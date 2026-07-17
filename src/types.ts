@@ -1,0 +1,223 @@
+export type Visibility = 'private' | 'group' | 'status';
+export type MetricDataType = 'number' | 'boolean' | 'text' | 'photo' | 'calculated';
+export type Aggregation = 'sum' | 'latest' | 'average' | 'max' | 'min';
+export type RankingDirection = 'higher' | 'lower' | 'closest';
+export type GoalKind = 'at_least' | 'at_most' | 'exact' | 'complete';
+export type DashboardSection = 'today' | 'group' | 'insights';
+export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'very_active' | 'athlete';
+export type BiologicalSex = 'female' | 'male' | 'unspecified';
+export type HealthProvider = 'apple_health' | 'health_connect';
+export type HealthDataType =
+  | 'steps'
+  | 'active_energy'
+  | 'weight'
+  | 'nutrition'
+  | 'water'
+  | 'workouts';
+
+export type MetricGoal = {
+  kind: GoalKind;
+  target: number;
+};
+
+export type MetricDefinition = {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  unit: string;
+  dataType: MetricDataType;
+  aggregation: Aggregation;
+  rankingDirection: RankingDirection;
+  goal: MetricGoal;
+  scoreWeight: number;
+  formula?: string;
+  defaultVisibility: Visibility;
+  sections: Record<DashboardSection, boolean>;
+  order: number;
+  /** Goals and completion scoring apply from this local date forward. */
+  activeFrom: string;
+};
+
+export type Member = {
+  id: string;
+  name: string;
+  initials: string;
+  color: string;
+  role: 'owner' | 'admin' | 'member';
+  avatarUri?: string;
+  /** Private-bucket object path; signed URLs in avatarUri are intentionally temporary. */
+  avatarStoragePath?: string;
+};
+
+export type MetricEntry = {
+  id: string;
+  metricId: string;
+  userId: string;
+  value: number | boolean | string;
+  localDate: string;
+  recordedAt: string;
+  visibility: Visibility;
+  source: 'manual' | 'imported' | 'calculated';
+  label?: string;
+  note?: string;
+  imageUri?: string;
+  imageStoragePath?: string;
+  nutrition?: NutritionDetails;
+  /** Stable native provenance used to update records without creating duplicates. */
+  sourceProvider?: HealthProvider;
+  sourceRecordId?: string;
+  sourceOrigin?: string;
+  sourceUpdatedAt?: string;
+};
+
+export type NutritionDetails = {
+  proteinG?: number;
+  fatG?: number;
+  carbsG?: number;
+  fiberG?: number;
+  sodiumMg?: number;
+};
+
+export type PhotoUpdate = {
+  id: string;
+  userId: string;
+  uri: string | number | { uri: string; width?: number; height?: number };
+  caption: string;
+  localDate: string;
+  createdAt: string;
+  visibility: Visibility;
+  capturedAt?: string;
+  storagePath?: string;
+};
+
+export type ChatMessage = {
+  id: string;
+  senderId: string | 'system';
+  text: string;
+  createdAt: string;
+  kind: 'message' | 'cheer' | 'taunt' | 'achievement';
+  conversationId?: string;
+  recipientId?: string;
+  imageUri?: string;
+  imageStoragePath?: string;
+};
+
+export type DailyMetricStatus = {
+  groupId: string;
+  metricId: string;
+  userId: string;
+  localDate: string;
+  goalReached: boolean;
+  scoreContribution: number;
+};
+
+export type SyncMode = 'manual' | 'battery' | 'balanced' | 'frequent';
+export type BanterTone = 'supportive' | 'friendly' | 'ruthless' | 'off';
+export type FoodGoalMode = 'activity_adjusted' | 'fixed';
+
+export type HealthSyncSettings = {
+  enabled: boolean;
+  dataTypes: Record<HealthDataType, boolean>;
+  /** Requested separately because both mobile operating systems may decline it. */
+  backgroundAccess: boolean;
+};
+
+export type EnergyProfile = {
+  age: number;
+  sex: BiologicalSex;
+  heightCm: number;
+  weightKg: number;
+  targetWeightKg: number;
+  activityLevel: ActivityLevel;
+  desiredWeeklyLossKg: number;
+};
+
+export type UserSettings = {
+  /** Legacy/manual fallback. Formula variable `baseline` now resolves to calculated daily energy. */
+  baselineCalories: number;
+  energyProfile: EnergyProfile;
+  syncMode: SyncMode;
+  healthSync: HealthSyncSettings;
+  banterTone: BanterTone;
+  autoMessages: boolean;
+  cheerMessage: string;
+  tauntMessage: string;
+  reminderMessage: string;
+  featuredTodayCard: 'score' | string;
+  /** Whether logged active energy raises that day's food allowance. */
+  foodGoalMode: FoodGoalMode;
+  /** Personal aliases are scoped to the group where they were assigned. */
+  memberNicknamesByGroup: Record<string, Record<string, string>>;
+  /** Up to five badge ids the current user chose to feature in each group. */
+  badgeShowcaseByGroup: Record<string, string[]>;
+  /** Legacy v6 aliases retained only while migrating stored demo state. */
+  memberNicknames?: Record<string, string>;
+  notifications: NotificationSettings;
+};
+
+export type NotificationSettings = {
+  pushEnabled: boolean;
+  groupMetricActivity: boolean;
+  metricIds: string[];
+  chatMessages: boolean;
+  badgesAndWinners: boolean;
+  reminders: boolean;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+};
+
+export type TrackedGoalPeriod = { from: string; to?: string };
+
+export type Group = {
+  id: string;
+  name: string;
+  inviteCode: string;
+  templateName: string;
+  members: Member[];
+  /** Number of missed days permitted inside each rolling seven-day streak window. */
+  streakRestDaysPerWeek: number;
+  /** Versioned locally in demo mode; cloud mode stores this as group-owned configuration. */
+  metricConfiguration?: MetricDefinition[];
+};
+
+export type AppState = {
+  version: 10;
+  currentUserId: string;
+  group: Group;
+  groups: Group[];
+  /** Private per-member profiles used by calculated energy metrics. */
+  energyProfiles: Record<string, EnergyProfile>;
+  metrics: MetricDefinition[];
+  entries: MetricEntry[];
+  photos: PhotoUpdate[];
+  messages: ChatMessage[];
+  /** Value-free status rows shared when the underlying entry is not exact-value visible. */
+  dailyMetricStatuses: DailyMetricStatus[];
+  settings: UserSettings;
+  /** Preserves which goals counted on each historical date. */
+  trackedGoalPeriods: Record<string, TrackedGoalPeriod[]>;
+  selectedGroupMetricId: string;
+  lastSavedAt: string | null;
+};
+
+export type EntryDetails = {
+  note?: string;
+  label?: string;
+  imageUri?: string;
+  localDate?: string;
+  recordedAt?: string;
+  nutrition?: NutritionDetails;
+};
+
+export type NewEntry = Pick<MetricEntry, 'metricId' | 'value' | 'visibility' | 'note'> & {
+  localDate?: string;
+};
+
+export type NewMetric = Pick<
+  MetricDefinition,
+  'name' | 'icon' | 'color' | 'unit' | 'dataType' | 'goal' | 'rankingDirection' | 'defaultVisibility'
+> & {
+  formula?: string;
+};
