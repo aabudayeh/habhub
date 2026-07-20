@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { palette, shadow } from '@/src/theme';
+import { palette, shadow, useAppColors, useGroupAccent } from '@/src/theme';
 
 export type MetricSelectorItem = {
   id: string;
@@ -20,6 +20,8 @@ export function MetricSelector({ items, selectedIds, onChange, multiple = true, 
   title?: string;
   emptyLabel?: string;
 }) {
+  const colors=useAppColors();
+  const accent=useGroupAccent();
   const [open,setOpen]=useState(false);
   const selected=items.filter((item)=>selectedIds.includes(item.id));
   function choose(id:string){
@@ -27,8 +29,8 @@ export function MetricSelector({ items, selectedIds, onChange, multiple = true, 
     onChange(selectedIds.includes(id)?selectedIds.length>1?selectedIds.filter((item)=>item!==id):selectedIds:[...selectedIds,id]);
   }
   return <View style={styles.wrap}>
-    <Pressable accessibilityRole="button" onPress={()=>setOpen((value)=>!value)} style={styles.button}><View style={styles.icon}><Ionicons name="options-outline" size={18} color={palette.primary}/></View><View style={styles.copy}><Text style={styles.title}>{title}</Text><Text numberOfLines={1} style={styles.summary}>{selected.length?selected.map((item)=>item.label).join(', '):emptyLabel}</Text></View><Ionicons name={open?'chevron-up':'chevron-down'} size={18} color={palette.muted}/></Pressable>
-    {open?<View style={styles.menu}>{items.length?items.map((item)=>{const checked=selectedIds.includes(item.id);return <Pressable key={item.id} onPress={()=>choose(item.id)} style={[styles.row,checked&&styles.rowSelected]}><View style={[styles.itemIcon,{backgroundColor:`${item.color??palette.primary}18`}]}><Ionicons name={item.icon??'analytics-outline'} size={17} color={item.color??palette.primary}/></View><View style={styles.copy}><Text style={styles.itemLabel}>{item.label}</Text>{item.sublabel?<Text style={styles.sublabel}>{item.sublabel}</Text>:null}</View><Ionicons name={multiple?(checked?'checkbox':'square-outline'):(checked?'radio-button-on':'radio-button-off')} size={20} color={checked?palette.primary:palette.faint}/></Pressable>}):<Text style={styles.empty}>{emptyLabel}</Text>}<Pressable onPress={()=>setOpen(false)} style={styles.done}><Text style={styles.doneText}>Done</Text></Pressable></View>:null}
+    <Pressable accessibilityRole="button" onPress={()=>setOpen((value)=>!value)} style={[styles.button,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.icon,{backgroundColor:colors.primarySoft}]}><Ionicons name="options-outline" size={18} color={accent}/></View><View style={styles.copy}><Text style={[styles.title,{color:colors.ink}]}>{title}</Text><Text numberOfLines={1} style={[styles.summary,{color:colors.muted}]}>{selected.length?selected.map((item)=>item.label).join(', '):emptyLabel}</Text></View><Ionicons name={open?'chevron-up':'chevron-down'} size={18} color={colors.muted}/></Pressable>
+    {open?<View style={[styles.menu,{backgroundColor:colors.card,borderColor:colors.border}]}>{items.length?items.map((item)=>{const checked=selectedIds.includes(item.id);return <Pressable key={item.id} onPress={()=>choose(item.id)} style={[styles.row,checked&&{backgroundColor:colors.primarySoft}]}><View style={[styles.itemIcon,{backgroundColor:`${item.color??accent}18`}]}><Ionicons name={item.icon??'analytics-outline'} size={17} color={item.color??accent}/></View><View style={styles.copy}><Text style={[styles.itemLabel,{color:colors.ink}]}>{item.label}</Text>{item.sublabel?<Text style={[styles.sublabel,{color:colors.muted}]}>{item.sublabel}</Text>:null}</View><Ionicons name={multiple?(checked?'checkbox':'square-outline'):(checked?'radio-button-on':'radio-button-off')} size={20} color={checked?accent:colors.faint}/></Pressable>}):<Text style={[styles.empty,{color:colors.muted}]}>{emptyLabel}</Text>}<Pressable onPress={()=>setOpen(false)} style={styles.done}><Text style={[styles.doneText,{color:accent}]}>Done</Text></Pressable></View>:null}
   </View>;
 }
 

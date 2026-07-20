@@ -2,7 +2,7 @@ import { AppState, MetricDefinition, MetricEntry, PhotoUpdate } from '@/src/type
 import { dateKey, dateKeyWithOffset } from '@/src/domain/date';
 import { DEMO_PROGRESS_URIS } from './demoAssets';
 
-export const DEFAULT_METRICS: MetricDefinition[] = [
+const BASE_METRICS: MetricDefinition[] = [
   {
     id: 'steps',
     name: 'Steps',
@@ -136,12 +136,12 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
     defaultVisibility: 'group', sections: { today: false, group: false, insights: true }, order: 12, activeFrom: dateKeyWithOffset(-29),
   },
   { id:'workout_duration',name:'Workout duration',icon:'timer-outline',color:'#337B7B',unit:'min',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:30},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:true,insights:true},order:13,activeFrom:dateKeyWithOffset(-29) },
-  { id:'body_fat',name:'Body fat',icon:'body-outline',color:'#9B6B43',unit:'%',dataType:'number',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:20},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:14,activeFrom:dateKeyWithOffset(-29) },
-  { id:'lean_body_mass',name:'Lean body mass',icon:'fitness-outline',color:'#5A7184',unit:'kg',dataType:'number',aggregation:'latest',rankingDirection:'higher',goal:{kind:'at_least',target:0},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:15,activeFrom:dateKeyWithOffset(-29) },
-  { id:'blood_pressure_systolic',name:'Systolic pressure',icon:'heart-outline',color:'#D95852',unit:'mmHg',dataType:'number',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:120},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:16,activeFrom:dateKeyWithOffset(-29) },
-  { id:'blood_pressure_diastolic',name:'Diastolic pressure',icon:'heart-half-outline',color:'#C45B35',unit:'mmHg',dataType:'number',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:80},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:17,activeFrom:dateKeyWithOffset(-29) },
-  { id:'pulse',name:'Pulse',icon:'pulse-outline',color:'#9B3F72',unit:'bpm',dataType:'number',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:70},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:18,activeFrom:dateKeyWithOffset(-29) },
-  { id:'workout_calories',name:'Workout calories',icon:'flame-outline',color:'#D95852',unit:'kcal',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:250},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:19,activeFrom:dateKeyWithOffset(-29) },
+  { id:'body_fat',name:'Body fat',icon:'body-outline',color:'#9B6B43',unit:'%',dataType:'number',aggregation:'average',rankingDirection:'closest',goal:{kind:'exact',target:20},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:14,activeFrom:dateKeyWithOffset(-29) },
+  { id:'lean_body_mass',name:'Lean body mass',icon:'fitness-outline',color:'#5A7184',unit:'kg',dataType:'number',aggregation:'average',rankingDirection:'higher',goal:{kind:'at_least',target:0},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:15,activeFrom:dateKeyWithOffset(-29) },
+  { id:'blood_pressure_systolic',name:'Blood pressure · systolic',icon:'heart-outline',color:'#D95852',unit:'mmHg',dataType:'number',aggregation:'average',rankingDirection:'closest',goal:{kind:'exact',target:120},goalEnabled:false,scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:16,activeFrom:dateKeyWithOffset(-29) },
+  { id:'blood_pressure_diastolic',name:'Blood pressure · diastolic',icon:'heart-half-outline',color:'#C45B35',unit:'mmHg',dataType:'number',aggregation:'average',rankingDirection:'closest',goal:{kind:'exact',target:80},goalEnabled:false,scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:17,activeFrom:dateKeyWithOffset(-29) },
+  { id:'pulse',name:'Pulse',icon:'pulse-outline',color:'#9B3F72',unit:'bpm',dataType:'number',aggregation:'average',rankingDirection:'closest',goal:{kind:'exact',target:70},goalEnabled:false,scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:18,activeFrom:dateKeyWithOffset(-29) },
+  { id:'workout_calories',name:'Workout calories',icon:'flame-outline',color:'#D95852',unit:'kcal',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:250},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:19,activeFrom:dateKeyWithOffset(-29) },
   { id:'workout_distance',name:'Workout distance',icon:'map-outline',color:'#3478D4',unit:'km',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:3},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:true},order:20,activeFrom:dateKeyWithOffset(-29) },
   { id:'sugar',name:'Sugar',icon:'cube-outline',color:'#C47C47',unit:'g',dataType:'number',aggregation:'sum',rankingDirection:'lower',goal:{kind:'at_most',target:50},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:21,activeFrom:dateKeyWithOffset(-29) },
   { id:'saturated_fat',name:'Saturated fat',icon:'ellipse-outline',color:'#A85D49',unit:'g',dataType:'number',aggregation:'sum',rankingDirection:'lower',goal:{kind:'at_most',target:20},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:22,activeFrom:dateKeyWithOffset(-29) },
@@ -153,8 +153,21 @@ export const DEFAULT_METRICS: MetricDefinition[] = [
   { id:'vitamin_c',name:'Vitamin C',icon:'sunny-outline',color:'#E08A32',unit:'mg',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:90},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:28,activeFrom:dateKeyWithOffset(-29) },
   { id:'vitamin_d',name:'Vitamin D',icon:'sunny-outline',color:'#D2A329',unit:'mcg',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:15},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:29,activeFrom:dateKeyWithOffset(-29) },
   { id:'vitamin_b12',name:'Vitamin B12',icon:'medkit-outline',color:'#B05C8C',unit:'mcg',dataType:'number',aggregation:'sum',rankingDirection:'higher',goal:{kind:'at_least',target:2.4},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:30,activeFrom:dateKeyWithOffset(-29) },
-  { id:'weekly_deficit_balance',name:'Weekly deficit balance',icon:'calendar-number-outline',color:'#7756D9',unit:'kcal',dataType:'calculated',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:0},scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:false},order:31,activeFrom:dateKeyWithOffset(-29) },
+  { id:'weekly_deficit_balance',name:'Weekly balance',icon:'calendar-number-outline',color:'#7756D9',unit:'kcal',dataType:'calculated',aggregation:'latest',rankingDirection:'closest',goal:{kind:'exact',target:0},goalEnabled:false,scoreWeight:0,defaultVisibility:'group',sections:{today:true,group:false,insights:false},order:31,activeFrom:dateKeyWithOffset(-29) },
+  { id:'sleep',name:'Sleep',icon:'moon-outline',color:'#5969B0',unit:'hr',dataType:'number',aggregation:'sum',rankingDirection:'closest',goal:{kind:'exact',target:8},goalRange:{min:7,max:9},scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:32,activeFrom:dateKeyWithOffset(-29) },
+  { id:'blood_glucose',name:'Blood glucose',icon:'water-outline',color:'#A64F6A',unit:'mg/dL',dataType:'number',aggregation:'average',rankingDirection:'closest',goal:{kind:'exact',target:100},goalEnabled:false,scoreWeight:0,defaultVisibility:'group',sections:{today:false,group:false,insights:true},order:33,activeFrom:dateKeyWithOffset(-29) },
+  { id:'menstrual_cycle',name:'Cycle tracking',icon:'flower-outline',color:'#C95B88',unit:'',dataType:'boolean',aggregation:'max',rankingDirection:'higher',goal:{kind:'complete',target:1},goalEnabled:false,scoreWeight:0,defaultVisibility:'private',sections:{today:false,group:false,insights:true},order:34,activeFrom:dateKeyWithOffset(-29) },
 ];
+
+const HEALTH_MAPPINGS:Record<string,MetricDefinition['healthMapping']>={
+  steps:{dataType:'steps',field:'value'},food:{dataType:'nutrition',field:'value'},exercise:{dataType:'active_energy',field:'value'},water:{dataType:'water',field:'value'},weight:{dataType:'weight',field:'value'},
+  workout:{dataType:'workouts',field:'value'},workout_duration:{dataType:'workouts',field:'duration_minutes'},workout_calories:{dataType:'workouts',field:'active_calories'},workout_distance:{dataType:'workouts',field:'distance_km'},
+  body_fat:{dataType:'body_fat',field:'value'},lean_body_mass:{dataType:'lean_body_mass',field:'value'},blood_pressure_systolic:{dataType:'blood_pressure',field:'systolic'},blood_pressure_diastolic:{dataType:'blood_pressure',field:'diastolic'},pulse:{dataType:'heart_rate',field:'value'},
+  protein:{dataType:'nutrition',field:'protein'},fat:{dataType:'nutrition',field:'fat'},carbs:{dataType:'nutrition',field:'carbs'},fiber:{dataType:'nutrition',field:'fiber'},sodium:{dataType:'nutrition',field:'sodium'},sugar:{dataType:'nutrition',field:'sugar'},saturated_fat:{dataType:'nutrition',field:'saturated_fat'},cholesterol:{dataType:'nutrition',field:'cholesterol'},potassium:{dataType:'nutrition',field:'potassium'},calcium:{dataType:'nutrition',field:'calcium'},iron:{dataType:'nutrition',field:'iron'},magnesium:{dataType:'nutrition',field:'magnesium'},vitamin_c:{dataType:'nutrition',field:'vitamin_c'},vitamin_d:{dataType:'nutrition',field:'vitamin_d'},vitamin_b12:{dataType:'nutrition',field:'vitamin_b12'},
+  sleep:{dataType:'sleep',field:'duration_minutes'},blood_glucose:{dataType:'blood_glucose',field:'value'},menstrual_cycle:{dataType:'menstruation',field:'value'},
+};
+const CATEGORIES:Record<string,MetricDefinition['category']>={steps:'activity',exercise:'activity',workout:'activity',workout_duration:'activity',workout_calories:'activity',workout_distance:'activity',food:'nutrition',protein:'nutrition',fat:'nutrition',carbs:'nutrition',fiber:'nutrition',sodium:'nutrition',sugar:'nutrition',saturated_fat:'nutrition',cholesterol:'nutrition',potassium:'nutrition',calcium:'nutrition',iron:'nutrition',magnesium:'nutrition',vitamin_c:'nutrition',vitamin_d:'nutrition',vitamin_b12:'nutrition',weight:'body',body_fat:'body',lean_body_mass:'body',blood_pressure_systolic:'health',blood_pressure_diastolic:'health',pulse:'health',sleep:'health',blood_glucose:'health',menstrual_cycle:'health',progress_photo:'photos',deficit:'goals',weekly_deficit_balance:'goals',water:'nutrition'};
+export const DEFAULT_METRICS:MetricDefinition[]=BASE_METRICS.map((metric)=>({...metric,category:CATEGORIES[metric.id]??'other',healthMapping:HEALTH_MAPPINGS[metric.id],stepFallback:metric.id==='exercise',manualEntry:metric.id!=='steps'}));
 
 const members = [
   { id: 'ahmad', name: 'Ahmad', initials: 'AH', color: '#176B4D', role: 'owner' as const },
@@ -258,7 +271,7 @@ export function createInitialState(): AppState {
     metricConfiguration: DEFAULT_METRICS,
   };
   return {
-    version: 14,
+    version: 15,
     currentUserId: 'ahmad',
     group,
     groups: [group],
@@ -332,6 +345,9 @@ export function createInitialState(): AppState {
           lean_body_mass: true,
           blood_pressure: true,
           heart_rate: true,
+          sleep: true,
+          blood_glucose: true,
+          menstruation: true,
         },
       },
       banterTone: 'friendly',
@@ -344,7 +360,12 @@ export function createInitialState(): AppState {
       darkMode: false,
       showLeaderboard: true,
       showChat: true,
+      onboardingComplete: false,
+      tutorialComplete: false,
+      advancedTutorialComplete: false,
+      selectedGoals: [],
       foodGoalMode: 'activity_adjusted',
+      weightDirection: 'lose',
       memberNicknamesByGroup: { 'weekend-warriors': {} },
       badgeShowcaseByGroup: {},
       progressMetricIds: ['tracked_goals','steps'],
@@ -360,6 +381,10 @@ export function createInitialState(): AppState {
         quietHoursEnabled: true,
         quietHoursStart: '22:00',
         quietHoursEnd: '08:00',
+        mutedGroupIds: [],
+        mutedConversationIds: [],
+        missedGoalNudges: true,
+        streakAlerts: true,
       },
     },
     trackedGoalPeriods: Object.fromEntries(DEFAULT_METRICS.filter((metric)=>metric.sections.today).map((metric)=>[metric.id,[{from:metric.activeFrom}]])),

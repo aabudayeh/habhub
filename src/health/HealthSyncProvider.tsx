@@ -82,8 +82,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       try {
         const from = syncStart(persisted.lastSyncedAt);
         const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
-        const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group');
-        importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes), dateKey(from));
+        const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group',current.metrics,current.settings.energyProfile.weightKg);
+        importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes,current.metrics), dateKey(from));
         await saveStatus({ lastSyncedAt: new Date().toISOString(), lastReason: reason, importedCount: entries.length, error: null });
         setStatus('ready');
       } catch (error) {

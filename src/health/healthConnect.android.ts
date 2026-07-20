@@ -19,7 +19,12 @@ const RECORD_TYPES: Record<HealthDataType, string> = {
   lean_body_mass: 'LeanBodyMass',
   blood_pressure: 'BloodPressure',
   heart_rate: 'HeartRate',
+  sleep: 'SleepSession',
+  blood_glucose: 'BloodGlucose',
+  menstruation: 'MenstruationPeriod',
 };
+
+const EXERCISE_NAMES:Record<number,string>={0:'Workout',8:'Cycling',9:'Indoor cycling',16:'Elliptical',37:'Hiking',56:'Running',57:'Treadmill',79:'Walking',80:'Wheelchair activity'};
 
 function nestedNumber(value: unknown, ...keys: string[]) {
   let current: unknown = value;
@@ -83,7 +88,10 @@ function convert(type: HealthDataType, record: Record<string, unknown>): HealthI
   if (type === 'body_fat') { value = Number(record.percentage ?? 0); unit = '%'; }
   if (type === 'lean_body_mass') { value = nestedNumber(record, 'mass', 'inKilograms'); unit = 'kg'; }
   if (type === 'blood_pressure') { value = nestedNumber(record, 'systolic', 'inMillimetersOfMercury'); unit = 'mmHg'; }
-  if (type === 'heart_rate') { const samples=Array.isArray(record.samples)?record.samples as Record<string,unknown>[]:[];value = Number(record.beatsPerMinute ?? samples.at(-1)?.beatsPerMinute ?? 0); unit = 'bpm'; }
+  if (type === 'heart_rate') { const samples=Array.isArray(record.samples)?record.samples as Record<string,unknown>[]:[];const readings=samples.map((sample)=>Number(sample.beatsPerMinute)).filter((reading)=>Number.isFinite(reading)&&reading>0);value = Number(record.beatsPerMinute ?? (readings.length?readings.reduce((sum,reading)=>sum+reading,0)/readings.length:0)); unit = 'bpm'; }
+  if(type==='sleep'){value=durationMinutes/60;unit='hr';}
+  if(type==='blood_glucose'){value=nestedNumber(record,'level','inMilligramsPerDeciliter')||nestedNumber(record,'level','inMillimolesPerLiter')*18.0182;unit='mg/dL';}
+  if(type==='menstruation'){value=true;unit='';}
   const metadata = record.metadata as Record<string, unknown> | undefined;
   return {
     id: recordId(record, type),
@@ -95,14 +103,14 @@ function convert(type: HealthDataType, record: Record<string, unknown>): HealthI
     unit,
     origin: origin(record),
     updatedAt: typeof metadata?.lastModifiedTime === 'string' ? metadata.lastModifiedTime : undefined,
-    label: type === 'nutrition' ? String(record.mealName ?? record.name ?? 'Meal summary') : type === 'workouts' ? String(record.title ?? record.exerciseType ?? 'Workout') : undefined,
+    label: type === 'nutrition' ? String(record.mealName ?? record.name ?? 'Meal summary') : type === 'workouts' ? String(record.title ?? EXERCISE_NAMES[Number(record.exerciseType)] ?? record.exerciseType ?? 'Workout') : undefined,
     nutrition: type === 'nutrition' ? nutrition(record) : undefined,
     note: typeof record.notes === 'string' ? record.notes : undefined,
     measurements: type === 'workouts' ? {
       durationMinutes,
       activeCalories: nestedNumber(record,'energy','inKilocalories') || nestedNumber(record,'totalEnergyBurned','inKilocalories'),
       distanceKm: nestedNumber(record,'distance','inKilometers') || nestedNumber(record,'distance','inMeters')/1000,
-    } : type === 'blood_pressure' ? {
+    } : type === 'sleep' ? { durationMinutes } : type === 'blood_pressure' ? {
       systolic: nestedNumber(record, 'systolic', 'inMillimetersOfMercury'),
       diastolic: nestedNumber(record, 'diastolic', 'inMillimetersOfMercury'),
     } : undefined,

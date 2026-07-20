@@ -1,4 +1,4 @@
-import { ActivityLevel, EnergyProfile, FoodGoalMode } from '@/src/types';
+import { ActivityLevel, EnergyProfile, FoodGoalMode, WeightDirection } from '@/src/types';
 
 export const ACTIVITY_FACTORS: Record<ActivityLevel, number> = {
   sedentary: 1.2,
@@ -44,6 +44,13 @@ export function recommendedDailyDeficit(profile: EnergyProfile): number {
 
 export function recommendedDailyIntake(profile: EnergyProfile): number {
   return Math.max(profile.sex === 'male' ? 1500 : 1200, Math.round(calculateDailyEnergy(profile) - recommendedDailyDeficit(profile)));
+}
+
+export function recommendedDailyIntakeForDirection(profile:EnergyProfile,direction:WeightDirection){
+  const adjustment=recommendedDailyDeficit(profile);
+  if(direction==='gain')return Math.round(calculateDailyEnergy(profile)+adjustment);
+  if(direction==='maintain')return Math.round(calculateDailyEnergy(profile));
+  return recommendedDailyIntake(profile);
 }
 
 export function dailyFoodGoal(baseTarget: number, activeEnergy: number, mode: FoodGoalMode): number {

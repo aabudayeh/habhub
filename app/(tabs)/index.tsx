@@ -1,171 +1,39 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import React, { useMemo } from 'react';
-import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useRef, useState } from 'react';
+import { Alert, Modal, PanResponder, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { MetricCard } from '@/src/components/MetricCard';
-import { Avatar, Card, PageHeader, ProgressBar, Screen, SectionHeader } from '@/src/components/ui';
-import { dateKey } from '@/src/domain/date';
+import { Avatar, ProgressBar } from '@/src/components/ui';
+import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
 import { memberDisplayName } from '@/src/domain/members';
-import {
-  dailyScore,
-  effectiveGoalTarget,
-  formatMetricValue,
-  goalProgress,
-  goalRemainingLabel,
-  latestTextValue,
-  rankedMembers,
-  safeMetricValue,
-  trackedGoalSummary,
-  weeklyDeficitBalance,
-} from '@/src/domain/metrics';
-import { useApp } from '@/src/state/AppProvider';
+import { effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, safeMetricValue, trackedGoalSummary, weeklyDeficitBalance } from '@/src/domain/metrics';
 import { useHealthSync } from '@/src/health/HealthSyncProvider';
-import { palette, useCompactMode, useGroupAccent } from '@/src/theme';
+import { useApp } from '@/src/state/AppProvider';
+import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 import { MetricDefinition } from '@/src/types';
 
-const scoreMetric: MetricDefinition = {
-  id: '__score', name: 'Overall score', icon: 'speedometer-outline', color: '#6A5ACD', unit: 'pts', dataType: 'calculated',
-  aggregation: 'average', rankingDirection: 'higher', goal: { kind: 'at_least', target: 100 }, scoreWeight: 0,
-  defaultVisibility: 'group', sections: { today: true, group: true, insights: true }, order: -1, activeFrom: '2000-01-01',
-};
-
-export default function TodayScreen() {
-  const { state } = useApp();
-  const accent = useGroupAccent();
-  const compact=useCompactMode();
-  const health = useHealthSync();
-  const today = dateKey();
-  const user = state.group.members.find((member) => member.id === state.currentUserId)!;
-  const featuredMetric = state.settings.featuredTodayCard === 'score'
-    ? undefined
-    : state.metrics.find((metric) => metric.id === state.settings.featuredTodayCard && metric.sections.today && metric.id !== 'weekly_deficit_balance');
-  const balanceMetric = state.metrics.find((metric) => metric.id === 'weekly_deficit_balance');
-  const metrics = [...state.metrics]
-    .filter((metric) => metric.sections.today && metric.activeFrom <= today && metric.id !== featuredMetric?.id && metric.id !== 'weekly_deficit_balance')
-    .sort((a, b) => a.order - b.order);
-  const score = dailyScore(state, state.currentUserId, today);
-  const scoreRanks = useMemo(
-    () => state.group.members.map((member) => ({ member, value: dailyScore(state, member.id, today) })).sort((a, b) => b.value - a.value),
-    [state, today],
-  );
-  const scoreRank = scoreRanks.findIndex((row) => row.member.id === state.currentUserId) + 1;
-  const scoreAbove = scoreRank > 1 ? scoreRanks[scoreRank - 2] : undefined;
-  const scoreRankLabel = scoreRank === 1
-    ? '#1 in your group'
-    : scoreAbove
-      ? `#${scoreRank} · ${Math.round(scoreAbove.value - score)} pts behind #${scoreRank - 1} ${memberDisplayName(state, scoreAbove.member)}`
-      : undefined;
-  const weeklyBalance = weeklyDeficitBalance(state, state.currentUserId, today);
-  const heroRows = featuredMetric ? rankedMembers(state, featuredMetric, today) : scoreRanks;
-  const heroRank = heroRows.findIndex((row) => row.member.id === state.currentUserId) + 1;
-  const heroValue = featuredMetric ? safeMetricValue(state, featuredMetric, state.currentUserId, today) : score;
-  const heroGoal = featuredMetric ? effectiveGoalTarget(state, featuredMetric, state.currentUserId, today) : 100;
-  const heroAbove = heroRank > 1 ? heroRows[heroRank - 2] : undefined;
-  const goals = trackedGoalSummary(state, state.currentUserId, today);
-  const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
-  const todayCards = [...metrics.map((metric) => ({ kind: 'metric' as const, order: metric.order, metric })), ...(balanceMetric?.sections.today ? [{ kind: 'balance' as const, order: balanceMetric.order }] : [])].sort((a, b) => a.order - b.order);
-
-  function rankText(metric: MetricDefinition) {
-    if (metric.dataType === 'text' || metric.defaultVisibility === 'private' || metric.scoreWeight <= 0) return undefined;
-    const rows = rankedMembers(state, metric, today);
-    const rank = rows.findIndex((row) => row.member.id === state.currentUserId) + 1;
-    const above = rank > 1 ? rows[rank - 2] : undefined;
-    if (!rank) return undefined;
-    if (!above) return '#1 in your group';
-    const gap = Math.abs(above.value - safeMetricValue(state, metric, state.currentUserId, today));
-    return `#${rank} · ${formatMetricValue(metric, gap)} behind #${rank - 1} ${memberDisplayName(state, above.member)}`;
-  }
-
-  return <Screen refreshControl={<RefreshControl refreshing={health.status === 'syncing'} onRefresh={() => health.syncNow('pull').catch(() => undefined)} tintColor={palette.primary} colors={[palette.primary]} />}>
-    {!compact?<PageHeader eyebrow={dateLabel} title={`Good to see you, ${memberDisplayName(state, user)}.`} subtitle="Your goals, rank, and reporting—all in one place." />:<View style={styles.compactTop}><Text style={styles.compactGreeting}>{memberDisplayName(state,user)} · {dateLabel}</Text><Pressable onPress={()=>router.push('/menu')}><Ionicons name="menu-outline" size={22} color={accent}/></Pressable></View>}
-    <Pressable onPress={()=>featuredMetric?router.push({pathname:'/metric-detail',params:{metric:featuredMetric.id}}):router.push('/group')}><Card style={[styles.hero,compact&&styles.heroCompact,{backgroundColor:accent,borderColor:accent}]}>
-      <View style={styles.goalLine}>
-        <Ionicons name={goals.allMet ? 'trophy' : 'checkmark-done-outline'} size={15} color={palette.lime} />
-        <Text style={styles.goalLineText}>{goals.allMet ? 'All daily goals met' : `${goals.met} of ${goals.total} daily goals met`}</Text>
-      </View>
-      <View style={styles.heroBody}>
-        <View style={styles.heroCopy}>
-          <View style={styles.livePill}><View style={styles.liveDot} /><Text style={styles.liveText}>{featuredMetric ? featuredMetric.name : "Today's score"}</Text></View>
-          <Text style={styles.heroValue}>{featuredMetric ? formatMetricValue(featuredMetric, heroValue) : Math.round(heroValue)}</Text>
-          {featuredMetric ? <Text style={styles.heroRemaining}>{goalRemainingLabel(state, featuredMetric, state.currentUserId, today)}</Text> : null}
-          <Text style={styles.heroMeta}>#{heroRank || '—'} in {state.group.name}{heroAbove ? ` · ${featuredMetric ? formatMetricValue(featuredMetric, Math.abs(heroAbove.value - heroValue)) : `${Math.round(Math.abs(heroAbove.value - heroValue))} pts`} behind #${heroRank - 1} ${memberDisplayName(state, heroAbove.member)}` : ''}</Text>
-          <View style={styles.heroProgress}><ProgressBar progress={featuredMetric ? goalProgress(featuredMetric, heroValue, heroGoal) : heroValue / 100} color={palette.lime} /></View>
-        </View>
-        <View style={styles.podium}>
-          <Text style={styles.podiumLabel}>CURRENT LEADERS</Text>
-          {heroRows.slice(0, 3).map((row, index) => <View key={row.member.id} style={[styles.leaderAvatar, index > 0 && styles.overlap]}><Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={38} /><View style={styles.rankBadge}><Text style={styles.rankBadgeText}>{index + 1}</Text></View></View>)}
-        </View>
-      </View>
-    </Card></Pressable>
-    {!compact?<SectionHeader title="Your metrics" action={<Pressable onPress={() => router.push('/customize?tab=today')} style={styles.textAction}><Ionicons name="options-outline" size={16} color={accent} /><Text style={[styles.textActionLabel,{color:accent}]}>Customize goals</Text></Pressable>} />:null}
-    <View style={styles.grid}>
-      {featuredMetric ? <MetricCard metric={scoreMetric} value={score} rankLabel={scoreRankLabel} onPress={() => router.push('/group')} /> : null}
-      {todayCards.map((item) => { if (item.kind === 'balance') return <WeeklyBalanceCard key="weekly-deficit" balance={weeklyBalance.balance} actual={weeklyBalance.actual} target={weeklyBalance.target} days={weeklyBalance.days} compact={compact} />; const metric = item.metric;
-        const value = safeMetricValue(state, metric, state.currentUserId, today);
-        return <MetricCard
-          key={metric.id}
-          metric={metric}
-          value={value}
-          displayText={metric.dataType === 'text' ? latestTextValue(state, metric.id, state.currentUserId, today) : undefined}
-          goalTarget={effectiveGoalTarget(state, metric, state.currentUserId, today)}
-          remainingLabel={metric.dataType === 'text' || metric.dataType === 'photo' ? undefined : goalRemainingLabel(state, metric, state.currentUserId, today)}
-          rankLabel={rankText(metric)}
-          onPress={() => router.push({ pathname: '/metric-detail', params: { metric: metric.id } })}
-        />;
-      })}
-    </View>
-  </Screen>;
+export default function Today(){
+  const {state,reorderMetric,setMetricSection,deleteMetric}=useApp();const health=useHealthSync();const colors=useAppColors();const accent=useGroupAccent();const [editing,setEditing]=useState(false);const [showMore,setShowMore]=useState(false);const today=dateKey();const user=state.group.members.find((item)=>item.id===state.currentUserId)!;const goals=trackedGoalSummary(state,state.currentUserId,today);const weekly=weeklyDeficitBalance(state,state.currentUserId,today);
+  const visible=useMemo(()=>state.metrics.filter((item)=>item.sections.today&&item.activeFrom<=today).sort((a,b)=>a.order-b.order),[state.metrics,today]);const primary=visible.slice(0,4);const extra=visible.slice(4);const weekAll=Array.from({length:7},(_,i)=>trackedGoalSummary(state,state.currentUserId,dateWithOffsetFrom(today,-i)).allMet).every(Boolean);
+  function remove(item:MetricDefinition){Alert.alert(`Remove ${item.name}?`,'Keep earlier history, or permanently remove this tracker and its entries.',[{text:'Cancel',style:'cancel'},{text:'Stop showing from today',onPress:()=>setMetricSection(item.id,'today',false,'today')},{text:'Delete everything',style:'destructive',onPress:()=>deleteMetric(item.id)}]);}
+  return <SafeAreaView style={[styles.safe,{backgroundColor:colors.canvas}]} edges={['top']}><ScrollView refreshControl={<RefreshControl refreshing={health.status==='syncing'} onRefresh={()=>health.syncNow('pull').catch(()=>undefined)} tintColor={accent}/>} contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
+    <View style={styles.header}><View><Text style={[styles.eyebrow,{color:accent}]}>NORTH · TODAY</Text><Text style={[styles.greeting,{color:colors.ink}]}>Hi, {memberDisplayName(state,user)}</Text></View><View style={styles.headerActions}>{editing?<Pressable onPress={()=>setEditing(false)} style={[styles.done,{backgroundColor:accent}]}><Text style={styles.doneText}>Done</Text></Pressable>:null}<Pressable onPress={()=>router.push('/menu')}><Avatar initials={user.initials} color={user.color} uri={user.avatarUri} size={39}/></Pressable></View></View>
+    <View style={[styles.hero,{backgroundColor:accent}]}><View style={styles.heroTop}><View><Text style={styles.heroEyebrow}>{goals.allMet?'DAY COMPLETE':'TODAY’S FOCUS'}</Text><Text style={styles.heroValue}>{goals.met} of {goals.total}</Text><Text style={styles.heroTitle}>{goals.allMet?'Every goal reached':goals.total?`${goals.total-goals.met} goal${goals.total-goals.met===1?'':'s'} left`:'Choose your first goal'}</Text></View><View style={styles.ring}><Text style={styles.ringText}>{goals.total?Math.round(goals.met/goals.total*100):0}%</Text></View></View><ProgressBar progress={goals.total?goals.met/goals.total:0} color={palette.lime}/><View style={styles.goalDots}>{goals.metrics.slice(0,6).map((item)=>{const met=goalReached(item,safeMetricValue(state,item,state.currentUserId,today),effectiveGoalTarget(state,item,state.currentUserId,today));return <View key={item.id} style={[styles.dot,{backgroundColor:met?palette.lime:'rgba(255,255,255,.16)'}]}><Ionicons name={met?'checkmark':item.icon as keyof typeof Ionicons.glyphMap} size={12} color={met?palette.ink:palette.white}/></View>})}</View></View>
+    {goals.allMet?<Celebration title={weekAll?'Perfect week':'Today complete'} copy={weekAll?'Seven days of showing up. A special badge is yours.':'Nice work. Your daily completion badge is ready.'} special={weekAll} colors={colors}/>:goals.met>0?<Celebration title="Progress made" copy={`${goals.met} goal${goals.met===1?'':'s'} complete. Keep the momentum.`} colors={colors}/>:null}
+    <View style={styles.sectionRow}><Text style={[styles.section,{color:colors.ink}]}>Your day</Text><Text style={[styles.hint,{color:colors.muted}]}>{editing?'Drag · remove · add':'Hold any card to edit'}</Text></View>
+    <View style={styles.list}>{primary.map((item,index)=><TrackerRow key={item.id} item={item} index={index} count={visible.length} state={state} day={today} editing={editing} colors={colors} accent={accent} weekly={weekly} onEdit={()=>setEditing(true)} onMove={(target)=>reorderMetric(item.id,target)} onRemove={()=>remove(item)}/>)}</View>
+    {extra.length?<Pressable onPress={()=>setShowMore(true)} style={[styles.more,{backgroundColor:colors.card,borderColor:colors.border}]}><Text style={[styles.moreText,{color:colors.ink}]}>More</Text><View style={styles.moreRight}><Text style={[styles.moreCount,{color:colors.muted}]}>{extra.length} hidden from this compact view</Text><Ionicons name="chevron-down" size={17} color={colors.faint}/></View></Pressable>:null}
+    {editing?<Pressable onPress={()=>router.push({pathname:'/metric-editor',params:{id:'new'}})} style={[styles.add,{borderColor:accent}]}><Ionicons name="add" size={19} color={accent}/><Text style={[styles.addText,{color:accent}]}>Add something to track</Text></Pressable>:null}
+  </ScrollView><Modal transparent animationType="fade" visible={showMore} onRequestClose={()=>setShowMore(false)}><Pressable style={styles.backdrop} onPress={()=>setShowMore(false)}><View style={[styles.sheet,{backgroundColor:colors.card}]}><View style={styles.sheetHandle}/><Text style={[styles.sheetTitle,{color:colors.ink}]}>More from today</Text>{extra.map((item)=><Pressable key={item.id} onPress={()=>{setShowMore(false);router.push({pathname:'/metric-detail',params:{metric:item.id}})}} style={[styles.sheetRow,{borderColor:colors.border}]}><View style={[styles.smallIcon,{backgroundColor:`${item.color}18`}]}><Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={17} color={item.color}/></View><Text style={[styles.sheetName,{color:colors.ink}]}>{item.name}</Text><Text style={[styles.sheetValue,{color:colors.muted}]}>{displayValue(state,item,today,weekly)}</Text></Pressable>)}</View></Pressable></Modal></SafeAreaView>;
 }
 
-function WeeklyBalanceCard({ balance, actual, target, days, compact }: { balance: number; actual: number; target: number; days: number; compact:boolean }) {
-  const ahead = balance >= 0;
-  const weekday = new Date().getDay();
-  const daysRemaining = 7 - ((weekday + 6) % 7);
-  const dailyCatchUp = Math.ceil(Math.abs(balance) / Math.max(daysRemaining, 1));
-  return <Pressable onPress={()=>router.push({pathname:'/metric-detail',params:{metric:'weekly_deficit'}})} style={[styles.balancePress,compact&&styles.balancePressCompact]}><Card style={[styles.balanceCard,compact&&styles.balanceCardCompact]}>
-    <View style={[styles.balanceTop,compact&&styles.balanceTopCompact]}><View style={[styles.balanceIcon,compact&&styles.balanceIconCompact]}><Ionicons name="calendar-number-outline" size={compact?17:21} color={palette.purple} /></View><View style={[styles.balancePill, ahead ? styles.aheadPill : styles.behindPill]}><Text style={[styles.balancePillText, ahead ? styles.aheadText : styles.behindText]}>{ahead ? 'Ahead' : 'Catch up'}</Text></View></View>
-    <Text style={styles.balanceName}>Weekly deficit balance</Text>
-    <Text style={styles.balanceValue}>{Math.round(Math.abs(balance)).toLocaleString()} kcal</Text>
-    {!compact?<><Text style={styles.balanceCopy}>{ahead ? 'available as flexibility while staying on this week’s plan' : `short of plan · about ${dailyCatchUp.toLocaleString()} kcal/day across ${daysRemaining} remaining day${daysRemaining === 1 ? '' : 's'}`}</Text><Text style={styles.balanceMeta}>{Math.round(actual).toLocaleString()} actual / {Math.round(target).toLocaleString()} target through {days} day{days === 1 ? '' : 's'}</Text></>:null}
-  </Card></Pressable>;
+function TrackerRow({item,index,count,state,day,editing,colors,accent,weekly,onEdit,onMove,onRemove}:{item:MetricDefinition;index:number;count:number;state:ReturnType<typeof useApp>['state'];day:string;editing:boolean;colors:ReturnType<typeof useAppColors>;accent:string;weekly:ReturnType<typeof weeklyDeficitBalance>;onEdit:()=>void;onMove:(target:number)=>void;onRemove:()=>void}){
+  const start=useRef(index);start.current=index;const responder=useMemo(()=>PanResponder.create({onMoveShouldSetPanResponder:()=>editing,onPanResponderRelease:(_event,gesture)=>onMove(Math.max(0,Math.min(count-1,start.current+Math.round(gesture.dy/62))))}),[count,editing,onMove]);const value=item.id==='weekly_deficit_balance'?weekly.balance:safeMetricValue(state,item,state.currentUserId,day);const applicable=item.id!=='deficit'||state.entries.some((entry)=>entry.userId===state.currentUserId&&entry.metricId==='food'&&entry.localDate===day);const target=effectiveGoalTarget(state,item,state.currentUserId,day);const met=applicable&&goalReached(item,value,target);const photo=item.dataType==='photo'?state.photos.find((entry)=>entry.userId===state.currentUserId&&entry.localDate===day):undefined;const content=trackerCopy(state,item,day,value,target,applicable,weekly);
+  return <Pressable {...(editing?responder.panHandlers:{})} onLongPress={onEdit} onPress={()=>editing?undefined:router.push({pathname:'/metric-detail',params:{metric:item.id==='weekly_deficit_balance'?'weekly_deficit':item.id}})} style={[styles.row,{backgroundColor:colors.card,borderColor:editing?`${accent}66`:colors.border}]}>{editing?<Ionicons name="reorder-three-outline" size={22} color={colors.faint}/>:<View style={[styles.icon,{backgroundColor:`${item.color}18`}]}>{photo?<Image source={photo.uri} style={styles.photo}/>:<Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={19} color={item.color}/>}</View>}<View style={styles.rowCopy}><View style={styles.nameLine}><Text style={[styles.name,{color:colors.ink}]} numberOfLines={1}>{item.name}</Text>{met?<Ionicons name="checkmark-circle" size={15} color={accent}/>:null}</View><Text style={[styles.primary,{color:item.goal.kind==='at_most'&&value>target?palette.red:colors.ink}]} numberOfLines={1}>{content.primary}</Text><Text style={[styles.secondary,{color:colors.muted}]} numberOfLines={1}>{content.secondary}</Text></View>{item.goalEnabled!==false&&applicable?<View style={styles.progress}><ProgressBar progress={goalProgress(item,value,target)} color={item.color}/></View>:null}{editing?<Pressable onPress={onRemove} style={styles.remove}><Ionicons name="remove" size={17} color={palette.white}/></Pressable>:<Ionicons name="chevron-forward" size={16} color={colors.faint}/>}</Pressable>;
 }
-
-const styles = StyleSheet.create({
-  hero: { backgroundColor: palette.ink, borderColor: palette.ink, minHeight: 205, marginBottom: 24, overflow: 'hidden' },
-  heroCompact:{minHeight:132,marginBottom:8,padding:11},compactTop:{height:42,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},compactGreeting:{fontSize:11,fontWeight:'800',color:palette.muted},
-  goalLine: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#354039' },
-  goalLineText: { color: '#E5EBE6', fontSize: 11, fontWeight: '900' },
-  heroBody: { flex: 1, flexDirection: 'row', paddingTop: 10 },
-  heroCopy: { flex: 1, justifyContent: 'center' },
-  livePill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#2B362F', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.lime },
-  liveText: { color: '#D8E1DA', fontSize: 11, fontWeight: '800' },
-  heroValue: { color: palette.white, fontSize: 38, lineHeight: 47, fontWeight: '900', letterSpacing: -1.3, marginTop: 8 },
-  heroRemaining: { color: palette.lime, fontSize: 10, lineHeight: 15, fontWeight: '800', marginBottom: 2 },
-  heroMeta: { color: '#AFBAB2', fontSize: 11, lineHeight: 16, fontWeight: '700' },
-  heroProgress: { marginTop: 14, maxWidth: 230 },
-  podium: { width: 106, justifyContent: 'center', alignItems: 'flex-end' },
-  podiumLabel: { color: '#AFBAB2', fontSize: 8, fontWeight: '800', marginBottom: 9 },
-  leaderAvatar: { position: 'relative' },
-  overlap: { marginTop: -8 },
-  rankBadge: { position: 'absolute', right: -4, bottom: -1, width: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.lime, borderWidth: 2, borderColor: palette.ink },
-  rankBadgeText: { color: palette.ink, fontSize: 8, fontWeight: '900' },
-  textAction: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7 },
-  textActionLabel: { color: palette.primary, fontSize: 12, fontWeight: '800' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8, marginBottom: 24 },
-  balanceCard: { width: '100%', padding: 14 },
-  balancePress:{width:'48%'},balancePressCompact:{width:'100%'},balanceCardCompact:{width:'100%',paddingHorizontal:11,paddingVertical:8,minHeight:82,borderRadius:14},balanceTopCompact:{marginBottom:3},balanceIconCompact:{width:28,height:28},
-  balanceTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  balanceIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#7756D918' },
-  balancePill: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 4 },
-  aheadPill: { backgroundColor: palette.primarySoft },
-  behindPill: { backgroundColor: '#FDEBE8' },
-  balancePillText: { fontSize: 9, fontWeight: '900' },
-  aheadText: { color: palette.primary },
-  behindText: { color: palette.red },
-  balanceName: { color: palette.muted, fontSize: 13, fontWeight: '700', marginBottom: 4 },
-  balanceValue: { color: palette.ink, fontSize: 22, lineHeight: 28, fontWeight: '800' },
-  balanceCopy: { color: palette.muted, fontSize: 9, lineHeight: 14, fontWeight: '700', marginTop: 4 },
-  balanceMeta: { color: palette.faint, fontSize: 8, lineHeight: 12, marginTop: 7 },
-});
+function displayValue(state:ReturnType<typeof useApp>['state'],item:MetricDefinition,day:string,weekly:ReturnType<typeof weeklyDeficitBalance>){if(item.id==='weekly_deficit_balance')return `${Math.abs(Math.round(weekly.balance))} kcal`;return formatMetricValue(item,safeMetricValue(state,item,state.currentUserId,day));}
+function trackerCopy(state:ReturnType<typeof useApp>['state'],item:MetricDefinition,day:string,value:number,target:number,applicable:boolean,weekly:ReturnType<typeof weeklyDeficitBalance>){if(!applicable)return{primary:'Not available yet',secondary:'Log food to calculate today’s energy balance'};if(item.id==='weekly_deficit_balance')return{primary:`${Math.abs(Math.round(weekly.balance)).toLocaleString()} kcal ${weekly.balance>=0?'ahead':'behind'}`,secondary:`${weekly.days} logged day${weekly.days===1?'':'s'} count this week`};if(item.id==='food'){const left=target-value;return{primary:left>=0?`${Math.round(left).toLocaleString()} kcal left`:`${Math.abs(Math.round(left)).toLocaleString()} kcal over`,secondary:`${Math.round(value).toLocaleString()} consumed · allowance ${Math.round(target).toLocaleString()}`};}if(item.id==='weight'){const first=state.entries.filter((entry)=>entry.userId===state.currentUserId&&entry.metricId==='weight').sort((a,b)=>a.recordedAt.localeCompare(b.recordedAt))[0];const delta=first?value-Number(first.value):0;return{primary:formatMetricValue(item,value),secondary:first?`${delta>0?'+':''}${delta.toFixed(1)} kg from your starting weight`:'Add a first weigh-in to establish your baseline'};}if(item.dataType==='photo')return{primary:value?`${Math.round(value)} added today`:'No photo today',secondary:'Private by default only if you choose it when logging'};return{primary:formatMetricValue(item,value),secondary:item.goalEnabled===false?'Tracking only':item.goal.kind==='at_most'?`${Math.max(0,target-value).toFixed(item.unit==='L'?1:0)} ${item.unit} remaining`:`Goal ${formatMetricValue(item,target)}`};}
+function Celebration({title,copy,special=false,colors}:{title:string;copy:string;special?:boolean;colors:ReturnType<typeof useAppColors>}){return <View style={[styles.celebration,{backgroundColor:special?'#FFF2C9':colors.card,borderColor:special?'#E4B84A':colors.border}]}><Text style={styles.sparkles}>{special?'✦ ✨ ✦':'✦'}</Text><View style={styles.rowCopy}><Text style={[styles.name,{color:special?'#6B4A00':colors.ink}]}>{title}</Text><Text style={[styles.secondary,{color:special?'#806316':colors.muted}]}>{copy}</Text></View></View>}
+const styles=StyleSheet.create({safe:{flex:1},page:{paddingHorizontal:14,paddingBottom:12},header:{height:55,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},eyebrow:{fontSize:8,fontWeight:'900',letterSpacing:1.4},greeting:{fontSize:19,fontWeight:'900',letterSpacing:-.4,marginTop:1},headerActions:{flexDirection:'row',alignItems:'center',gap:8},done:{paddingHorizontal:12,paddingVertical:7,borderRadius:12},doneText:{color:palette.white,fontSize:10,fontWeight:'900'},hero:{borderRadius:20,padding:14,minHeight:135},heroTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:11},heroEyebrow:{color:'rgba(255,255,255,.72)',fontSize:8,fontWeight:'900',letterSpacing:1.1},heroValue:{color:palette.white,fontSize:30,fontWeight:'900',lineHeight:35,marginTop:3},heroTitle:{color:palette.white,fontSize:11,fontWeight:'800'},ring:{width:54,height:54,borderRadius:27,borderWidth:5,borderColor:palette.lime,alignItems:'center',justifyContent:'center'},ringText:{color:palette.white,fontSize:12,fontWeight:'900'},goalDots:{flexDirection:'row',gap:5,marginTop:10},dot:{width:25,height:25,borderRadius:9,alignItems:'center',justifyContent:'center'},celebration:{minHeight:52,borderWidth:1,borderRadius:16,paddingHorizontal:12,marginTop:8,flexDirection:'row',alignItems:'center',gap:10},sparkles:{fontSize:18},sectionRow:{height:43,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},section:{fontSize:13,fontWeight:'900'},hint:{fontSize:8,fontWeight:'700'},list:{gap:7},row:{height:67,borderWidth:1,borderRadius:16,paddingHorizontal:10,flexDirection:'row',alignItems:'center',gap:10},icon:{width:42,height:42,borderRadius:13,alignItems:'center',justifyContent:'center',overflow:'hidden'},photo:{width:42,height:42},rowCopy:{flex:1,minWidth:0},nameLine:{flexDirection:'row',alignItems:'center',gap:5},name:{fontSize:11,fontWeight:'900'},primary:{fontSize:14,fontWeight:'900',marginTop:1},secondary:{fontSize:8,lineHeight:12,marginTop:1},progress:{width:48},remove:{width:25,height:25,borderRadius:13,backgroundColor:palette.red,alignItems:'center',justifyContent:'center'},more:{height:48,borderWidth:1,borderRadius:15,marginTop:7,paddingHorizontal:12,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},moreText:{fontSize:11,fontWeight:'900'},moreRight:{flexDirection:'row',alignItems:'center',gap:6},moreCount:{fontSize:8},add:{height:44,borderWidth:1,borderStyle:'dashed',borderRadius:14,marginTop:8,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6},addText:{fontSize:10,fontWeight:'900'},backdrop:{flex:1,backgroundColor:'rgba(10,15,12,.52)',justifyContent:'flex-end'},sheet:{borderTopLeftRadius:24,borderTopRightRadius:24,padding:16,paddingBottom:30},sheetHandle:{width:36,height:4,borderRadius:2,backgroundColor:'#89918C',alignSelf:'center',marginBottom:12},sheetTitle:{fontSize:15,fontWeight:'900',marginBottom:8},sheetRow:{height:54,borderBottomWidth:1,flexDirection:'row',alignItems:'center',gap:10},smallIcon:{width:34,height:34,borderRadius:11,alignItems:'center',justifyContent:'center'},sheetName:{flex:1,fontSize:11,fontWeight:'900'},sheetValue:{fontSize:10,fontWeight:'800'}});

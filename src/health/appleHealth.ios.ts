@@ -5,6 +5,7 @@ import {
   queryWorkoutSamples,
   requestAuthorization,
 } from '@kingstinct/react-native-healthkit';
+import { CategoryTypes } from '@kingstinct/react-native-healthkit/modules';
 import { Linking } from 'react-native';
 
 import { HealthAdapter, HealthImportRecord } from '@/src/health/types';
@@ -33,6 +34,7 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier:'HKQuantityTypeIdentifierDietaryPotassium',type:'nutrition',unit:'mg',nutritionField:'potassiumMg' },
   { identifier:'HKQuantityTypeIdentifierDietaryCalcium',type:'nutrition',unit:'mg',nutritionField:'calciumMg' },
   { identifier:'HKQuantityTypeIdentifierDietaryIron',type:'nutrition',unit:'mg',nutritionField:'ironMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryMagnesium',type:'nutrition',unit:'mg',nutritionField:'magnesiumMg' },
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminC',type:'nutrition',unit:'mg',nutritionField:'vitaminCMg' },
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminD',type:'nutrition',unit:'mcg',nutritionField:'vitaminDMcg' },
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminB12',type:'nutrition',unit:'mcg',nutritionField:'vitaminB12Mcg' },
@@ -40,7 +42,13 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier: 'HKQuantityTypeIdentifierBodyFatPercentage', type: 'body_fat', unit: '%' },
   { identifier: 'HKQuantityTypeIdentifierLeanBodyMass', type: 'lean_body_mass', unit: 'kg' },
   { identifier: 'HKQuantityTypeIdentifierRestingHeartRate', type: 'heart_rate', unit: 'count/min' },
+  { identifier: 'HKQuantityTypeIdentifierBloodGlucose', type: 'blood_glucose', unit: 'mg/dL' },
 ];
+
+async function readCategories(type:HealthDataType,identifier:'HKCategoryTypeIdentifierSleepAnalysis'|'HKCategoryTypeIdentifierMenstrualFlow',from:Date,to:Date):Promise<HealthImportRecord[]>{
+  const samples=await CategoryTypes.queryCategorySamples(identifier,{limit:0,ascending:true,filter:{date:{startDate:from,endDate:to}}});
+  return samples.flatMap((sample)=>{const start=asDate(sample.startDate,from);const end=asDate(sample.endDate,start);const numeric=Number(sample.value);if(type==='sleep'&&![1,3,4,5].includes(numeric))return[];if(type==='menstruation'&&numeric===5)return[];const durationMinutes=Math.max(0,(end.getTime()-start.getTime())/60000);return[{id:String(sample.uuid??`${identifier}:${start.toISOString()}`),provider:'apple_health' as const,type,startTime:start.toISOString(),endTime:end.toISOString(),value:type==='sleep'?durationMinutes/60:true,unit:type==='sleep'?'hr':'',origin:sourceName(sample),measurements:type==='sleep'?{durationMinutes}:undefined}];});
+}
 
 function asDate(value: unknown, fallback: Date) {
   const date = value instanceof Date ? value : new Date(String(value ?? fallback.toISOString()));
@@ -120,11 +128,15 @@ export const appleHealthAdapter: HealthAdapter = {
   requestPermissions: async (dataTypes) => {
     const toRead = QUANTITIES.filter((item) => dataTypes.includes(item.type)).map((item) => item.identifier);
     if (dataTypes.includes('workouts')) toRead.push('HKWorkoutTypeIdentifier');
+    if(dataTypes.includes('sleep'))toRead.push('HKCategoryTypeIdentifierSleepAnalysis');
+    if(dataTypes.includes('menstruation'))toRead.push('HKCategoryTypeIdentifierMenstrualFlow');
     if (!toRead.length) throw new Error('Choose at least one health data category.');
     await requestAuthorization({ toRead });
   },
   read: async ({ from, to, dataTypes }) => {
     const records = (await Promise.all(QUANTITIES.filter((item) => dataTypes.includes(item.type)).map((item) => readQuantity(item, from, to)))).flat();
+    if(dataTypes.includes('sleep'))records.push(...await readCategories('sleep','HKCategoryTypeIdentifierSleepAnalysis',from,to));
+    if(dataTypes.includes('menstruation'))records.push(...await readCategories('menstruation','HKCategoryTypeIdentifierMenstrualFlow',from,to));
     if (!dataTypes.includes('workouts')) return records;
     const workouts = await queryWorkoutSamples({ limit: 0, ascending: true, filter: { date: { startDate: from, endDate: to } } });
     return [...records, ...workouts.map((workout): HealthImportRecord => {

@@ -74,7 +74,7 @@ function personalStories(state: AppState, current: string[], previous: string[])
     stories.push({ id: 'personal-distance', scope: 'personal', eyebrow: 'DISTANCE UNLOCKED', title: 'Put it in perspective', stat: `${(km / 42.195).toFixed(1)} marathons`, body: `Your ${Math.round(stepTotal).toLocaleString()} steps add up to roughly ${km.toFixed(1)} km.`, icon: 'map-outline', color: '#3274D9' });
   }
   stories.push({ id: 'personal-goals', scope: 'personal', eyebrow: 'GOAL CHECK', title: perfect ? 'Perfect days happened' : 'Every check counts', stat: `${perfect}/7 all-goal days`, body: `${met} of ${possible} individual tracked goals completed across the week.`, icon: 'checkmark-done-outline', color: '#9B6BDB' });
-  stories.push({ id: 'personal-score', scope: 'personal', eyebrow: 'BEST DAY', title: friendlyDate(scores[0]?.day ?? current[6]), stat: `${Math.round(scores[0]?.value ?? 0)}/100`, body: 'Your highest configured Paceboard score in this recap window.', icon: 'sparkles-outline', color: '#6A5ACD' });
+  stories.push({ id: 'personal-score', scope: 'personal', eyebrow: 'BEST DAY', title: friendlyDate(scores[0]?.day ?? current[6]), stat: `${Math.round(scores[0]?.value ?? 0)}/100`, body: 'Your highest configured North score in this recap window.', icon: 'sparkles-outline', color: '#6A5ACD' });
   if (exercise) {
     const value = total(state, exercise, userId, current);
     stories.push({ id: 'personal-exercise', scope: 'personal', eyebrow: 'ACTIVE ENERGY', title: 'Energy invested', stat: formatMetricValue(exercise, value), body: 'Total logged active energy across your last seven days.', icon: exercise.icon, color: exercise.color });

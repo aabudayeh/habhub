@@ -3,7 +3,7 @@ import { Tabs } from 'expo-router';
 import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { palette, useAppColors, useGroupAccent } from '@/src/theme';
+import { useAppColors, useGroupAccent } from '@/src/theme';
 import { useApp } from '@/src/state/AppProvider';
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -24,7 +24,7 @@ export default function TabLayout() {
         headerShown: false,
         tabBarButton: HapticTab,
         tabBarActiveTintColor: accent,
-        tabBarInactiveTintColor: palette.faint,
+        tabBarInactiveTintColor: colors.faint,
         tabBarHideOnKeyboard: true,
         tabBarStyle: {
           height: 76,

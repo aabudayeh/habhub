@@ -11,6 +11,7 @@ export type FoodProduct = {
   fiberG?: number;
   sodiumMg?: number;
   sugarG?:number;saturatedFatG?:number;cholesterolMg?:number;potassiumMg?:number;
+  calciumMg?:number;ironMg?:number;magnesiumMg?:number;vitaminCMg?:number;vitaminDMcg?:number;vitaminB12Mcg?:number;
 };
 
 type RawProduct = {
@@ -55,11 +56,13 @@ function parseProduct(product: RawProduct): FoodProduct | null {
     sodiumMg: sodiumG === undefined ? undefined : sodiumG * 1000,
     sugarG:nutrient('sugars'),saturatedFatG:nutrient('saturated-fat'),
     cholesterolMg:(nutrient('cholesterol')??0)*1000||undefined,potassiumMg:(nutrient('potassium')??0)*1000||undefined,
+    calciumMg:(nutrient('calcium')??0)*1000||undefined,ironMg:(nutrient('iron')??0)*1000||undefined,magnesiumMg:(nutrient('magnesium')??0)*1000||undefined,
+    vitaminCMg:(nutrient('vitamin-c')??0)*1000||undefined,vitaminDMcg:(nutrient('vitamin-d')??0)*1000000||undefined,vitaminB12Mcg:(nutrient('vitamin-b12')??0)*1000000||undefined,
   };
 }
 
 async function request(url: string) {
-  const response = await fetch(url, { headers: { 'User-Agent': 'Paceboard/1.0 (mobile food logger)' } });
+  const response = await fetch(url, { headers: { 'User-Agent': 'North/1.0 (mobile food logger)' } });
   if (!response.ok) throw new Error(`Food database request failed (${response.status}).`);
   return response.json() as Promise<Record<string, unknown>>;
 }

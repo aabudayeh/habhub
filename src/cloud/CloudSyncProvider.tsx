@@ -80,7 +80,7 @@ function isDemoBoundState(state: AppState) {
 function createCleanAccountState(user: User): AppState {
   const defaults = createInitialState();
   const today = dateKey();
-  const name = accountName(user, 'Paceboard member');
+  const name = accountName(user, 'North member');
   const metrics = defaults.metrics.map((metric) => ({ ...metric, activeFrom: today }));
   const energyProfile = { age: 30, sex: 'unspecified' as const, heightCm: 170, weightKg: 70, targetWeightKg: 70, activityLevel: 'sedentary' as const, desiredWeeklyLossKg: 0.25 };
   const group: Group = {

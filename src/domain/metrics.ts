@@ -36,7 +36,14 @@ export function metricValue(
     const sameDay = state.entries
       .filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate === localDate)
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
-    if (sameDay.length || metric.aggregation !== 'latest') return aggregate(sameDay, metric.aggregation);
+    if (sameDay.length) return aggregate(sameDay, metric.aggregation);
+    if(metric.stepFallback){
+      const steps=state.metrics.find((candidate)=>candidate.healthMapping?.dataType==='steps'&&candidate.healthMapping.field==='value');
+      const stepCount=steps?metricValue(state,steps,userId,localDate,[...stack,metric.id]):0;
+      const weight=state.energyProfiles?.[userId]?.weightKg??state.settings.energyProfile.weightKg??70;
+      return Math.round(uncoveredStepActivity(state,userId,localDate,stepCount,weight));
+    }
+    if(metric.aggregation!=='latest')return 0;
     const carried = state.entries
       .filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate <= localDate)
       .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
@@ -59,6 +66,10 @@ export function metricValue(
   }
 
   return evaluateFormula(metric.formula, variables);
+}
+
+function uncoveredStepActivity(state:AppState,userId:string,localDate:string,steps:number,weightKg:number){
+  const day=state.entries.filter((entry)=>entry.userId===userId&&entry.localDate===localDate);const workoutIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='value').map((item)=>item.id);const distanceIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='distance_km').map((item)=>item.id);const durationIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='duration_minutes').map((item)=>item.id);const calorieIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='active_calories').map((item)=>item.id);const sessions=day.filter((entry)=>workoutIds.includes(entry.metricId)&&/(walk|run|hike|treadmill)/i.test(entry.label??''));let covered=0;for(const sourceId of new Set(sessions.map((entry)=>entry.sourceRecordId).filter(Boolean))){const label=sessions.find((entry)=>entry.sourceRecordId===sourceId)?.label??'';const running=/(run|treadmill)/i.test(label);const distance=Math.max(0,...day.filter((entry)=>entry.sourceRecordId===sourceId&&distanceIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));const duration=Math.max(0,...day.filter((entry)=>entry.sourceRecordId===sourceId&&durationIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));covered+=(distance||duration/60*(running?9:5))*(running?1000:1312);}const known=day.filter((entry)=>calorieIds.includes(entry.metricId)).reduce((sum,entry)=>sum+Number(entry.value||0),0);const uncovered=Math.max(0,steps-covered);return known+uncovered*.000762*.53*Math.max(35,weightKg);
 }
 
 export function safeMetricValue(
@@ -146,6 +157,8 @@ export function sharedMetricResult(
 }
 
 export function goalProgress(metric: MetricDefinition, value: number, targetOverride = metric.goal.target): number {
+  if(metric.goalEnabled===false)return 0;
+  if(metric.goalRange){if(value<=0)return 0;if(value>=metric.goalRange.min&&value<=metric.goalRange.max)return 1;const edge=value<metric.goalRange.min?metric.goalRange.min:metric.goalRange.max;return Math.max(0,1-Math.abs(value-edge)/Math.max(Math.abs(edge),1));}
   const target = Math.max(targetOverride, 0.0001);
   switch (metric.goal.kind) {
     case 'at_most':
@@ -161,6 +174,8 @@ export function goalProgress(metric: MetricDefinition, value: number, targetOver
 }
 
 export function goalReached(metric: MetricDefinition, value: number, targetOverride = metric.goal.target): boolean {
+  if(metric.goalEnabled===false)return false;
+  if(metric.goalRange)return value>=metric.goalRange.min&&value<=metric.goalRange.max;
   switch (metric.goal.kind) {
     case 'at_most':
       return value <= targetOverride && value > 0;
@@ -174,7 +189,7 @@ export function goalReached(metric: MetricDefinition, value: number, targetOverr
 }
 
 export function dailyScore(state: AppState, userId: string, localDate: string): number {
-  const enabled = state.metrics.filter((metric) => metric.scoreWeight > 0 && metric.dataType !== 'text' && metric.activeFrom <= localDate);
+  const enabled = state.metrics.filter((metric) => metric.goalEnabled!==false&&metric.scoreWeight > 0 && metric.dataType !== 'text' && metric.activeFrom <= localDate && (metric.id !== 'deficit' || state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===localDate)));
   const totalWeight = enabled.reduce((sum, metric) => sum + metric.scoreWeight, 0) || 1;
   return enabled.reduce((score, metric) => {
     const status = state.dailyMetricStatuses?.find((item) => item.groupId === state.group.id && item.metricId === metric.id && item.userId === userId && item.localDate === localDate);
@@ -210,7 +225,8 @@ export function isMetricTrackedOnDate(state: AppState, metric: MetricDefinition,
 
 export function trackedGoalSummary(state: AppState, userId: string, localDate: string, metricIds?: string[]) {
   const metrics = state.metrics.filter((metric) =>
-    metric.activeFrom <= localDate && metric.dataType !== 'text' &&
+    metric.goalEnabled!==false&&metric.activeFrom <= localDate && metric.dataType !== 'text' &&
+    (metric.id !== 'deficit' || state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===localDate)) &&
     (metricIds ? metricIds.includes(metric.id) : isMetricTrackedOnDate(state, metric, localDate)),
   );
   const met = metrics.filter((metric) => goalReached(metric, safeMetricValue(state, metric, userId, localDate), effectiveGoalTarget(state, metric, userId, localDate)));
@@ -256,11 +272,12 @@ export function deficitRealityCheckAtDate(state: AppState, userId: string, local
   const reported: number[] = [];
   while (dateCursor <= new Date(`${current.localDate}T12:00:00`)) {
     const key = `${dateCursor.getFullYear()}-${String(dateCursor.getMonth() + 1).padStart(2, '0')}-${String(dateCursor.getDate()).padStart(2, '0')}`;
-    reported.push(safeMetricValue(state, deficit, userId, key));
+    if(state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===key))reported.push(safeMetricValue(state, deficit, userId, key));
     dateCursor.setDate(dateCursor.getDate() + 1);
   }
   const reportedDailyDeficit = reported.reduce((sum, value) => sum + value, 0) / Math.max(reported.length, 1);
-  const actualDailyDeficit = weightChangeKg * KCAL_PER_KG_ESTIMATE / days;
+  const actualDailyDeficit = weightChangeKg * KCAL_PER_KG_ESTIMATE / days * ((state.settings.weightDirection??'lose')==='lose'?1:-1);
+  if(!reported.length)return{status:'insufficient',actualDailyDeficit,reportedDailyDeficit:0,days,weightChangeKg,fromDate:previous.localDate,toDate:current.localDate};
   if (Math.abs(weightChangeKg) < 0.3) return { status: 'noise', actualDailyDeficit, reportedDailyDeficit, days, weightChangeKg, fromDate: previous.localDate, toDate: current.localDate };
   const ratio = reportedDailyDeficit > 0 ? actualDailyDeficit / reportedDailyDeficit : 0;
   const status = ratio >= 0.6 && ratio <= 1.4 ? 'aligned' : ratio < 0.6 ? 'reported_ahead' : 'scale_ahead';
@@ -285,6 +302,7 @@ export function rankedMembers(state: AppState, metric: MetricDefinition, localDa
 }
 
 export function goalRemainingLabel(state: AppState, metric: MetricDefinition, userId: string, localDate: string): string | undefined {
+  if(metric.goalEnabled===false)return undefined;
   if (metric.dataType === 'text' || metric.dataType === 'boolean' || metric.dataType === 'photo') return undefined;
   const value = safeMetricValue(state, metric, userId, localDate);
   const target = effectiveGoalTarget(state, metric, userId, localDate);
@@ -300,13 +318,14 @@ export function goalRemainingLabel(state: AppState, metric: MetricDefinition, us
     }
   }
   if (metric.id === 'weight') {
-    const remaining = Math.max(0, value - target);
+    const gaining=(state.settings.weightDirection??'lose')==='gain';
+    const remaining = Math.max(0, gaining?target-value:value-target);
     const weights = state.entries.filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate <= localDate && Number.isFinite(Number(entry.value))).sort((a,b)=>b.localDate.localeCompare(a.localDate));
     const current = weights[0];
     const older = current ? weights.find((entry) => entry.localDate <= new Date(new Date(`${current.localDate}T12:00:00`).getTime() - 6 * 86400000).toISOString().slice(0,10)) : undefined;
     const elapsed = current && older ? Math.max(1,(new Date(`${current.localDate}T12:00:00`).getTime()-new Date(`${older.localDate}T12:00:00`).getTime())/86400000) : 0;
     const pace = current && older && elapsed ? (Number(older.value)-Number(current.value))/elapsed*7 : 0;
-    return `${formatMetricValue(metric, remaining)} left to lose${pace>0?` · ~${pace.toFixed(1)} kg/week pace`:' · pace pending more weigh-ins'}`;
+    return `${formatMetricValue(metric, remaining)} left to ${gaining?'gain':'lose'}${pace!==0?` · ~${Math.abs(pace).toFixed(1)} kg/week pace`:' · pace pending more weigh-ins'}`;
   }
   if (metric.goal.kind === 'at_least') {
     const remaining = Math.max(0, target - value);

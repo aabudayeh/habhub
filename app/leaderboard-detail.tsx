@@ -114,13 +114,13 @@ function PhotoCompare({ state, memberId, dates }: { state: AppState; memberId: s
     const photos = [primary, comparison].filter(Boolean) as PhotoUpdate[];
     if (photos.length < 2) return;
     if (Platform.OS !== 'web') {
-      await Share.share({ message: `Paceboard comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join('\n')}` });
+      await Share.share({ message: `North comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join('\n')}` });
       return;
     }
     try {
       const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 850;
       const context = canvas.getContext('2d'); if (!context) throw new Error('Canvas unavailable');
-      context.fillStyle = '#F5F7F2'; context.fillRect(0, 0, 1200, 850); context.fillStyle = '#17211B'; context.font = 'bold 34px sans-serif'; context.fillText('Paceboard progress comparison', 45, 55);
+      context.fillStyle = '#F5F7F2'; context.fillRect(0, 0, 1200, 850); context.fillStyle = '#17211B'; context.font = 'bold 34px sans-serif'; context.fillText('North progress comparison', 45, 55);
       const images = await Promise.all(photos.map((photo) => new Promise<HTMLImageElement>((resolve, reject) => { const image = document.createElement('img'); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Photo unavailable')); image.src = imageSourceUri(photo.uri); })));
       images.forEach((image, index) => { const x = 45 + index * 565; context.drawImage(image, x, 90, 540, 620); context.textAlign = 'center'; context.fillStyle = '#17211B'; context.font = 'bold 23px sans-serif'; context.fillText(photos[index].localDate, x + 270, 755); context.fillStyle = '#176B4D'; context.font = 'bold 18px sans-serif'; context.fillText(weight(photos[index].localDate), x + 270, 790); });
       canvas.toBlob((blob) => { if (!blob) return; const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `paceboard-${memberId}-comparison.png`; link.click(); URL.revokeObjectURL(url); }, 'image/png');

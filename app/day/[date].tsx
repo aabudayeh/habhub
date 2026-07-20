@@ -8,7 +8,7 @@ import { MetricSelector } from '@/src/components/MetricSelector';
 import { MonthCalendar } from '@/src/components/MonthCalendar';
 import { Button, Card, Chip, IconButton, PageHeader, ProgressBar, Screen, SectionHeader } from '@/src/components/ui';
 import { dateKey, dateWithOffsetFrom, friendlyDate } from '@/src/domain/date';
-import { deficitRealityCheckAtDate, effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, latestTextValue, safeMetricValue, trackedGoalSummary } from '@/src/domain/metrics';
+import { deficitRealityCheckAtDate, effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, safeMetricValue, trackedGoalSummary } from '@/src/domain/metrics';
 import { imageSourceUri } from '@/src/domain/media';
 import { useApp } from '@/src/state/AppProvider';
 import { palette } from '@/src/theme';
@@ -36,7 +36,7 @@ export default function DayDetail() {
   const [selectedIds, setSelectedIds] = useState<string[]>(initialIds);
   const available = state.metrics.filter((metric) => loggedIds.includes(metric.id));
   const selected = state.metrics.filter((metric) => selectedIds.includes(metric.id) && loggedIds.includes(metric.id)).sort((a, b) => a.order - b.order);
-  const showTracked = requested.includes(TRACKED);
+  const showTracked = trackedSummary.total > 0;
   const alignment = deficitRealityCheckAtDate(state, state.currentUserId, day);
   const weightLogged = dayEntries.some((entry) => entry.metricId === 'weight');
   const otherPhotoDates = [...new Set(state.photos.filter((photo) => photo.userId === state.currentUserId && photo.localDate < day).map((photo) => photo.localDate))].sort().reverse();
@@ -66,7 +66,7 @@ export default function DayDetail() {
   async function saveCollage() {
     if (collage.length < 2) return;
     if (Platform.OS !== 'web') {
-      await Share.share({ message: `Paceboard comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join('\n')}` });
+      await Share.share({ message: `North comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join('\n')}` });
       return;
     }
     try {
@@ -75,7 +75,7 @@ export default function DayDetail() {
       const context = canvas.getContext('2d');
       if (!context) throw new Error('Canvas unavailable');
       context.fillStyle = '#F5F7F2'; context.fillRect(0, 0, 1200, 850);
-      context.fillStyle = '#17211B'; context.font = 'bold 36px sans-serif'; context.fillText('Paceboard progress comparison', 45, 60);
+      context.fillStyle = '#17211B'; context.font = 'bold 36px sans-serif'; context.fillText('North progress comparison', 45, 60);
       const images = await Promise.all(collage.map((photo) => new Promise<HTMLImageElement>((resolve, reject) => {
         const image = document.createElement('img'); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Photo unavailable')); image.src = imageSourceUri(photo.uri);
       })));
@@ -95,7 +95,7 @@ export default function DayDetail() {
   }
 
   return <Screen keyboardShouldPersistTaps="handled">
-    <PageHeader eyebrow="Daily detail" title={friendlyDate(day)} subtitle="Only metrics logged on this day appear by default." showMenu={false} action={<IconButton icon="close" label="Close" onPress={() => router.back()} />} />
+    <PageHeader eyebrow="Daily detail" title={friendlyDate(day)} subtitle="Only items logged on this day appear by default." showMenu={false} action={<IconButton icon="close" label="Close" onPress={() => router.back()} />} />
     <Card style={styles.dateCard}>
       <View style={styles.dateNav}>
         <Pressable onPress={() => changeDay(dateWithOffsetFrom(day, -1))} style={styles.arrow}><Ionicons name="chevron-back" size={19} color={palette.ink} /></Pressable>
@@ -104,7 +104,7 @@ export default function DayDetail() {
       </View>
       {calendarOpen ? <View style={styles.calendar}><MonthCalendar monthDate={day} selectedDate={day} onMonthChange={setDay} onSelect={(date) => { changeDay(date); setCalendarOpen(false); }} /></View> : null}
     </Card>
-    <MetricSelector items={available.map((metric) => ({ id: metric.id, label: metric.name, icon: metric.icon as keyof typeof Ionicons.glyphMap, color: metric.color, sublabel: dayEntries.some((entry) => entry.metricId === metric.id) ? 'Logged on this day' : 'Selected goal metric' }))} selectedIds={selectedIds} onChange={setSelectedIds} title="Filter this day" emptyLabel="No logs on this day" />
+    <MetricSelector items={available.map((metric) => ({ id: metric.id, label: metric.name, icon: metric.icon as keyof typeof Ionicons.glyphMap, color: metric.color, sublabel: dayEntries.some((entry) => entry.metricId === metric.id) ? 'Logged on this day' : 'Selected goal' }))} selectedIds={selectedIds} onChange={setSelectedIds} title="What to show" emptyLabel="No logs on this day" />
     {showTracked ? <TrackedCard state={state} day={day} /> : null}
     <SectionHeader title="Selected logs" />
     <View style={styles.metrics}>{selected.map((metric) => {
@@ -112,11 +112,7 @@ export default function DayDetail() {
       const target = effectiveGoalTarget(state, metric, state.currentUserId, day);
       const reached = goalReached(metric, value, target);
       const entries = dayEntries.filter((entry) => entry.metricId === metric.id);
-      return <Card key={metric.id} style={styles.metricCard}>
-        <View style={styles.metricHeader}><View style={[styles.metricIcon, { backgroundColor: `${metric.color}18` }]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={20} color={metric.color} /></View><View style={styles.grow}><Text style={styles.metricName}>{metric.name}</Text><Text style={styles.metricValue}>{metric.dataType === 'text' ? latestTextValue(state, metric.id, state.currentUserId, day) || 'No entry' : formatMetricValue(metric, value)}</Text></View><Chip label={reached ? 'Goal met' : 'Not met'} selected={reached} /></View>
-        {metric.dataType !== 'text' ? <ProgressBar progress={goalProgress(metric, value, target)} color={metric.color} /> : null}
-        {entries.map((entry) => <EntryRow key={entry.id} entry={entry} metric={metric} />)}
-      </Card>;
+      return <DayTracker key={metric.id} metric={metric} value={value} target={target} reached={reached} entries={entries} day={day} />;
     })}</View>
     {weightLogged ? <AlignmentCard status={alignment} /> : null}
     {dayPhotos.length ? <>
@@ -126,6 +122,23 @@ export default function DayDetail() {
       {collage.length === 2 ? <Card style={styles.comparison}><View style={styles.compareGrid}>{collage.map((photo) => <View key={photo.id} style={styles.compareItem}><ExpandableImage uri={photo.uri} thumbnailStyle={styles.compareImage} /><Text style={styles.photoCaption}>{photo.localDate}</Text><Text style={styles.weight}>{nearestWeight(photo.localDate)}</Text></View>)}</View><Button label={Platform.OS === 'web' ? 'Download collage' : 'Share comparison'} icon={Platform.OS === 'web' ? 'download-outline' : 'share-outline'} variant="ghost" onPress={saveCollage} /></Card> : null}
     </> : null}
   </Screen>;
+}
+
+function DayTracker({ metric, value, target, reached, entries, day }: { metric: MetricDefinition; value: number; target: number; reached: boolean; entries: MetricEntry[]; day: string }) {
+  const [open, setOpen] = useState(false);
+  return <Card style={styles.metricCard}>
+    <Pressable onPress={() => setOpen((value) => !value)} style={styles.metricHeader}>
+      <View style={[styles.metricIcon, { backgroundColor: `${metric.color}18` }]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={20} color={metric.color} /></View>
+      <View style={styles.grow}><Text style={styles.metricName}>{metric.name}</Text><Text style={styles.metricValue}>{metric.dataType === 'text' ? String(entries.at(-1)?.value ?? 'No entry') : formatMetricValue(metric, value)}</Text></View>
+      {metric.goalEnabled !== false ? <Chip label={reached ? 'Goal met' : 'Not met'} selected={reached} /> : null}
+      <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={17} color={palette.faint} />
+    </Pressable>
+    {open ? <>
+      {metric.dataType !== 'text' && metric.goalEnabled !== false ? <ProgressBar progress={goalProgress(metric, value, target)} color={metric.color} /> : null}
+      {entries.map((entry) => <EntryRow key={entry.id} entry={entry} metric={metric} />)}
+      <Pressable onPress={() => router.push({ pathname: '/metric-detail' as never, params: { metric: metric.id, date: day } } as never)} style={styles.openTracker}><Text style={[styles.nutrition, { color: metric.color }]}>Open history and trends</Text><Ionicons name="arrow-forward" size={14} color={metric.color} /></Pressable>
+    </> : null}
+  </Card>;
 }
 
 function TrackedCard({ state, day }: { state: AppState; day: string }) {
@@ -156,6 +169,7 @@ const styles = StyleSheet.create({
   dateCard: { padding: 9, marginBottom: 9 }, dateNav: { flexDirection: 'row', alignItems: 'center', gap: 8 }, arrow: { width: 38, height: 38, borderRadius: 12, backgroundColor: palette.canvas, alignItems: 'center', justifyContent: 'center' }, dateButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 38 }, dateText: { color: palette.ink, fontSize: 14, fontWeight: '900' }, calendar: { borderTopWidth: 1, borderTopColor: palette.border, paddingTop: 11, marginTop: 9 },
   tracked: { marginTop: 10, backgroundColor: '#F5FAF7' }, trackedTop: { flexDirection: 'row', alignItems: 'center', gap: 10 }, grow: { flex: 1 }, trackedTitle: { color: palette.ink, fontSize: 14, fontWeight: '900' }, meta: { color: palette.muted, fontSize: 9, marginTop: 2 }, fraction: { color: palette.primary, fontSize: 18, fontWeight: '900' }, goalChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   metrics: { gap: 9 }, metricCard: { padding: 14 }, metricHeader: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 10 }, metricIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' }, metricName: { color: palette.muted, fontSize: 9, fontWeight: '800' }, metricValue: { color: palette.ink, fontSize: 16, fontWeight: '900', marginTop: 2 },
+  openTracker: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingTop: 12 },
   entry: { flexDirection: 'row', gap: 8, borderRadius: 13, padding: 10, marginTop: 8, borderLeftWidth: 3 }, entryMetric: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 4 }, entryMetricText: { fontSize: 8, fontWeight: '900', textTransform: 'uppercase' }, entryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, entryValue: { fontSize: 12, fontWeight: '900' }, entryTime: { color: palette.faint, fontSize: 8 }, entryLabel: { color: palette.ink, fontSize: 11, fontWeight: '900', marginTop: 4 }, entryNote: { color: palette.muted, fontSize: 9, lineHeight: 14, marginTop: 3 }, nutrition: { color: palette.primary, fontSize: 9, lineHeight: 14, fontWeight: '800', marginTop: 4 }, entryImage: { width: 62, height: 62, borderRadius: 10 },
   alignment: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 }, alignmentTitle: { color: palette.ink, fontSize: 13, fontWeight: '900' }, dayPhotos: { gap: 9 }, photoCard: { padding: 12 }, dayPhoto: { width: 150, height: 150, borderRadius: 14 }, photoCaption: { color: palette.ink, fontSize: 11, fontWeight: '900', textAlign: 'center', marginTop: 6 }, weight: { color: palette.primary, fontSize: 9, fontWeight: '800', textAlign: 'center', marginTop: 2 }, comparison: { marginTop: 10 }, compareGrid: { flexDirection: 'row', gap: 8, marginBottom: 11 }, compareItem: { flex: 1 }, compareImage: { width: 145, height: 180, borderRadius: 13 },
 });

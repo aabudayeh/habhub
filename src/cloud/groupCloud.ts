@@ -1,14 +1,11 @@
 import { User } from '@supabase/supabase-js';
 
 import { effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, rankedMembers, safeMetricValue } from '@/src/domain/metrics';
-import { DEFAULT_METRICS } from '@/src/data/seed';
 import { supabase } from '@/src/lib/supabase';
 import { AppState, ChatMessage, DailyMetricStatus, Group, Member, MetricDefinition, MetricEntry, PhotoUpdate } from '@/src/types';
 
 const MEDIA_BUCKET = 'paceboard-media';
 const COLORS = ['#176B4D', '#3478D4', '#7756D9', '#E9A23B', '#D95852', '#2A8F86', '#9B6B43'];
-const REQUIRED_HEALTH_METRICS = new Set(['workout_duration','workout_calories','workout_distance','body_fat','lean_body_mass','blood_pressure_systolic','blood_pressure_diastolic','pulse']);
-function ensureHealthMetrics(metrics:MetricDefinition[]){return [...metrics,...DEFAULT_METRICS.filter((metric)=>REQUIRED_HEALTH_METRICS.has(metric.id)&&!metrics.some((item)=>item.id===metric.id))].sort((a,b)=>a.order-b.order);}
 
 export function isCloudGroupId(id: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -45,6 +42,12 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     aggregation: row.aggregation_method,
     rankingDirection: row.ranking_direction,
     goal: configuration.goal ?? { kind: 'at_least', target: 1 },
+    goalEnabled: configuration.goalEnabled ?? true,
+    goalRange: configuration.goalRange,
+    category: configuration.category ?? 'other',
+    healthMapping: configuration.healthMapping,
+    stepFallback: configuration.stepFallback,
+    manualEntry: configuration.manualEntry ?? true,
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,
@@ -69,7 +72,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
     formula: metric.formula ?? null,
     score_weight: metric.scoreWeight,
     default_visibility: metric.defaultVisibility,
-    configuration: { goal: metric.goal, sections: metric.sections, order: metric.order, activeFrom: metric.activeFrom },
+    configuration: { goal: metric.goal, goalEnabled:metric.goalEnabled,goalRange:metric.goalRange,category:metric.category,healthMapping:metric.healthMapping,stepFallback:metric.stepFallback,manualEntry:metric.manualEntry, sections: metric.sections, order: metric.order, activeFrom: metric.activeFrom },
   };
 }
 
@@ -114,7 +117,7 @@ async function groupMembers(groupIds: string[]) {
   const result = new Map<string, Member[]>();
   for (const membershipRow of membership ?? []) {
     const profile = profileMap.get(membershipRow.user_id);
-    const name = profile?.display_name || 'Paceboard member';
+    const name = profile?.display_name || 'North member';
     const member: Member = {
       id: membershipRow.user_id,
       name,
@@ -150,7 +153,7 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
     members: members.get(row.id) ?? [],
     streakRestDaysPerWeek: Number((row.settings as Record<string, any>)?.streakRestDaysPerWeek ?? 1),
     themeColor: String((row.settings as Record<string, any>)?.themeColor ?? '#176B4D'),
-    metricConfiguration: ensureHealthMetrics((metrics ?? []).filter((metric) => metric.group_id === row.id).map(metricFromRow)),
+    metricConfiguration: (metrics ?? []).filter((metric) => metric.group_id === row.id).map(metricFromRow).sort((a,b)=>a.order-b.order),
   }));
 }
 
@@ -480,7 +483,7 @@ export async function pushCloudWorkspace(state: AppState) {
     recipientId: message.recipientId,
     title: message.recipientId ? `Private message from ${current.name}` : `${current.name} in ${state.group.name}`,
     body: message.text || 'Sent an image',
-    data: { route: '/chat' },
+    data: { route: '/chat', conversationId: message.conversationId ?? `group:${state.group.id}` },
   } })));
 
   const ownedPhotos = state.photos.filter((photo) => photo.userId === state.currentUserId && photo.storagePath);

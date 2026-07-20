@@ -11,9 +11,9 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <meta name="theme-color" content="#F5F7F2" />
         <meta
           name="description"
-          content="Paceboard is a private, customizable social tracker for friends."
+          content="North is a private, goal-led tracker for you and your friends."
         />
-        <title>Paceboard · Track your way</title>
+        <title>North · Find your direction</title>
         <ScrollViewStyleReset />
       </head>
       <body>{children}</body>

@@ -37,25 +37,27 @@ function RootNavigator() {
   const { state } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? '');
-  const inAuthRoute = rootSegment === 'sign-in' || rootSegment === 'auth-callback' || rootSegment === 'update-password' || rootSegment === 'join';
+  const inAuthRoute = rootSegment === 'sign-in' || rootSegment === 'auth-callback' || rootSegment === 'update-password' || rootSegment === 'join' || rootSegment === 'onboarding';
 
   if (auth.status === 'loading') {
-    return <View style={styles.loading}><View style={styles.mark}><Text style={styles.initial}>P</Text></View><ActivityIndicator color={palette.primary}/></View>;
+    return <View style={styles.loading}><View style={styles.mark}><Text style={styles.initial}>N</Text></View><ActivityIndicator color={palette.primary}/></View>;
   }
   if (auth.status === 'signedIn' && (cloud.status === 'disabled' || cloud.status === 'initializing')) {
-    return <View style={styles.loading}><View style={styles.mark}><Text style={styles.initial}>P</Text></View><ActivityIndicator color={palette.primary}/></View>;
+    return <View style={styles.loading}><View style={styles.mark}><Text style={styles.initial}>N</Text></View><ActivityIndicator color={palette.primary}/></View>;
   }
   if (auth.configured && auth.status === 'signedOut' && !inAuthRoute) return <Redirect href={'/sign-in' as never} />;
   if (auth.status === 'signedIn' && auth.passwordRecovery && rootSegment !== 'update-password') return <Redirect href={'/update-password' as never} />;
+  if(!state.settings.onboardingComplete&&rootSegment!=='onboarding'&&!(auth.configured&&auth.status==='signedOut'))return <Redirect href={'/onboarding' as never}/>;
 
   const accent = state.group.themeColor ?? palette.primary;
   const activeTheme = { ...theme, dark:state.settings.darkMode, colors: { ...theme.colors, primary: accent,background:state.settings.darkMode?'#0F1411':palette.canvas,text:state.settings.darkMode?'#F1F5F2':palette.ink,card:state.settings.darkMode?'#18201B':palette.card,border:state.settings.darkMode?'#2B3730':palette.border } };
   return <GroupAccentProvider color={accent}><DarkModeProvider dark={state.settings.darkMode}><CompactModeProvider compact={state.settings.compactMode}><ThemeProvider value={activeTheme}>
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: palette.canvas } }}>
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: state.settings.darkMode?'#0F1411':palette.canvas } }}>
           <Stack.Screen name="sign-in" options={{ animation: 'fade' }} />
           <Stack.Screen name="auth-callback" options={{ animation: 'fade' }} />
           <Stack.Screen name="update-password" options={{ presentation: 'modal' }} />
           <Stack.Screen name="join" options={{ presentation: 'modal' }} />
+          <Stack.Screen name="onboarding" options={{ animation:'fade' }} />
           <Stack.Screen name="food-search" options={{ presentation: 'modal' }} />
           <Stack.Screen name="metric-detail" options={{ presentation: 'modal' }} />
           <Stack.Screen name="(tabs)" />
@@ -74,7 +76,7 @@ function RootNavigator() {
           <Stack.Screen name="leaderboard-detail" />
           <Stack.Screen name="groups" options={{ presentation: 'modal' }} />
         </Stack>
-        <StatusBar style="dark" />
+        <StatusBar style={state.settings.darkMode?'light':'dark'} />
       </ThemeProvider></CompactModeProvider></DarkModeProvider></GroupAccentProvider>
 }
 

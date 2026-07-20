@@ -34,14 +34,14 @@ export default function SignInScreen() {
     if (mode === 'magic') {
       await run('email', async () => {
         await auth.sendMagicLink(email);
-        Alert.alert('Check your inbox', 'Open the secure Paceboard link on this device.');
+        Alert.alert('Check your inbox', 'Open the secure North link on this device.');
       });
       return;
     }
     if (mode === 'sign-up') {
       await run('email', async () => {
         const result = await auth.signUp(email, password);
-        if (result === 'verification-required') Alert.alert('Verify your email', 'Use the link we sent, then return to Paceboard.');
+        if (result === 'verification-required') Alert.alert('Verify your email', 'Use the link we sent, then return to North.');
       });
       return;
     }
@@ -50,7 +50,7 @@ export default function SignInScreen() {
 
   return <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen keyboardShouldPersistTaps="handled" contentContainerStyle={styles.screen}>
-      <View style={styles.brand}><View style={styles.mark}><Text style={styles.markText}>P</Text></View><Text style={styles.name}>Paceboard</Text><Text style={styles.tagline}>Track your way. Rally together.</Text></View>
+      <View style={styles.brand}><View style={styles.mark}><Text style={styles.markText}>N</Text></View><Text style={styles.name}>North</Text><Text style={styles.tagline}>Your goals, one clear direction.</Text></View>
       <Card style={styles.card}>
         <Text style={styles.title}>{mode === 'sign-up' ? 'Create your account' : mode === 'magic' ? 'Email sign-in link' : 'Welcome back'}</Text>
         <Text style={styles.subtitle}>Your private data stays available offline and syncs securely when you sign in.</Text>

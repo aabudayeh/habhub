@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -26,12 +27,13 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function ChatScreen() {
-  const { state, sendMessage } = useApp();
+  const { state, sendMessage, updateSettings } = useApp();
   const accent = useGroupAccent();
   const colors=useAppColors();
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const messageScroll = useRef<ScrollView>(null);
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
@@ -40,6 +42,8 @@ export default function ChatScreen() {
   const conversationId = recipientId
     ? directConversationId(state.currentUserId, recipientId)
     : groupConversationId;
+  const notifications=state.settings.notifications;const muted=recipientId?(notifications.mutedConversationIds??[]).includes(conversationId):(notifications.mutedGroupIds??[]).includes(state.group.id);
+  function toggleMute(){updateSettings({notifications:{...notifications,...(recipientId?{mutedConversationIds:muted?(notifications.mutedConversationIds??[]).filter((id)=>id!==conversationId):[...(notifications.mutedConversationIds??[]),conversationId]}:{mutedGroupIds:muted?(notifications.mutedGroupIds??[]).filter((id)=>id!==state.group.id):[...(notifications.mutedGroupIds??[]),state.group.id]})}});}
   const messages = useMemo(
     () =>
       state.messages.filter((message) => {
@@ -57,6 +61,14 @@ export default function ChatScreen() {
     );
     return () => clearTimeout(timer);
   }, [conversationId]);
+  useEffect(() => {
+    const shown = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
+    const hidden = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
 
   function submit() {
     if (!draft.trim() && !imageUri) return;
@@ -92,7 +104,7 @@ export default function ChatScreen() {
     <SafeAreaView style={[styles.safe,{backgroundColor:colors.canvas}]} edges={["top"]}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
@@ -104,7 +116,7 @@ export default function ChatScreen() {
               marginBottom: 4,
             }}
           />
-          <View style={[styles.chatPicker]}>
+          {!keyboardOpen ? <View style={[styles.chatPicker]}>
             <Text style={styles.sidebarTitle}>CHATS</Text>
             <ScrollView
               horizontal
@@ -150,7 +162,7 @@ export default function ChatScreen() {
                   </Pressable>
                 ))}
             </ScrollView>
-          </View>
+          </View> : null}
 
           <View style={[styles.threadHeader,{borderBottomColor:colors.border}]}>
             {recipient ? (
@@ -189,6 +201,7 @@ export default function ChatScreen() {
                   : "Shared group conversation"}
               </Text>
             </Pressable>
+            <Pressable accessibilityLabel={muted?'Unmute chat':'Mute chat'} onPress={toggleMute} style={styles.profileButton}><Ionicons name={muted?'notifications-off-outline':'notifications-outline'} size={18} color={accent}/></Pressable>
             {recipient ? (
               <Pressable
                 accessibilityLabel="View friend profile"
@@ -346,7 +359,7 @@ export default function ChatScreen() {
               </Pressable>
             </View>
           ) : null}
-          <View style={styles.quickRow}>
+          {!keyboardOpen ? <View style={styles.quickRow}>
             <Quick
               label="Cheer"
               icon="sparkles-outline"
@@ -362,11 +375,11 @@ export default function ChatScreen() {
               icon="notifications-outline"
               onPress={() => suggest("reminder")}
             />
-          </View>
-          <Text style={styles.libraryNote}>
+          </View> : null}
+          {!keyboardOpen ? <Text style={styles.libraryNote}>
             A random built-in suggestion is placed in the box first. Edit
             it, then send when ready.
-          </Text>
+          </Text> : null}
           <View style={[styles.composer,{backgroundColor:colors.card,borderColor:colors.border}]}>
             <Pressable
               accessibilityLabel="Attach image"
@@ -572,7 +585,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  messages: { gap: 13, minHeight: 285, paddingVertical: 15, paddingHorizontal: 14 },
+  messages: { flexGrow: 1, justifyContent: "flex-end", gap: 13, paddingVertical: 15, paddingHorizontal: 14 },
   systemMessage: {
     alignSelf: "center",
     flexDirection: "row",

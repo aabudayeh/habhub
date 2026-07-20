@@ -34,7 +34,7 @@ export default function JoinGroupScreen() {
   return <Screen contentContainerStyle={styles.screen}><Card style={styles.card}>
     <View style={styles.icon}><Ionicons name="people" size={30} color={palette.white}/></View>
     <Text style={styles.title}>You’re invited</Text>
-    <Text style={styles.body}>Join this Paceboard group to share permitted metrics, chat, and compete on its leaderboard.</Text>
+    <Text style={styles.body}>Join this North group to share the progress you choose, chat, and compete.</Text>
     <View style={styles.code}><Text style={styles.codeLabel}>INVITE CODE</Text><Text style={styles.codeValue}>{code || 'Missing'}</Text></View>
     <Button label={auth.status === 'signedOut' ? 'Sign in to join' : 'Join group'} icon="enter-outline" loading={busy} onPress={join}/>
     <Button label="Not now" variant="ghost" onPress={() => router.replace('/')}/>

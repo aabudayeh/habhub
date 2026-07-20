@@ -4,7 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { createInitialState } from '@/src/data/seed';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
-import { recommendedDailyDeficit, recommendedDailyIntake } from '@/src/domain/energy';
+import { recommendedDailyDeficit, recommendedDailyIntake, recommendedDailyIntakeForDirection } from '@/src/domain/energy';
 import { effectiveGoalTarget, goalReached, safeMetricValue } from '@/src/domain/metrics';
 import { randomMessage } from '@/src/domain/social';
 import { palette } from '@/src/theme';
@@ -137,19 +137,20 @@ function reducer(state: AppState, action: Action): AppState {
       return nextState;
     }
     case 'addMetric': {
-      const baseId = slugify(action.metric.name) || 'metric';
+      const baseId = (action.metric.templateId ?? slugify(action.metric.name)) || 'metric';
       let id = baseId;
       let suffix = 2;
       while (state.metrics.some((metric) => metric.id === id)) id = `${baseId}_${suffix++}`;
       const metric: MetricDefinition = {
         ...action.metric,
         id,
-        aggregation: action.metric.dataType === 'boolean' ? 'max' : action.metric.dataType === 'text' || action.metric.dataType === 'calculated' ? 'latest' : 'sum',
+        aggregation: action.metric.aggregation ?? (action.metric.dataType === 'boolean' ? 'max' : action.metric.dataType === 'text' || action.metric.dataType === 'calculated' ? 'latest' : 'sum'),
         scoreWeight: 0,
         sections: { today: true, group: true, insights: true },
         order: state.metrics.length,
         activeFrom: dateKey(),
       };
+      delete (metric as MetricDefinition & { templateId?: string }).templateId;
       const next = withActiveMetrics(state, [...state.metrics, metric]);
       return { ...next, trackedGoalPeriods: { ...state.trackedGoalPeriods, [metric.id]: [{ from: dateKey() }] } };
     }
@@ -266,15 +267,20 @@ function reducer(state: AppState, action: Action): AppState {
     case 'energyProfile': {
       const energyProfile = { ...state.settings.energyProfile, ...action.changes };
       const deficitTarget = recommendedDailyDeficit(energyProfile);
-      const foodTarget = recommendedDailyIntake(energyProfile);
+      const direction=state.settings.weightDirection??'lose';
+      const foodTarget = recommendedDailyIntakeForDirection(energyProfile,direction);
       return withActiveMetrics({
         ...state,
         settings: { ...state.settings, energyProfile },
         energyProfiles: { ...state.energyProfiles, [state.currentUserId]: energyProfile },
       }, state.metrics.map((metric) =>
-          metric.id === 'deficit' ? { ...metric, goal: { kind: 'at_least', target: deficitTarget } }
+          metric.id === 'deficit' ? direction==='lose'
+            ? { ...metric,name:'Daily deficit',formula:'bmr + daily_activity + exercise - food',goal:{kind:'at_least',target:deficitTarget},goalRange:undefined }
+            : direction==='gain'
+              ? { ...metric,name:'Daily surplus',formula:'food - bmr - daily_activity - exercise',goal:{kind:'at_least',target:deficitTarget},goalRange:undefined }
+              : { ...metric,name:'Energy balance',formula:'food - bmr - daily_activity - exercise',goal:{kind:'exact',target:0},goalRange:{min:-150,max:150} }
             : metric.id === 'food' ? { ...metric, goal: { kind: 'at_most', target: foodTarget } }
-              : metric.id === 'weight' ? { ...metric, goal: { kind: 'at_most', target: energyProfile.targetWeightKg } }
+              : metric.id === 'weight' ? { ...metric, goal: { kind: direction==='gain'?'at_least':'at_most', target: energyProfile.targetWeightKg } }
                 : metric,
         ));
     }
@@ -446,8 +452,9 @@ export function AppProvider({ children }: PropsWithChildren) {
               ...restoredMetrics.filter((metric) => !builtInIds.has(metric.id)),
             ].map((metric, order) => ({ ...metric, order }));
           }
-          if (restoredVersion < 14) {
-            restoredMetrics = [...restoredMetrics, ...defaults.metrics.filter((candidate)=>!restoredMetrics.some((metric)=>metric.id===candidate.id))];
+          if (restoredVersion < 15) {
+            const newTrackerIds = new Set(['sleep', 'blood_glucose', 'menstrual_cycle']);
+            restoredMetrics = [...restoredMetrics, ...defaults.metrics.filter((candidate)=>newTrackerIds.has(candidate.id)&&!restoredMetrics.some((metric)=>metric.id===candidate.id))];
           }
           const defaultEntryIds = new Set(defaults.entries.map((entry) => entry.id));
           const defaultPhotoIds = new Set(defaults.photos.map((photo) => photo.id));
@@ -457,10 +464,11 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 14,
+            version: 15,
             settings: {
               ...defaults.settings,
               ...restored.settings,
+              onboardingComplete: restored.settings?.onboardingComplete ?? restoredVersion < 15,
               energyProfile: { ...defaults.settings.energyProfile, ...restored.settings?.energyProfile },
               healthSync: {
                 ...defaults.settings.healthSync,
@@ -481,9 +489,11 @@ export function AppProvider({ children }: PropsWithChildren) {
               ? [...(restored.photos ?? []).filter((photo) => !defaultPhotoIds.has(photo.id)), ...defaults.photos]
               : (restored.photos ?? defaults.photos),
             metrics: restoredMetrics.map((metric) => {
-              const normalized = metric.id === 'deficit' && metric.formula === 'baseline + exercise - food'
-                ? { ...metric, formula: 'bmr + daily_activity + exercise - food' }
-                : metric;
+              const preset = defaults.metrics.find((candidate)=>candidate.id===metric.id);
+              const enriched = restoredVersion < 15 && preset ? { ...metric, category:metric.category??preset.category,healthMapping:metric.healthMapping??preset.healthMapping,stepFallback:metric.stepFallback??preset.stepFallback,manualEntry:metric.manualEntry??preset.manualEntry,goalEnabled:metric.id==='weekly_deficit_balance'?false:metric.goalEnabled??preset.goalEnabled,goalRange:metric.goalRange??preset.goalRange,aggregation:['body_fat','lean_body_mass','blood_pressure_systolic','blood_pressure_diastolic','pulse','blood_glucose'].includes(metric.id)?'average' as const:metric.aggregation } : metric;
+              const normalized = enriched.id === 'deficit' && enriched.formula === 'baseline + exercise - food'
+                ? { ...enriched, formula: 'bmr + daily_activity + exercise - food' }
+                : enriched;
               if (restoredVersion < 4 && normalized.id === 'weight') return { ...normalized, sections: { ...normalized.sections, today: false } };
               const profile = { ...defaults.settings.energyProfile, ...restored.settings?.energyProfile };
               if (restoredVersion < 4 && normalized.id === 'deficit' && normalized.goal.target === 500) return { ...normalized, goal: { ...normalized.goal, target: recommendedDailyDeficit(profile) } };
@@ -558,10 +568,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     return (
       <View style={styles.loadingScreen}>
         <View style={styles.loadingMark}>
-          <Text style={styles.loadingInitial}>P</Text>
+          <Text style={styles.loadingInitial}>N</Text>
         </View>
-        <Text style={styles.loadingTitle}>Paceboard</Text>
-        <Text style={styles.loadingText}>Track your way. Rally together.</Text>
+        <Text style={styles.loadingTitle}>North</Text>
+        <Text style={styles.loadingText}>Your goals, one clear direction.</Text>
         <ActivityIndicator color={palette.primary} style={styles.loadingSpinner} />
       </View>
     );

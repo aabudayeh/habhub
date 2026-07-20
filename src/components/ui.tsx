@@ -48,8 +48,8 @@ export function PageHeader({
   showMenu?: boolean;
 }) {
   const accent = useGroupAccent();
+  const colors = useAppColors();
   const compact = useCompactMode();
-  const colors=useAppColors();
   return (
     <View style={[styles.header,compact&&styles.headerCompact]}>
       <View style={styles.headerCopy}>
@@ -94,13 +94,14 @@ export function IconButton({
   filled?: boolean;
 }) {
   const accent = useGroupAccent();
+  const colors = useAppColors();
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.iconButton, filled && styles.iconButtonFilled,filled&&{backgroundColor:accent,borderColor:accent}, pressed && styles.pressed]}>
-      <Ionicons name={icon} size={20} color={filled ? palette.white : palette.ink} />
+      style={({ pressed }) => [styles.iconButton, { backgroundColor: colors.card, borderColor: colors.border }, filled && styles.iconButtonFilled,filled&&{backgroundColor:accent,borderColor:accent}, pressed && styles.pressed]}>
+      <Ionicons name={icon} size={20} color={filled ? palette.white : colors.ink} />
     </Pressable>
   );
 }
@@ -122,6 +123,7 @@ export function Button({
 }) {
   const accent = useGroupAccent();
   const compact = useCompactMode();
+  const colors = useAppColors();
   return (
     <Pressable
       accessibilityRole="button"
@@ -130,6 +132,8 @@ export function Button({
       style={({ pressed }) => [
         styles.button, compact&&styles.buttonCompact,
         styles[`button_${variant}`],
+        variant === 'secondary' && { backgroundColor: colors.primarySoft, borderColor: colors.primarySoft },
+        variant === 'ghost' && { borderColor: colors.border },
         variant==='primary'&&{backgroundColor:accent,borderColor:accent},
         (disabled || loading) && styles.disabled,
         pressed && styles.pressed,
@@ -161,15 +165,16 @@ export function Chip({
 }) {
   const accent = useGroupAccent();
   const compact = useCompactMode();
+  const colors = useAppColors();
   const content = (
     <>
-      {icon ? <Ionicons name={icon} size={15} color={selected ? accent : palette.muted} /> : null}
-      <Text style={[styles.chipText, selected && styles.chipTextSelected,selected&&{color:accent}]}>{label}</Text>
+      {icon ? <Ionicons name={icon} size={15} color={selected ? accent : colors.muted} /> : null}
+      <Text style={[styles.chipText, { color: colors.muted }, selected && styles.chipTextSelected,selected&&{color:accent}]}>{label}</Text>
     </>
   );
-  if (!onPress) return <View style={[styles.chip, compact&&styles.chipCompact, selected && styles.chipSelected]}>{content}</View>;
+  if (!onPress) return <View style={[styles.chip, { backgroundColor: colors.card, borderColor: colors.border }, compact&&styles.chipCompact, selected && styles.chipSelected, selected && { backgroundColor: colors.primarySoft }]}>{content}</View>;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, compact&&styles.chipCompact, selected && styles.chipSelected, pressed && styles.pressed]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, { backgroundColor: colors.card, borderColor: colors.border }, compact&&styles.chipCompact, selected && styles.chipSelected, selected && { backgroundColor: colors.primarySoft }, pressed && styles.pressed]}>
       {content}
     </Pressable>
   );
@@ -184,8 +189,9 @@ export function Avatar({ initials, color, size = 42, uri }: { initials: string; 
 }
 
 export function ProgressBar({ progress, color = palette.primary }: { progress: number; color?: string }) {
+  const colors = useAppColors();
   return (
-    <View style={styles.progressTrack}>
+    <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
       <View style={[styles.progressFill, { backgroundColor: color, width: `${Math.min(Math.max(progress, 0), 1) * 100}%` }]} />
     </View>
   );

@@ -127,6 +127,9 @@ const healthDataTypes: {
     subtitle: "Resting heart-rate readings",
     icon: "pulse-outline",
   },
+  { id: "sleep", title: "Sleep", subtitle: "Sleep sessions and duration", icon: "moon-outline" },
+  { id: "blood_glucose", title: "Blood glucose", subtitle: "Glucose readings", icon: "water-outline" },
+  { id: "menstruation", title: "Cycle", subtitle: "Menstrual cycle entries", icon: "flower-outline" },
 ];
 
 const statusCopy = {
@@ -210,13 +213,13 @@ export default function SettingsScreen() {
       URL.revokeObjectURL(url);
       return;
     }
-    await Share.share({ title: "Paceboard data export", message: json });
+    await Share.share({ title: "North data export", message: json });
   }
 
   return (
     <Screen>
       <PageHeader
-        eyebrow="Paceboard"
+        eyebrow="North"
         title="Cloud & health sync"
         subtitle="Account, device, backup, and health import preferences."
         showMenu={false}

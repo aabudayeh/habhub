@@ -17,7 +17,14 @@ export type HealthDataType =
   | 'body_fat'
   | 'lean_body_mass'
   | 'blood_pressure'
-  | 'heart_rate';
+  | 'heart_rate'
+  | 'sleep'
+  | 'blood_glucose'
+  | 'menstruation';
+
+export type HealthMetricField = 'value' | 'duration_minutes' | 'active_calories' | 'distance_km' | 'systolic' | 'diastolic' | 'protein' | 'fat' | 'carbs' | 'fiber' | 'sodium' | 'sugar' | 'saturated_fat' | 'cholesterol' | 'potassium' | 'calcium' | 'iron' | 'magnesium' | 'vitamin_c' | 'vitamin_d' | 'vitamin_b12';
+export type HealthMetricMapping = { dataType: HealthDataType; field: HealthMetricField };
+export type TrackerCategory = 'goals' | 'activity' | 'nutrition' | 'body' | 'health' | 'mind' | 'photos' | 'other';
 
 export type MetricGoal = {
   kind: GoalKind;
@@ -34,6 +41,16 @@ export type MetricDefinition = {
   aggregation: Aggregation;
   rankingDirection: RankingDirection;
   goal: MetricGoal;
+  /** Advanced: some health readings are informational and have no target. */
+  goalEnabled?: boolean;
+  /** Optional healthy/desired range, used instead of an exact point target. */
+  goalRange?: { min: number; max: number };
+  category?: TrackerCategory;
+  healthMapping?: HealthMetricMapping;
+  /** Estimate uncovered walking activity from steps when no canonical activity calories exist. */
+  stepFallback?: boolean;
+  /** False for device-owned readings such as steps. */
+  manualEntry?: boolean;
   scoreWeight: number;
   formula?: string;
   defaultVisibility: Visibility;
@@ -121,6 +138,7 @@ export type DailyMetricStatus = {
 export type SyncMode = 'manual' | 'battery' | 'balanced' | 'frequent';
 export type BanterTone = 'supportive' | 'friendly' | 'ruthless' | 'off';
 export type FoodGoalMode = 'activity_adjusted' | 'fixed';
+export type WeightDirection = 'lose' | 'maintain' | 'gain';
 
 export type HealthSyncSettings = {
   enabled: boolean;
@@ -155,8 +173,13 @@ export type UserSettings = {
   darkMode: boolean;
   showLeaderboard: boolean;
   showChat: boolean;
+  onboardingComplete: boolean;
+  tutorialComplete: boolean;
+  advancedTutorialComplete: boolean;
+  selectedGoals: string[];
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
+  weightDirection: WeightDirection;
   /** Personal aliases are scoped to the group where they were assigned. */
   memberNicknamesByGroup: Record<string, Record<string, string>>;
   /** Up to five badge ids the current user chose to feature in each group. */
@@ -179,6 +202,10 @@ export type NotificationSettings = {
   quietHoursEnabled: boolean;
   quietHoursStart: string;
   quietHoursEnd: string;
+  mutedGroupIds?: string[];
+  mutedConversationIds?: string[];
+  missedGoalNudges?: boolean;
+  streakAlerts?: boolean;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };
@@ -198,7 +225,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 14;
+  version: 15;
   currentUserId: string;
   group: Group;
   groups: Group[];
@@ -232,7 +259,9 @@ export type NewEntry = Pick<MetricEntry, 'metricId' | 'value' | 'visibility' | '
 
 export type NewMetric = Pick<
   MetricDefinition,
-  'name' | 'icon' | 'color' | 'unit' | 'dataType' | 'goal' | 'rankingDirection' | 'defaultVisibility'
+  'name' | 'icon' | 'color' | 'unit' | 'dataType' | 'aggregation' | 'goal' | 'rankingDirection' | 'defaultVisibility' | 'goalEnabled' | 'goalRange' | 'category' | 'healthMapping' | 'stepFallback' | 'manualEntry'
 > & {
   formula?: string;
+  /** Stable id used when adding a built-in preset after it was previously removed. */
+  templateId?: string;
 };

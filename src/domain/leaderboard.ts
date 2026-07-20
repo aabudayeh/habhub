@@ -52,10 +52,10 @@ export function periodMetricResult(
   const results = dates
     .filter((date) => metric.activeFrom <= date)
     .map((date) => ({ date, result: sharedMetricResult(state, metric, subjectUserId, viewerUserId, date) }));
-  const exact = results.filter(({ result }) => result.mode === 'exact');
+  const exact = results.filter(({ date, result }) => result.mode === 'exact' && hasPeriodData(state, metric, subjectUserId, date));
   const statuses = results.filter(({ result }) => result.mode === 'status');
   if (!exact.length && !statuses.length) {
-    return { mode: 'private', total: 0, average: 0, completedDays: 0, visibleDays: 0, label: 'Private' };
+    return { mode: 'private', total: 0, average: 0, completedDays: 0, visibleDays: 0, label: subjectUserId === viewerUserId ? 'No data' : 'Private' };
   }
   const completedDays = results.filter(({ date, result }) =>
     result.mode === 'status'
@@ -91,6 +91,16 @@ export function periodMetricResult(
       ? `${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
       : undefined,
   };
+}
+
+function hasPeriodData(state: AppState, metric: MetricDefinition, userId: string, date: string) {
+  if (metric.dataType === 'boolean') return true;
+  if (metric.dataType === 'photo') return state.photos.some((photo) => photo.userId === userId && photo.localDate === date);
+  if (metric.dataType === 'calculated') {
+    if (metric.id === 'deficit') return state.entries.some((entry) => entry.userId === userId && entry.metricId === 'food' && entry.localDate === date);
+    return true;
+  }
+  return state.entries.some((entry) => entry.userId === userId && entry.metricId === metric.id && entry.localDate === date);
 }
 
 export type LeaderboardRow = {

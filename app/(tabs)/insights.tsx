@@ -10,7 +10,7 @@ import { dateKey, dateRangeEnding, dateWithOffsetFrom, friendlyDate, monthDateRa
 import { effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, goalRemainingLabel, safeMetricValue, trackedGoalSummary } from '@/src/domain/metrics';
 import { longestStreakWithRest } from '@/src/domain/streaks';
 import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
+import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 import { AppState, MetricDefinition } from '@/src/types';
 
 const TRACKED = 'tracked_goals';
@@ -20,11 +20,12 @@ type ViewMode = 'week' | 'month';
 
 export default function Insights() {
   const { state,updateSettings } = useApp();
+  const colors=useAppColors();const accent=useGroupAccent();
   const today = dateKey();
   const metrics = state.metrics.filter((metric) => metric.sections.insights && metric.dataType !== 'text');
   const [selectedIds, setSelectedIds] = useState<string[]>((state.settings.progressMetricIds?.length?state.settings.progressMetricIds:[TRACKED,'steps']).filter((id) => id === TRACKED || metrics.some((metric) => metric.id === id)));
   const [filterTouched, setFilterTouched] = useState(false);
-  const [view, setView] = useState<ViewMode>('month');
+  const [view, setView] = useState<ViewMode>('week');
   const [month, setMonth] = useState(today);
   const [weekAnchor, setWeekAnchor] = useState(today);
   const selectedMetrics = metrics.filter((metric) => selectedIds.includes(metric.id));
@@ -81,37 +82,38 @@ export default function Insights() {
       eyebrow="Your story"
       title="Progress"
       subtitle="Your summaries first, with a visual week or month below."
-      action={<Pressable onPress={() => router.push('/recap?scope=personal' as never)} style={styles.recap}><Ionicons name="sparkles-outline" size={16} color={palette.white} /><Text style={styles.recapText}>Recap</Text></Pressable>}
+      action={<Pressable onPress={() => router.push('/recap?scope=personal' as never)} style={[styles.recap,{backgroundColor:colors.ink}]}><Ionicons name="sparkles-outline" size={16} color={colors.canvas} /><Text style={[styles.recapText,{color:colors.canvas}]}>Recap</Text></Pressable>}
     />
-    <Pressable onPress={() => openDay(today)} style={styles.today}>
-      <Ionicons name="today" size={21} color={palette.primary} />
-      <View style={styles.copy}><Text style={styles.todayTitle}>Open today’s full log</Text><Text style={styles.todayText}>Values, meals, notes, photos, and weight-based alignment.</Text></View>
-      <Ionicons name="chevron-forward" size={18} color={palette.faint} />
+    <Pressable onPress={() => openDay(today)} style={[styles.today,{backgroundColor:colors.card,borderColor:colors.border}]}>
+      <Ionicons name="today" size={21} color={accent} />
+      <View style={styles.copy}><Text style={[styles.todayTitle,{color:colors.ink}]}>Open today’s full log</Text><Text style={[styles.todayText,{color:colors.muted}]}>Values, meals, notes, photos, and weight-based alignment.</Text></View>
+      <Ionicons name="chevron-forward" size={18} color={colors.faint} />
     </Pressable>
     <View style={styles.controls}>
       <View style={styles.mode}><Chip label="7 days" selected={view === 'week'} onPress={() => setView('week')} /><Chip label="Month" selected={view === 'month'} onPress={() => setView('month')} /></View>
-      <MetricSelector items={selectorItems} selectedIds={selectedIds} onChange={select} title="Metrics shown" />
+      <MetricSelector items={selectorItems} selectedIds={selectedIds} onChange={select} title="What to show" />
     </View>
     <SectionHeader title={`${view === 'week' ? '7-day' : 'Month'} summaries`} />
     <View style={styles.summaries}>{tracked ? <TrackedSummary state={state} dates={dates} /> : null}{selectedMetrics.map((metric) => <MetricSummary key={metric.id} state={state} metric={metric} dates={dates} />)}</View>
-    <View style={styles.legendWrap}>{legendItems.map((item) => <View key={item.id} style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: item.color }]} /><Text style={styles.legendName}>{item.name}</Text></View>)}</View>
+    <View style={styles.legendWrap}>{legendItems.map((item) => <View key={item.id} style={[styles.legendItem,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.legendDot, { backgroundColor: item.color }]} /><Text style={[styles.legendName,{color:colors.muted}]}>{item.name}</Text></View>)}</View>
     {view === 'month' ? <Card style={styles.visualCard}>
-      <View style={styles.cardHeading}><View><Text style={styles.eyebrow}>MONTH VIEW</Text><Text style={styles.cardTitle}>Daily goal progress</Text></View><Text style={styles.legend}>Up to 5 bars per day</Text></View>
+      <View style={styles.cardHeading}><View><Text style={[styles.eyebrow,{color:accent}]}>MONTH VIEW</Text><Text style={[styles.cardTitle,{color:colors.ink}]}>Daily goal progress</Text></View><Text style={[styles.legend,{color:colors.muted}]}>Up to 5 bars per day</Text></View>
       <MonthCalendar selectedDate={today} monthDate={month} onMonthChange={setMonth} onSelect={openDay} dayStatus={status} dayVisuals={dayVisuals} />
-      <Text style={styles.hint}>Each colored line is one selected metric. Tap a date for its filtered log.</Text>
+      <Text style={[styles.hint,{color:colors.muted}]}>Each colored line is one selected item. Tap a date for its filtered log.</Text>
     </Card> : <Card style={styles.visualCard}>
       <View style={styles.weekNav}>
         <Pressable onPress={() => setWeekAnchor(dateWithOffsetFrom(weekAnchor, -7))} style={styles.arrow}><Ionicons name="chevron-back" size={18} color={palette.ink} /></Pressable>
-        <View style={styles.navCopy}><Text style={styles.cardTitle}>7-day trend</Text><Text style={styles.legend}>{friendlyDate(dates[0])} – {friendlyDate(dates[6])}</Text></View>
+        <View style={styles.navCopy}><Text style={[styles.cardTitle,{color:colors.ink}]}>7-day trend</Text><Text style={[styles.legend,{color:colors.muted}]}>{friendlyDate(dates[0])} – {friendlyDate(dates[6])}</Text></View>
         <Pressable disabled={weekAnchor >= today} onPress={() => setWeekAnchor(dateWithOffsetFrom(weekAnchor, 7) > today ? today : dateWithOffsetFrom(weekAnchor, 7))} style={styles.arrow}><Ionicons name="chevron-forward" size={18} color={weekAnchor >= today ? palette.faint : palette.ink} /></Pressable>
       </View>
-      <View style={styles.weekChart}><View pointerEvents="none" style={styles.goalReference}><Text style={styles.goalReferenceLabel}>GOAL · 100%</Text></View>{dates.map((day) => <Pressable key={day} onPress={() => openDay(day)} style={styles.dayColumn}><View style={styles.bars}>{rawDayVisuals(day).slice(0, 5).map((item, index) => <View key={index} style={[styles.bar, { height: `${Math.max(3, Math.min(item.progress / WEEK_CHART_MAX, 1) * 100)}%`, backgroundColor: item.color }]} />)}</View><Text style={styles.dayLabel}>{shortDay(day).slice(0, 1)}</Text><Text style={styles.dayNumber}>{Number(day.slice(-2))}</Text></Pressable>)}</View>
-      <Text style={styles.hint}>The dashed line is each metric’s own goal. Bars can extend to 140%, so exceeding a goal stays visible even when metrics use different units.</Text>
+      <View style={styles.weekChart}><View pointerEvents="none" style={[styles.goalReference,{borderTopColor:colors.ink}]}><Text style={[styles.goalReferenceLabel,{color:colors.ink,backgroundColor:colors.card}]}>GOAL · 100%</Text></View>{dates.map((day) => <Pressable key={day} onPress={() => openDay(day)} style={styles.dayColumn}><View style={[styles.bars,{borderBottomColor:colors.border}]}>{rawDayVisuals(day).slice(0, 5).map((item, index) => <View key={index} style={[styles.bar, { height: `${Math.max(3, Math.min(item.progress / WEEK_CHART_MAX, 1) * 100)}%`, backgroundColor: item.color }]} />)}</View><Text style={[styles.dayLabel,{color:colors.muted}]}>{shortDay(day).slice(0, 1)}</Text><Text style={[styles.dayNumber,{color:colors.ink}]}>{Number(day.slice(-2))}</Text></Pressable>)}</View>
+      <Text style={[styles.hint,{color:colors.muted}]}>The dashed line is each item’s own goal. Bars can extend to 140%, so exceeding a goal stays visible across different units.</Text>
     </Card>}
   </Screen>;
 }
 
 function TrackedSummary({ state, dates }: { state: AppState; dates: string[] }) {
+  const colors=useAppColors();
   const totals = dates.map((date) => trackedGoalSummary(state, state.currentUserId, date));
   const eligible = totals.filter((item) => item.total > 0);
   const met = totals.reduce((sum, item) => sum + item.met, 0);
@@ -120,31 +122,34 @@ function TrackedSummary({ state, dates }: { state: AppState; dates: string[] }) 
   const streak = longestStreakWithRest(state, dates, (date) => trackedGoalSummary(state, state.currentUserId, date).allMet);
   return <Card style={styles.summary}>
     <View style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}><Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} /></View>
-    <Text style={styles.summaryName}>Tracked goals</Text><Text style={styles.summaryValue}>{perfect}/{eligible.length}</Text>
-    <Text style={styles.summaryLabel}>all-goal days · {eligible.length ? Math.round(perfect / eligible.length * 100) : 0}%</Text>
+    <Text style={[styles.summaryName,{color:colors.ink}]}>Tracked goals</Text><Text style={[styles.summaryValue,{color:colors.ink}]}>{perfect}/{eligible.length}</Text>
+    <Text style={[styles.summaryLabel,{color:colors.muted}]}>all-goal days · {eligible.length ? Math.round(perfect / eligible.length * 100) : 0}%</Text>
     <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>{met}/{possible} individual goals · {possible ? Math.round(met / possible * 100) : 0}%</Text>
-    <Text style={styles.streakLine}>Longest streak {streak} days</Text>
+    <Text style={[styles.streakLine,{color:colors.muted}]}>Longest streak {streak} days</Text>
   </Card>;
 }
 
 function MetricSummary({ state, metric, dates }: { state: AppState; metric: MetricDefinition; dates: string[] }) {
+  const colors=useAppColors();
   const active = dates.filter((date) => metric.activeFrom <= date);
-  const values = active.map((date) => safeMetricValue(state, metric, state.currentUserId, date));
+  const measured = metric.dataType === 'boolean' ? active : active.filter((date) => metric.dataType === 'calculated' ? metric.id !== 'deficit' || state.entries.some((entry) => entry.userId === state.currentUserId && entry.metricId === 'food' && entry.localDate === date) : state.entries.some((entry) => entry.userId === state.currentUserId && entry.metricId === metric.id && entry.localDate === date));
+  const values = measured.map((date) => safeMetricValue(state, metric, state.currentUserId, date));
   const average = values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
   const reached = active.filter((date) => goalReached(metric, safeMetricValue(state, metric, state.currentUserId, date), effectiveGoalTarget(state, metric, state.currentUserId, date))).length;
   const streak = longestStreakWithRest(state, active, (date) => goalReached(metric, safeMetricValue(state, metric, state.currentUserId, date), effectiveGoalTarget(state, metric, state.currentUserId, date)));
   const days = Math.max(1, Math.floor((new Date(`${dateKey()}T12:00:00`).getTime() - new Date(`${metric.activeFrom}T12:00:00`).getTime()) / 86400000) + 1);
   const overallDates = dateRangeEnding(dateKey(), Math.min(days, 730));
-  const overall = overallDates.reduce((sum, date) => sum + safeMetricValue(state, metric, state.currentUserId, date), 0) / overallDates.length;
+  const overallMeasured = metric.dataType === 'boolean' ? overallDates : overallDates.filter((date) => metric.dataType === 'calculated' ? metric.id !== 'deficit' || state.entries.some((entry) => entry.userId === state.currentUserId && entry.metricId === 'food' && entry.localDate === date) : state.entries.some((entry) => entry.userId === state.currentUserId && entry.metricId === metric.id && entry.localDate === date));
+  const overall = overallMeasured.reduce((sum, date) => sum + safeMetricValue(state, metric, state.currentUserId, date), 0) / Math.max(overallMeasured.length, 1);
   const isBoolean = metric.dataType === 'boolean';
-  return <Card style={styles.summary}>
+  return <Pressable style={styles.summaryWrap} onPress={() => router.push({ pathname: '/metric-detail' as never, params: { metric: metric.id, date: dates[dates.length - 1] } } as never)}><Card style={styles.summary}>
     <View style={[styles.summaryIcon, { backgroundColor: `${metric.color}18` }]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={20} color={metric.color} /></View>
-    <Text style={styles.summaryName}>{metric.name}</Text><Text style={styles.summaryValue}>{isBoolean ? `${reached}/${active.length} days` : formatMetricValue(metric, average)}</Text>
-    <Text style={styles.summaryLabel}>{isBoolean ? `${active.length ? Math.round(reached / active.length * 100) : 0}% completed in this range` : `daily average across ${active.length} days · overall ${formatMetricValue(metric, overall)}`}</Text>
-    {!isBoolean ? <Text style={styles.remaining}>{goalRemainingLabel(state, metric, state.currentUserId, dates[dates.length - 1])}</Text> : null}
+    <Text style={[styles.summaryName,{color:colors.ink}]}>{metric.name}</Text><Text style={[styles.summaryValue,{color:colors.ink}]}>{isBoolean ? `${reached}/${active.length} days` : formatMetricValue(metric, average)}</Text>
+    <Text style={[styles.summaryLabel,{color:colors.muted}]}>{isBoolean ? `${active.length ? Math.round(reached / active.length * 100) : 0}% completed in this range` : `${measured.length ? `daily average across ${measured.length} logged days` : 'No entries in this range'} · overall ${formatMetricValue(metric, overall)}`}</Text>
+    {!isBoolean ? <Text style={[styles.remaining,{color:colors.ink}]}>{goalRemainingLabel(state, metric, state.currentUserId, dates[dates.length - 1])}</Text> : null}
     <Text style={styles.goalLine}>{reached}/{active.length} goal days · {active.length ? Math.round(reached / active.length * 100) : 0}%</Text>
-    <Text style={styles.streakLine}>Longest streak {streak} days</Text>
-  </Card>;
+    <Text style={[styles.streakLine,{color:colors.muted}]}>Longest streak {streak} days</Text>
+  </Card></Pressable>;
 }
 
 const styles = StyleSheet.create({
@@ -178,7 +183,8 @@ const styles = StyleSheet.create({
   dayLabel: { color: palette.muted, fontSize: 9, fontWeight: '800', marginTop: 7 },
   dayNumber: { color: palette.ink, fontSize: 9, fontWeight: '900' },
   summaries: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
-  summary: { width: '48%', minWidth: 150, padding: 14 },
+  summaryWrap: { width: '48%', minWidth: 150 },
+  summary: { width: '100%', padding: 14 },
   summaryIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   summaryName: { color: palette.ink, fontSize: 12, fontWeight: '900', marginTop: 9 },
   summaryValue: { color: palette.ink, fontSize: 18, fontWeight: '900', marginTop: 7 },

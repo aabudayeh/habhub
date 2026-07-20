@@ -17,7 +17,7 @@ function storedPreferences(preferences: NotificationSettings) {
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
-  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'Paceboard', importance: Notifications.AndroidImportance.DEFAULT });
+  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'North', importance: Notifications.AndroidImportance.DEFAULT });
   let permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
   if (!permission.granted) throw new Error('Notification permission was not granted. You can enable it in system settings.');

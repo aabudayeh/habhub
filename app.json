@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Paceboard",
+    "name": "North",
     "slug": "paceboard",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -15,8 +15,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.paceboard.mobile",
       "infoPlist": {
-        "NSHealthShareUsageDescription": "Paceboard reads only the health categories you choose so it can update your private tracker and permitted group metrics.",
-        "NSHealthUpdateUsageDescription": "Paceboard does not write health data unless you explicitly choose a future export feature."
+        "NSHealthShareUsageDescription": "North reads only the health categories you choose so it can update your private goals and permitted group progress.",
+        "NSHealthUpdateUsageDescription": "North does not write health data unless you explicitly choose a future export feature."
       }
     },
     "android": {
@@ -42,9 +42,12 @@
         "android.permission.health.READ_BLOOD_PRESSURE",
         "android.permission.health.READ_RESTING_HEART_RATE",
         "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_SLEEP",
+        "android.permission.health.READ_BLOOD_GLUCOSE",
+        "android.permission.health.READ_MENSTRUATION",
         "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
       ],
-      "edgeToEdgeEnabled": true,
+      "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
       "softwareKeyboardLayoutMode": "resize"
     },
@@ -58,8 +61,8 @@
       [
         "@kingstinct/react-native-healthkit",
         {
-          "NSHealthShareUsageDescription": "Paceboard reads only the health categories you choose so it can update your private tracker and permitted group metrics.",
-          "NSHealthUpdateUsageDescription": "Paceboard does not write health data unless you explicitly choose a future export feature.",
+          "NSHealthShareUsageDescription": "North reads only the health categories you choose so it can update your private goals and permitted group progress.",
+          "NSHealthUpdateUsageDescription": "North does not write health data unless you explicitly choose a future export feature.",
           "background": true
         }
       ],
@@ -75,8 +78,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Paceboard uses your photos only when you choose to add a progress update.",
-          "cameraPermission": "Paceboard uses your camera only when you choose to take a progress photo.",
+          "photosPermission": "North uses your photos only when you choose to add a progress update.",
+          "cameraPermission": "North uses your camera only when you choose to take a progress photo.",
           "microphonePermission": false
         }
       ],

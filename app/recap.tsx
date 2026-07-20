@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Screen } from '@/src/components/ui';
 import { buildRecapStories, RecapScope } from '@/src/domain/recaps';
@@ -15,6 +15,7 @@ export default function RecapScreen() {
   const stories = useMemo(() => buildRecapStories(state, scope), [scope, state]);
   const [index, setIndex] = useState(0);
   const touchStartX = useRef(0);
+  const progress = useRef(new Animated.Value(0)).current;
   const story = stories[index];
 
   function previous() {
@@ -28,16 +29,16 @@ export default function RecapScreen() {
   }
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIndex((value) => (value + 1) % stories.length);
-    }, 6500);
-    return () => clearTimeout(timer);
-  }, [index, stories.length]);
+    progress.setValue(0);
+    const animation=Animated.timing(progress,{toValue:1,duration:6500,useNativeDriver:false});
+    animation.start(({finished})=>{if(finished)setIndex((value)=>(value+1)%stories.length);});
+    return ()=>animation.stop();
+  }, [index, progress, stories.length]);
 
   if (!story) return null;
   return <Screen contentContainerStyle={styles.screen}>
     <View style={styles.topRow}>
-      <View style={styles.progress}>{stories.map((item, itemIndex) => <View key={item.id} style={[styles.segment, itemIndex <= index && styles.segmentActive]} />)}</View>
+      <View style={styles.progress}>{stories.map((item, itemIndex) => <View key={item.id} style={styles.segment}>{itemIndex<index?<View style={[styles.segmentFill,{width:'100%'}]}/>:itemIndex===index?<Animated.View style={[styles.segmentFill,{width:progress.interpolate({inputRange:[0,1],outputRange:['0%','100%']})}]}/>:null}</View>)}</View>
       <Pressable onPress={() => router.back()} accessibilityLabel="Close recap" style={styles.close}><Ionicons name="close" size={22} color={palette.ink} /></Pressable>
     </View>
     <Text style={styles.heading}>{scope === 'group' ? 'Group recap' : 'Your recap'} · {index + 1} of {stories.length}</Text>
@@ -49,12 +50,8 @@ export default function RecapScreen() {
         <Text style={styles.stat}>{story.stat}</Text>
         <Text style={styles.body}>{story.body}</Text>
       </View>
-      <Text style={styles.brand}>PACEBOARD</Text>
+      <Text style={styles.brand}>NORTH</Text>
     </Card></View>
-    <View style={styles.actions}>
-      <Pressable onPress={previous} style={styles.action}><Ionicons name="arrow-back" size={18} color={palette.ink} /><Text style={styles.actionText}>{index === 0 ? 'Close' : 'Back'}</Text></Pressable>
-      <Pressable onPress={next} style={[styles.action, styles.next]}><Text style={styles.nextText}>{index === stories.length - 1 ? 'Done' : 'Next'}</Text><Ionicons name={index === stories.length - 1 ? 'checkmark' : 'arrow-forward'} size={18} color={palette.white} /></Pressable>
-    </View>
     <Text style={styles.note}>Swipe to move between stories. They advance automatically and refresh daily. Values are estimates based on logged data.</Text>
   </Screen>;
 }
@@ -63,8 +60,8 @@ const styles = StyleSheet.create({
   screen: { flexGrow: 1, justifyContent: 'center', paddingVertical: 24 },
   topRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   progress: { flex: 1, flexDirection: 'row', gap: 4 },
-  segment: { flex: 1, height: 4, borderRadius: 2, backgroundColor: palette.border },
-  segmentActive: { backgroundColor: palette.ink },
+  segment: { flex: 1, height: 4, borderRadius: 2, backgroundColor: palette.border, overflow:'hidden' },
+  segmentFill: { height:'100%', backgroundColor:palette.ink },
   close: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.card },
   heading: { color: palette.muted, fontSize: 11, fontWeight: '800', marginTop: 12, marginBottom: 10 },
   story: { minHeight: 510, borderRadius: 30, padding: 26, justifyContent: 'space-between', ...shadow },

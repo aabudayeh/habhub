@@ -1,107 +1,1176 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
-import { router, useLocalSearchParams } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import * as ImagePicker from "expo-image-picker";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import { Button, Card, Chip, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
-import { MetricSelector } from '@/src/components/MetricSelector';
-import { MonthCalendar } from '@/src/components/MonthCalendar';
-import { dateKey } from '@/src/domain/date';
-import { formatMetricValue, latestTextValue, safeMetricValue } from '@/src/domain/metrics';
-import { useApp } from '@/src/state/AppProvider';
-import { palette, useCompactMode, useGroupAccent } from '@/src/theme';
-import { Visibility } from '@/src/types';
+import {
+  Button,
+  Card,
+  Chip,
+  PageHeader,
+  Screen,
+  SectionHeader,
+} from "@/src/components/ui";
+import { MetricSelector } from "@/src/components/MetricSelector";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { dateKey } from "@/src/domain/date";
+import {
+  formatMetricValue,
+  latestTextValue,
+  safeMetricValue,
+} from "@/src/domain/metrics";
+import { useApp } from "@/src/state/AppProvider";
+import { palette, useCompactMode, useGroupAccent } from "@/src/theme";
+import { Visibility } from "@/src/types";
 
-const privacyOptions: { value: Visibility; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { value: 'private', label: 'Only me', icon: 'lock-closed-outline' },
-  { value: 'status', label: 'Goal status', icon: 'checkmark-circle-outline' },
-  { value: 'group', label: 'Exact value', icon: 'people-outline' },
+const privacyOptions: {
+  value: Visibility;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { value: "private", label: "Only me", icon: "lock-closed-outline" },
+  { value: "status", label: "Goal status", icon: "checkmark-circle-outline" },
+  { value: "group", label: "Share with group", icon: "people-outline" },
 ];
 
 export default function LogScreen() {
-  const params = useLocalSearchParams<{ metric?: string; foodName?: string; calories?: string; protein?: string; fat?: string; carbs?: string; fiber?: string; sodium?: string;sugar?:string;saturatedFat?:string;cholesterol?:string;potassium?:string }>();
+  const params = useLocalSearchParams<{
+    metric?: string;
+    foodName?: string;
+    calories?: string;
+    protein?: string;
+    fat?: string;
+    carbs?: string;
+    fiber?: string;
+    sodium?: string;
+    sugar?: string;
+    saturatedFat?: string;
+    cholesterol?: string;
+    potassium?: string;
+    calcium?: string;
+    iron?: string;
+    magnesium?: string;
+    vitaminC?: string;
+    vitaminD?: string;
+    vitaminB12?: string;
+  }>();
   const { state, logMetric, addPhoto } = useApp();
-  const compact=useCompactMode();const accent=useGroupAccent();
-  const metrics = useMemo(() => {const secondary=new Set(['protein','fat','carbs','fiber','sodium','sugar','saturated_fat','cholesterol','potassium','calcium','iron','magnesium','vitamin_c','vitamin_d','vitamin_b12','workout_duration','workout_calories','workout_distance']);return [...state.metrics].filter((metric) => metric.dataType !== 'calculated' && metric.dataType !== 'photo'&&!secondary.has(metric.id)).sort((a,b)=>a.order-b.order);}, [state.metrics]);
-  const [selectedId,setSelectedId]=useState(metrics[0]?.id??''); const selected=state.metrics.find((metric)=>metric.id===selectedId)??metrics[0];
-  const [value,setValue]=useState(''); const [label,setLabel]=useState(''); const [note,setNote]=useState('');
-  const [visibility,setVisibility]=useState<Visibility>(selected?.defaultVisibility??'group'); const [entryImage,setEntryImage]=useState<string|null>(null);
-  const [photoUri,setPhotoUri]=useState<string|null>(null); const [caption,setCaption]=useState(''); const [photoVisibility,setPhotoVisibility]=useState<Visibility>('group');
+  const compact = useCompactMode();
+  const accent = useGroupAccent();
+  const metrics = useMemo(() => {
+    const secondary = new Set([
+      "protein",
+      "fat",
+      "carbs",
+      "fiber",
+      "sodium",
+      "sugar",
+      "saturated_fat",
+      "cholesterol",
+      "potassium",
+      "calcium",
+      "iron",
+      "magnesium",
+      "vitamin_c",
+      "vitamin_d",
+      "vitamin_b12",
+      "workout_duration",
+      "workout_calories",
+      "workout_distance",
+    ]);
+    return [...state.metrics]
+      .filter(
+        (metric) =>
+          metric.dataType !== "calculated" &&
+          metric.dataType !== "photo" &&
+          metric.manualEntry !== false &&
+          !secondary.has(metric.id),
+      )
+      .sort((a, b) => a.order - b.order);
+  }, [state.metrics]);
+  const [selectedId, setSelectedId] = useState(metrics[0]?.id ?? "");
+  const selected =
+    state.metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
+  const [value, setValue] = useState("");
+  const [label, setLabel] = useState("");
+  const [note, setNote] = useState("");
+  const [visibility, setVisibility] = useState<Visibility>(
+    selected?.defaultVisibility ?? "group",
+  );
+  const [entryImage, setEntryImage] = useState<string | null>(null);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [caption, setCaption] = useState("");
+  const [photoVisibility, setPhotoVisibility] = useState<Visibility>("group");
   const now = new Date();
-  const [logDate,setLogDate]=useState(dateKey());
-  const [logCalendarOpen,setLogCalendarOpen]=useState(false);
-  const [logTime,setLogTime]=useState(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
-  const [photoDate,setPhotoDate]=useState(dateKey()); const [photoCalendarOpen,setPhotoCalendarOpen]=useState(false); const [photoTime,setPhotoTime]=useState(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`); const [photoWeight,setPhotoWeight]=useState('');
-  const [protein,setProtein]=useState(''); const [fat,setFat]=useState(''); const [carbs,setCarbs]=useState(''); const [fiber,setFiber]=useState(''); const [sodium,setSodium]=useState('');
-  const [sugar,setSugar]=useState('');const [saturatedFat,setSaturatedFat]=useState('');const [cholesterol,setCholesterol]=useState('');const [potassium,setPotassium]=useState('');
-  const [workoutDuration,setWorkoutDuration]=useState(''); const [workoutCalories,setWorkoutCalories]=useState(''); const [workoutDistance,setWorkoutDistance]=useState('');
+  const [logDate, setLogDate] = useState(dateKey());
+  const [logCalendarOpen, setLogCalendarOpen] = useState(false);
+  const [logTime, setLogTime] = useState(
+    `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+  );
+  const [photoDate, setPhotoDate] = useState(dateKey());
+  const [photoCalendarOpen, setPhotoCalendarOpen] = useState(false);
+  const [photoTime, setPhotoTime] = useState(
+    `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+  );
+  const [photoWeight, setPhotoWeight] = useState("");
+  const [protein, setProtein] = useState("");
+  const [fat, setFat] = useState("");
+  const [carbs, setCarbs] = useState("");
+  const [fiber, setFiber] = useState("");
+  const [sodium, setSodium] = useState("");
+  const [sugar, setSugar] = useState("");
+  const [saturatedFat, setSaturatedFat] = useState("");
+  const [cholesterol, setCholesterol] = useState("");
+  const [potassium, setPotassium] = useState("");
+  const [calcium, setCalcium] = useState("");
+  const [iron, setIron] = useState("");
+  const [magnesium, setMagnesium] = useState("");
+  const [vitaminC, setVitaminC] = useState("");
+  const [vitaminD, setVitaminD] = useState("");
+  const [vitaminB12, setVitaminB12] = useState("");
+  const [moreNutrition, setMoreNutrition] = useState(false);
+  const [workoutDuration, setWorkoutDuration] = useState("");
+  const [workoutCalories, setWorkoutCalories] = useState("");
+  const [workoutDistance, setWorkoutDistance] = useState("");
 
-  useEffect(()=>{if(params.metric&&state.metrics.some((metric)=>metric.id===params.metric&&metric.dataType!=='calculated'))setSelectedId(params.metric);},[params.metric,state.metrics]);
-  useEffect(()=>{
-    if(!params.foodName)return;
-    setSelectedId('food'); setLabel(params.foodName); setValue(params.calories??''); setProtein(params.protein??''); setFat(params.fat??''); setCarbs(params.carbs??''); setFiber(params.fiber??''); setSodium(params.sodium??'');setSugar(params.sugar??'');setSaturatedFat(params.saturatedFat??'');setCholesterol(params.cholesterol??'');setPotassium(params.potassium??'');
-  },[params.calories,params.carbs,params.cholesterol,params.fat,params.fiber,params.foodName,params.potassium,params.protein,params.saturatedFat,params.sodium,params.sugar]);
-  useEffect(()=>{if(selected)setVisibility(selected.defaultVisibility);},[selected]);
-  const numericToday=selected?safeMetricValue(state,selected,state.currentUserId,logDate):0;
-  const textToday=selected?.dataType==='text'?latestTextValue(state,selected.id,state.currentUserId,logDate):'';
-  const replaceMode=selected?.id==='steps'||selected?.aggregation==='latest';
+  useEffect(() => {
+    if (
+      params.metric &&
+      state.metrics.some(
+        (metric) =>
+          metric.id === params.metric && metric.dataType !== "calculated",
+      )
+    )
+      setSelectedId(params.metric);
+  }, [params.metric, state.metrics]);
+  useEffect(() => {
+    if (!params.foodName) return;
+    setSelectedId("food");
+    setLabel(params.foodName);
+    setValue(params.calories ?? "");
+    setProtein(params.protein ?? "");
+    setFat(params.fat ?? "");
+    setCarbs(params.carbs ?? "");
+    setFiber(params.fiber ?? "");
+    setSodium(params.sodium ?? "");
+    setSugar(params.sugar ?? "");
+    setSaturatedFat(params.saturatedFat ?? "");
+    setCholesterol(params.cholesterol ?? "");
+    setPotassium(params.potassium ?? "");
+    setCalcium(params.calcium ?? "");
+    setIron(params.iron ?? "");
+    setMagnesium(params.magnesium ?? "");
+    setVitaminC(params.vitaminC ?? "");
+    setVitaminD(params.vitaminD ?? "");
+    setVitaminB12(params.vitaminB12 ?? "");
+  }, [
+    params.calories,
+    params.carbs,
+    params.cholesterol,
+    params.fat,
+    params.fiber,
+    params.foodName,
+    params.potassium,
+    params.calcium,
+    params.iron,
+    params.magnesium,
+    params.vitaminC,
+    params.vitaminD,
+    params.vitaminB12,
+    params.protein,
+    params.saturatedFat,
+    params.sodium,
+    params.sugar,
+  ]);
+  useEffect(() => {
+    if (selected) setVisibility(selected.defaultVisibility);
+  }, [selected]);
+  const numericToday = selected
+    ? safeMetricValue(state, selected, state.currentUserId, logDate)
+    : 0;
+  const textToday =
+    selected?.dataType === "text"
+      ? latestTextValue(state, selected.id, state.currentUserId, logDate)
+      : "";
+  const replaceMode =
+    selected?.id === "steps" || selected?.aggregation === "latest";
 
-  async function pickImage(setter:(uri:string)=>void){
-    const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8,base64:Platform.OS==='web'});
-    if(!result.canceled){const asset=result.assets[0];setter(asset.base64?`data:${asset.mimeType??'image/jpeg'};base64,${asset.base64}`:asset.uri);}
+  async function pickImage(setter: (uri: string) => void) {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+      base64: Platform.OS === "web",
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      setter(
+        asset.base64
+          ? `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}`
+          : asset.uri,
+      );
+    }
   }
-  function entryTimestamp(localDate=logDate, localTime=logTime){
-    const date = new Date(`${localDate}T${/^\d{2}:\d{2}$/.test(localTime) ? localTime : '12:00'}:00`);
+  function entryTimestamp(localDate = logDate, localTime = logTime) {
+    const date = new Date(
+      `${localDate}T${/^\d{2}:\d{2}$/.test(localTime) ? localTime : "12:00"}:00`,
+    );
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
-  function clearEntry(){setValue('');setLabel('');setNote('');setEntryImage(null);setProtein('');setFat('');setCarbs('');setFiber('');setSodium('');setSugar('');setSaturatedFat('');setCholesterol('');setPotassium('');setWorkoutDuration('');setWorkoutCalories('');setWorkoutDistance('');}
-  function toggleBoolean(){if(!selected)return;const recordedAt=entryTimestamp();if(!recordedAt)return;logMetric(selected.id,numericToday<=0,visibility,'replace',{note:note.trim()||undefined,localDate:logDate,recordedAt});}
-  function saveEntry(){
-    if(!selected)return;
-    const recordedAt=entryTimestamp(); if(!recordedAt)return Alert.alert('Check the date','Use YYYY-MM-DD and a 24-hour time such as 18:30.');
-    const nutrition={proteinG:Number(protein)||undefined,fatG:Number(fat)||undefined,carbsG:Number(carbs)||undefined,fiberG:Number(fiber)||undefined,sodiumMg:Number(sodium)||undefined,sugarG:Number(sugar)||undefined,saturatedFatG:Number(saturatedFat)||undefined,cholesterolMg:Number(cholesterol)||undefined,potassiumMg:Number(potassium)||undefined};
-    const details={label:label.trim()||undefined,note:note.trim()||undefined,imageUri:entryImage??undefined,localDate:logDate,recordedAt,nutrition:selected.id==='food'?nutrition:undefined};
-    if(selected.dataType==='boolean'){
-      logMetric(selected.id,true,visibility,'replace',details);
-      if(selected.id==='workout')([['workout_duration',workoutDuration],['workout_calories',workoutCalories],['workout_distance',workoutDistance]] as const).forEach(([metricId,raw])=>{const amount=Number(raw.replace(',','.'));if(Number.isFinite(amount)&&amount>0)logMetric(metricId,amount,visibility,'add',details);});
-      clearEntry();Alert.alert('Logged',`${selected.name} marked complete.`);return;
+  function clearEntry() {
+    setValue("");
+    setLabel("");
+    setNote("");
+    setEntryImage(null);
+    setProtein("");
+    setFat("");
+    setCarbs("");
+    setFiber("");
+    setSodium("");
+    setSugar("");
+    setSaturatedFat("");
+    setCholesterol("");
+    setPotassium("");
+    setCalcium("");
+    setIron("");
+    setMagnesium("");
+    setVitaminC("");
+    setVitaminD("");
+    setVitaminB12("");
+    setWorkoutDuration("");
+    setWorkoutCalories("");
+    setWorkoutDistance("");
+  }
+  function toggleBoolean() {
+    if (!selected) return;
+    const recordedAt = entryTimestamp();
+    if (!recordedAt) return;
+    logMetric(selected.id, numericToday <= 0, visibility, "replace", {
+      note: note.trim() || undefined,
+      localDate: logDate,
+      recordedAt,
+    });
+  }
+  function saveEntry() {
+    if (!selected) return;
+    const recordedAt = entryTimestamp();
+    if (!recordedAt)
+      return Alert.alert(
+        "Check the date",
+        "Use YYYY-MM-DD and a 24-hour time such as 18:30.",
+      );
+    const nutrition = {
+      proteinG: Number(protein) || undefined,
+      fatG: Number(fat) || undefined,
+      carbsG: Number(carbs) || undefined,
+      fiberG: Number(fiber) || undefined,
+      sodiumMg: Number(sodium) || undefined,
+      sugarG: Number(sugar) || undefined,
+      saturatedFatG: Number(saturatedFat) || undefined,
+      cholesterolMg: Number(cholesterol) || undefined,
+      potassiumMg: Number(potassium) || undefined,
+      calciumMg: Number(calcium) || undefined,
+      ironMg: Number(iron) || undefined,
+      magnesiumMg: Number(magnesium) || undefined,
+      vitaminCMg: Number(vitaminC) || undefined,
+      vitaminDMcg: Number(vitaminD) || undefined,
+      vitaminB12Mcg: Number(vitaminB12) || undefined,
+    };
+    const details = {
+      label: label.trim() || undefined,
+      note: note.trim() || undefined,
+      imageUri: entryImage ?? undefined,
+      localDate: logDate,
+      recordedAt,
+      nutrition: selected.id === "food" ? nutrition : undefined,
+    };
+    if (selected.dataType === "boolean") {
+      logMetric(selected.id, true, visibility, "replace", details);
+      if (selected.id === "workout")
+        (
+          [
+            ["workout_duration", workoutDuration],
+            ["exercise", workoutCalories],
+            ["workout_distance", workoutDistance],
+          ] as const
+        ).forEach(([metricId, raw]) => {
+          const amount = Number(raw.replace(",", "."));
+          if (Number.isFinite(amount) && amount > 0)
+            logMetric(metricId, amount, visibility, "add", details);
+        });
+      clearEntry();
+      Alert.alert("Logged", `${selected.name} marked complete.`);
+      return;
     }
-    if(selected.dataType==='text'){if(!value.trim())return Alert.alert('Add some text','Write the entry you want to save.');logMetric(selected.id,value.trim(),visibility,'add',details);clearEntry();Alert.alert('Saved',`${selected.name} was added.`);return;}
-    const number=Number(value.replace(',','.')); if(!Number.isFinite(number)||number<0)return Alert.alert('Check the value','Enter a positive number.');
-    logMetric(selected.id,number,visibility,replaceMode?'replace':'add',details);
-    if(selected.id==='weight' && entryImage) addPhoto(entryImage,label.trim()||`Weight check-in · ${number} ${selected.unit}`,visibility==='status'?'private':visibility,logDate,recordedAt);
-    if(selected.id==='food') {
-      ([['protein',protein],['fat',fat],['carbs',carbs],['fiber',fiber],['sodium',sodium],['sugar',sugar],['saturated_fat',saturatedFat],['cholesterol',cholesterol],['potassium',potassium]] as const).forEach(([metricId,raw])=>{
-        const amount=Number(raw.replace(',','.')); if(Number.isFinite(amount)&&amount>0)logMetric(metricId,amount,visibility,'add',{localDate:logDate,recordedAt});
+    if (selected.dataType === "text") {
+      if (!value.trim())
+        return Alert.alert(
+          "Add some text",
+          "Write the entry you want to save.",
+        );
+      logMetric(selected.id, value.trim(), visibility, "add", details);
+      clearEntry();
+      Alert.alert("Saved", `${selected.name} was added.`);
+      return;
+    }
+    const number = Number(value.replace(",", "."));
+    if (!Number.isFinite(number) || number < 0)
+      return Alert.alert("Check the value", "Enter a positive number.");
+    logMetric(
+      selected.id,
+      number,
+      visibility,
+      replaceMode ? "replace" : "add",
+      details,
+    );
+    if (selected.id === "weight" && entryImage)
+      addPhoto(
+        entryImage,
+        label.trim() || `Weight check-in · ${number} ${selected.unit}`,
+        visibility === "status" ? "private" : visibility,
+        logDate,
+        recordedAt,
+      );
+    if (selected.id === "food") {
+      (
+        [
+          ["protein", protein],
+          ["fat", fat],
+          ["carbs", carbs],
+          ["fiber", fiber],
+          ["sodium", sodium],
+          ["sugar", sugar],
+          ["saturated_fat", saturatedFat],
+          ["cholesterol", cholesterol],
+          ["potassium", potassium],
+          ["calcium", calcium],
+          ["iron", iron],
+          ["magnesium", magnesium],
+          ["vitamin_c", vitaminC],
+          ["vitamin_d", vitaminD],
+          ["vitamin_b12", vitaminB12],
+        ] as const
+      ).forEach(([metricId, raw]) => {
+        const amount = Number(raw.replace(",", "."));
+        if (Number.isFinite(amount) && amount > 0)
+          logMetric(metricId, amount, visibility, "add", {
+            label: label.trim() || selected.name,
+            note: note.trim() || undefined,
+            localDate: logDate,
+            recordedAt,
+          });
       });
     }
-    clearEntry();Alert.alert('Saved',`${selected.name} was added to ${logDate === dateKey() ? 'today' : logDate}.`);
+    clearEntry();
+    Alert.alert(
+      "Saved",
+      `${selected.name} was added to ${logDate === dateKey() ? "today" : logDate}.`,
+    );
   }
-  function savePhoto(){const capturedAt=entryTimestamp(photoDate,photoTime);if(!photoUri||!capturedAt)return Alert.alert('Check the date','Enter a valid date and time.');addPhoto(photoUri,caption.trim(),photoVisibility,photoDate,capturedAt);const weight=Number(photoWeight.replace(',','.'));if(Number.isFinite(weight)&&weight>0)logMetric('weight',weight,photoVisibility==='group'?'group':'private','replace',{localDate:photoDate,recordedAt:capturedAt,label:'Progress photo weight'});setPhotoUri(null);setCaption('');setPhotoWeight('');setPhotoVisibility('group');Alert.alert('Photo saved',weight>0?'The photo and matching weight entry were saved.':photoVisibility==='private'?'It stays private until you reveal it.':'It is visible to your group.');}
-  const privacyCopy=visibility==='private'?'Only you can read this entry, its note, and image.':visibility==='status'?'Friends see goal met / not met only—not the value, note, label, or image.':'Your group can see the exact value, note, label, and attached image.';
+  function savePhoto() {
+    const capturedAt = entryTimestamp(photoDate, photoTime);
+    if (!photoUri || !capturedAt)
+      return Alert.alert("Check the date", "Enter a valid date and time.");
+    addPhoto(photoUri, caption.trim(), photoVisibility, photoDate, capturedAt);
+    const weight = Number(photoWeight.replace(",", "."));
+    if (Number.isFinite(weight) && weight > 0)
+      logMetric(
+        "weight",
+        weight,
+        photoVisibility === "group" ? "group" : "private",
+        "replace",
+        {
+          localDate: photoDate,
+          recordedAt: capturedAt,
+          label: "Progress photo weight",
+        },
+      );
+    setPhotoUri(null);
+    setCaption("");
+    setPhotoWeight("");
+    setPhotoVisibility("group");
+    Alert.alert(
+      "Photo saved",
+      weight > 0
+        ? "The photo and matching weight entry were saved."
+        : photoVisibility === "private"
+          ? "It stays private until you reveal it."
+          : "It is visible to your group.",
+    );
+  }
+  const privacyCopy =
+    visibility === "private"
+      ? "Only you can read this entry, its note, and image."
+      : visibility === "status"
+        ? "Friends see goal met / not met only—not the value, note, label, or image."
+        : "Your group can see the exact value, note, label, and attached image.";
 
-  return <Screen keyboardShouldPersistTaps="handled">
-    {!compact?<PageHeader eyebrow="Quick add" title="Log your day" subtitle="Every entry supports a note, image, and explicit privacy." />:<View style={styles.compactHeader}><Text style={styles.compactTitle}>Log metric</Text><Pressable onPress={()=>router.push('/menu')}><Ionicons name="menu-outline" size={22} color={accent}/></Pressable></View>}
-    <View style={styles.selector}><MetricSelector title="Metric to log" items={metrics.map((metric)=>({id:metric.id,label:metric.name,icon:metric.icon as keyof typeof Ionicons.glyphMap,color:metric.color}))} selectedIds={selected?[selected.id]:[]} onChange={(ids)=>ids[0]&&setSelectedId(ids[0])} multiple={false}/></View>
-    {selected?<Card style={styles.logCard}>
-      <View style={styles.heading}><View style={[styles.metricIcon,{backgroundColor:`${selected.color}18`}]}><Ionicons name={selected.icon as keyof typeof Ionicons.glyphMap} size={25} color={selected.color}/></View><View style={styles.grow}><Text style={styles.metricName}>{selected.name}</Text><Text style={styles.currentValue}>{logDate === dateKey() ? 'Today' : logDate}: {selected.dataType==='text'?(textToday||'No entry yet'):formatMetricValue(selected,numericToday)}</Text></View><View style={styles.defaultPill}><Ionicons name={selected.defaultVisibility==='private'?'lock-closed':selected.defaultVisibility==='status'?'shield-checkmark':'people'} size={12} color={palette.primary}/><Text style={styles.defaultText}>Default</Text></View></View>
-      <View style={styles.dateCard}><View style={styles.dateRow}><Pressable onPress={()=>setLogCalendarOpen((open)=>!open)} style={styles.calendarButton}><Ionicons name="calendar-outline" size={18} color={palette.primary}/><View style={styles.grow}><Text style={styles.fieldLabel}>Date</Text><Text style={styles.calendarText}>{logDate}</Text></View><Ionicons name={logCalendarOpen?'chevron-up':'chevron-down'} size={16} color={palette.muted}/></Pressable><View style={styles.timeField}><Text style={styles.fieldLabel}>Time</Text><TextInput value={logTime} onChangeText={setLogTime} placeholder="HH:MM" placeholderTextColor={palette.faint} style={styles.dateInput}/></View><Pressable onPress={()=>{const current=new Date();setLogDate(dateKey());setLogTime(`${String(current.getHours()).padStart(2,'0')}:${String(current.getMinutes()).padStart(2,'0')}`);setLogCalendarOpen(false);}} style={styles.nowButton}><Ionicons name="time-outline" size={17} color={palette.primary}/><Text style={styles.nowText}>Now</Text></Pressable></View>{logCalendarOpen?<View style={styles.miniCalendar}><MonthCalendar monthDate={logDate} selectedDate={logDate} onMonthChange={setLogDate} onSelect={(date)=>{setLogDate(date);setLogCalendarOpen(false);}}/></View>:null}</View>
-      {selected.dataType==='boolean'?<Pressable onPress={toggleBoolean} style={styles.completion}><Ionicons name={numericToday>0?'checkmark-circle':'ellipse-outline'} size={32} color={numericToday>0?palette.primary:palette.faint}/><View><Text style={styles.completionTitle}>{numericToday>0?'Completed':'Mark as complete'}</Text><Text style={styles.helper}>Tap to toggle this date</Text></View></Pressable>:selected.dataType==='text'?<TextInput value={value} onChangeText={setValue} placeholder={`Write this ${selected.name.toLowerCase()}…`} placeholderTextColor={palette.faint} style={[styles.fieldInput,styles.textArea]} multiline/>:<View style={styles.numberWrap}><TextInput accessibilityLabel={`${selected.name} value`} keyboardType="decimal-pad" value={value} onChangeText={setValue} placeholder={replaceMode?"Day's total":'Amount to add'} placeholderTextColor={palette.faint} style={styles.numberInput}/><Text style={styles.unit}>{selected.unit}</Text></View>}
-      {selected.id==='food'?<><Pressable onPress={()=>router.push('/food-search')} style={styles.foodLookup}><Ionicons name="barcode-outline" size={20} color={accent}/><View style={styles.grow}><Text style={[styles.foodLookupTitle,{color:accent}]}>Scan barcode or search foods</Text><Text style={styles.helper}>Fill nutrition, then review it.</Text></View><Ionicons name="chevron-forward" size={17} color={palette.faint}/></Pressable><Text style={styles.fieldLabel}>What did you eat?</Text><TextInput value={label} onChangeText={setLabel} placeholder="e.g. Chicken rice bowl" placeholderTextColor={palette.faint} style={styles.fieldInput}/><Text style={styles.fieldLabel}>Nutrition (optional)</Text><View style={styles.nutritionGrid}>{[{label:'Protein',value:protein,set:setProtein,unit:'g'},{label:'Fat',value:fat,set:setFat,unit:'g'},{label:'Carbs',value:carbs,set:setCarbs,unit:'g'},{label:'Fiber',value:fiber,set:setFiber,unit:'g'},{label:'Sugar',value:sugar,set:setSugar,unit:'g'},{label:'Sat. fat',value:saturatedFat,set:setSaturatedFat,unit:'g'},{label:'Sodium',value:sodium,set:setSodium,unit:'mg'},{label:'Cholesterol',value:cholesterol,set:setCholesterol,unit:'mg'},{label:'Potassium',value:potassium,set:setPotassium,unit:'mg'}].map((item)=><View key={item.label} style={styles.nutritionField}><Text style={styles.nutritionLabel}>{item.label}</Text><View style={styles.nutritionInput}><TextInput value={item.value} onChangeText={item.set} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={palette.faint} style={styles.nutritionText}/><Text style={styles.nutritionUnit}>{item.unit}</Text></View></View>)}</View></>:null}
-      {selected.id==='workout'?<><Text style={styles.fieldLabel}>Workout type</Text><TextInput value={label} onChangeText={setLabel} placeholder="e.g. Walk, strength training, cycling" placeholderTextColor={palette.faint} style={styles.fieldInput}/><Text style={styles.fieldLabel}>Workout details</Text><View style={styles.nutritionGrid}>{[{label:'Duration',value:workoutDuration,set:setWorkoutDuration,unit:'min'},{label:'Calories',value:workoutCalories,set:setWorkoutCalories,unit:'kcal'},{label:'Distance',value:workoutDistance,set:setWorkoutDistance,unit:'km'}].map((item)=><View key={item.label} style={styles.nutritionField}><Text style={styles.nutritionLabel}>{item.label}</Text><View style={styles.nutritionInput}><TextInput value={item.value} onChangeText={item.set} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={palette.faint} style={styles.nutritionText}/><Text style={styles.nutritionUnit}>{item.unit}</Text></View></View>)}</View></>:null}
-      <Text style={styles.fieldLabel}>Note (optional)</Text><TextInput value={note} onChangeText={setNote} placeholder="Context, how it felt, where it came from…" placeholderTextColor={palette.faint} style={[styles.fieldInput,styles.noteInput]} multiline/>
-      {entryImage?<View style={styles.entryImageWrap}><Image source={{uri:entryImage}} style={styles.entryImage} contentFit="cover"/><Pressable onPress={()=>setEntryImage(null)} style={styles.removeImage}><Ionicons name="close" size={16} color={palette.white}/></Pressable></View>:null}
-      <Pressable onPress={()=>pickImage(setEntryImage)} style={styles.attachRow}><Ionicons name="image-outline" size={19} color={palette.primary}/><Text style={styles.attachText}>{entryImage?'Change attached image':'Attach an image'}</Text></Pressable>
-      <Text style={styles.fieldLabel}>Who can see it?</Text><View style={styles.privacyRow}>{privacyOptions.map((option)=><Chip key={option.value} label={option.label} icon={option.icon} selected={visibility===option.value} onPress={()=>setVisibility(option.value)}/>)}</View>
-      <View style={styles.privacyBox}><Ionicons name={visibility==='private'?'lock-closed':visibility==='status'?'shield-checkmark':'people'} size={16} color={palette.primary}/><Text style={styles.privacyText}>{privacyCopy}</Text></View>
-      <Button label={replaceMode?"Save today's total":`Add ${selected.name.toLowerCase()}`} icon="checkmark" onPress={saveEntry} disabled={selected.dataType!=='boolean'&&!value.trim()}/>
-    </Card>:null}
-    <SectionHeader title="Progress photo"/><Card>{photoUri?<><Image source={{uri:photoUri}} style={styles.photoPreview} contentFit="cover"/><View style={styles.dateCard}><View style={styles.dateRow}><Pressable onPress={()=>setPhotoCalendarOpen((open)=>!open)} style={styles.calendarButton}><Ionicons name="calendar-outline" size={18} color={palette.primary}/><View style={styles.grow}><Text style={styles.fieldLabel}>Photo date</Text><Text style={styles.calendarText}>{photoDate}</Text></View><Ionicons name={photoCalendarOpen?'chevron-up':'chevron-down'} size={16} color={palette.muted}/></Pressable><View style={styles.timeField}><Text style={styles.fieldLabel}>Time</Text><TextInput value={photoTime} onChangeText={setPhotoTime} placeholder="HH:MM" placeholderTextColor={palette.faint} style={styles.dateInput}/></View></View>{photoCalendarOpen?<View style={styles.miniCalendar}><MonthCalendar monthDate={photoDate} selectedDate={photoDate} onMonthChange={setPhotoDate} onSelect={(date)=>{setPhotoDate(date);setPhotoCalendarOpen(false);}}/></View>:null}</View><Text style={styles.fieldLabel}>Weight on this date (optional)</Text><View style={styles.numberWrap}><TextInput value={photoWeight} onChangeText={setPhotoWeight} keyboardType="decimal-pad" placeholder="e.g. 82.4" placeholderTextColor={palette.faint} style={styles.numberInput}/><Text style={styles.unit}>kg</Text></View><TextInput value={caption} onChangeText={setCaption} placeholder="Add a caption (optional)" placeholderTextColor={palette.faint} style={styles.fieldInput}/><Text style={styles.fieldLabel}>Who can see it?</Text><View style={styles.privacyRow}>{privacyOptions.filter((option)=>option.value!=='status').map((option)=><Chip key={option.value} label={option.label} icon={option.icon} selected={photoVisibility===option.value} onPress={()=>setPhotoVisibility(option.value)}/>)}</View><View style={styles.photoActions}><View style={styles.grow}><Button label="Cancel" variant="ghost" onPress={()=>setPhotoUri(null)}/></View><View style={styles.grow}><Button label="Save photo" onPress={savePhoto}/></View></View></>:<Pressable onPress={()=>pickImage(setPhotoUri)} style={styles.photoEmpty}><View style={styles.photoIcon}><Ionicons name="images-outline" size={27} color={palette.primary}/></View><View style={styles.grow}><Text style={styles.photoTitle}>Add a progress photo</Text><Text style={styles.helper}>Optionally record weight with the same date.</Text></View><Ionicons name="add" size={22} color={palette.primary}/></Pressable>}</Card>
-  </Screen>;
+  return (
+    <Screen keyboardShouldPersistTaps="handled">
+      {!compact ? (
+        <PageHeader
+          eyebrow="Quick add"
+          title="Log your day"
+          subtitle="Every entry supports a note, image, and explicit privacy."
+        />
+      ) : (
+        <View style={styles.compactHeader}>
+          <Text style={styles.compactTitle}>Add an entry</Text>
+          <Pressable onPress={() => router.push("/menu")}>
+            <Ionicons name="menu-outline" size={22} color={accent} />
+          </Pressable>
+        </View>
+      )}
+      <View style={styles.selector}>
+        <MetricSelector
+          title="What are you adding?"
+          items={metrics.map((metric) => ({
+            id: metric.id,
+            label: metric.name,
+            icon: metric.icon as keyof typeof Ionicons.glyphMap,
+            color: metric.color,
+          }))}
+          selectedIds={selected ? [selected.id] : []}
+          onChange={(ids) => ids[0] && setSelectedId(ids[0])}
+          multiple={false}
+        />
+      </View>
+      {selected ? (
+        <Card style={styles.logCard}>
+          <View style={styles.heading}>
+            <View
+              style={[
+                styles.metricIcon,
+                { backgroundColor: `${selected.color}18` },
+              ]}
+            >
+              <Ionicons
+                name={selected.icon as keyof typeof Ionicons.glyphMap}
+                size={25}
+                color={selected.color}
+              />
+            </View>
+            <View style={styles.grow}>
+              <Text style={styles.metricName}>{selected.name}</Text>
+              <Text style={styles.currentValue}>
+                {logDate === dateKey() ? "Today" : logDate}:{" "}
+                {selected.dataType === "text"
+                  ? textToday || "No entry yet"
+                  : formatMetricValue(selected, numericToday)}
+              </Text>
+            </View>
+            <View style={styles.defaultPill}>
+              <Ionicons
+                name={
+                  selected.defaultVisibility === "private"
+                    ? "lock-closed"
+                    : selected.defaultVisibility === "status"
+                      ? "shield-checkmark"
+                      : "people"
+                }
+                size={12}
+                color={palette.primary}
+              />
+              <Text style={styles.defaultText}>Default</Text>
+            </View>
+          </View>
+          <View style={styles.dateCard}>
+            <View style={styles.dateRow}>
+              <Pressable
+                onPress={() => setLogCalendarOpen((open) => !open)}
+                style={styles.calendarButton}
+              >
+                <Ionicons
+                  name="calendar-outline"
+                  size={18}
+                  color={palette.primary}
+                />
+                <View style={styles.grow}>
+                  <Text style={styles.fieldLabel}>Date</Text>
+                  <Text style={styles.calendarText}>{logDate}</Text>
+                </View>
+                <Ionicons
+                  name={logCalendarOpen ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={palette.muted}
+                />
+              </Pressable>
+              <View style={styles.timeField}>
+                <Text style={styles.fieldLabel}>Time</Text>
+                <TextInput
+                  value={logTime}
+                  onChangeText={setLogTime}
+                  placeholder="HH:MM"
+                  placeholderTextColor={palette.faint}
+                  style={styles.dateInput}
+                />
+              </View>
+              <Pressable
+                onPress={() => {
+                  const current = new Date();
+                  setLogDate(dateKey());
+                  setLogTime(
+                    `${String(current.getHours()).padStart(2, "0")}:${String(current.getMinutes()).padStart(2, "0")}`,
+                  );
+                  setLogCalendarOpen(false);
+                }}
+                style={styles.nowButton}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={17}
+                  color={palette.primary}
+                />
+                <Text style={styles.nowText}>Now</Text>
+              </Pressable>
+            </View>
+            {logCalendarOpen ? (
+              <View style={styles.miniCalendar}>
+                <MonthCalendar
+                  monthDate={logDate}
+                  selectedDate={logDate}
+                  onMonthChange={setLogDate}
+                  onSelect={(date) => {
+                    setLogDate(date);
+                    setLogCalendarOpen(false);
+                  }}
+                />
+              </View>
+            ) : null}
+          </View>
+          {selected.dataType === "boolean" ? (
+            <Pressable onPress={toggleBoolean} style={styles.completion}>
+              <Ionicons
+                name={numericToday > 0 ? "checkmark-circle" : "ellipse-outline"}
+                size={32}
+                color={numericToday > 0 ? palette.primary : palette.faint}
+              />
+              <View>
+                <Text style={styles.completionTitle}>
+                  {numericToday > 0 ? "Completed" : "Mark as complete"}
+                </Text>
+                <Text style={styles.helper}>Tap to toggle this date</Text>
+              </View>
+            </Pressable>
+          ) : selected.dataType === "text" ? (
+            <TextInput
+              value={value}
+              onChangeText={setValue}
+              placeholder={`Write this ${selected.name.toLowerCase()}…`}
+              placeholderTextColor={palette.faint}
+              style={[styles.fieldInput, styles.textArea]}
+              multiline
+            />
+          ) : (
+            <View style={styles.numberWrap}>
+              <TextInput
+                accessibilityLabel={`${selected.name} value`}
+                keyboardType="decimal-pad"
+                value={value}
+                onChangeText={setValue}
+                placeholder={replaceMode ? "Day's total" : "Amount to add"}
+                placeholderTextColor={palette.faint}
+                style={styles.numberInput}
+              />
+              <Text style={styles.unit}>{selected.unit}</Text>
+            </View>
+          )}
+          {selected.id === "food" ? (
+            <>
+              <Pressable
+                onPress={() => router.push("/food-search")}
+                style={styles.foodLookup}
+              >
+                <Ionicons name="barcode-outline" size={20} color={accent} />
+                <View style={styles.grow}>
+                  <Text style={[styles.foodLookupTitle, { color: accent }]}>
+                    Scan barcode or search foods
+                  </Text>
+                  <Text style={styles.helper}>
+                    Fill nutrition, then review it.
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color={palette.faint}
+                />
+              </Pressable>
+              <Text style={styles.fieldLabel}>What did you eat?</Text>
+              <TextInput
+                value={label}
+                onChangeText={setLabel}
+                placeholder="e.g. Chicken rice bowl"
+                placeholderTextColor={palette.faint}
+                style={styles.fieldInput}
+              />
+              <Text style={styles.fieldLabel}>Nutrition (optional)</Text>
+              <View style={styles.nutritionGrid}>
+                {[
+                  {
+                    label: "Protein",
+                    value: protein,
+                    set: setProtein,
+                    unit: "g",
+                  },
+                  { label: "Fat", value: fat, set: setFat, unit: "g" },
+                  { label: "Carbs", value: carbs, set: setCarbs, unit: "g" },
+                  { label: "Fiber", value: fiber, set: setFiber, unit: "g" },
+                ].map((item) => (
+                  <View key={item.label} style={styles.nutritionField}>
+                    <Text style={styles.nutritionLabel}>{item.label}</Text>
+                    <View style={styles.nutritionInput}>
+                      <TextInput
+                        value={item.value}
+                        onChangeText={item.set}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={palette.faint}
+                        style={styles.nutritionText}
+                      />
+                      <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+              <Pressable
+                onPress={() => setMoreNutrition((open) => !open)}
+                style={styles.moreNutrition}
+              >
+                <Text style={[styles.moreNutritionText, { color: accent }]}>
+                  {moreNutrition ? "Hide extra nutrients" : "Add vitamins, minerals and more"}
+                </Text>
+                <Ionicons
+                  name={moreNutrition ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={accent}
+                />
+              </Pressable>
+              {moreNutrition ? (
+                <View style={styles.nutritionGrid}>
+                  {[
+                    { label: "Sugar", value: sugar, set: setSugar, unit: "g" },
+                    { label: "Sat. fat", value: saturatedFat, set: setSaturatedFat, unit: "g" },
+                    { label: "Sodium", value: sodium, set: setSodium, unit: "mg" },
+                    { label: "Cholesterol", value: cholesterol, set: setCholesterol, unit: "mg" },
+                    { label: "Potassium", value: potassium, set: setPotassium, unit: "mg" },
+                    { label: "Calcium", value: calcium, set: setCalcium, unit: "mg" },
+                    { label: "Iron", value: iron, set: setIron, unit: "mg" },
+                    { label: "Magnesium", value: magnesium, set: setMagnesium, unit: "mg" },
+                    { label: "Vitamin C", value: vitaminC, set: setVitaminC, unit: "mg" },
+                    { label: "Vitamin D", value: vitaminD, set: setVitaminD, unit: "mcg" },
+                    { label: "Vitamin B12", value: vitaminB12, set: setVitaminB12, unit: "mcg" },
+                  ].map((item) => (
+                    <View key={item.label} style={styles.nutritionField}>
+                      <Text style={styles.nutritionLabel}>{item.label}</Text>
+                      <View style={styles.nutritionInput}>
+                        <TextInput
+                          value={item.value}
+                          onChangeText={item.set}
+                          keyboardType="decimal-pad"
+                          placeholder="0"
+                          placeholderTextColor={palette.faint}
+                          style={styles.nutritionText}
+                        />
+                        <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </>
+          ) : null}
+          {selected.id === "workout" ? (
+            <>
+              <Text style={styles.fieldLabel}>Workout type</Text>
+              <TextInput
+                value={label}
+                onChangeText={setLabel}
+                placeholder="e.g. Walk, strength training, cycling"
+                placeholderTextColor={palette.faint}
+                style={styles.fieldInput}
+              />
+              <Text style={styles.fieldLabel}>Workout details</Text>
+              <View style={styles.nutritionGrid}>
+                {[
+                  {
+                    label: "Duration",
+                    value: workoutDuration,
+                    set: setWorkoutDuration,
+                    unit: "min",
+                  },
+                  {
+                    label: "Calories",
+                    value: workoutCalories,
+                    set: setWorkoutCalories,
+                    unit: "kcal",
+                  },
+                  {
+                    label: "Distance",
+                    value: workoutDistance,
+                    set: setWorkoutDistance,
+                    unit: "km",
+                  },
+                ].map((item) => (
+                  <View key={item.label} style={styles.nutritionField}>
+                    <Text style={styles.nutritionLabel}>{item.label}</Text>
+                    <View style={styles.nutritionInput}>
+                      <TextInput
+                        value={item.value}
+                        onChangeText={item.set}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={palette.faint}
+                        style={styles.nutritionText}
+                      />
+                      <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : null}
+          <Text style={styles.fieldLabel}>Note (optional)</Text>
+          <TextInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="Context, how it felt, where it came from…"
+            placeholderTextColor={palette.faint}
+            style={[styles.fieldInput, styles.noteInput]}
+            multiline
+          />
+          {entryImage ? (
+            <View style={styles.entryImageWrap}>
+              <Image
+                source={{ uri: entryImage }}
+                style={styles.entryImage}
+                contentFit="cover"
+              />
+              <Pressable
+                onPress={() => setEntryImage(null)}
+                style={styles.removeImage}
+              >
+                <Ionicons name="close" size={16} color={palette.white} />
+              </Pressable>
+            </View>
+          ) : null}
+          <Pressable
+            onPress={() => pickImage(setEntryImage)}
+            style={styles.attachRow}
+          >
+            <Ionicons name="image-outline" size={19} color={palette.primary} />
+            <Text style={styles.attachText}>
+              {entryImage ? "Change attached image" : "Attach an image"}
+            </Text>
+          </Pressable>
+          <Text style={styles.fieldLabel}>Who can see it?</Text>
+          <View style={styles.privacyRow}>
+            {privacyOptions.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                icon={option.icon}
+                selected={visibility === option.value}
+                onPress={() => setVisibility(option.value)}
+              />
+            ))}
+          </View>
+          <View style={styles.privacyBox}>
+            <Ionicons
+              name={
+                visibility === "private"
+                  ? "lock-closed"
+                  : visibility === "status"
+                    ? "shield-checkmark"
+                    : "people"
+              }
+              size={16}
+              color={palette.primary}
+            />
+            <Text style={styles.privacyText}>{privacyCopy}</Text>
+          </View>
+          <Button
+            label={
+              replaceMode
+                ? "Save today's total"
+                : `Add ${selected.name.toLowerCase()}`
+            }
+            icon="checkmark"
+            onPress={saveEntry}
+            disabled={selected.dataType !== "boolean" && !value.trim()}
+          />
+        </Card>
+      ) : null}
+      <SectionHeader title="Progress photo" />
+      <Card>
+        {photoUri ? (
+          <>
+            <Image
+              source={{ uri: photoUri }}
+              style={styles.photoPreview}
+              contentFit="cover"
+            />
+            <View style={styles.dateCard}>
+              <View style={styles.dateRow}>
+                <Pressable
+                  onPress={() => setPhotoCalendarOpen((open) => !open)}
+                  style={styles.calendarButton}
+                >
+                  <Ionicons
+                    name="calendar-outline"
+                    size={18}
+                    color={palette.primary}
+                  />
+                  <View style={styles.grow}>
+                    <Text style={styles.fieldLabel}>Photo date</Text>
+                    <Text style={styles.calendarText}>{photoDate}</Text>
+                  </View>
+                  <Ionicons
+                    name={photoCalendarOpen ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={palette.muted}
+                  />
+                </Pressable>
+                <View style={styles.timeField}>
+                  <Text style={styles.fieldLabel}>Time</Text>
+                  <TextInput
+                    value={photoTime}
+                    onChangeText={setPhotoTime}
+                    placeholder="HH:MM"
+                    placeholderTextColor={palette.faint}
+                    style={styles.dateInput}
+                  />
+                </View>
+              </View>
+              {photoCalendarOpen ? (
+                <View style={styles.miniCalendar}>
+                  <MonthCalendar
+                    monthDate={photoDate}
+                    selectedDate={photoDate}
+                    onMonthChange={setPhotoDate}
+                    onSelect={(date) => {
+                      setPhotoDate(date);
+                      setPhotoCalendarOpen(false);
+                    }}
+                  />
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.fieldLabel}>
+              Weight on this date (optional)
+            </Text>
+            <View style={styles.numberWrap}>
+              <TextInput
+                value={photoWeight}
+                onChangeText={setPhotoWeight}
+                keyboardType="decimal-pad"
+                placeholder="e.g. 82.4"
+                placeholderTextColor={palette.faint}
+                style={styles.numberInput}
+              />
+              <Text style={styles.unit}>kg</Text>
+            </View>
+            <TextInput
+              value={caption}
+              onChangeText={setCaption}
+              placeholder="Add a caption (optional)"
+              placeholderTextColor={palette.faint}
+              style={styles.fieldInput}
+            />
+            <Text style={styles.fieldLabel}>Who can see it?</Text>
+            <View style={styles.privacyRow}>
+              {privacyOptions
+                .filter((option) => option.value !== "status")
+                .map((option) => (
+                  <Chip
+                    key={option.value}
+                    label={option.label}
+                    icon={option.icon}
+                    selected={photoVisibility === option.value}
+                    onPress={() => setPhotoVisibility(option.value)}
+                  />
+                ))}
+            </View>
+            <View style={styles.photoActions}>
+              <View style={styles.grow}>
+                <Button
+                  label="Cancel"
+                  variant="ghost"
+                  onPress={() => setPhotoUri(null)}
+                />
+              </View>
+              <View style={styles.grow}>
+                <Button label="Save photo" onPress={savePhoto} />
+              </View>
+            </View>
+          </>
+        ) : (
+          <Pressable
+            onPress={() => pickImage(setPhotoUri)}
+            style={styles.photoEmpty}
+          >
+            <View style={styles.photoIcon}>
+              <Ionicons
+                name="images-outline"
+                size={27}
+                color={palette.primary}
+              />
+            </View>
+            <View style={styles.grow}>
+              <Text style={styles.photoTitle}>Add a progress photo</Text>
+              <Text style={styles.helper}>
+                Optionally record weight with the same date.
+              </Text>
+            </View>
+            <Ionicons name="add" size={22} color={palette.primary} />
+          </Pressable>
+        )}
+      </Card>
+    </Screen>
+  );
 }
 
-const styles=StyleSheet.create({
-  compactHeader:{height:38,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},compactTitle:{fontSize:13,fontWeight:'900',color:palette.ink},selector:{marginBottom:14},dateCard:{marginBottom:16},dateRow:{flexDirection:'row',alignItems:'flex-end',gap:8},calendarButton:{flex:1.4,minHeight:46,flexDirection:'row',alignItems:'center',gap:8,borderWidth:1,borderColor:palette.border,borderRadius:12,paddingHorizontal:10},calendarText:{color:palette.ink,fontSize:12,fontWeight:'900',marginTop:-5},miniCalendar:{borderTopWidth:1,borderTopColor:palette.border,paddingTop:11,marginTop:10},timeField:{flex:1},dateInput:{borderWidth:1,borderColor:palette.border,borderRadius:11,paddingHorizontal:10,paddingVertical:9,color:palette.ink,fontSize:12,fontWeight:'700'},nowButton:{height:40,flexDirection:'row',alignItems:'center',gap:4,paddingHorizontal:9,borderRadius:11,backgroundColor:palette.primarySoft},nowText:{color:palette.primary,fontSize:10,fontWeight:'800'},logCard:{marginBottom:24},heading:{flexDirection:'row',alignItems:'center',gap:12,marginBottom:18},metricIcon:{width:49,height:49,borderRadius:16,alignItems:'center',justifyContent:'center'},grow:{flex:1},metricName:{color:palette.ink,fontSize:18,fontWeight:'800'},currentValue:{color:palette.muted,fontSize:12,marginTop:3},defaultPill:{flexDirection:'row',gap:4,backgroundColor:palette.primarySoft,borderRadius:10,padding:6},defaultText:{color:palette.primary,fontSize:9,fontWeight:'800'},numberWrap:{flexDirection:'row',alignItems:'center',borderWidth:1.5,borderColor:palette.border,borderRadius:16,paddingHorizontal:16,marginBottom:14},numberInput:{flex:1,color:palette.ink,fontSize:15,fontWeight:'800',paddingVertical:15},unit:{color:palette.muted,fontSize:14,fontWeight:'700'},fieldLabel:{color:palette.ink,fontSize:11,fontWeight:'900',marginBottom:8,marginTop:4},fieldInput:{borderWidth:1,borderColor:palette.border,borderRadius:14,paddingHorizontal:14,paddingVertical:12,color:palette.ink,marginBottom:14},textArea:{minHeight:95,textAlignVertical:'top'},noteInput:{minHeight:65,textAlignVertical:'top'},foodLookup:{flexDirection:'row',alignItems:'center',gap:9,backgroundColor:palette.primarySoft,borderRadius:14,padding:11,marginBottom:14},foodLookupTitle:{color:palette.primary,fontSize:11,fontWeight:'900'},nutritionGrid:{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:12},nutritionField:{width:'31%',minWidth:90},nutritionLabel:{color:palette.muted,fontSize:9,fontWeight:'800',marginBottom:4},nutritionInput:{flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.border,borderRadius:10,paddingHorizontal:8},nutritionText:{flex:1,color:palette.ink,fontSize:12,fontWeight:'800',paddingVertical:8},nutritionUnit:{color:palette.faint,fontSize:8},completion:{flexDirection:'row',alignItems:'center',gap:12,padding:14,borderRadius:16,backgroundColor:palette.canvas,marginBottom:14},completionTitle:{color:palette.ink,fontSize:15,fontWeight:'800'},helper:{color:palette.muted,fontSize:12,lineHeight:17,marginTop:2},attachRow:{flexDirection:'row',alignItems:'center',gap:7,alignSelf:'flex-start',paddingVertical:8,marginBottom:7},attachText:{color:palette.primary,fontSize:12,fontWeight:'800'},entryImageWrap:{width:120,height:92,position:'relative'},entryImage:{width:120,height:92,borderRadius:13},removeImage:{position:'absolute',right:-5,top:-5,width:23,height:23,borderRadius:12,backgroundColor:palette.ink,alignItems:'center',justifyContent:'center'},privacyRow:{flexDirection:'row',flexWrap:'wrap',gap:7,marginBottom:10},privacyBox:{flexDirection:'row',alignItems:'flex-start',gap:8,backgroundColor:palette.primarySoft,borderRadius:13,padding:10,marginBottom:14},privacyText:{flex:1,color:palette.primary,fontSize:10,lineHeight:15,fontWeight:'700'},photoPreview:{width:'100%',aspectRatio:1.5,borderRadius:16,marginBottom:14},photoActions:{flexDirection:'row',gap:9},photoEmpty:{flexDirection:'row',alignItems:'center',gap:12},photoIcon:{width:49,height:49,borderRadius:16,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},photoTitle:{color:palette.ink,fontSize:15,fontWeight:'800'},
+const styles = StyleSheet.create({
+  compactHeader: {
+    height: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  compactTitle: { fontSize: 13, fontWeight: "900", color: palette.ink },
+  selector: { marginBottom: 14 },
+  dateCard: { marginBottom: 16 },
+  dateRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  calendarButton: {
+    flex: 1.4,
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+  },
+  calendarText: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: -5,
+  },
+  miniCalendar: {
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    paddingTop: 11,
+    marginTop: 10,
+  },
+  timeField: { flex: 1 },
+  dateInput: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  nowButton: {
+    height: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 9,
+    borderRadius: 11,
+    backgroundColor: palette.primarySoft,
+  },
+  nowText: { color: palette.primary, fontSize: 10, fontWeight: "800" },
+  logCard: { marginBottom: 24 },
+  heading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 18,
+  },
+  metricIcon: {
+    width: 49,
+    height: 49,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  grow: { flex: 1 },
+  metricName: { color: palette.ink, fontSize: 18, fontWeight: "800" },
+  currentValue: { color: palette.muted, fontSize: 12, marginTop: 3 },
+  defaultPill: {
+    flexDirection: "row",
+    gap: 4,
+    backgroundColor: palette.primarySoft,
+    borderRadius: 10,
+    padding: 6,
+  },
+  defaultText: { color: palette.primary, fontSize: 9, fontWeight: "800" },
+  numberWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: palette.border,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    marginBottom: 14,
+  },
+  numberInput: {
+    flex: 1,
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: "800",
+    paddingVertical: 15,
+  },
+  unit: { color: palette.muted, fontSize: 14, fontWeight: "700" },
+  fieldLabel: {
+    color: palette.ink,
+    fontSize: 11,
+    fontWeight: "900",
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  fieldInput: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: palette.ink,
+    marginBottom: 14,
+  },
+  textArea: { minHeight: 95, textAlignVertical: "top" },
+  noteInput: { minHeight: 65, textAlignVertical: "top" },
+  foodLookup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: palette.primarySoft,
+    borderRadius: 14,
+    padding: 11,
+    marginBottom: 14,
+  },
+  foodLookupTitle: { color: palette.primary, fontSize: 11, fontWeight: "900" },
+  nutritionGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  moreNutrition: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 9,
+    marginBottom: 8,
+  },
+  moreNutritionText: { fontSize: 11, fontWeight: "800" },
+  nutritionField: { width: "31%", minWidth: 90 },
+  nutritionLabel: {
+    color: palette.muted,
+    fontSize: 9,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  nutritionInput: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+  },
+  nutritionText: {
+    flex: 1,
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: "800",
+    paddingVertical: 8,
+  },
+  nutritionUnit: { color: palette.faint, fontSize: 8 },
+  completion: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: palette.canvas,
+    marginBottom: 14,
+  },
+  completionTitle: { color: palette.ink, fontSize: 15, fontWeight: "800" },
+  helper: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  attachRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    marginBottom: 7,
+  },
+  attachText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  entryImageWrap: { width: 120, height: 92, position: "relative" },
+  entryImage: { width: 120, height: 92, borderRadius: 13 },
+  removeImage: {
+    position: "absolute",
+    right: -5,
+    top: -5,
+    width: 23,
+    height: 23,
+    borderRadius: 12,
+    backgroundColor: palette.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  privacyRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginBottom: 10,
+  },
+  privacyBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: palette.primarySoft,
+    borderRadius: 13,
+    padding: 10,
+    marginBottom: 14,
+  },
+  privacyText: {
+    flex: 1,
+    color: palette.primary,
+    fontSize: 10,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
+  photoPreview: {
+    width: "100%",
+    aspectRatio: 1.5,
+    borderRadius: 16,
+    marginBottom: 14,
+  },
+  photoActions: { flexDirection: "row", gap: 9 },
+  photoEmpty: { flexDirection: "row", alignItems: "center", gap: 12 },
+  photoIcon: {
+    width: 49,
+    height: 49,
+    borderRadius: 16,
+    backgroundColor: palette.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoTitle: { color: palette.ink, fontSize: 15, fontWeight: "800" },
 });

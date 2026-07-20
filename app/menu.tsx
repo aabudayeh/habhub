@@ -11,12 +11,6 @@ import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
 
 const items = [
   {
-    label: "Customize",
-    detail: "Metrics, formulas, dashboards and scoring",
-    icon: "options-outline" as const,
-    path: "/customize" as const,
-  },
-  {
     label: "Cloud account & health sync",
     detail: "Backup, restore and device sync preferences",
     icon: "cloud-outline" as const,
@@ -24,7 +18,7 @@ const items = [
   },
   {
     label: "Notifications",
-    detail: "Metric activity, chat, badges and quiet hours",
+    detail: "Goal activity, chat, badges and quiet hours",
     icon: "notifications-outline" as const,
     path: "/notifications" as const,
   },
@@ -34,12 +28,8 @@ const items = [
     icon: "people-outline" as const,
     path: "/groups" as const,
   },
-  {
-    label: "Privacy guide",
-    detail: "Review how sharing works",
-    icon: "shield-checkmark-outline" as const,
-    path: "/customize?tab=metrics" as const,
-  },
+  { label: "Quick guide", detail: "Replay the short setup and tutorial", icon: "help-circle-outline" as const, path: "/onboarding" as const },
+  { label: "Advanced settings", detail: "Trackers, calculations, layouts and scoring", icon: "options-outline" as const, path: "/customize" as const },
 ];
 
 export default function MenuScreen() {
@@ -61,7 +51,7 @@ export default function MenuScreen() {
         edges={["top", "bottom"]}
       >
         <View style={styles.topRow}>
-          <Text style={[styles.brand, { color: accent }]}>PACEBOARD</Text>
+          <Text style={[styles.brand, { color: accent }]}>NORTH</Text>
           <Pressable onPress={() => router.back()} style={[styles.close,{backgroundColor:colors.canvas}]}>
             <Ionicons name="close" size={22} color={colors.ink} />
           </Pressable>
@@ -110,8 +100,8 @@ export default function MenuScreen() {
           ))}
         </View>
         <Text style={[styles.privacy,{color:colors.muted}]}>
-          New metrics share exact values with your group by default. You can
-          make any metric or entry private.
+          New items share their values with your group by default. You can
+          make any item or entry private.
         </Text>
       </SafeAreaView>
     </View>
