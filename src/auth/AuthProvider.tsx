@@ -30,8 +30,10 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+WebBrowser.maybeCompleteAuthSession();
+
 function callbackUrl() {
-  return Linking.createURL('/auth-callback');
+  return Platform.OS === 'web' ? Linking.createURL('/auth-callback') : 'paceboard://auth-callback';
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {

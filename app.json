@@ -27,17 +27,26 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "app.paceboard.mobile",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.health.READ_STEPS",
         "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+        "android.permission.health.READ_TOTAL_CALORIES_BURNED",
+        "android.permission.health.READ_DISTANCE",
         "android.permission.health.READ_WEIGHT",
         "android.permission.health.READ_NUTRITION",
         "android.permission.health.READ_HYDRATION",
         "android.permission.health.READ_EXERCISE",
+        "android.permission.health.READ_BODY_FAT",
+        "android.permission.health.READ_LEAN_BODY_MASS",
+        "android.permission.health.READ_BLOOD_PRESSURE",
+        "android.permission.health.READ_RESTING_HEART_RATE",
+        "android.permission.health.READ_HEART_RATE",
         "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
       ],
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "output": "static",
@@ -45,6 +54,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-notifications",
       [
         "@kingstinct/react-native-healthkit",
         {
@@ -92,6 +102,9 @@
       "eas": {
         "projectId": "bc338000-2432-42da-8a7f-1502fa2482e4"
       }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/bc338000-2432-42da-8a7f-1502fa2482e4"
     }
   }
 }

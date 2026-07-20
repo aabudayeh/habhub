@@ -27,7 +27,19 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier: 'HKQuantityTypeIdentifierDietaryCarbohydrates', type: 'nutrition', unit: 'g', nutritionField: 'carbsG' },
   { identifier: 'HKQuantityTypeIdentifierDietaryFiber', type: 'nutrition', unit: 'g', nutritionField: 'fiberG' },
   { identifier: 'HKQuantityTypeIdentifierDietarySodium', type: 'nutrition', unit: 'mg', nutritionField: 'sodiumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietarySugar',type:'nutrition',unit:'g',nutritionField:'sugarG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatSaturated',type:'nutrition',unit:'g',nutritionField:'saturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCholesterol',type:'nutrition',unit:'mg',nutritionField:'cholesterolMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPotassium',type:'nutrition',unit:'mg',nutritionField:'potassiumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCalcium',type:'nutrition',unit:'mg',nutritionField:'calciumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryIron',type:'nutrition',unit:'mg',nutritionField:'ironMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminC',type:'nutrition',unit:'mg',nutritionField:'vitaminCMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminD',type:'nutrition',unit:'mcg',nutritionField:'vitaminDMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminB12',type:'nutrition',unit:'mcg',nutritionField:'vitaminB12Mcg' },
   { identifier: 'HKQuantityTypeIdentifierDietaryWater', type: 'water', unit: 'L' },
+  { identifier: 'HKQuantityTypeIdentifierBodyFatPercentage', type: 'body_fat', unit: '%' },
+  { identifier: 'HKQuantityTypeIdentifierLeanBodyMass', type: 'lean_body_mass', unit: 'kg' },
+  { identifier: 'HKQuantityTypeIdentifierRestingHeartRate', type: 'heart_rate', unit: 'count/min' },
 ];
 
 function asDate(value: unknown, fallback: Date) {
@@ -48,7 +60,7 @@ function sourceName(value: Record<string, unknown>) {
 }
 
 async function readQuantity(config: QuantityConfig, from: Date, to: Date): Promise<HealthImportRecord[]> {
-  if (config.type === 'weight') {
+  if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'heart_rate') {
     const samples = await queryQuantitySamples(config.identifier, {
       limit: 0,
       ascending: true,
@@ -116,6 +128,7 @@ export const appleHealthAdapter: HealthAdapter = {
     if (!dataTypes.includes('workouts')) return records;
     const workouts = await queryWorkoutSamples({ limit: 0, ascending: true, filter: { date: { startDate: from, endDate: to } } });
     return [...records, ...workouts.map((workout): HealthImportRecord => {
+      const raw = workout as unknown as Record<string, unknown>;
       const start = asDate(workout.startDate, from);
       const end = asDate(workout.endDate, start);
       return {
@@ -124,13 +137,17 @@ export const appleHealthAdapter: HealthAdapter = {
         type: 'workouts',
         startTime: start.toISOString(),
         endTime: end.toISOString(),
-        value: true,
-        unit: '',
+        value: Math.max(1,(end.getTime()-start.getTime())/60000),
+        unit: 'min',
         origin: sourceName(workout),
         label: String(workout.workoutActivityType ?? 'Workout'),
+        measurements: {
+          durationMinutes: Math.max(0,(end.getTime()-start.getTime())/60000),
+          activeCalories: nestedNumber(raw,'totalEnergyBurned','quantity') || Number(raw.totalEnergyBurned ?? 0),
+          distanceKm: nestedNumber(raw,'totalDistance','quantity') || Number(raw.totalDistance ?? 0),
+        },
       };
     })];
   },
   openSettings: async () => { await Linking.openSettings(); },
 };
-

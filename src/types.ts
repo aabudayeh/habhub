@@ -13,7 +13,11 @@ export type HealthDataType =
   | 'weight'
   | 'nutrition'
   | 'water'
-  | 'workouts';
+  | 'workouts'
+  | 'body_fat'
+  | 'lean_body_mass'
+  | 'blood_pressure'
+  | 'heart_rate';
 
 export type MetricGoal = {
   kind: GoalKind;
@@ -77,6 +81,8 @@ export type NutritionDetails = {
   carbsG?: number;
   fiberG?: number;
   sodiumMg?: number;
+  sugarG?: number; saturatedFatG?: number; cholesterolMg?: number; potassiumMg?: number;
+  calciumMg?: number; ironMg?: number; magnesiumMg?: number; vitaminCMg?: number; vitaminDMcg?: number; vitaminB12Mcg?: number;
 };
 
 export type PhotoUpdate = {
@@ -145,12 +151,18 @@ export type UserSettings = {
   tauntMessage: string;
   reminderMessage: string;
   featuredTodayCard: 'score' | string;
+  compactMode: boolean;
+  darkMode: boolean;
+  showLeaderboard: boolean;
+  showChat: boolean;
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
   /** Personal aliases are scoped to the group where they were assigned. */
   memberNicknamesByGroup: Record<string, Record<string, string>>;
   /** Up to five badge ids the current user chose to feature in each group. */
   badgeShowcaseByGroup: Record<string, string[]>;
+  progressMetricIds: string[];
+  leaderboardMetricIdsByGroup: Record<string,string[]>;
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;
@@ -159,6 +171,7 @@ export type UserSettings = {
 export type NotificationSettings = {
   pushEnabled: boolean;
   groupMetricActivity: boolean;
+  leadChanges: boolean;
   metricIds: string[];
   chatMessages: boolean;
   badgesAndWinners: boolean;
@@ -178,12 +191,14 @@ export type Group = {
   members: Member[];
   /** Number of missed days permitted inside each rolling seven-day streak window. */
   streakRestDaysPerWeek: number;
+  /** Group-owned accent used throughout the app while this group is active. */
+  themeColor?: string;
   /** Versioned locally in demo mode; cloud mode stores this as group-owned configuration. */
   metricConfiguration?: MetricDefinition[];
 };
 
 export type AppState = {
-  version: 10;
+  version: 14;
   currentUserId: string;
   group: Group;
   groups: Group[];

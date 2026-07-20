@@ -1,11 +1,14 @@
 import { User } from '@supabase/supabase-js';
 
-import { effectiveGoalTarget, goalProgress, goalReached, safeMetricValue } from '@/src/domain/metrics';
+import { effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, rankedMembers, safeMetricValue } from '@/src/domain/metrics';
+import { DEFAULT_METRICS } from '@/src/data/seed';
 import { supabase } from '@/src/lib/supabase';
 import { AppState, ChatMessage, DailyMetricStatus, Group, Member, MetricDefinition, MetricEntry, PhotoUpdate } from '@/src/types';
 
 const MEDIA_BUCKET = 'paceboard-media';
 const COLORS = ['#176B4D', '#3478D4', '#7756D9', '#E9A23B', '#D95852', '#2A8F86', '#9B6B43'];
+const REQUIRED_HEALTH_METRICS = new Set(['workout_duration','workout_calories','workout_distance','body_fat','lean_body_mass','blood_pressure_systolic','blood_pressure_diastolic','pulse']);
+function ensureHealthMetrics(metrics:MetricDefinition[]){return [...metrics,...DEFAULT_METRICS.filter((metric)=>REQUIRED_HEALTH_METRICS.has(metric.id)&&!metrics.some((item)=>item.id===metric.id))].sort((a,b)=>a.order-b.order);}
 
 export function isCloudGroupId(id: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -146,7 +149,8 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
     templateName: row.template_name,
     members: members.get(row.id) ?? [],
     streakRestDaysPerWeek: Number((row.settings as Record<string, any>)?.streakRestDaysPerWeek ?? 1),
-    metricConfiguration: (metrics ?? []).filter((metric) => metric.group_id === row.id).map(metricFromRow).sort((a, b) => a.order - b.order),
+    themeColor: String((row.settings as Record<string, any>)?.themeColor ?? '#176B4D'),
+    metricConfiguration: ensureHealthMetrics((metrics ?? []).filter((metric) => metric.group_id === row.id).map(metricFromRow)),
   }));
 }
 
@@ -156,6 +160,14 @@ export async function createCloudGroup(name: string, metrics: MetricDefinition[]
     const { error } = await client.from('profiles').update({ display_name: displayName.trim() }).eq('id', user.id);
     if (error) throw error;
   }
+  const { data: atomicGroupId, error: atomicError } = await client.rpc('create_group_with_metrics', {
+    group_name: name.trim(),
+    metric_configuration: metrics,
+    group_theme_color: '#176B4D',
+  });
+  if (!atomicError && atomicGroupId) return atomicGroupId as string;
+  if (atomicError && !/create_group_with_metrics|schema cache|function.*does not exist/i.test(atomicError.message)) throw atomicError;
+
   let created: Record<string, any> | null = null;
   for (let attempt = 0; attempt < 3 && !created; attempt += 1) {
     const { data, error } = await client.from('groups').insert({
@@ -163,7 +175,7 @@ export async function createCloudGroup(name: string, metrics: MetricDefinition[]
       name: name.trim(),
       invite_code: inviteCode(),
       template_name: 'Healthy Competition',
-      settings: { streakRestDaysPerWeek: 1 },
+      settings: { streakRestDaysPerWeek: 1, themeColor: '#176B4D' },
     }).select('id').single();
     if (!error) created = data;
     else if (!/invite_code|duplicate/i.test(error.message)) throw error;
@@ -276,7 +288,7 @@ export async function loadCloudWorkspace(state: AppState, groupId: string): Prom
     goalReached: status.goal_reached,
     scoreContribution: Number(status.score_contribution ?? 0),
   }));
-  const messages: ChatMessage[] = (messageResult.data ?? []).map((message) => ({
+  const remoteMessages: ChatMessage[] = (messageResult.data ?? []).map((message) => ({
     id: message.client_generated_id ?? message.id,
     senderId: message.sender_id ?? 'system',
     text: message.content,
@@ -287,6 +299,16 @@ export async function loadCloudWorkspace(state: AppState, groupId: string): Prom
     imageStoragePath: message.image_path ?? undefined,
     imageUri: message.image_path ? urls.get(message.image_path) ?? undefined : undefined,
   }));
+  // Keep locally-created messages until their cloud upsert is visible. A realtime
+  // refresh must never make a just-sent message (or offline history) disappear.
+  const messagesById = new Map(remoteMessages.map((message) => [message.id, message]));
+  state.messages
+    .filter((message) => message.senderId === state.currentUserId && (
+      message.conversationId === `group:${groupId}`
+      || Boolean(message.recipientId && group.members.some((member) => member.id === message.recipientId))
+    ))
+    .forEach((message) => { if (!messagesById.has(message.id)) messagesById.set(message.id, message); });
+  const messages = [...messagesById.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const photos: PhotoUpdate[] = (photoResult.data ?? []).map((photo) => {
     const asset = mediaById.get(photo.media_asset_id);
     const path = asset?.storage_path;
@@ -343,7 +365,7 @@ export async function pushCloudWorkspace(state: AppState) {
     const { error: groupError } = await client.from('groups').update({
       name: state.group.name,
       template_name: state.group.templateName,
-      settings: { streakRestDaysPerWeek: state.group.streakRestDaysPerWeek },
+      settings: { streakRestDaysPerWeek: state.group.streakRestDaysPerWeek, themeColor: state.group.themeColor ?? '#176B4D' },
     }).eq('id', state.group.id);
     if (groupError) throw groupError;
     await upsertMetrics(state.group.id, state.metrics);
@@ -360,12 +382,35 @@ export async function pushCloudWorkspace(state: AppState) {
   const ownedEntries = state.entries.filter((entry) => entry.userId === state.currentUserId && idBySlug.has(entry.metricId));
   const { data: oldEntries, error: oldEntryError } = await client.from('metric_entries').select('client_generated_id').eq('user_id', state.currentUserId).in('metric_id', [...idBySlug.values()]);
   if (oldEntryError) throw oldEntryError;
+  const oldEntryIds = new Set((oldEntries ?? []).map((entry) => entry.client_generated_id));
+  const newSharedEntries = ownedEntries.filter((entry) => !oldEntryIds.has(entry.id) && entry.visibility !== 'private');
   const currentEntryIds = new Set(ownedEntries.map((entry) => entry.id));
   const deletedEntryIds = (oldEntries ?? []).map((entry) => entry.client_generated_id).filter((id) => !currentEntryIds.has(id));
   if (deletedEntryIds.length) {
     const { error } = await client.from('metric_entries').delete().eq('user_id', state.currentUserId).in('client_generated_id', deletedEntryIds);
     if (error) throw error;
   }
+  await Promise.allSettled(newSharedEntries.map((entry) => {
+    const metric = state.metrics.find((item) => item.id === entry.metricId);
+    return client.functions.invoke('send-push', { body: {
+      eventKey: `entry:${state.group.id}:${entry.id}`,
+      groupId: state.group.id,
+      category: 'metric',
+      metricId: entry.metricId,
+      title: `${current.name} logged ${metric?.name ?? 'a metric'}`,
+      body: entry.visibility === 'group' && metric && typeof entry.value !== 'string' ? formatMetricValue(metric, Number(entry.value)) : `A shared ${metric?.name ?? 'metric'} update was added.`,
+      data: { route: `/day/${entry.localDate}`, metricId: entry.metricId },
+    } });
+  }));
+  await Promise.allSettled(newSharedEntries.map((entry)=>{
+    const metric=state.metrics.find((item)=>item.id===entry.metricId);
+    if(!metric||(!metric.sections.group&&metric.scoreWeight<=0))return Promise.resolve();
+    const currentLeader=rankedMembers(state,metric,entry.localDate)[0]?.member;
+    const previousState={...state,entries:state.entries.filter((item)=>item.id!==entry.id)};
+    const previousLeader=rankedMembers(previousState,metric,entry.localDate)[0]?.member;
+    if(!currentLeader||currentLeader.id!==state.currentUserId||!previousLeader||previousLeader.id===currentLeader.id)return Promise.resolve();
+    return client.functions.invoke('send-push',{body:{eventKey:`lead:${state.group.id}:${entry.id}`,groupId:state.group.id,category:'lead',metricId:metric.id,title:`${current.name} took the lead`,body:`${current.name} passed ${previousLeader.name} in ${metric.name}.`,data:{route:'/group',metricId:metric.id}}});
+  }));
   if (ownedEntries.length) {
     const { error } = await client.from('metric_entries').upsert(ownedEntries.map((entry) => ({
       client_generated_id: entry.id,
@@ -409,9 +454,10 @@ export async function pushCloudWorkspace(state: AppState) {
   const ownedMessages = state.messages.filter((message) => message.senderId === state.currentUserId);
   const { data: oldMessages, error: oldMessageError } = await client.from('messages').select('client_generated_id').eq('group_id', state.group.id).eq('sender_id', state.currentUserId);
   if (oldMessageError) throw oldMessageError;
-  const currentMessageIds = new Set(ownedMessages.map((message) => message.id));
-  const deletedMessageIds = (oldMessages ?? []).map((message) => message.client_generated_id).filter((id) => id && !currentMessageIds.has(id));
-  if (deletedMessageIds.length) await client.from('messages').delete().eq('group_id', state.group.id).eq('sender_id', state.currentUserId).in('client_generated_id', deletedMessageIds);
+  const oldMessageIds = new Set((oldMessages ?? []).map((message) => message.client_generated_id));
+  const newMessages = ownedMessages.filter((message) => !oldMessageIds.has(message.id));
+  // Chat is append-preserving. Missing local rows may simply be an older or
+  // partially loaded snapshot, so absence must not be interpreted as deletion.
   if (ownedMessages.length) {
     const { error } = await client.from('messages').upsert(ownedMessages.map((message) => ({
       group_id: state.group.id,
@@ -427,6 +473,15 @@ export async function pushCloudWorkspace(state: AppState) {
     })), { onConflict: 'sender_id,client_generated_id' });
     if (error) throw error;
   }
+  await Promise.allSettled(newMessages.map((message) => client.functions.invoke('send-push', { body: {
+    eventKey: `message:${state.group.id}:${message.id}`,
+    groupId: state.group.id,
+    category: 'chat',
+    recipientId: message.recipientId,
+    title: message.recipientId ? `Private message from ${current.name}` : `${current.name} in ${state.group.name}`,
+    body: message.text || 'Sent an image',
+    data: { route: '/chat' },
+  } })));
 
   const ownedPhotos = state.photos.filter((photo) => photo.userId === state.currentUserId && photo.storagePath);
   const { data: oldPhotos, error: oldPhotoError } = await client.from('photo_updates').select('client_generated_id').eq('group_id', state.group.id).eq('owner_user_id', state.currentUserId);

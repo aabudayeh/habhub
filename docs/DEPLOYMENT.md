@@ -25,6 +25,7 @@ pnpm.cmd dlx supabase@latest link --project-ref YOUR_PROJECT_REF
 pnpm.cmd dlx supabase@latest db push --dry-run
 pnpm.cmd dlx supabase@latest db push
 pnpm.cmd dlx supabase@latest functions deploy delete-account
+pnpm.cmd dlx supabase@latest functions deploy send-push
 ```
 
 The fifth migration adds revisioned account sync, registered devices, realtime group invalidation, idempotent photo/message writes, and RLS-backed group access to private Storage objects. The sixth adds health-source provenance, connection/cursor storage, deduplication constraints, and owner-only RLS.
@@ -85,7 +86,7 @@ Add the legal/support URL variables from `.env.example` before store submission.
 
 ## 5. Build and deploy
 
-Health sync is already configured in `app.json`. It requires a new native EAS build and will not work in Expo Go. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
+Health sync, barcode scanning, and push notifications are configured in `app.json`. They require a new native EAS build. Remote push is not available in Expo Go on Android; test it in the preview/release APK. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
 
 Before distributing the Android production build, complete Google Play's Health Connect declaration for every requested read category. Confirm Samsung Health, MyFitnessPal, or Google Fit is allowed to write into Health Connect if you want its data to appear. On iOS, allow compatible apps to write into Apple Health and grant Paceboard read access when prompted.
 

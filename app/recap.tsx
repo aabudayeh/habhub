@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Screen } from '@/src/components/ui';
@@ -14,6 +14,7 @@ export default function RecapScreen() {
   const scope: RecapScope = params.scope === 'group' ? 'group' : 'personal';
   const stories = useMemo(() => buildRecapStories(state, scope), [scope, state]);
   const [index, setIndex] = useState(0);
+  const touchStartX = useRef(0);
   const story = stories[index];
 
   function previous() {
@@ -26,6 +27,13 @@ export default function RecapScreen() {
     setIndex((value) => value + 1);
   }
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIndex((value) => (value + 1) % stories.length);
+    }, 6500);
+    return () => clearTimeout(timer);
+  }, [index, stories.length]);
+
   if (!story) return null;
   return <Screen contentContainerStyle={styles.screen}>
     <View style={styles.topRow}>
@@ -33,7 +41,7 @@ export default function RecapScreen() {
       <Pressable onPress={() => router.back()} accessibilityLabel="Close recap" style={styles.close}><Ionicons name="close" size={22} color={palette.ink} /></Pressable>
     </View>
     <Text style={styles.heading}>{scope === 'group' ? 'Group recap' : 'Your recap'} · {index + 1} of {stories.length}</Text>
-    <Card style={[styles.story, { backgroundColor: story.color, borderColor: story.color }]}>
+    <View onStartShouldSetResponder={()=>true} onResponderGrant={(event)=>{touchStartX.current=event.nativeEvent.pageX;}} onResponderRelease={(event)=>{const delta=event.nativeEvent.pageX-touchStartX.current;if(delta>35)previous();else if(delta < -35)next();}}><Card style={[styles.story, { backgroundColor: story.color, borderColor: story.color }]}>
       <View style={styles.icon}><Ionicons name={story.icon as keyof typeof Ionicons.glyphMap} size={38} color={palette.white} /></View>
       <View style={styles.storyCopy}>
         <Text style={styles.eyebrow}>{story.eyebrow}</Text>
@@ -42,12 +50,12 @@ export default function RecapScreen() {
         <Text style={styles.body}>{story.body}</Text>
       </View>
       <Text style={styles.brand}>PACEBOARD</Text>
-    </Card>
+    </Card></View>
     <View style={styles.actions}>
       <Pressable onPress={previous} style={styles.action}><Ionicons name="arrow-back" size={18} color={palette.ink} /><Text style={styles.actionText}>{index === 0 ? 'Close' : 'Back'}</Text></Pressable>
       <Pressable onPress={next} style={[styles.action, styles.next]}><Text style={styles.nextText}>{index === stories.length - 1 ? 'Done' : 'Next'}</Text><Ionicons name={index === stories.length - 1 ? 'checkmark' : 'arrow-forward'} size={18} color={palette.white} /></Pressable>
     </View>
-    <Text style={styles.note}>Recaps refresh and reshuffle daily. Values are estimates based on logged data.</Text>
+    <Text style={styles.note}>Swipe to move between stories. They advance automatically and refresh daily. Values are estimates based on logged data.</Text>
   </Screen>;
 }
 

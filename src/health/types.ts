@@ -11,6 +11,8 @@ export type HealthImportRecord = {
   origin?: string;
   label?: string;
   nutrition?: NutritionDetails;
+  note?: string;
+  measurements?: { durationMinutes?: number; activeCalories?: number; distanceKm?: number; speedKmh?: number; systolic?: number; diastolic?: number };
   updatedAt?: string;
 };
 
@@ -41,4 +43,3 @@ export type PersistedHealthStatus = {
   importedCount?: number;
   error?: string | null;
 };
-

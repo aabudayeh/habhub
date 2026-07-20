@@ -5,6 +5,8 @@ import { AppState as NativeAppState, Platform } from 'react-native';
 
 import { useAuth } from '@/src/auth/AuthProvider';
 import { createCloudGroup, isCloudGroupId, joinCloudGroup, leaveCloudGroup, loadCloudGroupShells, loadCloudWorkspace, pushCloudWorkspace } from '@/src/cloud/groupCloud';
+import { createInitialState } from '@/src/data/seed';
+import { dateKey } from '@/src/domain/date';
 import { supabase } from '@/src/lib/supabase';
 import { useApp } from '@/src/state/AppProvider';
 import { AppState, ChatMessage, Group, Member, MetricEntry, PhotoUpdate } from '@/src/types';
@@ -63,11 +65,6 @@ async function getDeviceId() {
   return created;
 }
 
-function replaceId(value: string | undefined, oldId: string, newId: string) {
-  if (!value) return value;
-  return value.split(oldId).join(newId);
-}
-
 function accountName(user: User, fallback: string) {
   const metadataName = user.user_metadata?.display_name ?? user.user_metadata?.full_name ?? user.user_metadata?.name;
   return typeof metadataName === 'string' && metadataName.trim()
@@ -75,42 +72,49 @@ function accountName(user: User, fallback: string) {
     : user.email?.split('@')[0] || fallback;
 }
 
-/** Binds the local demo identity to the authenticated account without changing other members' sample data. */
-function bindStateToAccount(state: AppState, user: User): AppState {
-  if (state.currentUserId === user.id) return state;
-  const oldId = state.currentUserId;
-  const renameMembers = (group: Group): Group => ({
-    ...group,
-    members: group.members.map((member): Member => member.id === oldId ? {
-      ...member,
-      id: user.id,
-      name: accountName(user, member.name),
-      initials: accountName(user, member.name).slice(0, 2).toUpperCase(),
-    } : member),
-  });
-  const nicknames = Object.fromEntries(Object.entries(state.settings.memberNicknamesByGroup ?? {}).map(([groupId, values]) => [
-    groupId,
-    Object.fromEntries(Object.entries(values).map(([id, nickname]) => [id === oldId ? user.id : id, nickname])),
-  ]));
-  return {
-    ...state,
-    currentUserId: user.id,
-    group: renameMembers(state.group),
-    groups: state.groups.map(renameMembers),
-    energyProfiles: {
-      ...Object.fromEntries(Object.entries(state.energyProfiles).filter(([id]) => id !== oldId)),
-      [user.id]: state.energyProfiles[oldId] ?? state.settings.energyProfile,
-    },
-    entries: state.entries.map((entry) => entry.userId === oldId ? { ...entry, userId: user.id } : entry),
-    photos: state.photos.map((photo) => photo.userId === oldId ? { ...photo, userId: user.id } : photo),
-    messages: state.messages.map((message) => ({
-      ...message,
-      senderId: message.senderId === oldId ? user.id : message.senderId,
-      recipientId: message.recipientId === oldId ? user.id : message.recipientId,
-      conversationId: replaceId(message.conversationId, oldId, user.id),
-    })),
-    settings: { ...state.settings, memberNicknamesByGroup: nicknames },
+function isDemoBoundState(state: AppState) {
+  return state.group.id === 'weekend-warriors'
+    || (!isCloudGroupId(state.group.id) && state.group.members.some((member) => ['sarah','daniel','maya'].includes(member.id)));
+}
+
+function createCleanAccountState(user: User): AppState {
+  const defaults = createInitialState();
+  const today = dateKey();
+  const name = accountName(user, 'Paceboard member');
+  const metrics = defaults.metrics.map((metric) => ({ ...metric, activeFrom: today }));
+  const energyProfile = { age: 30, sex: 'unspecified' as const, heightCm: 170, weightKg: 70, targetWeightKg: 70, activityLevel: 'sedentary' as const, desiredWeeklyLossKg: 0.25 };
+  const group: Group = {
+    id: `account-starter-${user.id}`,
+    name: 'Personal setup',
+    inviteCode: 'CREATE-GROUP',
+    templateName: 'Healthy Competition',
+    members: [{ id: user.id, name, initials: name.split(/\s+/).slice(0,2).map((part)=>part[0]??'').join('').toUpperCase() || 'P', color: '#176B4D', role: 'owner' }],
+    streakRestDaysPerWeek: 1,
+    themeColor: '#176B4D',
+    metricConfiguration: metrics,
   };
+  return {
+    ...defaults,
+    currentUserId: user.id,
+    group,
+    groups: [group],
+    metrics,
+    entries: [],
+    photos: [],
+    messages: [],
+    dailyMetricStatuses: [],
+    energyProfiles: { [user.id]: energyProfile },
+    settings: { ...defaults.settings, baselineCalories: 2000, energyProfile, memberNicknamesByGroup: { [group.id]: {} }, badgeShowcaseByGroup: {} },
+    trackedGoalPeriods: Object.fromEntries(metrics.filter((metric)=>metric.sections.today).map((metric)=>[metric.id,[{from:today}]])),
+    selectedGroupMetricId: 'steps',
+    lastSavedAt: null,
+  };
+}
+
+/** Cloud identities never inherit another local account or the seeded demo member. */
+function bindStateToAccount(state: AppState, user: User): AppState {
+  if (state.currentUserId !== user.id || isDemoBoundState(state)) return createCleanAccountState(user);
+  return state;
 }
 
 function photoUri(uri: PhotoUpdate['uri']) {
@@ -213,14 +217,34 @@ function snapshotPayload(state: AppState): AppState {
   };
 }
 
-function stableHash(state: AppState) {
-  const source = JSON.stringify(snapshotPayload(state));
+function valueHash(value: unknown) {
+  const source = JSON.stringify(value);
   let hash = 2166136261;
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+
+function stableHash(state: AppState) {
+  return valueHash(snapshotPayload(state));
+}
+
+/** Only data represented by relational group tables belongs in a group push. */
+function workspaceHash(state: AppState) {
+  const payload = snapshotPayload(state);
+  return valueHash({
+    currentUserId: payload.currentUserId,
+    group: payload.group,
+    metrics: payload.metrics,
+    energyProfile: payload.energyProfiles[payload.currentUserId] ?? payload.settings.energyProfile,
+    aliases: payload.settings.memberNicknamesByGroup[payload.group.id] ?? {},
+    entries: payload.entries.filter((entry) => entry.userId === payload.currentUserId),
+    photos: payload.photos.filter((photo) => photo.userId === payload.currentUserId),
+    messages: payload.messages.filter((message) => message.senderId === payload.currentUserId),
+    dailyMetricStatuses: payload.dailyMetricStatuses.filter((status) => status.userId === payload.currentUserId),
+  });
 }
 
 async function resolvePrivateMedia(state: AppState): Promise<AppState> {
@@ -276,8 +300,21 @@ async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
   return data as SnapshotRow | null;
 }
 
+function errorText(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const parts = ['message', 'details', 'hint', 'code']
+      .map((key) => typeof record[key] === 'string' ? String(record[key]) : '')
+      .filter(Boolean);
+    if (parts.length) return [...new Set(parts)].join(' · ');
+    try { return JSON.stringify(error); } catch { return ''; }
+  }
+  return typeof error === 'string' ? error : '';
+}
+
 function friendlySyncError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorText(error);
   if (/network|fetch|offline|timeout/i.test(message)) return 'Offline changes are safe on this device and will retry automatically.';
   if (/column.*revision|sync_user_snapshot|schema cache/i.test(message)) return 'Apply the latest Supabase migrations before enabling cloud sync.';
   return message || 'Cloud sync failed. Your local data is still safe.';
@@ -294,10 +331,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const stateRef = useRef(state);
   const revisionRef = useRef(0);
   const hashRef = useRef<string | null>(null);
+  const workspaceHashRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const initializedUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressGroupRefreshUntilRef = useRef(0);
   stateRef.current = state;
 
   const loadDevices = useCallback(async () => {
@@ -317,9 +356,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (!remote) return;
       revisionRef.current = remote.revision;
       const bound = bindStateToAccount(remote.payload, auth.user);
-      hashRef.current = stableHash(bound);
       let resolved = await resolvePrivateMedia(bound);
       if (isCloudGroupId(resolved.group.id)) resolved = await loadCloudWorkspace(resolved, resolved.group.id);
+      hashRef.current = stableHash(resolved);
+      workspaceHashRef.current = workspaceHash(resolved);
       replaceState(resolved);
       setLastSyncedAt(remote.updated_at); setPendingChanges(false); setStatus('synced');
     } catch (error) {
@@ -342,7 +382,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           replaceState(candidate);
           stateRef.current = candidate;
         }
-        if (isCloudGroupId(candidate.group.id)) await pushCloudWorkspace(candidate);
+        const nextWorkspaceHash = workspaceHash(candidate);
+        if (isCloudGroupId(candidate.group.id) && nextWorkspaceHash !== workspaceHashRef.current) {
+          suppressGroupRefreshUntilRef.current = Date.now() + 3000;
+          try { await pushCloudWorkspace(candidate); }
+          catch (error) { throw new Error(`Group data could not sync: ${errorText(error) || 'unknown server error'}`); }
+        }
         const payload = snapshotPayload(candidate);
         const { data, error } = await supabase.rpc('sync_user_snapshot', {
           expected_revision: revisionRef.current,
@@ -355,6 +400,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         revisionRef.current = Number(result?.revision ?? revisionRef.current + 1);
         const syncedAt = result?.updated_at ?? new Date().toISOString();
         hashRef.current = stableHash(candidate);
+        workspaceHashRef.current = nextWorkspaceHash;
         setLastSyncedAt(syncedAt); setPendingChanges(false); setStatus('synced');
         await supabase.rpc('register_account_device', { client_device_id: deviceId, client_platform: Platform.OS, client_label: null });
         loadDevices().catch(() => undefined);
@@ -396,23 +442,26 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         deviceIdRef.current = deviceId;
         const remote = await fetchSnapshot(user.id);
         if (cancelled) return;
+        let correctedAccountState = false;
         if (remote) {
           revisionRef.current = remote.revision;
+          correctedAccountState = remote.payload.currentUserId !== user.id || isDemoBoundState(remote.payload);
           const bound = bindStateToAccount(remote.payload, user);
-          hashRef.current = stableHash(bound);
           let resolved = await resolvePrivateMedia(bound);
-          if (isCloudGroupId(resolved.group.id)) resolved = await loadCloudWorkspace(resolved, resolved.group.id);
-          if (!cancelled) { replaceState(resolved); stateRef.current = resolved; setLastSyncedAt(remote.updated_at); }
+          const existingGroups = await loadCloudGroupShells();
+          const targetGroup = existingGroups.find((group)=>group.id===resolved.group.id) ?? existingGroups[0];
+          if (targetGroup) resolved = await loadCloudWorkspace({ ...resolved, groups: existingGroups }, targetGroup.id);
+          if (!cancelled) { hashRef.current = correctedAccountState ? null : stableHash(resolved); workspaceHashRef.current = workspaceHash(resolved); replaceState(resolved); stateRef.current = resolved; setLastSyncedAt(remote.updated_at); }
         } else {
           let bound = bindStateToAccount(stateRef.current, user);
           const existingGroups = await loadCloudGroupShells();
           if (existingGroups.length) bound = await loadCloudWorkspace({ ...bound, groups: existingGroups }, existingGroups[0].id);
-          stateRef.current = bound; replaceState(bound); revisionRef.current = 0; hashRef.current = null;
+          stateRef.current = bound; replaceState(bound); revisionRef.current = 0; hashRef.current = null; workspaceHashRef.current = existingGroups.length ? workspaceHash(bound) : null;
         }
         if (cancelled) return;
         initializedUserRef.current = user.id;
         await supabase!.rpc('register_account_device', { client_device_id: deviceId, client_platform: Platform.OS, client_label: null });
-        if (!remote) await performSync(); else setStatus('synced');
+        if (!remote || correctedAccountState) await performSync(); else setStatus('synced');
         loadDevices().catch(() => undefined);
       } catch (error) {
         if (!cancelled) { setStatus(/network|fetch|offline|timeout/i.test(String(error)) ? 'offline' : 'error'); setErrorMessage(friendlySyncError(error)); }
@@ -447,6 +496,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
     const refreshed = await loadCloudWorkspace(stateRef.current, stateRef.current.group.id);
     stateRef.current = refreshed;
+    hashRef.current = stableHash(refreshed);
+    workspaceHashRef.current = workspaceHash(refreshed);
     replaceState(refreshed);
   }, [replaceState]);
 
@@ -454,6 +505,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     if (!supabase || auth.status !== 'signedIn' || !isCloudGroupId(state.group.id)) return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const queueRefresh = () => {
+      if (Date.now() < suppressGroupRefreshUntilRef.current) return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => refreshGroup().catch(() => undefined), 500);
     };
@@ -474,11 +526,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     const subscription = NativeAppState.addEventListener('change', (next) => {
       if (next === 'active' && auth.status === 'signedIn') {
         if (pendingChanges || status === 'offline') performSync().catch(() => undefined);
-        else pullLatest().catch(() => undefined);
       }
     });
     return () => subscription.remove();
-  }, [auth.status, pendingChanges, performSync, pullLatest, status]);
+  }, [auth.status, pendingChanges, performSync, status]);
 
   const value = useMemo<CloudSyncContextValue>(() => ({
     status, lastSyncedAt, errorMessage, pendingChanges, devices,
@@ -502,16 +553,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const me = stateRef.current.group.members.find((member) => member.id === stateRef.current.currentUserId);
       const groupId = await createCloudGroup(name, stateRef.current.metrics, auth.user, me?.name);
       const next = await loadCloudWorkspace(stateRef.current, groupId);
-      stateRef.current = next; replaceState(next); setPendingChanges(true);
+      stateRef.current = next; workspaceHashRef.current = workspaceHash(next); replaceState(next); setPendingChanges(true);
     },
     joinGroup: async (code) => {
       const groupId = await joinCloudGroup(code);
       const next = await loadCloudWorkspace(stateRef.current, groupId);
-      stateRef.current = next; replaceState(next); setPendingChanges(true);
+      stateRef.current = next; workspaceHashRef.current = workspaceHash(next); replaceState(next); setPendingChanges(true);
     },
     switchGroup: async (groupId) => {
       const next = await loadCloudWorkspace(stateRef.current, groupId);
-      stateRef.current = next; replaceState(next); setPendingChanges(true);
+      stateRef.current = next; workspaceHashRef.current = workspaceHash(next); replaceState(next); setPendingChanges(true);
     },
     leaveGroup: async (groupId) => {
       await leaveCloudGroup(groupId);

@@ -19,10 +19,10 @@ const WEEK_CHART_MAX = 1.4;
 type ViewMode = 'week' | 'month';
 
 export default function Insights() {
-  const { state } = useApp();
+  const { state,updateSettings } = useApp();
   const today = dateKey();
   const metrics = state.metrics.filter((metric) => metric.sections.insights && metric.dataType !== 'text');
-  const [selectedIds, setSelectedIds] = useState<string[]>([TRACKED, 'steps'].filter((id) => id === TRACKED || metrics.some((metric) => metric.id === id)));
+  const [selectedIds, setSelectedIds] = useState<string[]>((state.settings.progressMetricIds?.length?state.settings.progressMetricIds:[TRACKED,'steps']).filter((id) => id === TRACKED || metrics.some((metric) => metric.id === id)));
   const [filterTouched, setFilterTouched] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [month, setMonth] = useState(today);
@@ -37,6 +37,7 @@ export default function Insights() {
 
   function select(ids: string[]) {
     setSelectedIds(ids);
+    updateSettings({progressMetricIds:ids});
     setFilterTouched(true);
   }
 
@@ -53,8 +54,9 @@ export default function Insights() {
     const visuals = selectedMetrics.map((metric) => ({
       color: metric.color,
       progress: goalProgress(metric, safeMetricValue(state, metric, state.currentUserId, day), effectiveGoalTarget(state, metric, state.currentUserId, day)),
+      goalReached: goalReached(metric, safeMetricValue(state, metric, state.currentUserId, day), effectiveGoalTarget(state, metric, state.currentUserId, day)),
     }));
-    if (tracked) visuals.unshift({ color: TRACKED_COLOR, progress: trackedProgress(day) });
+    if (tracked) visuals.unshift({ color: TRACKED_COLOR, progress: trackedProgress(day), goalReached: trackedGoalSummary(state, state.currentUserId, day).allMet });
     return visuals;
   }
 

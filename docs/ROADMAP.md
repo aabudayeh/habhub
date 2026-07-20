@@ -7,6 +7,7 @@
 - Centralized Supabase authentication, automatic account sync, device tracking, private Storage, data export/deletion, static web export, and EAS configuration.
 - Authenticated cloud groups, real profiles, invite-code membership, relational metric/log/status/chat/photo sync, realtime invalidation, and ownership transfer on leave.
 - HealthKit and Health Connect native adapters with permissions, provenance, deduplication, app-open/manual/pull-to-refresh sync, and OS-managed background schedules.
+- Open Food Facts search/barcode lookup, native push-token registration, quiet hours, and server-delivered chat/metric activity notifications.
 
 ## Stage 2 — collaboration hardening
 
@@ -21,12 +22,10 @@
 - Physical-device provider matrix tests for Apple Health, Samsung Health, MyFitnessPal summaries, and Google Fit migration data.
 - Use native change tokens/anchors for larger histories; the current stable-ID implementation safely refreshes an overlapping date window.
 - Add an imported-record correction/override audit screen.
-- Open Food Facts search/barcode flow with confirmation and correction.
 - Saved foods, meals, recipes, and imported meal summaries.
 
 ## Stage 4 — notifications and automation
 
-- Push token registration and quiet hours.
 - Scheduled leaderboard finalization.
 - Rule-based goal, lead-change, streak, reminder, and daily-winner messages.
 - Cooldowns, user banter preferences, moderation, and audit history.

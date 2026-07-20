@@ -15,14 +15,18 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { palette, shadow } from '@/src/theme';
+import { palette, shadow, useAppColors, useCompactMode, useGroupAccent } from '@/src/theme';
 
-export function Screen({ children, contentContainerStyle, ...props }: ScrollViewProps) {
+export function Screen({ children, contentContainerStyle, scrollRef, ...props }: ScrollViewProps & { scrollRef?: React.RefObject<ScrollView | null> }) {
+  const compact = useCompactMode();
+  const colors=useAppColors();
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe,{backgroundColor:colors.canvas}]} edges={['top']}>
       <ScrollView
+        ref={scrollRef}
+        style={{backgroundColor:colors.canvas}}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.screen, contentContainerStyle]}
+        contentContainerStyle={[styles.screen, compact && styles.screenCompact, contentContainerStyle]}
         {...props}>
         <View style={styles.content}>{children}</View>
       </ScrollView>
@@ -43,12 +47,15 @@ export function PageHeader({
   action?: ReactNode;
   showMenu?: boolean;
 }) {
+  const accent = useGroupAccent();
+  const compact = useCompactMode();
+  const colors=useAppColors();
   return (
-    <View style={styles.header}>
+    <View style={[styles.header,compact&&styles.headerCompact]}>
       <View style={styles.headerCopy}>
-        {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        {eyebrow ? <Text style={[styles.eyebrow,{color:accent}]}>{eyebrow}</Text> : null}
+        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={[styles.title,{color:colors.ink}]}>{title}</Text>
+        {subtitle ? <Text style={[styles.subtitle,{color:colors.muted}]}>{subtitle}</Text> : null}
       </View>
       <View style={styles.headerActions}>
         {action}
@@ -59,16 +66,20 @@ export function PageHeader({
 }
 
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
+  const compact = useCompactMode();
+  const colors=useAppColors();
   return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+    <View style={[styles.sectionHeader,compact&&styles.sectionHeaderCompact]}>
+      <Text style={[styles.sectionTitle,{color:colors.ink}]}>{title}</Text>
       {action}
     </View>
   );
 }
 
 export function Card({ children, style }: PropsWithChildren<{ style?: StyleProp<ViewStyle> }>) {
-  return <View style={[styles.card, style]}>{children}</View>;
+  const compact = useCompactMode();
+  const colors=useAppColors();
+  return <View style={[styles.card,{backgroundColor:colors.card,borderColor:colors.border}, compact&&styles.cardCompact, style]}>{children}</View>;
 }
 
 export function IconButton({
@@ -82,12 +93,13 @@ export function IconButton({
   label: string;
   filled?: boolean;
 }) {
+  const accent = useGroupAccent();
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.iconButton, filled && styles.iconButtonFilled, pressed && styles.pressed]}>
+      style={({ pressed }) => [styles.iconButton, filled && styles.iconButtonFilled,filled&&{backgroundColor:accent,borderColor:accent}, pressed && styles.pressed]}>
       <Ionicons name={icon} size={20} color={filled ? palette.white : palette.ink} />
     </Pressable>
   );
@@ -108,23 +120,26 @@ export function Button({
   disabled?: boolean;
   loading?: boolean;
 }) {
+  const accent = useGroupAccent();
+  const compact = useCompactMode();
   return (
     <Pressable
       accessibilityRole="button"
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.button,
+        styles.button, compact&&styles.buttonCompact,
         styles[`button_${variant}`],
+        variant==='primary'&&{backgroundColor:accent,borderColor:accent},
         (disabled || loading) && styles.disabled,
         pressed && styles.pressed,
       ]}>
       {loading ? (
-        <ActivityIndicator color={variant === 'primary' ? palette.white : palette.primary} />
+        <ActivityIndicator color={variant === 'primary' ? palette.white : accent} />
       ) : (
         <>
           {icon ? (
-            <Ionicons name={icon} size={18} color={variant === 'primary' ? palette.white : palette.primary} />
+            <Ionicons name={icon} size={18} color={variant === 'primary' ? palette.white : accent} />
           ) : null}
           <Text style={[styles.buttonText, variant === 'primary' && styles.buttonTextPrimary]}>{label}</Text>
         </>
@@ -144,15 +159,17 @@ export function Chip({
   onPress?: () => void;
   icon?: keyof typeof Ionicons.glyphMap;
 }) {
+  const accent = useGroupAccent();
+  const compact = useCompactMode();
   const content = (
     <>
-      {icon ? <Ionicons name={icon} size={15} color={selected ? palette.primary : palette.muted} /> : null}
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+      {icon ? <Ionicons name={icon} size={15} color={selected ? accent : palette.muted} /> : null}
+      <Text style={[styles.chipText, selected && styles.chipTextSelected,selected&&{color:accent}]}>{label}</Text>
     </>
   );
-  if (!onPress) return <View style={[styles.chip, selected && styles.chipSelected]}>{content}</View>;
+  if (!onPress) return <View style={[styles.chip, compact&&styles.chipCompact, selected && styles.chipSelected]}>{content}</View>;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, selected && styles.chipSelected, pressed && styles.pressed]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.chip, compact&&styles.chipCompact, selected && styles.chipSelected, pressed && styles.pressed]}>
       {content}
     </Pressable>
   );
@@ -177,19 +194,24 @@ export function ProgressBar({ progress, color = palette.primary }: { progress: n
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.canvas },
   screen: { paddingHorizontal: 18, paddingBottom: 120 },
+  screenCompact:{paddingHorizontal:12,paddingBottom:90},
   content: { width: '100%', maxWidth: 760, alignSelf: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16, paddingTop: 16, marginBottom: 24 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingTop: 14, marginBottom: 22 },
+  headerCompact:{paddingTop:8,marginBottom:13},
   headerCopy: { flex: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   eyebrow: { color: palette.primary, textTransform: 'uppercase', letterSpacing: 1.5, fontSize: 11, fontWeight: '800', marginBottom: 6 },
-  title: { color: palette.ink, fontSize: 30, lineHeight: 35, fontWeight: '800', letterSpacing: -0.8 },
-  subtitle: { color: palette.muted, fontSize: 15, lineHeight: 21, marginTop: 6 },
+  title: { color: palette.ink, fontSize: 28, lineHeight: 33, fontWeight: '800', letterSpacing: -0.6 },
+  subtitle: { color: palette.muted, fontSize: 13, lineHeight: 19, marginTop: 5 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, marginBottom: 12 },
-  sectionTitle: { color: palette.ink, fontSize: 18, fontWeight: '800', letterSpacing: -0.25 },
+  sectionHeaderCompact:{marginTop:5,marginBottom:7},
+  sectionTitle: { color: palette.ink, fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
   card: { backgroundColor: palette.card, borderRadius: 22, borderWidth: 1, borderColor: palette.border, padding: 18, ...shadow },
-  iconButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.card, borderWidth: 1, borderColor: palette.border, alignItems: 'center', justifyContent: 'center' },
+  cardCompact:{borderRadius:17,padding:12},
+  iconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: palette.card, borderWidth: 1, borderColor: palette.border, alignItems: 'center', justifyContent: 'center' },
   iconButtonFilled: { backgroundColor: palette.primary, borderColor: palette.primary },
   button: { minHeight: 48, paddingHorizontal: 18, borderRadius: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1 },
+  buttonCompact:{minHeight:40,paddingHorizontal:13,borderRadius:12},
   button_primary: { backgroundColor: palette.primary, borderColor: palette.primary },
   button_secondary: { backgroundColor: palette.primarySoft, borderColor: palette.primarySoft },
   button_ghost: { backgroundColor: 'transparent', borderColor: palette.border },
@@ -199,6 +221,7 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.72, transform: [{ scale: 0.985 }] },
   chip: { minHeight: 36, paddingHorizontal: 13, borderRadius: 18, backgroundColor: palette.card, borderColor: palette.border, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  chipCompact:{minHeight:30,paddingHorizontal:10},
   chipSelected: { backgroundColor: palette.primarySoft, borderColor: '#B9DFC9' },
   chipText: { color: palette.muted, fontSize: 13, fontWeight: '700' },
   chipTextSelected: { color: palette.primary },

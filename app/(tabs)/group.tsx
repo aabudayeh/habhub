@@ -6,8 +6,9 @@ import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { MetricSelector } from '@/src/components/MetricSelector';
 import { MonthCalendar } from '@/src/components/MonthCalendar';
 import { Avatar, Card, Chip, PageHeader, ProgressBar, Screen } from '@/src/components/ui';
-import { dateKey, dateKeyWithOffset } from '@/src/domain/date';
-import { leaderboardRows, LeaderboardPeriod, periodDates, periodTitle } from '@/src/domain/leaderboard';
+import { dateKey, dateKeyWithOffset, relativeTime } from '@/src/domain/date';
+import { groupInviteMessage } from '@/src/domain/invites';
+import { LeaderboardPeriod, leaderboardRows, periodDates, periodTitle } from '@/src/domain/leaderboard';
 import { memberDisplayName, memberOriginalLabel } from '@/src/domain/members';
 import { useApp } from '@/src/state/AppProvider';
 import { palette } from '@/src/theme';
@@ -15,16 +16,16 @@ import { palette } from '@/src/theme';
 const SCORE_ID='__score';
 
 export default function LeaderboardScreen() {
-  const { state }=useApp();
+  const { state,updateSettings }=useApp();
   const [period,setPeriod]=useState<LeaderboardPeriod>('today');
   const [anchor,setAnchor]=useState(dateKey());
   const [calendarOpen,setCalendarOpen]=useState(false);
   const tracked=state.metrics.filter((metric)=>metric.scoreWeight>0&&metric.dataType!=='text'&&metric.sections.group);
-  const [selectedIds,setSelectedIds]=useState<string[]>([state.selectedGroupMetricId||SCORE_ID]);
+  const [selectedIds,setSelectedIds]=useState<string[]>(state.settings.leaderboardMetricIdsByGroup?.[state.group.id]??[state.selectedGroupMetricId||SCORE_ID]);
   const dates=useMemo(()=>periodDates(period,anchor),[anchor,period]);
 
   function choosePeriod(next:LeaderboardPeriod){setPeriod(next);if(next==='today')setAnchor(dateKey());if(next==='yesterday')setAnchor(dateKeyWithOffset(-1));setCalendarOpen(next==='custom');}
-  async function invite(){await Share.share({message:`Join ${state.group.name} on Paceboard with code ${state.group.inviteCode}`});}
+  async function invite(){await Share.share({message:groupInviteMessage(state.group.name,state.group.inviteCode)});}
   const selectorOptions=[{id:SCORE_ID,label:'Overall score',icon:'speedometer-outline' as const,color:palette.purple},...tracked.map((metric)=>({id:metric.id,label:metric.name,icon:metric.icon as keyof typeof Ionicons.glyphMap,color:metric.color}))];
 
   return <Screen>
@@ -33,7 +34,7 @@ export default function LeaderboardScreen() {
     <Card style={styles.controls}>
       <View style={styles.periods}><Chip label="Today" selected={period==='today'} onPress={()=>choosePeriod('today')}/><Chip label="Yesterday" selected={period==='yesterday'} onPress={()=>choosePeriod('yesterday')}/><Chip label="7 days" selected={period==='week'} onPress={()=>choosePeriod('week')}/><Chip label="This month" selected={period==='month'} onPress={()=>choosePeriod('month')}/><Chip label="Pick date" icon="calendar-outline" selected={period==='custom'} onPress={()=>choosePeriod('custom')}/></View>
       {period==='custom'?<View style={styles.calendar}><Pressable onPress={()=>setCalendarOpen((value)=>!value)} style={styles.dateButton}><Ionicons name="calendar-outline" size={18} color={palette.primary}/><Text style={styles.dateText}>{periodTitle('custom',anchor)}</Text><Ionicons name={calendarOpen?'chevron-up':'chevron-down'} size={18} color={palette.muted}/></Pressable>{calendarOpen?<View style={styles.calendarBody}><MonthCalendar monthDate={anchor} selectedDate={anchor} onSelect={(date)=>{setAnchor(date);setCalendarOpen(false);}} onMonthChange={setAnchor}/></View>:null}</View>:null}
-      <MetricSelector title="Rankings to show" items={selectorOptions} selectedIds={selectedIds} onChange={setSelectedIds}/>
+      <MetricSelector title="Rankings to show" items={selectorOptions} selectedIds={selectedIds} onChange={(ids)=>{setSelectedIds(ids);updateSettings({leaderboardMetricIdsByGroup:{...state.settings.leaderboardMetricIdsByGroup,[state.group.id]:ids}});}}/>
       <Pressable onPress={()=>router.push({pathname:'/leaderboard-detail',params:{period,anchor,metrics:selectedIds.join(',')}} as never)} style={styles.open}><View><Text style={styles.openTitle}>{periodTitle(period,anchor)}</Text><Text style={styles.openSub}>Open all friends, entries, notes and photos</Text></View><Ionicons name="expand-outline" size={21} color={palette.primary}/></Pressable>
     </Card>
 
@@ -42,7 +43,7 @@ export default function LeaderboardScreen() {
       const rows=leaderboardRows(state,metric?[metric]:[],dates,state.currentUserId,includeScore);
       return <Card key={id} style={styles.ranking}>
         <View style={styles.rankingHead}><View><Text style={styles.eyebrow}>{dates.length===1?'DAILY RANKING':`${dates.length}-DAY RANKING`}</Text><Text style={styles.title}>{includeScore?'Overall score':metric?.name}</Text></View>{includeScore?<Text style={styles.max}>MAX 100</Text>:null}</View>
-        {rows.map((row,index)=>{const result=row.metrics[0]?.result;return <Pressable key={row.member.id} onPress={()=>router.push({pathname:'/member/[id]',params:{id:row.member.id,period,anchor,metrics:id}} as never)} style={[styles.row,row.member.id===state.currentUserId&&styles.current]}><Text style={[styles.rank,index<3&&styles.podium]}>#{index+1}</Text><Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={41}/><View style={styles.copy}><Text style={styles.name}>{memberDisplayName(state,row.member)}{row.member.id===state.currentUserId?' · You':''}</Text>{memberOriginalLabel(state,row.member)?<Text style={styles.original}>{memberOriginalLabel(state,row.member)}</Text>:null}<Text style={[styles.value,result?.mode==='private'&&styles.private]}>{includeScore?`${Math.round(row.score)} points`:result?.label}{result?.averageLabel?` · ${result.averageLabel}`:''}</Text></View><View style={styles.bar}><Text style={styles.score}>{includeScore?Math.round(row.score):result?.completedDays||result?.visibleDays?`${result.completedDays}/${result.visibleDays}`:''}</Text><ProgressBar progress={row.score/100} color={row.member.color}/></View><Ionicons name="chevron-forward" size={16} color={palette.faint}/></Pressable>})}
+        {rows.map((row,index)=>{const result=row.metrics[0]?.result;const streakText=result?.streak&&result.streak>1?`${result.streak}d streak`:'';const lastSync=result?.lastRecordedAt?relativeTime(result.lastRecordedAt):'';const subtextParts=[includeScore?`${Math.round(row.score)} points`:result?.averageLabel||'',streakText,lastSync].filter(Boolean);return <Pressable key={row.member.id} onPress={()=>router.push({pathname:'/member/[id]',params:{id:row.member.id,period,anchor,metrics:id}} as never)} style={[styles.row,row.member.id===state.currentUserId&&styles.current]}><Text style={[styles.rank,index<3&&styles.podium]}>#{index+1}</Text><Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={41}/><View style={styles.copy}><Text style={styles.name}>{memberDisplayName(state,row.member)}{row.member.id===state.currentUserId?' · You':''}</Text>{memberOriginalLabel(state,row.member)?<Text style={styles.original}>{memberOriginalLabel(state,row.member)}</Text>:null}<Text style={[styles.value,result?.mode==='private'&&styles.private]}>{subtextParts.join(' · ')}</Text></View><View style={styles.bar}><Text style={styles.score}>{result?.label}</Text><ProgressBar progress={row.score/100} color={row.member.color}/></View><Ionicons name="chevron-forward" size={16} color={palette.faint}/></Pressable>})}
       </Card>;
     })}
 

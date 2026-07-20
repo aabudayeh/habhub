@@ -28,6 +28,8 @@ This repository contains a working Expo app for iOS, Android, and web. It launch
 - Automatic revisioned multi-device account sync with offline retry, conflict merging, device management, portable JSON export, and permanent account deletion.
 - Real cloud groups with invite codes, membership switching, admin-owned scoring/metrics, authorized realtime refresh, group/private/status-only logs, chat, and private-bucket photo uploads.
 - Native Apple Health and Android Health Connect imports for steps, active energy, weight, food calories/macros, water, and workouts. Source provenance, overlapping-window replacement, app-open sync, pull-to-refresh, manual sync, and OS-managed background schedules are included. Samsung Health, MyFitnessPal, and legacy Google Fit data are consumed through the platform health hub when those apps share it.
+- Open Food Facts name search and package barcode scanning with reviewable calories, macros, fiber, and sodium.
+- Native notification permission, per-category device preferences, Expo push-token registration, and server-delivered group chat/metric notifications.
 - Production Supabase migrations with row-level security on user data and relationally authorized signed media URLs.
 - Static web export and EAS build configuration.
 
@@ -73,6 +75,7 @@ pnpm dlx supabase@latest login
 pnpm dlx supabase@latest link --project-ref YOUR_PROJECT_REF
 pnpm dlx supabase@latest db push
 pnpm dlx supabase@latest functions deploy delete-account
+pnpm dlx supabase@latest functions deploy send-push
 ```
 
 5. Add your deployed web callback and `paceboard://auth-callback` to the allowed Auth redirect URLs in Supabase.
@@ -118,7 +121,7 @@ Change `app.paceboard.mobile` in `app.json` before store submission if you want 
 
 ## Important scope boundary
 
-This is now a deployable cloud-backed core product, not a finished medical/health platform. Accounts, cloud groups/media/chat, and HealthKit/Health Connect imports are implemented. Barcode nutrition search, OS push-token delivery, production store health-data approval, and public-launch legal/security review remain; see [docs/ROADMAP.md](docs/ROADMAP.md).
+This is now a deployable cloud-backed core product, not a finished medical/health platform. Accounts, cloud groups/media/chat, HealthKit/Health Connect imports, barcode nutrition search, and push delivery are implemented. Production store health-data approval and public-launch legal/security review remain; see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Repository map
 

@@ -7,6 +7,7 @@ import { useAuth } from '@/src/auth/AuthProvider';
 import { useCloudSync } from '@/src/cloud/CloudSyncProvider';
 import { isCloudGroupId } from '@/src/cloud/groupCloud';
 import { Avatar, Button, Card, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
+import { groupInviteMessage } from '@/src/domain/invites';
 import { useApp } from '@/src/state/AppProvider';
 import { palette } from '@/src/theme';
 
@@ -24,7 +25,7 @@ export default function GroupsScreen() {
     if (!name.trim()) return Alert.alert('Name your group', 'Enter a group name first.');
     setBusy('create');
     try { if(auth.status==='signedIn') await cloud.createGroup(name); else createGroup(name); setName(''); }
-    catch(error){Alert.alert('Could not create group',error instanceof Error?error.message:'Try again.');}
+    catch(error){Alert.alert('Could not create group',cloudErrorMessage(error));}
     finally{setBusy(null);}
   }
   async function join() {
@@ -35,7 +36,7 @@ export default function GroupsScreen() {
     finally{setBusy(null);}
   }
   async function invite() {
-    await Share.share({ message: `Join ${state.group.name} on Paceboard with code ${state.group.inviteCode}` });
+    await Share.share({ message: groupInviteMessage(state.group.name, state.group.inviteCode) });
   }
   function confirmLeave(groupId: string, groupName: string) {
     if (state.groups.length <= 1) return Alert.alert('Keep one group', 'Create or join another group before leaving this one.');
@@ -62,7 +63,7 @@ export default function GroupsScreen() {
       </Pressable>;
     })}</View>
 
-    <Card style={styles.inviteCard}><View style={styles.inviteTop}><Avatar initials={state.group.name.slice(0, 2).toUpperCase()} color={palette.primary} /><View style={styles.copy}><Text style={styles.cardTitle}>{state.group.name}</Text><Text style={styles.meta}>Share code {state.group.inviteCode}{canManage ? ' · You can manage this group' : ''}</Text></View></View><View style={styles.groupButtons}><View style={styles.buttonGrow}><Button label="Share invitation" icon="share-outline" variant="secondary" onPress={invite} /></View>{canManage ? <View style={styles.buttonGrow}><Button label="Group settings" icon="settings-outline" onPress={() => router.push('/group-settings' as never)} /></View> : null}</View></Card>
+    <Card style={styles.inviteCard}><View style={styles.inviteTop}><Avatar initials={state.group.name.slice(0, 2).toUpperCase()} color={palette.primary} /><View style={styles.copy}><Text style={styles.cardTitle}>{state.group.name}</Text><Text style={styles.meta}>Share a link or code {state.group.inviteCode}{canManage ? ' · You can manage this group' : ''}</Text></View></View><View style={styles.groupButtons}><View style={styles.buttonGrow}><Button label="Share invite link" icon="share-outline" variant="secondary" onPress={invite} /></View>{canManage ? <View style={styles.buttonGrow}><Button label="Group settings" icon="settings-outline" onPress={() => router.push('/group-settings' as never)} /></View> : null}</View></Card>
 
     <SectionHeader title="Create a group" />
     <Card><TextInput value={name} onChangeText={setName} placeholder="e.g. Office Step League" placeholderTextColor={palette.faint} style={styles.input} /><Button label={auth.status==='signedIn'?"Create cloud group":"Create and switch"} icon="add" loading={busy==='create'} onPress={create} /></Card>
@@ -70,6 +71,12 @@ export default function GroupsScreen() {
     <Card><TextInput value={code} onChangeText={setCode} autoCapitalize="characters" placeholder="PACE-7K2M" placeholderTextColor={palette.faint} style={styles.input} /><Button label="Join and switch" icon="enter-outline" loading={busy==='join'} onPress={join} /></Card>
     <Text style={styles.note}>In cloud mode, invite codes resolve the real group, members, scoring rules, and permissions. Demo mode keeps these group memberships on this device.</Text>
   </Screen>;
+}
+
+function cloudErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message);
+  return 'The cloud server rejected the request. Please try again.';
 }
 
 const styles = StyleSheet.create({

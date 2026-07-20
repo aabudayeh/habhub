@@ -52,12 +52,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
   const saveStatus = useCallback(async (next: PersistedHealthStatus) => {
     setPersisted(next);
-    await AsyncStorage.setItem(HEALTH_STATUS_STORAGE_KEY, JSON.stringify(next));
+    await AsyncStorage.setItem(`${HEALTH_STATUS_STORAGE_KEY}:${stateRef.current.currentUserId}`, JSON.stringify(next));
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([nativeHealthAdapter.availability(), AsyncStorage.getItem(HEALTH_STATUS_STORAGE_KEY)])
+    setPersisted({ lastSyncedAt:null,importedCount:0,error:null });
+    Promise.all([nativeHealthAdapter.availability(), AsyncStorage.getItem(`${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`)])
       .then(([nextAvailability, saved]) => {
         if (cancelled) return;
         setAvailability(nextAvailability);
@@ -68,7 +69,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         if (!cancelled) { setStatus('error'); setPersisted((current) => ({ ...current, error: error instanceof Error ? error.message : 'Could not check health availability.' })); }
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [state.currentUserId]);
 
   const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual', forceEnabled = false) => {
     if (syncingRef.current) return syncingRef.current;
@@ -165,4 +166,3 @@ export function useHealthSync() {
   if (!context) throw new Error('useHealthSync must be used inside HealthSyncProvider');
   return context;
 }
-

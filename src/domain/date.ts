@@ -39,3 +39,15 @@ export function monthDateRange(localDate: string): string[] {
   const days = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   return Array.from({ length: days }, (_, index) => dateKey(new Date(date.getFullYear(), date.getMonth(), index + 1, 12)));
 }
+
+export function relativeTime(isoString: string): string {
+  const elapsed = Date.now() - new Date(isoString).getTime();
+  const seconds = Math.floor(elapsed / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (seconds < 60) return `${seconds}s ago`;
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+}

@@ -1,5 +1,6 @@
 import { dateKey, dateKeyWithOffset, dateRangeEnding, monthDateRange } from '@/src/domain/date';
 import { dailyScore, effectiveGoalTarget, formatMetricValue, goalProgress, goalReached, sharedMetricResult } from '@/src/domain/metrics';
+import { longestStreakWithRest } from '@/src/domain/streaks';
 import { AppState, Member, MetricDefinition } from '@/src/types';
 
 export type LeaderboardPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'custom';
@@ -30,7 +31,16 @@ export type PeriodMetricResult = {
   visibleDays: number;
   label: string;
   averageLabel?: string;
+  streak?: number;
+  lastRecordedAt?: string;
 };
+
+function metGoalOnDate(state: AppState, metric: MetricDefinition, userId: string, date: string): boolean {
+  const result = sharedMetricResult(state, metric, userId, userId, date);
+  if (result.mode === 'status') return result.label === 'Goal met';
+  if (result.mode === 'exact') return goalReached(metric, result.value, effectiveGoalTarget(state, metric, userId, date));
+  return false;
+}
 
 export function periodMetricResult(
   state: AppState,
@@ -52,9 +62,13 @@ export function periodMetricResult(
       ? result.label === 'Goal met'
       : result.mode === 'exact' && goalReached(metric, result.value, effectiveGoalTarget(state, metric, subjectUserId, date)),
   ).length;
+  const streak = longestStreakWithRest(state, dates, (d) => metGoalOnDate(state, metric, subjectUserId, d));
+  const matchingEntries = state.entries.filter((entry) => entry.userId === subjectUserId && entry.metricId === metric.id && results.some((r) => r.date === entry.localDate));
+  const latestEntry = matchingEntries.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+  const lastRecordedAt = latestEntry?.recordedAt;
   if (!exact.length) {
     return {
-      mode: 'status', total: 0, average: 0, completedDays, visibleDays: statuses.length,
+      mode: 'status', total: 0, average: 0, completedDays, visibleDays: statuses.length, streak, lastRecordedAt,
       label: `${completedDays}/${results.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
     };
@@ -65,16 +79,16 @@ export function periodMetricResult(
     const done = exact.filter(({ result }) => result.value > 0).length;
     return {
       mode: 'exact', total: done, average: exact.length ? done / exact.length : 0,
-      completedDays: done, visibleDays: exact.length, label: `${done}/${results.length} days met`,
+      completedDays: done, visibleDays: exact.length, streak, lastRecordedAt, label: `${done}/${results.length}`,
       averageLabel: `${Math.round((done / Math.max(results.length, 1)) * 100)}% of period`,
     };
   }
   const multipleDays = dates.length > 1;
   return {
-    mode: 'exact', total, average, completedDays, visibleDays: exact.length,
+    mode: 'exact', total, average, completedDays, visibleDays: exact.length, streak, lastRecordedAt,
     label: formatMetricValue(metric, multipleDays ? average : total),
     averageLabel: multipleDays
-      ? `Daily average · ${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
+      ? `${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
       : undefined,
   };
 }

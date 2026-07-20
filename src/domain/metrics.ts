@@ -335,12 +335,16 @@ export function weeklyDeficitBalance(state: AppState, userId: string, localDate:
   const weekday = new Date(`${localDate}T12:00:00`).getDay();
   const mondayOffset = -((weekday + 6) % 7);
   const startDate = dateWithOffsetFrom(localDate, mondayOffset);
-  const days = Math.abs(mondayOffset) + 1;
-  if (!deficit) return { balance: 0, actual: 0, target: 0, days, startDate };
+  const calendarDays = Math.abs(mondayOffset) + 1;
+  if (!deficit) return { balance: 0, actual: 0, target: 0, days: 0, startDate };
   let actual = 0;
   let target = 0;
-  for (let index = 0; index < days; index += 1) {
+  let days = 0;
+  for (let index = 0; index < calendarDays; index += 1) {
     const day = dateWithOffsetFrom(startDate, index);
+    const hasFood=state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===day);
+    if(!hasFood)continue;
+    days+=1;
     actual += safeMetricValue(state, deficit, userId, day);
     target += effectiveGoalTarget(state, deficit, userId, day);
   }

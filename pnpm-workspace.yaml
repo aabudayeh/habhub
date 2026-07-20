@@ -1,4 +1,6 @@
 allowBuilds:
+  '@firebase/util': true
+  protobufjs: true
   unrs-resolver: false
 minimumReleaseAgeExclude:
   - '@supabase/auth-js@2.110.6'

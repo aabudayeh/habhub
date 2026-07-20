@@ -6,14 +6,17 @@ import { AppState, MetricDefinition } from '@/src/types';
 export type ComparisonStats={bestDay:string;bestScore:number;daysWon:number;longestWinStreak:number;eligibleDays:number};
 
 export function comparisonStats(state:AppState,subjectId:string,viewerId:string,dates:string[],metrics:MetricDefinition[]):ComparisonStats{
-  const ordered=[...dates].sort();let bestDate=ordered[0]??'';let bestScore=-1;let daysWon=0;let longest=0;let current=0;
+  const ordered=[...dates].sort();let bestDate='';let bestScore=-1;let daysWon=0;let longest=0;let current=0;let eligibleDays=0;
   for(const date of ordered){
+    const hasData=metrics.some((metric)=>metric.dataType==='calculated'||state.entries.some((entry)=>entry.metricId===metric.id&&entry.userId===subjectId&&entry.localDate===date));
+    if(!hasData){current=0;continue;}
+    eligibleDays+=1;
     const rows=leaderboardRows(state,metrics,[date],viewerId,metrics.length===0);const subject=rows.find((row)=>row.member.id===subjectId);const viewer=rows.find((row)=>row.member.id===viewerId);const score=subject?.score??0;
     if(score>bestScore){bestScore=score;bestDate=date;}
     const won=subjectId===viewerId?rows[0]?.member.id===subjectId:Boolean(subject&&viewer&&subject.score>viewer.score);
     if(won){daysWon+=1;current+=1;longest=Math.max(longest,current);}else current=0;
   }
-  return{bestDay:bestDate?friendlyDate(bestDate):'—',bestScore:Math.max(0,bestScore),daysWon,longestWinStreak:longest,eligibleDays:ordered.length};
+  return{bestDay:bestDate?friendlyDate(bestDate):'—',bestScore:Math.max(0,bestScore),daysWon,longestWinStreak:longest,eligibleDays};
 }
 
 export type HeadToHeadStats = {

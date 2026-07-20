@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, PropsWithChildren, useContext, useEffect, useMemo, useReducer, useState } from 'react';
+import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { createInitialState } from '@/src/data/seed';
@@ -51,6 +51,7 @@ type Action =
   | { type: 'leaveGroup'; groupId: string }
   | { type: 'nickname'; memberId: string; nickname: string }
   | { type: 'groupRestDays'; value: number }
+  | { type: 'groupTheme'; color: string }
   | { type: 'memberAvatar'; memberId: string; avatarUri?: string }
   | { type: 'memberName'; memberId: string; name: string }
   | { type: 'memberRole'; memberId: string; role: 'admin' | 'member' }
@@ -193,8 +194,11 @@ function reducer(state: AppState, action: Action): AppState {
       if (action.value) {
         const periods = action.historyMode === 'history'
           ? [{ from: metric.activeFrom }]
-          : [...existing, { from: dateKey() }];
+          : [{ from: dateKey() }];
         return { ...next, trackedGoalPeriods: { ...state.trackedGoalPeriods, [metric.id]: periods } };
+      }
+      if (action.historyMode === 'history') {
+        return { ...next, trackedGoalPeriods: { ...state.trackedGoalPeriods, [metric.id]: [] } };
       }
       const yesterday = dateWithOffsetFrom(dateKey(), -1);
       const periods = existing.flatMap((period) => !period.to
@@ -330,6 +334,10 @@ function reducer(state: AppState, action: Action): AppState {
       const group = { ...state.group, streakRestDaysPerWeek: value };
       return { ...state, group, groups: state.groups.map((candidate) => candidate.id === group.id ? group : candidate) };
     }
+    case 'groupTheme': {
+      const group = { ...state.group, themeColor: action.color };
+      return { ...state, group, groups: state.groups.map((candidate) => candidate.id === group.id ? group : candidate) };
+    }
     case 'memberAvatar': {
       const updateMembers = (group: Group): Group => ({ ...group, members: group.members.map((member) => member.id === action.memberId ? { ...member, avatarUri: action.avatarUri, avatarStoragePath: undefined } : member) });
       const groups = state.groups.map(updateMembers);
@@ -396,6 +404,7 @@ type AppContextValue = {
   leaveGroup: (groupId: string) => void;
   updateNickname: (memberId: string, nickname: string) => void;
   setGroupRestDays: (value: number) => void;
+  setGroupTheme: (color: string) => void;
   updateMemberAvatar: (memberId: string, avatarUri?: string) => void;
   updateMemberName: (memberId: string, name: string) => void;
   setMemberRole: (memberId: string, role: 'admin' | 'member') => void;
@@ -437,6 +446,9 @@ export function AppProvider({ children }: PropsWithChildren) {
               ...restoredMetrics.filter((metric) => !builtInIds.has(metric.id)),
             ].map((metric, order) => ({ ...metric, order }));
           }
+          if (restoredVersion < 14) {
+            restoredMetrics = [...restoredMetrics, ...defaults.metrics.filter((candidate)=>!restoredMetrics.some((metric)=>metric.id===candidate.id))];
+          }
           const defaultEntryIds = new Set(defaults.entries.map((entry) => entry.id));
           const defaultPhotoIds = new Set(defaults.photos.map((photo) => photo.id));
           const migratedTrackedGoals = restoredVersion < 9 && isDefaultDemo
@@ -445,7 +457,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 10,
+            version: 14,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -478,8 +490,8 @@ export function AppProvider({ children }: PropsWithChildren) {
               if (restoredVersion < 4 && normalized.id === 'food' && normalized.goal.target === 2000) return { ...normalized, goal: { ...normalized.goal, target: recommendedDailyIntake(profile) } };
               return normalized;
             }),
-            group: { ...(restored.group ?? defaults.group), streakRestDaysPerWeek: restored.group?.streakRestDaysPerWeek ?? 1, metricConfiguration: restoredVersion < 9 && isDefaultDemo ? restoredMetrics : restored.group?.metricConfiguration ?? restoredMetrics },
-            groups: (restored.groups?.length ? restored.groups : [restored.group ?? defaults.group]).map((group) => ({ ...group, streakRestDaysPerWeek: group.streakRestDaysPerWeek ?? 1, metricConfiguration: restoredVersion < 9 && group.id === defaults.group.id ? restoredMetrics : group.metricConfiguration ?? restoredMetrics })),
+            group: { ...(restored.group ?? defaults.group), streakRestDaysPerWeek: restored.group?.streakRestDaysPerWeek ?? 1, metricConfiguration: restoredVersion < 13 && isDefaultDemo ? restoredMetrics : restored.group?.metricConfiguration ?? restoredMetrics },
+            groups: (restored.groups?.length ? restored.groups : [restored.group ?? defaults.group]).map((group) => ({ ...group, streakRestDaysPerWeek: group.streakRestDaysPerWeek ?? 1, metricConfiguration: restoredVersion < 13 && group.id === defaults.group.id ? restoredMetrics : group.metricConfiguration ?? restoredMetrics })),
             energyProfiles: { ...defaults.energyProfiles, ...restored.energyProfiles, [restored.currentUserId ?? defaults.currentUserId]: { ...defaults.settings.energyProfile, ...restored.settings?.energyProfile } },
             messages: (restored.messages ?? defaults.messages).map((message) => ({ ...message, conversationId: message.conversationId ?? 'group' })),
             dailyMetricStatuses: restored.dailyMetricStatuses ?? [],
@@ -503,6 +515,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     }, 250);
     return () => clearTimeout(timeout);
   }, [hydrated, state]);
+
+  const replaceState = useCallback((nextState: AppState) => dispatch({ type: 'hydrate', state: nextState }), []);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -529,14 +543,15 @@ export function AppProvider({ children }: PropsWithChildren) {
       leaveGroup: (groupId) => dispatch({ type: 'leaveGroup', groupId }),
       updateNickname: (memberId, nickname) => dispatch({ type: 'nickname', memberId, nickname }),
       setGroupRestDays: (value) => dispatch({ type: 'groupRestDays', value }),
+      setGroupTheme: (color) => dispatch({ type: 'groupTheme', color }),
       updateMemberAvatar: (memberId, avatarUri) => dispatch({ type: 'memberAvatar', memberId, avatarUri }),
       updateMemberName: (memberId, name) => dispatch({ type: 'memberName', memberId, name }),
       setMemberRole: (memberId, role) => dispatch({ type: 'memberRole', memberId, role }),
       importHealthEntries: (entries, provider, metricIds, fromDate) => dispatch({ type: 'importHealth', entries, provider, metricIds, fromDate }),
-      replaceState: (nextState) => dispatch({ type: 'hydrate', state: nextState }),
+      replaceState,
       resetDemo: () => dispatch({ type: 'reset' }),
     }),
-    [hydrated, state],
+    [hydrated, replaceState, state],
   );
 
   if (!hydrated) {

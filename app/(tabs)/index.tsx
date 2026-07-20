@@ -21,7 +21,7 @@ import {
 } from '@/src/domain/metrics';
 import { useApp } from '@/src/state/AppProvider';
 import { useHealthSync } from '@/src/health/HealthSyncProvider';
-import { palette } from '@/src/theme';
+import { palette, useCompactMode, useGroupAccent } from '@/src/theme';
 import { MetricDefinition } from '@/src/types';
 
 const scoreMetric: MetricDefinition = {
@@ -32,14 +32,17 @@ const scoreMetric: MetricDefinition = {
 
 export default function TodayScreen() {
   const { state } = useApp();
+  const accent = useGroupAccent();
+  const compact=useCompactMode();
   const health = useHealthSync();
   const today = dateKey();
   const user = state.group.members.find((member) => member.id === state.currentUserId)!;
   const featuredMetric = state.settings.featuredTodayCard === 'score'
     ? undefined
-    : state.metrics.find((metric) => metric.id === state.settings.featuredTodayCard && metric.sections.today);
+    : state.metrics.find((metric) => metric.id === state.settings.featuredTodayCard && metric.sections.today && metric.id !== 'weekly_deficit_balance');
+  const balanceMetric = state.metrics.find((metric) => metric.id === 'weekly_deficit_balance');
   const metrics = [...state.metrics]
-    .filter((metric) => metric.sections.today && metric.activeFrom <= today && metric.id !== featuredMetric?.id)
+    .filter((metric) => metric.sections.today && metric.activeFrom <= today && metric.id !== featuredMetric?.id && metric.id !== 'weekly_deficit_balance')
     .sort((a, b) => a.order - b.order);
   const score = dailyScore(state, state.currentUserId, today);
   const scoreRanks = useMemo(
@@ -61,6 +64,7 @@ export default function TodayScreen() {
   const heroAbove = heroRank > 1 ? heroRows[heroRank - 2] : undefined;
   const goals = trackedGoalSummary(state, state.currentUserId, today);
   const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
+  const todayCards = [...metrics.map((metric) => ({ kind: 'metric' as const, order: metric.order, metric })), ...(balanceMetric?.sections.today ? [{ kind: 'balance' as const, order: balanceMetric.order }] : [])].sort((a, b) => a.order - b.order);
 
   function rankText(metric: MetricDefinition) {
     if (metric.dataType === 'text' || metric.defaultVisibility === 'private' || metric.scoreWeight <= 0) return undefined;
@@ -74,8 +78,8 @@ export default function TodayScreen() {
   }
 
   return <Screen refreshControl={<RefreshControl refreshing={health.status === 'syncing'} onRefresh={() => health.syncNow('pull').catch(() => undefined)} tintColor={palette.primary} colors={[palette.primary]} />}>
-    <PageHeader eyebrow={dateLabel} title={`Good to see you, ${memberDisplayName(state, user)}.`} subtitle="Your goals, rank, and reporting—all in one place." />
-    <Card style={styles.hero}>
+    {!compact?<PageHeader eyebrow={dateLabel} title={`Good to see you, ${memberDisplayName(state, user)}.`} subtitle="Your goals, rank, and reporting—all in one place." />:<View style={styles.compactTop}><Text style={styles.compactGreeting}>{memberDisplayName(state,user)} · {dateLabel}</Text><Pressable onPress={()=>router.push('/menu')}><Ionicons name="menu-outline" size={22} color={accent}/></Pressable></View>}
+    <Pressable onPress={()=>featuredMetric?router.push({pathname:'/metric-detail',params:{metric:featuredMetric.id}}):router.push('/group')}><Card style={[styles.hero,compact&&styles.heroCompact,{backgroundColor:accent,borderColor:accent}]}>
       <View style={styles.goalLine}>
         <Ionicons name={goals.allMet ? 'trophy' : 'checkmark-done-outline'} size={15} color={palette.lime} />
         <Text style={styles.goalLineText}>{goals.allMet ? 'All daily goals met' : `${goals.met} of ${goals.total} daily goals met`}</Text>
@@ -93,12 +97,11 @@ export default function TodayScreen() {
           {heroRows.slice(0, 3).map((row, index) => <View key={row.member.id} style={[styles.leaderAvatar, index > 0 && styles.overlap]}><Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={38} /><View style={styles.rankBadge}><Text style={styles.rankBadgeText}>{index + 1}</Text></View></View>)}
         </View>
       </View>
-    </Card>
-    <SectionHeader title="Your metrics" action={<Pressable onPress={() => router.push('/customize?tab=today')} style={styles.textAction}><Ionicons name="options-outline" size={16} color={palette.primary} /><Text style={styles.textActionLabel}>Customize goals</Text></Pressable>} />
+    </Card></Pressable>
+    {!compact?<SectionHeader title="Your metrics" action={<Pressable onPress={() => router.push('/customize?tab=today')} style={styles.textAction}><Ionicons name="options-outline" size={16} color={accent} /><Text style={[styles.textActionLabel,{color:accent}]}>Customize goals</Text></Pressable>} />:null}
     <View style={styles.grid}>
       {featuredMetric ? <MetricCard metric={scoreMetric} value={score} rankLabel={scoreRankLabel} onPress={() => router.push('/group')} /> : null}
-      <WeeklyBalanceCard balance={weeklyBalance.balance} actual={weeklyBalance.actual} target={weeklyBalance.target} days={weeklyBalance.days} />
-      {metrics.map((metric) => {
+      {todayCards.map((item) => { if (item.kind === 'balance') return <WeeklyBalanceCard key="weekly-deficit" balance={weeklyBalance.balance} actual={weeklyBalance.actual} target={weeklyBalance.target} days={weeklyBalance.days} compact={compact} />; const metric = item.metric;
         const value = safeMetricValue(state, metric, state.currentUserId, today);
         return <MetricCard
           key={metric.id}
@@ -108,32 +111,32 @@ export default function TodayScreen() {
           goalTarget={effectiveGoalTarget(state, metric, state.currentUserId, today)}
           remainingLabel={metric.dataType === 'text' || metric.dataType === 'photo' ? undefined : goalRemainingLabel(state, metric, state.currentUserId, today)}
           rankLabel={rankText(metric)}
-          onPress={metric.dataType === 'calculated' || metric.dataType === 'photo' ? undefined : () => router.push({ pathname: '/log', params: { metric: metric.id } })}
+          onPress={() => router.push({ pathname: '/metric-detail', params: { metric: metric.id } })}
         />;
       })}
     </View>
   </Screen>;
 }
 
-function WeeklyBalanceCard({ balance, actual, target, days }: { balance: number; actual: number; target: number; days: number }) {
+function WeeklyBalanceCard({ balance, actual, target, days, compact }: { balance: number; actual: number; target: number; days: number; compact:boolean }) {
   const ahead = balance >= 0;
   const weekday = new Date().getDay();
   const daysRemaining = 7 - ((weekday + 6) % 7);
   const dailyCatchUp = Math.ceil(Math.abs(balance) / Math.max(daysRemaining, 1));
-  return <Card style={styles.balanceCard}>
-    <View style={styles.balanceTop}><View style={styles.balanceIcon}><Ionicons name="calendar-number-outline" size={21} color={palette.purple} /></View><View style={[styles.balancePill, ahead ? styles.aheadPill : styles.behindPill]}><Text style={[styles.balancePillText, ahead ? styles.aheadText : styles.behindText]}>{ahead ? 'Ahead' : 'Catch up'}</Text></View></View>
+  return <Pressable onPress={()=>router.push({pathname:'/metric-detail',params:{metric:'weekly_deficit'}})} style={[styles.balancePress,compact&&styles.balancePressCompact]}><Card style={[styles.balanceCard,compact&&styles.balanceCardCompact]}>
+    <View style={[styles.balanceTop,compact&&styles.balanceTopCompact]}><View style={[styles.balanceIcon,compact&&styles.balanceIconCompact]}><Ionicons name="calendar-number-outline" size={compact?17:21} color={palette.purple} /></View><View style={[styles.balancePill, ahead ? styles.aheadPill : styles.behindPill]}><Text style={[styles.balancePillText, ahead ? styles.aheadText : styles.behindText]}>{ahead ? 'Ahead' : 'Catch up'}</Text></View></View>
     <Text style={styles.balanceName}>Weekly deficit balance</Text>
     <Text style={styles.balanceValue}>{Math.round(Math.abs(balance)).toLocaleString()} kcal</Text>
-    <Text style={styles.balanceCopy}>{ahead ? 'available as flexibility while staying on this week’s plan' : `short of plan · about ${dailyCatchUp.toLocaleString()} kcal/day across ${daysRemaining} remaining day${daysRemaining === 1 ? '' : 's'}`}</Text>
-    <Text style={styles.balanceMeta}>{Math.round(actual).toLocaleString()} actual / {Math.round(target).toLocaleString()} target through {days} day{days === 1 ? '' : 's'}</Text>
-  </Card>;
+    {!compact?<><Text style={styles.balanceCopy}>{ahead ? 'available as flexibility while staying on this week’s plan' : `short of plan · about ${dailyCatchUp.toLocaleString()} kcal/day across ${daysRemaining} remaining day${daysRemaining === 1 ? '' : 's'}`}</Text><Text style={styles.balanceMeta}>{Math.round(actual).toLocaleString()} actual / {Math.round(target).toLocaleString()} target through {days} day{days === 1 ? '' : 's'}</Text></>:null}
+  </Card></Pressable>;
 }
 
 const styles = StyleSheet.create({
   hero: { backgroundColor: palette.ink, borderColor: palette.ink, minHeight: 205, marginBottom: 24, overflow: 'hidden' },
+  heroCompact:{minHeight:132,marginBottom:8,padding:11},compactTop:{height:42,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},compactGreeting:{fontSize:11,fontWeight:'800',color:palette.muted},
   goalLine: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#354039' },
   goalLineText: { color: '#E5EBE6', fontSize: 11, fontWeight: '900' },
-  heroBody: { flex: 1, flexDirection: 'row' },
+  heroBody: { flex: 1, flexDirection: 'row', paddingTop: 10 },
   heroCopy: { flex: 1, justifyContent: 'center' },
   livePill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#2B362F', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12 },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.lime },
@@ -150,8 +153,9 @@ const styles = StyleSheet.create({
   rankBadgeText: { color: palette.ink, fontSize: 8, fontWeight: '900' },
   textAction: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 7 },
   textActionLabel: { color: palette.primary, fontSize: 12, fontWeight: '800' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 24 },
-  balanceCard: { width: '48.3%', minWidth: 155, padding: 16 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8, marginBottom: 24 },
+  balanceCard: { width: '100%', padding: 14 },
+  balancePress:{width:'48%'},balancePressCompact:{width:'100%'},balanceCardCompact:{width:'100%',paddingHorizontal:11,paddingVertical:8,minHeight:82,borderRadius:14},balanceTopCompact:{marginBottom:3},balanceIconCompact:{width:28,height:28},
   balanceTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   balanceIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#7756D918' },
   balancePill: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 4 },
