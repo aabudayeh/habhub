@@ -121,7 +121,10 @@ export function MonthCalendar({
                   backgroundColor: colors.isDark ? "#26351E" : "#EDF7D5",
                 },
                 status === "partial" && { backgroundColor: colors.primarySoft },
-                selected && { backgroundColor: colors.primary },
+                selected && {
+                  borderWidth: 2,
+                  borderColor: colors.primary,
+                },
               ]}
             >
               <Text
@@ -129,7 +132,7 @@ export function MonthCalendar({
                   styles.dayText,
                   { color: colors.ink },
                   !day.current && { color: colors.faint },
-                  selected && styles.selectedText,
+                  selected && { color: colors.primary },
                 ]}
               >
                 {day.number}
