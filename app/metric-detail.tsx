@@ -175,37 +175,26 @@ export default function TrackerDetail() {
             onPress={() => setPeriod("month")}
           />
         </View>
-        <View style={styles.dayNav}>
-          <Pressable
+        <Card style={styles.navigator}>
+          <IconButton
+            icon="chevron-back"
+            label="Previous"
             onPress={() => shiftRange(-1)}
-            style={[
-              styles.navButton,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Ionicons name="chevron-back" size={25} color={accent} />
-          </Pressable>
+          />
           <View style={styles.navCopy}>
-            <Text style={[styles.day, { color: colors.ink }]}>{periodTitle(period, day)}</Text>
+            <Text style={[styles.navTitle, { color: colors.ink }]}>
+              {periodTitle(period, day)}
+            </Text>
             <Text style={[styles.navSub, { color: colors.muted }]}>
               {dates.length > 1 ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}` : friendlyDate(day)}
             </Text>
           </View>
-          <Pressable
-            disabled={day >= dateKey()}
+          <IconButton
+            icon="chevron-forward"
+            label="Next"
             onPress={() => shiftRange(1)}
-            style={[
-              styles.navButton,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Ionicons
-              name="chevron-forward"
-              size={25}
-              color={day >= dateKey() ? colors.faint : accent}
-            />
-          </Pressable>
-        </View>
+          />
+        </Card>
       </View>
       <Card style={styles.summary}>
         <View style={styles.summaryTop}>
@@ -503,17 +492,21 @@ function WeeklyDetail({
           />
         }
       />
-      <View style={styles.dayNav}>
-        <Pressable onPress={() => setDay(dateWithOffsetFrom(day, -7))}>
-          <Ionicons name="chevron-back" size={19} color={accent} />
-        </Pressable>
-        <Text style={[styles.day, { color: colors.ink }]}>
+      <Card style={styles.navigator}>
+        <IconButton
+          icon="chevron-back"
+          label="Previous week"
+          onPress={() => setDay(dateWithOffsetFrom(day, -7))}
+        />
+        <Text style={[styles.navTitle, { color: colors.ink }]}>
           Week of {balance.startDate}
         </Text>
-        <Pressable onPress={() => setDay(dateWithOffsetFrom(day, 7))}>
-          <Ionicons name="chevron-forward" size={19} color={accent} />
-        </Pressable>
-      </View>
+        <IconButton
+          icon="chevron-forward"
+          label="Next week"
+          onPress={() => setDay(dateWithOffsetFrom(day, 7))}
+        />
+      </Card>
       <Card style={styles.summary}>
         <Text style={[styles.label, { color: colors.faint }]}>
           WEEKLY RESULT
@@ -749,23 +742,15 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   periods: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
-  dayNav: {
+  navigator: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 9,
+    padding: 8,
   },
-  navButton: {
-    width: 42,
-    height: 42,
-    borderWidth: 1,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  day: { fontSize: 10, fontWeight: "900" },
   navCopy: { flex: 1, alignItems: "center" },
-  navSub: { fontSize: 8, marginTop: 2, textAlign: "center" },
+  navTitle: { fontSize: 14, fontWeight: "900" },
+  navSub: { fontSize: 9, marginTop: 2, textAlign: "center" },
   summary: { marginBottom: 9 },
   summaryTop: {
     flexDirection: "row",
