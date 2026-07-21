@@ -347,7 +347,13 @@ export function Avatar({
           contentFit="cover"
         />
       ) : (
-        <Text style={[styles.avatarText, { fontSize: size * 0.32 }]}>
+        <Text
+          preserveColor
+          style={[
+            styles.avatarText,
+            { color: palette.white, fontSize: size * 0.32 },
+          ]}
+        >
           {initials}
         </Text>
       )}

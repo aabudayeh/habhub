@@ -184,16 +184,21 @@ export default function Today() {
             </Pressable>
           </View>
         </View>
-        <View style={[styles.hero, { backgroundColor: accent }]}>
+        <View
+          style={[
+            styles.hero,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
           <View style={styles.heroTop}>
             <View>
-              <Text style={styles.heroEyebrow}>
+              <Text style={[styles.heroEyebrow, { color: accent }]}>
                 {goals.allMet ? "DAY COMPLETE" : "TODAY'S FOCUS"}
               </Text>
-              <Text style={styles.heroValue}>
+              <Text style={[styles.heroValue, { color: colors.ink }]}>
                 {goals.met} of {goals.total}
               </Text>
-              <Text style={styles.heroTitle}>
+              <Text style={[styles.heroTitle, { color: colors.muted }]}>
                 {goals.allMet
                   ? "Every goal reached"
                   : goals.total
@@ -201,15 +206,20 @@ export default function Today() {
                     : "Choose your first goal"}
               </Text>
             </View>
-            <View style={styles.ring}>
-              <Text style={styles.ringText}>
+            <View
+              style={[
+                styles.ring,
+                { borderColor: accent, backgroundColor: colors.primarySoft },
+              ]}
+            >
+              <Text style={[styles.ringText, { color: accent }]}>
                 {goals.total ? Math.round((goals.met / goals.total) * 100) : 0}%
               </Text>
             </View>
           </View>
           <ProgressBar
             progress={goals.total ? goals.met / goals.total : 0}
-            color={palette.lime}
+            color={accent}
           />
           <View style={styles.goalDots}>
             {goals.metrics.map((item) => {
@@ -227,9 +237,7 @@ export default function Today() {
                   style={[
                     styles.dot,
                     {
-                      backgroundColor: met
-                        ? palette.lime
-                        : "rgba(255,255,255,.16)",
+                      backgroundColor: met ? accent : colors.canvas,
                     },
                   ]}
                 >
@@ -242,7 +250,7 @@ export default function Today() {
                           : (item.icon as keyof typeof Ionicons.glyphMap)
                     }
                     size={11}
-                    color={met ? palette.ink : palette.white}
+                    color={met ? palette.white : colors.faint}
                   />
                 </View>
               );
@@ -762,7 +770,7 @@ const styles = StyleSheet.create({
   },
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
-  hero: { borderRadius: 20, padding: 14, minHeight: 135 },
+  hero: { borderRadius: 20, borderWidth: 1, padding: 14, minHeight: 135 },
   heroTop: {
     flexDirection: "row",
     justifyContent: "space-between",
