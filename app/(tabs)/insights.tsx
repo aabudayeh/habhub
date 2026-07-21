@@ -669,10 +669,9 @@ const styles = StyleSheet.create({
   },
   dayNumber: { color: palette.ink, fontSize: 9, fontWeight: "900" },
   summaries: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
-  summaryWrap: { width: "48%", flexGrow: 1 },
+  summaryWrap: { width: "100%" },
   summary: {
     width: "100%",
-    minHeight: 156,
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
