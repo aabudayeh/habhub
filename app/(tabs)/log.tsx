@@ -398,7 +398,10 @@ export default function LogScreen() {
         : "Your group can see the exact value, note, label, and attached image.";
 
   return (
-    <Screen keyboardShouldPersistTaps="handled">
+    <Screen
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ paddingBottom: 14 }}
+    >
       <PageHeader title="Log" />
       <View style={styles.selector}>
         <MetricSelector

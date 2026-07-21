@@ -159,7 +159,7 @@ export default function Insights() {
   ].slice(0, 5);
 
   return (
-    <Screen>
+    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
       <PageHeader title="Progress" />
       <View style={styles.controls}>
         <View style={styles.mode}>

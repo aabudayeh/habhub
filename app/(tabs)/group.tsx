@@ -97,7 +97,7 @@ export default function LeaderboardScreen() {
     },
   ];
   return (
-    <Screen>
+    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
       <PageHeader
         title="Leaderboard"
         subtitle={`${state.group.name} · ${state.group.members.length} friends`}
