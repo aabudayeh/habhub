@@ -851,17 +851,19 @@ function ProfilePhotoCompare({
             options={{ format: "png", quality: 1 }}
             style={styles.photoCapture}
           >
-            <Text style={styles.captureTitle}>North progress comparison</Text>
+            <Text preserveColor style={styles.captureTitle}>
+              North progress comparison
+            </Text>
             <View style={styles.photos}>
               <View style={styles.photoBlock}>
                 <ExpandableImage
                   uri={primary.uri}
                   thumbnailStyle={styles.photo}
                 />
-                <Text style={styles.photoDate}>
+                <Text preserveColor style={styles.photoDate}>
                   {friendlyDate(primary.localDate)}
                 </Text>
-                <Text style={styles.photoDate}>
+                <Text preserveColor style={styles.photoDate}>
                   {weight(primary.localDate)}
                 </Text>
               </View>
@@ -871,10 +873,10 @@ function ProfilePhotoCompare({
                     uri={comparison.uri}
                     thumbnailStyle={styles.photo}
                   />
-                  <Text style={styles.photoDate}>
+                  <Text preserveColor style={styles.photoDate}>
                     {friendlyDate(comparison.localDate)}
                   </Text>
-                  <Text style={styles.photoDate}>
+                  <Text preserveColor style={styles.photoDate}>
                     {weight(comparison.localDate)}
                   </Text>
                 </View>

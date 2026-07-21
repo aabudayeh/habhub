@@ -8,11 +8,29 @@ import {
   TextInputProps,
 } from "react-native";
 
-import { useFontScale } from "@/src/theme";
+import { palette, useAppColors, useFontScale } from "@/src/theme";
+
+type AppTextProps = TextProps & { preserveColor?: boolean };
+
+function remapColor(color: TextStyle["color"], colors: ReturnType<typeof useAppColors>) {
+  if (!colors.isDark || typeof color !== "string") return color;
+  const replacements: Record<string, string> = {
+    [palette.ink]: colors.ink,
+    [palette.muted]: colors.muted,
+    [palette.faint]: colors.faint,
+    [palette.canvas]: colors.canvas,
+    [palette.card]: colors.card,
+    [palette.border]: colors.border,
+    [palette.primary]: colors.primary,
+    [palette.primarySoft]: colors.primarySoft,
+  };
+  return replacements[color] ?? color;
+}
 
 /** Keeps every opted-in screen on the same app-controlled text scale. */
-export function AppText({ style, ...props }: TextProps) {
+export function AppText({ style, preserveColor = false, ...props }: AppTextProps) {
   const scale = useFontScale();
+  const colors = useAppColors();
   const flattened = StyleSheet.flatten(style) as TextStyle | undefined;
   const fontSize = flattened?.fontSize ?? 14;
   const lineHeight = flattened?.lineHeight;
@@ -22,6 +40,13 @@ export function AppText({ style, ...props }: TextProps) {
       allowFontScaling={false}
       style={[
         style,
+        preserveColor
+          ? undefined
+          : {
+              color: remapColor(flattened?.color, colors),
+              backgroundColor: remapColor(flattened?.backgroundColor, colors),
+              borderColor: remapColor(flattened?.borderColor, colors),
+            },
         scale === 1
           ? undefined
           : {
@@ -33,15 +58,29 @@ export function AppText({ style, ...props }: TextProps) {
   );
 }
 
-export function AppTextInput({ style, ...props }: TextInputProps) {
+export function AppTextInput({
+  style,
+  placeholderTextColor,
+  ...props
+}: TextInputProps) {
   const scale = useFontScale();
+  const colors = useAppColors();
   const flattened = StyleSheet.flatten(style) as TextStyle | undefined;
   const fontSize = flattened?.fontSize ?? 14;
   return (
     <NativeTextInput
       {...props}
       allowFontScaling={false}
-      style={[style, scale === 1 ? undefined : { fontSize: fontSize * scale }]}
+      placeholderTextColor={remapColor(placeholderTextColor, colors)}
+      style={[
+        style,
+        {
+          color: remapColor(flattened?.color, colors),
+          backgroundColor: remapColor(flattened?.backgroundColor, colors),
+          borderColor: remapColor(flattened?.borderColor, colors),
+        },
+        scale === 1 ? undefined : { fontSize: fontSize * scale },
+      ]}
     />
   );
 }

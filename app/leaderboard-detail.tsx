@@ -666,7 +666,9 @@ function PhotoCompare({
             options={{ format: "png", quality: 1 }}
             style={styles.capture}
           >
-            <Text style={styles.captureTitle}>North progress comparison</Text>
+            <Text preserveColor style={styles.captureTitle}>
+              North progress comparison
+            </Text>
             <View style={styles.photoGrid}>
               {[primary, comparison].filter(Boolean).map((photo) => (
                 <View key={photo!.id} style={styles.photoItem}>
@@ -674,8 +676,10 @@ function PhotoCompare({
                     uri={photo!.uri}
                     thumbnailStyle={styles.photo}
                   />
-                  <Text style={styles.photoDate}>{photo!.localDate}</Text>
-                  <Text style={styles.photoWeight}>
+                  <Text preserveColor style={styles.photoDate}>
+                    {photo!.localDate}
+                  </Text>
+                  <Text preserveColor style={styles.photoWeight}>
                     {weight(photo!.localDate)}
                   </Text>
                 </View>

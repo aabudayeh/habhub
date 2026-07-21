@@ -37,7 +37,7 @@ import {
 } from "@/src/domain/metrics";
 import { imageSourceUri } from "@/src/domain/media";
 import { useApp } from "@/src/state/AppProvider";
-import { palette } from "@/src/theme";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   AppState,
   MetricDefinition,
@@ -50,6 +50,8 @@ const TRACKED = "tracked_goals";
 export default function DayDetail() {
   const params = useLocalSearchParams<{ date: string; metrics?: string }>();
   const { state } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
   const [day, setDay] = useState(params.date ?? dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [photosOpen, setPhotosOpen] = useState(false);
@@ -246,9 +248,9 @@ export default function DayDetail() {
         <View style={styles.dateNav}>
           <Pressable
             onPress={() => changeDay(dateWithOffsetFrom(day, -1))}
-            style={styles.arrow}
+            style={[styles.arrow, { backgroundColor: colors.canvas }]}
           >
-            <Ionicons name="chevron-back" size={19} color={palette.ink} />
+            <Ionicons name="chevron-back" size={19} color={colors.ink} />
           </Pressable>
           <Pressable
             onPress={() => setCalendarOpen((value) => !value)}
@@ -257,24 +259,26 @@ export default function DayDetail() {
             <Ionicons
               name="calendar-outline"
               size={17}
-              color={palette.primary}
+              color={accent}
             />
-            <Text style={styles.dateText}>{friendlyDate(day)}</Text>
+            <Text style={[styles.dateText, { color: colors.ink }]}>
+              {friendlyDate(day)}
+            </Text>
             <Ionicons
               name={calendarOpen ? "chevron-up" : "chevron-down"}
               size={16}
-              color={palette.muted}
+              color={colors.muted}
             />
           </Pressable>
           <Pressable
             onPress={() => changeDay(dateWithOffsetFrom(day, 1))}
-            style={styles.arrow}
+            style={[styles.arrow, { backgroundColor: colors.canvas }]}
           >
-            <Ionicons name="chevron-forward" size={19} color={palette.ink} />
+            <Ionicons name="chevron-forward" size={19} color={colors.ink} />
           </Pressable>
         </View>
         {calendarOpen ? (
-          <View style={styles.calendar}>
+          <View style={[styles.calendar, { borderTopColor: colors.border }]}>
             <MonthCalendar
               monthDate={day}
               selectedDate={day}
@@ -343,15 +347,15 @@ export default function DayDetail() {
               <Ionicons
                 name="images-outline"
                 size={18}
-                color={palette.primary}
+                color={accent}
               />
-              <Text style={styles.trackedTitle}>
+              <Text style={[styles.trackedTitle, { color: colors.ink }]}>
                 Photos from this day · {dayPhotos.length}
               </Text>
               <Ionicons
                 name={photosOpen ? "chevron-up" : "chevron-down"}
                 size={17}
-                color={palette.muted}
+                color={colors.muted}
               />
             </Card>
           </Pressable>
@@ -365,10 +369,10 @@ export default function DayDetail() {
                       caption={photo.caption}
                       thumbnailStyle={styles.dayPhoto}
                     />
-                    <Text style={styles.photoCaption}>
+                    <Text style={[styles.photoCaption, { color: colors.ink }]}>
                       {photo.caption || "Progress photo"}
                     </Text>
-                    <Text style={styles.weight}>
+                    <Text style={[styles.weight, { color: accent }]}>
                       {photo.localDate} · {nearestWeight(photo.localDate)}
                     </Text>
                   </Card>
@@ -398,7 +402,7 @@ export default function DayDetail() {
                     options={{ format: "png", quality: 1 }}
                     style={styles.capture}
                   >
-                    <Text style={styles.captureTitle}>
+                    <Text preserveColor style={styles.captureTitle}>
                       North progress comparison
                     </Text>
                     <View style={styles.compareGrid}>
@@ -408,10 +412,10 @@ export default function DayDetail() {
                             uri={photo.uri}
                             thumbnailStyle={styles.compareImage}
                           />
-                          <Text style={styles.photoCaption}>
+                          <Text preserveColor style={styles.photoCaption}>
                             {photo.localDate}
                           </Text>
-                          <Text style={styles.weight}>
+                          <Text preserveColor style={styles.weight}>
                             {nearestWeight(photo.localDate)}
                           </Text>
                         </View>
@@ -458,6 +462,7 @@ function DayTracker({
   day: string;
 }) {
   const [open, setOpen] = useState(false);
+  const colors = useAppColors();
   return (
     <Card style={styles.metricCard}>
       <Pressable
@@ -474,8 +479,10 @@ function DayTracker({
           />
         </View>
         <View style={styles.grow}>
-          <Text style={styles.metricName}>{metric.name}</Text>
-          <Text style={styles.metricValue}>
+          <Text style={[styles.metricName, { color: colors.muted }]}>
+            {metric.name}
+          </Text>
+          <Text style={[styles.metricValue, { color: colors.ink }]}>
             {metric.dataType === "text"
               ? String(entries.at(-1)?.value ?? "No entry")
               : formatMetricValue(metric, value)}
@@ -487,7 +494,7 @@ function DayTracker({
         <Ionicons
           name={open ? "chevron-up" : "chevron-down"}
           size={17}
-          color={palette.faint}
+          color={colors.faint}
         />
       </Pressable>
       {open ? (
@@ -524,26 +531,28 @@ function DayTracker({
 function TrackedCard({ state, day }: { state: AppState; day: string }) {
   const summary = trackedGoalSummary(state, state.currentUserId, day);
   const [open, setOpen] = useState(false);
+  const colors = useAppColors();
+  const accent = useGroupAccent();
   return (
-    <Card style={styles.tracked}>
+    <Card style={[styles.tracked, { backgroundColor: colors.primarySoft }]}>
       <Pressable
         onPress={() => setOpen((value) => !value)}
         style={styles.trackedTop}
       >
-        <Ionicons name="checkmark-done" size={22} color={palette.primary} />
+        <Ionicons name="checkmark-done" size={22} color={accent} />
         <View style={styles.grow}>
-          <Text style={styles.trackedTitle}>Tracked goals</Text>
-          <Text style={styles.meta}>
+          <Text style={[styles.trackedTitle, { color: colors.ink }]}>Tracked goals</Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
             {summary.met}/{summary.total} goals completed on this date
           </Text>
         </View>
-        <Text style={styles.fraction}>
+        <Text style={[styles.fraction, { color: accent }]}>
           {summary.met}/{summary.total}
         </Text>
         <Ionicons
           name={open ? "chevron-up" : "chevron-down"}
           size={16}
-          color={palette.muted}
+          color={colors.muted}
         />
       </Pressable>
       {open ? (
@@ -578,6 +587,7 @@ function EntryRow({
   entry: MetricEntry;
   metric: MetricDefinition;
 }) {
+  const colors = useAppColors();
   const label =
     typeof entry.value === "string"
       ? entry.value
@@ -611,7 +621,7 @@ function EntryRow({
           <Text style={[styles.entryValue, { color: metric.color }]}>
             {label}
           </Text>
-          <Text style={styles.entryTime}>
+          <Text style={[styles.entryTime, { color: colors.faint }]}>
             {new Date(entry.recordedAt).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -619,11 +629,17 @@ function EntryRow({
           </Text>
         </View>
         {entry.label ? (
-          <Text style={styles.entryLabel}>{entry.label}</Text>
+          <Text style={[styles.entryLabel, { color: colors.ink }]}>
+            {entry.label}
+          </Text>
         ) : null}
-        {entry.note ? <Text style={styles.entryNote}>{entry.note}</Text> : null}
+        {entry.note ? (
+          <Text style={[styles.entryNote, { color: colors.muted }]}>
+            {entry.note}
+          </Text>
+        ) : null}
         {entry.nutrition ? (
-          <Text style={styles.nutrition}>
+          <Text style={[styles.nutrition, { color: colors.primary }]}>
             {[
               ["Protein", entry.nutrition.proteinG, "g"],
               ["Fat", entry.nutrition.fatG, "g"],
@@ -652,6 +668,8 @@ function AlignmentCard({
 }: {
   status: ReturnType<typeof deficitRealityCheckAtDate>;
 }) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
   const copy = {
     aligned: "Scale change roughly matches the reported deficit.",
     reported_ahead:
@@ -672,17 +690,19 @@ function AlignmentCard({
               : "analytics-outline"
           }
           size={24}
-          color={palette.primary}
+          color={accent}
         />
         <View style={styles.grow}>
-          <Text style={styles.alignmentTitle}>
+          <Text style={[styles.alignmentTitle, { color: colors.ink }]}>
             {status.status === "aligned"
               ? "Reported and scale trends align"
               : "Estimate from this weight entry"}
           </Text>
-          <Text style={styles.entryNote}>{copy}</Text>
+          <Text style={[styles.entryNote, { color: colors.muted }]}>
+            {copy}
+          </Text>
           {status.status !== "insufficient" ? (
-            <Text style={styles.nutrition}>
+            <Text style={[styles.nutrition, { color: accent }]}>
               Reported {Math.round(status.reportedDailyDeficit)} kcal/day ·
               scale estimate {Math.round(status.actualDailyDeficit)} kcal/day
             </Text>
