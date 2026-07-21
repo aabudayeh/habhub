@@ -493,10 +493,6 @@ export default function ChatScreen() {
               onPress={() => suggest("reminder")}
             />
           </View>
-          <Text style={styles.libraryNote}>
-            A random built-in suggestion is placed in the box first. Edit it,
-            then send when ready.
-          </Text>
           <View
             style={[
               styles.composer,
@@ -827,6 +823,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 5,
     paddingHorizontal: 14,
+    marginBottom: 7,
   },
   quick: {
     flexDirection: "row",
@@ -838,14 +835,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   quickText: { color: palette.primary, fontSize: 9, fontWeight: "800" },
-  libraryNote: {
-    color: palette.muted,
-    fontSize: 8,
-    lineHeight: 12,
-    marginTop: 5,
-    marginBottom: 7,
-    paddingHorizontal: 14,
-  },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
