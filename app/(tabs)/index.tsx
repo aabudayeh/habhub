@@ -188,8 +188,8 @@ export default function Today() {
           style={[
             styles.hero,
             {
-              backgroundColor: colors.isDark ? colors.card : accent,
-              borderColor: colors.isDark ? colors.border : accent,
+              backgroundColor: accent,
+              borderColor: accent,
             },
           ]}
         >
@@ -198,25 +198,25 @@ export default function Today() {
               <Text
                 style={[
                   styles.heroEyebrow,
-                  { color: colors.isDark ? accent : "rgba(255,255,255,.76)" },
+                  { color: "rgba(255,255,255,.76)" },
                 ]}
               >
                 {goals.allMet ? "DAY COMPLETE" : "TODAY'S FOCUS"}
               </Text>
               <Text
-                preserveColor={!colors.isDark}
+                preserveColor
                 style={[
                   styles.heroValue,
-                  { color: colors.isDark ? colors.ink : palette.white },
+                  { color: palette.white },
                 ]}
               >
                 {goals.met} of {goals.total}
               </Text>
               <Text
-                preserveColor={!colors.isDark}
+                preserveColor
                 style={[
                   styles.heroTitle,
-                  { color: colors.isDark ? colors.muted : palette.white },
+                  { color: palette.white },
                 ]}
               >
                 {goals.allMet
@@ -230,18 +230,16 @@ export default function Today() {
               style={[
                 styles.ring,
                 {
-                  borderColor: colors.isDark ? accent : palette.lime,
-                  backgroundColor: colors.isDark
-                    ? colors.primarySoft
-                    : "transparent",
+                  borderColor: palette.lime,
+                  backgroundColor: "transparent",
                 },
               ]}
             >
               <Text
-                preserveColor={!colors.isDark}
+                preserveColor
                 style={[
                   styles.ringText,
-                  { color: colors.isDark ? accent : palette.white },
+                  { color: palette.white },
                 ]}
               >
                 {goals.total ? Math.round((goals.met / goals.total) * 100) : 0}%
@@ -250,7 +248,7 @@ export default function Today() {
           </View>
           <ProgressBar
             progress={goals.total ? goals.met / goals.total : 0}
-            color={colors.isDark ? accent : palette.lime}
+            color={palette.lime}
           />
           <View style={styles.goalDots}>
             {goals.metrics.map((item) => {
@@ -268,13 +266,9 @@ export default function Today() {
                   style={[
                     styles.dot,
                     {
-                      backgroundColor: colors.isDark
-                        ? met
-                          ? accent
-                          : colors.canvas
-                        : met
-                          ? palette.white
-                          : "rgba(255,255,255,.16)",
+                      backgroundColor: met
+                        ? palette.white
+                        : "rgba(255,255,255,.16)",
                     },
                   ]}
                 >
@@ -287,15 +281,7 @@ export default function Today() {
                           : (item.icon as keyof typeof Ionicons.glyphMap)
                     }
                     size={11}
-                    color={
-                      colors.isDark
-                        ? met
-                          ? palette.white
-                          : colors.faint
-                        : met
-                          ? accent
-                          : palette.white
-                    }
+                    color={met ? accent : palette.white}
                   />
                 </View>
               );

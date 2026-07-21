@@ -500,7 +500,7 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: keyboardOpen ? 8 : 16 },
+              { marginBottom: keyboardOpen ? 8 : 30 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
