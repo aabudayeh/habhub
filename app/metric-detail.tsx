@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Alert, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -37,7 +37,7 @@ export default function TrackerDetail() {
     metric: string;
     date?: string;
   }>();
-  const { state } = useApp();
+  const { state, deleteEntry, deletePhoto } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
@@ -340,7 +340,28 @@ export default function TrackerDetail() {
       </View>
       <View style={styles.entries}>
         {entries.map((entry) => (
-          <Card key={entry.id} style={styles.entry}>
+          <Pressable
+            key={entry.id}
+            delayLongPress={450}
+            onLongPress={
+              entry.source === "manual"
+                ? () =>
+                    Alert.alert(
+                      "Delete entry?",
+                      "This removes this manually logged item.",
+                      [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "Delete",
+                          style: "destructive",
+                          onPress: () => deleteEntry(entry.id),
+                        },
+                      ],
+                    )
+                : undefined
+            }
+          >
+          <Card style={styles.entry}>
             <View style={styles.entryTop}>
               <View style={styles.grow}>
                 <Text style={[styles.entryTitle, { color: colors.ink }]}>
@@ -380,9 +401,28 @@ export default function TrackerDetail() {
               />
             ) : null}
           </Card>
+          </Pressable>
         ))}
         {dayPhotos.map((photo) => (
-          <Card key={photo.id} style={styles.entry}>
+          <Pressable
+            key={photo.id}
+            delayLongPress={450}
+            onLongPress={() =>
+              Alert.alert(
+                "Delete photo?",
+                "This removes this progress-photo entry.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: () => deletePhoto(photo.id),
+                  },
+                ],
+              )
+            }
+          >
+          <Card style={styles.entry}>
             <Text style={[styles.entryTitle, { color: colors.ink }]}>
               {photo.caption || "Progress photo"}
             </Text>
@@ -446,6 +486,7 @@ export default function TrackerDetail() {
               </>
             ) : null}
           </Card>
+          </Pressable>
         ))}
       </View>
       {!entries.length && !dayPhotos.length ? (

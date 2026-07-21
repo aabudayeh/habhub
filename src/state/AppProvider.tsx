@@ -59,6 +59,8 @@ type Action =
       changes: Partial<MetricDefinition>;
     }
   | { type: "deleteMetric"; metricId: string }
+  | { type: "deleteEntry"; entryId: string }
+  | { type: "deletePhoto"; photoId: string }
   | {
       type: "setMetricSection";
       metricId: string;
@@ -372,6 +374,25 @@ function reducer(state: AppState, action: Action): AppState {
           state.selectedGroupMetricId === action.metricId
             ? "steps"
             : state.selectedGroupMetricId,
+      };
+    case "deleteEntry":
+      return {
+        ...state,
+        entries: state.entries.filter(
+          (entry) =>
+            entry.id !== action.entryId ||
+            entry.userId !== state.currentUserId ||
+            entry.source !== "manual",
+        ),
+      };
+    case "deletePhoto":
+      return {
+        ...state,
+        photos: state.photos.filter(
+          (photo) =>
+            photo.id !== action.photoId ||
+            photo.userId !== state.currentUserId,
+        ),
       };
     case "setMetricSection": {
       const metric = state.metrics.find(
@@ -957,6 +978,8 @@ type AppContextValue = {
   addMetric: (metric: NewMetric) => void;
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
+  deleteEntry: (entryId: string) => void;
+  deletePhoto: (photoId: string) => void;
   setMetricSection: (
     metricId: string,
     section: DashboardSection,
@@ -1352,6 +1375,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       updateMetric: (metricId, changes) =>
         dispatch({ type: "updateMetric", metricId, changes }),
       deleteMetric: (metricId) => dispatch({ type: "deleteMetric", metricId }),
+      deleteEntry: (entryId) => dispatch({ type: "deleteEntry", entryId }),
+      deletePhoto: (photoId) => dispatch({ type: "deletePhoto", photoId }),
       setMetricSection: (metricId, section, value, historyMode) =>
         dispatch({
           type: "setMetricSection",
