@@ -68,7 +68,7 @@ export default function MenuScreen() {
         edges={["top", "bottom"]}
       >
         <View style={styles.topRow}>
-          <Text style={[styles.brand, { color: accent }]}>NORTH</Text>
+          <Text style={[styles.brand, { color: accent }]}>METRICRALLY</Text>
           <Pressable
             onPress={() => router.back()}
             style={[styles.close, { backgroundColor: colors.canvas }]}

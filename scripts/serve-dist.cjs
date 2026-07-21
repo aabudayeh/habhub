@@ -31,5 +31,5 @@ http.createServer((request, response) => {
   response.setHeader('Content-Type', contentTypes[path.extname(filePath)] || 'application/octet-stream');
   fs.createReadStream(filePath).pipe(response);
 }).listen(port, '0.0.0.0', () => {
-  console.log(`Paceboard web export: http://localhost:${port}`);
+  console.log(`MetricRally web export: http://localhost:${port}`);
 });

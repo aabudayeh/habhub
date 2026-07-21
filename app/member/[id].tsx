@@ -852,7 +852,7 @@ function ProfilePhotoCompare({
             style={styles.photoCapture}
           >
             <Text preserveColor style={styles.captureTitle}>
-              North progress comparison
+              MetricRally progress comparison
             </Text>
             <View style={styles.photos}>
               <View style={styles.photoBlock}>

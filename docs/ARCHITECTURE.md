@@ -2,7 +2,7 @@
 
 ## Client
 
-Paceboard is an Expo Router application targeting iOS, Android, and web from one TypeScript codebase.
+MetricRally is an Expo Router application targeting iOS, Android, and web from one TypeScript codebase.
 
 The current client is local-first:
 

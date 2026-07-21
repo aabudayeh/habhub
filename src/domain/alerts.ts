@@ -88,7 +88,7 @@ export function buildAlerts(state: AppState): PaceAlert[] {
         color: achievement ? palette.amber : palette.primary,
         title:
           message.senderId === "system"
-            ? "North update"
+            ? "MetricRally update"
             : sender
               ? `Message from ${memberDisplayName(state, sender)}`
               : "New message",

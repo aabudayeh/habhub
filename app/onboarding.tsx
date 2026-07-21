@@ -334,7 +334,7 @@ export default function Onboarding() {
             <View style={[styles.mark, { backgroundColor: accent }]}>
               <Ionicons name="navigate" size={20} color={palette.white} />
             </View>
-            <Text style={[styles.brand, { color: colors.ink }]}>NORTH</Text>
+            <Text style={[styles.brand, { color: colors.ink }]}>METRICRALLY</Text>
             <Text style={[styles.step, { color: colors.muted }]}>
               {step + 1}/5
             </Text>
@@ -350,7 +350,7 @@ export default function Onboarding() {
               <>
                 <Title
                   title="What would you like to change?"
-                  copy="Choose only what matters now. North builds the rest for you."
+                  copy="Choose only what matters now. MetricRally builds the rest for you."
                   colors={colors}
                 />
                 <View style={styles.goalGrid}>
@@ -737,7 +737,7 @@ export default function Onboarding() {
             {step === 4 ? (
               <View style={styles.landing}>
                 <Text style={[styles.label, { color: colors.ink }]}>
-                  Open North on
+                  Open MetricRally on
                 </Text>
                 <View style={styles.wrap}>
                   <Chip
@@ -798,7 +798,7 @@ export default function Onboarding() {
             )}
             <View style={styles.next}>
               <Button
-                label={step === 4 ? "Start using North" : "Continue"}
+                label={step === 4 ? "Start using MetricRally" : "Continue"}
                 disabled={
                   (step === 0 && !goals.length) ||
                   (step === 2 && !selected.length)

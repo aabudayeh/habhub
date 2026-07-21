@@ -592,7 +592,7 @@ function PhotoCompare({
     if (photos.length < 2) return;
     if (Platform.OS !== "web") {
       await Share.share({
-        message: `North comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join("\n")}`,
+        message: `MetricRally comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join("\n")}`,
       });
       return;
     }
@@ -606,7 +606,7 @@ function PhotoCompare({
       context.fillRect(0, 0, 1200, 850);
       context.fillStyle = "#17211B";
       context.font = "bold 34px sans-serif";
-      context.fillText("North progress comparison", 45, 55);
+      context.fillText("MetricRally progress comparison", 45, 55);
       const images = await Promise.all(
         photos.map(
           (photo) =>
@@ -634,7 +634,7 @@ function PhotoCompare({
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `paceboard-${memberId}-comparison.png`;
+        link.download = `metric-rally-${memberId}-comparison.png`;
         link.click();
         URL.revokeObjectURL(url);
       }, "image/png");
@@ -667,7 +667,7 @@ function PhotoCompare({
             style={styles.capture}
           >
             <Text preserveColor style={styles.captureTitle}>
-              North progress comparison
+              MetricRally progress comparison
             </Text>
             <View style={styles.photoGrid}>
               {[primary, comparison].filter(Boolean).map((photo) => (

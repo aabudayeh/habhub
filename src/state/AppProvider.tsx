@@ -1462,7 +1462,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         <View style={styles.loadingMark}>
           <Text style={styles.loadingInitial}>N</Text>
         </View>
-        <Text style={styles.loadingTitle}>North</Text>
+        <Text style={styles.loadingTitle}>MetricRally</Text>
         <Text style={styles.loadingText}>Your goals, one clear direction.</Text>
         <ActivityIndicator
           color={palette.primary}

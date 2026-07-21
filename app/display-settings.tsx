@@ -54,7 +54,7 @@ export default function DisplaySettings() {
     <Screen>
       <PageHeader
         title="Display"
-        subtitle="Appearance and where North opens."
+        subtitle="Appearance and where MetricRally opens."
         showMenu={false}
         action={
           <IconButton

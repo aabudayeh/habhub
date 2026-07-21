@@ -484,17 +484,23 @@ function MetricSummary({
             color={metric.color}
           />
         </View>
-        <Text style={[styles.summaryName, { color: colors.ink }]}>
-          {metric.name}
-        </Text>
-        <Text style={[styles.summaryValue, { color: colors.ink }]}>
+        <View style={styles.summaryPrimary}>
+          <Text
+            numberOfLines={1}
+            style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}
+          >
+            {metric.name}
+          </Text>
+          <Text numberOfLines={1} style={[styles.summaryValue, { color: colors.ink }]}>
           {weightStats
             ? `${weightStats.currentWeight.toFixed(1)} kg`
             : isBoolean
               ? `${reached}/${active.length} days`
               : formatMetricValue(metric, average)}
-        </Text>
-        <Text style={[styles.summaryLabel, { color: colors.muted }]}>
+          </Text>
+        </View>
+        <View style={styles.summaryDetail}>
+        <Text numberOfLines={2} style={[styles.summaryLabel, { color: colors.muted }]}>
           {weightStats
             ? `${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} total · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week average`
             : isBoolean
@@ -502,13 +508,13 @@ function MetricSummary({
               : `${measured.length ? `daily average across ${measured.length} logged days` : "No entries in this range"} · overall ${formatMetricValue(metric, overall)}`}
         </Text>
         {weightStats ? (
-          <Text style={[styles.remaining, { color: colors.ink }]}>
+          <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
             Last 7 days {Math.abs(weightStats.lastWeekChange).toFixed(1)} kg ·
             planned {weightStats.expectedWeeklyChange.toFixed(1)} kg/week ·{" "}
             {weightStats.remaining.toFixed(1)} kg remaining
           </Text>
         ) : !isBoolean ? (
-          <Text style={[styles.remaining, { color: colors.ink }]}>
+          <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
             {goalRemainingLabel(
               state,
               metric,
@@ -517,6 +523,8 @@ function MetricSummary({
             )}
           </Text>
         ) : null}
+        </View>
+        <View style={styles.summaryGoal}>
         <Text style={styles.goalLine}>
           {reached}/{active.length} goal days ·{" "}
           {active.length ? Math.round((reached / active.length) * 100) : 0}%
@@ -524,6 +532,7 @@ function MetricSummary({
         <Text style={[styles.streakLine, { color: colors.muted }]}>
           Longest streak {streak} days
         </Text>
+        </View>
       </Card>
     </Pressable>
   );
@@ -672,9 +681,16 @@ const styles = StyleSheet.create({
   summaryWrap: { width: "100%" },
   summary: {
     width: "100%",
+    minHeight: 72,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
+  summaryPrimary: { width: 78, minWidth: 68 },
+  summaryDetail: { flex: 1, minWidth: 0 },
+  summaryGoal: { width: 74, alignItems: "flex-end" },
   trackedSummary: {
     width: "100%",
     minHeight: 66,
@@ -699,6 +715,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 6,
   },
+  summaryNameRow: { marginTop: 0 },
   summaryValue: {
     color: palette.ink,
     fontSize: 15,
@@ -722,12 +739,13 @@ const styles = StyleSheet.create({
     color: palette.primary,
     fontSize: 9,
     fontWeight: "800",
-    marginTop: 6,
+    textAlign: "right",
   },
   streakLine: {
     color: palette.muted,
     fontSize: 8,
     fontWeight: "800",
-    marginTop: 4,
+    marginTop: 3,
+    textAlign: "right",
   },
 });

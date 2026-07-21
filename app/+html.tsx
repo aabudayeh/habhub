@@ -11,9 +11,9 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <meta name="theme-color" content="#F5F7F2" />
         <meta
           name="description"
-          content="North is a private, goal-led tracker for you and your friends."
+          content="MetricRally is a private, customizable tracker for you and your friends."
         />
-        <title>North · Find your direction</title>
+        <title>MetricRally · Track anything. Progress together.</title>
         <ScrollViewStyleReset />
       </head>
       <body>{children}</body>

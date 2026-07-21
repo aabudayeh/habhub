@@ -114,7 +114,7 @@ async function request(url: string, attempts = 3) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 9000);
     try {
-      const response = await fetch(url, { headers: { "User-Agent": "North/1.0 (mobile food logger)" }, signal: controller.signal });
+      const response = await fetch(url, { headers: { "User-Agent": "MetricRally/1.0 (mobile food logger)" }, signal: controller.signal });
       if (response.ok) return response.json() as Promise<Record<string, unknown>>;
       last = new Error(`Food database request failed (${response.status}).`);
       if (![429, 500, 502, 503, 504].includes(response.status)) throw last;

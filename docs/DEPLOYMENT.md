@@ -1,6 +1,6 @@
 # Production deployment
 
-Paceboard can still run without credentials, but accounts, cross-device sync, real friend groups, private cloud media, and account deletion require Supabase.
+MetricRally can still run without credentials, but accounts, cross-device sync, real friend groups, private cloud media, and account deletion require Supabase.
 
 ## 1. Create the Supabase project
 
@@ -88,7 +88,7 @@ Add the legal/support URL variables from `.env.example` before store submission.
 
 Health sync, barcode scanning, and push notifications are configured in `app.json`. They require a new native EAS build. Remote push is not available in Expo Go on Android; test it in the preview/release APK. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
 
-Before distributing the Android production build, complete Google Play's Health Connect declaration for every requested read category. Confirm Samsung Health, MyFitnessPal, or Google Fit is allowed to write into Health Connect if you want its data to appear. On iOS, allow compatible apps to write into Apple Health and grant Paceboard read access when prompted.
+Before distributing the Android production build, complete Google Play's Health Connect declaration for every requested read category. Confirm Samsung Health, MyFitnessPal, or Google Fit is allowed to write into Health Connect if you want its data to appear. On iOS, allow compatible apps to write into Apple Health and grant MetricRally read access when prompted.
 
 Run the release checks:
 

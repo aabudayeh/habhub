@@ -225,18 +225,18 @@ export default function SettingsScreen() {
       );
       const link = document.createElement("a");
       link.href = url;
-      link.download = `paceboard-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.download = `metric-rally-export-${new Date().toISOString().slice(0, 10)}.json`;
       link.click();
       URL.revokeObjectURL(url);
       return;
     }
-    await Share.share({ title: "North data export", message: json });
+    await Share.share({ title: "MetricRally data export", message: json });
   }
 
   return (
     <Screen>
       <PageHeader
-        eyebrow="North"
+        eyebrow="MetricRally"
         title="Cloud & health sync"
         subtitle="Account, device, backup, and health import preferences."
         showMenu={false}

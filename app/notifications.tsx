@@ -57,7 +57,7 @@ export default function NotificationsScreen() {
     registrationAttempted.current = true;
     enablePushNotifications(auth.user.id, value)
       .then(() =>
-        setPermissionNote("This phone is registered for North notifications."),
+        setPermissionNote("This phone is registered for MetricRally notifications."),
       )
       .catch((error) => {
         setPermissionNote(
@@ -89,7 +89,7 @@ export default function NotificationsScreen() {
         pushEnabled: true,
       });
       patch({ pushEnabled: true });
-      setPermissionNote("This phone is registered for North notifications.");
+      setPermissionNote("This phone is registered for MetricRally notifications.");
     } catch (error) {
       patch({ pushEnabled: false });
       const message =

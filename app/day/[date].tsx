@@ -175,7 +175,7 @@ export default function DayDetail() {
     if (collage.length < 2) return;
     if (Platform.OS !== "web") {
       await Share.share({
-        message: `North comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join("\n")}`,
+        message: `MetricRally comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join("\n")}`,
       });
       return;
     }
@@ -189,7 +189,7 @@ export default function DayDetail() {
       context.fillRect(0, 0, 1200, 850);
       context.fillStyle = "#17211B";
       context.font = "bold 36px sans-serif";
-      context.fillText("North progress comparison", 45, 60);
+      context.fillText("MetricRally progress comparison", 45, 60);
       const images = await Promise.all(
         collage.map(
           (photo) =>
@@ -217,7 +217,7 @@ export default function DayDetail() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `paceboard-${day}-comparison.png`;
+        link.download = `metric-rally-${day}-comparison.png`;
         link.click();
         URL.revokeObjectURL(url);
       }, "image/png");
@@ -403,7 +403,7 @@ export default function DayDetail() {
                     style={styles.capture}
                   >
                     <Text preserveColor style={styles.captureTitle}>
-                      North progress comparison
+                      MetricRally progress comparison
                     </Text>
                     <View style={styles.compareGrid}>
                       {collage.map((photo) => (

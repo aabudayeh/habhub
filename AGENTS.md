@@ -1,4 +1,4 @@
-# Paceboard repository instructions
+# MetricRally repository instructions
 
 - The app targets Expo SDK 54 and React Native 0.81.
 - Keep iOS, Android, and web behavior working from the same TypeScript codebase.

@@ -5,5 +5,5 @@ export function groupInviteLink(code: string) {
 }
 
 export function groupInviteMessage(groupName: string, code: string) {
-  return `Join ${groupName} on North\n${groupInviteLink(code)}\n\nInvite code: ${code}`;
+  return `Join ${groupName} on MetricRally\n${groupInviteLink(code)}\n\nInvite code: ${code}`;
 }

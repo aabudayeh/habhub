@@ -150,7 +150,7 @@ function personalStories(
     eyebrow: "BEST DAY",
     title: friendlyDate(scores[0]?.day ?? current[6]),
     stat: `${Math.round(scores[0]?.value ?? 0)}/100`,
-    body: "Your highest configured North score in this recap window.",
+    body: "Your highest configured MetricRally score in this recap window.",
     icon: "sparkles-outline",
     color: "#6A5ACD",
   });

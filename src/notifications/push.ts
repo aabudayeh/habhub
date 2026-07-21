@@ -20,7 +20,7 @@ function storedPreferences(preferences: NotificationSettings) {
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
-  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'North', importance: Notifications.AndroidImportance.DEFAULT });
+  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'MetricRally', importance: Notifications.AndroidImportance.DEFAULT });
   let permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
   if (!permission.granted) throw new Error('Notification permission was not granted. You can enable it in system settings.');
@@ -68,7 +68,7 @@ export async function syncCycleNotifications(state: AppState) {
   if (!forecast.nextPeriodStart) return;
   const schedule: { date: string; title: string; body: string }[] = [];
   if (settings.cyclePredictions !== false) {
-    schedule.push({ date: dateWithOffsetFrom(forecast.nextPeriodStart, -(settings.cycleReminderDays ?? 2)), title: 'Period estimate', body: `Your next period is estimated in ${settings.cycleReminderDays ?? 2} days. This may change as North learns your cycle.` });
+    schedule.push({ date: dateWithOffsetFrom(forecast.nextPeriodStart, -(settings.cycleReminderDays ?? 2)), title: 'Period estimate', body: `Your next period is estimated in ${settings.cycleReminderDays ?? 2} days. This may change as MetricRally learns your cycle.` });
   }
   if (settings.cyclePhaseUpdates === true) {
     const currentStart = dateWithOffsetFrom(forecast.nextPeriodStart, -forecast.averageCycleDays);

@@ -1,6 +1,6 @@
-# Paceboard
+# MetricRally
 
-Paceboard is a customizable social tracker for private friend groups: **track your way, rally together**.
+MetricRally is a customizable social tracker for private friend groups: **Track anything. Progress together.**
 
 This repository contains a working Expo app for iOS, Android, and web. It launches with a credential-free demo group so you can try the product immediately. Supabase sign-in and cloud backup turn on when you add environment variables.
 

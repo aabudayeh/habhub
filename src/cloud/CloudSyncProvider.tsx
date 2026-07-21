@@ -123,7 +123,7 @@ function isDemoBoundState(state: AppState) {
 function createCleanAccountState(user: User): AppState {
   const defaults = createInitialState();
   const today = dateKey();
-  const name = accountName(user, "North member");
+  const name = accountName(user, "MetricRally member");
   const metrics = defaults.metrics.map((metric) => ({
     ...metric,
     activeFrom: today,

@@ -204,7 +204,7 @@ async function groupMembers(groupIds: string[]) {
   const result = new Map<string, { active: Member[]; pending: Member[] }>();
   for (const membershipRow of membership ?? []) {
     const profile = profileMap.get(membershipRow.user_id);
-    const name = profile?.display_name || "North member";
+    const name = profile?.display_name || "MetricRally member";
     const member: Member = {
       id: membershipRow.user_id,
       name,

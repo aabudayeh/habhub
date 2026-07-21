@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "North",
+    "name": "MetricRally",
     "slug": "paceboard",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -15,8 +15,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.paceboard.mobile",
       "infoPlist": {
-        "NSHealthShareUsageDescription": "North reads only the health categories you choose so it can update your private goals and permitted group progress.",
-        "NSHealthUpdateUsageDescription": "North does not write health data unless you explicitly choose a future export feature."
+        "NSHealthShareUsageDescription": "MetricRally reads only the health categories you choose so it can update your private goals and permitted group progress.",
+        "NSHealthUpdateUsageDescription": "MetricRally does not write health data unless you explicitly choose a future export feature."
       }
     },
     "android": {
@@ -61,8 +61,8 @@
       [
         "@kingstinct/react-native-healthkit",
         {
-          "NSHealthShareUsageDescription": "North reads only the health categories you choose so it can update your private goals and permitted group progress.",
-          "NSHealthUpdateUsageDescription": "North does not write health data unless you explicitly choose a future export feature.",
+          "NSHealthShareUsageDescription": "MetricRally reads only the health categories you choose so it can update your private goals and permitted group progress.",
+          "NSHealthUpdateUsageDescription": "MetricRally does not write health data unless you explicitly choose a future export feature.",
           "background": true
         }
       ],
@@ -78,8 +78,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "North uses your photos only when you choose to add a progress update.",
-          "cameraPermission": "North uses your camera only when you choose to take a progress photo.",
+          "photosPermission": "MetricRally uses your photos only when you choose to add a progress update.",
+          "cameraPermission": "MetricRally uses your camera only when you choose to take a progress photo.",
           "microphonePermission": false
         }
       ],
