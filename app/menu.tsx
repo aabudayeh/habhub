@@ -125,10 +125,6 @@ export default function MenuScreen() {
             </Pressable>
           ))}
         </View>
-        <Text style={[styles.privacy, { color: colors.muted }]}>
-          New items share their values with your group by default. You can make
-          any item or entry private.
-        </Text>
       </SafeAreaView>
     </View>
   );
@@ -200,12 +196,5 @@ const styles = StyleSheet.create({
   copy: { flex: 1 },
   label: { color: palette.ink, fontSize: 14, fontWeight: "800" },
   detail: { color: palette.muted, fontSize: 10, lineHeight: 15, marginTop: 2 },
-  privacy: {
-    color: palette.muted,
-    fontSize: 11,
-    lineHeight: 17,
-    marginTop: "auto",
-    paddingVertical: 16,
-  },
   pressed: { opacity: 0.65 },
 });
