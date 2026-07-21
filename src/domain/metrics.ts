@@ -1,21 +1,34 @@
-import { AppState, MetricDefinition, MetricEntry } from '@/src/types';
-import { dateWithOffsetFrom } from './date';
-import { dailyFoodGoal, energyFormulaVariables, KCAL_PER_KG_ESTIMATE } from './energy';
-import { evaluateFormula, formulaIdentifiers, FormulaError } from './formula';
+import { AppState, MetricDefinition, MetricEntry } from "@/src/types";
+import { dateWithOffsetFrom } from "./date";
+import {
+  dailyFoodGoal,
+  energyFormulaVariables,
+  KCAL_PER_KG_ESTIMATE,
+} from "./energy";
+import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
 
-function aggregate(entries: MetricEntry[], method: MetricDefinition['aggregation']): number {
+function aggregate(
+  entries: MetricEntry[],
+  method: MetricDefinition["aggregation"],
+): number {
   const numbers = entries
-    .map((entry) => (entry.value === true ? 1 : entry.value === false ? 0 : Number(entry.value)))
+    .map((entry) =>
+      entry.value === true
+        ? 1
+        : entry.value === false
+          ? 0
+          : Number(entry.value),
+    )
     .filter(Number.isFinite);
   if (!numbers.length) return 0;
   switch (method) {
-    case 'latest':
+    case "latest":
       return numbers[numbers.length - 1];
-    case 'average':
+    case "average":
       return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
-    case 'max':
+    case "max":
       return Math.max(...numbers);
-    case 'min':
+    case "min":
       return Math.min(...numbers);
     default:
       return numbers.reduce((sum, value) => sum + value, 0);
@@ -29,29 +42,55 @@ export function metricValue(
   localDate: string,
   stack: string[] = [],
 ): number {
-  if (metric.dataType === 'photo') {
-    return state.photos.filter((photo) => photo.userId === userId && photo.localDate === localDate).length;
+  if (metric.id === "overall_score")
+    return dailyScore(state, userId, localDate);
+  if (metric.dataType === "photo") {
+    return state.photos.filter(
+      (photo) => photo.userId === userId && photo.localDate === localDate,
+    ).length;
   }
-  if (metric.dataType !== 'calculated') {
+  if (metric.dataType !== "calculated") {
     const sameDay = state.entries
-      .filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate === localDate)
+      .filter(
+        (entry) =>
+          entry.metricId === metric.id &&
+          entry.userId === userId &&
+          entry.localDate === localDate,
+      )
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
     if (sameDay.length) return aggregate(sameDay, metric.aggregation);
-    if(metric.stepFallback){
-      const steps=state.metrics.find((candidate)=>candidate.healthMapping?.dataType==='steps'&&candidate.healthMapping.field==='value');
-      const stepCount=steps?metricValue(state,steps,userId,localDate,[...stack,metric.id]):0;
-      const weight=state.energyProfiles?.[userId]?.weightKg??state.settings.energyProfile.weightKg??70;
-      return Math.round(uncoveredStepActivity(state,userId,localDate,stepCount,weight));
+    if (metric.stepFallback) {
+      const steps = state.metrics.find(
+        (candidate) =>
+          candidate.healthMapping?.dataType === "steps" &&
+          candidate.healthMapping.field === "value",
+      );
+      const stepCount = steps
+        ? metricValue(state, steps, userId, localDate, [...stack, metric.id])
+        : 0;
+      const weight =
+        state.energyProfiles?.[userId]?.weightKg ??
+        state.settings.energyProfile.weightKg ??
+        70;
+      return Math.round(
+        uncoveredStepActivity(state, userId, localDate, stepCount, weight),
+      );
     }
-    if(metric.aggregation!=='latest')return 0;
+    if (metric.aggregation !== "latest") return 0;
     const carried = state.entries
-      .filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate <= localDate)
+      .filter(
+        (entry) =>
+          entry.metricId === metric.id &&
+          entry.userId === userId &&
+          entry.localDate <= localDate,
+      )
       .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
-    return carried ? aggregate([carried], 'latest') : 0;
+    return carried ? aggregate([carried], "latest") : 0;
   }
 
   if (!metric.formula) return 0;
-  if (stack.includes(metric.id)) throw new FormulaError(`Circular formula involving “${metric.name}”`);
+  if (stack.includes(metric.id))
+    throw new FormulaError(`Circular formula involving “${metric.name}”`);
 
   const variables: Record<string, number> = energyFormulaVariables(
     state.energyProfiles?.[userId] ?? state.settings.energyProfile,
@@ -59,17 +98,102 @@ export function metricValue(
   );
   for (const identifier of formulaIdentifiers(metric.formula)) {
     if (identifier in variables) continue;
-    const dependency = state.metrics.find((candidate) => candidate.id === identifier);
+    const dependency = state.metrics.find(
+      (candidate) => candidate.id === identifier,
+    );
     if (dependency) {
-      variables[identifier] = metricValue(state, dependency, userId, localDate, [...stack, metric.id]);
+      variables[identifier] = metricValue(
+        state,
+        dependency,
+        userId,
+        localDate,
+        [...stack, metric.id],
+      );
     }
   }
 
   return evaluateFormula(metric.formula, variables);
 }
 
-function uncoveredStepActivity(state:AppState,userId:string,localDate:string,steps:number,weightKg:number){
-  const day=state.entries.filter((entry)=>entry.userId===userId&&entry.localDate===localDate);const workoutIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='value').map((item)=>item.id);const distanceIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='distance_km').map((item)=>item.id);const durationIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='duration_minutes').map((item)=>item.id);const calorieIds=state.metrics.filter((item)=>item.healthMapping?.dataType==='workouts'&&item.healthMapping.field==='active_calories').map((item)=>item.id);const sessions=day.filter((entry)=>workoutIds.includes(entry.metricId)&&/(walk|run|hike|treadmill)/i.test(entry.label??''));let covered=0;for(const sourceId of new Set(sessions.map((entry)=>entry.sourceRecordId).filter(Boolean))){const label=sessions.find((entry)=>entry.sourceRecordId===sourceId)?.label??'';const running=/(run|treadmill)/i.test(label);const distance=Math.max(0,...day.filter((entry)=>entry.sourceRecordId===sourceId&&distanceIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));const duration=Math.max(0,...day.filter((entry)=>entry.sourceRecordId===sourceId&&durationIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));covered+=(distance||duration/60*(running?9:5))*(running?1000:1312);}const known=day.filter((entry)=>calorieIds.includes(entry.metricId)).reduce((sum,entry)=>sum+Number(entry.value||0),0);const uncovered=Math.max(0,steps-covered);return known+uncovered*.000762*.53*Math.max(35,weightKg);
+function uncoveredStepActivity(
+  state: AppState,
+  userId: string,
+  localDate: string,
+  steps: number,
+  weightKg: number,
+) {
+  const day = state.entries.filter(
+    (entry) => entry.userId === userId && entry.localDate === localDate,
+  );
+  const workoutIds = state.metrics
+    .filter(
+      (item) =>
+        item.healthMapping?.dataType === "workouts" &&
+        item.healthMapping.field === "value",
+    )
+    .map((item) => item.id);
+  const distanceIds = state.metrics
+    .filter(
+      (item) =>
+        item.healthMapping?.dataType === "workouts" &&
+        item.healthMapping.field === "distance_km",
+    )
+    .map((item) => item.id);
+  const durationIds = state.metrics
+    .filter(
+      (item) =>
+        item.healthMapping?.dataType === "workouts" &&
+        item.healthMapping.field === "duration_minutes",
+    )
+    .map((item) => item.id);
+  const calorieIds = state.metrics
+    .filter(
+      (item) =>
+        item.healthMapping?.dataType === "workouts" &&
+        item.healthMapping.field === "active_calories",
+    )
+    .map((item) => item.id);
+  const sessions = day.filter(
+    (entry) =>
+      workoutIds.includes(entry.metricId) &&
+      /(walk|run|hike|treadmill)/i.test(entry.label ?? ""),
+  );
+  let covered = 0;
+  for (const sourceId of new Set(
+    sessions.map((entry) => entry.sourceRecordId).filter(Boolean),
+  )) {
+    const label =
+      sessions.find((entry) => entry.sourceRecordId === sourceId)?.label ?? "";
+    const running = /(run|treadmill)/i.test(label);
+    const distance = Math.max(
+      0,
+      ...day
+        .filter(
+          (entry) =>
+            entry.sourceRecordId === sourceId &&
+            distanceIds.includes(entry.metricId),
+        )
+        .map((entry) => Number(entry.value || 0)),
+    );
+    const duration = Math.max(
+      0,
+      ...day
+        .filter(
+          (entry) =>
+            entry.sourceRecordId === sourceId &&
+            durationIds.includes(entry.metricId),
+        )
+        .map((entry) => Number(entry.value || 0)),
+    );
+    covered +=
+      (distance || (duration / 60) * (running ? 9 : 5)) *
+      (running ? 1000 : 1312);
+  }
+  const known = day
+    .filter((entry) => calorieIds.includes(entry.metricId))
+    .reduce((sum, entry) => sum + Number(entry.value || 0), 0);
+  const uncovered = Math.max(0, steps - covered);
+  return known + uncovered * 0.000762 * 0.53 * Math.max(35, weightKg);
 }
 
 export function safeMetricValue(
@@ -85,18 +209,41 @@ export function safeMetricValue(
   }
 }
 
-export function effectiveGoalTarget(state: AppState, metric: MetricDefinition, userId: string, localDate: string): number {
-  if (metric.id !== 'food') return metric.goal.target;
-  const exercise = state.metrics.find((candidate) => candidate.id === 'exercise');
-  const activeEnergy = exercise ? safeMetricValue(state, exercise, userId, localDate) : 0;
-  return dailyFoodGoal(metric.goal.target, activeEnergy, state.settings.foodGoalMode ?? 'activity_adjusted');
+export function effectiveGoalTarget(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+): number {
+  if (metric.id !== "food") return metric.goal.target;
+  const exercise = state.metrics.find(
+    (candidate) => candidate.id === "exercise",
+  );
+  const activeEnergy = exercise
+    ? safeMetricValue(state, exercise, userId, localDate)
+    : 0;
+  return dailyFoodGoal(
+    metric.goal.target,
+    activeEnergy,
+    state.settings.foodGoalMode ?? "activity_adjusted",
+  );
 }
 
-export function latestTextValue(state: AppState, metricId: string, userId: string, localDate: string): string {
+export function latestTextValue(
+  state: AppState,
+  metricId: string,
+  userId: string,
+  localDate: string,
+): string {
   const match = state.entries
-    .filter((entry) => entry.metricId === metricId && entry.userId === userId && entry.localDate === localDate)
+    .filter(
+      (entry) =>
+        entry.metricId === metricId &&
+        entry.userId === userId &&
+        entry.localDate === localDate,
+    )
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
-  return typeof match?.value === 'string' ? match.value : '';
+  return typeof match?.value === "string" ? match.value : "";
 }
 
 export function averageMetricValue(
@@ -106,7 +253,12 @@ export function averageMetricValue(
   dates: string[],
 ): number {
   if (!dates.length) return 0;
-  return dates.reduce((sum, date) => sum + safeMetricValue(state, metric, userId, date), 0) / dates.length;
+  return (
+    dates.reduce(
+      (sum, date) => sum + safeMetricValue(state, metric, userId, date),
+      0,
+    ) / dates.length
+  );
 }
 
 export type SharedMetricResult = {
@@ -115,7 +267,7 @@ export type SharedMetricResult = {
   label: string;
 };
 
-type VisibilityMode = 'exact' | 'status' | 'private';
+type VisibilityMode = "exact" | "status" | "private";
 
 export function sharedMetricResult(
   state: AppState,
@@ -124,117 +276,276 @@ export function sharedMetricResult(
   viewerUserId: string,
   localDate: string,
 ): SharedMetricResult {
-  const value = metric.dataType === 'photo' && subjectUserId !== viewerUserId
-    ? state.photos.filter((photo) => photo.userId === subjectUserId && photo.localDate === localDate && photo.visibility === 'group').length
-    : safeMetricValue(state, metric, subjectUserId, localDate);
-  if (subjectUserId === viewerUserId) return { mode: 'exact', value, label: formatMetricValue(metric, value) };
+  const value =
+    metric.dataType === "photo" && subjectUserId !== viewerUserId
+      ? state.photos.filter(
+          (photo) =>
+            photo.userId === subjectUserId &&
+            photo.localDate === localDate &&
+            photo.visibility === "group",
+        ).length
+      : safeMetricValue(state, metric, subjectUserId, localDate);
+  if (subjectUserId === viewerUserId)
+    return { mode: "exact", value, label: formatMetricValue(metric, value) };
 
   const entries = state.entries.filter(
-    (entry) => entry.metricId === metric.id && entry.userId === subjectUserId && entry.localDate === localDate,
+    (entry) =>
+      entry.metricId === metric.id &&
+      entry.userId === subjectUserId &&
+      entry.localDate === localDate,
   );
-  const sharedStatus = state.dailyMetricStatuses?.find((status) =>
-    status.groupId === state.group.id && status.metricId === metric.id && status.userId === subjectUserId && status.localDate === localDate,
+  const sharedStatus = state.dailyMetricStatuses?.find(
+    (status) =>
+      status.groupId === state.group.id &&
+      status.metricId === metric.id &&
+      status.userId === subjectUserId &&
+      status.localDate === localDate,
   );
-  const photoEntries = metric.dataType === 'photo'
-    ? state.photos.filter((photo) => photo.userId === subjectUserId && photo.localDate === localDate)
-    : [];
-  const visibility = metric.dataType === 'photo'
-    ? photoEntries.some((photo) => photo.visibility === 'group') ? 'group' : 'private'
-    : metric.dataType === 'calculated'
-    ? metric.defaultVisibility
-    : entries.some((entry) => entry.visibility === 'group')
-      ? 'group'
-      : entries.some((entry) => entry.visibility === 'status')
-        ? 'status'
-        : 'private';
+  const photoEntries =
+    metric.dataType === "photo"
+      ? state.photos.filter(
+          (photo) =>
+            photo.userId === subjectUserId && photo.localDate === localDate,
+        )
+      : [];
+  const visibility =
+    metric.dataType === "photo"
+      ? photoEntries.some((photo) => photo.visibility === "group")
+        ? "group"
+        : "private"
+      : metric.dataType === "calculated"
+        ? metric.defaultVisibility
+        : entries.some((entry) => entry.visibility === "group")
+          ? "group"
+          : entries.some((entry) => entry.visibility === "status")
+            ? "status"
+            : "private";
 
-  if (subjectUserId !== viewerUserId && !entries.length && sharedStatus) return { mode: 'status', value: 0, label: sharedStatus.goalReached ? 'Goal met' : 'In progress' };
-  if (visibility === 'group') return { mode: 'exact', value, label: formatMetricValue(metric, value) };
-  if (visibility === 'status') {
-    return { mode: 'status', value, label: goalReached(metric, value, effectiveGoalTarget(state, metric, subjectUserId, localDate)) ? 'Goal met' : 'In progress' };
+  if (subjectUserId !== viewerUserId && !entries.length && sharedStatus)
+    return {
+      mode: "status",
+      value: 0,
+      label: sharedStatus.goalReached ? "Goal met" : "In progress",
+    };
+  if (visibility === "group")
+    return { mode: "exact", value, label: formatMetricValue(metric, value) };
+  if (visibility === "status") {
+    return {
+      mode: "status",
+      value,
+      label: goalReached(
+        metric,
+        value,
+        effectiveGoalTarget(state, metric, subjectUserId, localDate),
+      )
+        ? "Goal met"
+        : "In progress",
+    };
   }
-  return { mode: 'private', value, label: 'Private' };
+  return { mode: "private", value, label: "Private" };
 }
 
-export function goalProgress(metric: MetricDefinition, value: number, targetOverride = metric.goal.target): number {
-  if(metric.goalEnabled===false)return 0;
-  if(metric.goalRange){if(value<=0)return 0;if(value>=metric.goalRange.min&&value<=metric.goalRange.max)return 1;const edge=value<metric.goalRange.min?metric.goalRange.min:metric.goalRange.max;return Math.max(0,1-Math.abs(value-edge)/Math.max(Math.abs(edge),1));}
+export function goalProgress(
+  metric: MetricDefinition,
+  value: number,
+  targetOverride = metric.goal.target,
+): number {
+  if (metric.goalEnabled === false) return 0;
+  if (metric.goalRange) {
+    if (value <= 0) return 0;
+    if (value >= metric.goalRange.min && value <= metric.goalRange.max)
+      return 1;
+    const edge =
+      value < metric.goalRange.min
+        ? metric.goalRange.min
+        : metric.goalRange.max;
+    return Math.max(
+      0,
+      1 - Math.abs(value - edge) / Math.max(Math.abs(edge), 1),
+    );
+  }
   const target = Math.max(targetOverride, 0.0001);
   switch (metric.goal.kind) {
-    case 'at_most':
+    case "at_most":
       if (value <= 0) return 0;
       return value <= target ? 1 : Math.max(0, 1 - (value - target) / target);
-    case 'exact':
+    case "exact":
       return Math.max(0, 1 - Math.abs(value - target) / target);
-    case 'complete':
+    case "complete":
       return value > 0 ? 1 : 0;
     default:
       return Math.max(0, value / target);
   }
 }
 
-export function goalReached(metric: MetricDefinition, value: number, targetOverride = metric.goal.target): boolean {
-  if(metric.goalEnabled===false)return false;
-  if(metric.goalRange)return value>=metric.goalRange.min&&value<=metric.goalRange.max;
+export function goalReached(
+  metric: MetricDefinition,
+  value: number,
+  targetOverride = metric.goal.target,
+): boolean {
+  if (metric.goalEnabled === false) return false;
+  if (metric.goalRange)
+    return value >= metric.goalRange.min && value <= metric.goalRange.max;
   switch (metric.goal.kind) {
-    case 'at_most':
+    case "at_most":
       return value <= targetOverride && value > 0;
-    case 'exact':
+    case "exact":
       return value === targetOverride;
-    case 'complete':
+    case "complete":
       return value > 0;
     default:
       return value >= targetOverride;
   }
 }
 
-export function dailyScore(state: AppState, userId: string, localDate: string): number {
-  const enabled = state.metrics.filter((metric) => metric.goalEnabled!==false&&metric.scoreWeight > 0 && metric.dataType !== 'text' && metric.activeFrom <= localDate && (metric.id !== 'deficit' || state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===localDate)));
-  const totalWeight = enabled.reduce((sum, metric) => sum + metric.scoreWeight, 0) || 1;
+export function dailyScore(
+  state: AppState,
+  userId: string,
+  localDate: string,
+): number {
+  const groupMetrics = state.group.metricConfiguration ?? [];
+  const enabled = groupMetrics.filter(
+    (metric) =>
+      metric.goalEnabled !== false &&
+      metric.scoreWeight > 0 &&
+      metric.dataType !== "text" &&
+      metric.activeFrom <= localDate &&
+      (metric.id !== "deficit" ||
+        state.entries.some(
+          (entry) =>
+            entry.userId === userId &&
+            entry.metricId === "food" &&
+            entry.localDate === localDate,
+        )),
+  );
+  const totalWeight =
+    enabled.reduce((sum, metric) => sum + metric.scoreWeight, 0) || 1;
   return enabled.reduce((score, metric) => {
-    const status = state.dailyMetricStatuses?.find((item) => item.groupId === state.group.id && item.metricId === metric.id && item.userId === userId && item.localDate === localDate);
-    const hasVisibleValue = metric.dataType === 'photo'
-      ? state.photos.some((photo) => photo.userId === userId && photo.localDate === localDate && photo.visibility === 'group')
-      : state.entries.some((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate === localDate && entry.visibility === 'group');
+    const status = state.dailyMetricStatuses?.find(
+      (item) =>
+        item.groupId === state.group.id &&
+        item.metricId === metric.id &&
+        item.userId === userId &&
+        item.localDate === localDate,
+    );
+    const hasVisibleValue =
+      metric.dataType === "photo"
+        ? state.photos.some(
+            (photo) =>
+              photo.userId === userId &&
+              photo.localDate === localDate &&
+              photo.visibility === "group",
+          )
+        : state.entries.some(
+            (entry) =>
+              entry.metricId === metric.id &&
+              entry.userId === userId &&
+              entry.localDate === localDate &&
+              entry.visibility === "group",
+          );
     if (status && !hasVisibleValue && userId !== state.currentUserId) {
-      return score + (metric.scoreWeight / totalWeight) * Math.min(Math.max(status.scoreContribution, 0), 100);
+      return (
+        score +
+        (metric.scoreWeight / totalWeight) *
+          Math.min(Math.max(status.scoreContribution, 0), 100)
+      );
     }
     let value = 0;
-    if (metric.dataType === 'calculated') {
-      value = metric.defaultVisibility === 'private' ? 0 : safeMetricValue(state, metric, userId, localDate);
-    } else if (metric.dataType === 'photo') {
-      value = state.photos.filter((photo) => photo.userId === userId && photo.localDate === localDate && photo.visibility === 'group').length;
+    if (metric.dataType === "calculated") {
+      value =
+        metric.defaultVisibility === "private"
+          ? 0
+          : safeMetricValue(state, metric, userId, localDate);
+    } else if (metric.dataType === "photo") {
+      value = state.photos.filter(
+        (photo) =>
+          photo.userId === userId &&
+          photo.localDate === localDate &&
+          photo.visibility === "group",
+      ).length;
     } else {
       value = aggregate(
         state.entries
-          .filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate === localDate && entry.visibility !== 'private')
+          .filter(
+            (entry) =>
+              entry.metricId === metric.id &&
+              entry.userId === userId &&
+              entry.localDate === localDate &&
+              entry.visibility !== "private",
+          )
           .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)),
         metric.aggregation,
       );
     }
-    const cappedProgress = Math.min(goalProgress(metric, value, effectiveGoalTarget(state, metric, userId, localDate)), 1);
+    const cappedProgress = Math.min(
+      goalProgress(
+        metric,
+        value,
+        effectiveGoalTarget(state, metric, userId, localDate),
+      ),
+      1,
+    );
     return score + (metric.scoreWeight / totalWeight) * cappedProgress * 100;
   }, 0);
 }
 
-export function isMetricTrackedOnDate(state: AppState, metric: MetricDefinition, localDate: string): boolean {
+export function isMetricTrackedOnDate(
+  state: AppState,
+  metric: MetricDefinition,
+  localDate: string,
+): boolean {
   const periods = state.trackedGoalPeriods?.[metric.id];
   if (!periods) return metric.sections.today && metric.activeFrom <= localDate;
-  return periods.some((period) => period.from <= localDate && (!period.to || localDate <= period.to));
+  return periods.some(
+    (period) =>
+      period.from <= localDate && (!period.to || localDate <= period.to),
+  );
 }
 
-export function trackedGoalSummary(state: AppState, userId: string, localDate: string, metricIds?: string[]) {
-  const metrics = state.metrics.filter((metric) =>
-    metric.goalEnabled!==false&&metric.activeFrom <= localDate && metric.dataType !== 'text' &&
-    (metric.id !== 'deficit' || state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===localDate)) &&
-    (metricIds ? metricIds.includes(metric.id) : isMetricTrackedOnDate(state, metric, localDate)),
+export function trackedGoalSummary(
+  state: AppState,
+  userId: string,
+  localDate: string,
+  metricIds?: string[],
+) {
+  const metrics = state.metrics.filter(
+    (metric) =>
+      metric.goalEnabled !== false &&
+      metric.activeFrom <= localDate &&
+      metric.dataType !== "text" &&
+      (metric.id !== "deficit" ||
+        state.entries.some(
+          (entry) =>
+            entry.userId === userId &&
+            entry.metricId === "food" &&
+            entry.localDate === localDate,
+        )) &&
+      (metricIds
+        ? metricIds.includes(metric.id)
+        : isMetricTrackedOnDate(state, metric, localDate)),
   );
-  const met = metrics.filter((metric) => goalReached(metric, safeMetricValue(state, metric, userId, localDate), effectiveGoalTarget(state, metric, userId, localDate)));
-  return { met: met.length, total: metrics.length, allMet: metrics.length > 0 && met.length === metrics.length, metrics };
+  const met = metrics.filter((metric) =>
+    goalReached(
+      metric,
+      safeMetricValue(state, metric, userId, localDate),
+      effectiveGoalTarget(state, metric, userId, localDate),
+    ),
+  );
+  return {
+    met: met.length,
+    total: metrics.length,
+    allMet: metrics.length > 0 && met.length === metrics.length,
+    metrics,
+  };
 }
 
 export type DeficitRealityCheck = {
-  status: 'aligned' | 'reported_ahead' | 'scale_ahead' | 'insufficient' | 'noise';
+  status:
+    | "aligned"
+    | "reported_ahead"
+    | "scale_ahead"
+    | "insufficient"
+    | "noise";
   actualDailyDeficit: number;
   reportedDailyDeficit: number;
   days: number;
@@ -243,48 +554,130 @@ export type DeficitRealityCheck = {
   toDate?: string;
 };
 
-export function deficitRealityCheck(state: AppState, userId: string): DeficitRealityCheck {
+export function deficitRealityCheck(
+  state: AppState,
+  userId: string,
+): DeficitRealityCheck {
   const latest = state.entries
-    .filter((entry) => entry.metricId === 'weight' && entry.userId === userId && Number.isFinite(Number(entry.value)))
+    .filter(
+      (entry) =>
+        entry.metricId === "weight" &&
+        entry.userId === userId &&
+        Number.isFinite(Number(entry.value)),
+    )
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
-  return latest ? deficitRealityCheckAtDate(state, userId, latest.localDate) : emptyRealityCheck();
+  return latest
+    ? deficitRealityCheckAtDate(state, userId, latest.localDate)
+    : emptyRealityCheck();
 }
 
 function emptyRealityCheck(): DeficitRealityCheck {
-  return { status: 'insufficient', actualDailyDeficit: 0, reportedDailyDeficit: 0, days: 0, weightChangeKg: 0 };
+  return {
+    status: "insufficient",
+    actualDailyDeficit: 0,
+    reportedDailyDeficit: 0,
+    days: 0,
+    weightChangeKg: 0,
+  };
 }
 
-export function deficitRealityCheckAtDate(state: AppState, userId: string, localDate: string): DeficitRealityCheck {
-  const weight = state.metrics.find((metric) => metric.id === 'weight');
-  const deficit = state.metrics.find((metric) => metric.id === 'deficit');
+export function deficitRealityCheckAtDate(
+  state: AppState,
+  userId: string,
+  localDate: string,
+): DeficitRealityCheck {
+  const weight = state.metrics.find((metric) => metric.id === "weight");
+  const deficit = state.metrics.find((metric) => metric.id === "deficit");
   if (!weight || !deficit) return emptyRealityCheck();
   const weightEntries = state.entries
-    .filter((entry) => entry.metricId === weight.id && entry.userId === userId && entry.localDate <= localDate && Number.isFinite(Number(entry.value)))
+    .filter(
+      (entry) =>
+        entry.metricId === weight.id &&
+        entry.userId === userId &&
+        entry.localDate <= localDate &&
+        Number.isFinite(Number(entry.value)),
+    )
     .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
-  const currentIndex = weightEntries.map((entry) => entry.localDate).lastIndexOf(localDate);
+  const currentIndex = weightEntries
+    .map((entry) => entry.localDate)
+    .lastIndexOf(localDate);
   if (currentIndex < 1) return emptyRealityCheck();
   const previous = weightEntries[currentIndex - 1];
   const current = weightEntries[currentIndex];
-  const days = Math.max(0.5, (new Date(current.recordedAt).getTime() - new Date(previous.recordedAt).getTime()) / 86400000);
+  const days = Math.max(
+    0.5,
+    (new Date(current.recordedAt).getTime() -
+      new Date(previous.recordedAt).getTime()) /
+      86400000,
+  );
   const weightChangeKg = Number(previous.value) - Number(current.value);
   const dateCursor = new Date(`${previous.localDate}T12:00:00`);
-  if (previous.localDate !== current.localDate) dateCursor.setDate(dateCursor.getDate() + 1);
+  if (previous.localDate !== current.localDate)
+    dateCursor.setDate(dateCursor.getDate() + 1);
   const reported: number[] = [];
   while (dateCursor <= new Date(`${current.localDate}T12:00:00`)) {
-    const key = `${dateCursor.getFullYear()}-${String(dateCursor.getMonth() + 1).padStart(2, '0')}-${String(dateCursor.getDate()).padStart(2, '0')}`;
-    if(state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===key))reported.push(safeMetricValue(state, deficit, userId, key));
+    const key = `${dateCursor.getFullYear()}-${String(dateCursor.getMonth() + 1).padStart(2, "0")}-${String(dateCursor.getDate()).padStart(2, "0")}`;
+    if (
+      state.entries.some(
+        (entry) =>
+          entry.userId === userId &&
+          entry.metricId === "food" &&
+          entry.localDate === key,
+      )
+    )
+      reported.push(safeMetricValue(state, deficit, userId, key));
     dateCursor.setDate(dateCursor.getDate() + 1);
   }
-  const reportedDailyDeficit = reported.reduce((sum, value) => sum + value, 0) / Math.max(reported.length, 1);
-  const actualDailyDeficit = weightChangeKg * KCAL_PER_KG_ESTIMATE / days * ((state.settings.weightDirection??'lose')==='lose'?1:-1);
-  if(!reported.length)return{status:'insufficient',actualDailyDeficit,reportedDailyDeficit:0,days,weightChangeKg,fromDate:previous.localDate,toDate:current.localDate};
-  if (Math.abs(weightChangeKg) < 0.3) return { status: 'noise', actualDailyDeficit, reportedDailyDeficit, days, weightChangeKg, fromDate: previous.localDate, toDate: current.localDate };
-  const ratio = reportedDailyDeficit > 0 ? actualDailyDeficit / reportedDailyDeficit : 0;
-  const status = ratio >= 0.6 && ratio <= 1.4 ? 'aligned' : ratio < 0.6 ? 'reported_ahead' : 'scale_ahead';
-  return { status, actualDailyDeficit, reportedDailyDeficit, days, weightChangeKg, fromDate: previous.localDate, toDate: current.localDate };
+  const reportedDailyDeficit =
+    reported.reduce((sum, value) => sum + value, 0) /
+    Math.max(reported.length, 1);
+  const actualDailyDeficit =
+    ((weightChangeKg * KCAL_PER_KG_ESTIMATE) / days) *
+    ((state.settings.weightDirection ?? "lose") === "lose" ? 1 : -1);
+  if (!reported.length)
+    return {
+      status: "insufficient",
+      actualDailyDeficit,
+      reportedDailyDeficit: 0,
+      days,
+      weightChangeKg,
+      fromDate: previous.localDate,
+      toDate: current.localDate,
+    };
+  if (Math.abs(weightChangeKg) < 0.3)
+    return {
+      status: "noise",
+      actualDailyDeficit,
+      reportedDailyDeficit,
+      days,
+      weightChangeKg,
+      fromDate: previous.localDate,
+      toDate: current.localDate,
+    };
+  const ratio =
+    reportedDailyDeficit > 0 ? actualDailyDeficit / reportedDailyDeficit : 0;
+  const status =
+    ratio >= 0.6 && ratio <= 1.4
+      ? "aligned"
+      : ratio < 0.6
+        ? "reported_ahead"
+        : "scale_ahead";
+  return {
+    status,
+    actualDailyDeficit,
+    reportedDailyDeficit,
+    days,
+    weightChangeKg,
+    fromDate: previous.localDate,
+    toDate: current.localDate,
+  };
 }
 
-export function rankedMembers(state: AppState, metric: MetricDefinition, localDate: string) {
+export function rankedMembers(
+  state: AppState,
+  metric: MetricDefinition,
+  localDate: string,
+) {
   const rows = state.group.members.map((member) => ({
     member,
     value: safeMetricValue(state, metric, member.id, localDate),
@@ -293,51 +686,114 @@ export function rankedMembers(state: AppState, metric: MetricDefinition, localDa
   return rows.sort((a, b) => {
     if (a.value === 0 && b.value !== 0) return 1;
     if (b.value === 0 && a.value !== 0) return -1;
-    if (metric.rankingDirection === 'lower') return a.value - b.value;
-    if (metric.rankingDirection === 'closest') {
-      return Math.abs(a.value - effectiveGoalTarget(state, metric, a.member.id, localDate)) - Math.abs(b.value - effectiveGoalTarget(state, metric, b.member.id, localDate));
+    if (metric.rankingDirection === "lower") return a.value - b.value;
+    if (metric.rankingDirection === "closest") {
+      return (
+        Math.abs(
+          a.value - effectiveGoalTarget(state, metric, a.member.id, localDate),
+        ) -
+        Math.abs(
+          b.value - effectiveGoalTarget(state, metric, b.member.id, localDate),
+        )
+      );
     }
     return b.value - a.value;
   });
 }
 
-export function goalRemainingLabel(state: AppState, metric: MetricDefinition, userId: string, localDate: string): string | undefined {
-  if(metric.goalEnabled===false)return undefined;
-  if (metric.dataType === 'text' || metric.dataType === 'boolean' || metric.dataType === 'photo') return undefined;
+export function goalRemainingLabel(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+): string | undefined {
+  if (metric.goalEnabled === false) return undefined;
+  if (
+    metric.dataType === "text" ||
+    metric.dataType === "boolean" ||
+    metric.dataType === "photo"
+  )
+    return undefined;
   const value = safeMetricValue(state, metric, userId, localDate);
   const target = effectiveGoalTarget(state, metric, userId, localDate);
-  if (metric.id === 'exercise') {
-    const deficit = state.metrics.find((candidate) => candidate.id === 'deficit');
+  if (metric.id === "exercise") {
+    const deficit = state.metrics.find(
+      (candidate) => candidate.id === "deficit",
+    );
     if (deficit) {
       const deficitValue = safeMetricValue(state, deficit, userId, localDate);
-      const deficitTarget = effectiveGoalTarget(state, deficit, userId, localDate);
+      const deficitTarget = effectiveGoalTarget(
+        state,
+        deficit,
+        userId,
+        localDate,
+      );
       const rescueBurn = Math.max(0, deficitTarget - deficitValue);
       if (rescueBurn > 0) {
         return `${formatMetricValue(metric, rescueBurn)} more activity would reach today’s deficit goal · a walk or run can help`;
       }
     }
   }
-  if (metric.id === 'weight') {
-    const gaining=(state.settings.weightDirection??'lose')==='gain';
-    const remaining = Math.max(0, gaining?target-value:value-target);
-    const weights = state.entries.filter((entry) => entry.metricId === metric.id && entry.userId === userId && entry.localDate <= localDate && Number.isFinite(Number(entry.value))).sort((a,b)=>b.localDate.localeCompare(a.localDate));
+  if (metric.id === "weight") {
+    const gaining = (state.settings.weightDirection ?? "lose") === "gain";
+    const remaining = Math.max(0, gaining ? target - value : value - target);
+    const weights = state.entries
+      .filter(
+        (entry) =>
+          entry.metricId === metric.id &&
+          entry.userId === userId &&
+          entry.localDate <= localDate &&
+          Number.isFinite(Number(entry.value)),
+      )
+      .sort((a, b) => b.localDate.localeCompare(a.localDate));
     const current = weights[0];
-    const older = current ? weights.find((entry) => entry.localDate <= new Date(new Date(`${current.localDate}T12:00:00`).getTime() - 6 * 86400000).toISOString().slice(0,10)) : undefined;
-    const elapsed = current && older ? Math.max(1,(new Date(`${current.localDate}T12:00:00`).getTime()-new Date(`${older.localDate}T12:00:00`).getTime())/86400000) : 0;
-    const pace = current && older && elapsed ? (Number(older.value)-Number(current.value))/elapsed*7 : 0;
-    return `${formatMetricValue(metric, remaining)} left to ${gaining?'gain':'lose'}${pace!==0?` · ~${Math.abs(pace).toFixed(1)} kg/week pace`:' · pace pending more weigh-ins'}`;
+    const older = current
+      ? weights.find(
+          (entry) =>
+            entry.localDate <=
+            new Date(
+              new Date(`${current.localDate}T12:00:00`).getTime() -
+                6 * 86400000,
+            )
+              .toISOString()
+              .slice(0, 10),
+        )
+      : undefined;
+    const elapsed =
+      current && older
+        ? Math.max(
+            1,
+            (new Date(`${current.localDate}T12:00:00`).getTime() -
+              new Date(`${older.localDate}T12:00:00`).getTime()) /
+              86400000,
+          )
+        : 0;
+    const pace =
+      current && older && elapsed
+        ? ((Number(older.value) - Number(current.value)) / elapsed) * 7
+        : 0;
+    return `${formatMetricValue(metric, remaining)} left to ${gaining ? "gain" : "lose"}${pace !== 0 ? ` · ~${Math.abs(pace).toFixed(1)} kg/week pace` : " · pace pending more weigh-ins"}`;
   }
-  if (metric.goal.kind === 'at_least') {
+  if (metric.goal.kind === "at_least") {
     const remaining = Math.max(0, target - value);
-    return remaining > 0 ? `${formatMetricValue(metric, remaining)} left · goal ${formatMetricValue(metric, target)}` : `Goal reached · ${formatMetricValue(metric, value-target)} above target`;
+    return remaining > 0
+      ? `${formatMetricValue(metric, remaining)} left · goal ${formatMetricValue(metric, target)}`
+      : `Goal reached · ${formatMetricValue(metric, value - target)} above target`;
   }
-  if (metric.goal.kind === 'at_most') {
+  if (metric.goal.kind === "at_most") {
     const remaining = target - value;
-    const mode = metric.id === 'food' && state.settings.foodGoalMode !== 'fixed' ? ' · adjusts with active energy' : '';
-    return remaining >= 0 ? `${formatMetricValue(metric, remaining)} remaining · goal ${formatMetricValue(metric, target)}${mode}` : `${formatMetricValue(metric, Math.abs(remaining))} over goal${mode}`;
+    const mode =
+      metric.id === "food" && state.settings.foodGoalMode !== "fixed"
+        ? " · adjusts with active energy"
+        : "";
+    return remaining >= 0
+      ? `${formatMetricValue(metric, remaining)} remaining · goal ${formatMetricValue(metric, target)}${mode}`
+      : `${formatMetricValue(metric, Math.abs(remaining))} over goal${mode}`;
   }
-  const difference = Math.abs(target-value);
-  return difference > 0 ? `${formatMetricValue(metric,difference)} from target · goal ${formatMetricValue(metric,target)}` : 'Exact goal reached';
+  const difference = Math.abs(target - value);
+  return difference > 0
+    ? `${formatMetricValue(metric, difference)} from target · goal ${formatMetricValue(metric, target)}`
+    : "Exact goal reached";
 }
 
 export type WeeklyDeficitBalance = {
@@ -349,8 +805,12 @@ export type WeeklyDeficitBalance = {
 };
 
 /** Positive means ahead of the cumulative deficit target; negative means there is a weekly shortfall. */
-export function weeklyDeficitBalance(state: AppState, userId: string, localDate: string): WeeklyDeficitBalance {
-  const deficit = state.metrics.find((metric) => metric.id === 'deficit');
+export function weeklyDeficitBalance(
+  state: AppState,
+  userId: string,
+  localDate: string,
+): WeeklyDeficitBalance {
+  const deficit = state.metrics.find((metric) => metric.id === "deficit");
   const weekday = new Date(`${localDate}T12:00:00`).getDay();
   const mondayOffset = -((weekday + 6) % 7);
   const startDate = dateWithOffsetFrom(localDate, mondayOffset);
@@ -361,18 +821,30 @@ export function weeklyDeficitBalance(state: AppState, userId: string, localDate:
   let days = 0;
   for (let index = 0; index < calendarDays; index += 1) {
     const day = dateWithOffsetFrom(startDate, index);
-    const hasFood=state.entries.some((entry)=>entry.userId===userId&&entry.metricId==='food'&&entry.localDate===day);
-    if(!hasFood)continue;
-    days+=1;
+    const hasFood = state.entries.some(
+      (entry) =>
+        entry.userId === userId &&
+        entry.metricId === "food" &&
+        entry.localDate === day,
+    );
+    if (!hasFood) continue;
+    days += 1;
     actual += safeMetricValue(state, deficit, userId, day);
     target += effectiveGoalTarget(state, deficit, userId, day);
   }
   return { balance: actual - target, actual, target, days, startDate };
 }
 
-export function formatMetricValue(metric: MetricDefinition, value: number): string {
-  if (metric.dataType === 'boolean') return value > 0 ? 'Done' : 'Not yet';
-  if (metric.dataType === 'photo') return `${Math.round(value)} photo${Math.round(value) === 1 ? '' : 's'}`;
-  const rounded = Math.abs(value) >= 1000 ? Math.round(value).toLocaleString() : Number(value.toFixed(1)).toLocaleString();
+export function formatMetricValue(
+  metric: MetricDefinition,
+  value: number,
+): string {
+  if (metric.dataType === "boolean") return value > 0 ? "Done" : "Not yet";
+  if (metric.dataType === "photo")
+    return `${Math.round(value)} photo${Math.round(value) === 1 ? "" : "s"}`;
+  const rounded =
+    Math.abs(value) >= 1000
+      ? Math.round(value).toLocaleString()
+      : Number(value.toFixed(1)).toLocaleString();
   return metric.unit ? `${rounded} ${metric.unit}` : rounded;
 }

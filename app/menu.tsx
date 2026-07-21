@@ -23,13 +23,29 @@ const items = [
     path: "/notifications" as const,
   },
   {
+    label: "Display",
+    detail: "Layout, dark mode, visible tabs and landing page",
+    icon: "phone-portrait-outline" as const,
+    path: "/display-settings" as const,
+  },
+  {
     label: "Groups",
     detail: "Switch, invite, join, or manage group scoring",
     icon: "people-outline" as const,
     path: "/groups" as const,
   },
-  { label: "Quick guide", detail: "Replay the short setup and tutorial", icon: "help-circle-outline" as const, path: "/onboarding" as const },
-  { label: "Advanced settings", detail: "Trackers, calculations, layouts and scoring", icon: "options-outline" as const, path: "/customize" as const },
+  {
+    label: "Quick guide",
+    detail: "Replay the short setup and tutorial",
+    icon: "help-circle-outline" as const,
+    path: "/onboarding" as const,
+  },
+  {
+    label: "Advanced settings",
+    detail: "Trackers, calculations, layouts and scoring",
+    icon: "options-outline" as const,
+    path: "/customize" as const,
+  },
 ];
 
 export default function MenuScreen() {
@@ -52,13 +68,16 @@ export default function MenuScreen() {
       >
         <View style={styles.topRow}>
           <Text style={[styles.brand, { color: accent }]}>NORTH</Text>
-          <Pressable onPress={() => router.back()} style={[styles.close,{backgroundColor:colors.canvas}]}>
+          <Pressable
+            onPress={() => router.back()}
+            style={[styles.close, { backgroundColor: colors.canvas }]}
+          >
             <Ionicons name="close" size={22} color={colors.ink} />
           </Pressable>
         </View>
         <Pressable
           onPress={() => router.replace("/profile")}
-          style={styles.profile}
+          style={[styles.profile, { borderBottomColor: colors.border }]}
         >
           <Avatar
             initials={user.initials}
@@ -67,13 +86,17 @@ export default function MenuScreen() {
             size={48}
           />
           <View style={styles.profileCopy}>
-            <Text style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state, user)}</Text>
+            <Text style={[styles.name, { color: colors.ink }]}>
+              {memberDisplayName(state, user)}
+            </Text>
             {memberOriginalLabel(state, user) ? (
-              <Text style={[styles.original,{color:colors.faint}]}>
+              <Text style={[styles.original, { color: colors.faint }]}>
                 {memberOriginalLabel(state, user)}
               </Text>
             ) : null}
-            <Text style={[styles.meta,{color:colors.muted}]}>My profile · {state.group.name}</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              My profile · {state.group.name}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={19} color={colors.faint} />
         </Pressable>
@@ -84,24 +107,26 @@ export default function MenuScreen() {
               onPress={() => router.replace(item.path as never)}
               style={({ pressed }) => [styles.item, pressed && styles.pressed]}
             >
-              <View style={[styles.icon,{backgroundColor:colors.primarySoft}]}>
+              <View
+                style={[styles.icon, { backgroundColor: colors.primarySoft }]}
+              >
                 <Ionicons name={item.icon} size={21} color={accent} />
               </View>
               <View style={styles.copy}>
-                <Text style={[styles.label,{color:colors.ink}]}>{item.label}</Text>
-                <Text style={[styles.detail,{color:colors.muted}]}>{item.detail}</Text>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  {item.label}
+                </Text>
+                <Text style={[styles.detail, { color: colors.muted }]}>
+                  {item.detail}
+                </Text>
               </View>
-              <Ionicons
-                name="chevron-forward"
-                size={18}
-                color={colors.faint}
-              />
+              <Ionicons name="chevron-forward" size={18} color={colors.faint} />
             </Pressable>
           ))}
         </View>
-        <Text style={[styles.privacy,{color:colors.muted}]}>
-          New items share their values with your group by default. You can
-          make any item or entry private.
+        <Text style={[styles.privacy, { color: colors.muted }]}>
+          New items share their values with your group by default. You can make
+          any item or entry private.
         </Text>
       </SafeAreaView>
     </View>

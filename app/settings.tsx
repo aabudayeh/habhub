@@ -127,9 +127,24 @@ const healthDataTypes: {
     subtitle: "Resting heart-rate readings",
     icon: "pulse-outline",
   },
-  { id: "sleep", title: "Sleep", subtitle: "Sleep sessions and duration", icon: "moon-outline" },
-  { id: "blood_glucose", title: "Blood glucose", subtitle: "Glucose readings", icon: "water-outline" },
-  { id: "menstruation", title: "Cycle", subtitle: "Menstrual cycle entries", icon: "flower-outline" },
+  {
+    id: "sleep",
+    title: "Sleep",
+    subtitle: "Sleep sessions and duration",
+    icon: "moon-outline",
+  },
+  {
+    id: "blood_glucose",
+    title: "Blood glucose",
+    subtitle: "Glucose readings",
+    icon: "water-outline",
+  },
+  {
+    id: "menstruation",
+    title: "Cycle",
+    subtitle: "Menstrual cycle entries",
+    icon: "flower-outline",
+  },
 ];
 
 const statusCopy = {
@@ -148,11 +163,13 @@ export default function SettingsScreen() {
   const cloud = useCloudSync();
   const health = useHealthSync();
   const accent = useGroupAccent();
-  const colors=useAppColors();
+  const colors = useAppColors();
   const [busy, setBusy] = useState<
     "sync" | "pull" | "health" | "signout" | "delete" | null
   >(null);
   const [showDevices, setShowDevices] = useState(false);
+  const [showHealthTypes, setShowHealthTypes] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
 
   async function run(
     kind: typeof busy,
@@ -243,7 +260,9 @@ export default function SettingsScreen() {
               />
             </View>
             <View style={styles.copy}>
-              <Text style={[styles.title,{color:colors.ink}]}>{auth.user?.email}</Text>
+              <Text style={[styles.title, { color: colors.ink }]}>
+                {auth.user?.email}
+              </Text>
               <Text style={styles.meta}>
                 {syncLabel[0]} · {lastSync}
               </Text>
@@ -256,7 +275,7 @@ export default function SettingsScreen() {
               }
             />
           </View>
-          <Text style={[styles.text,{color:colors.muted}]}>
+          <Text style={[styles.text, { color: colors.muted }]}>
             Logs, settings, chats, and private photos save on this device first,
             then sync automatically through your protected account.
           </Text>
@@ -307,11 +326,7 @@ export default function SettingsScreen() {
             }}
             style={styles.disclosure}
           >
-            <Ionicons
-              name="phone-portrait-outline"
-              size={17}
-              color={accent}
-            />
+            <Ionicons name="phone-portrait-outline" size={17} color={accent} />
             <Text style={styles.disclosureText}>Signed-in devices</Text>
             <Ionicons
               name={showDevices ? "chevron-up" : "chevron-down"}
@@ -393,7 +408,7 @@ export default function SettingsScreen() {
             />
           </View>
           <View style={styles.copy}>
-            <Text style={[styles.title,{color:colors.ink}]}>
+            <Text style={[styles.title, { color: colors.ink }]}>
               {auth.configured
                 ? "Using device-only demo"
                 : "Demo mode is ready"}
@@ -435,7 +450,7 @@ export default function SettingsScreen() {
             />
           </View>
           <View style={styles.copy}>
-            <Text style={[styles.title,{color:colors.ink}]}>
+            <Text style={[styles.title, { color: colors.ink }]}>
               {health.availability?.title ?? "Checking health service…"}
             </Text>
             <Text style={styles.meta}>
@@ -456,7 +471,7 @@ export default function SettingsScreen() {
             selected={state.settings.healthSync.enabled}
           />
         </View>
-        <Text style={[styles.text,{color:colors.muted}]}>
+        <Text style={[styles.text, { color: colors.muted }]}>
           {health.availability?.detail ?? "Checking what this device supports."}
         </Text>
         {health.errorMessage ? (
@@ -516,7 +531,9 @@ export default function SettingsScreen() {
                   )
               }
             >
-              <Text style={[styles.healthLink, { color: accent }]}>Open system health settings</Text>
+              <Text style={[styles.healthLink, { color: accent }]}>
+                Open system health settings
+              </Text>
             </Pressable>
             <Pressable onPress={() => health.disconnect()}>
               <Text style={[styles.healthLink, { color: palette.red }]}>
@@ -536,43 +553,70 @@ export default function SettingsScreen() {
           </View>
         ) : null}
         <View style={styles.localDivider} />
-        {healthDataTypes.map((item, index) => (
-          <View
-            key={item.id}
-            style={[
-              styles.healthType,
-              index < healthDataTypes.length - 1 && styles.border,
-            ]}
-          >
-            <View style={styles.modeIcon}>
-              <Ionicons name={item.icon} size={19} color={accent} />
-            </View>
-            <View style={styles.copy}>
-              <Text style={[styles.modeTitle,{color:colors.ink}]}>{item.title}</Text>
-              <Text style={[styles.meta,{color:colors.muted}]}>{item.subtitle}</Text>
-            </View>
-            <Switch
-              value={state.settings.healthSync.dataTypes[item.id]}
-              onValueChange={(value) =>
-                updateSettings({
-                  healthSync: {
-                    ...state.settings.healthSync,
-                    dataTypes: {
-                      ...state.settings.healthSync.dataTypes,
-                      [item.id]: value,
-                    },
-                  },
-                })
-              }
-              trackColor={{ false: palette.border, true: `${accent}88` }}
-              thumbColor={
-                state.settings.healthSync.dataTypes[item.id]
-                  ? accent
-                  : "#F4F5F4"
-              }
-            />
-          </View>
-        ))}
+        <Pressable
+          onPress={() => setShowHealthTypes((value) => !value)}
+          style={styles.collapseRow}
+        >
+          <Text style={[styles.modeTitle, { color: colors.ink }]}>
+            Synced health items
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            {
+              healthDataTypes.filter(
+                (item) => state.settings.healthSync.dataTypes[item.id],
+              ).length
+            }{" "}
+            enabled
+          </Text>
+          <Ionicons
+            name={showHealthTypes ? "chevron-up" : "chevron-down"}
+            size={18}
+            color={accent}
+          />
+        </Pressable>
+        {showHealthTypes
+          ? healthDataTypes.map((item, index) => (
+              <View
+                key={item.id}
+                style={[
+                  styles.healthType,
+                  index < healthDataTypes.length - 1 && styles.border,
+                ]}
+              >
+                <View style={styles.modeIcon}>
+                  <Ionicons name={item.icon} size={19} color={accent} />
+                </View>
+                <View style={styles.copy}>
+                  <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                    {item.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {item.subtitle}
+                  </Text>
+                </View>
+                <Switch
+                  value={state.settings.healthSync.dataTypes[item.id]}
+                  onValueChange={(value) =>
+                    updateSettings({
+                      healthSync: {
+                        ...state.settings.healthSync,
+                        dataTypes: {
+                          ...state.settings.healthSync.dataTypes,
+                          [item.id]: value,
+                        },
+                      },
+                    })
+                  }
+                  trackColor={{ false: palette.border, true: `${accent}88` }}
+                  thumbColor={
+                    state.settings.healthSync.dataTypes[item.id]
+                      ? accent
+                      : "#F4F5F4"
+                  }
+                />
+              </View>
+            ))
+          : null}
       </Card>
       <Text style={styles.disclaimer}>
         Imported values are group-visible by default, retain their source app,
@@ -581,107 +625,79 @@ export default function SettingsScreen() {
         share it.
       </Text>
 
-      <SectionHeader title="Health sync schedule" />
-      <Card style={styles.list}>
-        {syncModes.map((mode, index) => (
-          <Pressable
-            key={mode.id}
-            onPress={() => updateSettings({ syncMode: mode.id })}
-            style={[styles.mode, index < syncModes.length - 1 && styles.border]}
-          >
-            <View
+      <SectionHeader
+        title="Health sync schedule"
+        action={
+          <Pressable onPress={() => setShowSchedule((value) => !value)}>
+            <Text style={[styles.healthLink, { color: accent }]}>
+              {showSchedule
+                ? "Hide"
+                : (syncModes.find((mode) => mode.id === state.settings.syncMode)
+                    ?.title ?? "Show")}
+            </Text>
+          </Pressable>
+        }
+      />
+      {showSchedule ? (
+        <Card style={styles.list}>
+          {syncModes.map((mode, index) => (
+            <Pressable
+              key={mode.id}
+              onPress={() => updateSettings({ syncMode: mode.id })}
               style={[
-                styles.modeIcon,
-                state.settings.syncMode === mode.id && styles.modeActive,
+                styles.mode,
+                index < syncModes.length - 1 && styles.border,
               ]}
             >
+              <View
+                style={[
+                  styles.modeIcon,
+                  state.settings.syncMode === mode.id && styles.modeActive,
+                ]}
+              >
+                <Ionicons
+                  name={mode.icon}
+                  size={20}
+                  color={
+                    state.settings.syncMode === mode.id ? accent : palette.muted
+                  }
+                />
+              </View>
+              <View style={styles.copy}>
+                <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                  {mode.title}
+                </Text>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  {mode.subtitle}
+                </Text>
+              </View>
               <Ionicons
-                name={mode.icon}
+                name={
+                  state.settings.syncMode === mode.id
+                    ? "radio-button-on"
+                    : "radio-button-off"
+                }
                 size={20}
                 color={
-                  state.settings.syncMode === mode.id
-                    ? accent
-                    : palette.muted
+                  state.settings.syncMode === mode.id ? accent : palette.faint
                 }
               />
-            </View>
-            <View style={styles.copy}>
-              <Text style={[styles.modeTitle,{color:colors.ink}]}>{mode.title}</Text>
-              <Text style={[styles.meta,{color:colors.muted}]}>{mode.subtitle}</Text>
-            </View>
-            <Ionicons
-              name={
-                state.settings.syncMode === mode.id
-                  ? "radio-button-on"
-                  : "radio-button-off"
-              }
-              size={20}
-              color={
-                state.settings.syncMode === mode.id
-                  ? accent
-                  : palette.faint
-              }
-            />
-          </Pressable>
-        ))}
-      </Card>
+            </Pressable>
+          ))}
+        </Card>
+      ) : null}
       <Text style={styles.disclaimer}>
         App-open and pull-to-refresh sync are immediate. Background timing is
         controlled by iOS or Android and is therefore an approximate schedule.
         Account cloud sync remains automatic.
       </Text>
 
-      <SectionHeader title="Display" />
-      <Card>
-        {[
-          {
-            key: "compactMode" as const,
-            title: "Compact layout",
-            copy: "Shorter cards and headers; width stays unchanged",
-            icon: "contract-outline" as const,
-          },
-          {
-            key: "darkMode" as const,
-            title: "Dark mode",
-            copy: "Use the dark app color scheme",
-            icon: "moon-outline" as const,
-          },
-          {
-            key: "showLeaderboard" as const,
-            title: "Show Leaderboard",
-            copy: "Hide for solo tracking",
-            icon: "trophy-outline" as const,
-          },
-          {
-            key: "showChat" as const,
-            title: "Show Chat",
-            copy: "Hide for solo tracking",
-            icon: "chatbubbles-outline" as const,
-          },
-        ].map((item) => (
-          <View key={item.key} style={[styles.healthType, styles.border]}>
-            <View style={styles.modeIcon}>
-              <Ionicons name={item.icon} size={19} color={accent} />
-            </View>
-            <View style={styles.copy}>
-              <Text style={[styles.modeTitle,{color:colors.ink}]}>{item.title}</Text>
-              <Text style={[styles.meta,{color:colors.muted}]}>{item.copy}</Text>
-            </View>
-            <Switch
-              value={state.settings[item.key]}
-              onValueChange={(value) => updateSettings({ [item.key]: value })}
-              trackColor={{ false: palette.border, true: `${accent}88` }}
-              thumbColor={
-                state.settings[item.key] ? accent : "#F4F5F4"
-              }
-            />
-          </View>
-        ))}
-      </Card>
       <SectionHeader title="Data controls" />
       <Card>
-        <Text style={[styles.title,{color:colors.ink}]}>Your portable data</Text>
-        <Text style={[styles.text,{color:colors.muted}]}>
+        <Text style={[styles.title, { color: colors.ink }]}>
+          Your portable data
+        </Text>
+        <Text style={[styles.text, { color: colors.muted }]}>
           Export logs and configuration as JSON. Private-bucket paths are
           included; temporary access links are not.
         </Text>
@@ -699,8 +715,10 @@ export default function SettingsScreen() {
           }
         />
         <View style={styles.localDivider} />
-        <Text style={[styles.title,{color:colors.ink}]}>Local demo data</Text>
-        <Text style={[styles.text,{color:colors.muted}]}>
+        <Text style={[styles.title, { color: colors.ink }]}>
+          Local demo data
+        </Text>
+        <Text style={[styles.text, { color: colors.muted }]}>
           Restore the built-in group, metrics, history, scoring, and chat on
           this device.
         </Text>
@@ -847,6 +865,12 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: palette.border,
     marginVertical: 15,
+  },
+  collapseRow: {
+    height: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
   },
   deleteAccount: {
     marginTop: 12,

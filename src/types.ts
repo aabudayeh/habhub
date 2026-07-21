@@ -1,30 +1,72 @@
-export type Visibility = 'private' | 'group' | 'status';
-export type MetricDataType = 'number' | 'boolean' | 'text' | 'photo' | 'calculated';
-export type Aggregation = 'sum' | 'latest' | 'average' | 'max' | 'min';
-export type RankingDirection = 'higher' | 'lower' | 'closest';
-export type GoalKind = 'at_least' | 'at_most' | 'exact' | 'complete';
-export type DashboardSection = 'today' | 'group' | 'insights';
-export type ActivityLevel = 'sedentary' | 'light' | 'moderate' | 'very_active' | 'athlete';
-export type BiologicalSex = 'female' | 'male' | 'unspecified';
-export type HealthProvider = 'apple_health' | 'health_connect';
+export type Visibility = "private" | "group" | "status";
+export type MetricDataType =
+  | "number"
+  | "boolean"
+  | "text"
+  | "photo"
+  | "calculated";
+export type Aggregation = "sum" | "latest" | "average" | "max" | "min";
+export type RankingDirection = "higher" | "lower" | "closest";
+export type GoalKind = "at_least" | "at_most" | "exact" | "complete";
+export type DashboardSection = "today" | "group" | "insights";
+export type ActivityLevel =
+  | "sedentary"
+  | "light"
+  | "moderate"
+  | "very_active"
+  | "athlete";
+export type BiologicalSex = "female" | "male" | "unspecified";
+export type HealthProvider = "apple_health" | "health_connect";
 export type HealthDataType =
-  | 'steps'
-  | 'active_energy'
-  | 'weight'
-  | 'nutrition'
-  | 'water'
-  | 'workouts'
-  | 'body_fat'
-  | 'lean_body_mass'
-  | 'blood_pressure'
-  | 'heart_rate'
-  | 'sleep'
-  | 'blood_glucose'
-  | 'menstruation';
+  | "steps"
+  | "active_energy"
+  | "weight"
+  | "nutrition"
+  | "water"
+  | "workouts"
+  | "body_fat"
+  | "lean_body_mass"
+  | "blood_pressure"
+  | "heart_rate"
+  | "sleep"
+  | "blood_glucose"
+  | "menstruation";
 
-export type HealthMetricField = 'value' | 'duration_minutes' | 'active_calories' | 'distance_km' | 'systolic' | 'diastolic' | 'protein' | 'fat' | 'carbs' | 'fiber' | 'sodium' | 'sugar' | 'saturated_fat' | 'cholesterol' | 'potassium' | 'calcium' | 'iron' | 'magnesium' | 'vitamin_c' | 'vitamin_d' | 'vitamin_b12';
-export type HealthMetricMapping = { dataType: HealthDataType; field: HealthMetricField };
-export type TrackerCategory = 'goals' | 'activity' | 'nutrition' | 'body' | 'health' | 'mind' | 'photos' | 'other';
+export type HealthMetricField =
+  | "value"
+  | "duration_minutes"
+  | "active_calories"
+  | "distance_km"
+  | "systolic"
+  | "diastolic"
+  | "protein"
+  | "fat"
+  | "carbs"
+  | "fiber"
+  | "sodium"
+  | "sugar"
+  | "saturated_fat"
+  | "cholesterol"
+  | "potassium"
+  | "calcium"
+  | "iron"
+  | "magnesium"
+  | "vitamin_c"
+  | "vitamin_d"
+  | "vitamin_b12";
+export type HealthMetricMapping = {
+  dataType: HealthDataType;
+  field: HealthMetricField;
+};
+export type TrackerCategory =
+  | "goals"
+  | "activity"
+  | "nutrition"
+  | "body"
+  | "health"
+  | "mind"
+  | "photos"
+  | "other";
 
 export type MetricGoal = {
   kind: GoalKind;
@@ -65,7 +107,7 @@ export type Member = {
   name: string;
   initials: string;
   color: string;
-  role: 'owner' | 'admin' | 'member';
+  role: "owner" | "admin" | "member";
   avatarUri?: string;
   /** Private-bucket object path; signed URLs in avatarUri are intentionally temporary. */
   avatarStoragePath?: string;
@@ -79,7 +121,7 @@ export type MetricEntry = {
   localDate: string;
   recordedAt: string;
   visibility: Visibility;
-  source: 'manual' | 'imported' | 'calculated';
+  source: "manual" | "imported" | "calculated";
   label?: string;
   note?: string;
   imageUri?: string;
@@ -98,8 +140,16 @@ export type NutritionDetails = {
   carbsG?: number;
   fiberG?: number;
   sodiumMg?: number;
-  sugarG?: number; saturatedFatG?: number; cholesterolMg?: number; potassiumMg?: number;
-  calciumMg?: number; ironMg?: number; magnesiumMg?: number; vitaminCMg?: number; vitaminDMcg?: number; vitaminB12Mcg?: number;
+  sugarG?: number;
+  saturatedFatG?: number;
+  cholesterolMg?: number;
+  potassiumMg?: number;
+  calciumMg?: number;
+  ironMg?: number;
+  magnesiumMg?: number;
+  vitaminCMg?: number;
+  vitaminDMcg?: number;
+  vitaminB12Mcg?: number;
 };
 
 export type PhotoUpdate = {
@@ -116,10 +166,10 @@ export type PhotoUpdate = {
 
 export type ChatMessage = {
   id: string;
-  senderId: string | 'system';
+  senderId: string | "system";
   text: string;
   createdAt: string;
-  kind: 'message' | 'cheer' | 'taunt' | 'achievement';
+  kind: "message" | "cheer" | "taunt" | "achievement";
   conversationId?: string;
   recipientId?: string;
   imageUri?: string;
@@ -135,10 +185,11 @@ export type DailyMetricStatus = {
   scoreContribution: number;
 };
 
-export type SyncMode = 'manual' | 'battery' | 'balanced' | 'frequent';
-export type BanterTone = 'supportive' | 'friendly' | 'ruthless' | 'off';
-export type FoodGoalMode = 'activity_adjusted' | 'fixed';
-export type WeightDirection = 'lose' | 'maintain' | 'gain';
+export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
+export type BanterTone = "supportive" | "friendly" | "ruthless" | "off";
+export type FoodGoalMode = "activity_adjusted" | "fixed";
+export type WeightDirection = "lose" | "maintain" | "gain";
+export type LandingPage = "index" | "log" | "insights" | "group" | "chat";
 
 export type HealthSyncSettings = {
   enabled: boolean;
@@ -168,7 +219,9 @@ export type UserSettings = {
   cheerMessage: string;
   tauntMessage: string;
   reminderMessage: string;
-  featuredTodayCard: 'score' | string;
+  /** Legacy v15 setting retained while old snapshots migrate. */
+  featuredTodayCard: "score" | string;
+  defaultLandingPage: LandingPage;
   compactMode: boolean;
   darkMode: boolean;
   showLeaderboard: boolean;
@@ -185,7 +238,7 @@ export type UserSettings = {
   /** Up to five badge ids the current user chose to feature in each group. */
   badgeShowcaseByGroup: Record<string, string[]>;
   progressMetricIds: string[];
-  leaderboardMetricIdsByGroup: Record<string,string[]>;
+  leaderboardMetricIdsByGroup: Record<string, string[]>;
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;
@@ -225,7 +278,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 15;
+  version: 16;
   currentUserId: string;
   group: Group;
   groups: Group[];
@@ -253,13 +306,30 @@ export type EntryDetails = {
   nutrition?: NutritionDetails;
 };
 
-export type NewEntry = Pick<MetricEntry, 'metricId' | 'value' | 'visibility' | 'note'> & {
+export type NewEntry = Pick<
+  MetricEntry,
+  "metricId" | "value" | "visibility" | "note"
+> & {
   localDate?: string;
 };
 
 export type NewMetric = Pick<
   MetricDefinition,
-  'name' | 'icon' | 'color' | 'unit' | 'dataType' | 'aggregation' | 'goal' | 'rankingDirection' | 'defaultVisibility' | 'goalEnabled' | 'goalRange' | 'category' | 'healthMapping' | 'stepFallback' | 'manualEntry'
+  | "name"
+  | "icon"
+  | "color"
+  | "unit"
+  | "dataType"
+  | "aggregation"
+  | "goal"
+  | "rankingDirection"
+  | "defaultVisibility"
+  | "goalEnabled"
+  | "goalRange"
+  | "category"
+  | "healthMapping"
+  | "stepFallback"
+  | "manualEntry"
 > & {
   formula?: string;
   /** Stable id used when adding a built-in preset after it was previously removed. */

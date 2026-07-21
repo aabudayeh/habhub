@@ -1,33 +1,388 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
-import React, { useMemo, useRef, useState } from 'react';
-import { Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useState } from "react";
+import { Alert, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
-import { Button, Card, Chip, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
-import { formatMetricValue } from '@/src/domain/metrics';
-import { messageLibrary } from '@/src/domain/social';
-import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
-import { BanterTone, DashboardSection, MetricDefinition, Visibility } from '@/src/types';
+import {
+  Card,
+  Chip,
+  IconButton,
+  PageHeader,
+  Screen,
+  SectionHeader,
+} from "@/src/components/ui";
+import { formatMetricValue, isMetricTrackedOnDate } from "@/src/domain/metrics";
+import { messageLibrary } from "@/src/domain/social";
+import { useApp } from "@/src/state/AppProvider";
+import { useAppColors, useGroupAccent } from "@/src/theme";
+import { BanterTone, DashboardSection, MetricDefinition } from "@/src/types";
 
-type Tab='metrics'|DashboardSection|'scoring'|'social';
-const tabs:{id:Tab;label:string}[]=[{id:'metrics',label:'Trackers'},{id:'today',label:'Today & goals'},{id:'group',label:'Leaderboard view'},{id:'insights',label:'Progress view'},{id:'scoring',label:'Group scoring'},{id:'social',label:'Social'}];
-const toneCopy:Record<BanterTone,string>={supportive:'Gentle encouragement and softened challenges.',friendly:'Playful competition with light jokes.',ruthless:'Sharper opt-in banter for close friends.',off:'No automatic messages.'};
-function privacy(value:Visibility){return value==='private'?'Only you':value==='status'?'Goal status only':'Exact value shared';}
-function Toggle({value,onChange}:{value:boolean;onChange:()=>void}){return <Pressable accessibilityRole="switch" accessibilityState={{checked:value}} onPress={onChange} style={[styles.toggle,value&&styles.toggleOn]}><View style={[styles.knob,value&&styles.knobOn]}/></Pressable>;}
-function Drag({index,count,onMove}:{index:number;count:number;onMove:(target:number)=>void}){const start=useRef(index);start.current=index;const responder=useMemo(()=>PanResponder.create({onStartShouldSetPanResponder:()=>true,onMoveShouldSetPanResponder:()=>true,onPanResponderRelease:(_event,gesture)=>onMove(Math.max(0,Math.min(count-1,start.current+Math.round(gesture.dy/68))))}),[count,onMove]);return <View {...responder.panHandlers} style={styles.drag}><Ionicons name="reorder-three-outline" size={25} color={palette.muted}/></View>;}
+type Tab = "trackers" | "goals" | "today" | "insights" | "social";
+const tabs: { id: Tab; label: string }[] = [
+  { id: "trackers", label: "Trackers" },
+  { id: "goals", label: "Tracked goals" },
+  { id: "today", label: "Today" },
+  { id: "insights", label: "Progress" },
+  { id: "social", label: "Social" },
+];
 
-export default function Customize(){
-  const params=useLocalSearchParams<{tab?:string}>();const {state,setMetricSection,reorderMetric,updateSettings}=useApp();const initial=tabs.some((item)=>item.id===params.tab)?params.tab as Tab:'metrics';const [tab,setTab]=useState<Tab>(initial);const [pendingGoal,setPendingGoal]=useState<MetricDefinition|null>(null);const [pendingRemove,setPendingRemove]=useState<MetricDefinition|null>(null);const ordered=[...state.metrics].sort((a,b)=>a.order-b.order);const member=state.group.members.find((item)=>item.id===state.currentUserId)!;const canAdmin=member.role==='owner'||member.role==='admin';
-  function setSection(metric:MetricDefinition,section:DashboardSection){const value=!metric.sections[section];if(section==='today'&&value){setPendingGoal(metric);return;}if(section==='today'&&!value){setPendingRemove(metric);return;}setMetricSection(metric.id,section,value);}
-  function applyGoal(mode:'today'|'history'){if(!pendingGoal)return;setMetricSection(pendingGoal.id,'today',true,mode);setPendingGoal(null);}
-  function applyRemove(mode:'today'|'history'){if(!pendingRemove)return;setMetricSection(pendingRemove.id,'today',false,mode);setPendingRemove(null);}
-  return <><Screen><PageHeader eyebrow="Make it yours" title="Customize" subtitle="Personal layouts stay personal; group scoring is managed per group." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/><View style={styles.tabs}>{tabs.map((item)=><Chip key={item.id} label={item.label} selected={tab===item.id} onPress={()=>setTab(item.id)}/>)}</View>
-    {tab==='metrics'?<><Card style={styles.info}><Ionicons name="create-outline" size={20} color={palette.primary}/><Text style={styles.infoText}>Choose a tracker to adjust its goal, sharing, or advanced setup.</Text></Card><SectionHeader title="Your trackers" action={<Pressable onPress={()=>router.push({pathname:'/metric-editor' as never,params:{id:'new'}})}><Text style={styles.add}>+ Add tracker</Text></Pressable>}/><Card style={styles.list}>{ordered.map((metric,index)=><Pressable key={metric.id} onPress={()=>router.push({pathname:'/metric-editor' as never,params:{id:metric.id}})} style={[styles.row,index<ordered.length-1&&styles.border]}><View style={[styles.metricIcon,{backgroundColor:`${metric.color}18`}]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={20} color={metric.color}/></View><View style={styles.copy}><Text style={styles.name}>{metric.name}</Text><Text style={styles.meta}>{metric.dataType==='calculated'?`Calculated automatically`:metric.dataType==='text'?'Free text':metric.goalEnabled===false?'No goal':`Goal ${formatMetricValue(metric,metric.goal.target)}`} · {privacy(metric.defaultVisibility)}</Text></View><Ionicons name="chevron-forward" size={18} color={palette.faint}/></Pressable>)}</Card></>:null}
-    {tab==='today'||tab==='group'||tab==='insights'?<><Card style={styles.info}><Ionicons name={tab==='today'?'checkmark-done-outline':'eye-outline'} size={20} color={palette.primary}/><Text style={styles.infoText}>{tab==='today'?'These switches define the goals tracked today. Old days keep their original goal list unless you explicitly apply a goal to history.':tab==='group'?'This only changes what you personally see on the Leaderboard. It does not alter group scoring.':'Choose which metrics are available in your personal Progress view.'}</Text></Card>{tab==='today'?<><SectionHeader title="Featured card"/><Card><View style={styles.options}><Chip label="Overall score" selected={state.settings.featuredTodayCard==='score'} onPress={()=>updateSettings({featuredTodayCard:'score'})}/>{ordered.filter((metric)=>metric.dataType!=='text'&&metric.id!=='weekly_deficit_balance').map((metric)=><Chip key={metric.id} label={metric.name} icon={metric.icon as keyof typeof Ionicons.glyphMap} selected={state.settings.featuredTodayCard===metric.id} onPress={()=>updateSettings({featuredTodayCard:metric.id})}/>)}</View></Card></>:null}<SectionHeader title={tab==='today'?'Tracked goals & Today cards':'Visible metrics'}/><Card style={styles.list}>{ordered.map((metric,index)=><View key={metric.id} style={[styles.row,index<ordered.length-1&&styles.border]}><Drag index={index} count={ordered.length} onMove={(target)=>reorderMetric(metric.id,target)}/><View style={[styles.metricIcon,{backgroundColor:`${metric.color}18`}]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={19} color={metric.color}/></View><View style={styles.copy}><Text style={styles.name}>{metric.name}</Text><Text style={styles.meta}>{tab==='today'?(metric.sections.today?'Counts from its configured historical periods':'Not currently tracked'):`${privacy(metric.defaultVisibility)} · personal layout`}</Text></View><Toggle value={metric.sections[tab]} onChange={()=>setSection(metric,tab)}/></View>)}</Card></>:null}
-    {tab==='scoring'?<><Card style={styles.score}><Text style={styles.scoreNumber}>100</Text><View style={styles.copy}><Text style={styles.scoreTitle}>{state.group.name} scoring</Text><Text style={styles.scoreText}>Scoring and group-tracked metrics are stored with this group and follow it when members switch groups.</Text></View></Card><Button label={canAdmin?'Open group settings':'View group settings'} icon="people-outline" onPress={()=>router.push('/group-settings' as never)}/></>:null}
-    {tab==='social'?<><SectionHeader title="Banter tone"/><Card><View style={styles.toneList}>{(['supportive','friendly','ruthless','off'] as BanterTone[]).map((tone)=><Pressable key={tone} onPress={()=>updateSettings({banterTone:tone})} style={[styles.tone,state.settings.banterTone===tone&&styles.toneSelected]}><Ionicons name={state.settings.banterTone===tone?'radio-button-on':'radio-button-off'} size={20} color={state.settings.banterTone===tone?palette.primary:palette.faint}/><View style={styles.copy}><Text style={styles.name}>{tone[0].toUpperCase()+tone.slice(1)}</Text><Text style={styles.meta}>{toneCopy[tone]}</Text></View></Pressable>)}</View><View style={styles.auto}><View style={styles.copy}><Text style={styles.name}>Automatic goal messages</Text><Text style={styles.meta}>Randomized group cheer when a shared goal is reached</Text></View><Toggle value={state.settings.autoMessages} onChange={()=>updateSettings({autoMessages:!state.settings.autoMessages})}/></View></Card><SectionHeader title="Built-in libraries"/><Card><Text style={styles.library}>{messageLibrary('cheer',state.settings.banterTone).length} cheers · {messageLibrary('taunt',state.settings.banterTone).length} taunts · {messageLibrary('reminder',state.settings.banterTone).length} reminders</Text></Card></>:null}
-  </Screen><Modal transparent animationType="fade" visible={Boolean(pendingGoal)} onRequestClose={()=>setPendingGoal(null)}><View style={styles.modalBackdrop}><View style={styles.modalCard}><View style={styles.modalIcon}><Ionicons name="calendar-outline" size={23} color={palette.primary}/></View><Text style={styles.modalTitle}>Track {pendingGoal?.name} as a daily goal?</Text><Text style={styles.modalCopy}>Choose whether this new goal changes earlier completion totals or starts from today.</Text><Button label="Start tracking today" icon="play-outline" onPress={()=>applyGoal('today')}/><Button label="Apply to past days too" variant="secondary" icon="time-outline" onPress={()=>applyGoal('history')}/><Pressable onPress={()=>setPendingGoal(null)} style={styles.cancel}><Text style={styles.cancelText}>Cancel</Text></Pressable></View></View></Modal><Modal transparent animationType="fade" visible={Boolean(pendingRemove)} onRequestClose={()=>setPendingRemove(null)}><View style={styles.modalBackdrop}><View style={styles.modalCard}><View style={styles.modalIcon}><Ionicons name="remove-circle-outline" size={23} color={palette.red}/></View><Text style={styles.modalTitle}>Stop tracking {pendingRemove?.name}?</Text><Text style={styles.modalCopy}>Choose whether to stop tracking from today only, or remove it from past days too.</Text><Button label="Stop from today" icon="play-outline" onPress={()=>applyRemove('today')}/><Button label="Remove from past days too" variant="secondary" icon="time-outline" onPress={()=>applyRemove('history')}/><Pressable onPress={()=>setPendingRemove(null)} style={styles.cancel}><Text style={styles.cancelText}>Cancel</Text></Pressable></View></View></Modal></>;
+export default function Customize() {
+  const params = useLocalSearchParams<{ tab?: string }>();
+  const { state, setMetricSection, setTrackedGoal, updateSettings } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const initial = tabs.some((item) => item.id === params.tab)
+    ? (params.tab as Tab)
+    : "trackers";
+  const [tab, setTab] = useState<Tab>(initial);
+  const ordered = [...state.metrics].sort((a, b) => a.order - b.order);
+
+  function changeTrackedGoal(metric: MetricDefinition, value: boolean) {
+    const action = value ? "Start tracking" : "Stop tracking";
+    Alert.alert(
+      `${action} ${metric.name}?`,
+      "Choose whether this change should alter earlier progress reports.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "From today",
+          onPress: () => setTrackedGoal(metric.id, value, "today"),
+        },
+        {
+          text: "Apply to history",
+          onPress: () => setTrackedGoal(metric.id, value, "history"),
+        },
+      ],
+    );
+  }
+
+  return (
+    <Screen>
+      <PageHeader
+        title="Customize"
+        subtitle="Only your selected trackers appear here. Group competition is managed in Group settings."
+        showMenu={false}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
+      />
+      <View style={styles.tabs}>
+        {tabs.map((item) => (
+          <Chip
+            key={item.id}
+            label={item.label}
+            selected={tab === item.id}
+            onPress={() => setTab(item.id)}
+          />
+        ))}
+      </View>
+
+      {tab === "trackers" ? (
+        <>
+          <SectionHeader
+            title="Your trackers"
+            action={
+              <Pressable
+                onPress={() =>
+                  router.push({
+                    pathname: "/metric-editor" as never,
+                    params: { id: "new" },
+                  })
+                }
+              >
+                <Text style={[styles.link, { color: accent }]}>+ Add</Text>
+              </Pressable>
+            }
+          />
+          <Card style={styles.list}>
+            {ordered.map((metric, index) => (
+              <Pressable
+                key={metric.id}
+                onPress={() =>
+                  router.push({
+                    pathname: "/metric-editor" as never,
+                    params: { id: metric.id },
+                  })
+                }
+                style={[
+                  styles.row,
+                  index < ordered.length - 1 && {
+                    borderBottomColor: colors.border,
+                    borderBottomWidth: 1,
+                  },
+                ]}
+              >
+                <TrackerIcon metric={metric} />
+                <View style={styles.copy}>
+                  <Text style={[styles.name, { color: colors.ink }]}>
+                    {metric.name}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {metric.dataType === "calculated"
+                      ? "Calculated automatically"
+                      : metric.goalEnabled === false
+                        ? "No target"
+                        : `Target ${formatMetricValue(metric, metric.goal.target)}`}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color={colors.faint}
+                />
+              </Pressable>
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      {tab === "goals" ? (
+        <>
+          <Card
+            style={[
+              styles.note,
+              {
+                backgroundColor: colors.primarySoft,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons name="checkmark-done-outline" size={19} color={accent} />
+            <Text style={[styles.noteText, { color: colors.muted }]}>
+              These are the goals counted in Today and historical completion.
+              Showing a tracker on Today is a separate choice.
+            </Text>
+          </Card>
+          <SectionHeader title="Goals being counted" />
+          <Card style={styles.list}>
+            {ordered
+              .filter((metric) => metric.dataType !== "text")
+              .map((metric, index, list) => {
+                const selected = isMetricTrackedOnDate(
+                  state,
+                  metric,
+                  new Date().toISOString().slice(0, 10),
+                );
+                return (
+                  <View
+                    key={metric.id}
+                    style={[
+                      styles.row,
+                      index < list.length - 1 && {
+                        borderBottomColor: colors.border,
+                        borderBottomWidth: 1,
+                      },
+                    ]}
+                  >
+                    <TrackerIcon metric={metric} />
+                    <View style={styles.copy}>
+                      <Text style={[styles.name, { color: colors.ink }]}>
+                        {metric.name}
+                      </Text>
+                      <Text style={[styles.meta, { color: colors.muted }]}>
+                        {metric.goalEnabled === false
+                          ? "Informational by default; selecting it enables its configured target"
+                          : selected
+                            ? "Included in daily completion"
+                            : "Not counted"}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={selected}
+                      onValueChange={(value) =>
+                        changeTrackedGoal(metric, value)
+                      }
+                      trackColor={{ false: colors.border, true: `${accent}88` }}
+                      thumbColor={selected ? accent : colors.faint}
+                    />
+                  </View>
+                );
+              })}
+          </Card>
+        </>
+      ) : null}
+
+      {tab === "today" || tab === "insights" ? (
+        <>
+          <Card
+            style={[
+              styles.note,
+              {
+                backgroundColor: colors.primarySoft,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons name="eye-outline" size={19} color={accent} />
+            <Text style={[styles.noteText, { color: colors.muted }]}>
+              {tab === "today"
+                ? "Choose the compact tiles visible on Today. Up to five fit before More appears."
+                : "Choose what is available in your personal Progress view."}
+            </Text>
+          </Card>
+          <SectionHeader
+            title={tab === "today" ? "Today tiles" : "Progress items"}
+          />
+          <Card style={styles.list}>
+            {ordered.map((metric, index) => (
+              <VisibilityRow
+                key={metric.id}
+                metric={metric}
+                section={tab}
+                last={index === ordered.length - 1}
+                colors={colors}
+                accent={accent}
+                onChange={() =>
+                  setMetricSection(metric.id, tab, !metric.sections[tab])
+                }
+              />
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      {tab === "social" ? (
+        <>
+          <SectionHeader title="Message tone" />
+          <Card style={styles.list}>
+            {(
+              ["supportive", "friendly", "ruthless", "off"] as BanterTone[]
+            ).map((tone) => (
+              <Pressable
+                key={tone}
+                onPress={() => updateSettings({ banterTone: tone })}
+                style={[
+                  styles.row,
+                  state.settings.banterTone === tone && {
+                    backgroundColor: colors.primarySoft,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={
+                    state.settings.banterTone === tone
+                      ? "radio-button-on"
+                      : "radio-button-off"
+                  }
+                  size={20}
+                  color={
+                    state.settings.banterTone === tone ? accent : colors.faint
+                  }
+                />
+                <View style={styles.copy}>
+                  <Text style={[styles.name, { color: colors.ink }]}>
+                    {tone[0].toUpperCase() + tone.slice(1)}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {tone === "off"
+                      ? "No automatic suggestions"
+                      : `${messageLibrary("cheer", tone).length} cheers · ${messageLibrary("taunt", tone).length} taunts · ${messageLibrary("reminder", tone).length} reminders`}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+          </Card>
+          <Card style={styles.switchCard}>
+            <View style={styles.copy}>
+              <Text style={[styles.name, { color: colors.ink }]}>
+                Automatic goal messages
+              </Text>
+              <Text style={[styles.meta, { color: colors.muted }]}>
+                Post a randomized group cheer when a shared goal is reached.
+              </Text>
+            </View>
+            <Switch
+              value={state.settings.autoMessages}
+              onValueChange={(value) => updateSettings({ autoMessages: value })}
+            />
+          </Card>
+        </>
+      ) : null}
+    </Screen>
+  );
 }
-const styles=StyleSheet.create({tabs:{flexDirection:'row',flexWrap:'wrap',gap:7,marginBottom:16},info:{flexDirection:'row',alignItems:'flex-start',gap:9,backgroundColor:palette.primarySoft,borderColor:'#C9E7D5',padding:14},infoText:{flex:1,color:palette.primary,fontSize:11,lineHeight:17},add:{color:palette.primary,fontSize:12,fontWeight:'900'},list:{paddingVertical:3,paddingHorizontal:13},row:{minHeight:66,flexDirection:'row',alignItems:'center',gap:9},border:{borderBottomWidth:1,borderBottomColor:palette.border},metricIcon:{width:40,height:40,borderRadius:13,alignItems:'center',justifyContent:'center'},copy:{flex:1},name:{color:palette.ink,fontSize:13,fontWeight:'900'},meta:{color:palette.muted,fontSize:9,lineHeight:14,marginTop:2},drag:{width:29,height:46,alignItems:'center',justifyContent:'center'},toggle:{width:43,height:25,borderRadius:13,padding:3,backgroundColor:'#D9DFDA'},toggleOn:{backgroundColor:palette.primary},knob:{width:19,height:19,borderRadius:10,backgroundColor:palette.white},knobOn:{marginLeft:18},options:{flexDirection:'row',flexWrap:'wrap',gap:7},score:{flexDirection:'row',alignItems:'center',gap:16,backgroundColor:palette.ink,borderColor:palette.ink,marginBottom:10},scoreNumber:{color:palette.lime,fontSize:34,fontWeight:'900'},scoreTitle:{color:palette.white,fontSize:14,fontWeight:'900'},scoreText:{color:'#BDC8C0',fontSize:10,lineHeight:15,marginTop:3},toneList:{gap:4},tone:{flexDirection:'row',alignItems:'center',gap:9,padding:10,borderRadius:12},toneSelected:{backgroundColor:palette.primarySoft},auto:{flexDirection:'row',alignItems:'center',gap:10,borderTopWidth:1,borderTopColor:palette.border,paddingTop:13,marginTop:9},library:{color:palette.muted,fontSize:11,lineHeight:17},modalBackdrop:{flex:1,backgroundColor:'rgba(20,29,23,.45)',alignItems:'center',justifyContent:'center',padding:22},modalCard:{width:'100%',maxWidth:420,backgroundColor:palette.card,borderRadius:24,padding:21,gap:9},modalIcon:{width:48,height:48,borderRadius:16,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center',alignSelf:'center'},modalTitle:{color:palette.ink,fontSize:18,fontWeight:'900',textAlign:'center',marginTop:4},modalCopy:{color:palette.muted,fontSize:11,lineHeight:17,textAlign:'center',marginBottom:4},cancel:{alignSelf:'center',padding:10},cancelText:{color:palette.muted,fontSize:11,fontWeight:'900'},
+
+function TrackerIcon({ metric }: { metric: MetricDefinition }) {
+  return (
+    <View style={[styles.icon, { backgroundColor: `${metric.color}18` }]}>
+      <Ionicons
+        name={metric.icon as keyof typeof Ionicons.glyphMap}
+        size={18}
+        color={metric.color}
+      />
+    </View>
+  );
+}
+function VisibilityRow({
+  metric,
+  section,
+  last,
+  colors,
+  accent,
+  onChange,
+}: {
+  metric: MetricDefinition;
+  section: DashboardSection;
+  last: boolean;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+  onChange: () => void;
+}) {
+  return (
+    <View
+      style={[
+        styles.row,
+        !last && { borderBottomColor: colors.border, borderBottomWidth: 1 },
+      ]}
+    >
+      <TrackerIcon metric={metric} />
+      <View style={styles.copy}>
+        <Text style={[styles.name, { color: colors.ink }]}>{metric.name}</Text>
+        <Text style={[styles.meta, { color: colors.muted }]}>
+          {metric.sections[section] ? "Visible" : "Hidden"}
+        </Text>
+      </View>
+      <Switch
+        value={metric.sections[section]}
+        onValueChange={onChange}
+        trackColor={{ false: colors.border, true: `${accent}88` }}
+        thumbColor={metric.sections[section] ? accent : colors.faint}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  tabs: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  list: { paddingVertical: 2, paddingHorizontal: 11 },
+  row: {
+    minHeight: 56,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 2,
+  },
+  icon: {
+    width: 37,
+    height: 37,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  copy: { flex: 1 },
+  name: { fontSize: 11, fontWeight: "900" },
+  meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  link: { fontSize: 11, fontWeight: "900" },
+  note: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 11 },
+  noteText: { flex: 1, fontSize: 9, lineHeight: 14 },
+  switchCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
+  },
 });

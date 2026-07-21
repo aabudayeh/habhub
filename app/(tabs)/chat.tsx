@@ -29,7 +29,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 export default function ChatScreen() {
   const { state, sendMessage, updateSettings } = useApp();
   const accent = useGroupAccent();
-  const colors=useAppColors();
+  const colors = useAppColors();
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
@@ -42,8 +42,35 @@ export default function ChatScreen() {
   const conversationId = recipientId
     ? directConversationId(state.currentUserId, recipientId)
     : groupConversationId;
-  const notifications=state.settings.notifications;const muted=recipientId?(notifications.mutedConversationIds??[]).includes(conversationId):(notifications.mutedGroupIds??[]).includes(state.group.id);
-  function toggleMute(){updateSettings({notifications:{...notifications,...(recipientId?{mutedConversationIds:muted?(notifications.mutedConversationIds??[]).filter((id)=>id!==conversationId):[...(notifications.mutedConversationIds??[]),conversationId]}:{mutedGroupIds:muted?(notifications.mutedGroupIds??[]).filter((id)=>id!==state.group.id):[...(notifications.mutedGroupIds??[]),state.group.id]})}});}
+  const notifications = state.settings.notifications;
+  const muted = recipientId
+    ? (notifications.mutedConversationIds ?? []).includes(conversationId)
+    : (notifications.mutedGroupIds ?? []).includes(state.group.id);
+  function toggleMute() {
+    updateSettings({
+      notifications: {
+        ...notifications,
+        ...(recipientId
+          ? {
+              mutedConversationIds: muted
+                ? (notifications.mutedConversationIds ?? []).filter(
+                    (id) => id !== conversationId,
+                  )
+                : [
+                    ...(notifications.mutedConversationIds ?? []),
+                    conversationId,
+                  ],
+            }
+          : {
+              mutedGroupIds: muted
+                ? (notifications.mutedGroupIds ?? []).filter(
+                    (id) => id !== state.group.id,
+                  )
+                : [...(notifications.mutedGroupIds ?? []), state.group.id],
+            }),
+      },
+    });
+  }
   const messages = useMemo(
     () =>
       state.messages.filter((message) => {
@@ -62,8 +89,12 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [conversationId]);
   useEffect(() => {
-    const shown = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
-    const hidden = Keyboard.addListener("keyboardDidHide", () => setKeyboardOpen(false));
+    const shown = Keyboard.addListener("keyboardDidShow", () =>
+      setKeyboardOpen(true),
+    );
+    const hidden = Keyboard.addListener("keyboardDidHide", () =>
+      setKeyboardOpen(false),
+    );
     return () => {
       shown.remove();
       hidden.remove();
@@ -101,10 +132,13 @@ export default function ChatScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.safe,{backgroundColor:colors.canvas}]} edges={["top"]}>
+    <SafeAreaView
+      style={[styles.safe, { backgroundColor: colors.canvas }]}
+      edges={["top"]}
+    >
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
@@ -116,60 +150,62 @@ export default function ChatScreen() {
               marginBottom: 4,
             }}
           />
-          {!keyboardOpen ? <View style={[styles.chatPicker]}>
-            <Text style={styles.sidebarTitle}>CHATS</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={[styles.sidebar, styles.sidebarTop]}
-            >
-              <ConversationButton
-                label="Group"
-                icon="people"
-                selected={!recipientId}
-                onPress={() => setRecipientId(null)}
-              />
-              {state.group.members
-                .filter((member) => member.id !== state.currentUserId)
-                .map((member) => (
-                  <Pressable
-                    key={member.id}
-                    accessibilityLabel={`Message ${memberDisplayName(state, member)}`}
-                    onPress={() => setRecipientId(member.id)}
-                    style={[
-                      styles.personButton,
-                      recipientId === member.id &&
-                        styles.personButtonSelected,
-                    ]}
-                  >
-                    <Avatar
-                      initials={member.initials}
-                      color={member.color}
-                      uri={member.avatarUri}
-                      size={34}
-                    />
-                    <Text
-                      numberOfLines={1}
+          {!keyboardOpen ? (
+            <View style={[styles.chatPicker]}>
+              <Text style={styles.sidebarTitle}>CHATS</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[styles.sidebar, styles.sidebarTop]}
+              >
+                <ConversationButton
+                  label="Group"
+                  icon="people"
+                  selected={!recipientId}
+                  onPress={() => setRecipientId(null)}
+                />
+                {state.group.members
+                  .filter((member) => member.id !== state.currentUserId)
+                  .map((member) => (
+                    <Pressable
+                      key={member.id}
+                      accessibilityLabel={`Message ${memberDisplayName(state, member)}`}
+                      onPress={() => setRecipientId(member.id)}
                       style={[
-                        styles.personName,
+                        styles.personButton,
                         recipientId === member.id &&
-                          styles.personNameSelected,
-                        recipientId === member.id && { color: accent },
+                          styles.personButtonSelected,
                       ]}
                     >
-                      {memberDisplayName(state, member)}
-                    </Text>
-                  </Pressable>
-                ))}
-            </ScrollView>
-          </View> : null}
+                      <Avatar
+                        initials={member.initials}
+                        color={member.color}
+                        uri={member.avatarUri}
+                        size={34}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.personName,
+                          recipientId === member.id &&
+                            styles.personNameSelected,
+                          recipientId === member.id && { color: accent },
+                        ]}
+                      >
+                        {memberDisplayName(state, member)}
+                      </Text>
+                    </Pressable>
+                  ))}
+              </ScrollView>
+            </View>
+          ) : null}
 
-          <View style={[styles.threadHeader,{borderBottomColor:colors.border}]}>
+          <View
+            style={[styles.threadHeader, { borderBottomColor: colors.border }]}
+          >
             {recipient ? (
               <Pressable
-                onPress={() =>
-                  router.push(`/member/${recipient.id}` as never)
-                }
+                onPress={() => router.push(`/member/${recipient.id}` as never)}
               >
                 <Avatar
                   initials={recipient.initials}
@@ -179,9 +215,12 @@ export default function ChatScreen() {
                 />
               </Pressable>
             ) : (
-              <View style={[styles.groupAvatar, { backgroundColor: accent }]}>
+              <Pressable
+                onPress={() => router.push("/group-settings" as never)}
+                style={[styles.groupAvatar, { backgroundColor: accent }]}
+              >
                 <Ionicons name="people" size={20} color={palette.white} />
-              </View>
+              </Pressable>
             )}
             <Pressable
               disabled={!recipient}
@@ -190,38 +229,46 @@ export default function ChatScreen() {
               }
               style={styles.threadCopy}
             >
-                <Text style={[styles.threadTitle,{color:colors.ink}]}>
+              <Text style={[styles.threadTitle, { color: colors.ink }]}>
                 {recipient
                   ? memberDisplayName(state, recipient)
                   : state.group.name}
               </Text>
-                <Text style={[styles.threadSub,{color:colors.muted}]}>
+              <Text style={[styles.threadSub, { color: colors.muted }]}>
                 {recipient
                   ? "Tap to view profile · private conversation"
                   : "Shared group conversation"}
               </Text>
             </Pressable>
-            <Pressable accessibilityLabel={muted?'Unmute chat':'Mute chat'} onPress={toggleMute} style={styles.profileButton}><Ionicons name={muted?'notifications-off-outline':'notifications-outline'} size={18} color={accent}/></Pressable>
+            <Pressable
+              accessibilityLabel={muted ? "Unmute chat" : "Mute chat"}
+              onPress={toggleMute}
+              style={styles.profileButton}
+            >
+              <Ionicons
+                name={
+                  muted ? "notifications-off-outline" : "notifications-outline"
+                }
+                size={18}
+                color={accent}
+              />
+            </Pressable>
             {recipient ? (
               <Pressable
                 accessibilityLabel="View friend profile"
-                onPress={() =>
-                  router.push(`/member/${recipient.id}` as never)
-                }
+                onPress={() => router.push(`/member/${recipient.id}` as never)}
                 style={styles.profileButton}
               >
-                <Ionicons
-                  name="person-outline"
-                  size={18}
-                  color={accent}
-                />
+                <Ionicons name="person-outline" size={18} color={accent} />
               </Pressable>
             ) : (
-              <Ionicons
-                name="people-outline"
-                size={17}
-                color={palette.faint}
-              />
+              <Pressable
+                accessibilityLabel="Open group settings"
+                onPress={() => router.push("/group-settings" as never)}
+                style={[styles.profileButton, { backgroundColor: colors.card }]}
+              >
+                <Ionicons name="people-outline" size={18} color={accent} />
+              </Pressable>
             )}
           </View>
           <ScrollView
@@ -234,97 +281,166 @@ export default function ChatScreen() {
             }
           >
             {messages.length ? (
-              messages.map((message) => {
+              messages.map((message, index) => {
+                const timestamp = new Date(message.createdAt);
+                const showDate =
+                  index === 0 ||
+                  new Date(messages[index - 1].createdAt).toDateString() !==
+                    timestamp.toDateString();
                 if (message.senderId === "system")
                   return (
-                    <View
-                      key={message.id}
-                      style={[
-                        styles.systemMessage,
-                        message.kind === "achievement" &&
-                          styles.achievement,
-                      ]}
-                    >
-                      <Ionicons
-                        name={
-                          message.kind === "achievement"
-                            ? "trophy"
-                            : "sparkles"
-                        }
-                        size={14}
-                        color={
-                          message.kind === "achievement"
-                            ? palette.amber
-                            : accent
-                        }
-                      />
-                      <Text style={styles.systemText}>{message.text}</Text>
-                    </View>
+                    <React.Fragment key={message.id}>
+                      {showDate ? (
+                        <Text
+                          style={[
+                            styles.dateStamp,
+                            {
+                              color: colors.muted,
+                              backgroundColor: colors.card,
+                            },
+                          ]}
+                        >
+                          {timestamp.toLocaleDateString(undefined, {
+                            weekday: "short",
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </Text>
+                      ) : null}
+                      <View
+                        style={[
+                          styles.systemMessage,
+                          message.kind === "achievement" && styles.achievement,
+                        ]}
+                      >
+                        <Ionicons
+                          name={
+                            message.kind === "achievement"
+                              ? "trophy"
+                              : "sparkles"
+                          }
+                          size={14}
+                          color={
+                            message.kind === "achievement"
+                              ? palette.amber
+                              : accent
+                          }
+                        />
+                        <Text
+                          style={[styles.systemText, { color: colors.muted }]}
+                        >
+                          {message.text} ·{" "}
+                          {timestamp.toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </Text>
+                      </View>
+                    </React.Fragment>
                   );
                 const sender = state.group.members.find(
                   (candidate) => candidate.id === message.senderId,
                 );
                 const mine = message.senderId === state.currentUserId;
                 return (
-                  <View
-                    key={message.id}
-                    style={[
-                      styles.messageRow,
-                      mine && styles.messageRowMine,
-                    ]}
-                  >
-                    {!mine && sender ? (
-                      <Pressable
-                        onPress={() =>
-                          router.push(`/member/${sender.id}` as never)
-                        }
+                  <React.Fragment key={message.id}>
+                    {showDate ? (
+                      <Text
+                        style={[
+                          styles.dateStamp,
+                          { color: colors.muted, backgroundColor: colors.card },
+                        ]}
                       >
-                        <Avatar
-                          initials={sender.initials}
-                          color={sender.color}
-                          uri={sender.avatarUri}
-                          size={28}
-                        />
-                      </Pressable>
+                        {timestamp.toLocaleDateString(undefined, {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </Text>
                     ) : null}
-                    <View style={styles.messageBlock}>
-                      {!mine ? (
+                    <View
+                      style={[styles.messageRow, mine && styles.messageRowMine]}
+                    >
+                      {!mine && sender ? (
                         <Pressable
-                          disabled={!sender}
                           onPress={() =>
-                            sender &&
                             router.push(`/member/${sender.id}` as never)
                           }
                         >
-                          <Text style={styles.sender}>
-                            {sender
-                              ? memberDisplayName(state, sender)
-                              : "Member"}
-                          </Text>
+                          <Avatar
+                            initials={sender.initials}
+                            color={sender.color}
+                            uri={sender.avatarUri}
+                            size={28}
+                          />
                         </Pressable>
                       ) : null}
-                      <View
-                        style={[styles.bubble,{backgroundColor:colors.card,borderColor:colors.border}, mine && styles.bubbleMine, mine && { backgroundColor: accent, borderColor: accent }]}
-                      >
-                        {message.imageUri ? (
-                          <ExpandableImage
-                            uri={message.imageUri}
-                            thumbnailStyle={styles.messageImage}
-                          />
+                      <View style={styles.messageBlock}>
+                        {!mine ? (
+                          <Pressable
+                            disabled={!sender}
+                            onPress={() =>
+                              sender &&
+                              router.push(`/member/${sender.id}` as never)
+                            }
+                          >
+                            <Text style={styles.sender}>
+                              {sender
+                                ? memberDisplayName(state, sender)
+                                : "Member"}
+                            </Text>
+                          </Pressable>
                         ) : null}
-                        {message.text ? (
+                        <View
+                          style={[
+                            styles.bubble,
+                            {
+                              backgroundColor: colors.card,
+                              borderColor: colors.border,
+                            },
+                            mine && styles.bubbleMine,
+                            mine && {
+                              backgroundColor: accent,
+                              borderColor: accent,
+                            },
+                          ]}
+                        >
+                          {message.imageUri ? (
+                            <ExpandableImage
+                              uri={message.imageUri}
+                              thumbnailStyle={styles.messageImage}
+                            />
+                          ) : null}
+                          {message.text ? (
+                            <Text
+                              style={[
+                                styles.messageText,
+                                { color: colors.ink },
+                                mine && styles.messageTextMine,
+                              ]}
+                            >
+                              {message.text}
+                            </Text>
+                          ) : null}
                           <Text
                             style={[
-                              styles.messageText,
-                              {color:colors.ink},mine && styles.messageTextMine,
+                              styles.messageTime,
+                              {
+                                color: mine
+                                  ? "rgba(255,255,255,.72)"
+                                  : colors.faint,
+                              },
                             ]}
                           >
-                            {message.text}
+                            {timestamp.toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </Text>
-                        ) : null}
+                        </View>
                       </View>
                     </View>
-                  </View>
+                  </React.Fragment>
                 );
               })
             ) : (
@@ -334,12 +450,10 @@ export default function ChatScreen() {
                   size={27}
                   color={accent}
                 />
-                <Text style={styles.emptyTitle}>
-                  Start the conversation
-                </Text>
+                <Text style={styles.emptyTitle}>Start the conversation</Text>
                 <Text style={styles.emptyText}>
-                  Messages and images in this thread stay separate from
-                  other chats.
+                  Messages and images in this thread stay separate from other
+                  chats.
                 </Text>
               </View>
             )}
@@ -359,57 +473,60 @@ export default function ChatScreen() {
               </Pressable>
             </View>
           ) : null}
-          {!keyboardOpen ? <View style={styles.quickRow}>
-            <Quick
-              label="Cheer"
-              icon="sparkles-outline"
-              onPress={() => suggest("cheer")}
-            />
-            <Quick
-              label="Taunt"
-              icon="flash-outline"
-              onPress={() => suggest("taunt")}
-            />
-            <Quick
-              label="Remind"
-              icon="notifications-outline"
-              onPress={() => suggest("reminder")}
-            />
-          </View> : null}
-          {!keyboardOpen ? <Text style={styles.libraryNote}>
-            A random built-in suggestion is placed in the box first. Edit
-            it, then send when ready.
-          </Text> : null}
-          <View style={[styles.composer,{backgroundColor:colors.card,borderColor:colors.border}]}>
+          {!keyboardOpen ? (
+            <View style={styles.quickRow}>
+              <Quick
+                label="Cheer"
+                icon="sparkles-outline"
+                onPress={() => suggest("cheer")}
+              />
+              <Quick
+                label="Taunt"
+                icon="flash-outline"
+                onPress={() => suggest("taunt")}
+              />
+              <Quick
+                label="Remind"
+                icon="notifications-outline"
+                onPress={() => suggest("reminder")}
+              />
+            </View>
+          ) : null}
+          {!keyboardOpen ? (
+            <Text style={styles.libraryNote}>
+              A random built-in suggestion is placed in the box first. Edit it,
+              then send when ready.
+            </Text>
+          ) : null}
+          <View
+            style={[
+              styles.composer,
+              keyboardOpen && styles.composerKeyboard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
             <Pressable
               accessibilityLabel="Attach image"
               onPress={chooseImage}
               style={styles.attach}
             >
-              <Ionicons
-                name="image-outline"
-                size={20}
-                color={accent}
-              />
+              <Ionicons name="image-outline" size={20} color={accent} />
             </Pressable>
             <TextInput
               value={draft}
               onChangeText={setDraft}
               onFocus={() =>
                 setTimeout(
-                  () =>
-                    messageScroll.current?.scrollToEnd({ animated: true }),
+                  () => messageScroll.current?.scrollToEnd({ animated: true }),
                   250,
                 )
               }
               onSubmitEditing={submit}
               placeholder={
-                recipient
-                  ? `Message ${recipient.name}…`
-                  : "Message the group…"
+                recipient ? `Message ${recipient.name}…` : "Message the group…"
               }
               placeholderTextColor={palette.faint}
-            style={[styles.input,{color:colors.ink}]}
+              style={[styles.input, { color: colors.ink }]}
               returnKeyType="send"
               multiline
             />
@@ -444,19 +561,21 @@ function ConversationButton({
   onPress: () => void;
 }) {
   const accent = useGroupAccent();
+  const colors = useAppColors();
   return (
     <Pressable
       onPress={onPress}
       style={[
         styles.conversationButton,
         selected && styles.conversationButtonSelected,
+        selected && { backgroundColor: colors.card },
       ]}
     >
       <View
         style={[
           styles.conversationIcon,
           selected && styles.conversationIconSelected,
-          selected && { backgroundColor: accent },
+          { backgroundColor: selected ? accent : colors.card },
         ]}
       >
         <Ionicons
@@ -469,7 +588,7 @@ function ConversationButton({
         style={[
           styles.conversationLabel,
           selected && styles.personNameSelected,
-          selected && { color: accent },
+          { color: selected ? accent : colors.muted },
         ]}
       >
         {label}
@@ -487,10 +606,15 @@ function Quick({
   onPress: () => void;
 }) {
   const accent = useGroupAccent();
+  const colors = useAppColors();
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.quick, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.quick,
+        { backgroundColor: colors.card },
+        pressed && styles.pressed,
+      ]}
     >
       <Ionicons name={icon} size={14} color={accent} />
       <Text style={[styles.quickText, { color: accent }]}>{label}</Text>
@@ -585,7 +709,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  messages: { flexGrow: 1, justifyContent: "flex-end", gap: 13, paddingVertical: 15, paddingHorizontal: 14 },
+  messages: {
+    flexGrow: 1,
+    justifyContent: "flex-end",
+    gap: 13,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
+  },
   systemMessage: {
     alignSelf: "center",
     flexDirection: "row",
@@ -685,7 +815,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 5, paddingHorizontal: 14 },
+  quickRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 5,
+    paddingHorizontal: 14,
+  },
   quick: {
     flexDirection: "row",
     alignItems: "center",
@@ -715,6 +850,29 @@ const styles = StyleSheet.create({
     backgroundColor: palette.canvas,
     marginHorizontal: 14,
     marginBottom: 8,
+  },
+  composerKeyboard: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 72,
+    zIndex: 30,
+    elevation: 30,
+  },
+  dateStamp: {
+    alignSelf: "center",
+    fontSize: 8,
+    fontWeight: "900",
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 9,
+    overflow: "hidden",
+  },
+  messageTime: {
+    fontSize: 7,
+    textAlign: "right",
+    marginTop: 1,
+    paddingHorizontal: 5,
   },
   attach: {
     width: 34,

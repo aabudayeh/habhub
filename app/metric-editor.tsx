@@ -1,59 +1,971 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useState } from "react";
+import {
+  Alert,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import { Button, Card, Chip, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
-import { MetricSelector } from '@/src/components/MetricSelector';
-import { energyFormulaVariables } from '@/src/domain/energy';
-import { evaluateFormula, formulaIdentifiers } from '@/src/domain/formula';
-import { trackerPresets, TrackerPreset } from '@/src/domain/trackerCatalog';
-import { useApp } from '@/src/state/AppProvider';
-import { palette, useAppColors, useGroupAccent } from '@/src/theme';
-import { Aggregation, GoalKind, HealthDataType, HealthMetricField, MetricDataType, NewMetric, RankingDirection, TrackerCategory, Visibility } from '@/src/types';
+import {
+  Button,
+  Card,
+  Chip,
+  IconButton,
+  PageHeader,
+  Screen,
+  SectionHeader,
+} from "@/src/components/ui";
+import { MetricSelector } from "@/src/components/MetricSelector";
+import { energyFormulaVariables } from "@/src/domain/energy";
+import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
+import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
+import { useApp } from "@/src/state/AppProvider";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import {
+  Aggregation,
+  GoalKind,
+  HealthDataType,
+  HealthMetricField,
+  MetricDataType,
+  NewMetric,
+  RankingDirection,
+  TrackerCategory,
+  Visibility,
+} from "@/src/types";
 
-const ICONS=['walk-outline','fitness-outline','heart-outline','leaf-outline','water-outline','star-outline','restaurant-outline','flash-outline','trending-down-outline','barbell-outline','bicycle-outline','body-outline','bed-outline','book-outline','bulb-outline','calendar-outline','camera-outline','checkmark-circle-outline','flower-outline','medkit-outline','moon-outline','pencil-outline','pulse-outline','reader-outline','school-outline','time-outline','trophy-outline'] as const;
-const CATEGORIES:{id:TrackerCategory;label:string;icon:keyof typeof Ionicons.glyphMap}[]=[{id:'goals',label:'Goal',icon:'flag-outline'},{id:'activity',label:'Activity',icon:'walk-outline'},{id:'nutrition',label:'Food',icon:'restaurant-outline'},{id:'body',label:'Body',icon:'body-outline'},{id:'health',label:'Health',icon:'heart-outline'},{id:'mind',label:'Mind',icon:'book-outline'},{id:'photos',label:'Photos',icon:'camera-outline'},{id:'other',label:'Other',icon:'apps-outline'}];
-const SOURCES:{id:HealthDataType;label:string;fields:{id:HealthMetricField;label:string}[]}[]=[
-  {id:'steps',label:'Steps',fields:[{id:'value',label:'Step count'}]},
-  {id:'active_energy',label:'Active calories',fields:[{id:'value',label:'Calories'}]},
-  {id:'workouts',label:'Workout',fields:[{id:'duration_minutes',label:'Duration'},{id:'active_calories',label:'Calories'},{id:'distance_km',label:'Distance'},{id:'value',label:'Completed'}]},
-  {id:'sleep',label:'Sleep',fields:[{id:'duration_minutes',label:'Duration'}]},
-  {id:'weight',label:'Weight',fields:[{id:'value',label:'Weight'}]},
-  {id:'body_fat',label:'Body fat',fields:[{id:'value',label:'Percentage'}]},
-  {id:'lean_body_mass',label:'Lean mass',fields:[{id:'value',label:'Mass'}]},
-  {id:'blood_pressure',label:'Blood pressure',fields:[{id:'systolic',label:'Systolic'},{id:'diastolic',label:'Diastolic'}]},
-  {id:'heart_rate',label:'Heart rate',fields:[{id:'value',label:'Pulse'}]},
-  {id:'blood_glucose',label:'Blood glucose',fields:[{id:'value',label:'Reading'}]},
-  {id:'water',label:'Water',fields:[{id:'value',label:'Volume'}]},
-  {id:'menstruation',label:'Menstrual cycle',fields:[{id:'value',label:'Recorded day'}]},
-  {id:'nutrition',label:'Nutrition',fields:[{id:'value',label:'Calories'},{id:'protein',label:'Protein'},{id:'fat',label:'Fat'},{id:'carbs',label:'Carbs'},{id:'fiber',label:'Fiber'},{id:'sodium',label:'Sodium'},{id:'sugar',label:'Sugar'},{id:'saturated_fat',label:'Saturated fat'},{id:'cholesterol',label:'Cholesterol'},{id:'potassium',label:'Potassium'},{id:'calcium',label:'Calcium'},{id:'iron',label:'Iron'},{id:'magnesium',label:'Magnesium'},{id:'vitamin_c',label:'Vitamin C'},{id:'vitamin_d',label:'Vitamin D'},{id:'vitamin_b12',label:'Vitamin B12'}]},
+const ICONS = [
+  "walk-outline",
+  "fitness-outline",
+  "heart-outline",
+  "leaf-outline",
+  "water-outline",
+  "star-outline",
+  "restaurant-outline",
+  "flash-outline",
+  "trending-down-outline",
+  "barbell-outline",
+  "bicycle-outline",
+  "body-outline",
+  "bed-outline",
+  "book-outline",
+  "bulb-outline",
+  "calendar-outline",
+  "camera-outline",
+  "checkmark-circle-outline",
+  "flower-outline",
+  "medkit-outline",
+  "moon-outline",
+  "pencil-outline",
+  "pulse-outline",
+  "reader-outline",
+  "school-outline",
+  "time-outline",
+  "trophy-outline",
+] as const;
+const CATEGORIES: {
+  id: TrackerCategory;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { id: "goals", label: "Goal", icon: "flag-outline" },
+  { id: "activity", label: "Activity", icon: "walk-outline" },
+  { id: "nutrition", label: "Food", icon: "restaurant-outline" },
+  { id: "body", label: "Body", icon: "body-outline" },
+  { id: "health", label: "Health", icon: "heart-outline" },
+  { id: "mind", label: "Mind", icon: "book-outline" },
+  { id: "photos", label: "Photos", icon: "camera-outline" },
+  { id: "other", label: "Other", icon: "apps-outline" },
+];
+const SOURCES: {
+  id: HealthDataType;
+  label: string;
+  fields: { id: HealthMetricField; label: string }[];
+}[] = [
+  {
+    id: "steps",
+    label: "Steps",
+    fields: [{ id: "value", label: "Step count" }],
+  },
+  {
+    id: "active_energy",
+    label: "Active calories",
+    fields: [{ id: "value", label: "Calories" }],
+  },
+  {
+    id: "workouts",
+    label: "Workout",
+    fields: [
+      { id: "duration_minutes", label: "Duration" },
+      { id: "active_calories", label: "Calories" },
+      { id: "distance_km", label: "Distance" },
+      { id: "value", label: "Completed" },
+    ],
+  },
+  {
+    id: "sleep",
+    label: "Sleep",
+    fields: [{ id: "duration_minutes", label: "Duration" }],
+  },
+  { id: "weight", label: "Weight", fields: [{ id: "value", label: "Weight" }] },
+  {
+    id: "body_fat",
+    label: "Body fat",
+    fields: [{ id: "value", label: "Percentage" }],
+  },
+  {
+    id: "lean_body_mass",
+    label: "Lean mass",
+    fields: [{ id: "value", label: "Mass" }],
+  },
+  {
+    id: "blood_pressure",
+    label: "Blood pressure",
+    fields: [
+      { id: "systolic", label: "Systolic" },
+      { id: "diastolic", label: "Diastolic" },
+    ],
+  },
+  {
+    id: "heart_rate",
+    label: "Heart rate",
+    fields: [{ id: "value", label: "Pulse" }],
+  },
+  {
+    id: "blood_glucose",
+    label: "Blood glucose",
+    fields: [{ id: "value", label: "Reading" }],
+  },
+  { id: "water", label: "Water", fields: [{ id: "value", label: "Volume" }] },
+  {
+    id: "menstruation",
+    label: "Menstrual cycle",
+    fields: [{ id: "value", label: "Recorded day" }],
+  },
+  {
+    id: "nutrition",
+    label: "Nutrition",
+    fields: [
+      { id: "value", label: "Calories" },
+      { id: "protein", label: "Protein" },
+      { id: "fat", label: "Fat" },
+      { id: "carbs", label: "Carbs" },
+      { id: "fiber", label: "Fiber" },
+      { id: "sodium", label: "Sodium" },
+      { id: "sugar", label: "Sugar" },
+      { id: "saturated_fat", label: "Saturated fat" },
+      { id: "cholesterol", label: "Cholesterol" },
+      { id: "potassium", label: "Potassium" },
+      { id: "calcium", label: "Calcium" },
+      { id: "iron", label: "Iron" },
+      { id: "magnesium", label: "Magnesium" },
+      { id: "vitamin_c", label: "Vitamin C" },
+      { id: "vitamin_d", label: "Vitamin D" },
+      { id: "vitamin_b12", label: "Vitamin B12" },
+    ],
+  },
 ];
 
-export default function TrackerEditor(){
-  const {id}=useLocalSearchParams<{id?:string}>();const {state,addMetric,updateMetric,deleteMetric,updateSettings}=useApp();const tracker=id&&id!=='new'?state.metrics.find((item)=>item.id===id):undefined;
-  const colors=useAppColors();const accent=useGroupAccent();
-  const presets=trackerPresets(state).filter((preset)=>!state.metrics.some((item)=>item.id===preset.templateId));
-  const [presetId,setPresetId]=useState('');
-  const [name,setName]=useState(tracker?.name??'');const [category,setCategory]=useState<TrackerCategory>(tracker?.category??'other');const [unit,setUnit]=useState(tracker?.unit??'');const [dataType,setDataType]=useState<MetricDataType>(tracker?.dataType??'number');const [goalEnabled,setGoalEnabled]=useState(tracker?.goalEnabled!==false);const [goalKind,setGoalKind]=useState<GoalKind>(tracker?.goal.kind??'at_least');const [goal,setGoal]=useState(String(tracker?.goal.target??''));const [rangeMin,setRangeMin]=useState(String(tracker?.goalRange?.min??''));const [rangeMax,setRangeMax]=useState(String(tracker?.goalRange?.max??''));const [formula,setFormula]=useState(tracker?.formula??'');const [icon,setIcon]=useState(tracker?.icon??ICONS[0]);const [visibility,setVisibility]=useState<Visibility>(tracker?.defaultVisibility??'group');const [aggregation,setAggregation]=useState<Aggregation>(tracker?.aggregation??'sum');const [ranking,setRanking]=useState<RankingDirection>(tracker?.rankingDirection??'higher');const [advanced,setAdvanced]=useState(false);const [showIcons,setShowIcons]=useState(false);const [healthType,setHealthType]=useState<HealthDataType|''>(tracker?.healthMapping?.dataType??'');const [healthField,setHealthField]=useState<HealthMetricField>(tracker?.healthMapping?.field??'value');const [stepFallback,setStepFallback]=useState(tracker?.stepFallback??false);const [manualEntry,setManualEntry]=useState(tracker?.manualEntry!==false);const [validation,setValidation]=useState<string|null>(null);
-  const source=SOURCES.find((item)=>item.id===healthType);
-  function applyPreset(preset:TrackerPreset){setPresetId(preset.templateId);setName(preset.name);setCategory(preset.category??'other');setUnit(preset.unit);setDataType(preset.dataType);setGoalEnabled(preset.goalEnabled!==false);setGoalKind(preset.goal.kind);setGoal(String(preset.goal.target));setRangeMin(preset.goalRange?String(preset.goalRange.min):'');setRangeMax(preset.goalRange?String(preset.goalRange.max):'');setFormula(preset.formula??'');setIcon(preset.icon);setVisibility(preset.defaultVisibility);setAggregation(preset.aggregation);setRanking(preset.rankingDirection);setHealthType(preset.healthMapping?.dataType??'');setHealthField(preset.healthMapping?.field??'value');setStepFallback(preset.stepFallback??false);setManualEntry(preset.manualEntry!==false);setAdvanced(false);}
-  function insert(token:string){setFormula((current)=>`${current}${current&&!current.endsWith(' ')?' ':''}${token}`);setValidation(null);}
-  function validate(){try{const known=Object.fromEntries(state.metrics.map((item)=>[item.id,1]));const unknown=formulaIdentifiers(formula).filter((key)=>!(key in known)&&!['bmr','daily_activity','baseline','daily_energy'].includes(key));if(unknown.length)throw new Error(`Unknown: ${unknown.join(', ')}`);const result=evaluateFormula(formula,{...known,...energyFormulaVariables(state.settings.energyProfile,state.settings.baselineCalories)});setValidation(`Looks good · example ${Number(result.toFixed(1))}`);return true;}catch(error){const message=error instanceof Error?error.message:'Check this calculation.';setValidation(message);Alert.alert('Calculation needs attention',message);return false;}}
-  function save(){const target=Number(goal.replace(',','.'));if(!name.trim())return Alert.alert('Add a name','Use a short, clear name.');if(goalEnabled&&dataType!=='text'&&!Number.isFinite(target))return Alert.alert('Check your target','Enter a valid number.');if(dataType==='calculated'&&(!formula.trim()||!validate()))return;const common:NewMetric={name:name.trim(),icon,color:tracker?.color??accent,unit:unit.trim(),dataType,aggregation,goal:{kind:dataType==='boolean'||dataType==='photo'?'complete':goalKind,target:Number.isFinite(target)?target:0},goalEnabled,goalRange:rangeMin&&rangeMax?{min:Number(rangeMin),max:Number(rangeMax)}:undefined,category,healthMapping:healthType?{dataType:healthType,field:healthField}:undefined,stepFallback,manualEntry,rankingDirection:dataType==='boolean'?'higher':ranking,defaultVisibility:visibility,formula:dataType==='calculated'?formula.trim():undefined,templateId:tracker?undefined:presetId||undefined};if(tracker)updateMetric(tracker.id,common);else addMetric(common);if(healthType)updateSettings({healthSync:{...state.settings.healthSync,dataTypes:{...state.settings.healthSync.dataTypes,[healthType]:true}}});router.back();}
-  function remove(){if(!tracker)return;const dependencies=state.metrics.filter((item)=>item.formula&&formulaIdentifiers(item.formula).includes(tracker.id));if(dependencies.length)return Alert.alert('Used by another tracker',`Remove it from ${dependencies.map((item)=>item.name).join(', ')} first.`);Alert.alert(`Delete ${tracker.name}?`,'Choose whether earlier goal history should remain in reports.',[{text:'Cancel',style:'cancel'},{text:'Delete tracker',style:'destructive',onPress:()=>{deleteMetric(tracker.id);router.back();}}]);}
-  return <Screen keyboardShouldPersistTaps="handled"><PageHeader eyebrow="Personal setup" title={tracker?`Edit ${tracker.name}`:'Add something to track'} subtitle="Keep it simple. Technical controls stay under Advanced." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
-    {!tracker?<MetricSelector title="Choose a ready-made tracker" items={presets.map((preset)=>({id:preset.templateId,label:preset.name,icon:preset.icon as keyof typeof Ionicons.glyphMap,color:preset.color,sublabel:preset.description}))} selectedIds={presetId?[presetId]:[]} onChange={(ids)=>{const preset=presets.find((item)=>item.templateId===ids[0]);if(preset)applyPreset(preset);}} multiple={false} emptyLabel="Or create your own below"/>:null}
-    <Card><Text style={[styles.label,{color:colors.ink}]}>What do you want to track?</Text><TextInput value={name} onChangeText={setName} placeholder="Reading, sleep, blood pressure…" placeholderTextColor={colors.faint} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/><View style={styles.wrap}>{CATEGORIES.map((item)=><Chip key={item.id} label={item.label} icon={item.icon} selected={category===item.id} onPress={()=>setCategory(item.id)}/>)}</View>
-      <View style={[styles.switchRow,{borderColor:colors.border}]}><View style={styles.grow}><Text style={[styles.rowTitle,{color:colors.ink}]}>Set a target</Text><Text style={[styles.help,{color:colors.muted}]}>Turn this off for readings you only want to observe.</Text></View><Switch value={goalEnabled} onValueChange={setGoalEnabled} trackColor={{false:colors.border,true:`${accent}88`}} thumbColor={goalEnabled?accent:colors.faint}/></View>
-      {goalEnabled&&dataType!=='text'?<><Text style={[styles.label,{color:colors.ink}]}>Success means</Text><View style={styles.wrap}><Chip label="At least" selected={goalKind==='at_least'} onPress={()=>setGoalKind('at_least')}/><Chip label="No more than" selected={goalKind==='at_most'} onPress={()=>setGoalKind('at_most')}/><Chip label="Near target" selected={goalKind==='exact'&&!rangeMin} onPress={()=>{setGoalKind('exact');setRangeMin('');setRangeMax('');}}/><Chip label="Inside a range" selected={Boolean(rangeMin||rangeMax)} onPress={()=>{setGoalKind('exact');setRangeMin(rangeMin||'60');setRangeMax(rangeMax||'100');}}/></View>{rangeMin||rangeMax?<View style={styles.columns}><Field label="From" value={rangeMin} set={setRangeMin} colors={colors}/><Field label="To" value={rangeMax} set={setRangeMax} colors={colors}/></View>:<View style={styles.columns}><Field label="Target" value={goal} set={setGoal} colors={colors}/><Field label="Unit" value={unit} set={setUnit} colors={colors} keyboard={false}/></View>}</>:null}
-      <Text style={[styles.label,{color:colors.ink}]}>Who can see new entries?</Text><View style={styles.wrap}><Chip label="My group" icon="people-outline" selected={visibility==='group'} onPress={()=>setVisibility('group')}/><Chip label="Goal status only" icon="checkmark-circle-outline" selected={visibility==='status'} onPress={()=>setVisibility('status')}/><Chip label="Only me" icon="lock-closed-outline" selected={visibility==='private'} onPress={()=>setVisibility('private')}/></View>
-    </Card>
-    <Pressable onPress={()=>setAdvanced((value)=>!value)} style={[styles.advancedButton,{backgroundColor:colors.card,borderColor:colors.border}]}><View><Text style={[styles.rowTitle,{color:colors.ink}]}>Advanced settings</Text><Text style={[styles.help,{color:colors.muted}]}>Health sync, calculations, scoring and appearance</Text></View><Ionicons name={advanced?'chevron-up':'chevron-down'} size={19} color={accent}/></Pressable>
-    {advanced?<><Card><SectionHeader title="Health connection"/><Text style={[styles.help,{color:colors.muted}]}>Link this tracker to any compatible app that writes this data into Apple Health or Health Connect.</Text><View style={styles.wrap}><Chip label="No connection" selected={!healthType} onPress={()=>setHealthType('')}/>{SOURCES.map((item)=><Chip key={item.id} label={item.label} selected={healthType===item.id} onPress={()=>{setHealthType(item.id);setHealthField(item.fields[0].id);if(item.id==='steps')setManualEntry(false);}}/>)}</View>{source?<><Text style={[styles.label,{color:colors.ink}]}>Use this value</Text><View style={styles.wrap}>{source.fields.map((field)=><Chip key={field.id} label={field.label} selected={healthField===field.id} onPress={()=>setHealthField(field.id)}/>)}</View></>:null}{healthType==='active_energy'||(healthType==='workouts'&&healthField==='active_calories')?<View style={[styles.switchRow,{borderColor:colors.border}]}><View style={styles.grow}><Text style={[styles.rowTitle,{color:colors.ink}]}>Estimate uncovered walking</Text><Text style={[styles.help,{color:colors.muted}]}>If activity calories are missing, use only steps not already explained by walking or running workouts.</Text></View><Switch value={stepFallback} onValueChange={setStepFallback}/></View>:null}<View style={[styles.switchRow,{borderColor:colors.border}]}><View style={styles.grow}><Text style={[styles.rowTitle,{color:colors.ink}]}>Allow manual entries</Text><Text style={[styles.help,{color:colors.muted}]}>Turn off for device-owned values such as steps.</Text></View><Switch value={manualEntry} onValueChange={setManualEntry}/></View></Card>
-      <Card><SectionHeader title="How it behaves"/><Text style={[styles.label,{color:colors.ink}]}>Entry type</Text><View style={styles.wrap}>{(['number','boolean','text','photo','calculated'] as MetricDataType[]).map((item)=><Chip key={item} label={item==='number'?'Number':item==='boolean'?'Done / not done':item==='text'?'Note':item==='photo'?'Photo':'Calculated'} selected={dataType===item} onPress={()=>setDataType(item)}/>)}</View>{dataType==='number'?<><Text style={[styles.label,{color:colors.ink}]}>Multiple entries in one day</Text><View style={styles.wrap}>{([['sum','Add them'],['average','Average'],['latest','Use latest'],['max','Use highest'],['min','Use lowest']] as [Aggregation,string][]).map(([value,label])=><Chip key={value} label={label} selected={aggregation===value} onPress={()=>setAggregation(value)}/>)}</View></>:null}{dataType==='calculated'?<><TextInput value={formula} onChangeText={(value)=>{setFormula(value);setValidation(null);}} autoCapitalize="none" multiline placeholder="Choose values below, then add + or −" placeholderTextColor={colors.faint} style={[styles.input,styles.formula,{color:colors.ink,borderColor:colors.border}]}/><Text style={[styles.mini,{color:colors.muted}]}>AVAILABLE VALUES</Text><View style={styles.wrap}>{state.metrics.filter((item)=>item.id!==tracker?.id&&item.dataType!=='text').map((item)=><Chip key={item.id} label={item.name} onPress={()=>insert(item.id)}/>)}</View><View style={styles.wrap}>{['bmr','daily_activity','+','-','*','/','(',')'].map((item)=><Chip key={item} label={item.replace('_',' ')} onPress={()=>insert(item)}/>)}</View><Button label="Check calculation" variant="ghost" onPress={validate}/>{validation?<Text style={[styles.validation,{color:validation.startsWith('Looks')?accent:palette.red}]}>{validation}</Text>:null}</>:null}<Text style={[styles.label,{color:colors.ink}]}>Competition order</Text><View style={styles.wrap}><Chip label="Higher ranks first" selected={ranking==='higher'} onPress={()=>setRanking('higher')}/><Chip label="Lower ranks first" selected={ranking==='lower'} onPress={()=>setRanking('lower')}/><Chip label="Closest to target" selected={ranking==='closest'} onPress={()=>setRanking('closest')}/></View><Pressable onPress={()=>setShowIcons((value)=>!value)} style={styles.iconChoice}><View style={[styles.icon,{backgroundColor:`${tracker?.color??accent}18`}]}><Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={20} color={tracker?.color??accent}/></View><Text style={[styles.rowTitle,{color:colors.ink}]}>Change icon</Text><Ionicons name={showIcons?'chevron-up':'chevron-down'} size={18} color={colors.faint}/></Pressable>{showIcons?<View style={styles.icons}>{ICONS.map((item)=><Pressable key={item} onPress={()=>setIcon(item)} style={[styles.icon,{borderColor:icon===item?accent:colors.border}]}><Ionicons name={item} size={19} color={icon===item?accent:colors.muted}/></Pressable>)}</View>:null}</Card></>:null}
-    <View style={styles.actions}>{tracker?<View style={styles.delete}><Button label="Delete" variant="danger" onPress={remove}/></View>:null}<View style={styles.grow}><Button label={tracker?'Save':'Add to Today'} icon="checkmark" onPress={save}/></View></View>
-  </Screen>;
+export default function TrackerEditor() {
+  const { id, scope } = useLocalSearchParams<{ id?: string; scope?: string }>();
+  const groupScope = scope === "group";
+  const {
+    state,
+    addMetric,
+    updateMetric,
+    deleteMetric,
+    addGroupMetric,
+    updateGroupMetric,
+    deleteGroupMetric,
+    updateSettings,
+  } = useApp();
+  const sourceMetrics = groupScope
+    ? (state.group.metricConfiguration ?? [])
+    : state.metrics;
+  const tracker =
+    id && id !== "new"
+      ? sourceMetrics.find((item) => item.id === id)
+      : undefined;
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const presets = trackerPresets(state).filter(
+    (preset) => !sourceMetrics.some((item) => item.id === preset.templateId),
+  );
+  const [presetId, setPresetId] = useState("");
+  const [name, setName] = useState(tracker?.name ?? "");
+  const [color, setColor] = useState(tracker?.color ?? accent);
+  const [category, setCategory] = useState<TrackerCategory>(
+    tracker?.category ?? "other",
+  );
+  const [unit, setUnit] = useState(tracker?.unit ?? "");
+  const [dataType, setDataType] = useState<MetricDataType>(
+    tracker?.dataType ?? "number",
+  );
+  const [goalEnabled, setGoalEnabled] = useState(
+    tracker?.goalEnabled !== false,
+  );
+  const [goalKind, setGoalKind] = useState<GoalKind>(
+    tracker?.goal.kind ?? "at_least",
+  );
+  const [goal, setGoal] = useState(String(tracker?.goal.target ?? ""));
+  const [rangeMin, setRangeMin] = useState(
+    String(tracker?.goalRange?.min ?? ""),
+  );
+  const [rangeMax, setRangeMax] = useState(
+    String(tracker?.goalRange?.max ?? ""),
+  );
+  const [formula, setFormula] = useState(tracker?.formula ?? "");
+  const [icon, setIcon] = useState(tracker?.icon ?? ICONS[0]);
+  const [visibility, setVisibility] = useState<Visibility>(
+    tracker?.defaultVisibility ?? "group",
+  );
+  const [aggregation, setAggregation] = useState<Aggregation>(
+    tracker?.aggregation ?? "sum",
+  );
+  const [ranking, setRanking] = useState<RankingDirection>(
+    tracker?.rankingDirection ?? "higher",
+  );
+  const [advanced, setAdvanced] = useState(false);
+  const [showIcons, setShowIcons] = useState(false);
+  const [healthType, setHealthType] = useState<HealthDataType | "">(
+    tracker?.healthMapping?.dataType ?? "",
+  );
+  const [healthField, setHealthField] = useState<HealthMetricField>(
+    tracker?.healthMapping?.field ?? "value",
+  );
+  const [stepFallback, setStepFallback] = useState(
+    tracker?.stepFallback ?? false,
+  );
+  const [manualEntry, setManualEntry] = useState(
+    tracker?.manualEntry !== false,
+  );
+  const [validation, setValidation] = useState<string | null>(null);
+  const source = SOURCES.find((item) => item.id === healthType);
+  function applyPreset(preset: TrackerPreset) {
+    setPresetId(preset.templateId);
+    setName(preset.name);
+    setColor(preset.color);
+    setCategory(preset.category ?? "other");
+    setUnit(preset.unit);
+    setDataType(preset.dataType);
+    setGoalEnabled(preset.goalEnabled !== false);
+    setGoalKind(preset.goal.kind);
+    setGoal(String(preset.goal.target));
+    setRangeMin(preset.goalRange ? String(preset.goalRange.min) : "");
+    setRangeMax(preset.goalRange ? String(preset.goalRange.max) : "");
+    setFormula(preset.formula ?? "");
+    setIcon(preset.icon);
+    setVisibility(preset.defaultVisibility);
+    setAggregation(preset.aggregation);
+    setRanking(preset.rankingDirection);
+    setHealthType(preset.healthMapping?.dataType ?? "");
+    setHealthField(preset.healthMapping?.field ?? "value");
+    setStepFallback(preset.stepFallback ?? false);
+    setManualEntry(preset.manualEntry !== false);
+    setAdvanced(false);
+  }
+  function insert(token: string) {
+    setFormula(
+      (current) =>
+        `${current}${current && !current.endsWith(" ") ? " " : ""}${token}`,
+    );
+    setValidation(null);
+  }
+  function validate() {
+    try {
+      const known = Object.fromEntries(
+        sourceMetrics.map((item) => [item.id, 1]),
+      );
+      const unknown = formulaIdentifiers(formula).filter(
+        (key) =>
+          !(key in known) &&
+          !["bmr", "daily_activity", "baseline", "daily_energy"].includes(key),
+      );
+      if (unknown.length) throw new Error(`Unknown: ${unknown.join(", ")}`);
+      const result = evaluateFormula(formula, {
+        ...known,
+        ...energyFormulaVariables(
+          state.settings.energyProfile,
+          state.settings.baselineCalories,
+        ),
+      });
+      setValidation(`Looks good · example ${Number(result.toFixed(1))}`);
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Check this calculation.";
+      setValidation(message);
+      Alert.alert("Calculation needs attention", message);
+      return false;
+    }
+  }
+  function save() {
+    const target = Number(goal.replace(",", "."));
+    if (!name.trim())
+      return Alert.alert("Add a name", "Use a short, clear name.");
+    if (goalEnabled && dataType !== "text" && !Number.isFinite(target))
+      return Alert.alert("Check your target", "Enter a valid number.");
+    const builtInCalculation = [
+      "weekly_deficit_balance",
+      "overall_score",
+    ].includes(presetId || tracker?.id || "");
+    if (
+      dataType === "calculated" &&
+      !builtInCalculation &&
+      (!formula.trim() || !validate())
+    )
+      return;
+    const common: NewMetric = {
+      name: name.trim(),
+      icon,
+      color,
+      unit: unit.trim(),
+      dataType,
+      aggregation,
+      goal: {
+        kind:
+          dataType === "boolean" || dataType === "photo"
+            ? "complete"
+            : goalKind,
+        target: Number.isFinite(target) ? target : 0,
+      },
+      goalEnabled,
+      goalRange:
+        rangeMin && rangeMax
+          ? { min: Number(rangeMin), max: Number(rangeMax) }
+          : undefined,
+      category,
+      healthMapping: healthType
+        ? { dataType: healthType, field: healthField }
+        : undefined,
+      stepFallback,
+      manualEntry,
+      rankingDirection: dataType === "boolean" ? "higher" : ranking,
+      defaultVisibility: visibility,
+      formula:
+        dataType === "calculated" && formula.trim()
+          ? formula.trim()
+          : undefined,
+      templateId: tracker ? undefined : presetId || undefined,
+    };
+    if (groupScope) {
+      if (tracker) updateGroupMetric(tracker.id, common);
+      else addGroupMetric(common);
+    } else if (tracker) updateMetric(tracker.id, common);
+    else addMetric(common);
+    if (healthType)
+      updateSettings({
+        healthSync: {
+          ...state.settings.healthSync,
+          dataTypes: {
+            ...state.settings.healthSync.dataTypes,
+            [healthType]: true,
+          },
+        },
+      });
+    router.back();
+  }
+  function remove() {
+    if (!tracker) return;
+    const dependencies = sourceMetrics.filter(
+      (item) =>
+        item.formula && formulaIdentifiers(item.formula).includes(tracker.id),
+    );
+    if (dependencies.length)
+      return Alert.alert(
+        "Used by another tracker",
+        `Remove it from ${dependencies.map((item) => item.name).join(", ")} first.`,
+      );
+    Alert.alert(
+      `Delete ${tracker.name}?`,
+      groupScope
+        ? "This removes it from this group for every member."
+        : "Earlier entries will also be removed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete tracker",
+          style: "destructive",
+          onPress: () => {
+            if (groupScope) deleteGroupMetric(tracker.id);
+            else deleteMetric(tracker.id);
+            router.back();
+          },
+        },
+      ],
+    );
+  }
+  return (
+    <Screen keyboardShouldPersistTaps="handled">
+      <PageHeader
+        eyebrow={groupScope ? state.group.name : "Personal setup"}
+        title={
+          tracker
+            ? `Edit ${tracker.name}`
+            : groupScope
+              ? "Add group tracker"
+              : "Add something to track"
+        }
+        subtitle={
+          groupScope
+            ? "Admins define this once; it becomes available to every group member."
+            : "Keep it simple. Technical controls stay under Advanced."
+        }
+        showMenu={false}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
+      />
+      {!tracker ? (
+        <MetricSelector
+          title="Choose a ready-made tracker"
+          items={presets.map((preset) => ({
+            id: preset.templateId,
+            label: preset.name,
+            icon: preset.icon as keyof typeof Ionicons.glyphMap,
+            color: preset.color,
+            sublabel: preset.description,
+          }))}
+          selectedIds={presetId ? [presetId] : []}
+          onChange={(ids) => {
+            const preset = presets.find((item) => item.templateId === ids[0]);
+            if (preset) applyPreset(preset);
+          }}
+          multiple={false}
+          emptyLabel="Or create your own below"
+        />
+      ) : null}
+      <Card>
+        <Text style={[styles.label, { color: colors.ink }]}>
+          What do you want to track?
+        </Text>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          placeholder="Reading, sleep, blood pressure…"
+          placeholderTextColor={colors.faint}
+          style={[
+            styles.input,
+            { color: colors.ink, borderColor: colors.border },
+          ]}
+        />
+        <View style={styles.wrap}>
+          {CATEGORIES.map((item) => (
+            <Chip
+              key={item.id}
+              label={item.label}
+              icon={item.icon}
+              selected={category === item.id}
+              onPress={() => setCategory(item.id)}
+            />
+          ))}
+        </View>
+        <View style={[styles.switchRow, { borderColor: colors.border }]}>
+          <View style={styles.grow}>
+            <Text style={[styles.rowTitle, { color: colors.ink }]}>
+              Set a target
+            </Text>
+            <Text style={[styles.help, { color: colors.muted }]}>
+              Turn this off for readings you only want to observe.
+            </Text>
+          </View>
+          <Switch
+            value={goalEnabled}
+            onValueChange={setGoalEnabled}
+            trackColor={{ false: colors.border, true: `${accent}88` }}
+            thumbColor={goalEnabled ? accent : colors.faint}
+          />
+        </View>
+        {goalEnabled && dataType !== "text" ? (
+          <>
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Success means
+            </Text>
+            <View style={styles.wrap}>
+              <Chip
+                label="At least"
+                selected={goalKind === "at_least"}
+                onPress={() => setGoalKind("at_least")}
+              />
+              <Chip
+                label="No more than"
+                selected={goalKind === "at_most"}
+                onPress={() => setGoalKind("at_most")}
+              />
+              <Chip
+                label="Near target"
+                selected={goalKind === "exact" && !rangeMin}
+                onPress={() => {
+                  setGoalKind("exact");
+                  setRangeMin("");
+                  setRangeMax("");
+                }}
+              />
+              <Chip
+                label="Inside a range"
+                selected={Boolean(rangeMin || rangeMax)}
+                onPress={() => {
+                  setGoalKind("exact");
+                  setRangeMin(rangeMin || "60");
+                  setRangeMax(rangeMax || "100");
+                }}
+              />
+            </View>
+            {rangeMin || rangeMax ? (
+              <View style={styles.columns}>
+                <Field
+                  label="From"
+                  value={rangeMin}
+                  set={setRangeMin}
+                  colors={colors}
+                />
+                <Field
+                  label="To"
+                  value={rangeMax}
+                  set={setRangeMax}
+                  colors={colors}
+                />
+              </View>
+            ) : (
+              <View style={styles.columns}>
+                <Field
+                  label="Target"
+                  value={goal}
+                  set={setGoal}
+                  colors={colors}
+                />
+                <Field
+                  label="Unit"
+                  value={unit}
+                  set={setUnit}
+                  colors={colors}
+                  keyboard={false}
+                />
+              </View>
+            )}
+          </>
+        ) : null}
+        <Text style={[styles.label, { color: colors.ink }]}>
+          Who can see new entries?
+        </Text>
+        <View style={styles.wrap}>
+          <Chip
+            label="My group"
+            icon="people-outline"
+            selected={visibility === "group"}
+            onPress={() => setVisibility("group")}
+          />
+          <Chip
+            label="Goal status only"
+            icon="checkmark-circle-outline"
+            selected={visibility === "status"}
+            onPress={() => setVisibility("status")}
+          />
+          <Chip
+            label="Only me"
+            icon="lock-closed-outline"
+            selected={visibility === "private"}
+            onPress={() => setVisibility("private")}
+          />
+        </View>
+      </Card>
+      <Pressable
+        onPress={() => setAdvanced((value) => !value)}
+        style={[
+          styles.advancedButton,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
+        <View>
+          <Text style={[styles.rowTitle, { color: colors.ink }]}>
+            Advanced settings
+          </Text>
+          <Text style={[styles.help, { color: colors.muted }]}>
+            Health sync, calculations, scoring and appearance
+          </Text>
+        </View>
+        <Ionicons
+          name={advanced ? "chevron-up" : "chevron-down"}
+          size={19}
+          color={accent}
+        />
+      </Pressable>
+      {advanced ? (
+        <>
+          <Card>
+            <SectionHeader title="Health connection" />
+            <Text style={[styles.help, { color: colors.muted }]}>
+              Link this tracker to any compatible app that writes this data into
+              Apple Health or Health Connect.
+            </Text>
+            <View style={styles.wrap}>
+              <Chip
+                label="No connection"
+                selected={!healthType}
+                onPress={() => setHealthType("")}
+              />
+              {SOURCES.map((item) => (
+                <Chip
+                  key={item.id}
+                  label={item.label}
+                  selected={healthType === item.id}
+                  onPress={() => {
+                    setHealthType(item.id);
+                    setHealthField(item.fields[0].id);
+                    if (item.id === "steps") setManualEntry(false);
+                  }}
+                />
+              ))}
+            </View>
+            {source ? (
+              <>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Use this value
+                </Text>
+                <View style={styles.wrap}>
+                  {source.fields.map((field) => (
+                    <Chip
+                      key={field.id}
+                      label={field.label}
+                      selected={healthField === field.id}
+                      onPress={() => setHealthField(field.id)}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : null}
+            {healthType === "active_energy" ||
+            (healthType === "workouts" && healthField === "active_calories") ? (
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Estimate uncovered walking
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    If activity calories are missing, use only steps not already
+                    explained by walking or running workouts.
+                  </Text>
+                </View>
+                <Switch value={stepFallback} onValueChange={setStepFallback} />
+              </View>
+            ) : null}
+            <View style={[styles.switchRow, { borderColor: colors.border }]}>
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                  Allow manual entries
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Turn off for device-owned values such as steps.
+                </Text>
+              </View>
+              <Switch value={manualEntry} onValueChange={setManualEntry} />
+            </View>
+          </Card>
+          <Card>
+            <SectionHeader title="How it behaves" />
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Entry type
+            </Text>
+            <View style={styles.wrap}>
+              {(
+                [
+                  "number",
+                  "boolean",
+                  "text",
+                  "photo",
+                  "calculated",
+                ] as MetricDataType[]
+              ).map((item) => (
+                <Chip
+                  key={item}
+                  label={
+                    item === "number"
+                      ? "Number"
+                      : item === "boolean"
+                        ? "Done / not done"
+                        : item === "text"
+                          ? "Note"
+                          : item === "photo"
+                            ? "Photo"
+                            : "Calculated"
+                  }
+                  selected={dataType === item}
+                  onPress={() => setDataType(item)}
+                />
+              ))}
+            </View>
+            {dataType === "number" ? (
+              <>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Multiple entries in one day
+                </Text>
+                <View style={styles.wrap}>
+                  {(
+                    [
+                      ["sum", "Add them"],
+                      ["average", "Average"],
+                      ["latest", "Use latest"],
+                      ["max", "Use highest"],
+                      ["min", "Use lowest"],
+                    ] as [Aggregation, string][]
+                  ).map(([value, label]) => (
+                    <Chip
+                      key={value}
+                      label={label}
+                      selected={aggregation === value}
+                      onPress={() => setAggregation(value)}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : null}
+            {dataType === "calculated" ? (
+              <>
+                <TextInput
+                  value={formula}
+                  onChangeText={(value) => {
+                    setFormula(value);
+                    setValidation(null);
+                  }}
+                  autoCapitalize="none"
+                  multiline
+                  placeholder="Choose values below, then add + or −"
+                  placeholderTextColor={colors.faint}
+                  style={[
+                    styles.input,
+                    styles.formula,
+                    { color: colors.ink, borderColor: colors.border },
+                  ]}
+                />
+                <Text style={[styles.mini, { color: colors.muted }]}>
+                  AVAILABLE VALUES
+                </Text>
+                <View style={styles.wrap}>
+                  {state.metrics
+                    .filter(
+                      (item) =>
+                        item.id !== tracker?.id && item.dataType !== "text",
+                    )
+                    .map((item) => (
+                      <Chip
+                        key={item.id}
+                        label={item.name}
+                        onPress={() => insert(item.id)}
+                      />
+                    ))}
+                </View>
+                <View style={styles.wrap}>
+                  {["bmr", "daily_activity", "+", "-", "*", "/", "(", ")"].map(
+                    (item) => (
+                      <Chip
+                        key={item}
+                        label={item.replace("_", " ")}
+                        onPress={() => insert(item)}
+                      />
+                    ),
+                  )}
+                </View>
+                <Button
+                  label="Check calculation"
+                  variant="ghost"
+                  onPress={validate}
+                />
+                {validation ? (
+                  <Text
+                    style={[
+                      styles.validation,
+                      {
+                        color: validation.startsWith("Looks")
+                          ? accent
+                          : palette.red,
+                      },
+                    ]}
+                  >
+                    {validation}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Competition order
+            </Text>
+            <View style={styles.wrap}>
+              <Chip
+                label="Higher ranks first"
+                selected={ranking === "higher"}
+                onPress={() => setRanking("higher")}
+              />
+              <Chip
+                label="Lower ranks first"
+                selected={ranking === "lower"}
+                onPress={() => setRanking("lower")}
+              />
+              <Chip
+                label="Closest to target"
+                selected={ranking === "closest"}
+                onPress={() => setRanking("closest")}
+              />
+            </View>
+            <Pressable
+              onPress={() => setShowIcons((value) => !value)}
+              style={styles.iconChoice}
+            >
+              <View
+                style={[
+                  styles.icon,
+                  { backgroundColor: `${tracker?.color ?? accent}18` },
+                ]}
+              >
+                <Ionicons
+                  name={icon as keyof typeof Ionicons.glyphMap}
+                  size={20}
+                  color={tracker?.color ?? accent}
+                />
+              </View>
+              <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                Change icon
+              </Text>
+              <Ionicons
+                name={showIcons ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={colors.faint}
+              />
+            </Pressable>
+            {showIcons ? (
+              <View style={styles.icons}>
+                {ICONS.map((item) => (
+                  <Pressable
+                    key={item}
+                    onPress={() => setIcon(item)}
+                    style={[
+                      styles.icon,
+                      { borderColor: icon === item ? accent : colors.border },
+                    ]}
+                  >
+                    <Ionicons
+                      name={item}
+                      size={19}
+                      color={icon === item ? accent : colors.muted}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </Card>
+        </>
+      ) : null}
+      <View style={styles.actions}>
+        {tracker ? (
+          <View style={styles.delete}>
+            <Button label="Delete" variant="danger" onPress={remove} />
+          </View>
+        ) : null}
+        <View style={styles.grow}>
+          <Button
+            label={
+              tracker ? "Save" : groupScope ? "Add to group" : "Add to Today"
+            }
+            icon="checkmark"
+            onPress={save}
+          />
+        </View>
+      </View>
+    </Screen>
+  );
 }
-function Field({label,value,set,colors,keyboard=true}:{label:string;value:string;set:(value:string)=>void;colors:ReturnType<typeof useAppColors>;keyboard?:boolean}){return <View style={styles.grow}><Text style={[styles.label,{color:colors.ink}]}>{label}</Text><TextInput value={value} onChangeText={set} keyboardType={keyboard?'decimal-pad':'default'} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/></View>}
-const styles=StyleSheet.create({label:{fontSize:11,fontWeight:'900',marginTop:8,marginBottom:7},input:{minHeight:44,borderWidth:1,borderRadius:13,paddingHorizontal:12,fontSize:13,marginBottom:9},wrap:{flexDirection:'row',flexWrap:'wrap',gap:7,marginBottom:8},columns:{flexDirection:'row',gap:9},grow:{flex:1},switchRow:{minHeight:62,flexDirection:'row',alignItems:'center',gap:10,borderTopWidth:1,marginTop:10,paddingTop:10},rowTitle:{fontSize:12,fontWeight:'900'},help:{fontSize:9,lineHeight:14,marginTop:2},advancedButton:{minHeight:64,borderWidth:1,borderRadius:17,paddingHorizontal:14,flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginVertical:10},formula:{minHeight:76,textAlignVertical:'top'},mini:{fontSize:8,fontWeight:'900',letterSpacing:.8,marginBottom:7},validation:{fontSize:10,fontWeight:'900',textAlign:'center',marginTop:7},iconChoice:{flexDirection:'row',alignItems:'center',gap:10,marginTop:10},icons:{flexDirection:'row',flexWrap:'wrap',gap:7,marginTop:9},icon:{width:38,height:38,borderRadius:12,borderWidth:1,alignItems:'center',justifyContent:'center'},actions:{flexDirection:'row',gap:9,marginBottom:16},delete:{width:96}});
+function Field({
+  label,
+  value,
+  set,
+  colors,
+  keyboard = true,
+}: {
+  label: string;
+  value: string;
+  set: (value: string) => void;
+  colors: ReturnType<typeof useAppColors>;
+  keyboard?: boolean;
+}) {
+  return (
+    <View style={styles.grow}>
+      <Text style={[styles.label, { color: colors.ink }]}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={set}
+        keyboardType={keyboard ? "decimal-pad" : "default"}
+        style={[
+          styles.input,
+          { color: colors.ink, borderColor: colors.border },
+        ]}
+      />
+    </View>
+  );
+}
+const styles = StyleSheet.create({
+  label: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 },
+  input: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: 13,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    marginBottom: 9,
+  },
+  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 8 },
+  columns: { flexDirection: "row", gap: 9 },
+  grow: { flex: 1 },
+  switchRow: {
+    minHeight: 62,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderTopWidth: 1,
+    marginTop: 10,
+    paddingTop: 10,
+  },
+  rowTitle: { fontSize: 12, fontWeight: "900" },
+  help: { fontSize: 9, lineHeight: 14, marginTop: 2 },
+  advancedButton: {
+    minHeight: 64,
+    borderWidth: 1,
+    borderRadius: 17,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginVertical: 10,
+  },
+  formula: { minHeight: 76, textAlignVertical: "top" },
+  mini: { fontSize: 8, fontWeight: "900", letterSpacing: 0.8, marginBottom: 7 },
+  validation: {
+    fontSize: 10,
+    fontWeight: "900",
+    textAlign: "center",
+    marginTop: 7,
+  },
+  iconChoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 10,
+  },
+  icons: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 9 },
+  icon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actions: { flexDirection: "row", gap: 9, marginBottom: 16 },
+  delete: { width: 96 },
+});

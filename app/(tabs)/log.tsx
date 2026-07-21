@@ -13,14 +13,7 @@ import {
   View,
 } from "react-native";
 
-import {
-  Button,
-  Card,
-  Chip,
-  PageHeader,
-  Screen,
-  SectionHeader,
-} from "@/src/components/ui";
+import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { dateKey } from "@/src/domain/date";
@@ -30,7 +23,7 @@ import {
   safeMetricValue,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
-import { palette, useCompactMode, useGroupAccent } from "@/src/theme";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
 
 const privacyOptions: {
@@ -65,7 +58,7 @@ export default function LogScreen() {
     vitaminB12?: string;
   }>();
   const { state, logMetric, addPhoto } = useApp();
-  const compact = useCompactMode();
+  const colors = useAppColors();
   const accent = useGroupAccent();
   const metrics = useMemo(() => {
     const secondary = new Set([
@@ -92,7 +85,6 @@ export default function LogScreen() {
       .filter(
         (metric) =>
           metric.dataType !== "calculated" &&
-          metric.dataType !== "photo" &&
           metric.manualEntry !== false &&
           !secondary.has(metric.id),
       )
@@ -108,21 +100,12 @@ export default function LogScreen() {
     selected?.defaultVisibility ?? "group",
   );
   const [entryImage, setEntryImage] = useState<string | null>(null);
-  const [photoUri, setPhotoUri] = useState<string | null>(null);
-  const [caption, setCaption] = useState("");
-  const [photoVisibility, setPhotoVisibility] = useState<Visibility>("group");
   const now = new Date();
   const [logDate, setLogDate] = useState(dateKey());
   const [logCalendarOpen, setLogCalendarOpen] = useState(false);
   const [logTime, setLogTime] = useState(
     `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
   );
-  const [photoDate, setPhotoDate] = useState(dateKey());
-  const [photoCalendarOpen, setPhotoCalendarOpen] = useState(false);
-  const [photoTime, setPhotoTime] = useState(
-    `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
-  );
-  const [photoWeight, setPhotoWeight] = useState("");
   const [protein, setProtein] = useState("");
   const [fat, setFat] = useState("");
   const [carbs, setCarbs] = useState("");
@@ -293,6 +276,37 @@ export default function LogScreen() {
       recordedAt,
       nutrition: selected.id === "food" ? nutrition : undefined,
     };
+    if (selected.dataType === "photo") {
+      if (!entryImage)
+        return Alert.alert(
+          "Choose a photo",
+          "Attach the progress photo you want to save.",
+        );
+      addPhoto(
+        entryImage,
+        label.trim() || note.trim(),
+        visibility === "status" ? "private" : visibility,
+        logDate,
+        recordedAt,
+      );
+      const weight = Number(value.replace(",", "."));
+      if (Number.isFinite(weight) && weight > 0)
+        logMetric(
+          "weight",
+          weight,
+          visibility === "group" ? "group" : "private",
+          "replace",
+          { localDate: logDate, recordedAt, label: "Progress photo weight" },
+        );
+      clearEntry();
+      Alert.alert(
+        "Photo saved",
+        weight > 0
+          ? "The photo and matching weight were saved."
+          : "The progress photo was saved.",
+      );
+      return;
+    }
     if (selected.dataType === "boolean") {
       logMetric(selected.id, true, visibility, "replace", details);
       if (selected.id === "workout")
@@ -376,37 +390,6 @@ export default function LogScreen() {
       `${selected.name} was added to ${logDate === dateKey() ? "today" : logDate}.`,
     );
   }
-  function savePhoto() {
-    const capturedAt = entryTimestamp(photoDate, photoTime);
-    if (!photoUri || !capturedAt)
-      return Alert.alert("Check the date", "Enter a valid date and time.");
-    addPhoto(photoUri, caption.trim(), photoVisibility, photoDate, capturedAt);
-    const weight = Number(photoWeight.replace(",", "."));
-    if (Number.isFinite(weight) && weight > 0)
-      logMetric(
-        "weight",
-        weight,
-        photoVisibility === "group" ? "group" : "private",
-        "replace",
-        {
-          localDate: photoDate,
-          recordedAt: capturedAt,
-          label: "Progress photo weight",
-        },
-      );
-    setPhotoUri(null);
-    setCaption("");
-    setPhotoWeight("");
-    setPhotoVisibility("group");
-    Alert.alert(
-      "Photo saved",
-      weight > 0
-        ? "The photo and matching weight entry were saved."
-        : photoVisibility === "private"
-          ? "It stays private until you reveal it."
-          : "It is visible to your group.",
-    );
-  }
   const privacyCopy =
     visibility === "private"
       ? "Only you can read this entry, its note, and image."
@@ -416,20 +399,7 @@ export default function LogScreen() {
 
   return (
     <Screen keyboardShouldPersistTaps="handled">
-      {!compact ? (
-        <PageHeader
-          eyebrow="Quick add"
-          title="Log your day"
-          subtitle="Every entry supports a note, image, and explicit privacy."
-        />
-      ) : (
-        <View style={styles.compactHeader}>
-          <Text style={styles.compactTitle}>Add an entry</Text>
-          <Pressable onPress={() => router.push("/menu")}>
-            <Ionicons name="menu-outline" size={22} color={accent} />
-          </Pressable>
-        </View>
-      )}
+      <PageHeader title="Log" />
       <View style={styles.selector}>
         <MetricSelector
           title="What are you adding?"
@@ -460,8 +430,10 @@ export default function LogScreen() {
               />
             </View>
             <View style={styles.grow}>
-              <Text style={styles.metricName}>{selected.name}</Text>
-              <Text style={styles.currentValue}>
+              <Text style={[styles.metricName, { color: colors.ink }]}>
+                {selected.name}
+              </Text>
+              <Text style={[styles.currentValue, { color: colors.muted }]}>
                 {logDate === dateKey() ? "Today" : logDate}:{" "}
                 {selected.dataType === "text"
                   ? textToday || "No entry yet"
@@ -547,7 +519,32 @@ export default function LogScreen() {
               </View>
             ) : null}
           </View>
-          {selected.dataType === "boolean" ? (
+          {selected.dataType === "photo" ? (
+            <>
+              <Text style={styles.fieldLabel}>
+                Weight on this date (optional)
+              </Text>
+              <View style={styles.numberWrap}>
+                <TextInput
+                  value={value}
+                  onChangeText={setValue}
+                  keyboardType="decimal-pad"
+                  placeholder="e.g. 82.4"
+                  placeholderTextColor={palette.faint}
+                  style={styles.numberInput}
+                />
+                <Text style={styles.unit}>kg</Text>
+              </View>
+              <Text style={styles.fieldLabel}>Caption (optional)</Text>
+              <TextInput
+                value={label}
+                onChangeText={setLabel}
+                placeholder="A short note about this photo"
+                placeholderTextColor={palette.faint}
+                style={styles.fieldInput}
+              />
+            </>
+          ) : selected.dataType === "boolean" ? (
             <Pressable onPress={toggleBoolean} style={styles.completion}>
               <Ionicons
                 name={numericToday > 0 ? "checkmark-circle" : "ellipse-outline"}
@@ -579,7 +576,7 @@ export default function LogScreen() {
                 onChangeText={setValue}
                 placeholder={replaceMode ? "Day's total" : "Amount to add"}
                 placeholderTextColor={palette.faint}
-                style={styles.numberInput}
+                style={[styles.numberInput, { color: colors.ink }]}
               />
               <Text style={styles.unit}>{selected.unit}</Text>
             </View>
@@ -647,7 +644,9 @@ export default function LogScreen() {
                 style={styles.moreNutrition}
               >
                 <Text style={[styles.moreNutritionText, { color: accent }]}>
-                  {moreNutrition ? "Hide extra nutrients" : "Add vitamins, minerals and more"}
+                  {moreNutrition
+                    ? "Hide extra nutrients"
+                    : "Add vitamins, minerals and more"}
                 </Text>
                 <Ionicons
                   name={moreNutrition ? "chevron-up" : "chevron-down"}
@@ -659,16 +658,61 @@ export default function LogScreen() {
                 <View style={styles.nutritionGrid}>
                   {[
                     { label: "Sugar", value: sugar, set: setSugar, unit: "g" },
-                    { label: "Sat. fat", value: saturatedFat, set: setSaturatedFat, unit: "g" },
-                    { label: "Sodium", value: sodium, set: setSodium, unit: "mg" },
-                    { label: "Cholesterol", value: cholesterol, set: setCholesterol, unit: "mg" },
-                    { label: "Potassium", value: potassium, set: setPotassium, unit: "mg" },
-                    { label: "Calcium", value: calcium, set: setCalcium, unit: "mg" },
+                    {
+                      label: "Sat. fat",
+                      value: saturatedFat,
+                      set: setSaturatedFat,
+                      unit: "g",
+                    },
+                    {
+                      label: "Sodium",
+                      value: sodium,
+                      set: setSodium,
+                      unit: "mg",
+                    },
+                    {
+                      label: "Cholesterol",
+                      value: cholesterol,
+                      set: setCholesterol,
+                      unit: "mg",
+                    },
+                    {
+                      label: "Potassium",
+                      value: potassium,
+                      set: setPotassium,
+                      unit: "mg",
+                    },
+                    {
+                      label: "Calcium",
+                      value: calcium,
+                      set: setCalcium,
+                      unit: "mg",
+                    },
                     { label: "Iron", value: iron, set: setIron, unit: "mg" },
-                    { label: "Magnesium", value: magnesium, set: setMagnesium, unit: "mg" },
-                    { label: "Vitamin C", value: vitaminC, set: setVitaminC, unit: "mg" },
-                    { label: "Vitamin D", value: vitaminD, set: setVitaminD, unit: "mcg" },
-                    { label: "Vitamin B12", value: vitaminB12, set: setVitaminB12, unit: "mcg" },
+                    {
+                      label: "Magnesium",
+                      value: magnesium,
+                      set: setMagnesium,
+                      unit: "mg",
+                    },
+                    {
+                      label: "Vitamin C",
+                      value: vitaminC,
+                      set: setVitaminC,
+                      unit: "mg",
+                    },
+                    {
+                      label: "Vitamin D",
+                      value: vitaminD,
+                      set: setVitaminD,
+                      unit: "mcg",
+                    },
+                    {
+                      label: "Vitamin B12",
+                      value: vitaminB12,
+                      set: setVitaminB12,
+                      unit: "mcg",
+                    },
                   ].map((item) => (
                     <View key={item.label} style={styles.nutritionField}>
                       <Text style={styles.nutritionLabel}>{item.label}</Text>
@@ -806,135 +850,14 @@ export default function LogScreen() {
             }
             icon="checkmark"
             onPress={saveEntry}
-            disabled={selected.dataType !== "boolean" && !value.trim()}
+            disabled={
+              selected.dataType === "photo"
+                ? !entryImage
+                : selected.dataType !== "boolean" && !value.trim()
+            }
           />
         </Card>
       ) : null}
-      <SectionHeader title="Progress photo" />
-      <Card>
-        {photoUri ? (
-          <>
-            <Image
-              source={{ uri: photoUri }}
-              style={styles.photoPreview}
-              contentFit="cover"
-            />
-            <View style={styles.dateCard}>
-              <View style={styles.dateRow}>
-                <Pressable
-                  onPress={() => setPhotoCalendarOpen((open) => !open)}
-                  style={styles.calendarButton}
-                >
-                  <Ionicons
-                    name="calendar-outline"
-                    size={18}
-                    color={palette.primary}
-                  />
-                  <View style={styles.grow}>
-                    <Text style={styles.fieldLabel}>Photo date</Text>
-                    <Text style={styles.calendarText}>{photoDate}</Text>
-                  </View>
-                  <Ionicons
-                    name={photoCalendarOpen ? "chevron-up" : "chevron-down"}
-                    size={16}
-                    color={palette.muted}
-                  />
-                </Pressable>
-                <View style={styles.timeField}>
-                  <Text style={styles.fieldLabel}>Time</Text>
-                  <TextInput
-                    value={photoTime}
-                    onChangeText={setPhotoTime}
-                    placeholder="HH:MM"
-                    placeholderTextColor={palette.faint}
-                    style={styles.dateInput}
-                  />
-                </View>
-              </View>
-              {photoCalendarOpen ? (
-                <View style={styles.miniCalendar}>
-                  <MonthCalendar
-                    monthDate={photoDate}
-                    selectedDate={photoDate}
-                    onMonthChange={setPhotoDate}
-                    onSelect={(date) => {
-                      setPhotoDate(date);
-                      setPhotoCalendarOpen(false);
-                    }}
-                  />
-                </View>
-              ) : null}
-            </View>
-            <Text style={styles.fieldLabel}>
-              Weight on this date (optional)
-            </Text>
-            <View style={styles.numberWrap}>
-              <TextInput
-                value={photoWeight}
-                onChangeText={setPhotoWeight}
-                keyboardType="decimal-pad"
-                placeholder="e.g. 82.4"
-                placeholderTextColor={palette.faint}
-                style={styles.numberInput}
-              />
-              <Text style={styles.unit}>kg</Text>
-            </View>
-            <TextInput
-              value={caption}
-              onChangeText={setCaption}
-              placeholder="Add a caption (optional)"
-              placeholderTextColor={palette.faint}
-              style={styles.fieldInput}
-            />
-            <Text style={styles.fieldLabel}>Who can see it?</Text>
-            <View style={styles.privacyRow}>
-              {privacyOptions
-                .filter((option) => option.value !== "status")
-                .map((option) => (
-                  <Chip
-                    key={option.value}
-                    label={option.label}
-                    icon={option.icon}
-                    selected={photoVisibility === option.value}
-                    onPress={() => setPhotoVisibility(option.value)}
-                  />
-                ))}
-            </View>
-            <View style={styles.photoActions}>
-              <View style={styles.grow}>
-                <Button
-                  label="Cancel"
-                  variant="ghost"
-                  onPress={() => setPhotoUri(null)}
-                />
-              </View>
-              <View style={styles.grow}>
-                <Button label="Save photo" onPress={savePhoto} />
-              </View>
-            </View>
-          </>
-        ) : (
-          <Pressable
-            onPress={() => pickImage(setPhotoUri)}
-            style={styles.photoEmpty}
-          >
-            <View style={styles.photoIcon}>
-              <Ionicons
-                name="images-outline"
-                size={27}
-                color={palette.primary}
-              />
-            </View>
-            <View style={styles.grow}>
-              <Text style={styles.photoTitle}>Add a progress photo</Text>
-              <Text style={styles.helper}>
-                Optionally record weight with the same date.
-              </Text>
-            </View>
-            <Ionicons name="add" size={22} color={palette.primary} />
-          </Pressable>
-        )}
-      </Card>
     </Screen>
   );
 }

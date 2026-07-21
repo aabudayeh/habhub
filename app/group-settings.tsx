@@ -1,27 +1,416 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import React, { useState } from "react";
+import {
+  Alert,
+  Pressable,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import { Avatar, Card, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
-import { memberDisplayName, memberOriginalLabel, memberRoleLabel } from '@/src/domain/members';
-import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
+import {
+  Avatar,
+  Card,
+  IconButton,
+  PageHeader,
+  Screen,
+  SectionHeader,
+} from "@/src/components/ui";
+import {
+  memberDisplayName,
+  memberOriginalLabel,
+  memberRoleLabel,
+} from "@/src/domain/members";
+import { useApp } from "@/src/state/AppProvider";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
-const GROUP_COLORS = ['#176B4D','#3478D4','#7756D9','#C45B35','#9B3F72','#2A8F86','#59636E','#8A6A24'];
+const GROUP_COLORS = [
+  "#176B4D",
+  "#3478D4",
+  "#7756D9",
+  "#C45B35",
+  "#9B3F72",
+  "#2A8F86",
+  "#59636E",
+  "#8A6A24",
+];
 
-export default function GroupSettings(){
-  const {state,updateMetric,setMemberRole,updateNickname,setGroupRestDays,setGroupTheme}=useApp();const me=state.group.members.find((member)=>member.id===state.currentUserId)!;const canEdit=me.role==='owner'||me.role==='admin';const total=state.metrics.reduce((sum,metric)=>sum+metric.scoreWeight,0);const groupAliases=state.settings.memberNicknamesByGroup?.[state.group.id]??{};const [drafts,setDrafts]=useState<Record<string,string>>(()=>Object.fromEntries(state.group.members.map((member)=>[member.id,groupAliases[member.id]??''])));
-  function role(memberId:string,current:'owner'|'admin'|'member'){if(me.role!=='owner'||current==='owner')return;const next=current==='admin'?'member':'admin';Alert.alert(`${next==='admin'?'Make admin':'Remove admin access'}?`,next==='admin'?'This person can edit group metrics and scoring.':'They remain a group member.',[{text:'Cancel',style:'cancel'},{text:'Confirm',onPress:()=>setMemberRole(memberId,next)}]);}
-  return <Screen><PageHeader eyebrow={state.group.name} title="Group settings" subtitle="Tracked metrics and scoring belong to this group—not to an individual member." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
-    <Card style={styles.summary}><Ionicons name="shield-checkmark" size={24} color={palette.primary}/><View style={styles.copy}><Text style={styles.summaryTitle}>{canEdit?'You can edit this group':'View-only group configuration'}</Text><Text style={styles.meta}>{memberRoleLabel(me)} · changes stay with {state.group.name} when you switch groups</Text></View></Card>
-    <SectionHeader title="Group theme"/><Card style={themeStyles.card}>{GROUP_COLORS.map((color)=><Pressable key={color} disabled={!canEdit} accessibilityLabel={`Use ${color} theme`} onPress={()=>setGroupTheme(color)} style={[themeStyles.swatch,{backgroundColor:color},(state.group.themeColor??palette.primary)===color&&themeStyles.selected]}>{(state.group.themeColor??palette.primary)===color?<Ionicons name="checkmark" size={18} color={palette.white}/>:null}</Pressable>)}</Card>
-    <SectionHeader title="Group tracked metrics"/><Card style={styles.list}>{state.metrics.filter((metric)=>metric.dataType!=='text'&&metric.dataType!=='photo').map((metric,index,list)=>{const tracked=metric.scoreWeight>0;return <View key={metric.id} style={[styles.metric,index<list.length-1&&styles.border]}><Pressable disabled={!canEdit} onPress={()=>updateMetric(metric.id,{scoreWeight:tracked?0:10,sections:{...metric.sections,group:tracked?metric.sections.group:true}})}><Ionicons name={tracked?'checkbox':'square-outline'} size={22} color={tracked?palette.primary:palette.faint}/></Pressable><View style={[styles.icon,{backgroundColor:`${metric.color}18`}]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={19} color={metric.color}/></View><View style={styles.copy}><Text style={styles.name}>{metric.name}</Text><Text style={styles.meta}>{tracked?`${total?Math.round(metric.scoreWeight/total*100):0}% of the 100-point score`:'Not ranked by this group'}</Text></View>{canEdit&&tracked?<><Pressable onPress={()=>updateMetric(metric.id,{scoreWeight:Math.max(1,metric.scoreWeight-5)})} style={styles.step}><Ionicons name="remove" size={17} color={palette.primary}/></Pressable><Text style={styles.weight}>{metric.scoreWeight}</Text><Pressable onPress={()=>updateMetric(metric.id,{scoreWeight:Math.min(100,metric.scoreWeight+5)})} style={styles.step}><Ionicons name="add" size={17} color={palette.primary}/></Pressable></>:<Text style={styles.weight}>{metric.scoreWeight}</Text>}</View>;})}</Card>
-    <Card style={styles.score}><Text style={styles.scoreValue}>100</Text><View style={styles.copy}><Text style={styles.scoreTitle}>Maximum normalized score</Text><Text style={styles.scoreCopy}>Weights can total any amount; North normalizes them to a maximum score of 100.</Text></View></Card>
-    <SectionHeader title="Streak rest days"/><Card style={styles.restCard}><View style={styles.copy}><Text style={styles.name}>Allowed rest days per week</Text><Text style={styles.meta}>A missed goal day can preserve a group streak until this weekly allowance is used.</Text></View><Pressable disabled={!canEdit} onPress={()=>setGroupRestDays(state.group.streakRestDaysPerWeek-1)} style={styles.step}><Ionicons name="remove" size={17} color={palette.primary}/></Pressable><Text style={styles.restValue}>{state.group.streakRestDaysPerWeek}</Text><Pressable disabled={!canEdit} onPress={()=>setGroupRestDays(state.group.streakRestDaysPerWeek+1)} style={styles.step}><Ionicons name="add" size={17} color={palette.primary}/></Pressable></Card>
-    <SectionHeader title="Nicknames in this group"/><Text style={styles.help}>These aliases apply only while you are viewing {state.group.name}. Original names remain visible as subtext.</Text><Card style={styles.list}>{state.group.members.map((member,index)=><View key={member.id} style={[styles.alias,index<state.group.members.length-1&&styles.border]}><Avatar initials={member.initials} color={member.color} size={38} uri={member.avatarUri}/><View style={styles.copy}><Text style={styles.name}>{member.name}{member.id===state.currentUserId?' · You':''}</Text><TextInput value={drafts[member.id]??''} onChangeText={(value)=>setDrafts((current)=>({...current,[member.id]:value}))} onBlur={()=>updateNickname(member.id,drafts[member.id]??'')} onSubmitEditing={()=>updateNickname(member.id,drafts[member.id]??'')} placeholder="Nickname in this group" placeholderTextColor={palette.faint} style={styles.aliasInput}/></View><Pressable onPress={()=>updateNickname(member.id,drafts[member.id]??'')} style={styles.save}><Ionicons name="checkmark" size={17} color={palette.primary}/></Pressable></View>)}</Card>
-    <SectionHeader title="Group roles"/><Card style={styles.list}>{state.group.members.map((member,index)=><View key={member.id} style={[styles.member,index<state.group.members.length-1&&styles.border]}><Avatar initials={member.initials} color={member.color} size={40} uri={member.avatarUri}/><View style={styles.copy}><Text style={styles.name}>{memberDisplayName(state,member)}</Text><Text style={styles.meta}>{memberOriginalLabel(state,member)??memberRoleLabel(member)}</Text></View>{me.role==='owner'&&member.role!=='owner'?<Pressable onPress={()=>role(member.id,member.role)} style={[styles.roleButton,member.role==='admin'&&styles.adminButton]}><Text style={[styles.roleText,member.role==='admin'&&styles.adminText]}>{member.role==='admin'?'Admin':'Make admin'}</Text></Pressable>:<Text style={styles.roleStatic}>{memberRoleLabel(member)}</Text>}</View>)}</Card>
-  </Screen>;
+export default function GroupSettings() {
+  const {
+    state,
+    updateGroupMetric,
+    setMemberRole,
+    updateNickname,
+    setGroupRestDays,
+    setGroupTheme,
+  } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const me = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  )!;
+  const canEdit = me.role === "owner" || me.role === "admin";
+  const groupMetrics = state.group.metricConfiguration ?? [];
+  const total = groupMetrics.reduce(
+    (sum, metric) => sum + metric.scoreWeight,
+    0,
+  );
+  const aliases = state.settings.memberNicknamesByGroup?.[state.group.id] ?? {};
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      state.group.members.map((member) => [
+        member.id,
+        aliases[member.id] ?? "",
+      ]),
+    ),
+  );
+
+  function toggleRole(memberId: string, current: "owner" | "admin" | "member") {
+    if (me.role !== "owner" || current === "owner") return;
+    const role = current === "admin" ? "member" : "admin";
+    Alert.alert(
+      role === "admin" ? "Make this person an admin?" : "Remove admin access?",
+      "Group admins can change competition scoring and settings.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Confirm", onPress: () => setMemberRole(memberId, role) },
+      ],
+    );
+  }
+
+  return (
+    <Screen>
+      <PageHeader
+        eyebrow={state.group.name}
+        title="Group settings"
+        subtitle="Competition rules belong to this group and apply to every member."
+        showMenu={false}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
+      />
+      <Card style={styles.status}>
+        <Ionicons name="shield-checkmark" size={22} color={accent} />
+        <View style={styles.copy}>
+          <Text style={[styles.name, { color: colors.ink }]}>
+            {canEdit ? "You can edit this group" : "View-only configuration"}
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            {memberRoleLabel(me)} · changes stay with this group
+          </Text>
+        </View>
+      </Card>
+
+      <SectionHeader title="Group color" />
+      <Card style={styles.colors}>
+        {GROUP_COLORS.map((color) => (
+          <Pressable
+            key={color}
+            disabled={!canEdit}
+            onPress={() => setGroupTheme(color)}
+            style={[
+              styles.swatch,
+              { backgroundColor: color },
+              (state.group.themeColor ?? palette.primary) === color && {
+                borderColor: colors.ink,
+                borderWidth: 3,
+              },
+            ]}
+          >
+            {(state.group.themeColor ?? palette.primary) === color ? (
+              <Ionicons name="checkmark" size={17} color={palette.white} />
+            ) : null}
+          </Pressable>
+        ))}
+      </Card>
+
+      <SectionHeader
+        title="Group competition"
+        action={
+          canEdit ? (
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: "/metric-editor",
+                  params: { id: "new", scope: "group" },
+                })
+              }
+            >
+              <Text style={[styles.link, { color: accent }]}>
+                + Add group tracker
+              </Text>
+            </Pressable>
+          ) : undefined
+        }
+      />
+      <Card style={styles.list}>
+        {groupMetrics
+          .filter(
+            (metric) =>
+              !["weekly_deficit_balance", "overall_score"].includes(metric.id),
+          )
+          .map((metric, index, list) => {
+            const competitive =
+              metric.dataType !== "text" && metric.dataType !== "photo";
+            const tracked = competitive
+              ? metric.scoreWeight > 0
+              : metric.sections.group;
+            return (
+              <View
+                key={metric.id}
+                style={[
+                  styles.metric,
+                  index < list.length - 1 && {
+                    borderBottomColor: colors.border,
+                    borderBottomWidth: 1,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.icon,
+                    { backgroundColor: `${metric.color}18` },
+                  ]}
+                >
+                  <Ionicons
+                    name={metric.icon as keyof typeof Ionicons.glyphMap}
+                    size={18}
+                    color={metric.color}
+                  />
+                </View>
+                <View style={styles.copy}>
+                  <Text style={[styles.name, { color: colors.ink }]}>
+                    {metric.name}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {!competitive
+                      ? "Shared group item"
+                      : tracked
+                        ? `${total ? Math.round((metric.scoreWeight / total) * 100) : 0}% of group score`
+                        : "Not ranked by this group"}
+                  </Text>
+                </View>
+                {canEdit && tracked && competitive ? (
+                  <View style={styles.weightControl}>
+                    <Pressable
+                      onPress={() =>
+                        updateGroupMetric(metric.id, {
+                          scoreWeight: Math.max(1, metric.scoreWeight - 5),
+                        })
+                      }
+                      style={[
+                        styles.step,
+                        { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons name="remove" size={15} color={accent} />
+                    </Pressable>
+                    <Text style={[styles.weight, { color: colors.ink }]}>
+                      {metric.scoreWeight}
+                    </Text>
+                    <Pressable
+                      onPress={() =>
+                        updateGroupMetric(metric.id, {
+                          scoreWeight: Math.min(100, metric.scoreWeight + 5),
+                        })
+                      }
+                      style={[
+                        styles.step,
+                        { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons name="add" size={15} color={accent} />
+                    </Pressable>
+                  </View>
+                ) : null}
+                {canEdit ? (
+                  <Pressable
+                    accessibilityLabel={`Edit ${metric.name}`}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/metric-editor",
+                        params: { id: metric.id, scope: "group" },
+                      })
+                    }
+                    style={[
+                      styles.edit,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons name="create-outline" size={15} color={accent} />
+                  </Pressable>
+                ) : null}
+                <Switch
+                  disabled={!canEdit}
+                  value={tracked}
+                  onValueChange={(value) =>
+                    updateGroupMetric(metric.id, {
+                      scoreWeight: competitive && value ? 10 : 0,
+                      sections: { ...metric.sections, group: value },
+                    })
+                  }
+                  trackColor={{ false: colors.border, true: `${accent}88` }}
+                  thumbColor={tracked ? accent : colors.faint}
+                />
+              </View>
+            );
+          })}
+      </Card>
+      <Text style={[styles.help, { color: colors.muted }]}>
+        Weights are normalized to a maximum score of 100. Personal targets and
+        Today layouts remain individual.
+      </Text>
+
+      <SectionHeader title="Streak rest days" />
+      <Card style={styles.status}>
+        <View style={styles.copy}>
+          <Text style={[styles.name, { color: colors.ink }]}>
+            Allowed per seven days
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            A missed day can preserve the group streak until this allowance is
+            used.
+          </Text>
+        </View>
+        <Pressable
+          disabled={!canEdit}
+          onPress={() =>
+            setGroupRestDays(state.group.streakRestDaysPerWeek - 1)
+          }
+          style={[styles.step, { backgroundColor: colors.primarySoft }]}
+        >
+          <Ionicons name="remove" size={16} color={accent} />
+        </Pressable>
+        <Text style={[styles.rest, { color: colors.ink }]}>
+          {state.group.streakRestDaysPerWeek}
+        </Text>
+        <Pressable
+          disabled={!canEdit}
+          onPress={() =>
+            setGroupRestDays(state.group.streakRestDaysPerWeek + 1)
+          }
+          style={[styles.step, { backgroundColor: colors.primarySoft }]}
+        >
+          <Ionicons name="add" size={16} color={accent} />
+        </Pressable>
+      </Card>
+
+      <SectionHeader title="Names in this group" />
+      <Card style={styles.list}>
+        {state.group.members.map((member, index) => (
+          <View
+            key={member.id}
+            style={[
+              styles.person,
+              index < state.group.members.length - 1 && {
+                borderBottomColor: colors.border,
+                borderBottomWidth: 1,
+              },
+            ]}
+          >
+            <Avatar
+              initials={member.initials}
+              color={member.color}
+              size={36}
+              uri={member.avatarUri}
+            />
+            <View style={styles.copy}>
+              <Text style={[styles.name, { color: colors.ink }]}>
+                {member.name}
+                {member.id === state.currentUserId ? " · You" : ""}
+              </Text>
+              <TextInput
+                value={drafts[member.id] ?? ""}
+                onChangeText={(value) =>
+                  setDrafts((current) => ({ ...current, [member.id]: value }))
+                }
+                onBlur={() =>
+                  updateNickname(member.id, drafts[member.id] ?? "")
+                }
+                placeholder="Nickname in this group"
+                placeholderTextColor={colors.faint}
+                style={[
+                  styles.input,
+                  { color: colors.ink, borderColor: colors.border },
+                ]}
+              />
+            </View>
+            {me.role === "owner" && member.role !== "owner" ? (
+              <Pressable onPress={() => toggleRole(member.id, member.role)}>
+                <Text style={[styles.role, { color: accent }]}>
+                  {member.role === "admin" ? "Admin" : "Make admin"}
+                </Text>
+              </Pressable>
+            ) : (
+              <Text style={[styles.role, { color: colors.muted }]}>
+                {memberDisplayName(state, member) !== member.name
+                  ? memberOriginalLabel(state, member)
+                  : memberRoleLabel(member)}
+              </Text>
+            )}
+          </View>
+        ))}
+      </Card>
+    </Screen>
+  );
 }
-const styles=StyleSheet.create({summary:{flexDirection:'row',alignItems:'center',gap:12},copy:{flex:1},summaryTitle:{color:palette.ink,fontSize:14,fontWeight:'900'},meta:{color:palette.muted,fontSize:9,lineHeight:14,marginTop:2},list:{paddingVertical:3,paddingHorizontal:13},metric:{minHeight:64,flexDirection:'row',alignItems:'center',gap:8},border:{borderBottomWidth:1,borderBottomColor:palette.border},icon:{width:39,height:39,borderRadius:13,alignItems:'center',justifyContent:'center'},name:{color:palette.ink,fontSize:12,fontWeight:'900'},step:{width:30,height:30,borderRadius:10,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},weight:{width:28,textAlign:'center',color:palette.ink,fontSize:12,fontWeight:'900'},score:{flexDirection:'row',alignItems:'center',gap:14,backgroundColor:palette.ink,borderColor:palette.ink},scoreValue:{color:palette.lime,fontSize:32,fontWeight:'900'},scoreTitle:{color:palette.white,fontSize:13,fontWeight:'900'},scoreCopy:{color:'#BAC5BD',fontSize:9,lineHeight:14,marginTop:3},restCard:{flexDirection:'row',alignItems:'center',gap:8},restValue:{width:28,textAlign:'center',color:palette.ink,fontSize:18,fontWeight:'900'},help:{color:palette.muted,fontSize:9,lineHeight:14,paddingHorizontal:7,marginTop:-5,marginBottom:7},alias:{minHeight:72,flexDirection:'row',alignItems:'center',gap:9},aliasInput:{borderWidth:1,borderColor:palette.border,borderRadius:10,color:palette.ink,fontSize:10,paddingHorizontal:9,paddingVertical:7,marginTop:5},save:{width:34,height:34,borderRadius:11,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},member:{minHeight:64,flexDirection:'row',alignItems:'center',gap:9},roleButton:{borderRadius:11,backgroundColor:palette.primarySoft,paddingHorizontal:10,paddingVertical:8},adminButton:{backgroundColor:palette.primary},roleText:{color:palette.primary,fontSize:9,fontWeight:'900'},adminText:{color:palette.white},roleStatic:{color:palette.muted,fontSize:9,fontWeight:'800',maxWidth:72,textAlign:'right'}});
-const themeStyles=StyleSheet.create({card:{flexDirection:'row',flexWrap:'wrap',gap:12},swatch:{width:40,height:40,borderRadius:20,alignItems:'center',justifyContent:'center'},selected:{borderWidth:3,borderColor:palette.ink}});
+
+const styles = StyleSheet.create({
+  status: { flexDirection: "row", alignItems: "center", gap: 10 },
+  copy: { flex: 1 },
+  name: { fontSize: 11, fontWeight: "900" },
+  meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  link: { fontSize: 10, fontWeight: "900" },
+  colors: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  swatch: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  list: { paddingVertical: 2, paddingHorizontal: 11 },
+  metric: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 8 },
+  icon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  edit: {
+    width: 27,
+    height: 27,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weightControl: { flexDirection: "row", alignItems: "center", gap: 3 },
+  step: {
+    width: 27,
+    height: 27,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weight: { width: 24, textAlign: "center", fontSize: 10, fontWeight: "900" },
+  help: { fontSize: 8, lineHeight: 13, paddingHorizontal: 5, marginTop: 5 },
+  rest: { width: 25, textAlign: "center", fontSize: 16, fontWeight: "900" },
+  person: { minHeight: 63, flexDirection: "row", alignItems: "center", gap: 8 },
+  input: {
+    minHeight: 30,
+    borderWidth: 1,
+    borderRadius: 9,
+    fontSize: 9,
+    paddingHorizontal: 8,
+    marginTop: 4,
+  },
+  role: { fontSize: 8, fontWeight: "900", maxWidth: 70, textAlign: "right" },
+});

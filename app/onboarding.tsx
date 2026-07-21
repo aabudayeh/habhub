@@ -1,57 +1,1089 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import { Button, Chip, ProgressBar } from '@/src/components/ui';
-import { ACTIVITY_LABELS } from '@/src/domain/energy';
-import { useHealthSync } from '@/src/health/HealthSyncProvider';
-import { enablePushNotifications } from '@/src/notifications/push';
-import { useAuth } from '@/src/auth/AuthProvider';
-import { useApp } from '@/src/state/AppProvider';
-import { palette, useAppColors, useGroupAccent } from '@/src/theme';
-import { ActivityLevel, BiologicalSex, NewMetric, WeightDirection } from '@/src/types';
+import { useAuth } from "@/src/auth/AuthProvider";
+import { Button, Chip, ProgressBar } from "@/src/components/ui";
+import { dateKey } from "@/src/domain/date";
+import { ACTIVITY_LABELS } from "@/src/domain/energy";
+import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import { enablePushNotifications } from "@/src/notifications/push";
+import { useApp } from "@/src/state/AppProvider";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import {
+  ActivityLevel,
+  AppState,
+  BiologicalSex,
+  LandingPage,
+  MetricDefinition,
+  WeightDirection,
+} from "@/src/types";
 
-const GOALS=[
-  {id:'weight',title:'Manage my weight',copy:'Lose, maintain, or gain with a sensible energy plan.',icon:'scale-outline' as const},
-  {id:'activity',title:'Move more',copy:'Steps, workouts, or any activity you care about.',icon:'walk-outline' as const},
-  {id:'learning',title:'Learn consistently',copy:'Reading, studying, practice, or focused time.',icon:'book-outline' as const},
-  {id:'health',title:'Follow my health',copy:'Sleep, cycle, glucose, blood pressure, and more.',icon:'heart-outline' as const},
-  {id:'nutrition',title:'Eat healthier',copy:'Calories, macros, meals, water, and nutrients.',icon:'restaurant-outline' as const},
-  {id:'friends',title:'Do it with friends',copy:'Private groups, friendly rankings, and chat.',icon:'people-outline' as const},
+const GOALS = [
+  {
+    id: "weight",
+    title: "Manage my weight",
+    copy: "Lose, maintain, or gain with a sensible energy plan.",
+    icon: "scale-outline" as const,
+  },
+  {
+    id: "activity",
+    title: "Move more",
+    copy: "Steps, workouts, or any activity you care about.",
+    icon: "walk-outline" as const,
+  },
+  {
+    id: "learning",
+    title: "Learn consistently",
+    copy: "Reading, studying, practice, or focused time.",
+    icon: "book-outline" as const,
+  },
+  {
+    id: "health",
+    title: "Follow my health",
+    copy: "Sleep, cycle, glucose, blood pressure, and more.",
+    icon: "heart-outline" as const,
+  },
+  {
+    id: "nutrition",
+    title: "Eat healthier",
+    copy: "Calories, meals, water, and useful nutrients.",
+    icon: "restaurant-outline" as const,
+  },
+  {
+    id: "friends",
+    title: "Do it with friends",
+    copy: "Private groups, friendly rankings, and chat.",
+    icon: "people-outline" as const,
+  },
 ];
-const HEALTH=[['sleep','Sleep'],['blood_pressure_systolic','Blood pressure'],['blood_glucose','Blood glucose'],['menstrual_cycle','Cycle'],['pulse','Pulse'],['body_fat','Body composition']] as const;
+const HEALTH = [
+  ["sleep", "Sleep"],
+  ["blood_pressure_systolic", "Blood pressure"],
+  ["blood_glucose", "Blood glucose"],
+  ["menstrual_cycle", "Cycle"],
+  ["pulse", "Pulse"],
+  ["body_fat", "Body composition"],
+] as const;
+const GROUP_LABELS: Record<string, string> = {
+  energy: "Weight & energy",
+  activity: "Movement",
+  nutrition: "Food & hydration",
+  health: "Health readings",
+  mind: "Learning",
+  other: "Other",
+};
+const NOT_GOALS = new Set([
+  "weight",
+  "weekly_deficit_balance",
+  "overall_score",
+  "progress_photo",
+  "pulse",
+  "blood_pressure_systolic",
+  "blood_pressure_diastolic",
+  "body_fat",
+  "lean_body_mass",
+]);
 
-export default function Onboarding(){
-  const {state,updateSettings,updateEnergyProfile,updateMetric,setMetricSection,addMetric}=useApp();const auth=useAuth();const health=useHealthSync();const colors=useAppColors();const accent=useGroupAccent();
-  const [step,setStep]=useState(0);const [goals,setGoals]=useState<string[]>(state.settings.selectedGoals??[]);const [healthChoices,setHealthChoices]=useState<string[]>(['sleep']);const [direction,setDirection]=useState<WeightDirection>(state.settings.weightDirection??'lose');const profile=state.settings.energyProfile;const [age,setAge]=useState(String(profile.age));const [height,setHeight]=useState(String(profile.heightCm));const [weight,setWeight]=useState(String(profile.weightKg));const [target,setTarget]=useState(String(profile.targetWeightKg));const [sex,setSex]=useState<BiologicalSex>(profile.sex);const [activity,setActivity]=useState<ActivityLevel>(profile.activityLevel);const [pushReady,setPushReady]=useState(false);const [healthReady,setHealthReady]=useState(state.settings.healthSync.enabled);const [advancedTutorial,setAdvancedTutorial]=useState(false);
-  const total=5;
-  function toggle(id:string,setter=setGoals,current=goals){setter(current.includes(id)?current.filter((item)=>item!==id):[...current,id]);}
-  function configure(){
-    const visible=new Set<string>();if(goals.includes('weight'))['weight','food','exercise','deficit','weekly_deficit_balance','steps'].forEach((id)=>visible.add(id));if(goals.includes('activity'))['steps','exercise','workout_duration'].forEach((id)=>visible.add(id));if(goals.includes('nutrition'))['food','water'].forEach((id)=>visible.add(id));if(goals.includes('health'))healthChoices.forEach((id)=>visible.add(id));
-    state.metrics.forEach((item)=>setMetricSection(item.id,'today',visible.has(item.id),'today'));
-    if(goals.includes('learning')){
-      const existing=state.metrics.find((item)=>item.id==='reading');if(existing)setMetricSection(existing.id,'today',true,'today');else addMetric({name:'Reading',icon:'book-outline',color:'#5969B0',unit:'min',dataType:'number',aggregation:'sum',goal:{kind:'at_least',target:30},goalEnabled:true,category:'mind',manualEntry:true,rankingDirection:'higher',defaultVisibility:'group'} as NewMetric);
+export default function Onboarding() {
+  const {
+    state,
+    updateSettings,
+    updateEnergyProfile,
+    configurePersonalMetrics,
+  } = useApp();
+  const auth = useAuth();
+  const health = useHealthSync();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [step, setStep] = useState(0);
+  const [goals, setGoals] = useState<string[]>(
+    state.settings.selectedGoals ?? [],
+  );
+  const [healthChoices, setHealthChoices] = useState<string[]>(["sleep"]);
+  const [direction, setDirection] = useState<WeightDirection>(
+    state.settings.weightDirection ?? "lose",
+  );
+  const profile = state.settings.energyProfile;
+  const [age, setAge] = useState(String(profile.age));
+  const [height, setHeight] = useState(String(profile.heightCm));
+  const [weight, setWeight] = useState(String(profile.weightKg));
+  const [target, setTarget] = useState(String(profile.targetWeightKg));
+  const [sex, setSex] = useState<BiologicalSex>(profile.sex);
+  const [activity, setActivity] = useState<ActivityLevel>(
+    profile.activityLevel,
+  );
+  const [pushReady, setPushReady] = useState(false);
+  const [healthReady, setHealthReady] = useState(
+    state.settings.healthSync.enabled,
+  );
+  const [advancedTutorial, setAdvancedTutorial] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [expanded, setExpanded] = useState<string[]>([]);
+  const [landingPage, setLandingPage] = useState<LandingPage>(
+    (state.settings.selectedGoals ?? []).includes("friends")
+      ? "group"
+      : "index",
+  );
+  const initialized = useRef(false);
+  const nextProfile = useMemo(
+    () => ({
+      ...profile,
+      age: Number(age) || profile.age,
+      heightCm: Number(height) || profile.heightCm,
+      weightKg: Number(weight) || profile.weightKg,
+      targetWeightKg: Number(target) || profile.targetWeightKg,
+      sex,
+      activityLevel: activity,
+    }),
+    [profile, age, height, weight, target, sex, activity],
+  );
+  const desired = useMemo(() => {
+    const ids = new Set<string>();
+    if (goals.includes("weight"))
+      [
+        "weight",
+        "food",
+        "exercise",
+        "deficit",
+        "weekly_deficit_balance",
+      ].forEach((id) => ids.add(id));
+    if (goals.includes("activity"))
+      [
+        "steps",
+        "exercise",
+        "workout",
+        "workout_duration",
+        "workout_distance",
+      ].forEach((id) => ids.add(id));
+    if (goals.includes("nutrition"))
+      ["food", "water"].forEach((id) => ids.add(id));
+    if (goals.includes("health")) healthChoices.forEach((id) => ids.add(id));
+    if (goals.includes("learning")) ids.add("reading");
+    return ids;
+  }, [goals, healthChoices]);
+  const proposed = useMemo(() => {
+    const adjusted = {
+      ...state,
+      settings: {
+        ...state.settings,
+        energyProfile: nextProfile,
+        weightDirection: direction,
+      },
+    } as AppState;
+    const presets = trackerPresets(adjusted).filter((item) =>
+      desired.has(item.templateId),
+    );
+    const reading: TrackerPreset[] = desired.has("reading")
+      ? [
+          {
+            templateId: "reading",
+            name: "Reading",
+            icon: "book-outline",
+            color: "#5969B0",
+            unit: "min",
+            dataType: "number",
+            aggregation: "sum",
+            goal: { kind: "at_least", target: 30 },
+            goalEnabled: true,
+            category: "mind",
+            manualEntry: true,
+            rankingDirection: "higher",
+            defaultVisibility: "group",
+            description: "A simple daily reading or study-time goal.",
+          },
+        ]
+      : [];
+    return [...presets, ...reading];
+  }, [state, desired, direction, nextProfile]);
+  const grouped = useMemo(
+    () =>
+      Object.entries(
+        proposed.reduce<Record<string, typeof proposed>>((all, item) => {
+          const key = item.category ?? "other";
+          (all[key] ??= []).push(item);
+          return all;
+        }, {}),
+      ),
+    [proposed],
+  );
+  useEffect(() => {
+    if (step === 2 && !initialized.current) {
+      initialized.current = true;
+      setSelected(proposed.map((item) => item.templateId));
     }
-    updateSettings({selectedGoals:goals,weightDirection:direction,showLeaderboard:goals.includes('friends'),showChat:goals.includes('friends'),featuredTodayCard:visible.has('deficit')?'deficit':visible.has('steps')?'steps':'score'});
-    updateEnergyProfile({age:Number(age)||profile.age,heightCm:Number(height)||profile.heightCm,weightKg:Number(weight)||profile.weightKg,targetWeightKg:Number(target)||profile.targetWeightKg,sex,activityLevel:activity});
-    if(direction==='maintain')updateMetric('deficit',{goalEnabled:true,goalRange:{min:-150,max:150}});
+  }, [step, proposed]);
+  useEffect(() => {
+    if (step === 1 && goals.includes("friends")) setLandingPage("group");
+  }, [step, goals]);
+  function toggle(id: string, setter = setGoals, current = goals) {
+    setter(
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
   }
-  async function enablePush(){try{if(auth.user)await enablePushNotifications(auth.user.id,{...state.settings.notifications,pushEnabled:true});updateSettings({notifications:{...state.settings.notifications,pushEnabled:true}});setPushReady(true);}catch(error){Alert.alert('Notifications not enabled',error instanceof Error?error.message:'You can enable them later.');}}
-  async function enableHealth(){try{await health.connect();setHealthReady(true);}catch(error){Alert.alert('Health connection not completed',error instanceof Error?error.message:'You can connect later.');}}
-  function finish(){updateSettings({onboardingComplete:true,tutorialComplete:true,advancedTutorialComplete:advancedTutorial});router.replace((advancedTutorial?'/customize?guide=1':'/(tabs)') as never);}
-  return <SafeAreaView style={[styles.safe,{backgroundColor:colors.canvas}]}><KeyboardAvoidingView style={styles.safe} behavior={Platform.OS==='ios'?'padding':undefined}><View style={styles.page}>
-    <View style={styles.top}><View style={[styles.mark,{backgroundColor:accent}]}><Ionicons name="navigate" size={20} color={palette.white}/></View><Text style={[styles.brand,{color:colors.ink}]}>NORTH</Text><Text style={[styles.step,{color:colors.muted}]}>{step+1}/{total}</Text></View><ProgressBar progress={(step+1)/total} color={accent}/>
-    {step===0?<View style={styles.body}><Text style={[styles.title,{color:colors.ink}]}>What would you like to change?</Text><Text style={[styles.subtitle,{color:colors.muted}]}>Choose only what matters now. North builds the rest for you.</Text><View style={styles.goalGrid}>{GOALS.map((goal)=><Pressable key={goal.id} onPress={()=>toggle(goal.id)} style={[styles.goal,{backgroundColor:colors.card,borderColor:goals.includes(goal.id)?accent:colors.border}]}><View style={[styles.goalIcon,{backgroundColor:`${accent}18`}]}><Ionicons name={goal.icon} size={21} color={accent}/></View><View style={styles.grow}><Text style={[styles.goalTitle,{color:colors.ink}]}>{goal.title}</Text><Text style={[styles.goalCopy,{color:colors.muted}]}>{goal.copy}</Text></View><Ionicons name={goals.includes(goal.id)?'checkmark-circle':'ellipse-outline'} size={21} color={goals.includes(goal.id)?accent:colors.faint}/></Pressable>)}</View></View>:null}
-    {step===1?<View style={styles.body}><Text style={[styles.title,{color:colors.ink}]}>A little about you</Text><Text style={[styles.subtitle,{color:colors.muted}]}>Used privately for relevant targets and estimates.</Text>{goals.includes('weight')?<><Text style={[styles.label,{color:colors.ink}]}>Direction</Text><View style={styles.wrap}><Chip label="Lose" selected={direction==='lose'} onPress={()=>setDirection('lose')}/><Chip label="Maintain" selected={direction==='maintain'} onPress={()=>setDirection('maintain')}/><Chip label="Gain" selected={direction==='gain'} onPress={()=>setDirection('gain')}/></View><View style={styles.fields}><Field label="Age" value={age} set={setAge} colors={colors}/><Field label="Height cm" value={height} set={setHeight} colors={colors}/></View><View style={styles.fields}><Field label="Current kg" value={weight} set={setWeight} colors={colors}/><Field label="Target kg" value={target} set={setTarget} colors={colors}/></View><View style={styles.wrap}>{(['female','male','unspecified'] as BiologicalSex[]).map((item)=><Chip key={item} label={item==='unspecified'?'Prefer not to say':item[0].toUpperCase()+item.slice(1)} selected={sex===item} onPress={()=>setSex(item)}/>)}</View><Text style={[styles.label,{color:colors.ink}]}>Usual activity</Text><View style={styles.wrap}>{(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map((item)=><Chip key={item} label={ACTIVITY_LABELS[item]} selected={activity===item} onPress={()=>setActivity(item)}/>)}</View></>:<View style={[styles.empty,{backgroundColor:colors.card}]}><Ionicons name="shield-checkmark-outline" size={28} color={accent}/><Text style={[styles.goalTitle,{color:colors.ink}]}>No body profile needed</Text><Text style={[styles.goalCopy,{color:colors.muted}]}>You can add one later if a goal needs it.</Text></View>}</View>:null}
-    {step===2?<View style={styles.body}><Text style={[styles.title,{color:colors.ink}]}>Your starting setup</Text><Text style={[styles.subtitle,{color:colors.muted}]}>We will show these on Today. Everything else stays available under Advanced settings.</Text>{goals.includes('health')?<><Text style={[styles.label,{color:colors.ink}]}>Health readings</Text><View style={styles.choiceList}>{HEALTH.map(([id,label])=><Pressable key={id} onPress={()=>toggle(id,setHealthChoices,healthChoices)} style={[styles.choice,{backgroundColor:colors.card,borderColor:colors.border}]}><Text style={[styles.goalTitle,{color:colors.ink}]}>{label}</Text><Ionicons name={healthChoices.includes(id)?'checkbox':'square-outline'} size={21} color={healthChoices.includes(id)?accent:colors.faint}/></Pressable>)}</View></>:null}<View style={[styles.summary,{backgroundColor:colors.card,borderColor:colors.border}]}><Ionicons name="sparkles" size={23} color={accent}/><View style={styles.grow}><Text style={[styles.goalTitle,{color:colors.ink}]}>Tailored automatically</Text><Text style={[styles.goalCopy,{color:colors.muted}]}>{goals.length||1} focus area{goals.length===1?'':'s'} · {goals.includes('friends')?'social tools on':'private mode'} · advanced controls hidden</Text></View></View></View>:null}
-    {step===3?<View style={styles.body}><Text style={[styles.title,{color:colors.ink}]}>Keep it effortless</Text><Text style={[styles.subtitle,{color:colors.muted}]}>Connect once. North can refresh when the app opens, in the background when allowed, or when you pull down on Today.</Text><PermissionCard icon="heart-outline" title="Connect health data" copy="Import only the categories you approve from Apple Health or Health Connect—including data written by compatible apps." done={healthReady} action={enableHealth} colors={colors} accent={accent}/><PermissionCard icon="notifications-outline" title="Enable useful notifications" copy="Goal nudges, group lead changes, badges, and chat. You control each type later." done={pushReady} action={enablePush} colors={colors} accent={accent}/></View>:null}
-    {step===4?<View style={styles.body}><Text style={[styles.title,{color:colors.ink}]}>That’s it.</Text><Text style={[styles.subtitle,{color:colors.muted}]}>Three things are enough to start.</Text><View style={styles.tutorial}><Tip number="1" title="Today shows only your priorities" copy="Tap a card for its entries and trend. Hold it to rearrange or remove it." colors={colors} accent={accent}/><Tip number="2" title="Use + to record something" copy="Device-owned data such as steps updates automatically." colors={colors} accent={accent}/><Tip number="3" title="Progress keeps the detail" copy="Your dashboard stays calm; history, trends, and comparisons live there." colors={colors} accent={accent}/></View><Pressable onPress={()=>setAdvancedTutorial((value)=>!value)} style={styles.advanced}><Ionicons name={advancedTutorial?'checkbox':'square-outline'} size={20} color={advancedTutorial?accent:colors.faint}/><Text style={[styles.goalCopy,{color:colors.muted}]}>Show advanced customization tips after I start</Text></Pressable></View>:null}
-    <View style={styles.footer}>{step>0?<Pressable onPress={()=>setStep((value)=>value-1)} style={styles.back}><Text style={[styles.backText,{color:colors.muted}]}>Back</Text></Pressable>:<Pressable onPress={()=>{updateSettings({onboardingComplete:true,tutorialComplete:false});router.replace('/(tabs)' as never);}} style={styles.back}><Text style={[styles.backText,{color:colors.muted}]}>Skip setup</Text></Pressable>}<View style={styles.next}><Button label={step===4?'Start using North':'Continue'} disabled={step===0&&!goals.length} onPress={()=>{if(step===2)configure();if(step===4)finish();else setStep((value)=>value+1);}}/></View></View>
-  </View></KeyboardAvoidingView></SafeAreaView>;
+  function metricDefinitions(): MetricDefinition[] {
+    const today = dateKey();
+    return proposed
+      .filter((item) => selected.includes(item.templateId))
+      .map((item, order) => ({
+        id: item.templateId,
+        slug: item.templateId,
+        name: item.name,
+        icon: item.icon,
+        color: item.color,
+        unit: item.unit,
+        dataType: item.dataType,
+        aggregation: item.aggregation,
+        goal: { ...item.goal },
+        goalEnabled: item.goalEnabled,
+        goalRange: item.goalRange,
+        category: item.category,
+        healthMapping: item.healthMapping,
+        stepFallback: item.stepFallback,
+        manualEntry: item.manualEntry,
+        rankingDirection: item.rankingDirection,
+        defaultVisibility: item.defaultVisibility,
+        formula: item.formula,
+        formulaVersion: 1,
+        scoreWeight: 0,
+        sections: { today: true, insights: true, group: false },
+        order,
+        activeFrom: today,
+      }));
+  }
+  function configure() {
+    const metrics = metricDefinitions();
+    configurePersonalMetrics(
+      metrics,
+      metrics
+        .filter((item) => item.goalEnabled !== false && !NOT_GOALS.has(item.id))
+        .map((item) => item.id),
+    );
+    updateSettings({
+      selectedGoals: goals,
+      weightDirection: direction,
+      showLeaderboard: goals.includes("friends"),
+      showChat: goals.includes("friends"),
+      defaultLandingPage: landingPage,
+    });
+    updateEnergyProfile(nextProfile);
+  }
+  async function enablePush() {
+    try {
+      if (auth.user)
+        await enablePushNotifications(auth.user.id, {
+          ...state.settings.notifications,
+          pushEnabled: true,
+        });
+      updateSettings({
+        notifications: { ...state.settings.notifications, pushEnabled: true },
+      });
+      setPushReady(true);
+    } catch (error) {
+      Alert.alert(
+        "Notifications not enabled",
+        error instanceof Error ? error.message : "You can enable them later.",
+      );
+    }
+  }
+  async function enableHealth() {
+    try {
+      await health.connect();
+      setHealthReady(true);
+    } catch (error) {
+      Alert.alert(
+        "Health connection not completed",
+        error instanceof Error ? error.message : "You can connect later.",
+      );
+    }
+  }
+  function finish() {
+    updateSettings({
+      onboardingComplete: true,
+      tutorialComplete: true,
+      advancedTutorialComplete: advancedTutorial,
+      defaultLandingPage: landingPage,
+    });
+    router.replace(
+      (landingPage === "index" ? "/" : `/${landingPage}`) as never,
+    );
+  }
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
+      <KeyboardAvoidingView
+        style={styles.safe}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <View style={styles.page}>
+          <View style={styles.top}>
+            <View style={[styles.mark, { backgroundColor: accent }]}>
+              <Ionicons name="navigate" size={20} color={palette.white} />
+            </View>
+            <Text style={[styles.brand, { color: colors.ink }]}>NORTH</Text>
+            <Text style={[styles.step, { color: colors.muted }]}>
+              {step + 1}/5
+            </Text>
+          </View>
+          <ProgressBar progress={(step + 1) / 5} color={accent} />
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {step === 0 ? (
+              <>
+                <Title
+                  title="What would you like to change?"
+                  copy="Choose only what matters now. North builds the rest for you."
+                  colors={colors}
+                />
+                <View style={styles.goalGrid}>
+                  {GOALS.map((goal) => (
+                    <Pressable
+                      key={goal.id}
+                      onPress={() => toggle(goal.id)}
+                      style={[
+                        styles.goal,
+                        {
+                          backgroundColor: colors.card,
+                          borderColor: goals.includes(goal.id)
+                            ? accent
+                            : colors.border,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.goalIcon,
+                          { backgroundColor: `${accent}18` },
+                        ]}
+                      >
+                        <Ionicons name={goal.icon} size={21} color={accent} />
+                      </View>
+                      <View style={styles.grow}>
+                        <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                          {goal.title}
+                        </Text>
+                        <Text
+                          style={[styles.goalCopy, { color: colors.muted }]}
+                        >
+                          {goal.copy}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={
+                          goals.includes(goal.id)
+                            ? "checkmark-circle"
+                            : "ellipse-outline"
+                        }
+                        size={21}
+                        color={goals.includes(goal.id) ? accent : colors.faint}
+                      />
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            ) : null}
+            {step === 1 ? (
+              <>
+                <Title
+                  title="A little about you"
+                  copy="Used privately for relevant targets and estimates."
+                  colors={colors}
+                />
+                {goals.includes("weight") ? (
+                  <>
+                    <Text style={[styles.label, { color: colors.ink }]}>
+                      Direction
+                    </Text>
+                    <View style={styles.wrap}>
+                      <Chip
+                        label="Lose"
+                        selected={direction === "lose"}
+                        onPress={() => setDirection("lose")}
+                      />
+                      <Chip
+                        label="Maintain"
+                        selected={direction === "maintain"}
+                        onPress={() => setDirection("maintain")}
+                      />
+                      <Chip
+                        label="Gain"
+                        selected={direction === "gain"}
+                        onPress={() => setDirection("gain")}
+                      />
+                    </View>
+                    <View style={styles.fields}>
+                      <Field
+                        label="Age"
+                        value={age}
+                        set={setAge}
+                        colors={colors}
+                      />
+                      <Field
+                        label="Height cm"
+                        value={height}
+                        set={setHeight}
+                        colors={colors}
+                      />
+                    </View>
+                    <View style={styles.fields}>
+                      <Field
+                        label="Current kg"
+                        value={weight}
+                        set={setWeight}
+                        colors={colors}
+                      />
+                      <Field
+                        label="Target kg"
+                        value={target}
+                        set={setTarget}
+                        colors={colors}
+                      />
+                    </View>
+                    <View style={styles.wrap}>
+                      {(
+                        ["female", "male", "unspecified"] as BiologicalSex[]
+                      ).map((item) => (
+                        <Chip
+                          key={item}
+                          label={
+                            item === "unspecified"
+                              ? "Prefer not to say"
+                              : item[0].toUpperCase() + item.slice(1)
+                          }
+                          selected={sex === item}
+                          onPress={() => setSex(item)}
+                        />
+                      ))}
+                    </View>
+                    <Text style={[styles.label, { color: colors.ink }]}>
+                      Usual activity
+                    </Text>
+                    <View style={styles.wrap}>
+                      {(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map(
+                        (item) => (
+                          <Chip
+                            key={item}
+                            label={ACTIVITY_LABELS[item]}
+                            selected={activity === item}
+                            onPress={() => setActivity(item)}
+                          />
+                        ),
+                      )}
+                    </View>
+                  </>
+                ) : (
+                  <Empty
+                    copy="No body profile is needed for these goals."
+                    colors={colors}
+                    accent={accent}
+                  />
+                )}
+              </>
+            ) : null}
+            {step === 2 ? (
+              <>
+                <Title
+                  title="Your starting setup"
+                  copy="Only checked items are added. Other ready-made options stay available under Add."
+                  colors={colors}
+                />
+                {goals.includes("health") ? (
+                  <>
+                    <Text style={[styles.label, { color: colors.ink }]}>
+                      Health readings
+                    </Text>
+                    <View style={styles.choiceList}>
+                      {HEALTH.map(([id, label]) => (
+                        <Pressable
+                          key={id}
+                          onPress={() =>
+                            toggle(id, setHealthChoices, healthChoices)
+                          }
+                          style={[
+                            styles.choice,
+                            {
+                              backgroundColor: colors.card,
+                              borderColor: colors.border,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[styles.goalTitle, { color: colors.ink }]}
+                          >
+                            {label}
+                          </Text>
+                          <Ionicons
+                            name={
+                              healthChoices.includes(id)
+                                ? "checkbox"
+                                : "square-outline"
+                            }
+                            size={21}
+                            color={
+                              healthChoices.includes(id) ? accent : colors.faint
+                            }
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                ) : null}
+                <View style={styles.selectActions}>
+                  <Pressable
+                    onPress={() =>
+                      setSelected(proposed.map((item) => item.templateId))
+                    }
+                  >
+                    <Text style={[styles.action, { color: accent }]}>
+                      Select all
+                    </Text>
+                  </Pressable>
+                  <Pressable onPress={() => setSelected([])}>
+                    <Text style={[styles.action, { color: accent }]}>
+                      Deselect all
+                    </Text>
+                  </Pressable>
+                </View>
+                {grouped.map(([group, items]) => (
+                  <View
+                    key={group}
+                    style={[
+                      styles.group,
+                      {
+                        backgroundColor: colors.card,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <Pressable
+                      onPress={() => toggle(group, setExpanded, expanded)}
+                      style={styles.groupHead}
+                    >
+                      <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                        {GROUP_LABELS[group] ?? group}
+                      </Text>
+                      <Text style={[styles.count, { color: colors.muted }]}>
+                        {
+                          items.filter((item) =>
+                            selected.includes(item.templateId),
+                          ).length
+                        }
+                        /{items.length}
+                      </Text>
+                      <Ionicons
+                        name={
+                          expanded.includes(group)
+                            ? "chevron-up"
+                            : "chevron-down"
+                        }
+                        size={18}
+                        color={colors.faint}
+                      />
+                    </Pressable>
+                    {expanded.includes(group)
+                      ? items.map((item) => (
+                          <Pressable
+                            key={item.templateId}
+                            onPress={() =>
+                              toggle(item.templateId, setSelected, selected)
+                            }
+                            style={[
+                              styles.tracker,
+                              { borderTopColor: colors.border },
+                            ]}
+                          >
+                            <View
+                              style={[
+                                styles.tinyIcon,
+                                { backgroundColor: `${item.color}18` },
+                              ]}
+                            >
+                              <Ionicons
+                                name={
+                                  item.icon as keyof typeof Ionicons.glyphMap
+                                }
+                                size={17}
+                                color={item.color}
+                              />
+                            </View>
+                            <View style={styles.grow}>
+                              <Text
+                                style={[
+                                  styles.goalTitle,
+                                  { color: colors.ink },
+                                ]}
+                              >
+                                {item.name}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.goalCopy,
+                                  { color: colors.muted },
+                                ]}
+                              >
+                                {item.description}
+                              </Text>
+                            </View>
+                            <Ionicons
+                              name={
+                                selected.includes(item.templateId)
+                                  ? "checkbox"
+                                  : "square-outline"
+                              }
+                              size={21}
+                              color={
+                                selected.includes(item.templateId)
+                                  ? accent
+                                  : colors.faint
+                              }
+                            />
+                          </Pressable>
+                        ))
+                      : null}
+                  </View>
+                ))}
+              </>
+            ) : null}
+            {step === 3 ? (
+              <>
+                <Title
+                  title="Connect when you are ready"
+                  copy="Both permissions are optional and can be changed later."
+                  colors={colors}
+                />
+                <PermissionCard
+                  icon="notifications-outline"
+                  title="Notifications"
+                  copy="Goal reminders, chat, and group updates."
+                  done={pushReady}
+                  action={enablePush}
+                  colors={colors}
+                  accent={accent}
+                />
+                <PermissionCard
+                  icon="heart-outline"
+                  title="Health data"
+                  copy="Import selected data from Apple Health or Health Connect."
+                  done={healthReady}
+                  action={enableHealth}
+                  colors={colors}
+                  accent={accent}
+                />
+              </>
+            ) : null}
+            {step === 4 ? (
+              <>
+                <Title
+                  title="You are ready"
+                  copy="Three quick ideas are enough to start."
+                  colors={colors}
+                />
+                <View style={styles.tutorial}>
+                  <Tip
+                    number="1"
+                    title="Today keeps the focus small"
+                    copy="Tap an item for its history; hold it to rearrange or remove it."
+                    colors={colors}
+                    accent={accent}
+                  />
+                  <Tip
+                    number="2"
+                    title="Log only what is manual"
+                    copy="Connected health items update when the app opens or you pull down."
+                    colors={colors}
+                    accent={accent}
+                  />
+                  <Tip
+                    number="3"
+                    title="Advanced stays out of the way"
+                    copy="Add ready-made items, formulas, sharing, and group rules only when needed."
+                    colors={colors}
+                    accent={accent}
+                  />
+                </View>
+                <Pressable
+                  onPress={() => setAdvancedTutorial((value) => !value)}
+                  style={styles.advanced}
+                >
+                  <Ionicons
+                    name={advancedTutorial ? "checkbox" : "square-outline"}
+                    size={21}
+                    color={advancedTutorial ? accent : colors.faint}
+                  />
+                  <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                    Continue to advanced customization
+                  </Text>
+                </Pressable>
+              </>
+            ) : null}
+            {step === 4 ? (
+              <View style={styles.landing}>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Open North on
+                </Text>
+                <View style={styles.wrap}>
+                  <Chip
+                    label="Today"
+                    icon="today-outline"
+                    selected={landingPage === "index"}
+                    onPress={() => setLandingPage("index")}
+                  />
+                  {goals.includes("friends") ? (
+                    <Chip
+                      label="Leaderboard"
+                      icon="people-outline"
+                      selected={landingPage === "group"}
+                      onPress={() => setLandingPage("group")}
+                    />
+                  ) : null}
+                  <Chip
+                    label="Progress"
+                    icon="stats-chart-outline"
+                    selected={landingPage === "insights"}
+                    onPress={() => setLandingPage("insights")}
+                  />
+                  <Chip
+                    label="Log"
+                    icon="add-circle-outline"
+                    selected={landingPage === "log"}
+                    onPress={() => setLandingPage("log")}
+                  />
+                </View>
+              </View>
+            ) : null}
+          </ScrollView>
+          <View style={styles.footer}>
+            {step > 0 ? (
+              <Pressable
+                onPress={() => setStep((value) => value - 1)}
+                style={styles.back}
+              >
+                <Text style={[styles.backText, { color: colors.muted }]}>
+                  Back
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => {
+                  updateSettings({
+                    onboardingComplete: true,
+                    tutorialComplete: false,
+                  });
+                  router.replace("/(tabs)" as never);
+                }}
+                style={styles.back}
+              >
+                <Text style={[styles.backText, { color: colors.muted }]}>
+                  Skip
+                </Text>
+              </Pressable>
+            )}
+            <View style={styles.next}>
+              <Button
+                label={step === 4 ? "Start using North" : "Continue"}
+                disabled={
+                  (step === 0 && !goals.length) ||
+                  (step === 2 && !selected.length)
+                }
+                onPress={() => {
+                  if (step === 2) configure();
+                  if (step === 4) finish();
+                  else setStep((value) => value + 1);
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
 }
-function Field({label,value,set,colors}:{label:string;value:string;set:(value:string)=>void;colors:ReturnType<typeof useAppColors>}){return <View style={styles.grow}><Text style={[styles.fieldLabel,{color:colors.muted}]}>{label}</Text><TextInput value={value} onChangeText={set} keyboardType="decimal-pad" style={[styles.input,{color:colors.ink,borderColor:colors.border,backgroundColor:colors.card}]}/></View>}
-function PermissionCard({icon,title,copy,done,action,colors,accent}:{icon:keyof typeof Ionicons.glyphMap;title:string;copy:string;done:boolean;action:()=>void;colors:ReturnType<typeof useAppColors>;accent:string}){return <Pressable onPress={action} style={[styles.permission,{backgroundColor:colors.card,borderColor:done?accent:colors.border}]}><View style={[styles.goalIcon,{backgroundColor:`${accent}18`}]}><Ionicons name={icon} size={22} color={accent}/></View><View style={styles.grow}><Text style={[styles.goalTitle,{color:colors.ink}]}>{title}</Text><Text style={[styles.goalCopy,{color:colors.muted}]}>{copy}</Text></View><Text style={[styles.done,{color:done?accent:colors.muted}]}>{done?'Connected':'Set up'}</Text></Pressable>}
-function Tip({number,title,copy,colors,accent}:{number:string;title:string;copy:string;colors:ReturnType<typeof useAppColors>;accent:string}){return <View style={styles.tip}><View style={[styles.number,{backgroundColor:accent}]}><Text style={styles.numberText}>{number}</Text></View><View style={styles.grow}><Text style={[styles.goalTitle,{color:colors.ink}]}>{title}</Text><Text style={[styles.goalCopy,{color:colors.muted}]}>{copy}</Text></View></View>}
-const styles=StyleSheet.create({safe:{flex:1},page:{flex:1,paddingHorizontal:18,paddingBottom:12},top:{height:54,flexDirection:'row',alignItems:'center',gap:9},mark:{width:32,height:32,borderRadius:11,alignItems:'center',justifyContent:'center'},brand:{fontSize:12,fontWeight:'900',letterSpacing:1.5},step:{marginLeft:'auto',fontSize:10,fontWeight:'800'},body:{flex:1,paddingTop:18},title:{fontSize:27,lineHeight:32,fontWeight:'900',letterSpacing:-.7},subtitle:{fontSize:12,lineHeight:18,marginTop:6,marginBottom:15},goalGrid:{gap:7},goal:{minHeight:63,borderWidth:1,borderRadius:16,padding:10,flexDirection:'row',alignItems:'center',gap:10},goalIcon:{width:39,height:39,borderRadius:13,alignItems:'center',justifyContent:'center'},goalTitle:{fontSize:12,fontWeight:'900'},goalCopy:{fontSize:9,lineHeight:14,marginTop:2},grow:{flex:1},label:{fontSize:10,fontWeight:'900',marginTop:7,marginBottom:7},wrap:{flexDirection:'row',flexWrap:'wrap',gap:7,marginBottom:9},fields:{flexDirection:'row',gap:9},fieldLabel:{fontSize:9,fontWeight:'800',marginBottom:4},input:{height:43,borderWidth:1,borderRadius:12,paddingHorizontal:11,fontSize:13,fontWeight:'800',marginBottom:9},empty:{alignItems:'center',padding:25,borderRadius:18,gap:5,marginTop:20},choiceList:{gap:6},choice:{height:44,borderWidth:1,borderRadius:13,paddingHorizontal:12,flexDirection:'row',alignItems:'center',justifyContent:'space-between'},summary:{marginTop:12,borderWidth:1,borderRadius:16,padding:13,flexDirection:'row',alignItems:'center',gap:11},permission:{minHeight:92,borderWidth:1,borderRadius:18,padding:13,flexDirection:'row',alignItems:'center',gap:11,marginBottom:10},done:{fontSize:10,fontWeight:'900'},tutorial:{gap:14,marginTop:8},tip:{flexDirection:'row',gap:11,alignItems:'flex-start'},number:{width:30,height:30,borderRadius:10,alignItems:'center',justifyContent:'center'},numberText:{color:palette.white,fontSize:12,fontWeight:'900'},advanced:{flexDirection:'row',alignItems:'center',gap:8,marginTop:22},footer:{height:60,flexDirection:'row',alignItems:'center',gap:10},back:{padding:12},backText:{fontSize:11,fontWeight:'900'},next:{flex:1}});
+
+function Title({
+  title,
+  copy,
+  colors,
+}: {
+  title: string;
+  copy: string;
+  colors: ReturnType<typeof useAppColors>;
+}) {
+  return (
+    <>
+      <Text style={[styles.title, { color: colors.ink }]}>{title}</Text>
+      <Text style={[styles.subtitle, { color: colors.muted }]}>{copy}</Text>
+    </>
+  );
+}
+function Field({
+  label,
+  value,
+  set,
+  colors,
+}: {
+  label: string;
+  value: string;
+  set: (value: string) => void;
+  colors: ReturnType<typeof useAppColors>;
+}) {
+  return (
+    <View style={styles.grow}>
+      <Text style={[styles.fieldLabel, { color: colors.muted }]}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={set}
+        keyboardType="decimal-pad"
+        style={[
+          styles.input,
+          {
+            color: colors.ink,
+            borderColor: colors.border,
+            backgroundColor: colors.card,
+          },
+        ]}
+      />
+    </View>
+  );
+}
+function Empty({
+  copy,
+  colors,
+  accent,
+}: {
+  copy: string;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  return (
+    <View style={[styles.empty, { backgroundColor: colors.card }]}>
+      <Ionicons name="shield-checkmark-outline" size={28} color={accent} />
+      <Text style={[styles.goalTitle, { color: colors.ink }]}>{copy}</Text>
+    </View>
+  );
+}
+function PermissionCard({
+  icon,
+  title,
+  copy,
+  done,
+  action,
+  colors,
+  accent,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  copy: string;
+  done: boolean;
+  action: () => void;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  return (
+    <Pressable
+      onPress={action}
+      style={[
+        styles.permission,
+        {
+          backgroundColor: colors.card,
+          borderColor: done ? accent : colors.border,
+        },
+      ]}
+    >
+      <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
+        <Ionicons name={icon} size={22} color={accent} />
+      </View>
+      <View style={styles.grow}>
+        <Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text>
+        <Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text>
+      </View>
+      <Text style={[styles.done, { color: done ? accent : colors.muted }]}>
+        {done ? "Connected" : "Set up"}
+      </Text>
+    </Pressable>
+  );
+}
+function Tip({
+  number,
+  title,
+  copy,
+  colors,
+  accent,
+}: {
+  number: string;
+  title: string;
+  copy: string;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  return (
+    <View style={styles.tip}>
+      <View style={[styles.number, { backgroundColor: accent }]}>
+        <Text style={styles.numberText}>{number}</Text>
+      </View>
+      <View style={styles.grow}>
+        <Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text>
+        <Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text>
+      </View>
+    </View>
+  );
+}
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  page: { flex: 1, paddingHorizontal: 18, paddingBottom: 8 },
+  top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 },
+  mark: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 },
+  step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" },
+  body: { flex: 1 },
+  bodyContent: { paddingTop: 15, paddingBottom: 12 },
+  title: {
+    fontSize: 25,
+    lineHeight: 30,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+  },
+  subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 },
+  goalGrid: { gap: 6 },
+  goal: {
+    minHeight: 59,
+    borderWidth: 1,
+    borderRadius: 15,
+    padding: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  goalIcon: {
+    width: 37,
+    height: 37,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  goalTitle: { fontSize: 11, fontWeight: "900" },
+  goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 },
+  grow: { flex: 1 },
+  label: { fontSize: 10, fontWeight: "900", marginTop: 6, marginBottom: 6 },
+  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  fields: { flexDirection: "row", gap: 8 },
+  fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 },
+  input: {
+    height: 41,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  empty: {
+    alignItems: "center",
+    padding: 24,
+    borderRadius: 17,
+    gap: 6,
+    marginTop: 16,
+  },
+  choiceList: { gap: 5 },
+  choice: {
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectActions: {
+    flexDirection: "row",
+    gap: 16,
+    justifyContent: "flex-end",
+    marginVertical: 9,
+  },
+  action: { fontSize: 10, fontWeight: "900" },
+  group: {
+    borderWidth: 1,
+    borderRadius: 14,
+    marginBottom: 7,
+    overflow: "hidden",
+  },
+  groupHead: {
+    height: 43,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  count: { marginLeft: "auto", fontSize: 9, fontWeight: "900" },
+  tracker: {
+    minHeight: 50,
+    borderTopWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  tinyIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  permission: {
+    minHeight: 85,
+    borderWidth: 1,
+    borderRadius: 17,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 9,
+  },
+  done: { fontSize: 10, fontWeight: "900" },
+  tutorial: { gap: 13, marginTop: 7 },
+  tip: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+  number: {
+    width: 29,
+    height: 29,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  numberText: { color: palette.white, fontSize: 11, fontWeight: "900" },
+  advanced: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 20,
+  },
+  landing: { marginTop: 14 },
+  footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 },
+  back: { padding: 11 },
+  backText: { fontSize: 11, fontWeight: "900" },
+  next: { flex: 1 },
+});
