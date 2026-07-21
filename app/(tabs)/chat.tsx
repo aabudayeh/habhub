@@ -416,10 +416,10 @@ export default function ChatScreen() {
                           ) : null}
                           {message.text ? (
                             <Text
+                              preserveColor={mine}
                               style={[
                                 styles.messageText,
-                                { color: colors.ink },
-                                mine && styles.messageTextMine,
+                                { color: mine ? palette.white : colors.ink },
                               ]}
                             >
                               {message.text}
