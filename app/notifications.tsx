@@ -124,7 +124,9 @@ export default function NotificationsScreen() {
           onPress={togglePush}
         />
         {permissionNote ? (
-          <Text style={styles.permissionNote}>{permissionNote}</Text>
+          <Text style={[styles.permissionNote, { color: colors.muted }]}>
+            {permissionNote}
+          </Text>
         ) : null}
       </Card>
       <SectionHeader title="Group activity" />
@@ -260,25 +262,39 @@ export default function NotificationsScreen() {
         {value.quietHoursEnabled ? (
           <View style={styles.times}>
             <View style={styles.time}>
-              <Text style={styles.label}>From</Text>
+              <Text style={[styles.label, { color: colors.muted }]}>From</Text>
               <TextInput
                 value={value.quietHoursStart}
                 onChangeText={(quietHoursStart) => patch({ quietHoursStart })}
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    color: colors.ink,
+                    borderColor: colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
               />
             </View>
             <View style={styles.time}>
-              <Text style={styles.label}>Until</Text>
+              <Text style={[styles.label, { color: colors.muted }]}>Until</Text>
               <TextInput
                 value={value.quietHoursEnd}
                 onChangeText={(quietHoursEnd) => patch({ quietHoursEnd })}
-                style={styles.input}
+                style={[
+                  styles.input,
+                  {
+                    color: colors.ink,
+                    borderColor: colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
               />
             </View>
           </View>
         ) : null}
       </Card>
-      <Text style={styles.note}>
+      <Text style={[styles.note, { color: colors.muted }]}>
         The installed app requests system permission and registers this phone.
         Expo Go on Android cannot receive remote push notifications; use an EAS
         development or release build.

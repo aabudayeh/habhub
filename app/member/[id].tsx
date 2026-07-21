@@ -687,7 +687,12 @@ export default function MemberProfile() {
           onChange={setSelectedIds}
         />
       </View>
-      <Card style={styles.privacy}>
+      <Card
+        style={[
+          styles.privacy,
+          { backgroundColor: colors.primarySoft, borderColor: colors.border },
+        ]}
+      >
         <Ionicons name="lock-closed-outline" size={19} color={colors.primary} />
         <Text style={[styles.privacyText, { color: colors.muted }]}>
           Private values and photos never enter this comparison. Goal-status
@@ -716,7 +721,7 @@ function statValue(result: ReturnType<typeof periodMetricResult>) {
 function MiniStat({ label, value }: { label: string; value: string }) {
   const colors = useAppColors();
   return (
-    <View style={styles.stat}>
+    <View style={[styles.stat, { backgroundColor: colors.canvas }]}>
       <Text style={[styles.statValue, { color: colors.ink }]}>{value}</Text>
       <Text style={[styles.statLabel, { color: colors.muted }]}>{label}</Text>
     </View>

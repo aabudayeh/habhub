@@ -897,7 +897,12 @@ export default function LogScreen() {
               />
             ))}
           </View>
-          <View style={styles.privacyBox}>
+          <View
+            style={[
+              styles.privacyBox,
+              { backgroundColor: colors.primarySoft },
+            ]}
+          >
             <Ionicons
               name={
                 visibility === "private"

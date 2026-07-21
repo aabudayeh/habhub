@@ -211,11 +211,13 @@ export default function LeaderboardDetail() {
             style={styles.dateButton}
           >
             <Ionicons name="calendar-outline" size={18} color={accent} />
-            <Text style={styles.dateText}>{friendlyDate(anchor)}</Text>
+            <Text style={[styles.dateText, { color: colors.ink }]}>
+              {friendlyDate(anchor)}
+            </Text>
             <Ionicons
               name={showCalendar ? "chevron-up" : "chevron-down"}
               size={18}
-              color={palette.muted}
+              color={colors.muted}
             />
           </Pressable>
           {showCalendar ? (
@@ -277,7 +279,13 @@ export default function LeaderboardDetail() {
                 }
                 style={styles.heading}
               >
-                <Text style={[styles.rank, index < 3 && styles.podium]}>
+                <Text
+                  style={[
+                    styles.rank,
+                    { color: colors.faint },
+                    index < 3 && styles.podium,
+                  ]}
+                >
                   #{index + 1}
                 </Text>
                 <Avatar
@@ -287,25 +295,27 @@ export default function LeaderboardDetail() {
                   size={44}
                 />
                 <View style={styles.copy}>
-                  <Text style={styles.name}>
+                  <Text style={[styles.name, { color: colors.ink }]}>
                     {memberDisplayName(state, row.member)}
                     {row.member.id === state.currentUserId ? " · You" : ""}
                   </Text>
-                  <Text style={styles.role}>
+                  <Text style={[styles.role, { color: colors.muted }]}>
                     {memberOriginalLabel(state, row.member) ??
                       memberRoleLabel(row.member)}
                   </Text>
                 </View>
                 {includeScore ? (
                   <View>
-                    <Text style={styles.score}>{Math.round(row.score)}</Text>
-                    <Text style={styles.scoreLabel}>score</Text>
+                    <Text style={[styles.score, { color: colors.ink }]}>
+                      {Math.round(row.score)}
+                    </Text>
+                    <Text style={[styles.scoreLabel, { color: colors.faint }]}>score</Text>
                   </View>
                 ) : null}
                 <Ionicons
                   name="chevron-forward"
                   size={16}
-                  color={palette.faint}
+                  color={colors.faint}
                 />
               </Pressable>
               {includeScore ? (
@@ -316,7 +326,10 @@ export default function LeaderboardDetail() {
               ) : null}
               <View style={styles.metricList}>
                 {row.metrics.map(({ metric, result }) => (
-                  <View key={metric.id} style={styles.metric}>
+                  <View
+                    key={metric.id}
+                    style={[styles.metric, { borderBottomColor: colors.border }]}
+                  >
                     <View
                       style={[
                         styles.metricIcon,
@@ -330,8 +343,10 @@ export default function LeaderboardDetail() {
                       />
                     </View>
                     <View style={styles.copy}>
-                      <Text style={styles.metricName}>{metric.name}</Text>
-                      <Text style={styles.metricSub}>
+                      <Text style={[styles.metricName, { color: colors.ink }]}>
+                        {metric.name}
+                      </Text>
+                      <Text style={[styles.metricSub, { color: colors.muted }]}>
                         {result.averageLabel ??
                           `${result.visibleDays} visible day${result.visibleDays === 1 ? "" : "s"}`}
                       </Text>
@@ -339,7 +354,11 @@ export default function LeaderboardDetail() {
                     <Text
                       style={[
                         styles.metricValue,
-                        result.mode === "private" && styles.private,
+                        { color: accent },
+                        result.mode === "private" && {
+                          color: colors.faint,
+                          fontStyle: "italic",
+                        },
                       ]}
                     >
                       {result.label}
@@ -348,7 +367,12 @@ export default function LeaderboardDetail() {
                 ))}
               </View>
               {alignment ? (
-                <View style={styles.alignment}>
+                <View
+                  style={[
+                    styles.alignment,
+                    { backgroundColor: colors.primarySoft },
+                  ]}
+                >
                   <Ionicons
                     name={
                       alignment.status === "aligned"
@@ -359,8 +383,8 @@ export default function LeaderboardDetail() {
                     color={accent}
                   />
                   <View style={styles.copy}>
-                    <Text style={styles.logValue}>Reporting alignment</Text>
-                    <Text style={styles.note}>
+                    <Text style={[styles.logValue, { color: colors.ink }]}>Reporting alignment</Text>
+                    <Text style={[styles.note, { color: colors.muted }]}>
                       {alignment.status === "aligned"
                         ? "Scale change roughly matches the reported deficit."
                         : alignment.status === "insufficient"
@@ -383,10 +407,10 @@ export default function LeaderboardDetail() {
                     }
                     style={styles.logToggle}
                   >
-                    <Text style={styles.blockTitle}>
+                    <Text style={[styles.blockTitle, { color: colors.faint }]}>
                       SHARED LOGS · {entries.length}
                     </Text>
-                    <Text style={styles.logHint}>
+                    <Text style={[styles.logHint, { color: accent }]}>
                       {expanded ? "Hide" : "Show"}
                     </Text>
                     <Ionicons
@@ -420,6 +444,7 @@ export default function LeaderboardDetail() {
 }
 
 function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
+  const colors = useAppColors();
   const metric =
     (state.group.metricConfiguration ?? []).find(
       (item) => item.id === entry.metricId,
@@ -455,15 +480,19 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
           </Text>
         </View>
         <View style={styles.logTop}>
-          <Text style={styles.logValue}>
+          <Text style={[styles.logValue, { color: colors.ink }]}>
             {value}
             {entry.label ? ` · ${entry.label}` : ""}
           </Text>
-          <Text style={styles.logDate}>{friendlyDate(entry.localDate)}</Text>
+          <Text style={[styles.logDate, { color: colors.faint }]}>
+            {friendlyDate(entry.localDate)}
+          </Text>
         </View>
-        {entry.note ? <Text style={styles.note}>{entry.note}</Text> : null}
+        {entry.note ? (
+          <Text style={[styles.note, { color: colors.muted }]}>{entry.note}</Text>
+        ) : null}
         {entry.nutrition ? (
-          <Text style={styles.nutrition}>
+          <Text style={[styles.nutrition, { color: colors.primary }]}>
             {[
               ["Protein", entry.nutrition.proteinG, "g"],
               ["Carbs", entry.nutrition.carbsG, "g"],
@@ -497,6 +526,7 @@ function PhotoCompare({
   dates: string[];
 }) {
   const accent = useGroupAccent();
+  const colors = useAppColors();
   const visible = state.photos
     .filter(
       (photo) =>
@@ -622,7 +652,7 @@ function PhotoCompare({
         onPress={() => setOpen((value) => !value)}
         style={styles.photoToggle}
       >
-        <Text style={styles.blockTitle}>PROGRESS PHOTO</Text>
+        <Text style={[styles.blockTitle, { color: colors.faint }]}>PROGRESS PHOTO</Text>
         <Ionicons
           name={open ? "chevron-up" : "chevron-down"}
           size={17}
