@@ -28,7 +28,7 @@ export function MetricCard({ metric, value, displayText, rankLabel, goalTarget, 
         <View style={[styles.iconWrap, { backgroundColor: `${metric.color}16` }]}>
           <Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={compact?17:21} color={metric.color} />
         </View>
-        {metric.dataType !== 'text' ? <View style={[styles.status, reached && styles.statusReached]}>
+        {metric.dataType !== 'text' ? <View style={[styles.status, reached && styles.statusReached, reached && { backgroundColor: colors.primarySoft }]}>
           <Ionicons name={reached ? 'checkmark' : 'ellipse'} size={12} color={reached ? accent : colors.faint} />
           {!compact?<Text style={[styles.statusText,{color:colors.faint}, reached && {color:accent}]}>{reached ? 'Goal met' : 'In progress'}</Text>:null}
         </View> : <View style={styles.status}><Ionicons name="document-text-outline" size={13} color={palette.faint}/><Text style={styles.statusText}>Journal</Text></View>}

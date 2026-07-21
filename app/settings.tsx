@@ -331,7 +331,7 @@ export default function SettingsScreen() {
             <Ionicons
               name={showDevices ? "chevron-up" : "chevron-down"}
               size={16}
-              color={palette.muted}
+              color={colors.muted}
             />
           </Pressable>
           {showDevices ? (
@@ -376,7 +376,7 @@ export default function SettingsScreen() {
                         <Ionicons
                           name="close-circle-outline"
                           size={20}
-                          color={palette.muted}
+                          color={colors.muted}
                         />
                       </Pressable>
                     ) : null}

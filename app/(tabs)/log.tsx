@@ -440,7 +440,12 @@ export default function LogScreen() {
                   : formatMetricValue(selected, numericToday)}
               </Text>
             </View>
-            <View style={styles.defaultPill}>
+            <View
+              style={[
+                styles.defaultPill,
+                { backgroundColor: colors.primarySoft },
+              ]}
+            >
               <Ionicons
                 name={
                   selected.defaultVisibility === "private"
@@ -450,7 +455,7 @@ export default function LogScreen() {
                       : "people"
                 }
                 size={12}
-                color={palette.primary}
+                color={accent}
               />
               <Text style={styles.defaultText}>Default</Text>
             </View>
@@ -464,7 +469,7 @@ export default function LogScreen() {
                 <Ionicons
                   name="calendar-outline"
                   size={18}
-                  color={palette.primary}
+                  color={accent}
                 />
                 <View style={styles.grow}>
                   <Text style={[styles.fieldLabel, { color: colors.muted }]}>
@@ -477,7 +482,7 @@ export default function LogScreen() {
                 <Ionicons
                   name={logCalendarOpen ? "chevron-up" : "chevron-down"}
                   size={16}
-                  color={palette.muted}
+                  color={colors.muted}
                 />
               </Pressable>
               <View style={styles.timeField}>
@@ -504,12 +509,15 @@ export default function LogScreen() {
                   );
                   setLogCalendarOpen(false);
                 }}
-                style={styles.nowButton}
+                style={[
+                  styles.nowButton,
+                  { backgroundColor: colors.primarySoft },
+                ]}
               >
                 <Ionicons
                   name="time-outline"
                   size={17}
-                  color={palette.primary}
+                  color={accent}
                 />
                 <Text style={styles.nowText}>Now</Text>
               </Pressable>
@@ -602,11 +610,14 @@ export default function LogScreen() {
               />
             </>
           ) : selected.dataType === "boolean" ? (
-            <Pressable onPress={toggleBoolean} style={styles.completion}>
+            <Pressable
+              onPress={toggleBoolean}
+              style={[styles.completion, { backgroundColor: colors.canvas }]}
+            >
               <Ionicons
                 name={numericToday > 0 ? "checkmark-circle" : "ellipse-outline"}
                 size={32}
-                color={numericToday > 0 ? palette.primary : palette.faint}
+                color={numericToday > 0 ? accent : colors.faint}
               />
               <View>
                 <Text style={styles.completionTitle}>
@@ -644,7 +655,10 @@ export default function LogScreen() {
                 <>
                   <Pressable
                     onPress={() => router.push("/food-search")}
-                    style={styles.foodLookup}
+                    style={[
+                      styles.foodLookup,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
                   >
                     <Ionicons name="barcode-outline" size={20} color={accent} />
                     <View style={styles.grow}>
@@ -658,7 +672,7 @@ export default function LogScreen() {
                     <Ionicons
                       name="chevron-forward"
                       size={17}
-                      color={palette.faint}
+                      color={colors.faint}
                     />
                   </Pressable>
                   <Text style={styles.fieldLabel}>What did you eat?</Text>
@@ -878,8 +892,8 @@ export default function LogScreen() {
             onPress={() => pickImage(setEntryImage)}
             style={styles.attachRow}
           >
-            <Ionicons name="image-outline" size={19} color={palette.primary} />
-            <Text style={styles.attachText}>
+            <Ionicons name="image-outline" size={19} color={accent} />
+            <Text style={[styles.attachText, { color: accent }]}>
               {entryImage ? "Change attached image" : "Attach an image"}
             </Text>
           </Pressable>

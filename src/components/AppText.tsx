@@ -13,7 +13,11 @@ import { palette, useAppColors, useFontScale } from "@/src/theme";
 type AppTextProps = TextProps & { preserveColor?: boolean };
 
 function remapColor(color: TextStyle["color"], colors: ReturnType<typeof useAppColors>) {
-  if (!colors.isDark || typeof color !== "string") return color;
+  if (typeof color !== "string") return color;
+  // Legacy green text follows the active group's theme in every color mode.
+  if (color === palette.primary) return colors.primary;
+  if (color === palette.primarySoft) return colors.primarySoft;
+  if (!colors.isDark) return color;
   const replacements: Record<string, string> = {
     [palette.ink]: colors.ink,
     [palette.muted]: colors.muted,
@@ -21,8 +25,6 @@ function remapColor(color: TextStyle["color"], colors: ReturnType<typeof useAppC
     [palette.canvas]: colors.canvas,
     [palette.card]: colors.card,
     [palette.border]: colors.border,
-    [palette.primary]: colors.primary,
-    [palette.primarySoft]: colors.primarySoft,
   };
   return replacements[color] ?? color;
 }

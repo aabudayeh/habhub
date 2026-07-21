@@ -18,7 +18,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
-import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
+import { compactDayDate, dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
   effectiveGoalTarget,
@@ -140,7 +140,7 @@ export default function Today() {
         <View style={styles.header}>
           <View>
             <Text style={[styles.eyebrow, { color: accent }]}>
-              {friendlyDate(today).toUpperCase()}
+              {compactDayDate(today)}
             </Text>
             <Text style={[styles.greeting, { color: colors.ink }]}>
               Hi, {memberDisplayName(state, user)}

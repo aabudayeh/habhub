@@ -305,7 +305,15 @@ export default function ChatScreen() {
                       <View
                         style={[
                           styles.systemMessage,
-                          message.kind === "achievement" && styles.achievement,
+                          {
+                            backgroundColor:
+                              message.kind === "achievement" && !colors.isDark
+                                ? "#FFF6E7"
+                                : message.kind === "achievement"
+                                  ? colors.card
+                                  : colors.primarySoft,
+                            borderColor: colors.border,
+                          },
                         ]}
                       >
                         <Ionicons

@@ -9,12 +9,14 @@ import { AlertCategory, buildAlerts } from '@/src/domain/alerts';
 import { buildBadges } from '@/src/domain/badges';
 import { friendlyDate } from '@/src/domain/date';
 import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
+import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 
 type Filter = 'all' | AlertCategory | 'badges';
 
 export default function Alerts() {
   const { state } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
   const [filter, setFilter] = useState<Filter>('all');
   const alerts = useMemo(() => buildAlerts(state), [state]).filter((alert) => filter === 'all' || (filter !== 'badges' && alert.category === filter));
   const badges = useMemo(() => buildBadges(state).slice(0, 20), [state]);
@@ -29,7 +31,7 @@ export default function Alerts() {
       return <Pressable key={alert.id} onPress={() => alert.category === 'message' ? router.push('/chat' as never) : alert.memberId ? router.push(`/member/${alert.memberId}` as never) : undefined}>
         <Card style={[styles.alert, { borderLeftColor: alert.color }]}>{member ? <Avatar initials={member.initials} color={member.color} uri={member.avatarUri} size={41} /> : <View style={[styles.icon, { backgroundColor: `${alert.color}18` }]}><Ionicons name={alert.icon} size={20} color={alert.color} /></View>}<View style={styles.copy}><Text style={styles.title}>{alert.title}</Text><Text style={styles.detail}>{alert.detail}</Text><Text style={styles.date}>{friendlyDate(alert.createdAt.slice(0, 10))} · {new Date(alert.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text></View><Ionicons name="chevron-forward" size={17} color={palette.faint} /></Card>
       </Pressable>;
-    })}{!alerts.length ? <Card style={styles.empty}><Ionicons name="notifications-off-outline" size={25} color={palette.primary} /><Text style={styles.emptyText}>No alerts in this category yet.</Text></Card> : null}</View></> : null}
+    })}{!alerts.length ? <Card style={styles.empty}><Ionicons name="notifications-off-outline" size={25} color={accent} /><Text style={[styles.emptyText, { color: colors.muted }]}>No alerts in this category yet.</Text></Card> : null}</View></> : null}
   </Screen>;
 }
 

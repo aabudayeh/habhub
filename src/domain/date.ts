@@ -24,6 +24,13 @@ export function friendlyDate(date: string): string {
   );
 }
 
+export function compactDayDate(date: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    day: "numeric",
+  }).format(new Date(`${date}T12:00:00`));
+}
+
 export function dateWithOffsetFrom(localDate: string, days: number): string {
   const date = new Date(`${localDate}T12:00:00`);
   date.setDate(date.getDate() + days);
