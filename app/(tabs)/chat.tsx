@@ -8,10 +8,10 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -85,7 +85,7 @@ export default function ChatScreen() {
       0,
     );
     return () => clearTimeout(timer);
-  }, [conversationId]);
+  }, [conversationId, messages.length]);
 
   function submit() {
     if (!draft.trim() && !imageUri) return;
@@ -97,6 +97,7 @@ export default function ChatScreen() {
     );
     setDraft("");
     setImageUri(null);
+    setTimeout(() => messageScroll.current?.scrollToEnd({ animated: true }), 50);
   }
   function suggest(kind: MessageCategory) {
     setDraft(randomMessage(kind, state.settings.banterTone));

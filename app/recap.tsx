@@ -5,10 +5,10 @@ import {
   Animated,
   Pressable,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { Card, Screen } from "@/src/components/ui";
 import { buildRecapStories, RecapScope } from "@/src/domain/recaps";

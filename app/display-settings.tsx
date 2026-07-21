@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import { Pressable, StyleSheet, Switch, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import {
   Card,
@@ -135,6 +136,24 @@ export default function DisplaySettings() {
           </View>
         ))}
       </Card>
+      <SectionHeader title="Text size" />
+      <Card style={styles.fontCard}>
+        <Text style={[styles.meta, { color: colors.muted }]}>Applies consistently across every page.</Text>
+        <View style={styles.countChips}>
+          {[
+            ["Standard", 1],
+            ["Large", 1.12],
+            ["Extra large", 1.25],
+          ].map(([label, scale]) => (
+            <Chip
+              key={String(scale)}
+              label={String(label)}
+              selected={Math.abs((state.settings.fontScale ?? 1) - Number(scale)) < 0.01}
+              onPress={() => updateSettings({ fontScale: Number(scale) })}
+            />
+          ))}
+        </View>
+      </Card>
       <SectionHeader title="Today tiles" />
       <Card style={styles.list}>
         <View style={styles.row}>
@@ -255,4 +274,5 @@ const styles = StyleSheet.create({
   pageText: { flex: 1, fontSize: 11, fontWeight: "900" },
   tileCount: { borderTopWidth: 1, paddingVertical: 10, gap: 8 },
   countChips: { flexDirection: "row", gap: 6 },
+  fontCard: { gap: 9 },
 });

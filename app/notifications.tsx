@@ -5,10 +5,10 @@ import {
   Alert,
   Pressable,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import {
   Card,
@@ -223,6 +223,30 @@ export default function NotificationsScreen() {
           enabled={value.reminders}
           onPress={() => patch({ reminders: !value.reminders })}
         />
+        <ToggleRow
+          icon="calendar-outline"
+          title="Upcoming period estimate"
+          copy={`Private reminder ${value.cycleReminderDays ?? 2} days before the rolling estimate`}
+          enabled={value.cyclePredictions !== false}
+          onPress={() => patch({ cyclePredictions: value.cyclePredictions === false })}
+        />
+        <ToggleRow
+          icon="flower-outline"
+          title="Cycle phase updates"
+          copy="Optional phase estimates based on logged cycle history"
+          enabled={value.cyclePhaseUpdates === true}
+          onPress={() => patch({ cyclePhaseUpdates: value.cyclePhaseUpdates !== true })}
+        />
+        {value.cyclePredictions !== false ? (
+          <View style={styles.times}>
+            <Text style={[styles.label, { color: colors.muted }]}>Remind me before</Text>
+            {[1, 2, 3, 5].map((days) => (
+              <Pressable key={days} onPress={() => patch({ cycleReminderDays: days })}>
+                <Text style={{ color: (value.cycleReminderDays ?? 2) === days ? accent : colors.muted, fontWeight: "900" }}>{days}d</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
       </Card>
       <SectionHeader title="Quiet hours" />
       <Card>

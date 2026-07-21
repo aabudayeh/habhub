@@ -6,10 +6,10 @@ import {
   Pressable,
   StyleSheet,
   Switch,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import {
   Button,

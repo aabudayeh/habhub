@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import {
   ACTIVITY_LABELS,
@@ -11,14 +12,17 @@ import {
   recommendedDailyDeficit,
   recommendedDailyIntake,
 } from "@/src/domain/energy";
+import { dateKey } from "@/src/domain/date";
+import { isMetricTrackedOnDate } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
-import { palette } from "@/src/theme";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityLevel, BiologicalSex } from "@/src/types";
 import { Card, Chip, SectionHeader } from "./ui";
 
 export function EnergyProfileEditor() {
   const { state, updateEnergyProfile, updateSettings } = useApp();
   const profile = state.settings.energyProfile;
+  const colors = useAppColors();
   const bmr = Math.round(calculateBmr(profile));
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
@@ -28,7 +32,7 @@ export function EnergyProfileEditor() {
     <>
       <SectionHeader title="Body & energy profile" />
       <Card>
-        <Text style={styles.help}>
+        <Text style={[styles.help, { color: colors.muted }]}>
           Used for your private BMR, recommended deficit, and food-intake goals.
         </Text>
         <View style={styles.grid}>
@@ -59,8 +63,8 @@ export function EnergyProfileEditor() {
             },
           ].map((field) => (
             <View key={field.key} style={styles.field}>
-              <Text style={styles.label}>{field.label}</Text>
-              <View style={styles.inputWrap}>
+              <Text style={[styles.label, { color: colors.ink }]}>{field.label}</Text>
+              <View style={[styles.inputWrap, { borderColor: colors.border }]}>
                 <TextInput
                   value={String(field.value)}
                   selectTextOnFocus
@@ -70,14 +74,14 @@ export function EnergyProfileEditor() {
                     if (Number.isFinite(value) && value > 0)
                       updateEnergyProfile({ [field.key]: value });
                   }}
-                  style={styles.input}
+                  style={[styles.input, { color: colors.ink }]}
                 />
-                <Text style={styles.unit}>{field.unit}</Text>
+                <Text style={[styles.unit, { color: colors.muted }]}>{field.unit}</Text>
               </View>
             </View>
           ))}
         </View>
-        <Text style={styles.label}>
+        <Text style={[styles.label, { color: colors.ink }]}>
           Biological sex used by the BMR estimate
         </Text>
         <View style={styles.chips}>
@@ -94,7 +98,7 @@ export function EnergyProfileEditor() {
             />
           ))}
         </View>
-        <Text style={styles.label}>General activity level</Text>
+        <Text style={[styles.label, { color: colors.ink }]}>General activity level</Text>
         <View style={styles.chips}>
           {(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map((level) => (
             <Chip
@@ -105,7 +109,7 @@ export function EnergyProfileEditor() {
             />
           ))}
         </View>
-        <Text style={styles.label}>Planned weight change per week</Text>
+        <Text style={[styles.label, { color: colors.ink }]}>Planned weight change per week</Text>
         <View style={styles.chips}>
           {[0.25, 0.5, 0.75, 1].map((loss) => (
             <Chip
@@ -116,34 +120,34 @@ export function EnergyProfileEditor() {
             />
           ))}
         </View>
-        <View style={styles.equation}>
+        <View style={[styles.equation, { backgroundColor: colors.canvas }]}>
           <Stat value={bmr} label="BMR kcal" />
-          <Text style={styles.symbol}>+</Text>
+          <Text style={[styles.symbol, { color: colors.faint }]}>+</Text>
           <Stat value={activity} label="daily activity" />
-          <Text style={styles.symbol}>=</Text>
+          <Text style={[styles.symbol, { color: colors.faint }]}>=</Text>
           <Stat value={daily} label="daily energy" accent />
         </View>
         <View style={styles.recommendations}>
-          <View style={styles.recommendation}>
+          <View style={[styles.recommendation, { backgroundColor: colors.canvas }]}>
             <Ionicons
               name="trending-down-outline"
               size={19}
               color={palette.purple}
             />
-            <Text style={styles.recommendationValue}>{deficit}</Text>
-            <Text style={styles.recommendationLabel}>recommended deficit</Text>
+            <Text style={[styles.recommendationValue, { color: colors.ink }]}>{deficit}</Text>
+            <Text style={[styles.recommendationLabel, { color: colors.muted }]}>recommended deficit</Text>
           </View>
-          <View style={styles.recommendation}>
+          <View style={[styles.recommendation, { backgroundColor: colors.canvas }]}>
             <Ionicons
               name="restaurant-outline"
               size={19}
               color={palette.amber}
             />
-            <Text style={styles.recommendationValue}>{intake}</Text>
-            <Text style={styles.recommendationLabel}>base food goal</Text>
+            <Text style={[styles.recommendationValue, { color: colors.ink }]}>{intake}</Text>
+            <Text style={[styles.recommendationLabel, { color: colors.muted }]}>base food goal</Text>
           </View>
         </View>
-        <Text style={styles.label}>Food-goal behavior</Text>
+        <Text style={[styles.label, { color: colors.ink }]}>Food-goal behavior</Text>
         <View style={styles.chips}>
           <Chip
             label="Adjust with activity"
@@ -158,12 +162,12 @@ export function EnergyProfileEditor() {
             onPress={() => updateSettings({ foodGoalMode: "fixed" })}
           />
         </View>
-        <Text style={styles.help}>
+        <Text style={[styles.help, { color: colors.muted }]}>
           {state.settings.foodGoalMode === "activity_adjusted"
             ? "Default: active calories logged today are added to your food allowance while preserving the deficit target."
             : "Your food target stays fixed even when active energy changes."}
         </Text>
-        <Text style={styles.disclaimer}>
+        <Text style={[styles.disclaimer, { color: colors.muted }]}>
           Planning estimates, not medical advice. Updating this profile
           automatically refreshes the built-in Deficit, Food, and Weight goals.
         </Text>
@@ -174,27 +178,31 @@ export function EnergyProfileEditor() {
 
 export function MetricGoalsEditor() {
   const { state, updateMetric } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const metrics = state.metrics
+    .filter(
+      (metric) =>
+        metric.dataType !== "text" &&
+        metric.dataType !== "photo" &&
+        isMetricTrackedOnDate(state, metric, dateKey()),
+    )
+    .sort((a, b) => a.order - b.order);
   return (
     <>
       <SectionHeader
         title="Metric goals"
         action={
           <Pressable onPress={() => router.push("/customize" as never)}>
-            <Text style={styles.link}>Full customization</Text>
+            <Text style={[styles.link, { color: accent }]}>Full customization</Text>
           </Pressable>
         }
       />
       <Card style={styles.goalList}>
-        {state.metrics
-          .filter(
-            (metric) =>
-              metric.dataType !== "text" && metric.dataType !== "photo",
-          )
-          .sort((a, b) => a.order - b.order)
-          .map((metric, index, list) => (
+        {metrics.length ? metrics.map((metric, index, list) => (
             <View
               key={metric.id}
-              style={[styles.goal, index < list.length - 1 && styles.border]}
+              style={[styles.goal, index < list.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
             >
               <View
                 style={[styles.icon, { backgroundColor: `${metric.color}18` }]}
@@ -206,8 +214,8 @@ export function MetricGoalsEditor() {
                 />
               </View>
               <View style={styles.grow}>
-                <Text style={styles.goalName}>{metric.name}</Text>
-                <Text style={styles.goalMeta}>
+                <Text style={[styles.goalName, { color: colors.ink }]}>{metric.name}</Text>
+                <Text style={[styles.goalMeta, { color: colors.muted }]}>
                   {metric.goal.kind.replace("_", " ")} ·{" "}
                   {metric.defaultVisibility === "private"
                     ? "Private"
@@ -216,7 +224,7 @@ export function MetricGoalsEditor() {
                       : "Shared exact"}
                 </Text>
               </View>
-              <View style={styles.goalInput}>
+              <View style={[styles.goalInput, { borderColor: colors.border }]}>
                 <TextInput
                   value={String(metric.goal.target)}
                   selectTextOnFocus
@@ -228,12 +236,12 @@ export function MetricGoalsEditor() {
                         goal: { ...metric.goal, target },
                       });
                   }}
-                  style={styles.goalText}
+                  style={[styles.goalText, { color: colors.ink }]}
                 />
-                <Text style={styles.goalUnit}>{metric.unit}</Text>
+                <Text style={[styles.goalUnit, { color: colors.muted }]}>{metric.unit}</Text>
               </View>
             </View>
-          ))}
+          )) : <Text style={[styles.help, { color: colors.muted, marginVertical: 12 }]}>No goals are currently tracked. Add one in customization.</Text>}
       </Card>
     </>
   );
@@ -247,10 +255,12 @@ function Stat({
   label: string;
   accent?: boolean;
 }) {
+  const colors = useAppColors();
+  const groupAccent = useGroupAccent();
   return (
     <View style={styles.stat}>
-      <Text style={[styles.statValue, accent && styles.accent]}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color: accent ? groupAccent : colors.ink }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.muted }]}>{label}</Text>
     </View>
   );
 }

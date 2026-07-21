@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar } from "@/src/components/ui";
@@ -81,7 +82,7 @@ export default function MenuScreen() {
         >
           <Avatar
             initials={user.initials}
-            color={user.color}
+            color={accent}
             uri={user.avatarUri}
             size={48}
           />

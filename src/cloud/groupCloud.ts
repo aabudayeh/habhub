@@ -169,12 +169,24 @@ async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
 
 async function groupMembers(groupIds: string[]) {
   const client = requireCloud();
-  if (!groupIds.length) return new Map<string, Member[]>();
-  const { data: membership, error } = await client
+  if (!groupIds.length)
+    return new Map<string, { active: Member[]; pending: Member[] }>();
+  const currentMembership = await client
     .from("group_members")
-    .select("group_id, user_id, role")
+    .select("group_id, user_id, role, status")
     .in("group_id", groupIds);
-  if (error) throw error;
+  let membership: { group_id: string; user_id: string; role: Member["role"]; status: string }[];
+  if (currentMembership.error && /status|column/i.test(currentMembership.error.message)) {
+    const legacy = await client
+      .from("group_members")
+      .select("group_id, user_id, role")
+      .in("group_id", groupIds);
+    if (legacy.error) throw legacy.error;
+    membership = (legacy.data ?? []).map((row) => ({ ...row, status: "active" })) as typeof membership;
+  } else {
+    if (currentMembership.error) throw currentMembership.error;
+    membership = (currentMembership.data ?? []) as typeof membership;
+  }
   const userIds = [...new Set((membership ?? []).map((row) => row.user_id))];
   const { data: profiles, error: profileError } = userIds.length
     ? await client
@@ -189,7 +201,7 @@ async function groupMembers(groupIds: string[]) {
   const urls = await signedUrls(
     (profiles ?? []).map((profile) => profile.avatar_path).filter(Boolean),
   );
-  const result = new Map<string, Member[]>();
+  const result = new Map<string, { active: Member[]; pending: Member[] }>();
   for (const membershipRow of membership ?? []) {
     const profile = profileMap.get(membershipRow.user_id);
     const name = profile?.display_name || "North member";
@@ -204,10 +216,13 @@ async function groupMembers(groupIds: string[]) {
         ? (urls.get(profile.avatar_path) ?? undefined)
         : undefined,
     };
-    result.set(membershipRow.group_id, [
-      ...(result.get(membershipRow.group_id) ?? []),
-      member,
-    ]);
+    const current = result.get(membershipRow.group_id) ?? {
+      active: [],
+      pending: [],
+    };
+    const key = membershipRow.status === "pending" ? "pending" : "active";
+    current[key].push(member);
+    result.set(membershipRow.group_id, current);
   }
   return result;
 }
@@ -240,7 +255,11 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
       name: row.name,
       inviteCode: row.invite_code,
       templateName: row.template_name,
-      members: members.get(row.id) ?? [],
+      members: members.get(row.id)?.active ?? [],
+      pendingMembers: members.get(row.id)?.pending ?? [],
+      requireMemberApproval: Boolean(
+        (row.settings as Record<string, any>)?.requireMemberApproval,
+      ),
       streakRestDaysPerWeek: Number(
         (row.settings as Record<string, any>)?.streakRestDaysPerWeek ?? 1,
       ),
@@ -310,11 +329,38 @@ export async function createCloudGroup(
 
 export async function joinCloudGroup(code: string) {
   const client = requireCloud();
-  const { data, error } = await client.rpc("join_group_with_code", {
+  const { data, error } = await client.rpc("request_group_membership", {
     code: code.trim().toUpperCase(),
   });
+  if (error) {
+    if (!/request_group_membership|schema cache|does not exist/i.test(error.message))
+      throw error;
+    const legacy = await client.rpc("join_group_with_code", {
+      code: code.trim().toUpperCase(),
+    });
+    if (legacy.error) throw legacy.error;
+    return { groupId: legacy.data as string, status: "active" as const };
+  }
+  const result = data as { groupId: string; status: "active" | "pending" };
+  return result;
+}
+
+export async function approveCloudGroupMember(groupId: string, userId: string) {
+  const { error } = await requireCloud()
+    .from("group_members")
+    .update({ status: "active" })
+    .eq("group_id", groupId)
+    .eq("user_id", userId);
   if (error) throw error;
-  return data as string;
+}
+
+export async function removeCloudGroupMember(groupId: string, userId: string) {
+  const { error } = await requireCloud()
+    .from("group_members")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("user_id", userId);
+  if (error) throw error;
 }
 
 export async function leaveCloudGroup(groupId: string) {
@@ -613,6 +659,7 @@ export async function pushCloudWorkspace(state: AppState) {
         settings: {
           streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
           themeColor: state.group.themeColor ?? "#176B4D",
+          requireMemberApproval: state.group.requireMemberApproval ?? false,
         },
       })
       .eq("id", state.group.id);

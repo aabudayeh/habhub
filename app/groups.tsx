@@ -6,10 +6,10 @@ import {
   Pressable,
   Share,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
@@ -66,8 +66,11 @@ export default function GroupsScreen() {
       );
     setBusy("join");
     try {
-      if (auth.status === "signedIn") await cloud.joinGroup(code);
-      else joinGroup(code);
+      if (auth.status === "signedIn") {
+        const status = await cloud.joinGroup(code);
+        if (status === "pending")
+          Alert.alert("Request sent", "A group admin must approve you before the group appears.");
+      } else joinGroup(code);
       setCode("");
     } catch (error) {
       Alert.alert("Could not join group", cloudErrorMessage(error));

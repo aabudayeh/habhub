@@ -1,15 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import React, { useState } from 'react';
-import { ImageStyle, Modal, Pressable, StyleProp, StyleSheet, Text, View } from 'react-native';
+import { ImageStyle, Modal, Pressable, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { AppText as Text } from "@/src/components/AppText";
 
 import { palette } from '@/src/theme';
 import { PhotoUpdate } from '@/src/types';
 
-export function ExpandableImage({ uri, thumbnailStyle, label = 'Open full-size image', caption }: { uri: PhotoUpdate['uri']; thumbnailStyle?: StyleProp<ImageStyle>; label?: string; caption?: string }) {
+export function ExpandableImage({ uri, thumbnailStyle, containerStyle, label = 'Open full-size image', caption }: { uri: PhotoUpdate['uri']; thumbnailStyle?: StyleProp<ImageStyle>; containerStyle?: StyleProp<ViewStyle>; label?: string; caption?: string }) {
   const [open, setOpen] = useState(false);
   return <>
-    <Pressable accessibilityRole="imagebutton" accessibilityLabel={label} onPress={() => setOpen(true)} style={styles.thumbnailButton}>
+    <Pressable accessibilityRole="imagebutton" accessibilityLabel={label} onPress={() => setOpen(true)} style={[styles.thumbnailButton, containerStyle]}>
       <Image source={typeof uri === 'string' ? { uri } : uri} style={[styles.thumbnail, thumbnailStyle]} contentFit="cover" transition={120} />
       <View style={styles.expandBadge}><Ionicons name="expand-outline" size={13} color={palette.white} /></View>
     </Pressable>

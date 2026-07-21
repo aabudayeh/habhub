@@ -6,6 +6,7 @@ import {
   KCAL_PER_KG_ESTIMATE,
 } from "./energy";
 import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
+import { cycleForecast } from "./cycle";
 
 function aggregate(
   entries: MetricEntry[],
@@ -59,6 +60,10 @@ export function metricValue(
   }
   if (metric.id === "overall_score")
     return dailyScore(state, userId, localDate);
+  if (metric.id === "cycle_day")
+    return cycleForecast(state, userId, localDate).cycleDay;
+  if (metric.id === "days_until_period")
+    return Math.max(0, cycleForecast(state, userId, localDate).daysUntilPeriod ?? 0);
   if (metric.dataType === "photo") {
     return state.photos.filter(
       (photo) => photo.userId === userId && photo.localDate === localDate,
@@ -646,8 +651,12 @@ export function trackedGoalSummary(
   );
   return {
     met: met.length,
-    total: applicable.length,
-    allMet: applicable.length > 0 && met.length === applicable.length,
+    // The total represents goals the user chose to track. A calculated goal
+    // can be temporarily unavailable (for example deficit before food is
+    // logged), but it must not silently disappear from the chosen-goal count.
+    total: metrics.length,
+    applicableTotal: applicable.length,
+    allMet: metrics.length > 0 && met.length === metrics.length,
     metrics,
     unavailable,
   };

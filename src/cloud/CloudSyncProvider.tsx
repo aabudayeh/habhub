@@ -14,12 +14,14 @@ import { AppState as NativeAppState, Platform } from "react-native";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
+  approveCloudGroupMember,
   createCloudGroup,
   isCloudGroupId,
   joinCloudGroup,
   leaveCloudGroup,
   loadCloudGroupShells,
   loadCloudWorkspace,
+  removeCloudGroupMember,
   pushCloudWorkspace,
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
@@ -68,10 +70,12 @@ type CloudSyncContextValue = {
   forgetDevice: (deviceId: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
   createGroup: (name: string) => Promise<void>;
-  joinGroup: (code: string) => Promise<void>;
+  joinGroup: (code: string) => Promise<"active" | "pending">;
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   refreshGroup: () => Promise<void>;
+  approveMember: (userId: string) => Promise<void>;
+  removeMember: (userId: string) => Promise<void>;
 };
 
 type SnapshotRow = {
@@ -198,7 +202,51 @@ function createCleanAccountState(user: User): AppState {
 function bindStateToAccount(state: AppState, user: User): AppState {
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
-  return state;
+  if (Number(state.version ?? 1) >= 17)
+    return {
+      ...state,
+      settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
+    };
+  const historicalStart = state.entries
+    .filter((entry) => entry.userId === user.id)
+    .map((entry) => entry.localDate)
+    .sort()[0];
+  if (!historicalStart)
+    return {
+      ...state,
+      version: 17,
+      settings: { ...state.settings, fontScale: 1 },
+    };
+  const retrospective = new Set(
+    state.metrics
+      .filter((metric) =>
+        (state.trackedGoalPeriods?.[metric.id] ?? []).some(
+          (period) =>
+            period.from === metric.activeFrom && historicalStart < period.from,
+        ),
+      )
+      .map((metric) => metric.id),
+  );
+  return {
+    ...state,
+    version: 17,
+    settings: { ...state.settings, fontScale: 1 },
+    metrics: state.metrics.map((metric) =>
+      retrospective.has(metric.id)
+        ? { ...metric, activeFrom: historicalStart }
+        : metric,
+    ),
+    trackedGoalPeriods: Object.fromEntries(
+      Object.entries(state.trackedGoalPeriods ?? {}).map(
+        ([metricId, periods]) => [
+          metricId,
+          retrospective.has(metricId)
+            ? periods.map((period) => ({ ...period, from: historicalStart }))
+            : periods,
+        ],
+      ),
+    ),
+  };
 }
 
 function photoUri(uri: PhotoUpdate["uri"]) {
@@ -962,12 +1010,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(true);
       },
       joinGroup: async (code) => {
-        const groupId = await joinCloudGroup(code);
+        const result = await joinCloudGroup(code);
+        if (result.status === "pending") return "pending";
+        const groupId = result.groupId;
         const next = await loadCloudWorkspace(stateRef.current, groupId);
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
         setPendingChanges(true);
+        return "active";
       },
       switchGroup: async (groupId) => {
         const next = await loadCloudWorkspace(stateRef.current, groupId);
@@ -999,6 +1050,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(true);
       },
       refreshGroup,
+      approveMember: async (userId) => {
+        await approveCloudGroupMember(stateRef.current.group.id, userId);
+        await refreshGroup();
+      },
+      removeMember: async (userId) => {
+        await removeCloudGroupMember(stateRef.current.group.id, userId);
+        await refreshGroup();
+      },
     }),
     [
       auth.user,

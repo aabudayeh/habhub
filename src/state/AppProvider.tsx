@@ -110,6 +110,9 @@ type Action =
   | { type: "nickname"; memberId: string; nickname: string }
   | { type: "groupRestDays"; value: number }
   | { type: "groupTheme"; color: string }
+  | { type: "groupApproval"; value: boolean }
+  | { type: "approveMember"; memberId: string }
+  | { type: "removeMember"; memberId: string }
   | { type: "memberAvatar"; memberId: string; avatarUri?: string }
   | { type: "memberName"; memberId: string; name: string }
   | { type: "memberRole"; memberId: string; role: "admin" | "member" }
@@ -124,6 +127,20 @@ type Action =
 
 function uniqueId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function goalHistoryStart(state: AppState, metric: MetricDefinition) {
+  const ownDates = state.entries
+    .filter((entry) => entry.userId === state.currentUserId)
+    .filter(
+      (entry) =>
+        entry.metricId === metric.id || metric.dataType === "calculated",
+    )
+    .map((entry) => entry.localDate);
+  const allOwnDates = state.entries
+    .filter((entry) => entry.userId === state.currentUserId)
+    .map((entry) => entry.localDate);
+  return [...ownDates, ...allOwnDates, metric.activeFrom].sort()[0];
 }
 
 function slugify(name: string) {
@@ -321,9 +338,10 @@ function reducer(state: AppState, action: Action): AppState {
         state.trackedGoalPeriods?.[metric.id] ??
         (metric.sections.today ? [{ from: metric.activeFrom }] : []);
       if (action.value) {
+        const historyStart = goalHistoryStart(state, metric);
         const periods =
           action.historyMode === "history"
-            ? [{ from: metric.activeFrom }]
+            ? [{ from: historyStart }]
             : [{ from: dateKey() }];
         return {
           ...state,
@@ -331,6 +349,10 @@ function reducer(state: AppState, action: Action): AppState {
             candidate.id === metric.id
               ? {
                   ...candidate,
+                  activeFrom:
+                    action.historyMode === "history"
+                      ? historyStart
+                      : candidate.activeFrom,
                   sections: { ...candidate.sections, today: true },
                 }
               : candidate,
@@ -718,6 +740,52 @@ function reducer(state: AppState, action: Action): AppState {
         ),
       };
     }
+    case "groupApproval": {
+      const group = { ...state.group, requireMemberApproval: action.value };
+      return {
+        ...state,
+        group,
+        groups: state.groups.map((candidate) =>
+          candidate.id === group.id ? group : candidate,
+        ),
+      };
+    }
+    case "approveMember": {
+      const pending = state.group.pendingMembers ?? [];
+      const member = pending.find((item) => item.id === action.memberId);
+      if (!member) return state;
+      const group = {
+        ...state.group,
+        members: [...state.group.members, { ...member, role: "member" as const }],
+        pendingMembers: pending.filter((item) => item.id !== action.memberId),
+      };
+      return {
+        ...state,
+        group,
+        groups: state.groups.map((candidate) =>
+          candidate.id === group.id ? group : candidate,
+        ),
+      };
+    }
+    case "removeMember": {
+      if (action.memberId === state.currentUserId) return state;
+      const group = {
+        ...state.group,
+        members: state.group.members.filter(
+          (member) => member.id !== action.memberId,
+        ),
+        pendingMembers: (state.group.pendingMembers ?? []).filter(
+          (member) => member.id !== action.memberId,
+        ),
+      };
+      return {
+        ...state,
+        group,
+        groups: state.groups.map((candidate) =>
+          candidate.id === group.id ? group : candidate,
+        ),
+      };
+    }
     case "memberAvatar": {
       const updateMembers = (group: Group): Group => ({
         ...group,
@@ -864,6 +932,9 @@ type AppContextValue = {
   updateNickname: (memberId: string, nickname: string) => void;
   setGroupRestDays: (value: number) => void;
   setGroupTheme: (color: string) => void;
+  setGroupApprovalRequired: (value: boolean) => void;
+  approveMember: (memberId: string) => void;
+  removeMember: (memberId: string) => void;
   updateMemberAvatar: (memberId: string, avatarUri?: string) => void;
   updateMemberName: (memberId: string, name: string) => void;
   setMemberRole: (memberId: string, role: "admin" | "member") => void;
@@ -953,7 +1024,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const defaultPhotoIds = new Set(
             defaults.photos.map((photo) => photo.id),
           );
-          const migratedTrackedGoals =
+          let migratedTrackedGoals =
             restoredVersion < 9 && isDefaultDemo
               ? Object.fromEntries(
                   restoredMetrics.map((metric) => [
@@ -964,10 +1035,49 @@ export function AppProvider({ children }: PropsWithChildren) {
                   ]),
                 )
               : (restored.trackedGoalPeriods ?? defaults.trackedGoalPeriods);
+          const historicalStart = [
+            ...(restored.entries ?? []).filter(
+              (entry) => entry.userId === restored.currentUserId,
+            ),
+            ...(restored.photos ?? []).filter(
+              (photo) => photo.userId === restored.currentUserId,
+            ),
+          ]
+            .map((item) => item.localDate)
+            .sort()[0];
+          if (restoredVersion < 17 && historicalStart) {
+            const retrospective = new Set(
+              restoredMetrics
+                .filter((metric) =>
+                  (migratedTrackedGoals[metric.id] ?? []).some(
+                    (period) =>
+                      period.from === metric.activeFrom &&
+                      historicalStart < period.from,
+                  ),
+                )
+                .map((metric) => metric.id),
+            );
+            restoredMetrics = restoredMetrics.map((metric) =>
+              retrospective.has(metric.id)
+                ? { ...metric, activeFrom: historicalStart }
+                : metric,
+            );
+            migratedTrackedGoals = Object.fromEntries(
+              Object.entries(migratedTrackedGoals).map(([metricId, periods]) => [
+                metricId,
+                retrospective.has(metricId)
+                  ? periods.map((period) => ({
+                      ...period,
+                      from: historicalStart,
+                    }))
+                  : periods,
+              ]),
+            );
+          }
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 16,
+            version: 17,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -1223,6 +1333,12 @@ export function AppProvider({ children }: PropsWithChildren) {
         dispatch({ type: "nickname", memberId, nickname }),
       setGroupRestDays: (value) => dispatch({ type: "groupRestDays", value }),
       setGroupTheme: (color) => dispatch({ type: "groupTheme", color }),
+      setGroupApprovalRequired: (value) =>
+        dispatch({ type: "groupApproval", value }),
+      approveMember: (memberId) =>
+        dispatch({ type: "approveMember", memberId }),
+      removeMember: (memberId) =>
+        dispatch({ type: "removeMember", memberId }),
       updateMemberAvatar: (memberId, avatarUri) =>
         dispatch({ type: "memberAvatar", memberId, avatarUri }),
       updateMemberName: (memberId, name) =>

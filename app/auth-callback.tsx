@@ -1,6 +1,7 @@
 import { Redirect } from 'expo-router';
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from '@/src/auth/AuthProvider';
 import { palette } from '@/src/theme';

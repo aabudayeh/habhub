@@ -3,7 +3,8 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -343,8 +344,8 @@ export default function MemberProfile() {
                     />
                   </View>
                   <View style={styles.copy}>
-                    <Text style={styles.duelTitle}>{metric.name}</Text>
-                    <Text style={styles.duelMeta}>
+                    <Text style={[styles.duelTitle, { color: colors.ink }]}>{metric.name}</Text>
+                    <Text style={[styles.duelMeta, { color: colors.muted }]}>
                       {duel.eligibleDays} comparable day
                       {duel.eligibleDays === 1 ? "" : "s"} · higher wins
                     </Text>
@@ -378,7 +379,7 @@ export default function MemberProfile() {
       ) : (
         <Card style={styles.headEmpty}>
           <Ionicons name="analytics-outline" size={20} color={colors.primary} />
-          <Text style={styles.emptyPhotos}>
+          <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
             Head-to-head stats appear for selected “higher wins” metrics with
             shared daily data. Goal-distance metrics such as food and deficit
             are intentionally excluded.
@@ -390,10 +391,10 @@ export default function MemberProfile() {
           <Card key={metric.id} style={styles.chartCard}>
             <View style={styles.chartHeading}>
               <View>
-                <Text style={styles.chartEyebrow}>
+                <Text style={[styles.chartEyebrow, { color: metric.color }]}>
                   {periodTitle(period, anchor).toUpperCase()}
                 </Text>
-                <Text style={styles.chartTitle}>{metric.name}</Text>
+                <Text style={[styles.chartTitle, { color: colors.ink }]}>{metric.name}</Text>
               </View>
               <View
                 style={[
@@ -428,7 +429,7 @@ export default function MemberProfile() {
                       />
                       <View style={styles.barCopy}>
                         <View style={styles.labels}>
-                          <Text style={styles.barName}>
+                          <Text style={[styles.barName, { color: colors.ink }]}>
                             {person.id === state.currentUserId
                               ? "You"
                               : memberDisplayName(state, person)}
@@ -436,7 +437,7 @@ export default function MemberProfile() {
                           <Text
                             style={[
                               styles.barValue,
-                              result.mode === "private" && styles.private,
+                              { color: result.mode === "private" ? colors.faint : colors.muted },
                             ]}
                           >
                             {result.label}
@@ -520,7 +521,7 @@ export default function MemberProfile() {
             title={`${memberDisplayName(state, member)}'s badge showcase`}
             action={
               <Pressable onPress={() => router.navigate("/badges" as never)}>
-                <Text style={styles.badgeLink}>All badges</Text>
+                <Text style={[styles.badgeLink, { color: colors.primary }]}>All badges</Text>
               </Pressable>
             }
           />
@@ -568,8 +569,8 @@ export default function MemberProfile() {
                     <Ionicons name={badge.icon} size={18} color={badge.color} />
                   </View>
                   <View style={styles.copy}>
-                    <Text style={styles.badgeTitle}>{badge.title}</Text>
-                    <Text style={styles.badgeCaption}>
+                    <Text style={[styles.badgeTitle, { color: colors.ink }]}>{badge.title}</Text>
+                    <Text style={[styles.badgeCaption, { color: colors.muted }]}>
                       {badge.caption} · {badge.description}
                     </Text>
                   </View>
@@ -688,7 +689,7 @@ export default function MemberProfile() {
       </View>
       <Card style={styles.privacy}>
         <Ionicons name="lock-closed-outline" size={19} color={colors.primary} />
-        <Text style={styles.privacyText}>
+        <Text style={[styles.privacyText, { color: colors.muted }]}>
           Private values and photos never enter this comparison. Goal-status
           sharing can show completion without revealing the underlying number.
         </Text>
@@ -713,10 +714,11 @@ function statValue(result: ReturnType<typeof periodMetricResult>) {
   return result.average.toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 function MiniStat({ label, value }: { label: string; value: string }) {
+  const colors = useAppColors();
   return (
     <View style={styles.stat}>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, { color: colors.ink }]}>{value}</Text>
+      <Text style={[styles.statLabel, { color: colors.muted }]}>{label}</Text>
     </View>
   );
 }
@@ -735,9 +737,9 @@ function StatCard({
   return (
     <Card style={styles.comparisonCard}>
       <Ionicons name={icon} size={19} color={colors.primary} />
-      <Text style={styles.comparisonValue}>{value}</Text>
-      <Text style={styles.comparisonLabel}>{label}</Text>
-      <Text style={styles.comparisonDetail}>{detail}</Text>
+      <Text style={[styles.comparisonValue, { color: colors.ink }]}>{value}</Text>
+      <Text style={[styles.comparisonLabel, { color: colors.muted }]}>{label}</Text>
+      <Text style={[styles.comparisonDetail, { color: colors.faint }]}>{detail}</Text>
     </Card>
   );
 }
@@ -754,18 +756,19 @@ function DuelStat({
   friendName: string;
   detail?: string;
 }) {
+  const colors = useAppColors();
   return (
-    <View style={styles.duelStat}>
-      <Text style={styles.duelLabel}>{label}</Text>
+    <View style={[styles.duelStat, { backgroundColor: colors.canvas }]}>
+      <Text style={[styles.duelLabel, { color: colors.muted }]}>{label}</Text>
       <View style={styles.duelSide}>
-        <Text style={styles.duelPerson}>You</Text>
-        <Text style={styles.duelValue}>{you}</Text>
+        <Text style={[styles.duelPerson, { color: colors.faint }]}>You</Text>
+        <Text style={[styles.duelValue, { color: colors.ink }]}>{you}</Text>
       </View>
       <View style={styles.duelSide}>
-        <Text style={styles.duelPerson}>{friendName}</Text>
-        <Text style={styles.duelValue}>{friend}</Text>
+        <Text style={[styles.duelPerson, { color: colors.faint }]}>{friendName}</Text>
+        <Text style={[styles.duelValue, { color: colors.ink }]}>{friend}</Text>
       </View>
-      {detail ? <Text style={styles.duelDetail}>{detail}</Text> : null}
+      {detail ? <Text style={[styles.duelDetail, { color: colors.muted }]}>{detail}</Text> : null}
     </View>
   );
 }
@@ -778,6 +781,7 @@ function ProfilePhotoCompare({
   personId: string;
   dates: string[];
 }) {
+  const colors = useAppColors();
   const person = state.group.members.find((item) => item.id === personId)!;
   const visible = state.photos
     .filter(
@@ -830,7 +834,7 @@ function ProfilePhotoCompare({
   }
   return (
     <View style={styles.photoPerson}>
-      <Text style={styles.photoName}>
+      <Text style={[styles.photoName, { color: colors.ink }]}>
         {personId === state.currentUserId
           ? "You"
           : memberDisplayName(state, person)}
@@ -894,13 +898,13 @@ function ProfilePhotoCompare({
               onChange={setOlderId}
             />
           ) : (
-            <Text style={styles.emptyPhotos}>
+            <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
               No older photo is available yet.
             </Text>
           )}
         </>
       ) : (
-        <Text style={styles.emptyPhotos}>No shared photo in this range.</Text>
+        <Text style={[styles.emptyPhotos, { color: colors.muted }]}>No shared photo in this range.</Text>
       )}
     </View>
   );

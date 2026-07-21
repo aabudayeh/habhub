@@ -28,6 +28,7 @@ export const shadow = {
 const GroupAccentContext = createContext(palette.primary);
 const CompactModeContext = createContext(false);
 const DarkModeContext = createContext(false);
+const FontScaleContext = createContext(1);
 export function GroupAccentProvider({
   color,
   children,
@@ -66,6 +67,19 @@ export function DarkModeProvider({
 }
 export function useDarkMode() {
   return useContext(DarkModeContext);
+}
+export function FontScaleProvider({
+  scale,
+  children,
+}: PropsWithChildren<{ scale: number }>) {
+  return React.createElement(
+    FontScaleContext.Provider,
+    { value: scale },
+    children,
+  );
+}
+export function useFontScale() {
+  return useContext(FontScaleContext);
 }
 export function useAppColors() {
   const dark = useDarkMode();

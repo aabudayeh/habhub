@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { AppText as Text } from "@/src/components/AppText";
 
 import { Avatar, Card, Chip, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
 import { AlertCategory, buildAlerts } from '@/src/domain/alerts';

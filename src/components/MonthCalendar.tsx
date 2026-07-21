@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
+import { PanResponder, Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { dateKey } from "@/src/domain/date";
 import { palette, useAppColors } from "@/src/theme";
@@ -11,6 +12,7 @@ export function MonthCalendar({
   hasActivity,
   dayStatus,
   dayVisuals,
+  allTrackedGoalsMet,
   monthDate,
   onMonthChange,
 }: {
@@ -21,6 +23,7 @@ export function MonthCalendar({
   dayVisuals?: (
     date: string,
   ) => { color: string; progress: number; goalReached?: boolean }[];
+  allTrackedGoalsMet?: (date: string) => boolean;
   monthDate?: string;
   onMonthChange?: (date: string) => void;
 }) {
@@ -107,10 +110,7 @@ export function MonthCalendar({
           const selected = day.key === selectedDate;
           const status = dayStatus?.(day.key);
           const visuals = dayVisuals?.(day.key) ?? [];
-          const allTrackedMet =
-            visuals.length > 0 &&
-            visuals[0].color === "#9B6BDB" &&
-            visuals[0].goalReached;
+          const allTrackedMet = allTrackedGoalsMet?.(day.key) ?? false;
           return (
             <Pressable
               key={day.key}

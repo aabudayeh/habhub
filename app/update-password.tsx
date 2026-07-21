@@ -1,6 +1,7 @@
 import { Redirect, router } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput } from 'react-native';
+import { Alert, StyleSheet,} from 'react-native';
+import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 
 import { useAuth } from '@/src/auth/AuthProvider';
 import { Button, Card, PageHeader, Screen } from '@/src/components/ui';

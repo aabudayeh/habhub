@@ -2,16 +2,19 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { EnergyProfileEditor, MetricGoalsEditor } from '@/src/components/ProfileEditors';
+import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { Avatar, Button, Card, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
 import { memberDisplayName, memberOriginalLabel, memberRoleLabel } from '@/src/domain/members';
 import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
+import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 
 export default function ProfileScreen(){
   const {state,updateMemberAvatar,updateMemberName}=useApp();
+  const colors=useAppColors();
+  const accent=useGroupAccent();
   const me=state.group.members.find((member)=>member.id===state.currentUserId)!;
   const [name,setName]=useState(me.name);
   async function choosePhoto(){
@@ -23,16 +26,16 @@ export default function ProfileScreen(){
   return <Screen keyboardShouldPersistTaps="handled">
     <PageHeader eyebrow="Personal" title="My profile" subtitle="Your photo, body and energy profile, and personal metric goals." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
     <Card style={styles.identity}>
-      <View><Avatar initials={me.initials} color={me.color} size={72} uri={me.avatarUri}/><Pressable onPress={choosePhoto} style={styles.camera}><Ionicons name="camera" size={15} color={palette.white}/></Pressable></View>
-      <View style={styles.copy}><Text style={styles.name}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text style={styles.original}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={styles.meta}>{memberRoleLabel(me)} in {state.group.name}</Text></View>
+      <View><Avatar initials={me.initials} color={accent} size={72} uri={me.avatarUri}/><Pressable onPress={choosePhoto} style={[styles.camera,{backgroundColor:accent,borderColor:colors.card}]}><Ionicons name="camera" size={15} color={palette.white}/></Pressable></View>
+      <View style={styles.copy}><Text style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text style={[styles.original,{color:colors.faint}]}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in {state.group.name}</Text></View>
       {me.avatarUri?<Pressable accessibilityLabel="Remove profile photo" onPress={()=>updateMemberAvatar(me.id,undefined)} style={styles.remove}><Ionicons name="trash-outline" size={18} color={palette.red}/></Pressable>:null}
     </Card>
-    <Card style={styles.nameCard}><View style={styles.copy}><Text style={styles.fieldLabel}>Account display name</Text><TextInput value={name} onChangeText={setName} placeholder="Your name" placeholderTextColor={palette.faint} style={styles.input}/></View><Button label="Save" variant="ghost" onPress={()=>updateMemberName(me.id,name)}/></Card>
-    <Text style={styles.note}>Your account name comes from your profile. Friend nicknames are set separately inside each group.</Text>
+    <Card style={styles.nameCard}><View style={styles.copy}><Text style={[styles.fieldLabel,{color:colors.muted}]}>Account display name</Text><TextInput value={name} onChangeText={setName} placeholder="Your name" placeholderTextColor={colors.faint} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/></View><Button label="Save" variant="ghost" onPress={()=>updateMemberName(me.id,name)}/></Card>
+    <Text style={[styles.note,{color:colors.muted}]}>Your account name comes from your profile. Friend nicknames are set separately inside each group.</Text>
     <EnergyProfileEditor/>
     <MetricGoalsEditor/>
     <SectionHeader title="More profile details"/>
-    <Pressable onPress={()=>router.push(`/member/${me.id}` as never)} style={styles.linkCard}><View style={styles.linkIcon}><Ionicons name="trophy-outline" size={21} color={palette.primary}/></View><View style={styles.copy}><Text style={styles.linkTitle}>Public profile & badge showcase</Text><Text style={styles.meta}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={palette.faint}/></Pressable>
+    <Pressable onPress={()=>router.push(`/member/${me.id}` as never)} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.linkIcon,{backgroundColor:colors.primarySoft}]}><Ionicons name="trophy-outline" size={21} color={accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Public profile & badge showcase</Text><Text style={[styles.meta,{color:colors.muted}]}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
   </Screen>;
 }
 

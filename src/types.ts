@@ -223,6 +223,8 @@ export type UserSettings = {
   featuredTodayCard: "score" | string;
   defaultLandingPage: LandingPage;
   compactMode: boolean;
+  /** App-controlled text scale; system font scaling is disabled so layouts stay synchronized. */
+  fontScale: number;
   /** Show every Today tile in the main scroll instead of using the More sheet. */
   showAllTodayTiles: boolean;
   /** Maximum main-screen tiles before More appears when showAllTodayTiles is off. */
@@ -268,6 +270,10 @@ export type NotificationSettings = {
   mutedConversationIds?: string[];
   missedGoalNudges?: boolean;
   streakAlerts?: boolean;
+  /** Private on-device estimates derived from the user's own period-start history. */
+  cyclePredictions?: boolean;
+  cyclePhaseUpdates?: boolean;
+  cycleReminderDays?: number;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };
@@ -282,12 +288,16 @@ export type Group = {
   streakRestDaysPerWeek: number;
   /** Group-owned accent used throughout the app while this group is active. */
   themeColor?: string;
+  /** When enabled, invite joins wait for an admin to approve them. */
+  requireMemberApproval?: boolean;
+  /** Membership requests visible only to group admins. */
+  pendingMembers?: Member[];
   /** Versioned locally in demo mode; cloud mode stores this as group-owned configuration. */
   metricConfiguration?: MetricDefinition[];
 };
 
 export type AppState = {
-  version: 16;
+  version: 17;
   currentUserId: string;
   group: Group;
   groups: Group[];

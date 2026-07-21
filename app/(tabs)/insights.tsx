@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -212,6 +213,9 @@ export default function Insights() {
             onSelect={openDay}
             dayStatus={status}
             dayVisuals={dayVisuals}
+            allTrackedGoalsMet={(day) =>
+              trackedGoalSummary(state, state.currentUserId, day).allMet
+            }
           />
           <Text style={[styles.hint, { color: colors.muted }]}>
             Each colored line is one selected item. Tap a date for its filtered
@@ -351,29 +355,23 @@ function TrackedSummary({
     (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
   );
   return (
-    <Card style={styles.summary}>
+    <Card style={styles.trackedSummary}>
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
         <Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} />
       </View>
-      <Text style={[styles.summaryName, { color: colors.ink }]}>
-        Tracked goals
-      </Text>
-      <Text style={[styles.summaryValue, { color: colors.ink }]}>
-        {perfect}/{eligible.length}
-      </Text>
-      <Text style={[styles.summaryLabel, { color: colors.muted }]}>
-        all-goal days ·{" "}
-        {eligible.length ? Math.round((perfect / eligible.length) * 100) : 0}%
-      </Text>
-      <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-        {met}/{possible} individual goals ·{" "}
-        {possible ? Math.round((met / possible) * 100) : 0}%
-      </Text>
-      <Text style={[styles.streakLine, { color: colors.muted }]}>
-        Longest streak {streak} days
-      </Text>
+      <View style={styles.trackedCopy}>
+        <Text style={[styles.summaryName, { color: colors.ink }]}>Tracked goals</Text>
+        <Text style={[styles.summaryLabel, { color: colors.muted }]}>
+          {met}/{possible} goals · {possible ? Math.round((met / possible) * 100) : 0}%
+        </Text>
+      </View>
+      <View style={styles.trackedStat}>
+        <Text style={[styles.summaryValue, { color: colors.ink }]}>{perfect}/{eligible.length}</Text>
+        <Text style={[styles.summaryLabel, { color: colors.muted }]}>all-goal days</Text>
+      </View>
+      <Text style={[styles.streakLine, { color: TRACKED_COLOR }]}>Best {streak}d</Text>
     </Card>
   );
 }
@@ -678,6 +676,17 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
+  trackedSummary: {
+    width: "100%",
+    minHeight: 66,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  trackedCopy: { flex: 1 },
+  trackedStat: { alignItems: "flex-end" },
   summaryIcon: {
     width: 30,
     height: 30,

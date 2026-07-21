@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import {
@@ -21,11 +22,16 @@ import {
   weeklyDeficitBalance,
   weightProgressStats,
 } from "@/src/domain/metrics";
+import {
+  LeaderboardPeriod,
+  periodDates,
+  periodTitle,
+} from "@/src/domain/leaderboard";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
+import { cycleForecast } from "@/src/domain/cycle";
 
-type Period = "day" | "7" | "30";
 export default function TrackerDetail() {
   const { metric: trackerId, date } = useLocalSearchParams<{
     metric: string;
@@ -35,23 +41,20 @@ export default function TrackerDetail() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
-  const [period, setPeriod] = useState<Period>("day");
+  const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
-  const dates = useMemo(
-    () =>
-      Array.from(
-        { length: period === "30" ? 30 : period === "7" ? 7 : 1 },
-        (_, index) =>
-          dateWithOffsetFrom(
-            day,
-            index - (period === "30" ? 29 : period === "7" ? 6 : 0),
-          ),
-      ),
-    [day, period],
-  );
+  const dates = useMemo(() => periodDates(period, day), [day, period]);
+  function shiftRange(direction: number) {
+    const amount = period === "week" ? 7 : period === "month" ? 30 : 1;
+    const next = dateWithOffsetFrom(day, direction * amount);
+    if (next <= dateKey()) {
+      if (period === "today" || period === "yesterday") setPeriod("custom");
+      setDay(next);
+    }
+  }
   if (weekly)
     return (
       <WeeklyDetail
@@ -153,23 +156,28 @@ export default function TrackerDetail() {
         <View style={styles.periods}>
           <Chip
             label="Today"
-            selected={period === "day"}
-            onPress={() => setPeriod("day")}
+            selected={period === "today"}
+            onPress={() => { setPeriod("today"); setDay(dateKey()); }}
+          />
+          <Chip
+            label="Yesterday"
+            selected={period === "yesterday"}
+            onPress={() => { setPeriod("yesterday"); setDay(dateWithOffsetFrom(dateKey(), -1)); }}
           />
           <Chip
             label="7 days"
-            selected={period === "7"}
-            onPress={() => setPeriod("7")}
+            selected={period === "week"}
+            onPress={() => setPeriod("week")}
           />
           <Chip
-            label="30 days"
-            selected={period === "30"}
-            onPress={() => setPeriod("30")}
+            label="Month"
+            selected={period === "month"}
+            onPress={() => setPeriod("month")}
           />
         </View>
         <View style={styles.dayNav}>
           <Pressable
-            onPress={() => setDay(dateWithOffsetFrom(day, -1))}
+            onPress={() => shiftRange(-1)}
             style={[
               styles.navButton,
               { backgroundColor: colors.card, borderColor: colors.border },
@@ -177,14 +185,15 @@ export default function TrackerDetail() {
           >
             <Ionicons name="chevron-back" size={25} color={accent} />
           </Pressable>
-          <Text style={[styles.day, { color: colors.ink }]}>
-            {period === "day"
-              ? friendlyDate(day)
-              : `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`}
-          </Text>
+          <View style={styles.navCopy}>
+            <Text style={[styles.day, { color: colors.ink }]}>{periodTitle(period, day)}</Text>
+            <Text style={[styles.navSub, { color: colors.muted }]}>
+              {dates.length > 1 ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}` : friendlyDate(day)}
+            </Text>
+          </View>
           <Pressable
             disabled={day >= dateKey()}
-            onPress={() => setDay(dateWithOffsetFrom(day, 1))}
+            onPress={() => shiftRange(1)}
             style={[
               styles.navButton,
               { backgroundColor: colors.card, borderColor: colors.border },
@@ -202,7 +211,7 @@ export default function TrackerDetail() {
         <View style={styles.summaryTop}>
           <View>
             <Text style={[styles.label, { color: colors.faint }]}>
-              {period === "day" ? "CURRENT" : `${period}-DAY AVERAGE`}
+              {dates.length === 1 ? "CURRENT" : `${dates.length}-DAY AVERAGE`}
             </Text>
             <Text style={[styles.value, { color: colors.ink }]}>
               {isPhoto
@@ -211,7 +220,7 @@ export default function TrackerDetail() {
                   ? "Not available"
                   : formatMetricValue(
                       tracker,
-                      period === "day" ? current : average,
+                      dates.length === 1 ? current : average,
                     )}
             </Text>
             <Text style={[styles.sub, { color: colors.muted }]}>
@@ -231,7 +240,7 @@ export default function TrackerDetail() {
             />
           </View>
         </View>
-        {period !== "day" && !isPhoto ? (
+        {dates.length > 1 && !isPhoto ? (
           <Trend
             values={values}
             tracker={tracker}
@@ -259,6 +268,21 @@ export default function TrackerDetail() {
           </View>
         ) : null}
       </Card>
+      {["menstrual_cycle", "menstrual_flow", "cycle_day", "days_until_period"].includes(tracker.id) ? (
+        <Card style={{ gap: 4 }}>
+          {(() => {
+            const forecast = cycleForecast(state, state.currentUserId, day);
+            return <>
+              <Text style={[styles.label, { color: tracker.color }]}>CYCLE ESTIMATE</Text>
+              <Text style={[styles.value, { color: colors.ink }]}>Day {forecast.cycleDay || "–"} · {forecast.phase}</Text>
+              <Text style={[styles.sub, { color: colors.muted }]}>
+                {forecast.nextPeriodStart ? `Next period around ${friendlyDate(forecast.nextPeriodStart)} · ${forecast.averageCycleDays}-day rolling average` : "Log a period start to begin estimates."}
+              </Text>
+              <Text style={[styles.sub, { color: colors.faint }]}>Estimates learn from up to six recent cycles; personalized after three completed cycles. Not contraception or medical advice.</Text>
+            </>;
+          })()}
+        </Card>
+      ) : null}
       {weightStats ? (
         <Card style={styles.weightPlan}>
           <Stat
@@ -308,7 +332,7 @@ export default function TrackerDetail() {
       ) : null}
       <View style={styles.logHeader}>
         <Text style={[styles.section, { color: colors.ink }]}>
-          {period === "day" ? "Entries" : "Selected day"}
+          {dates.length === 1 ? "Entries" : "Selected day"}
         </Text>
         {tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
           <Pressable
@@ -378,6 +402,7 @@ export default function TrackerDetail() {
             </Text>
             <ExpandableImage
               uri={photo.uri}
+              containerStyle={styles.photoImageFrame}
               thumbnailStyle={styles.photoImage}
             />
             {olderPhoto ? (
@@ -400,10 +425,12 @@ export default function TrackerDetail() {
                     <View style={styles.photoCompare}>
                       <ExpandableImage
                         uri={photo.uri}
+                        containerStyle={styles.compareImageFrame}
                         thumbnailStyle={styles.compareImage}
                       />
                       <ExpandableImage
                         uri={olderPhoto.uri}
+                        containerStyle={styles.compareImageFrame}
                         thumbnailStyle={styles.compareImage}
                       />
                     </View>
@@ -717,13 +744,11 @@ function nutritionLine(
 const styles = StyleSheet.create({
   weightPlan: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   controls: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    alignItems: "stretch",
     gap: 8,
     marginBottom: 10,
   },
-  periods: { flexDirection: "row", gap: 5 },
+  periods: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
   dayNav: {
     flexDirection: "row",
     alignItems: "center",
@@ -739,6 +764,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   day: { fontSize: 10, fontWeight: "900" },
+  navCopy: { flex: 1, alignItems: "center" },
+  navSub: { fontSize: 8, marginTop: 2, textAlign: "center" },
   summary: { marginBottom: 9 },
   summaryTop: {
     flexDirection: "row",
@@ -820,7 +847,8 @@ const styles = StyleSheet.create({
   entryValue: { fontSize: 12, fontWeight: "900" },
   note: { fontSize: 9, lineHeight: 14, marginTop: 7 },
   image: { width: 92, height: 66, borderRadius: 10, marginTop: 8 },
-  photoImage: { width: "100%", height: 230, borderRadius: 13, marginTop: 8 },
+  photoImageFrame: { width: "100%", height: 230, marginTop: 8 },
+  photoImage: { width: "100%", height: "100%", borderRadius: 13 },
   photoToggle: {
     minHeight: 38,
     flexDirection: "row",
@@ -828,7 +856,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   photoCompare: { flexDirection: "row", gap: 7, marginTop: 7 },
-  compareImage: { flex: 1, height: 150, borderRadius: 11 },
+  compareImageFrame: { flex: 1, height: 150 },
+  compareImage: { width: "100%", height: "100%", borderRadius: 11 },
   compareButton: {
     height: 38,
     borderWidth: 1,

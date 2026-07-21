@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { AppText as Text } from "@/src/components/AppText";
 
 import { formatMetricValue, goalProgress, goalReached } from '@/src/domain/metrics';
 import { MetricDefinition } from '@/src/types';

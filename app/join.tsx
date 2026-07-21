@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
+import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from '@/src/auth/AuthProvider';
 import { useCloudSync } from '@/src/cloud/CloudSyncProvider';

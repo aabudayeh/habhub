@@ -1,8 +1,9 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Redirect, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
@@ -12,10 +13,11 @@ import { AppProvider, useApp } from "@/src/state/AppProvider";
 import {
   CompactModeProvider,
   DarkModeProvider,
+  FontScaleProvider,
   GroupAccentProvider,
   palette,
 } from "@/src/theme";
-import "@/src/notifications/push";
+import { syncCycleNotifications } from "@/src/notifications/push";
 
 const theme = {
   ...DefaultTheme,
@@ -47,6 +49,16 @@ function RootNavigator() {
   const { state } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
+  const cycleSignature = state.entries
+    .filter((entry) => entry.userId === state.currentUserId && entry.metricId === "menstrual_cycle")
+    .map((entry) => `${entry.localDate}:${entry.value}`)
+    .join("|");
+  const cycleStateRef = useRef(state);
+  cycleStateRef.current = state;
+  const cycleNotificationKey = `${cycleSignature}|${state.currentUserId}|${state.settings.notifications.pushEnabled}|${state.settings.notifications.cyclePredictions}|${state.settings.notifications.cyclePhaseUpdates}|${state.settings.notifications.cycleReminderDays}`;
+  useEffect(() => {
+    void syncCycleNotifications(cycleStateRef.current).catch(() => undefined);
+  }, [cycleNotificationKey]);
   const inAuthRoute =
     rootSegment === "sign-in" ||
     rootSegment === "auth-callback" ||
@@ -108,8 +120,9 @@ function RootNavigator() {
   return (
     <GroupAccentProvider color={accent}>
       <DarkModeProvider dark={state.settings.darkMode}>
-        <CompactModeProvider compact={state.settings.compactMode}>
-          <ThemeProvider value={activeTheme}>
+        <FontScaleProvider scale={state.settings.fontScale ?? 1}>
+          <CompactModeProvider compact={state.settings.compactMode}>
+            <ThemeProvider value={activeTheme}>
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -184,8 +197,9 @@ function RootNavigator() {
               <Stack.Screen name="groups" options={{ presentation: "modal" }} />
             </Stack>
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
-          </ThemeProvider>
-        </CompactModeProvider>
+            </ThemeProvider>
+          </CompactModeProvider>
+        </FontScaleProvider>
       </DarkModeProvider>
     </GroupAccentProvider>
   );

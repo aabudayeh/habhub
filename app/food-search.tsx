@@ -8,10 +8,10 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import {
   Button,
@@ -331,19 +331,19 @@ export default function FoodSearchScreen() {
                   >
                     {product.name}
                   </Text>
-                  {product.completeNutrition ? (
+                  {product.verified ? (
                     <Text
                       style={[
                         styles.complete,
                         { color: accent, backgroundColor: colors.primarySoft },
                       ]}
                     >
-                      COMPLETE
+                      VERIFIED
                     </Text>
                   ) : null}
                 </View>
                 <Text style={[styles.meta, { color: colors.muted }]}>
-                  {[product.brand, product.basis].filter(Boolean).join(" · ")}
+                  {[product.brand, product.basis, product.source].filter(Boolean).join(" · ")}
                 </Text>
                 <Text style={[styles.nutrition, { color: accent }]}>
                   {product.calories} kcal

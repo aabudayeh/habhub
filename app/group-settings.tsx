@@ -6,10 +6,13 @@ import {
   Pressable,
   StyleSheet,
   Switch,
-  Text,
   TextInput,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
+import { useAuth } from "@/src/auth/AuthProvider";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
 
 import {
   Avatar,
@@ -46,7 +49,12 @@ export default function GroupSettings() {
     updateNickname,
     setGroupRestDays,
     setGroupTheme,
+    setGroupApprovalRequired,
+    approveMember,
+    removeMember,
   } = useApp();
+  const auth = useAuth();
+  const cloud = useCloudSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const me = state.group.members.find(
@@ -79,6 +87,24 @@ export default function GroupSettings() {
         { text: "Confirm", onPress: () => setMemberRole(memberId, role) },
       ],
     );
+  }
+
+  async function approve(memberId: string) {
+    if (auth.status === "signedIn" && isCloudGroupId(state.group.id))
+      await cloud.approveMember(memberId);
+    else approveMember(memberId);
+  }
+
+  async function remove(memberId: string) {
+    const action = async () => {
+      if (auth.status === "signedIn" && isCloudGroupId(state.group.id))
+        await cloud.removeMember(memberId);
+      else removeMember(memberId);
+    };
+    Alert.alert("Remove this member?", "They can request to join again later.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Remove", style: "destructive", onPress: () => void action() },
+    ]);
   }
 
   return (
@@ -331,6 +357,35 @@ export default function GroupSettings() {
       </Card>
 
       <SectionHeader title="Names in this group" />
+      {canEdit ? (
+        <Card style={styles.status}>
+          <View style={styles.copy}>
+            <Text style={[styles.name, { color: colors.ink }]}>Allow members to join immediately</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>Turn off to approve each invite request first.</Text>
+          </View>
+          <Switch
+            value={!state.group.requireMemberApproval}
+            onValueChange={(allow) => setGroupApprovalRequired(!allow)}
+            trackColor={{ false: colors.border, true: `${accent}88` }}
+            thumbColor={!state.group.requireMemberApproval ? accent : colors.faint}
+          />
+        </Card>
+      ) : null}
+      {canEdit && (state.group.pendingMembers?.length ?? 0) > 0 ? (
+        <>
+          <SectionHeader title="Join requests" />
+          <Card style={styles.list}>
+            {state.group.pendingMembers!.map((member) => (
+              <View key={member.id} style={styles.person}>
+                <Avatar initials={member.initials} color={accent} size={36} uri={member.avatarUri} />
+                <Text style={[styles.name, styles.copy, { color: colors.ink }]}>{member.name}</Text>
+                <Pressable onPress={() => void approve(member.id)}><Text style={[styles.role, { color: accent }]}>Approve</Text></Pressable>
+                <Pressable onPress={() => void remove(member.id)}><Text style={[styles.role, { color: palette.red }]}>Decline</Text></Pressable>
+              </View>
+            ))}
+          </Card>
+        </>
+      ) : null}
       <Card style={styles.list}>
         {state.group.members.map((member, index) => (
           <View
@@ -391,6 +446,14 @@ export default function GroupSettings() {
                   : memberRoleLabel(member)}
               </Text>
             )}
+            {canEdit &&
+            member.role !== "owner" &&
+            member.id !== state.currentUserId &&
+            (me.role === "owner" || member.role === "member") ? (
+              <Pressable onPress={() => void remove(member.id)} style={styles.removeMember}>
+                <Ionicons name="person-remove-outline" size={16} color={palette.red} />
+              </Pressable>
+            ) : null}
           </View>
         ))}
       </Card>
@@ -451,4 +514,5 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   role: { fontSize: 8, fontWeight: "900", maxWidth: 70, textAlign: "right" },
+  removeMember: { padding: 5 },
 });

@@ -8,9 +8,9 @@ import {
   Share,
   StyleSheet,
   Switch,
-  Text,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";

@@ -11,10 +11,10 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Text,
   useWindowDimensions,
   View,
 } from "react-native";
+import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -177,7 +177,7 @@ export default function Today() {
             <Pressable onPress={() => router.navigate("/menu")}>
               <Avatar
                 initials={user.initials}
-                color={user.color}
+                color={accent}
                 uri={user.avatarUri}
                 size={39}
               />
