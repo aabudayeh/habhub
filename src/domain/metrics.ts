@@ -510,6 +510,27 @@ export function goalReached(
   }
 }
 
+/**
+ * Goals based on a day's accumulating nutrition or a calculated daily result
+ * are not final while the day is still in progress. Celebrating them on the
+ * first entry produces false positives (for example, 300 kcal is temporarily
+ * below a 2,000 kcal food limit).
+ */
+export function goalCelebrationTiming(
+  metric: MetricDefinition,
+): "immediate" | "end_of_day" {
+  if (metric.dataType === "calculated" || metric.category === "nutrition")
+    return "end_of_day";
+  if (
+    metric.aggregation === "sum" &&
+    (metric.goal.kind === "at_most" ||
+      metric.goal.kind === "exact" ||
+      Boolean(metric.goalRange))
+  )
+    return "end_of_day";
+  return "immediate";
+}
+
 export function dailyScore(
   state: AppState,
   userId: string,

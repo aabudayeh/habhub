@@ -20,7 +20,9 @@ import {
 } from "@/src/domain/energy";
 import {
   effectiveGoalTarget,
+  goalCelebrationTiming,
   goalReached,
+  isMetricTrackedOnDate,
   safeMetricValue,
 } from "@/src/domain/metrics";
 import { randomMessage } from "@/src/domain/social";
@@ -158,10 +160,77 @@ function withPersonalMetrics(
   return { ...state, metrics };
 }
 
+function hasShareableGoalEvidence(
+  state: AppState,
+  metric: MetricDefinition,
+  localDate: string,
+) {
+  const entries = state.entries.filter(
+    (entry) =>
+      entry.userId === state.currentUserId &&
+      entry.localDate === localDate &&
+      entry.visibility !== "private",
+  );
+  if (metric.dataType !== "calculated")
+    return entries.some((entry) => entry.metricId === metric.id);
+  if (metric.defaultVisibility === "private") return false;
+  const dependencies = new Set(
+    metric.formula?.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [],
+  );
+  return entries.some((entry) => dependencies.has(entry.metricId));
+}
+
+function finalizeEndOfDayGoals(state: AppState, localDate: string): AppState {
+  if (
+    !state.settings.autoMessages ||
+    state.settings.banterTone === "off" ||
+    localDate >= dateKey()
+  )
+    return state;
+  const messages = state.metrics
+    .filter(
+      (metric) =>
+        metric.goalEnabled !== false &&
+        metric.dataType !== "text" &&
+        goalCelebrationTiming(metric) === "end_of_day" &&
+        isMetricTrackedOnDate(state, metric, localDate) &&
+        hasShareableGoalEvidence(state, metric, localDate),
+    )
+    .filter((metric) =>
+      goalReached(
+        metric,
+        safeMetricValue(state, metric, state.currentUserId, localDate),
+        effectiveGoalTarget(state, metric, state.currentUserId, localDate),
+      ),
+    )
+    .filter(
+      (metric) =>
+        !state.messages.some(
+          (message) =>
+            message.id ===
+            `auto-goal:${state.group.id}:${state.currentUserId}:${localDate}:${metric.id}`,
+        ),
+    )
+    .map((metric) => ({
+      id: `auto-goal:${state.group.id}:${state.currentUserId}:${localDate}:${metric.id}`,
+      senderId: "system",
+      conversationId: `group:${state.group.id}`,
+      kind: "cheer" as const,
+      text: `${randomMessage("cheer", state.settings.banterTone)} Yesterday's ${metric.name.toLowerCase()} goal was met!`,
+      createdAt: new Date().toISOString(),
+    }));
+  return messages.length
+    ? { ...state, messages: [...state.messages, ...messages] }
+    : state;
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate":
-      return action.state;
+      return finalizeEndOfDayGoals(
+        action.state,
+        dateWithOffsetFrom(dateKey(), -1),
+      );
     case "log": {
       const localDate = action.details?.localDate ?? dateKey();
       const metric = state.metrics.find(
@@ -203,6 +272,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
       if (
         metric &&
+        goalCelebrationTiming(metric) === "immediate" &&
         state.settings.autoMessages &&
         state.settings.banterTone !== "off" &&
         action.visibility !== "private" &&
@@ -234,7 +304,9 @@ function reducer(state: AppState, action: Action): AppState {
           },
         ];
       }
-      return nextState;
+      return localDate < dateKey()
+        ? finalizeEndOfDayGoals(nextState, localDate)
+        : nextState;
     }
     case "addMetric": {
       const baseId =
