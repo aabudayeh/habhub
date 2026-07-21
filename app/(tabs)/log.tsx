@@ -467,8 +467,12 @@ export default function LogScreen() {
                   color={palette.primary}
                 />
                 <View style={styles.grow}>
-                  <Text style={styles.fieldLabel}>Date</Text>
-                  <Text style={styles.calendarText}>{logDate}</Text>
+                  <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                    Date
+                  </Text>
+                  <Text style={[styles.calendarText, { color: colors.ink }]}>
+                    {logDate}
+                  </Text>
                 </View>
                 <Ionicons
                   name={logCalendarOpen ? "chevron-up" : "chevron-down"}
@@ -477,13 +481,18 @@ export default function LogScreen() {
                 />
               </Pressable>
               <View style={styles.timeField}>
-                <Text style={styles.fieldLabel}>Time</Text>
+                <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                  Time
+                </Text>
                 <TextInput
                   value={logTime}
                   onChangeText={setLogTime}
                   placeholder="HH:MM"
                   placeholderTextColor={palette.faint}
-                  style={styles.dateInput}
+                  style={[
+                    styles.dateInput,
+                    { color: colors.ink, borderColor: colors.border },
+                  ]}
                 />
               </View>
               <Pressable
@@ -519,6 +528,54 @@ export default function LogScreen() {
               </View>
             ) : null}
           </View>
+          {selected.id === "food" ? (
+            <>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                What did you eat?
+              </Text>
+              <View
+                style={[styles.foodNameRow, { borderColor: colors.border }]}
+              >
+                <TextInput
+                  value={label}
+                  onChangeText={setLabel}
+                  placeholder="Food, product, or brand"
+                  placeholderTextColor={colors.faint}
+                  style={[styles.foodNameInput, { color: colors.ink }]}
+                />
+                <Pressable
+                  accessibilityLabel="Search foods"
+                  onPress={() =>
+                    router.navigate({
+                      pathname: "/food-search",
+                      params: { q: label },
+                    })
+                  }
+                  style={[styles.foodSearchButton, { backgroundColor: accent }]}
+                >
+                  <Ionicons name="search" size={18} color={palette.white} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Scan barcode"
+                  onPress={() =>
+                    router.navigate({
+                      pathname: "/food-search",
+                      params: { mode: "scan" },
+                    })
+                  }
+                  style={[
+                    styles.foodScanButton,
+                    { backgroundColor: colors.primarySoft },
+                  ]}
+                >
+                  <Ionicons name="barcode-outline" size={19} color={accent} />
+                </Pressable>
+              </View>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                Calories
+              </Text>
+            </>
+          ) : null}
           {selected.dataType === "photo" ? (
             <>
               <Text style={styles.fieldLabel}>
@@ -583,33 +640,37 @@ export default function LogScreen() {
           )}
           {selected.id === "food" ? (
             <>
-              <Pressable
-                onPress={() => router.push("/food-search")}
-                style={styles.foodLookup}
-              >
-                <Ionicons name="barcode-outline" size={20} color={accent} />
-                <View style={styles.grow}>
-                  <Text style={[styles.foodLookupTitle, { color: accent }]}>
-                    Scan barcode or search foods
-                  </Text>
-                  <Text style={styles.helper}>
-                    Fill nutrition, then review it.
-                  </Text>
-                </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={17}
-                  color={palette.faint}
-                />
-              </Pressable>
-              <Text style={styles.fieldLabel}>What did you eat?</Text>
-              <TextInput
-                value={label}
-                onChangeText={setLabel}
-                placeholder="e.g. Chicken rice bowl"
-                placeholderTextColor={palette.faint}
-                style={styles.fieldInput}
-              />
+              {false ? (
+                <>
+                  <Pressable
+                    onPress={() => router.push("/food-search")}
+                    style={styles.foodLookup}
+                  >
+                    <Ionicons name="barcode-outline" size={20} color={accent} />
+                    <View style={styles.grow}>
+                      <Text style={[styles.foodLookupTitle, { color: accent }]}>
+                        Scan barcode or search foods
+                      </Text>
+                      <Text style={styles.helper}>
+                        Fill nutrition, then review it.
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={17}
+                      color={palette.faint}
+                    />
+                  </Pressable>
+                  <Text style={styles.fieldLabel}>What did you eat?</Text>
+                  <TextInput
+                    value={label}
+                    onChangeText={setLabel}
+                    placeholder="e.g. Chicken rice bowl"
+                    placeholderTextColor={palette.faint}
+                    style={styles.fieldInput}
+                  />
+                </>
+              ) : null}
               <Text style={styles.fieldLabel}>Nutrition (optional)</Text>
               <View style={styles.nutritionGrid}>
                 {[
@@ -783,13 +844,19 @@ export default function LogScreen() {
               </View>
             </>
           ) : null}
-          <Text style={styles.fieldLabel}>Note (optional)</Text>
+          <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+            Note (optional)
+          </Text>
           <TextInput
             value={note}
             onChangeText={setNote}
             placeholder="Context, how it felt, where it came from…"
             placeholderTextColor={palette.faint}
-            style={[styles.fieldInput, styles.noteInput]}
+            style={[
+              styles.fieldInput,
+              styles.noteInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
             multiline
           />
           {entryImage ? (
@@ -816,7 +883,9 @@ export default function LogScreen() {
               {entryImage ? "Change attached image" : "Attach an image"}
             </Text>
           </Pressable>
-          <Text style={styles.fieldLabel}>Who can see it?</Text>
+          <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+            Who can see it?
+          </Text>
           <View style={styles.privacyRow}>
             {privacyOptions.map((option) => (
               <Chip
@@ -838,9 +907,11 @@ export default function LogScreen() {
                     : "people"
               }
               size={16}
-              color={palette.primary}
+              color={accent}
             />
-            <Text style={styles.privacyText}>{privacyCopy}</Text>
+            <Text style={[styles.privacyText, { color: colors.muted }]}>
+              {privacyCopy}
+            </Text>
           </View>
           <Button
             label={
@@ -870,12 +941,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   compactTitle: { fontSize: 13, fontWeight: "900", color: palette.ink },
-  selector: { marginBottom: 14 },
-  dateCard: { marginBottom: 16 },
+  selector: { marginBottom: 8 },
+  dateCard: { marginBottom: 8 },
   dateRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
   calendarButton: {
     flex: 1.4,
-    minHeight: 46,
+    minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -886,7 +957,7 @@ const styles = StyleSheet.create({
   },
   calendarText: {
     color: palette.ink,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "900",
     marginTop: -5,
   },
@@ -902,9 +973,9 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     borderRadius: 11,
     paddingHorizontal: 10,
-    paddingVertical: 9,
+    paddingVertical: 7,
     color: palette.ink,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "700",
   },
   nowButton: {
@@ -917,23 +988,23 @@ const styles = StyleSheet.create({
     backgroundColor: palette.primarySoft,
   },
   nowText: { color: palette.primary, fontSize: 10, fontWeight: "800" },
-  logCard: { marginBottom: 24 },
+  logCard: { marginBottom: 12, paddingVertical: 10 },
   heading: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    marginBottom: 18,
+    gap: 9,
+    marginBottom: 9,
   },
   metricIcon: {
-    width: 49,
-    height: 49,
-    borderRadius: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
   grow: { flex: 1 },
-  metricName: { color: palette.ink, fontSize: 18, fontWeight: "800" },
-  currentValue: { color: palette.muted, fontSize: 12, marginTop: 3 },
+  metricName: { color: palette.ink, fontSize: 14, fontWeight: "900" },
+  currentValue: { color: palette.muted, fontSize: 9, marginTop: 2 },
   defaultPill: {
     flexDirection: "row",
     gap: 4,
@@ -947,36 +1018,58 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1.5,
     borderColor: palette.border,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    marginBottom: 14,
+    borderRadius: 13,
+    paddingHorizontal: 11,
+    marginBottom: 8,
   },
   numberInput: {
     flex: 1,
     color: palette.ink,
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: "800",
-    paddingVertical: 15,
+    paddingVertical: 9,
   },
-  unit: { color: palette.muted, fontSize: 14, fontWeight: "700" },
+  unit: { color: palette.muted, fontSize: 10, fontWeight: "700" },
   fieldLabel: {
     color: palette.ink,
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: "900",
-    marginBottom: 8,
-    marginTop: 4,
+    marginBottom: 4,
+    marginTop: 2,
   },
   fieldInput: {
     borderWidth: 1,
     borderColor: palette.border,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     color: palette.ink,
-    marginBottom: 14,
+    marginBottom: 8,
   },
-  textArea: { minHeight: 95, textAlignVertical: "top" },
-  noteInput: { minHeight: 65, textAlignVertical: "top" },
+  textArea: { minHeight: 68, textAlignVertical: "top" },
+  noteInput: { minHeight: 46, textAlignVertical: "top" },
+  foodNameRow: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    marginBottom: 7,
+    overflow: "hidden",
+  },
+  foodNameInput: { flex: 1, paddingHorizontal: 10, fontSize: 11 },
+  foodSearchButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  foodScanButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   foodLookup: {
     flexDirection: "row",
     alignItems: "center",
@@ -1034,7 +1127,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   completionTitle: { color: palette.ink, fontSize: 15, fontWeight: "800" },
-  helper: { color: palette.muted, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  helper: { color: palette.muted, fontSize: 9, lineHeight: 13, marginTop: 2 },
   attachRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1043,7 +1136,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 7,
   },
-  attachText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  attachText: { color: palette.primary, fontSize: 10, fontWeight: "800" },
   entryImageWrap: { width: 120, height: 92, position: "relative" },
   entryImage: { width: 120, height: 92, borderRadius: 13 },
   removeImage: {

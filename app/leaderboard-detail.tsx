@@ -25,7 +25,7 @@ import {
   ProgressBar,
   Screen,
 } from "@/src/components/ui";
-import { dateKey, friendlyDate } from "@/src/domain/date";
+import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
   leaderboardRows,
   LeaderboardPeriod,
@@ -43,7 +43,7 @@ import {
   formatMetricValue,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
-import { palette } from "@/src/theme";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricEntry, PhotoUpdate } from "@/src/types";
 
 const SCORE_ID = "__score";
@@ -55,6 +55,8 @@ export default function LeaderboardDetail() {
     metrics?: string;
   }>();
   const { state } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
   const [period, setPeriod] = useState<LeaderboardPeriod>(
     (params.period as LeaderboardPeriod) || "today",
   );
@@ -128,6 +130,14 @@ export default function LeaderboardDetail() {
     if (next === "today") setAnchor(dateKey());
     setShowCalendar(next === "custom");
   }
+  function shift(direction: -1 | 1) {
+    const amount = period === "week" ? 7 : period === "month" ? 30 : 1;
+    const next = dateWithOffsetFrom(anchor, direction * amount);
+    if (next <= dateKey()) {
+      if (period === "today" || period === "yesterday") setPeriod("custom");
+      setAnchor(next);
+    }
+  }
 
   return (
     <Screen>
@@ -172,17 +182,35 @@ export default function LeaderboardDetail() {
           onPress={() => setRange("custom")}
         />
       </View>
+      <Card style={styles.navigator}>
+        <IconButton
+          icon="chevron-back"
+          label="Previous"
+          onPress={() => shift(-1)}
+        />
+        <View style={styles.navCopy}>
+          <Text style={[styles.navTitle, { color: colors.ink }]}>
+            {periodTitle(period, anchor)}
+          </Text>
+          <Text style={[styles.navSub, { color: colors.muted }]}>
+            {dates.length > 1
+              ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
+              : friendlyDate(anchor)}
+          </Text>
+        </View>
+        <IconButton
+          icon="chevron-forward"
+          label="Next"
+          onPress={() => shift(1)}
+        />
+      </Card>
       {period === "custom" ? (
         <Card style={styles.datePicker}>
           <Pressable
             onPress={() => setShowCalendar((value) => !value)}
             style={styles.dateButton}
           >
-            <Ionicons
-              name="calendar-outline"
-              size={18}
-              color={palette.primary}
-            />
+            <Ionicons name="calendar-outline" size={18} color={accent} />
             <Text style={styles.dateText}>{friendlyDate(anchor)}</Text>
             <Ionicons
               name={showCalendar ? "chevron-up" : "chevron-down"}
@@ -210,13 +238,15 @@ export default function LeaderboardDetail() {
         onChange={setSelectedIds}
         emptyLabel="No shared logs in this range"
       />
-      <View style={styles.range}>
-        <Ionicons name="calendar-outline" size={15} color={palette.primary} />
-        <Text style={styles.rangeText}>
-          {dates[0]} → {dates[dates.length - 1]} · {dates.length} day
-          {dates.length === 1 ? "" : "s"}
-        </Text>
-      </View>
+      {false ? (
+        <View style={styles.range}>
+          <Ionicons name="calendar-outline" size={15} color={accent} />
+          <Text style={styles.rangeText}>
+            {dates[0]} → {dates[dates.length - 1]} · {dates.length} day
+            {dates.length === 1 ? "" : "s"}
+          </Text>
+        </View>
+      ) : null}
       <View style={styles.members}>
         {rows.map((row, index) => {
           const entries = visibleEntries.filter(
@@ -235,7 +265,7 @@ export default function LeaderboardDetail() {
             <Card key={row.member.id} style={styles.memberCard}>
               <Pressable
                 onPress={() =>
-                  router.push({
+                  router.navigate({
                     pathname: "/member/[id]",
                     params: {
                       id: row.member.id,
@@ -326,7 +356,7 @@ export default function LeaderboardDetail() {
                         : "analytics-outline"
                     }
                     size={20}
-                    color={palette.primary}
+                    color={accent}
                   />
                   <View style={styles.copy}>
                     <Text style={styles.logValue}>Reporting alignment</Text>
@@ -362,7 +392,7 @@ export default function LeaderboardDetail() {
                     <Ionicons
                       name={expanded ? "chevron-up" : "chevron-down"}
                       size={18}
-                      color={palette.primary}
+                      color={accent}
                     />
                   </Pressable>
                   {expanded
@@ -466,6 +496,7 @@ function PhotoCompare({
   memberId: string;
   dates: string[];
 }) {
+  const accent = useGroupAccent();
   const visible = state.photos
     .filter(
       (photo) =>
@@ -486,6 +517,7 @@ function PhotoCompare({
   const primaryDate = primary?.localDate ?? "";
   const defaultOlderDate = olderDates[0] ?? "";
   const [compareDate, setCompareDate] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
   const collageRef = useRef<ViewShot>(null);
   const Share = {
     share: async (_options: { message: string }) => {
@@ -586,52 +618,81 @@ function PhotoCompare({
 
   return (
     <View style={styles.photos}>
-      <Text style={styles.blockTitle}>PROGRESS PHOTO</Text>
-      <ViewShot
-        ref={collageRef}
-        options={{ format: "png", quality: 1 }}
-        style={styles.capture}
+      <Pressable
+        onPress={() => setOpen((value) => !value)}
+        style={styles.photoToggle}
       >
-        <Text style={styles.captureTitle}>North progress comparison</Text>
-        <View style={styles.photoGrid}>
-          {[primary, comparison].filter(Boolean).map((photo) => (
-            <View key={photo!.id} style={styles.photoItem}>
-              <ExpandableImage uri={photo!.uri} thumbnailStyle={styles.photo} />
-              <Text style={styles.photoDate}>{photo!.localDate}</Text>
-              <Text style={styles.photoWeight}>{weight(photo!.localDate)}</Text>
+        <Text style={styles.blockTitle}>PROGRESS PHOTO</Text>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={17}
+          color={accent}
+        />
+      </Pressable>
+      {open ? (
+        <>
+          <ViewShot
+            ref={collageRef}
+            options={{ format: "png", quality: 1 }}
+            style={styles.capture}
+          >
+            <Text style={styles.captureTitle}>North progress comparison</Text>
+            <View style={styles.photoGrid}>
+              {[primary, comparison].filter(Boolean).map((photo) => (
+                <View key={photo!.id} style={styles.photoItem}>
+                  <ExpandableImage
+                    uri={photo!.uri}
+                    thumbnailStyle={styles.photo}
+                  />
+                  <Text style={styles.photoDate}>{photo!.localDate}</Text>
+                  <Text style={styles.photoWeight}>
+                    {weight(photo!.localDate)}
+                  </Text>
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-      </ViewShot>
-      {olderDates.length ? (
-        <MetricSelector
-          title="Older comparison date"
-          items={olderDates.map((day) => ({
-            id: day,
-            label: day,
-            icon: "calendar-outline",
-            sublabel: weight(day),
-          }))}
-          selectedIds={compareDate}
-          onChange={setCompareDate}
-          multiple={false}
-        />
-      ) : null}
-      {comparison ? (
-        <Button
-          label={
-            Platform.OS === "web" ? "Download collage" : "Save or share collage"
-          }
-          icon={Platform.OS === "web" ? "download-outline" : "share-outline"}
-          variant="ghost"
-          onPress={save}
-        />
+          </ViewShot>
+          {olderDates.length ? (
+            <MetricSelector
+              title="Older comparison date"
+              items={olderDates.map((day) => ({
+                id: day,
+                label: day,
+                icon: "calendar-outline",
+                sublabel: weight(day),
+              }))}
+              selectedIds={compareDate}
+              onChange={setCompareDate}
+              multiple={false}
+            />
+          ) : null}
+          {comparison ? (
+            <Button
+              label={
+                Platform.OS === "web"
+                  ? "Download collage"
+                  : "Save or share collage"
+              }
+              icon={
+                Platform.OS === "web" ? "download-outline" : "share-outline"
+              }
+              variant="ghost"
+              onPress={save}
+            />
+          ) : null}
+        </>
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  photoToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 38,
+  },
   capture: {
     backgroundColor: "#F5F7F2",
     padding: 10,
@@ -645,6 +706,10 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 11 },
+  navigator: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  navCopy: { flex: 1, alignItems: "center" },
+  navTitle: { fontSize: 12, fontWeight: "900" },
+  navSub: { fontSize: 9, marginTop: 2 },
   datePicker: { padding: 10, marginBottom: 10 },
   dateButton: {
     flexDirection: "row",

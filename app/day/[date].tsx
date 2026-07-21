@@ -52,6 +52,7 @@ export default function DayDetail() {
   const { state } = useApp();
   const [day, setDay] = useState(params.date ?? dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [photosOpen, setPhotosOpen] = useState(false);
   const requested = (params.metrics ?? "").split(",").filter(Boolean);
   const explicit = requested.length > 0;
   const dayEntries = state.entries.filter(
@@ -337,79 +338,103 @@ export default function DayDetail() {
       {weightLogged ? <AlignmentCard status={alignment} /> : null}
       {dayPhotos.length ? (
         <>
-          <SectionHeader title="Photos from this day" />
-          <View style={styles.dayPhotos}>
-            {dayPhotos.map((photo) => (
-              <Card key={photo.id} style={styles.photoCard}>
-                <ExpandableImage
-                  uri={photo.uri}
-                  caption={photo.caption}
-                  thumbnailStyle={styles.dayPhoto}
-                />
-                <Text style={styles.photoCaption}>
-                  {photo.caption || "Progress photo"}
-                </Text>
-                <Text style={styles.weight}>
-                  {photo.localDate} · {nearestWeight(photo.localDate)}
-                </Text>
-              </Card>
-            ))}
-          </View>
-          {otherPhotoDates.length ? (
-            <>
-              <SectionHeader title="Compare with another date" />
-              <MetricSelector
-                items={otherPhotoDates.map((date) => ({
-                  id: date,
-                  label: date,
-                  icon: "calendar-outline",
-                  sublabel: `${state.photos.filter((photo) => photo.userId === state.currentUserId && photo.localDate === date).length} photo(s)`,
-                }))}
-                selectedIds={compareDate}
-                onChange={setCompareDate}
-                multiple={false}
-                title="Older photo date"
+          <Pressable onPress={() => setPhotosOpen((open) => !open)}>
+            <Card style={styles.photoToggle}>
+              <Ionicons
+                name="images-outline"
+                size={18}
+                color={palette.primary}
               />
-            </>
-          ) : null}
-          {collage.length === 2 ? (
-            <Card style={styles.comparison}>
-              <ViewShot
-                ref={collageRef}
-                options={{ format: "png", quality: 1 }}
-                style={styles.capture}
-              >
-                <Text style={styles.captureTitle}>
-                  North progress comparison
-                </Text>
-                <View style={styles.compareGrid}>
-                  {collage.map((photo) => (
-                    <View key={photo.id} style={styles.compareItem}>
-                      <ExpandableImage
-                        uri={photo.uri}
-                        thumbnailStyle={styles.compareImage}
-                      />
-                      <Text style={styles.photoCaption}>{photo.localDate}</Text>
-                      <Text style={styles.weight}>
-                        {nearestWeight(photo.localDate)}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </ViewShot>
-              <Button
-                label={
-                  Platform.OS === "web"
-                    ? "Download collage"
-                    : "Save or share collage"
-                }
-                icon={
-                  Platform.OS === "web" ? "download-outline" : "share-outline"
-                }
-                variant="ghost"
-                onPress={saveCollage}
+              <Text style={styles.trackedTitle}>
+                Photos from this day · {dayPhotos.length}
+              </Text>
+              <Ionicons
+                name={photosOpen ? "chevron-up" : "chevron-down"}
+                size={17}
+                color={palette.muted}
               />
             </Card>
+          </Pressable>
+          {photosOpen ? (
+            <>
+              <View style={styles.dayPhotos}>
+                {dayPhotos.map((photo) => (
+                  <Card key={photo.id} style={styles.photoCard}>
+                    <ExpandableImage
+                      uri={photo.uri}
+                      caption={photo.caption}
+                      thumbnailStyle={styles.dayPhoto}
+                    />
+                    <Text style={styles.photoCaption}>
+                      {photo.caption || "Progress photo"}
+                    </Text>
+                    <Text style={styles.weight}>
+                      {photo.localDate} · {nearestWeight(photo.localDate)}
+                    </Text>
+                  </Card>
+                ))}
+              </View>
+              {otherPhotoDates.length ? (
+                <>
+                  <SectionHeader title="Compare with another date" />
+                  <MetricSelector
+                    items={otherPhotoDates.map((date) => ({
+                      id: date,
+                      label: date,
+                      icon: "calendar-outline",
+                      sublabel: `${state.photos.filter((photo) => photo.userId === state.currentUserId && photo.localDate === date).length} photo(s)`,
+                    }))}
+                    selectedIds={compareDate}
+                    onChange={setCompareDate}
+                    multiple={false}
+                    title="Older photo date"
+                  />
+                </>
+              ) : null}
+              {collage.length === 2 ? (
+                <Card style={styles.comparison}>
+                  <ViewShot
+                    ref={collageRef}
+                    options={{ format: "png", quality: 1 }}
+                    style={styles.capture}
+                  >
+                    <Text style={styles.captureTitle}>
+                      North progress comparison
+                    </Text>
+                    <View style={styles.compareGrid}>
+                      {collage.map((photo) => (
+                        <View key={photo.id} style={styles.compareItem}>
+                          <ExpandableImage
+                            uri={photo.uri}
+                            thumbnailStyle={styles.compareImage}
+                          />
+                          <Text style={styles.photoCaption}>
+                            {photo.localDate}
+                          </Text>
+                          <Text style={styles.weight}>
+                            {nearestWeight(photo.localDate)}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  </ViewShot>
+                  <Button
+                    label={
+                      Platform.OS === "web"
+                        ? "Download collage"
+                        : "Save or share collage"
+                    }
+                    icon={
+                      Platform.OS === "web"
+                        ? "download-outline"
+                        : "share-outline"
+                    }
+                    variant="ghost"
+                    onPress={saveCollage}
+                  />
+                </Card>
+              ) : null}
+            </>
           ) : null}
         </>
       ) : null}
@@ -498,9 +523,13 @@ function DayTracker({
 
 function TrackedCard({ state, day }: { state: AppState; day: string }) {
   const summary = trackedGoalSummary(state, state.currentUserId, day);
+  const [open, setOpen] = useState(false);
   return (
     <Card style={styles.tracked}>
-      <View style={styles.trackedTop}>
+      <Pressable
+        onPress={() => setOpen((value) => !value)}
+        style={styles.trackedTop}
+      >
         <Ionicons name="checkmark-done" size={22} color={palette.primary} />
         <View style={styles.grow}>
           <Text style={styles.trackedTitle}>Tracked goals</Text>
@@ -511,23 +540,33 @@ function TrackedCard({ state, day }: { state: AppState; day: string }) {
         <Text style={styles.fraction}>
           {summary.met}/{summary.total}
         </Text>
-      </View>
-      <View style={styles.goalChips}>
-        {summary.metrics.map((metric) => {
-          const reached = goalReached(
-            metric,
-            safeMetricValue(state, metric, state.currentUserId, day),
-            effectiveGoalTarget(state, metric, state.currentUserId, day),
-          );
-          return (
-            <Chip
-              key={metric.id}
-              label={`${metric.name}: ${reached ? "met" : "not met"}`}
-              selected={reached}
-            />
-          );
-        })}
-      </View>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={16}
+          color={palette.muted}
+        />
+      </Pressable>
+      {open ? (
+        <View style={styles.goalChips}>
+          {summary.metrics.map((metric) => {
+            const unavailable = summary.unavailable.some(
+              (item) => item.id === metric.id,
+            );
+            const reached = goalReached(
+              metric,
+              safeMetricValue(state, metric, state.currentUserId, day),
+              effectiveGoalTarget(state, metric, state.currentUserId, day),
+            );
+            return (
+              <Chip
+                key={metric.id}
+                label={`${metric.name}: ${unavailable ? "not available" : reached ? "met" : "not met"}`}
+                selected={!unavailable && reached}
+              />
+            );
+          })}
+        </View>
+      ) : null}
     </Card>
   );
 }
@@ -655,6 +694,12 @@ function AlignmentCard({
 }
 
 const styles = StyleSheet.create({
+  photoToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginTop: 10,
+  },
   dateCard: { padding: 9, marginBottom: 9 },
   dateNav: { flexDirection: "row", alignItems: "center", gap: 8 },
   arrow: {

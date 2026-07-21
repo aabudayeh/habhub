@@ -69,8 +69,18 @@ export default function MemberProfile() {
   const initial = paramIds.filter((id) =>
     available.some((metric) => metric.id === id),
   );
+  const savedMetricIds =
+    state.settings.comparisonMetricIdsByGroup?.[state.group.id] ?? [];
   const [metricIds, setMetricIds] = useState<string[]>(
-    initial.length ? initial : ([available[0]?.id].filter(Boolean) as string[]),
+    initial.length
+      ? initial
+      : savedMetricIds.filter((id) =>
+            available.some((metric) => metric.id === id),
+          ).length
+        ? savedMetricIds.filter((id) =>
+            available.some((metric) => metric.id === id),
+          )
+        : ([available[0]?.id].filter(Boolean) as string[]),
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(
     member.id === state.currentUserId
@@ -78,9 +88,12 @@ export default function MemberProfile() {
       : [state.currentUserId, member.id],
   );
   const [period, setPeriod] = useState<LeaderboardPeriod>(
-    (params.period as LeaderboardPeriod) || "week",
+    (params.period as LeaderboardPeriod) ||
+      state.settings.comparisonPeriodByGroup?.[state.group.id] ||
+      "week",
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
+  const [photosOpen, setPhotosOpen] = useState(false);
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   const metrics = available.filter((metric) => metricIds.includes(metric.id));
   const people = selectedIds
@@ -136,6 +149,24 @@ export default function MemberProfile() {
       setAnchor(next);
     }
   }
+  function choosePeriod(next: LeaderboardPeriod) {
+    setPeriod(next);
+    updateSettings({
+      comparisonPeriodByGroup: {
+        ...state.settings.comparisonPeriodByGroup,
+        [state.group.id]: next,
+      },
+    });
+  }
+  function chooseMetrics(ids: string[]) {
+    setMetricIds(ids);
+    updateSettings({
+      comparisonMetricIdsByGroup: {
+        ...state.settings.comparisonMetricIdsByGroup,
+        [state.group.id]: ids,
+      },
+    });
+  }
   return (
     <Screen>
       <PageHeader
@@ -178,92 +209,96 @@ export default function MemberProfile() {
         <Ionicons
           name="shield-checkmark-outline"
           size={22}
-          color={palette.primary}
+          color={colors.primary}
         />
       </Card>
-      <SectionHeader title="Date range" />
-      <View style={styles.chips}>
-        <Chip
-          label="Today"
-          selected={period === "today"}
-          onPress={() => {
-            setPeriod("today");
-            setAnchor(dateKey());
-          }}
-        />
-        <Chip
-          label="Yesterday"
-          selected={period === "yesterday"}
-          onPress={() => {
-            setPeriod("yesterday");
-            setAnchor(dateWithOffsetFrom(dateKey(), -1));
-          }}
-        />
-        <Chip
-          label="7 days"
-          selected={period === "week"}
-          onPress={() => setPeriod("week")}
-        />
-        <Chip
-          label="Month"
-          selected={period === "month"}
-          onPress={() => setPeriod("month")}
-        />
-      </View>
-      <Card style={styles.navigator}>
-        <IconButton
-          icon="chevron-back"
-          label="Previous"
-          onPress={() =>
-            shift(period === "week" ? -7 : period === "month" ? -30 : -1)
-          }
-        />
-        <View style={styles.navCopy}>
-          <Text style={[styles.navTitle, { color: colors.ink }]}>
-            {periodTitle(period, anchor)}
-          </Text>
-          <Text style={[styles.navSub, { color: colors.muted }]}>
-            {dates.length > 1
-              ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-              : friendlyDate(anchor)}
-          </Text>
-        </View>
-        <IconButton
-          icon="chevron-forward"
-          label="Next"
-          onPress={() =>
-            shift(period === "week" ? 7 : period === "month" ? 30 : 1)
-          }
-        />
-      </Card>
-      <SectionHeader title="Comparison filters" />
-      <View style={styles.selectors}>
-        <MetricSelector
-          title="What to show"
-          items={available.map((metric) => ({
-            id: metric.id,
-            label: metric.name,
-            icon: metric.icon as keyof typeof Ionicons.glyphMap,
-            color: metric.color,
-          }))}
-          selectedIds={metricIds}
-          onChange={setMetricIds}
-        />
-        <MetricSelector
-          title="People on chart"
-          items={state.group.members.map((person) => ({
-            id: person.id,
-            label:
-              person.id === state.currentUserId
-                ? "You"
-                : memberDisplayName(state, person),
-            icon: "person-outline",
-            color: person.color,
-          }))}
-          selectedIds={selectedIds}
-          onChange={setSelectedIds}
-        />
-      </View>
+      {false ? (
+        <>
+          <SectionHeader title="Date range" />
+          <View style={styles.chips}>
+            <Chip
+              label="Today"
+              selected={period === "today"}
+              onPress={() => {
+                choosePeriod("today");
+                setAnchor(dateKey());
+              }}
+            />
+            <Chip
+              label="Yesterday"
+              selected={period === "yesterday"}
+              onPress={() => {
+                choosePeriod("yesterday");
+                setAnchor(dateWithOffsetFrom(dateKey(), -1));
+              }}
+            />
+            <Chip
+              label="7 days"
+              selected={period === "week"}
+              onPress={() => choosePeriod("week")}
+            />
+            <Chip
+              label="Month"
+              selected={period === "month"}
+              onPress={() => choosePeriod("month")}
+            />
+          </View>
+          <Card style={styles.navigator}>
+            <IconButton
+              icon="chevron-back"
+              label="Previous"
+              onPress={() =>
+                shift(period === "week" ? -7 : period === "month" ? -30 : -1)
+              }
+            />
+            <View style={styles.navCopy}>
+              <Text style={[styles.navTitle, { color: colors.ink }]}>
+                {periodTitle(period, anchor)}
+              </Text>
+              <Text style={[styles.navSub, { color: colors.muted }]}>
+                {dates.length > 1
+                  ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
+                  : friendlyDate(anchor)}
+              </Text>
+            </View>
+            <IconButton
+              icon="chevron-forward"
+              label="Next"
+              onPress={() =>
+                shift(period === "week" ? 7 : period === "month" ? 30 : 1)
+              }
+            />
+          </Card>
+          <SectionHeader title="Comparison filters" />
+          <View style={styles.selectors}>
+            <MetricSelector
+              title="What to show"
+              items={available.map((metric) => ({
+                id: metric.id,
+                label: metric.name,
+                icon: metric.icon as keyof typeof Ionicons.glyphMap,
+                color: metric.color,
+              }))}
+              selectedIds={metricIds}
+              onChange={chooseMetrics}
+            />
+            <MetricSelector
+              title="People on chart"
+              items={state.group.members.map((person) => ({
+                id: person.id,
+                label:
+                  person.id === state.currentUserId
+                    ? "You"
+                    : memberDisplayName(state, person),
+                icon: "person-outline",
+                color: person.color,
+              }))}
+              selectedIds={selectedIds}
+              onChange={setSelectedIds}
+            />
+          </View>
+        </>
+      ) : null}
       {member.id === state.currentUserId ? (
         <>
           <SectionHeader title="Your competitive stats" />
@@ -342,11 +377,7 @@ export default function MemberProfile() {
         </>
       ) : (
         <Card style={styles.headEmpty}>
-          <Ionicons
-            name="analytics-outline"
-            size={20}
-            color={palette.primary}
-          />
+          <Ionicons name="analytics-outline" size={20} color={colors.primary} />
           <Text style={styles.emptyPhotos}>
             Head-to-head stats appear for selected “higher wins” metrics with
             shared daily data. Goal-distance metrics such as food and deficit
@@ -488,7 +519,7 @@ export default function MemberProfile() {
           <SectionHeader
             title={`${memberDisplayName(state, member)}'s badge showcase`}
             action={
-              <Pressable onPress={() => router.push("/badges" as never)}>
+              <Pressable onPress={() => router.navigate("/badges" as never)}>
                 <Text style={styles.badgeLink}>All badges</Text>
               </Pressable>
             }
@@ -548,23 +579,115 @@ export default function MemberProfile() {
           </Card>
         </>
       ) : null}
-      <SectionHeader title="Shared photo comparison" />
-      <Card>
-        {people.map((person) => (
-          <ProfilePhotoCompare
-            key={person.id}
-            state={state}
-            personId={person.id}
-            dates={dates}
+      <Pressable onPress={() => setPhotosOpen((open) => !open)}>
+        <Card style={styles.collapseHeader}>
+          <Ionicons name="images-outline" size={18} color={colors.primary} />
+          <Text style={[styles.collapseTitle, { color: colors.ink }]}>
+            Shared photo comparison
+          </Text>
+          <Ionicons
+            name={photosOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
           />
-        ))}
-      </Card>
-      <Card style={styles.privacy}>
-        <Ionicons
-          name="lock-closed-outline"
-          size={19}
-          color={palette.primary}
+        </Card>
+      </Pressable>
+      {photosOpen ? (
+        <Card>
+          {people.map((person) => (
+            <ProfilePhotoCompare
+              key={person.id}
+              state={state}
+              personId={person.id}
+              dates={dates}
+            />
+          ))}
+        </Card>
+      ) : null}
+      <SectionHeader title="Compare another range" />
+      <View style={styles.chips}>
+        <Chip
+          label="Today"
+          selected={period === "today"}
+          onPress={() => {
+            choosePeriod("today");
+            setAnchor(dateKey());
+          }}
         />
+        <Chip
+          label="Yesterday"
+          selected={period === "yesterday"}
+          onPress={() => {
+            choosePeriod("yesterday");
+            setAnchor(dateWithOffsetFrom(dateKey(), -1));
+          }}
+        />
+        <Chip
+          label="7 days"
+          selected={period === "week"}
+          onPress={() => choosePeriod("week")}
+        />
+        <Chip
+          label="Month"
+          selected={period === "month"}
+          onPress={() => choosePeriod("month")}
+        />
+      </View>
+      <Card style={styles.navigator}>
+        <IconButton
+          icon="chevron-back"
+          label="Previous"
+          onPress={() =>
+            shift(period === "week" ? -7 : period === "month" ? -30 : -1)
+          }
+        />
+        <View style={styles.navCopy}>
+          <Text style={[styles.navTitle, { color: colors.ink }]}>
+            {periodTitle(period, anchor)}
+          </Text>
+          <Text style={[styles.navSub, { color: colors.muted }]}>
+            {dates.length > 1
+              ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
+              : friendlyDate(anchor)}
+          </Text>
+        </View>
+        <IconButton
+          icon="chevron-forward"
+          label="Next"
+          onPress={() =>
+            shift(period === "week" ? 7 : period === "month" ? 30 : 1)
+          }
+        />
+      </Card>
+      <View style={styles.selectors}>
+        <MetricSelector
+          title="What to show"
+          items={available.map((metric) => ({
+            id: metric.id,
+            label: metric.name,
+            icon: metric.icon as keyof typeof Ionicons.glyphMap,
+            color: metric.color,
+          }))}
+          selectedIds={metricIds}
+          onChange={chooseMetrics}
+        />
+        <MetricSelector
+          title="People on chart"
+          items={state.group.members.map((person) => ({
+            id: person.id,
+            label:
+              person.id === state.currentUserId
+                ? "You"
+                : memberDisplayName(state, person),
+            icon: "person-outline",
+            color: person.color,
+          }))}
+          selectedIds={selectedIds}
+          onChange={setSelectedIds}
+        />
+      </View>
+      <Card style={styles.privacy}>
+        <Ionicons name="lock-closed-outline" size={19} color={colors.primary} />
         <Text style={styles.privacyText}>
           Private values and photos never enter this comparison. Goal-status
           sharing can show completion without revealing the underlying number.
@@ -608,9 +731,10 @@ function StatCard({
   value: string;
   detail: string;
 }) {
+  const colors = useAppColors();
   return (
     <Card style={styles.comparisonCard}>
-      <Ionicons name={icon} size={19} color={palette.primary} />
+      <Ionicons name={icon} size={19} color={colors.primary} />
       <Text style={styles.comparisonValue}>{value}</Text>
       <Text style={styles.comparisonLabel}>{label}</Text>
       <Text style={styles.comparisonDetail}>{detail}</Text>
@@ -782,6 +906,8 @@ function ProfilePhotoCompare({
   );
 }
 const styles = StyleSheet.create({
+  collapseHeader: { flexDirection: "row", alignItems: "center", gap: 9 },
+  collapseTitle: { flex: 1, fontSize: 11, fontWeight: "900" },
   photoCapture: {
     backgroundColor: "#F5F7F2",
     padding: 9,

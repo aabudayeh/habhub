@@ -117,9 +117,11 @@ export function MonthCalendar({
               onPress={() => onSelect(day.key)}
               style={[
                 styles.day,
-                status === "met" && styles.metDay,
+                status === "met" && {
+                  backgroundColor: colors.isDark ? "#26351E" : "#EDF7D5",
+                },
                 status === "partial" && { backgroundColor: colors.primarySoft },
-                selected && styles.selected,
+                selected && { backgroundColor: colors.primary },
               ]}
             >
               <Text
@@ -166,6 +168,7 @@ export function MonthCalendar({
                 <View
                   style={[
                     styles.dot,
+                    { backgroundColor: colors.primary },
                     status === "met" && styles.metDot,
                     selected && styles.dotSelected,
                   ]}

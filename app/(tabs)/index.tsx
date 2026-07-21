@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { router } from "expo-router";
-import React, { useMemo, useRef, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  BackHandler,
   Modal,
   PanResponder,
   Pressable,
@@ -24,8 +25,10 @@ import {
   formatMetricValue,
   goalProgress,
   goalReached,
+  isMetricTrackedOnDate,
   safeMetricValue,
   trackedGoalSummary,
+  weightProgressStats,
   weeklyDeficitBalance,
 } from "@/src/domain/metrics";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
@@ -41,6 +44,7 @@ export default function Today() {
   const { height } = useWindowDimensions();
   const [editing, setEditing] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const [showAddTiles, setShowAddTiles] = useState(false);
   const today = dateKey();
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
@@ -54,8 +58,22 @@ export default function Today() {
         .sort((a, b) => a.order - b.order),
     [state.metrics, today],
   );
-  const primary = visible.slice(0, 5);
-  const extra = visible.slice(5);
+  const tileLimit = Math.max(
+    3,
+    Math.min(8, state.settings.todayTileLimit ?? 5),
+  );
+  const primary = state.settings.showAllTodayTiles
+    ? visible
+    : visible.slice(0, tileLimit);
+  const extra = state.settings.showAllTodayTiles
+    ? []
+    : visible.slice(tileLimit);
+  const hiddenTracked = state.metrics
+    .filter(
+      (metric) =>
+        !metric.sections.today && isMetricTrackedOnDate(state, metric, today),
+    )
+    .sort((a, b) => a.order - b.order);
   const weekAll = Array.from(
     { length: 7 },
     (_, i) =>
@@ -66,8 +84,24 @@ export default function Today() {
       ).allMet,
   ).every(Boolean);
   const tileHeight = Math.max(
-    62,
-    Math.min(116, (height - 345) / Math.max(primary.length, 1)),
+    52,
+    Math.min(
+      88,
+      (height - 345) / Math.max(Math.min(primary.length, tileLimit), 1),
+    ),
+  );
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (!editing) return false;
+          setEditing(false);
+          return true;
+        },
+      );
+      return () => subscription.remove();
+    }, [editing]),
   );
   function remove(item: MetricDefinition) {
     Alert.alert(
@@ -125,20 +159,22 @@ export default function Today() {
                 <HeaderIcon
                   icon="sparkles-outline"
                   label="Open recap"
-                  onPress={() => router.push("/recap?scope=personal" as never)}
+                  onPress={() =>
+                    router.navigate("/recap?scope=personal" as never)
+                  }
                   colors={colors}
                   accent={accent}
                 />
                 <HeaderIcon
                   icon="notifications-outline"
                   label="Open notifications"
-                  onPress={() => router.push("/alerts" as never)}
+                  onPress={() => router.navigate("/alerts" as never)}
                   colors={colors}
                   accent={accent}
                 />
               </>
             )}
-            <Pressable onPress={() => router.push("/menu")}>
+            <Pressable onPress={() => router.navigate("/menu")}>
               <Avatar
                 initials={user.initials}
                 color={user.color}
@@ -177,6 +213,9 @@ export default function Today() {
           />
           <View style={styles.goalDots}>
             {goals.metrics.map((item) => {
+              const unavailable = goals.unavailable.some(
+                (metric) => metric.id === item.id,
+              );
               const met = goalReached(
                 item,
                 safeMetricValue(state, item, state.currentUserId, today),
@@ -196,9 +235,11 @@ export default function Today() {
                 >
                   <Ionicons
                     name={
-                      met
-                        ? "checkmark"
-                        : (item.icon as keyof typeof Ionicons.glyphMap)
+                      unavailable
+                        ? "remove"
+                        : met
+                          ? "checkmark"
+                          : (item.icon as keyof typeof Ionicons.glyphMap)
                     }
                     size={11}
                     color={met ? palette.ink : palette.white}
@@ -264,17 +305,30 @@ export default function Today() {
           </Pressable>
         ) : null}
         {editing ? (
-          <Pressable
-            onPress={() =>
-              router.push({ pathname: "/metric-editor", params: { id: "new" } })
-            }
-            style={[styles.add, { borderColor: accent }]}
-          >
-            <Ionicons name="add" size={19} color={accent} />
-            <Text style={[styles.addText, { color: accent }]}>
-              Add something to track
-            </Text>
-          </Pressable>
+          <View style={styles.editActions}>
+            <Pressable
+              onPress={() => setShowAddTiles(true)}
+              style={[styles.add, { borderColor: accent }]}
+            >
+              <Ionicons name="add" size={19} color={accent} />
+              <Text style={[styles.addText, { color: accent }]}>
+                Add existing goal tile
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => router.navigate("/customize?tab=goals" as never)}
+              style={[styles.add, { borderColor: colors.border }]}
+            >
+              <Ionicons
+                name="checkmark-done-outline"
+                size={18}
+                color={accent}
+              />
+              <Text style={[styles.addText, { color: accent }]}>
+                Edit tracked goals
+              </Text>
+            </Pressable>
+          </View>
         ) : null}
       </ScrollView>
       <Modal
@@ -294,7 +348,7 @@ export default function Today() {
                 key={item.id}
                 onPress={() => {
                   setShowMore(false);
-                  router.push({
+                  router.navigate({
                     pathname: "/metric-detail",
                     params: { metric: item.id },
                   });
@@ -321,6 +375,53 @@ export default function Today() {
                 </Text>
               </Pressable>
             ))}
+          </View>
+        </Pressable>
+      </Modal>
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showAddTiles}
+        onRequestClose={() => setShowAddTiles(false)}
+      >
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => setShowAddTiles(false)}
+        >
+          <View style={[styles.sheet, { backgroundColor: colors.card }]}>
+            <Text style={[styles.sheetTitle, { color: colors.ink }]}>
+              Add a tracked goal
+            </Text>
+            {hiddenTracked.length ? (
+              hiddenTracked.map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => {
+                    setMetricSection(item.id, "today", true);
+                    setShowAddTiles(false);
+                  }}
+                  style={[styles.sheetRow, { borderColor: colors.border }]}
+                >
+                  <Ionicons
+                    name={item.icon as keyof typeof Ionicons.glyphMap}
+                    size={18}
+                    color={item.color}
+                  />
+                  <Text style={[styles.sheetName, { color: colors.ink }]}>
+                    {item.name}
+                  </Text>
+                  <Ionicons
+                    name="add-circle-outline"
+                    size={18}
+                    color={accent}
+                  />
+                </Pressable>
+              ))
+            ) : (
+              <Text style={[styles.moreCount, { color: colors.muted }]}>
+                Every tracked goal already has a Today tile.
+              </Text>
+            )}
           </View>
         </Pressable>
       </Modal>
@@ -440,8 +541,8 @@ function TrackerRow({
         editing
           ? undefined
           : item.id === "overall_score"
-            ? router.push("/group" as never)
-            : router.push({
+            ? router.navigate("/group" as never)
+            : router.navigate({
                 pathname: "/metric-detail",
                 params: { metric: item.id },
               })
@@ -567,18 +668,15 @@ function trackerCopy(
     };
   }
   if (item.id === "weight") {
-    const first = state.entries
-      .filter(
-        (entry) =>
-          entry.userId === state.currentUserId && entry.metricId === "weight",
-      )
-      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))[0];
-    const delta = first ? value - Number(first.value) : 0;
+    const progress = weightProgressStats(state, state.currentUserId, day);
+    const action = progress.direction === "gain" ? "gained" : "lost";
     return {
-      primary: formatMetricValue(item, value),
-      secondary: first
-        ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)} kg from your starting weight`
-        : "Add a first weigh-in to establish your baseline",
+      primary: progress.hasMeasurement
+        ? `${progress.currentWeight.toFixed(1)} kg · ${progress.remaining.toFixed(1)} kg to target`
+        : "Add your first weigh-in",
+      secondary: progress.hasMeasurement
+        ? `${Math.abs(progress.totalChange).toFixed(1)} kg ${progress.totalChange >= 0 ? action : "off plan"} · ${Math.abs(progress.averageWeeklyChange).toFixed(1)} kg/week avg · ${Math.abs(progress.lastWeekChange).toFixed(1)} kg last week`
+        : `Starting ${progress.startingWeight.toFixed(1)} kg · target ${progress.finalTarget.toFixed(1)} kg`,
     };
   }
   if (item.dataType === "photo")
@@ -637,6 +735,7 @@ function Celebration({
   );
 }
 const styles = StyleSheet.create({
+  editActions: { gap: 6 },
   safe: { flex: 1 },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
   header: {

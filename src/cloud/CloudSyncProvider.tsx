@@ -174,6 +174,8 @@ function createCleanAccountState(user: User): AppState {
       energyProfile,
       memberNicknamesByGroup: { [group.id]: {} },
       badgeShowcaseByGroup: {},
+      comparisonMetricIdsByGroup: {},
+      comparisonPeriodByGroup: {},
     },
     trackedGoalPeriods: Object.fromEntries(
       metrics

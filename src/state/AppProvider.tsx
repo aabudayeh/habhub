@@ -327,7 +327,14 @@ function reducer(state: AppState, action: Action): AppState {
             : [{ from: dateKey() }];
         return {
           ...state,
-          metrics,
+          metrics: metrics.map((candidate) =>
+            candidate.id === metric.id
+              ? {
+                  ...candidate,
+                  sections: { ...candidate.sections, today: true },
+                }
+              : candidate,
+          ),
           trackedGoalPeriods: {
             ...state.trackedGoalPeriods,
             [metric.id]: periods,

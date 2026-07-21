@@ -1,39 +1,470 @@
-import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Image } from 'expo-image';
-import { router } from 'expo-router';
-import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { CameraView, useCameraPermissions } from "expo-camera";
+import { Image } from "expo-image";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
-import { Button, Card, Chip, IconButton, PageHeader, Screen } from '@/src/components/ui';
-import { foodByBarcode, FoodProduct, searchFoods } from '@/src/food/openFoodFacts';
-import { palette } from '@/src/theme';
+import {
+  Button,
+  Card,
+  Chip,
+  IconButton,
+  PageHeader,
+  Screen,
+} from "@/src/components/ui";
+import {
+  foodByBarcode,
+  FoodProduct,
+  searchFoods,
+} from "@/src/food/openFoodFacts";
+import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function FoodSearchScreen() {
-  const [mode,setMode]=useState<'search'|'scan'>('search');
-  const [permission,requestPermission]=useCameraPermissions();
-  const [query,setQuery]=useState(''); const [results,setResults]=useState<FoodProduct[]>([]);
-  const [loading,setLoading]=useState(false); const [error,setError]=useState<string|null>(null); const [scanned,setScanned]=useState(false);
-  const [selected,setSelected]=useState<FoodProduct|null>(null);const [multiplier,setMultiplier]=useState('1');
-  const scrollRef=useRef<ScrollView>(null);
+  const params = useLocalSearchParams<{ q?: string; mode?: string }>();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [mode, setMode] = useState<"search" | "scan">(
+    params.mode === "scan" ? "scan" : "search",
+  );
+  const [permission, requestPermission] = useCameraPermissions();
+  const [query, setQuery] = useState(params.q ?? "");
+  const [results, setResults] = useState<FoodProduct[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [scanned, setScanned] = useState(false);
+  const [selected, setSelected] = useState<FoodProduct | null>(null);
+  const [multiplier, setMultiplier] = useState("1");
+  const scrollRef = useRef<ScrollView>(null);
+  const searchedInitially = useRef(false);
 
-  async function lookupBarcode(code:string){setScanned(true);setLoading(true);setError(null);try{const product=await foodByBarcode(code);if(product)choose(product);else setError('That barcode is not in Open Food Facts yet. You can still enter the food manually.');}catch(err){setError(err instanceof Error?err.message:'Food lookup failed.');}finally{setLoading(false);}}
-  async function search(){if(query.trim().length<2)return;setLoading(true);setError(null);try{const found=await searchFoods(query);setResults(found);if(!found.length)setError('No matching foods with usable calorie data were found.');}catch(err){setError(err instanceof Error?err.message:'Food search failed.');}finally{setLoading(false);}}
-  function choose(product:FoodProduct){setSelected(product);setMultiplier('1');setTimeout(()=>scrollRef.current?.scrollTo({y:0,animated:true}),50);}
-  function apply(){if(!selected)return;const factor=Math.max(0,Number(multiplier.replace(',','.'))||0);const scaled=(value?:number)=>optional(value===undefined?undefined:value*factor);router.replace({pathname:'/(tabs)/log',params:{metric:'food',foodName:`${selected.name}${selected.brand?` · ${selected.brand}`:''} (${factor}× ${selected.basis})`,calories:String(Math.round(selected.calories*factor)),protein:scaled(selected.proteinG),fat:scaled(selected.fatG),carbs:scaled(selected.carbsG),fiber:scaled(selected.fiberG),sodium:scaled(selected.sodiumMg),sugar:scaled(selected.sugarG),saturatedFat:scaled(selected.saturatedFatG),cholesterol:scaled(selected.cholesterolMg),potassium:scaled(selected.potassiumMg),calcium:scaled(selected.calciumMg),iron:scaled(selected.ironMg),magnesium:scaled(selected.magnesiumMg),vitaminC:scaled(selected.vitaminCMg),vitaminD:scaled(selected.vitaminDMcg),vitaminB12:scaled(selected.vitaminB12Mcg)}});}
+  async function search(term = query) {
+    if (term.trim().length < 2) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const found = await searchFoods(term);
+      setResults(found);
+      if (!found.length)
+        setError("No matching foods with usable nutrition were found.");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Food search failed.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  return <Screen scrollRef={scrollRef} keyboardShouldPersistTaps="handled">
-    <PageHeader eyebrow="Open Food Facts" title="Find a food" subtitle="Scan a package or search the community database, then review every value before saving." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
-    <View style={styles.tabs}><Chip label="Search" icon="search-outline" selected={mode==='search'} onPress={()=>setMode('search')}/><Chip label="Scan barcode" icon="barcode-outline" selected={mode==='scan'} onPress={()=>setMode('scan')}/></View>
-    {selected?<Card style={styles.selection}><Text style={styles.resultName}>{selected.name}</Text><Text style={styles.meta}>Nutrition basis: {selected.basis}</Text><Text style={styles.amountLabel}>How many servings / portions?</Text><View style={styles.amountRow}><Pressable onPress={()=>setMultiplier(String(Math.max(0,(Number(multiplier)||0)-.5)))} style={styles.step}><Ionicons name="remove" size={18} color={palette.primary}/></Pressable><TextInput value={multiplier} onChangeText={setMultiplier} keyboardType="decimal-pad" style={styles.amountInput}/><Pressable onPress={()=>setMultiplier(String((Number(multiplier)||0)+.5))} style={styles.step}><Ionicons name="add" size={18} color={palette.primary}/></Pressable></View><FoodPreview product={selected} factor={Math.max(0,Number(multiplier.replace(',','.'))||0)}/><Button label="Use these values" onPress={apply}/><Button label="Choose another" variant="ghost" onPress={()=>setSelected(null)}/></Card>:null}
-    {mode==='search'?<Card><View style={styles.searchRow}><TextInput value={query} onChangeText={setQuery} onSubmitEditing={search} returnKeyType="search" placeholder="Food, product, or brand" placeholderTextColor={palette.faint} style={styles.input}/><Pressable onPress={search} style={styles.searchButton}><Ionicons name="search" size={19} color={palette.white}/></Pressable></View></Card>:<Card style={styles.cameraCard}>{!permission?.granted?<View style={styles.permission}><Ionicons name="camera-outline" size={31} color={palette.primary}/><Text style={styles.resultName}>Camera access is needed to scan a barcode.</Text><Button label="Allow camera" onPress={requestPermission}/></View>:<><CameraView style={styles.camera} facing="back" barcodeScannerSettings={{barcodeTypes:['ean13','ean8','upc_a','upc_e']}} onBarcodeScanned={scanned?undefined:({data})=>lookupBarcode(data)}/><View style={styles.scanGuide}><Text style={styles.scanText}>{loading?'Looking up product…':'Place the package barcode inside the frame'}</Text>{scanned&&!loading?<Button label="Scan another" variant="secondary" onPress={()=>{setScanned(false);setError(null);}}/>:null}</View></>}</Card>}
-    {loading?<ActivityIndicator style={styles.loading} color={palette.primary}/>:null}
-    {error?<Card style={styles.error}><Ionicons name="information-circle-outline" size={20} color={palette.amber}/><Text style={styles.errorText}>{error}</Text></Card>:null}
-    <View style={styles.results}>{results.map((product)=><Pressable key={`${product.code}-${product.name}`} onPress={()=>choose(product)}><Card style={styles.result}>{product.imageUrl?<Image source={{uri:product.imageUrl}} style={styles.image} contentFit="contain"/>:<View style={styles.placeholder}><Ionicons name="restaurant-outline" size={21} color={palette.primary}/></View>}<View style={styles.copy}><Text style={styles.resultName}>{product.name}</Text><Text style={styles.meta}>{[product.brand,product.basis].filter(Boolean).join(' · ')}</Text><Text style={styles.nutrition}>{product.calories} kcal{product.proteinG!==undefined?` · ${round(product.proteinG)}g protein`:''}</Text></View><Ionicons name="chevron-forward" size={18} color={palette.faint}/></Card></Pressable>)}</View>
-    <Text style={styles.attribution}>Product data is supplied by Open Food Facts and may be incomplete. Verify the package label before saving.</Text>
-  </Screen>;
+  useEffect(() => {
+    if (
+      !searchedInitially.current &&
+      params.q?.trim().length &&
+      mode === "search"
+    ) {
+      searchedInitially.current = true;
+      setLoading(true);
+      searchFoods(params.q)
+        .then((found) => {
+          setResults(found);
+          if (!found.length)
+            setError("No matching foods with usable nutrition were found.");
+        })
+        .catch((reason) =>
+          setError(
+            reason instanceof Error ? reason.message : "Food search failed.",
+          ),
+        )
+        .finally(() => setLoading(false));
+    }
+  }, [mode, params.q]);
+
+  function choose(product: FoodProduct) {
+    setSelected(product);
+    setMultiplier("1");
+    requestAnimationFrame(() =>
+      scrollRef.current?.scrollTo({ y: 0, animated: true }),
+    );
+  }
+
+  async function lookupBarcode(code: string) {
+    setScanned(true);
+    setLoading(true);
+    setError(null);
+    try {
+      const product = await foodByBarcode(code);
+      if (product) choose(product);
+      else
+        setError(
+          "That barcode is not in Open Food Facts. You can enter it manually.",
+        );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Food lookup failed.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function apply() {
+    if (!selected) return;
+    const factor = Math.max(0, Number(multiplier.replace(",", ".")) || 0);
+    const scaled = (value?: number) =>
+      optional(value === undefined ? undefined : value * factor);
+    router.replace({
+      pathname: "/(tabs)/log",
+      params: {
+        metric: "food",
+        foodName: `${selected.name}${selected.brand ? ` · ${selected.brand}` : ""} (${factor}× ${selected.basis})`,
+        calories: String(Math.round(selected.calories * factor)),
+        protein: scaled(selected.proteinG),
+        fat: scaled(selected.fatG),
+        carbs: scaled(selected.carbsG),
+        fiber: scaled(selected.fiberG),
+        sodium: scaled(selected.sodiumMg),
+        sugar: scaled(selected.sugarG),
+        saturatedFat: scaled(selected.saturatedFatG),
+        cholesterol: scaled(selected.cholesterolMg),
+        potassium: scaled(selected.potassiumMg),
+        calcium: scaled(selected.calciumMg),
+        iron: scaled(selected.ironMg),
+        magnesium: scaled(selected.magnesiumMg),
+        vitaminC: scaled(selected.vitaminCMg),
+        vitaminD: scaled(selected.vitaminDMcg),
+        vitaminB12: scaled(selected.vitaminB12Mcg),
+      },
+    });
+  }
+
+  const factor = Math.max(0, Number(multiplier.replace(",", ".")) || 0);
+  return (
+    <Screen scrollRef={scrollRef} keyboardShouldPersistTaps="handled">
+      <PageHeader
+        title="Find food"
+        subtitle="Complete, popular database results are shown first."
+        showMenu={false}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
+      />
+      <View style={styles.tabs}>
+        <Chip
+          label="Search"
+          icon="search-outline"
+          selected={mode === "search"}
+          onPress={() => setMode("search")}
+        />
+        <Chip
+          label="Scan barcode"
+          icon="barcode-outline"
+          selected={mode === "scan"}
+          onPress={() => setMode("scan")}
+        />
+      </View>
+      {selected ? (
+        <Card style={styles.selection}>
+          <Text style={[styles.name, { color: colors.ink }]}>
+            {selected.name}
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            {selected.brand ? `${selected.brand} · ` : ""}
+            {selected.basis}
+          </Text>
+          <View style={styles.amountRow}>
+            <Pressable
+              onPress={() => setMultiplier(String(Math.max(0, factor - 0.5)))}
+              style={[styles.step, { backgroundColor: colors.primarySoft }]}
+            >
+              <Ionicons name="remove" size={18} color={accent} />
+            </Pressable>
+            <TextInput
+              value={multiplier}
+              onChangeText={setMultiplier}
+              keyboardType="decimal-pad"
+              style={[
+                styles.amount,
+                { color: colors.ink, borderColor: colors.border },
+              ]}
+            />
+            <Pressable
+              onPress={() => setMultiplier(String(factor + 0.5))}
+              style={[styles.step, { backgroundColor: colors.primarySoft }]}
+            >
+              <Ionicons name="add" size={18} color={accent} />
+            </Pressable>
+          </View>
+          <FoodPreview
+            product={selected}
+            factor={factor}
+            colors={colors}
+            accent={accent}
+          />
+          <Button label="Use these values" onPress={apply} />
+          <Button
+            label="Choose another"
+            variant="ghost"
+            onPress={() => setSelected(null)}
+          />
+        </Card>
+      ) : null}
+      {mode === "search" ? (
+        <Card style={styles.searchCard}>
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => search()}
+            returnKeyType="search"
+            autoFocus={!params.q}
+            placeholder="Food, product, or brand"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.searchInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+          <Pressable
+            onPress={() => search()}
+            style={[styles.searchButton, { backgroundColor: accent }]}
+          >
+            <Ionicons name="search" size={19} color={palette.white} />
+          </Pressable>
+        </Card>
+      ) : (
+        <Card style={styles.cameraCard}>
+          {!permission?.granted ? (
+            <View style={styles.permission}>
+              <Ionicons name="camera-outline" size={31} color={accent} />
+              <Text style={[styles.name, { color: colors.ink }]}>
+                Camera access is needed to scan a barcode.
+              </Text>
+              <Button label="Allow camera" onPress={requestPermission} />
+            </View>
+          ) : (
+            <>
+              <CameraView
+                style={styles.camera}
+                facing="back"
+                barcodeScannerSettings={{
+                  barcodeTypes: ["ean13", "ean8", "upc_a", "upc_e"],
+                }}
+                onBarcodeScanned={
+                  scanned ? undefined : ({ data }) => lookupBarcode(data)
+                }
+              />
+              <View style={styles.permission}>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  {loading
+                    ? "Looking up product…"
+                    : "Place the barcode inside the frame"}
+                </Text>
+                {scanned && !loading ? (
+                  <Button
+                    label="Scan another"
+                    variant="secondary"
+                    onPress={() => {
+                      setScanned(false);
+                      setError(null);
+                    }}
+                  />
+                ) : null}
+              </View>
+            </>
+          )}
+        </Card>
+      )}
+      {loading ? (
+        <ActivityIndicator style={styles.loading} color={accent} />
+      ) : null}
+      {error ? (
+        <Card style={styles.notice}>
+          <Ionicons
+            name="information-circle-outline"
+            size={20}
+            color={palette.amber}
+          />
+          <Text style={[styles.meta, { color: colors.muted }]}>{error}</Text>
+        </Card>
+      ) : null}
+      <View style={styles.results}>
+        {results.map((product) => (
+          <Pressable key={product.code} onPress={() => choose(product)}>
+            <Card style={styles.result}>
+              {product.imageUrl ? (
+                <Image
+                  source={{ uri: product.imageUrl }}
+                  style={styles.image}
+                  contentFit="contain"
+                />
+              ) : (
+                <View
+                  style={[
+                    styles.image,
+                    styles.placeholder,
+                    { backgroundColor: colors.primarySoft },
+                  ]}
+                >
+                  <Ionicons
+                    name="restaurant-outline"
+                    size={20}
+                    color={accent}
+                  />
+                </View>
+              )}
+              <View style={styles.copy}>
+                <View style={styles.nameLine}>
+                  <Text
+                    style={[styles.name, { color: colors.ink }]}
+                    numberOfLines={2}
+                  >
+                    {product.name}
+                  </Text>
+                  {product.completeNutrition ? (
+                    <Text
+                      style={[
+                        styles.complete,
+                        { color: accent, backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      COMPLETE
+                    </Text>
+                  ) : null}
+                </View>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  {[product.brand, product.basis].filter(Boolean).join(" · ")}
+                </Text>
+                <Text style={[styles.nutrition, { color: accent }]}>
+                  {product.calories} kcal
+                  {product.proteinG !== undefined
+                    ? ` · ${round(product.proteinG)}g protein`
+                    : ""}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={17} color={colors.faint} />
+            </Card>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={[styles.attribution, { color: colors.faint }]}>
+        Open Food Facts is community supplied; review the package label before
+        saving.
+      </Text>
+    </Screen>
+  );
 }
 
-function round(value:number){return Math.round(value*10)/10;} function optional(value?:number){return value===undefined?'':String(round(value));}
-function FoodPreview({product,factor}:{product:FoodProduct;factor:number}){const grams=(Number.parseFloat(product.basis)||100)*factor;return <View><Text style={styles.nutrition}>{Math.round(product.calories*factor)} kcal · {round(grams)} g</Text><Text style={styles.macroPreview}>{product.proteinG!==undefined?`${round(product.proteinG*factor)}g protein · `:''}{product.fatG!==undefined?`${round(product.fatG*factor)}g fat · `:''}{product.carbsG!==undefined?`${round(product.carbsG*factor)}g carbs`:''}</Text></View>}
-const styles=StyleSheet.create({tabs:{flexDirection:'row',gap:8,marginBottom:12},selection:{gap:9,marginBottom:12},amountLabel:{color:palette.muted,fontSize:10,fontWeight:'800'},amountRow:{flexDirection:'row',alignItems:'center',gap:8},step:{width:40,height:40,borderRadius:12,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},amountInput:{flex:1,height:42,borderWidth:1,borderColor:palette.border,borderRadius:12,textAlign:'center',color:palette.ink,fontWeight:'900'},macroPreview:{color:palette.muted,fontSize:10,fontWeight:'700',marginTop:4},searchRow:{flexDirection:'row',gap:8},input:{flex:1,minHeight:46,borderWidth:1,borderColor:palette.border,borderRadius:13,paddingHorizontal:13,color:palette.ink,fontSize:13},searchButton:{width:46,height:46,borderRadius:13,backgroundColor:palette.primary,alignItems:'center',justifyContent:'center'},cameraCard:{padding:0,overflow:'hidden'},camera:{width:'100%',aspectRatio:1},scanGuide:{padding:13,gap:9},scanText:{color:palette.muted,fontSize:11,textAlign:'center'},permission:{alignItems:'center',gap:12,padding:24},loading:{marginVertical:18},error:{flexDirection:'row',alignItems:'center',gap:9,marginTop:12,borderColor:'#F0D39D'},errorText:{flex:1,color:palette.muted,fontSize:11,lineHeight:16},results:{gap:9,marginTop:12},result:{flexDirection:'row',alignItems:'center',gap:11,padding:11},image:{width:58,height:58,borderRadius:12,backgroundColor:palette.canvas},placeholder:{width:58,height:58,borderRadius:12,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},copy:{flex:1},resultName:{color:palette.ink,fontSize:13,fontWeight:'900'},meta:{color:palette.muted,fontSize:9,marginTop:3},nutrition:{color:palette.primary,fontSize:10,fontWeight:'800',marginTop:5},attribution:{color:palette.faint,fontSize:8,lineHeight:13,textAlign:'center',margin:18}});
+function round(value: number) {
+  return Math.round(value * 10) / 10;
+}
+function optional(value?: number) {
+  return value === undefined ? "" : String(round(value));
+}
+function FoodPreview({
+  product,
+  factor,
+  colors,
+  accent,
+}: {
+  product: FoodProduct;
+  factor: number;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  const grams = (Number.parseFloat(product.basis) || 100) * factor;
+  return (
+    <View>
+      <Text style={[styles.nutrition, { color: accent }]}>
+        {Math.round(product.calories * factor)} kcal · {round(grams)} g
+      </Text>
+      <Text style={[styles.meta, { color: colors.muted }]}>
+        {product.proteinG !== undefined
+          ? `${round(product.proteinG * factor)}g protein · `
+          : ""}
+        {product.fatG !== undefined
+          ? `${round(product.fatG * factor)}g fat · `
+          : ""}
+        {product.carbsG !== undefined
+          ? `${round(product.carbsG * factor)}g carbs`
+          : ""}
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  tabs: { flexDirection: "row", gap: 7, marginBottom: 9 },
+  selection: { gap: 7, marginBottom: 9 },
+  amountRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  step: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  amount: {
+    flex: 1,
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    textAlign: "center",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  searchCard: { flexDirection: "row", gap: 7, padding: 9 },
+  searchInput: {
+    flex: 1,
+    height: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    fontSize: 11,
+  },
+  searchButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cameraCard: { padding: 0, overflow: "hidden" },
+  camera: { width: "100%", aspectRatio: 1.3 },
+  permission: { alignItems: "center", gap: 10, padding: 16 },
+  loading: { marginVertical: 14 },
+  notice: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+  results: { gap: 7, marginTop: 9 },
+  result: {
+    minHeight: 72,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    padding: 9,
+  },
+  image: { width: 52, height: 52, borderRadius: 10 },
+  placeholder: { alignItems: "center", justifyContent: "center" },
+  copy: { flex: 1 },
+  nameLine: { flexDirection: "row", alignItems: "flex-start", gap: 6 },
+  name: { flex: 1, fontSize: 11, fontWeight: "900" },
+  meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  nutrition: { fontSize: 9, fontWeight: "900", marginTop: 3 },
+  complete: {
+    fontSize: 6,
+    fontWeight: "900",
+    paddingHorizontal: 5,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  attribution: { fontSize: 8, lineHeight: 12, textAlign: "center", margin: 14 },
+});

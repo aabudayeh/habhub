@@ -11,7 +11,7 @@ import {
   PageHeader,
   Screen,
 } from "@/src/components/ui";
-import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
   deficitRealityCheckAtDate,
   effectiveGoalTarget,
@@ -19,6 +19,7 @@ import {
   goalReached,
   safeMetricValue,
   weeklyDeficitBalance,
+  weightProgressStats,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -35,6 +36,7 @@ export default function TrackerDetail() {
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
   const [period, setPeriod] = useState<Period>("day");
+  const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
@@ -114,10 +116,23 @@ export default function TrackerDetail() {
   const streaks = streakStats(state, tracker, day);
   const applicable = tracker.id !== "deficit" || hasFood(state, day);
   const current = safeMetricValue(state, tracker, state.currentUserId, day);
+  const isPhoto = tracker.dataType === "photo";
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
+  const latestWeightDate = state.entries
+    .filter(
+      (entry) =>
+        entry.userId === state.currentUserId &&
+        entry.metricId === "weight" &&
+        entry.localDate <= day,
+    )
+    .sort((a, b) => b.localDate.localeCompare(a.localDate))[0]?.localDate;
   const reality =
+    tracker.id === "weight" && latestWeightDate
+      ? deficitRealityCheckAtDate(state, state.currentUserId, latestWeightDate)
+      : null;
+  const weightStats =
     tracker.id === "weight"
-      ? deficitRealityCheckAtDate(state, state.currentUserId, day)
+      ? weightProgressStats(state, state.currentUserId, day)
       : null;
   return (
     <Screen>
@@ -153,16 +168,27 @@ export default function TrackerDetail() {
           />
         </View>
         <View style={styles.dayNav}>
-          <Pressable onPress={() => setDay(dateWithOffsetFrom(day, -1))} style={[styles.navButton,{backgroundColor:colors.card,borderColor:colors.border}]}>
+          <Pressable
+            onPress={() => setDay(dateWithOffsetFrom(day, -1))}
+            style={[
+              styles.navButton,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
             <Ionicons name="chevron-back" size={25} color={accent} />
           </Pressable>
           <Text style={[styles.day, { color: colors.ink }]}>
-            {day === dateKey() ? "Today" : day}
+            {period === "day"
+              ? friendlyDate(day)
+              : `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`}
           </Text>
           <Pressable
             disabled={day >= dateKey()}
             onPress={() => setDay(dateWithOffsetFrom(day, 1))}
-            style={[styles.navButton,{backgroundColor:colors.card,borderColor:colors.border}]}
+            style={[
+              styles.navButton,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
           >
             <Ionicons
               name="chevron-forward"
@@ -179,12 +205,14 @@ export default function TrackerDetail() {
               {period === "day" ? "CURRENT" : `${period}-DAY AVERAGE`}
             </Text>
             <Text style={[styles.value, { color: colors.ink }]}>
-              {!applicable
-                ? "Not available"
-                : formatMetricValue(
-                    tracker,
-                    period === "day" ? current : average,
-                  )}
+              {isPhoto
+                ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
+                : !applicable
+                  ? "Not available"
+                  : formatMetricValue(
+                      tracker,
+                      period === "day" ? current : average,
+                    )}
             </Text>
             <Text style={[styles.sub, { color: colors.muted }]}>
               {summaryLine(state, tracker, day, current, target, applicable)}
@@ -203,7 +231,7 @@ export default function TrackerDetail() {
             />
           </View>
         </View>
-        {period !== "day" ? (
+        {period !== "day" && !isPhoto ? (
           <Trend
             values={values}
             tracker={tracker}
@@ -211,41 +239,71 @@ export default function TrackerDetail() {
             colors={colors}
           />
         ) : null}
-        <View style={[styles.stats, { borderColor: colors.border }]}>
-          <Stat
-            label="Current streak"
-            value={`${streaks.current} days`}
-            colors={colors}
-          />
-          <Stat
-            label="Best streak"
-            value={`${streaks.best} days`}
-            colors={colors}
-          />
-          <Stat
-            label="Goals reached"
-            value={`${dates.filter((date) => goalReached(tracker, safeMetricValue(state, tracker, state.currentUserId, date), effectiveGoalTarget(state, tracker, state.currentUserId, date))).length}/${dates.length}`}
-            colors={colors}
-          />
-        </View>
+        {!isPhoto ? (
+          <View style={[styles.stats, { borderColor: colors.border }]}>
+            <Stat
+              label="Current streak"
+              value={`${streaks.current} days`}
+              colors={colors}
+            />
+            <Stat
+              label="Best streak"
+              value={`${streaks.best} days`}
+              colors={colors}
+            />
+            <Stat
+              label="Goals reached"
+              value={`${dates.filter((date) => goalReached(tracker, safeMetricValue(state, tracker, state.currentUserId, date), effectiveGoalTarget(state, tracker, state.currentUserId, date))).length}/${dates.length}`}
+              colors={colors}
+            />
+          </View>
+        ) : null}
       </Card>
-      {reality && reality.status !== "insufficient" ? (
+      {weightStats ? (
+        <Card style={styles.weightPlan}>
+          <Stat
+            label="Total change"
+            value={`${Math.abs(weightStats.totalChange).toFixed(1)} kg`}
+            colors={colors}
+          />
+          <Stat
+            label="Weekly average"
+            value={`${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg`}
+            colors={colors}
+          />
+          <Stat
+            label="Last 7 days"
+            value={`${Math.abs(weightStats.lastWeekChange).toFixed(1)} kg`}
+            colors={colors}
+          />
+          <Stat
+            label="Plan per week"
+            value={`${weightStats.expectedWeeklyChange.toFixed(1)} kg`}
+            colors={colors}
+          />
+        </Card>
+      ) : null}
+      {reality ? (
         <Card>
           <Text style={[styles.entryTitle, { color: colors.ink }]}>
-            Weight and reporting
+            Reported vs scale-estimated energy
           </Text>
           <Text style={[styles.sub, { color: colors.muted }]}>
-            {reality.status === "aligned"
-              ? "Your measured change broadly matches your reported energy balance."
-              : reality.status === "noise"
-                ? "Normal scale variation is larger than the current signal. Keep logging."
-                : `Measured change and reported energy differ across ${Math.round(reality.days)} days.`}
+            {reality.status === "insufficient"
+              ? "Add at least two weight entries and log food between them to compare reported deficit with scale-estimated change."
+              : reality.status === "aligned"
+                ? "Your measured change broadly matches your reported energy balance."
+                : reality.status === "noise"
+                  ? "Normal scale variation is larger than the current signal. Keep logging."
+                  : `Measured change and reported energy differ across ${Math.round(reality.days)} days.`}
           </Text>
-          <Text style={[styles.entryValue, { color: accent }]}>
-            {reality.weightChangeKg >= 0 ? "−" : "+"}
-            {Math.abs(reality.weightChangeKg).toFixed(1)} kg ·{" "}
-            {Math.round(reality.actualDailyDeficit)} kcal/day measured
-          </Text>
+          {reality.status !== "insufficient" ? (
+            <Text style={[styles.entryValue, { color: accent }]}>
+              Reported {Math.round(reality.reportedDailyDeficit)} kcal/day ·
+              scale estimate {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
+              {Math.abs(reality.weightChangeKg).toFixed(1)} kg change
+            </Text>
+          ) : null}
         </Card>
       ) : null}
       <View style={styles.logHeader}>
@@ -255,7 +313,7 @@ export default function TrackerDetail() {
         {tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
           <Pressable
             onPress={() =>
-              router.push({
+              router.navigate({
                 pathname: "/(tabs)/log",
                 params: { metric: tracker.id },
               })
@@ -310,9 +368,71 @@ export default function TrackerDetail() {
             ) : null}
           </Card>
         ))}
-        {dayPhotos.map((photo)=><Card key={photo.id} style={styles.entry}><Text style={[styles.entryTitle,{color:colors.ink}]}>{photo.caption||'Progress photo'}</Text><Text style={[styles.time,{color:colors.faint}]}>{photo.localDate}</Text><ExpandableImage uri={photo.uri} thumbnailStyle={styles.photoImage}/>{olderPhoto?<><Text style={[styles.note,{color:colors.muted}]}>Automatically compared with {olderPhoto.localDate}</Text><View style={styles.photoCompare}><ExpandableImage uri={photo.uri} thumbnailStyle={styles.compareImage}/><ExpandableImage uri={olderPhoto.uri} thumbnailStyle={styles.compareImage}/></View><Pressable onPress={()=>router.push({pathname:'/day/[date]',params:{date:day,metrics:tracker.id}} as never)} style={[styles.compareButton,{borderColor:accent}]}><Ionicons name="download-outline" size={16} color={accent}/><Text style={[styles.compareText,{color:accent}]}>Open comparison & export</Text></Pressable></>:null}</Card>)}
+        {dayPhotos.map((photo) => (
+          <Card key={photo.id} style={styles.entry}>
+            <Text style={[styles.entryTitle, { color: colors.ink }]}>
+              {photo.caption || "Progress photo"}
+            </Text>
+            <Text style={[styles.time, { color: colors.faint }]}>
+              {friendlyDate(photo.localDate)}
+            </Text>
+            <ExpandableImage
+              uri={photo.uri}
+              thumbnailStyle={styles.photoImage}
+            />
+            {olderPhoto ? (
+              <>
+                <Pressable
+                  onPress={() => setPhotoCompareOpen((open) => !open)}
+                  style={styles.photoToggle}
+                >
+                  <Text style={[styles.note, { color: colors.muted }]}>
+                    Compare with {friendlyDate(olderPhoto.localDate)}
+                  </Text>
+                  <Ionicons
+                    name={photoCompareOpen ? "chevron-up" : "chevron-down"}
+                    size={16}
+                    color={accent}
+                  />
+                </Pressable>
+                {photoCompareOpen ? (
+                  <>
+                    <View style={styles.photoCompare}>
+                      <ExpandableImage
+                        uri={photo.uri}
+                        thumbnailStyle={styles.compareImage}
+                      />
+                      <ExpandableImage
+                        uri={olderPhoto.uri}
+                        thumbnailStyle={styles.compareImage}
+                      />
+                    </View>
+                    <Pressable
+                      onPress={() =>
+                        router.navigate({
+                          pathname: "/day/[date]",
+                          params: { date: day, metrics: tracker.id },
+                        } as never)
+                      }
+                      style={[styles.compareButton, { borderColor: accent }]}
+                    >
+                      <Ionicons
+                        name="download-outline"
+                        size={16}
+                        color={accent}
+                      />
+                      <Text style={[styles.compareText, { color: accent }]}>
+                        Open comparison & export
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+          </Card>
+        ))}
       </View>
-      {!entries.length&&!dayPhotos.length ? (
+      {!entries.length && !dayPhotos.length ? (
         <Card>
           <Text style={[styles.empty, { color: colors.muted }]}>
             {tracker.dataType === "calculated"
@@ -484,7 +604,11 @@ function hasData(
   tracker: MetricDefinition,
   day: string,
 ) {
-  if(tracker.dataType==='photo')return state.photos.some((photo)=>photo.userId===state.currentUserId&&photo.localDate===day);
+  if (tracker.dataType === "photo")
+    return state.photos.some(
+      (photo) =>
+        photo.userId === state.currentUserId && photo.localDate === day,
+    );
   return tracker.dataType === "calculated"
     ? tracker.id === "deficit"
       ? hasFood(state, day)
@@ -544,9 +668,17 @@ function summaryLine(
     return "Informational reading · no target attached";
   if (tracker.id === "food")
     return `${Math.round(value)} consumed · ${Math.max(0, Math.round(target - value))} remaining`;
-  if(tracker.id==='weight'){
-    const first=state.entries.filter((entry)=>entry.userId===state.currentUserId&&entry.metricId==='weight').sort((a,b)=>a.recordedAt.localeCompare(b.recordedAt))[0];const change=first?value-Number(first.value):0;
-    return first?`${change>0?'+':''}${change.toFixed(1)} kg from starting weight`:'Add a first weigh-in to establish your baseline';
+  if (tracker.id === "weight") {
+    const first = state.entries
+      .filter(
+        (entry) =>
+          entry.userId === state.currentUserId && entry.metricId === "weight",
+      )
+      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))[0];
+    const change = first ? value - Number(first.value) : 0;
+    return first
+      ? `${change > 0 ? "+" : ""}${change.toFixed(1)} kg from starting weight`
+      : "Add a first weigh-in to establish your baseline";
   }
   if (tracker.goalRange)
     return `Preferred range ${tracker.goalRange.min}–${tracker.goalRange.max} ${tracker.unit}`;
@@ -583,6 +715,7 @@ function nutritionLine(
     .join(" · ");
 }
 const styles = StyleSheet.create({
+  weightPlan: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   controls: {
     flexDirection: "row",
     alignItems: "center",
@@ -597,7 +730,14 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 9,
   },
-  navButton:{width:42,height:42,borderWidth:1,borderRadius:14,alignItems:'center',justifyContent:'center'},
+  navButton: {
+    width: 42,
+    height: 42,
+    borderWidth: 1,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   day: { fontSize: 10, fontWeight: "900" },
   summary: { marginBottom: 9 },
   summaryTop: {
@@ -680,7 +820,26 @@ const styles = StyleSheet.create({
   entryValue: { fontSize: 12, fontWeight: "900" },
   note: { fontSize: 9, lineHeight: 14, marginTop: 7 },
   image: { width: 92, height: 66, borderRadius: 10, marginTop: 8 },
-  photoImage:{width:'100%',height:230,borderRadius:13,marginTop:8},photoCompare:{flexDirection:'row',gap:7,marginTop:7},compareImage:{flex:1,height:150,borderRadius:11},compareButton:{height:38,borderWidth:1,borderRadius:12,marginTop:8,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6},compareText:{fontSize:9,fontWeight:'900'},
+  photoImage: { width: "100%", height: 230, borderRadius: 13, marginTop: 8 },
+  photoToggle: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  photoCompare: { flexDirection: "row", gap: 7, marginTop: 7 },
+  compareImage: { flex: 1, height: 150, borderRadius: 11 },
+  compareButton: {
+    height: 38,
+    borderWidth: 1,
+    borderRadius: 12,
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  compareText: { fontSize: 9, fontWeight: "900" },
   empty: { fontSize: 10, textAlign: "center" },
   weekRow: {
     minHeight: 48,

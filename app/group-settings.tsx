@@ -135,18 +135,46 @@ export default function GroupSettings() {
         title="Group competition"
         action={
           canEdit ? (
-            <Pressable
-              onPress={() =>
-                router.push({
-                  pathname: "/metric-editor",
-                  params: { id: "new", scope: "group" },
-                })
-              }
-            >
-              <Text style={[styles.link, { color: accent }]}>
-                + Add group tracker
-              </Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() =>
+                  groupMetrics.forEach((metric) =>
+                    updateGroupMetric(metric.id, {
+                      scoreWeight:
+                        metric.dataType === "text" ||
+                        metric.dataType === "photo"
+                          ? 0
+                          : Math.max(metric.scoreWeight, 10),
+                      sections: { ...metric.sections, group: true },
+                    }),
+                  )
+                }
+              >
+                <Text style={[styles.smallLink, { color: accent }]}>All</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
+                  groupMetrics.forEach((metric) =>
+                    updateGroupMetric(metric.id, {
+                      scoreWeight: 0,
+                      sections: { ...metric.sections, group: false },
+                    }),
+                  )
+                }
+              >
+                <Text style={[styles.smallLink, { color: accent }]}>Clear</Text>
+              </Pressable>
+              <Pressable
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/metric-editor",
+                    params: { id: "new", scope: "group" },
+                  })
+                }
+              >
+                <Text style={[styles.link, { color: accent }]}>+ Add</Text>
+              </Pressable>
+            </View>
           ) : undefined
         }
       />
@@ -234,7 +262,7 @@ export default function GroupSettings() {
                   <Pressable
                     accessibilityLabel={`Edit ${metric.name}`}
                     onPress={() =>
-                      router.push({
+                      router.navigate({
                         pathname: "/metric-editor",
                         params: { id: metric.id, scope: "group" },
                       })
@@ -315,17 +343,25 @@ export default function GroupSettings() {
               },
             ]}
           >
-            <Avatar
-              initials={member.initials}
-              color={member.color}
-              size={36}
-              uri={member.avatarUri}
-            />
+            <Pressable
+              onPress={() => router.navigate(`/member/${member.id}` as never)}
+            >
+              <Avatar
+                initials={member.initials}
+                color={member.color}
+                size={36}
+                uri={member.avatarUri}
+              />
+            </Pressable>
             <View style={styles.copy}>
-              <Text style={[styles.name, { color: colors.ink }]}>
-                {member.name}
-                {member.id === state.currentUserId ? " · You" : ""}
-              </Text>
+              <Pressable
+                onPress={() => router.navigate(`/member/${member.id}` as never)}
+              >
+                <Text style={[styles.name, { color: colors.ink }]}>
+                  {member.name}
+                  {member.id === state.currentUserId ? " · You" : ""}
+                </Text>
+              </Pressable>
               <TextInput
                 value={drafts[member.id] ?? ""}
                 onChangeText={(value) =>
@@ -363,6 +399,8 @@ export default function GroupSettings() {
 }
 
 const styles = StyleSheet.create({
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 9 },
+  smallLink: { fontSize: 9, fontWeight: "900" },
   status: { flexDirection: "row", alignItems: "center", gap: 10 },
   copy: { flex: 1 },
   name: { fontSize: 11, fontWeight: "900" },

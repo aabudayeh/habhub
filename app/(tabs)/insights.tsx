@@ -28,6 +28,7 @@ import {
   goalRemainingLabel,
   safeMetricValue,
   trackedGoalSummary,
+  weightProgressStats,
 } from "@/src/domain/metrics";
 import { longestStreakWithRest } from "@/src/domain/streaks";
 import { useApp } from "@/src/state/AppProvider";
@@ -90,7 +91,7 @@ export default function Insights() {
   }
 
   function openDay(day: string) {
-    router.push({
+    router.navigate({
       pathname: "/day/[date]" as never,
       params: {
         date: day,
@@ -172,12 +173,6 @@ export default function Insights() {
             onPress={() => setView("month")}
           />
         </View>
-        <MetricSelector
-          items={selectorItems}
-          selectedIds={selectedIds}
-          onChange={select}
-          title="What to show"
-        />
       </View>
       <View style={styles.legendWrap}>
         {legendItems.map((item) => (
@@ -311,6 +306,12 @@ export default function Insights() {
           </Text>
         </Card>
       )}
+      <MetricSelector
+        items={selectorItems}
+        selectedIds={selectedIds}
+        onChange={select}
+        title="What to show"
+      />
       <SectionHeader
         title={`${view === "week" ? "7-day" : "Month"} summaries`}
       />
@@ -461,11 +462,15 @@ function MetricSummary({
       0,
     ) / Math.max(overallMeasured.length, 1);
   const isBoolean = metric.dataType === "boolean";
+  const weightStats =
+    metric.id === "weight"
+      ? weightProgressStats(state, state.currentUserId, dates[dates.length - 1])
+      : null;
   return (
     <Pressable
       style={styles.summaryWrap}
       onPress={() =>
-        router.push({
+        router.navigate({
           pathname: "/metric-detail" as never,
           params: { metric: metric.id, date: dates[dates.length - 1] },
         } as never)
@@ -485,16 +490,26 @@ function MetricSummary({
           {metric.name}
         </Text>
         <Text style={[styles.summaryValue, { color: colors.ink }]}>
-          {isBoolean
-            ? `${reached}/${active.length} days`
-            : formatMetricValue(metric, average)}
+          {weightStats
+            ? `${weightStats.currentWeight.toFixed(1)} kg`
+            : isBoolean
+              ? `${reached}/${active.length} days`
+              : formatMetricValue(metric, average)}
         </Text>
         <Text style={[styles.summaryLabel, { color: colors.muted }]}>
-          {isBoolean
-            ? `${active.length ? Math.round((reached / active.length) * 100) : 0}% completed in this range`
-            : `${measured.length ? `daily average across ${measured.length} logged days` : "No entries in this range"} · overall ${formatMetricValue(metric, overall)}`}
+          {weightStats
+            ? `${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} total · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week average`
+            : isBoolean
+              ? `${active.length ? Math.round((reached / active.length) * 100) : 0}% completed in this range`
+              : `${measured.length ? `daily average across ${measured.length} logged days` : "No entries in this range"} · overall ${formatMetricValue(metric, overall)}`}
         </Text>
-        {!isBoolean ? (
+        {weightStats ? (
+          <Text style={[styles.remaining, { color: colors.ink }]}>
+            Last 7 days {Math.abs(weightStats.lastWeekChange).toFixed(1)} kg ·
+            planned {weightStats.expectedWeeklyChange.toFixed(1)} kg/week ·{" "}
+            {weightStats.remaining.toFixed(1)} kg remaining
+          </Text>
+        ) : !isBoolean ? (
           <Text style={[styles.remaining, { color: colors.ink }]}>
             {goalRemainingLabel(
               state,
@@ -656,26 +671,31 @@ const styles = StyleSheet.create({
   },
   dayNumber: { color: palette.ink, fontSize: 9, fontWeight: "900" },
   summaries: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
-  summaryWrap: { width: "100%" },
-  summary: { width: "100%", paddingVertical: 10, paddingHorizontal: 13 },
+  summaryWrap: { width: "48%", flexGrow: 1 },
+  summary: {
+    width: "100%",
+    minHeight: 156,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
   summaryIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
   },
   summaryName: {
     color: palette.ink,
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: "900",
-    marginTop: 9,
+    marginTop: 6,
   },
   summaryValue: {
     color: palette.ink,
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "900",
-    marginTop: 7,
+    marginTop: 4,
   },
   summaryLabel: {
     color: palette.muted,

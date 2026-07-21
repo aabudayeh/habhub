@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import {
   Card,
+  Chip,
   IconButton,
   PageHeader,
   Screen,
@@ -134,6 +135,49 @@ export default function DisplaySettings() {
           </View>
         ))}
       </Card>
+      <SectionHeader title="Today tiles" />
+      <Card style={styles.list}>
+        <View style={styles.row}>
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="list-outline" size={18} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Show every tile
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Scroll through all Today tiles instead of using More.
+            </Text>
+          </View>
+          <Switch
+            value={state.settings.showAllTodayTiles}
+            onValueChange={(showAllTodayTiles) =>
+              updateSettings({ showAllTodayTiles })
+            }
+            trackColor={{ false: colors.border, true: `${accent}88` }}
+            thumbColor={
+              state.settings.showAllTodayTiles ? accent : colors.faint
+            }
+          />
+        </View>
+        {!state.settings.showAllTodayTiles ? (
+          <View style={[styles.tileCount, { borderTopColor: colors.border }]}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Tiles before More
+            </Text>
+            <View style={styles.countChips}>
+              {[4, 5, 6].map((count) => (
+                <Chip
+                  key={count}
+                  label={String(count)}
+                  selected={(state.settings.todayTileLimit ?? 5) === count}
+                  onPress={() => updateSettings({ todayTileLimit: count })}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </Card>
       <SectionHeader title="Default landing page" />
       <Card style={styles.pages}>
         {visible.map((page) => (
@@ -209,4 +253,6 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   pageText: { flex: 1, fontSize: 11, fontWeight: "900" },
+  tileCount: { borderTopWidth: 1, paddingVertical: 10, gap: 8 },
+  countChips: { flexDirection: "row", gap: 6 },
 });

@@ -56,6 +56,31 @@ export default function Customize() {
     );
   }
 
+  function changeAllTracked(value: boolean) {
+    const applicable = ordered.filter((metric) => metric.dataType !== "text");
+    Alert.alert(
+      value ? "Track every configured goal?" : "Stop tracking every goal?",
+      "Choose whether this should also change earlier progress reports.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "From today",
+          onPress: () =>
+            applicable.forEach((metric) =>
+              setTrackedGoal(metric.id, value, "today"),
+            ),
+        },
+        {
+          text: "Apply to history",
+          onPress: () =>
+            applicable.forEach((metric) =>
+              setTrackedGoal(metric.id, value, "history"),
+            ),
+        },
+      ],
+    );
+  }
+
   return (
     <Screen>
       <PageHeader
@@ -157,7 +182,15 @@ export default function Customize() {
               Showing a tracker on Today is a separate choice.
             </Text>
           </Card>
-          <SectionHeader title="Goals being counted" />
+          <SectionHeader
+            title="Goals being counted"
+            action={
+              <BulkActions
+                onAll={() => changeAllTracked(true)}
+                onClear={() => changeAllTracked(false)}
+              />
+            }
+          />
           <Card style={styles.list}>
             {ordered
               .filter((metric) => metric.dataType !== "text")
@@ -226,6 +259,20 @@ export default function Customize() {
           </Card>
           <SectionHeader
             title={tab === "today" ? "Today tiles" : "Progress items"}
+            action={
+              <BulkActions
+                onAll={() =>
+                  ordered.forEach((metric) =>
+                    setMetricSection(metric.id, tab, true),
+                  )
+                }
+                onClear={() =>
+                  ordered.forEach((metric) =>
+                    setMetricSection(metric.id, tab, false),
+                  )
+                }
+              />
+            }
           />
           <Card style={styles.list}>
             {ordered.map((metric, index) => (
@@ -306,6 +353,27 @@ export default function Customize() {
   );
 }
 
+function BulkActions({
+  onAll,
+  onClear,
+}: {
+  onAll: () => void;
+  onClear: () => void;
+}) {
+  const accent = useGroupAccent();
+  return (
+    <View style={styles.bulkActions}>
+      <Pressable onPress={onAll}>
+        <Text style={[styles.bulkLink, { color: accent }]}>All</Text>
+      </Pressable>
+      <Text style={[styles.bulkDot, { color: accent }]}>•</Text>
+      <Pressable onPress={onClear}>
+        <Text style={[styles.bulkLink, { color: accent }]}>Clear</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function TrackerIcon({ metric }: { metric: MetricDefinition }) {
   return (
     <View style={[styles.icon, { backgroundColor: `${metric.color}18` }]}>
@@ -357,6 +425,9 @@ function VisibilityRow({
 }
 
 const styles = StyleSheet.create({
+  bulkActions: { flexDirection: "row", alignItems: "center", gap: 5 },
+  bulkLink: { fontSize: 9, fontWeight: "900" },
+  bulkDot: { fontSize: 9 },
   tabs: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   list: { paddingVertical: 2, paddingHorizontal: 11 },
   row: {

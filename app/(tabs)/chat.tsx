@@ -4,7 +4,6 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
-  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -33,7 +32,6 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const messageScroll = useRef<ScrollView>(null);
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
@@ -88,18 +86,6 @@ export default function ChatScreen() {
     );
     return () => clearTimeout(timer);
   }, [conversationId]);
-  useEffect(() => {
-    const shown = Keyboard.addListener("keyboardDidShow", () =>
-      setKeyboardOpen(true),
-    );
-    const hidden = Keyboard.addListener("keyboardDidHide", () =>
-      setKeyboardOpen(false),
-    );
-    return () => {
-      shown.remove();
-      hidden.remove();
-    };
-  }, []);
 
   function submit() {
     if (!draft.trim() && !imageUri) return;
@@ -134,7 +120,7 @@ export default function ChatScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top"]}
+      edges={["top", "bottom"]}
     >
       <KeyboardAvoidingView
         style={styles.flex}
@@ -143,16 +129,10 @@ export default function ChatScreen() {
       >
         <View style={styles.flex}>
           <View
-            style={{
-              height: 3,
-              backgroundColor: accent,
-              borderRadius: 2,
-              marginBottom: 4,
-            }}
-          />
-          {!keyboardOpen ? (
-            <View style={[styles.chatPicker]}>
-              <Text style={styles.sidebarTitle}>CHATS</Text>
+            style={[styles.pageHeader, { borderBottomColor: colors.border }]}
+          >
+            <Text style={[styles.pageTitle, { color: colors.ink }]}>Chat</Text>
+            <View style={styles.chatPicker}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -198,7 +178,7 @@ export default function ChatScreen() {
                   ))}
               </ScrollView>
             </View>
-          ) : null}
+          </View>
 
           <View
             style={[styles.threadHeader, { borderBottomColor: colors.border }]}
@@ -275,7 +255,7 @@ export default function ChatScreen() {
             ref={messageScroll}
             style={styles.messageScroller}
             contentContainerStyle={styles.messages}
-            keyboardShouldPersistTaps="handled"
+            keyboardShouldPersistTaps="always"
             onContentSizeChange={() =>
               messageScroll.current?.scrollToEnd({ animated: false })
             }
@@ -473,35 +453,30 @@ export default function ChatScreen() {
               </Pressable>
             </View>
           ) : null}
-          {!keyboardOpen ? (
-            <View style={styles.quickRow}>
-              <Quick
-                label="Cheer"
-                icon="sparkles-outline"
-                onPress={() => suggest("cheer")}
-              />
-              <Quick
-                label="Taunt"
-                icon="flash-outline"
-                onPress={() => suggest("taunt")}
-              />
-              <Quick
-                label="Remind"
-                icon="notifications-outline"
-                onPress={() => suggest("reminder")}
-              />
-            </View>
-          ) : null}
-          {!keyboardOpen ? (
-            <Text style={styles.libraryNote}>
-              A random built-in suggestion is placed in the box first. Edit it,
-              then send when ready.
-            </Text>
-          ) : null}
+          <View style={styles.quickRow}>
+            <Quick
+              label="Cheer"
+              icon="sparkles-outline"
+              onPress={() => suggest("cheer")}
+            />
+            <Quick
+              label="Taunt"
+              icon="flash-outline"
+              onPress={() => suggest("taunt")}
+            />
+            <Quick
+              label="Remind"
+              icon="notifications-outline"
+              onPress={() => suggest("reminder")}
+            />
+          </View>
+          <Text style={styles.libraryNote}>
+            A random built-in suggestion is placed in the box first. Edit it,
+            then send when ready.
+          </Text>
           <View
             style={[
               styles.composer,
-              keyboardOpen && styles.composerKeyboard,
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
@@ -516,9 +491,8 @@ export default function ChatScreen() {
               value={draft}
               onChangeText={setDraft}
               onFocus={() =>
-                setTimeout(
-                  () => messageScroll.current?.scrollToEnd({ animated: true }),
-                  250,
+                requestAnimationFrame(() =>
+                  messageScroll.current?.scrollToEnd({ animated: true }),
                 )
               }
               onSubmitEditing={submit}
@@ -625,6 +599,15 @@ function Quick({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.canvas },
   flex: { flex: 1 },
+  pageHeader: {
+    minHeight: 56,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    gap: 12,
+  },
+  pageTitle: { fontSize: 22, fontWeight: "900", letterSpacing: -0.5 },
   messageScroller: { flex: 1 },
   screen: { paddingBottom: 24 },
   sidebar: {
@@ -851,14 +834,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 14,
     marginBottom: 8,
   },
-  composerKeyboard: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: 72,
-    zIndex: 30,
-    elevation: 30,
-  },
   dateStamp: {
     alignSelf: "center",
     fontSize: 8,
@@ -901,10 +876,8 @@ const styles = StyleSheet.create({
   sendDisabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
   chatPicker: {
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: palette.border,
-    paddingHorizontal: 14,
+    flex: 1,
+    alignItems: "flex-end",
   },
   sidebarTop: {
     width: "auto",

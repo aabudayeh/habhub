@@ -1,31 +1,354 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import React from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import React from "react";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { ACTIVITY_LABELS, calculateBmr, calculateDailyActivity, calculateDailyEnergy, recommendedDailyDeficit, recommendedDailyIntake } from '@/src/domain/energy';
-import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
-import { ActivityLevel, BiologicalSex } from '@/src/types';
-import { Card, Chip, SectionHeader } from './ui';
+import {
+  ACTIVITY_LABELS,
+  calculateBmr,
+  calculateDailyActivity,
+  calculateDailyEnergy,
+  recommendedDailyDeficit,
+  recommendedDailyIntake,
+} from "@/src/domain/energy";
+import { useApp } from "@/src/state/AppProvider";
+import { palette } from "@/src/theme";
+import { ActivityLevel, BiologicalSex } from "@/src/types";
+import { Card, Chip, SectionHeader } from "./ui";
 
-export function EnergyProfileEditor(){
-  const {state,updateEnergyProfile,updateSettings}=useApp();const profile=state.settings.energyProfile;const bmr=Math.round(calculateBmr(profile));const activity=Math.round(calculateDailyActivity(profile));const daily=Math.round(calculateDailyEnergy(profile));const deficit=recommendedDailyDeficit(profile);const intake=recommendedDailyIntake(profile);
-  return <><SectionHeader title="Body & energy profile"/><Card><Text style={styles.help}>Used for your private BMR, recommended deficit, and food-intake goals.</Text><View style={styles.grid}>{[
-    {label:'Age',value:profile.age,unit:'years',key:'age' as const},{label:'Height',value:profile.heightCm,unit:'cm',key:'heightCm' as const},{label:'Current weight',value:profile.weightKg,unit:'kg',key:'weightKg' as const},{label:'Target weight',value:profile.targetWeightKg,unit:'kg',key:'targetWeightKg' as const},
-  ].map((field)=><View key={field.key} style={styles.field}><Text style={styles.label}>{field.label}</Text><View style={styles.inputWrap}><TextInput value={String(field.value)} selectTextOnFocus keyboardType="decimal-pad" onChangeText={(text)=>{const value=Number(text.replace(',','.'));if(Number.isFinite(value)&&value>0)updateEnergyProfile({[field.key]:value});}} style={styles.input}/><Text style={styles.unit}>{field.unit}</Text></View></View>)}</View>
-    <Text style={styles.label}>Biological sex used by the BMR estimate</Text><View style={styles.chips}>{(['female','male','unspecified'] as BiologicalSex[]).map((sex)=><Chip key={sex} label={sex==='unspecified'?'Prefer not to say':sex[0].toUpperCase()+sex.slice(1)} selected={profile.sex===sex} onPress={()=>updateEnergyProfile({sex})}/>)}</View>
-    <Text style={styles.label}>General activity level</Text><View style={styles.chips}>{(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map((level)=><Chip key={level} label={ACTIVITY_LABELS[level]} selected={profile.activityLevel===level} onPress={()=>updateEnergyProfile({activityLevel:level})}/>)}</View>
-    <Text style={styles.label}>Desired weight loss per week</Text><View style={styles.chips}>{[0.25,0.5,0.75,1].map((loss)=><Chip key={loss} label={`${loss} kg`} selected={profile.desiredWeeklyLossKg===loss} onPress={()=>updateEnergyProfile({desiredWeeklyLossKg:loss})}/>)}</View>
-    <View style={styles.equation}><Stat value={bmr} label="BMR kcal"/><Text style={styles.symbol}>+</Text><Stat value={activity} label="daily activity"/><Text style={styles.symbol}>=</Text><Stat value={daily} label="daily energy" accent/></View>
-    <View style={styles.recommendations}><View style={styles.recommendation}><Ionicons name="trending-down-outline" size={19} color={palette.purple}/><Text style={styles.recommendationValue}>{deficit}</Text><Text style={styles.recommendationLabel}>recommended deficit</Text></View><View style={styles.recommendation}><Ionicons name="restaurant-outline" size={19} color={palette.amber}/><Text style={styles.recommendationValue}>{intake}</Text><Text style={styles.recommendationLabel}>base food goal</Text></View></View>
-    <Text style={styles.label}>Food-goal behavior</Text><View style={styles.chips}><Chip label="Adjust with activity" selected={state.settings.foodGoalMode==='activity_adjusted'} onPress={()=>updateSettings({foodGoalMode:'activity_adjusted'})}/><Chip label="Keep fixed" selected={state.settings.foodGoalMode==='fixed'} onPress={()=>updateSettings({foodGoalMode:'fixed'})}/></View><Text style={styles.help}>{state.settings.foodGoalMode==='activity_adjusted'?'Default: active calories logged today are added to your food allowance while preserving the deficit target.':'Your food target stays fixed even when active energy changes.'}</Text>
-    <Text style={styles.disclaimer}>Planning estimates, not medical advice. Updating this profile automatically refreshes the built-in Deficit, Food, and Weight goals.</Text>
-  </Card></>;
+export function EnergyProfileEditor() {
+  const { state, updateEnergyProfile, updateSettings } = useApp();
+  const profile = state.settings.energyProfile;
+  const bmr = Math.round(calculateBmr(profile));
+  const activity = Math.round(calculateDailyActivity(profile));
+  const daily = Math.round(calculateDailyEnergy(profile));
+  const deficit = recommendedDailyDeficit(profile);
+  const intake = recommendedDailyIntake(profile);
+  return (
+    <>
+      <SectionHeader title="Body & energy profile" />
+      <Card>
+        <Text style={styles.help}>
+          Used for your private BMR, recommended deficit, and food-intake goals.
+        </Text>
+        <View style={styles.grid}>
+          {[
+            {
+              label: "Age",
+              value: profile.age,
+              unit: "years",
+              key: "age" as const,
+            },
+            {
+              label: "Height",
+              value: profile.heightCm,
+              unit: "cm",
+              key: "heightCm" as const,
+            },
+            {
+              label: "Starting weight",
+              value: profile.weightKg,
+              unit: "kg",
+              key: "weightKg" as const,
+            },
+            {
+              label: "Target weight",
+              value: profile.targetWeightKg,
+              unit: "kg",
+              key: "targetWeightKg" as const,
+            },
+          ].map((field) => (
+            <View key={field.key} style={styles.field}>
+              <Text style={styles.label}>{field.label}</Text>
+              <View style={styles.inputWrap}>
+                <TextInput
+                  value={String(field.value)}
+                  selectTextOnFocus
+                  keyboardType="decimal-pad"
+                  onChangeText={(text) => {
+                    const value = Number(text.replace(",", "."));
+                    if (Number.isFinite(value) && value > 0)
+                      updateEnergyProfile({ [field.key]: value });
+                  }}
+                  style={styles.input}
+                />
+                <Text style={styles.unit}>{field.unit}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.label}>
+          Biological sex used by the BMR estimate
+        </Text>
+        <View style={styles.chips}>
+          {(["female", "male", "unspecified"] as BiologicalSex[]).map((sex) => (
+            <Chip
+              key={sex}
+              label={
+                sex === "unspecified"
+                  ? "Prefer not to say"
+                  : sex[0].toUpperCase() + sex.slice(1)
+              }
+              selected={profile.sex === sex}
+              onPress={() => updateEnergyProfile({ sex })}
+            />
+          ))}
+        </View>
+        <Text style={styles.label}>General activity level</Text>
+        <View style={styles.chips}>
+          {(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map((level) => (
+            <Chip
+              key={level}
+              label={ACTIVITY_LABELS[level]}
+              selected={profile.activityLevel === level}
+              onPress={() => updateEnergyProfile({ activityLevel: level })}
+            />
+          ))}
+        </View>
+        <Text style={styles.label}>Planned weight change per week</Text>
+        <View style={styles.chips}>
+          {[0.25, 0.5, 0.75, 1].map((loss) => (
+            <Chip
+              key={loss}
+              label={`${loss} kg`}
+              selected={profile.desiredWeeklyLossKg === loss}
+              onPress={() => updateEnergyProfile({ desiredWeeklyLossKg: loss })}
+            />
+          ))}
+        </View>
+        <View style={styles.equation}>
+          <Stat value={bmr} label="BMR kcal" />
+          <Text style={styles.symbol}>+</Text>
+          <Stat value={activity} label="daily activity" />
+          <Text style={styles.symbol}>=</Text>
+          <Stat value={daily} label="daily energy" accent />
+        </View>
+        <View style={styles.recommendations}>
+          <View style={styles.recommendation}>
+            <Ionicons
+              name="trending-down-outline"
+              size={19}
+              color={palette.purple}
+            />
+            <Text style={styles.recommendationValue}>{deficit}</Text>
+            <Text style={styles.recommendationLabel}>recommended deficit</Text>
+          </View>
+          <View style={styles.recommendation}>
+            <Ionicons
+              name="restaurant-outline"
+              size={19}
+              color={palette.amber}
+            />
+            <Text style={styles.recommendationValue}>{intake}</Text>
+            <Text style={styles.recommendationLabel}>base food goal</Text>
+          </View>
+        </View>
+        <Text style={styles.label}>Food-goal behavior</Text>
+        <View style={styles.chips}>
+          <Chip
+            label="Adjust with activity"
+            selected={state.settings.foodGoalMode === "activity_adjusted"}
+            onPress={() =>
+              updateSettings({ foodGoalMode: "activity_adjusted" })
+            }
+          />
+          <Chip
+            label="Keep fixed"
+            selected={state.settings.foodGoalMode === "fixed"}
+            onPress={() => updateSettings({ foodGoalMode: "fixed" })}
+          />
+        </View>
+        <Text style={styles.help}>
+          {state.settings.foodGoalMode === "activity_adjusted"
+            ? "Default: active calories logged today are added to your food allowance while preserving the deficit target."
+            : "Your food target stays fixed even when active energy changes."}
+        </Text>
+        <Text style={styles.disclaimer}>
+          Planning estimates, not medical advice. Updating this profile
+          automatically refreshes the built-in Deficit, Food, and Weight goals.
+        </Text>
+      </Card>
+    </>
+  );
 }
 
-export function MetricGoalsEditor(){
-  const {state,updateMetric}=useApp();return <><SectionHeader title="Metric goals" action={<Pressable onPress={()=>router.push('/customize' as never)}><Text style={styles.link}>Full customization</Text></Pressable>}/><Card style={styles.goalList}>{state.metrics.filter((metric)=>metric.dataType!=='text'&&metric.dataType!=='photo').sort((a,b)=>a.order-b.order).map((metric,index,list)=><View key={metric.id} style={[styles.goal,index<list.length-1&&styles.border]}><View style={[styles.icon,{backgroundColor:`${metric.color}18`}]}><Ionicons name={metric.icon as keyof typeof Ionicons.glyphMap} size={18} color={metric.color}/></View><View style={styles.grow}><Text style={styles.goalName}>{metric.name}</Text><Text style={styles.goalMeta}>{metric.goal.kind.replace('_',' ')} · {metric.defaultVisibility==='private'?'Private':metric.defaultVisibility==='status'?'Status only':'Shared exact'}</Text></View><View style={styles.goalInput}><TextInput value={String(metric.goal.target)} selectTextOnFocus keyboardType="decimal-pad" onChangeText={(text)=>{const target=Number(text.replace(',','.'));if(Number.isFinite(target)&&target>=0)updateMetric(metric.id,{goal:{...metric.goal,target}});}} style={styles.goalText}/><Text style={styles.goalUnit}>{metric.unit}</Text></View></View>)}</Card></>;
+export function MetricGoalsEditor() {
+  const { state, updateMetric } = useApp();
+  return (
+    <>
+      <SectionHeader
+        title="Metric goals"
+        action={
+          <Pressable onPress={() => router.push("/customize" as never)}>
+            <Text style={styles.link}>Full customization</Text>
+          </Pressable>
+        }
+      />
+      <Card style={styles.goalList}>
+        {state.metrics
+          .filter(
+            (metric) =>
+              metric.dataType !== "text" && metric.dataType !== "photo",
+          )
+          .sort((a, b) => a.order - b.order)
+          .map((metric, index, list) => (
+            <View
+              key={metric.id}
+              style={[styles.goal, index < list.length - 1 && styles.border]}
+            >
+              <View
+                style={[styles.icon, { backgroundColor: `${metric.color}18` }]}
+              >
+                <Ionicons
+                  name={metric.icon as keyof typeof Ionicons.glyphMap}
+                  size={18}
+                  color={metric.color}
+                />
+              </View>
+              <View style={styles.grow}>
+                <Text style={styles.goalName}>{metric.name}</Text>
+                <Text style={styles.goalMeta}>
+                  {metric.goal.kind.replace("_", " ")} ·{" "}
+                  {metric.defaultVisibility === "private"
+                    ? "Private"
+                    : metric.defaultVisibility === "status"
+                      ? "Status only"
+                      : "Shared exact"}
+                </Text>
+              </View>
+              <View style={styles.goalInput}>
+                <TextInput
+                  value={String(metric.goal.target)}
+                  selectTextOnFocus
+                  keyboardType="decimal-pad"
+                  onChangeText={(text) => {
+                    const target = Number(text.replace(",", "."));
+                    if (Number.isFinite(target) && target >= 0)
+                      updateMetric(metric.id, {
+                        goal: { ...metric.goal, target },
+                      });
+                  }}
+                  style={styles.goalText}
+                />
+                <Text style={styles.goalUnit}>{metric.unit}</Text>
+              </View>
+            </View>
+          ))}
+      </Card>
+    </>
+  );
 }
-function Stat({value,label,accent=false}:{value:number;label:string;accent?:boolean}){return <View style={styles.stat}><Text style={[styles.statValue,accent&&styles.accent]}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>}
-const styles=StyleSheet.create({help:{color:palette.muted,fontSize:11,lineHeight:16,marginBottom:8},grid:{flexDirection:'row',flexWrap:'wrap',gap:9},field:{width:'48%',minWidth:130},label:{color:palette.ink,fontSize:10,fontWeight:'900',marginBottom:6,marginTop:9},inputWrap:{flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.border,borderRadius:12,paddingHorizontal:10},input:{flex:1,color:palette.ink,fontSize:14,fontWeight:'900',paddingVertical:10},unit:{color:palette.muted,fontSize:9},chips:{flexDirection:'row',flexWrap:'wrap',gap:6,marginBottom:4},equation:{flexDirection:'row',alignItems:'center',backgroundColor:palette.canvas,borderRadius:15,padding:11,marginTop:13},stat:{flex:1,alignItems:'center'},statValue:{color:palette.ink,fontSize:17,fontWeight:'900'},accent:{color:palette.primary},statLabel:{color:palette.muted,fontSize:8,textAlign:'center',marginTop:2},symbol:{color:palette.faint,fontWeight:'900'},recommendations:{flexDirection:'row',gap:8,marginTop:9},recommendation:{flex:1,backgroundColor:palette.canvas,borderRadius:14,padding:11},recommendationValue:{color:palette.ink,fontSize:18,fontWeight:'900',marginTop:5},recommendationLabel:{color:palette.muted,fontSize:8,marginTop:2},disclaimer:{color:palette.muted,fontSize:9,lineHeight:14,marginTop:9},link:{color:palette.primary,fontSize:11,fontWeight:'900'},goalList:{paddingHorizontal:12,paddingVertical:2},goal:{minHeight:62,flexDirection:'row',alignItems:'center',gap:8},border:{borderBottomWidth:1,borderBottomColor:palette.border},icon:{width:37,height:37,borderRadius:12,alignItems:'center',justifyContent:'center'},grow:{flex:1},goalName:{color:palette.ink,fontSize:12,fontWeight:'900'},goalMeta:{color:palette.muted,fontSize:8,marginTop:2},goalInput:{width:90,flexDirection:'row',alignItems:'center',borderWidth:1,borderColor:palette.border,borderRadius:10,paddingHorizontal:7},goalText:{flex:1,color:palette.ink,fontSize:11,fontWeight:'900',paddingVertical:7},goalUnit:{color:palette.muted,fontSize:7}});
+function Stat({
+  value,
+  label,
+  accent = false,
+}: {
+  value: number;
+  label: string;
+  accent?: boolean;
+}) {
+  return (
+    <View style={styles.stat}>
+      <Text style={[styles.statValue, accent && styles.accent]}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
+const styles = StyleSheet.create({
+  help: { color: palette.muted, fontSize: 11, lineHeight: 16, marginBottom: 8 },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
+  field: { width: "48%", minWidth: 130 },
+  label: {
+    color: palette.ink,
+    fontSize: 10,
+    fontWeight: "900",
+    marginBottom: 6,
+    marginTop: 9,
+  },
+  inputWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+  },
+  input: {
+    flex: 1,
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: "900",
+    paddingVertical: 10,
+  },
+  unit: { color: palette.muted, fontSize: 9 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
+  equation: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: palette.canvas,
+    borderRadius: 15,
+    padding: 11,
+    marginTop: 13,
+  },
+  stat: { flex: 1, alignItems: "center" },
+  statValue: { color: palette.ink, fontSize: 17, fontWeight: "900" },
+  accent: { color: palette.primary },
+  statLabel: {
+    color: palette.muted,
+    fontSize: 8,
+    textAlign: "center",
+    marginTop: 2,
+  },
+  symbol: { color: palette.faint, fontWeight: "900" },
+  recommendations: { flexDirection: "row", gap: 8, marginTop: 9 },
+  recommendation: {
+    flex: 1,
+    backgroundColor: palette.canvas,
+    borderRadius: 14,
+    padding: 11,
+  },
+  recommendationValue: {
+    color: palette.ink,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 5,
+  },
+  recommendationLabel: { color: palette.muted, fontSize: 8, marginTop: 2 },
+  disclaimer: {
+    color: palette.muted,
+    fontSize: 9,
+    lineHeight: 14,
+    marginTop: 9,
+  },
+  link: { color: palette.primary, fontSize: 11, fontWeight: "900" },
+  goalList: { paddingHorizontal: 12, paddingVertical: 2 },
+  goal: { minHeight: 62, flexDirection: "row", alignItems: "center", gap: 8 },
+  border: { borderBottomWidth: 1, borderBottomColor: palette.border },
+  icon: {
+    width: 37,
+    height: 37,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  grow: { flex: 1 },
+  goalName: { color: palette.ink, fontSize: 12, fontWeight: "900" },
+  goalMeta: { color: palette.muted, fontSize: 8, marginTop: 2 },
+  goalInput: {
+    width: 90,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 10,
+    paddingHorizontal: 7,
+  },
+  goalText: {
+    flex: 1,
+    color: palette.ink,
+    fontSize: 11,
+    fontWeight: "900",
+    paddingVertical: 7,
+  },
+  goalUnit: { color: palette.muted, fontSize: 7 },
+});

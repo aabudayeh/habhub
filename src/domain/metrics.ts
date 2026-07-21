@@ -42,6 +42,21 @@ export function metricValue(
   localDate: string,
   stack: string[] = [],
 ): number {
+  if (metric.id === "weight") {
+    const latest = state.entries
+      .filter(
+        (entry) =>
+          entry.metricId === metric.id &&
+          entry.userId === userId &&
+          entry.localDate <= localDate &&
+          Number.isFinite(Number(entry.value)),
+      )
+      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+    return latest
+      ? Number(latest.value)
+      : (state.energyProfiles?.[userId]?.weightKg ??
+          state.settings.energyProfile.weightKg);
+  }
   if (metric.id === "overall_score")
     return dailyScore(state, userId, localDate);
   if (metric.dataType === "photo") {
@@ -215,6 +230,24 @@ export function effectiveGoalTarget(
   userId: string,
   localDate: string,
 ): number {
+  if (metric.id === "weight") {
+    const profile =
+      state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+    const direction = weightDirectionFromProfile(profile);
+    if (direction === "maintain") return profile.weightKg;
+    const elapsedDays = Math.max(
+      0,
+      Math.floor(
+        (new Date(`${localDate}T12:00:00`).getTime() -
+          new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
+          86400000,
+      ),
+    );
+    const planned = (profile.desiredWeeklyLossKg * elapsedDays) / 7;
+    return direction === "gain"
+      ? Math.min(profile.targetWeightKg, profile.weightKg + planned)
+      : Math.max(profile.targetWeightKg, profile.weightKg - planned);
+  }
   if (metric.id !== "food") return metric.goal.target;
   const exercise = state.metrics.find(
     (candidate) => candidate.id === "exercise",
@@ -227,6 +260,80 @@ export function effectiveGoalTarget(
     activeEnergy,
     state.settings.foodGoalMode ?? "activity_adjusted",
   );
+}
+
+export function weightProgressStats(
+  state: AppState,
+  userId: string,
+  anchor: string,
+) {
+  const profile =
+    state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+  const metric = state.metrics.find((item) => item.id === "weight");
+  const direction = weightDirectionFromProfile(profile);
+  const entries = state.entries
+    .filter(
+      (entry) =>
+        entry.userId === userId &&
+        entry.metricId === "weight" &&
+        entry.localDate <= anchor &&
+        Number.isFinite(Number(entry.value)),
+    )
+    .sort((a, b) => a.localDate.localeCompare(b.localDate));
+  const currentEntry = entries.at(-1);
+  const current = currentEntry ? Number(currentEntry.value) : profile.weightKg;
+  const weekEntry = [...entries]
+    .reverse()
+    .find((entry) => entry.localDate <= dateWithOffsetFrom(anchor, -7));
+  const startDate = metric?.activeFrom ?? entries[0]?.localDate ?? anchor;
+  const elapsedDays = Math.max(
+    1,
+    (new Date(`${anchor}T12:00:00`).getTime() -
+      new Date(`${startDate}T12:00:00`).getTime()) /
+      86400000,
+  );
+  const directional = (from: number, to: number) =>
+    direction === "gain"
+      ? to - from
+      : direction === "lose"
+        ? from - to
+        : -Math.abs(to - from);
+  const totalChange = directional(profile.weightKg, current);
+  const lastWeekChange = directional(
+    weekEntry ? Number(weekEntry.value) : profile.weightKg,
+    current,
+  );
+  const scheduledTarget = metric
+    ? effectiveGoalTarget(state, metric, userId, anchor)
+    : profile.targetWeightKg;
+  return {
+    direction,
+    startingWeight: profile.weightKg,
+    currentWeight: current,
+    finalTarget: profile.targetWeightKg,
+    scheduledTarget,
+    expectedWeeklyChange:
+      direction === "maintain" ? 0 : profile.desiredWeeklyLossKg,
+    totalChange,
+    averageWeeklyChange: totalChange / (elapsedDays / 7),
+    lastWeekChange,
+    remaining:
+      direction === "gain"
+        ? Math.max(0, profile.targetWeightKg - current)
+        : direction === "lose"
+          ? Math.max(0, current - profile.targetWeightKg)
+          : Math.abs(current - profile.weightKg),
+    hasMeasurement: Boolean(currentEntry),
+  };
+}
+
+function weightDirectionFromProfile(profile: {
+  weightKg: number;
+  targetWeightKg: number;
+}): "lose" | "maintain" | "gain" {
+  if (profile.targetWeightKg > profile.weightKg) return "gain";
+  if (profile.targetWeightKg < profile.weightKg) return "lose";
+  return "maintain";
 }
 
 export function latestTextValue(
@@ -513,18 +620,24 @@ export function trackedGoalSummary(
       metric.goalEnabled !== false &&
       metric.activeFrom <= localDate &&
       metric.dataType !== "text" &&
-      (metric.id !== "deficit" ||
-        state.entries.some(
-          (entry) =>
-            entry.userId === userId &&
-            entry.metricId === "food" &&
-            entry.localDate === localDate,
-        )) &&
       (metricIds
         ? metricIds.includes(metric.id)
         : isMetricTrackedOnDate(state, metric, localDate)),
   );
-  const met = metrics.filter((metric) =>
+  const unavailable = metrics.filter(
+    (metric) =>
+      metric.id === "deficit" &&
+      !state.entries.some(
+        (entry) =>
+          entry.userId === userId &&
+          entry.metricId === "food" &&
+          entry.localDate === localDate,
+      ),
+  );
+  const applicable = metrics.filter(
+    (metric) => !unavailable.some((item) => item.id === metric.id),
+  );
+  const met = applicable.filter((metric) =>
     goalReached(
       metric,
       safeMetricValue(state, metric, userId, localDate),
@@ -533,9 +646,10 @@ export function trackedGoalSummary(
   );
   return {
     met: met.length,
-    total: metrics.length,
-    allMet: metrics.length > 0 && met.length === metrics.length,
+    total: applicable.length,
+    allMet: applicable.length > 0 && met.length === applicable.length,
     metrics,
+    unavailable,
   };
 }
 
@@ -631,9 +745,11 @@ export function deficitRealityCheckAtDate(
   const reportedDailyDeficit =
     reported.reduce((sum, value) => sum + value, 0) /
     Math.max(reported.length, 1);
+  const profile =
+    state.energyProfiles?.[userId] ?? state.settings.energyProfile;
   const actualDailyDeficit =
     ((weightChangeKg * KCAL_PER_KG_ESTIMATE) / days) *
-    ((state.settings.weightDirection ?? "lose") === "lose" ? 1 : -1);
+    (weightDirectionFromProfile(profile) === "gain" ? -1 : 1);
   if (!reported.length)
     return {
       status: "insufficient",

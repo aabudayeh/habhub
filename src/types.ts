@@ -223,6 +223,10 @@ export type UserSettings = {
   featuredTodayCard: "score" | string;
   defaultLandingPage: LandingPage;
   compactMode: boolean;
+  /** Show every Today tile in the main scroll instead of using the More sheet. */
+  showAllTodayTiles: boolean;
+  /** Maximum main-screen tiles before More appears when showAllTodayTiles is off. */
+  todayTileLimit: number;
   darkMode: boolean;
   showLeaderboard: boolean;
   showChat: boolean;
@@ -239,6 +243,11 @@ export type UserSettings = {
   badgeShowcaseByGroup: Record<string, string[]>;
   progressMetricIds: string[];
   leaderboardMetricIdsByGroup: Record<string, string[]>;
+  comparisonMetricIdsByGroup: Record<string, string[]>;
+  comparisonPeriodByGroup: Record<
+    string,
+    "today" | "yesterday" | "week" | "month" | "custom"
+  >;
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;

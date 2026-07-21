@@ -42,11 +42,17 @@ export default function LeaderboardScreen() {
   const saved = state.settings.leaderboardMetricIdsByGroup?.[
     state.group.id
   ] ?? [state.selectedGroupMetricId || SCORE_ID];
-  const [selectedIds, setSelectedIds] = useState<string[]>(
-    saved.filter(
-      (id) => id === SCORE_ID || tracked.some((metric) => metric.id === id),
-    ),
+  const validSaved = saved.filter(
+    (id) => id === SCORE_ID || tracked.some((metric) => metric.id === id),
   );
+  const initialSelected =
+    validSaved.length >= 2
+      ? validSaved
+      : ([
+          ...validSaved,
+          tracked.find((metric) => !validSaved.includes(metric.id))?.id,
+        ].filter(Boolean) as string[]);
+  const [selectedIds, setSelectedIds] = useState<string[]>(initialSelected);
   const selected = selectedIds.length ? selectedIds : [SCORE_ID];
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   function choosePeriod(next: LeaderboardPeriod) {
@@ -109,7 +115,7 @@ export default function LeaderboardScreen() {
           <Card key={id} style={styles.ranking}>
             <Pressable
               onPress={() =>
-                router.push({
+                router.navigate({
                   pathname: "/leaderboard-detail",
                   params: { period, anchor, metrics: id },
                 } as never)
@@ -137,7 +143,7 @@ export default function LeaderboardScreen() {
                 <Ionicons name="expand-outline" size={20} color={accent} />
               )}
             </Pressable>
-            {rows.map((row, index) => {
+            {rows.slice(0, 4).map((row, index) => {
               const result = row.metrics[0]?.result;
               const value = includeScore
                 ? `${Math.round(row.score)} pts`
@@ -157,7 +163,7 @@ export default function LeaderboardScreen() {
                 <Pressable
                   key={row.member.id}
                   onPress={() =>
-                    router.push({
+                    router.navigate({
                       pathname: "/member/[id]",
                       params: {
                         id: row.member.id,
@@ -190,7 +196,7 @@ export default function LeaderboardScreen() {
                     initials={row.member.initials}
                     color={row.member.color}
                     uri={row.member.avatarUri}
-                    size={39}
+                    size={31}
                   />
                   <View style={styles.copy}>
                     <Text style={[styles.name, { color: colors.ink }]}>
@@ -295,7 +301,7 @@ export default function LeaderboardScreen() {
       </Card>
       <View style={styles.actions}>
         <Pressable
-          onPress={() => router.push("/groups" as never)}
+          onPress={() => router.navigate("/groups" as never)}
           style={styles.inline}
         >
           <Ionicons name="swap-horizontal" size={17} color={accent} />
@@ -313,21 +319,21 @@ export default function LeaderboardScreen() {
   );
 }
 const styles = StyleSheet.create({
-  ranking: { padding: 11, marginBottom: 10 },
+  ranking: { padding: 7, marginBottom: 6 },
   rankingHead: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 7,
+    padding: 4,
   },
   eyebrow: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
-  title: { fontSize: 18, fontWeight: "900", marginTop: 2 },
+  title: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   max: { fontSize: 8, fontWeight: "900", padding: 7, borderRadius: 10 },
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    minHeight: 66,
+    minHeight: 45,
     paddingHorizontal: 5,
     paddingVertical: 7,
     borderTopWidth: 1,

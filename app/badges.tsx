@@ -1,27 +1,243 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
+import React, { useMemo, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { MetricSelector } from '@/src/components/MetricSelector';
-import { MonthCalendar } from '@/src/components/MonthCalendar';
-import { Avatar, Card, Chip, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
-import { BadgePeriod, buildBadges } from '@/src/domain/badges';
-import { dateKey, friendlyDate } from '@/src/domain/date';
-import { memberDisplayName } from '@/src/domain/members';
-import { useApp } from '@/src/state/AppProvider';
-import { palette } from '@/src/theme';
+import { MetricSelector } from "@/src/components/MetricSelector";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import {
+  Avatar,
+  Card,
+  Chip,
+  IconButton,
+  PageHeader,
+  Screen,
+  SectionHeader,
+} from "@/src/components/ui";
+import { BadgePeriod, buildBadges } from "@/src/domain/badges";
+import { dateKey, friendlyDate } from "@/src/domain/date";
+import { memberDisplayName } from "@/src/domain/members";
+import { useApp } from "@/src/state/AppProvider";
+import { useAppColors, useGroupAccent } from "@/src/theme";
 
-type Filter='all'|BadgePeriod;
-const filterLabels:{id:Filter;label:string}[]=[{id:'all',label:'All awards'},{id:'today',label:'Selected day'},{id:'yesterday',label:'Previous day'},{id:'week',label:'7 days'},{id:'month',label:'Month'},{id:'achievement',label:'Achievements'}];
+type Filter = "all" | BadgePeriod;
+const filters: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "today", label: "Day" },
+  { id: "yesterday", label: "Previous day" },
+  { id: "week", label: "7 days" },
+  { id: "month", label: "Month" },
+  { id: "achievement", label: "Milestones" },
+];
 
-export default function BadgesScreen(){
-  const {state}=useApp();const [anchor,setAnchor]=useState(dateKey());const [calendarOpen,setCalendarOpen]=useState(false);const [filter,setFilter]=useState<Filter>('all');const [memberIds,setMemberIds]=useState(state.group.members.map((member)=>member.id));
-  const badges=useMemo(()=>buildBadges(state,anchor),[anchor,state]);const filtered=badges.filter((badge)=>(filter==='all'||badge.period===filter)&&(!badge.memberId||memberIds.includes(badge.memberId)));const sections=filterLabels.slice(1).map((item)=>({id:item.id as BadgePeriod,label:item.label,badges:filtered.filter((badge)=>badge.period===item.id)})).filter((section)=>section.badges.length);
-  return <Screen><PageHeader eyebrow={state.group.name} title="Badge cabinet" subtitle="Filter winners by person, award period, and date." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
-    <View style={styles.filters}><MetricSelector title="People" items={state.group.members.map((member)=>({id:member.id,label:memberDisplayName(state,member),icon:'person-outline',color:member.color}))} selectedIds={memberIds} onChange={setMemberIds}/><Card style={styles.dateCard}><Pressable onPress={()=>setCalendarOpen((value)=>!value)} style={styles.dateButton}><View style={styles.dateIcon}><Ionicons name="calendar-outline" size={19} color={palette.primary}/></View><View style={styles.copy}><Text style={styles.filterTitle}>Award date</Text><Text style={styles.filterMeta}>{friendlyDate(anchor)} · tap to {calendarOpen?'close':'choose'}</Text></View><Ionicons name={calendarOpen?'chevron-up':'chevron-down'} size={18} color={palette.muted}/></Pressable>{calendarOpen?<View style={styles.calendar}><MonthCalendar monthDate={anchor} selectedDate={anchor} onMonthChange={setAnchor} onSelect={(date)=>{setAnchor(date);setCalendarOpen(false);}}/></View>:null}</Card></View>
-    <View style={styles.chips}>{filterLabels.map((item)=><Chip key={item.id} label={item.label} selected={filter===item.id} onPress={()=>setFilter(item.id)}/>)}</View>
-    {sections.length?sections.map((section)=><View key={section.id}><SectionHeader title={section.label}/><View style={styles.grid}>{section.badges.map((badge)=>{const member=badge.memberId?state.group.members.find((item)=>item.id===badge.memberId):undefined;return <Pressable key={badge.id} disabled={!badge.memberId} onPress={()=>badge.memberId&&router.push(`/member/${badge.memberId}` as never)} style={styles.item}><Card style={[styles.badge,{borderColor:`${badge.color}70`}]}><View style={[styles.ribbon,{backgroundColor:badge.color}]}><Ionicons name={badge.icon} size={16} color={palette.white}/><Text style={styles.ribbonText}>{badge.caption}</Text></View><View style={styles.ownerRow}>{member?<Avatar initials={member.initials} color={member.color} uri={member.avatarUri} size={34}/>:<View style={[styles.emptyAvatar,{backgroundColor:`${badge.color}20`}]}><Ionicons name="help" size={16} color={badge.color}/></View>}<View style={styles.copy}><Text style={styles.title}>{badge.title}</Text><Text style={[styles.owner,{color:badge.color}]}>{badge.owner}</Text></View></View><Text style={styles.description}>{badge.description}</Text><Text style={styles.dateLabel}>{friendlyDate(badge.anchorDate)}</Text></Card></Pressable>;})}</View></View>):<Card style={styles.empty}><Ionicons name="filter-outline" size={25} color={palette.primary}/><Text style={styles.emptyTitle}>No badges match these filters</Text><Text style={styles.filterMeta}>Select another person, period, or date.</Text></Card>}
-  </Screen>;
+export default function BadgesScreen() {
+  const { state } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [anchor, setAnchor] = useState(dateKey());
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [filter, setFilter] = useState<Filter>("week");
+  const [memberIds, setMemberIds] = useState(
+    state.group.members.map((member) => member.id),
+  );
+  const badges = useMemo(() => buildBadges(state, anchor), [anchor, state]);
+  const visible = badges.filter(
+    (badge) =>
+      (filter === "all" || badge.period === filter) &&
+      (!badge.memberId || memberIds.includes(badge.memberId)),
+  );
+  const sections = filters
+    .filter((item) => item.id !== "all")
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      badges: visible.filter((badge) => badge.period === item.id),
+    }))
+    .filter((section) => section.badges.length);
+
+  return (
+    <Screen>
+      <PageHeader
+        eyebrow={state.group.name}
+        title="Badge cabinet"
+        subtitle="Awards adapt to every group tracker, target, and ranking rule."
+        showMenu={false}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
+      />
+      <MetricSelector
+        title="People"
+        items={state.group.members.map((member) => ({
+          id: member.id,
+          label: memberDisplayName(state, member),
+          icon: "person-outline",
+          color: member.color,
+        }))}
+        selectedIds={memberIds}
+        onChange={setMemberIds}
+      />
+      <View style={styles.filterRow}>
+        {filters.map((item) => (
+          <Chip
+            key={item.id}
+            label={item.label}
+            selected={filter === item.id}
+            onPress={() => setFilter(item.id)}
+          />
+        ))}
+      </View>
+      <Pressable onPress={() => setCalendarOpen((open) => !open)}>
+        <Card style={styles.dateRow}>
+          <Ionicons name="calendar-outline" size={18} color={accent} />
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Awards ending {friendlyDate(anchor)}
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Choose a different reference date
+            </Text>
+          </View>
+          <Ionicons
+            name={calendarOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
+          />
+        </Card>
+      </Pressable>
+      {calendarOpen ? (
+        <Card>
+          <MonthCalendar
+            monthDate={anchor}
+            selectedDate={anchor}
+            onMonthChange={setAnchor}
+            onSelect={(date) => {
+              setAnchor(date);
+              setCalendarOpen(false);
+            }}
+          />
+        </Card>
+      ) : null}
+      {sections.length ? (
+        sections.map((section) => (
+          <View key={section.id}>
+            <SectionHeader title={section.label} />
+            <View style={styles.list}>
+              {section.badges.map((badge) => {
+                const member = badge.memberId
+                  ? state.group.members.find(
+                      (item) => item.id === badge.memberId,
+                    )
+                  : undefined;
+                return (
+                  <Pressable
+                    key={badge.id}
+                    disabled={!badge.memberId}
+                    onPress={() =>
+                      badge.memberId &&
+                      router.navigate(`/member/${badge.memberId}` as never)
+                    }
+                  >
+                    <Card
+                      style={[styles.badge, { borderLeftColor: badge.color }]}
+                    >
+                      {member ? (
+                        <Avatar
+                          initials={member.initials}
+                          color={member.color}
+                          uri={member.avatarUri}
+                          size={36}
+                        />
+                      ) : (
+                        <View
+                          style={[
+                            styles.badgeIcon,
+                            { backgroundColor: `${badge.color}20` },
+                          ]}
+                        >
+                          <Ionicons
+                            name={badge.icon}
+                            size={18}
+                            color={badge.color}
+                          />
+                        </View>
+                      )}
+                      <View style={styles.copy}>
+                        <Text style={[styles.title, { color: colors.ink }]}>
+                          {badge.title}
+                        </Text>
+                        <Text style={[styles.owner, { color: badge.color }]}>
+                          {badge.owner} · {badge.caption}
+                        </Text>
+                        <Text
+                          style={[styles.meta, { color: colors.muted }]}
+                          numberOfLines={2}
+                        >
+                          {badge.description}
+                        </Text>
+                      </View>
+                      <Text style={[styles.date, { color: colors.faint }]}>
+                        {friendlyDate(badge.anchorDate)}
+                      </Text>
+                    </Card>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ))
+      ) : (
+        <Card style={styles.empty}>
+          <Ionicons name="filter-outline" size={24} color={accent} />
+          <Text style={[styles.title, { color: colors.ink }]}>
+            No matching badges
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            Try another person, range, or date.
+          </Text>
+        </Card>
+      )}
+    </Screen>
+  );
 }
-const styles=StyleSheet.create({filters:{gap:8},dateCard:{padding:10},dateButton:{flexDirection:'row',alignItems:'center',gap:10},dateIcon:{width:38,height:38,borderRadius:12,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},copy:{flex:1},filterTitle:{color:palette.ink,fontSize:11,fontWeight:'900'},filterMeta:{color:palette.muted,fontSize:9,lineHeight:14,marginTop:2},calendar:{marginTop:12,borderTopWidth:1,borderTopColor:palette.border,paddingTop:12},chips:{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:10},grid:{flexDirection:'row',flexWrap:'wrap',gap:10},item:{width:'48%',minWidth:152,flexGrow:1},badge:{height:'100%',minHeight:180,padding:14,overflow:'hidden'},ribbon:{alignSelf:'flex-start',flexDirection:'row',alignItems:'center',gap:5,borderRadius:20,paddingHorizontal:9,paddingVertical:5},ribbonText:{color:palette.white,fontSize:8,fontWeight:'900'},ownerRow:{flexDirection:'row',alignItems:'center',gap:8,marginTop:12},emptyAvatar:{width:34,height:34,borderRadius:12,alignItems:'center',justifyContent:'center'},title:{color:palette.ink,fontSize:12,fontWeight:'900'},owner:{fontSize:10,fontWeight:'900',marginTop:2},description:{color:palette.muted,fontSize:9,lineHeight:14,marginTop:10},dateLabel:{color:palette.faint,fontSize:8,fontWeight:'800',marginTop:'auto',paddingTop:8},empty:{alignItems:'center',padding:28,marginTop:18},emptyTitle:{color:palette.ink,fontSize:13,fontWeight:'900',marginTop:8}});
+
+const styles = StyleSheet.create({
+  filterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginVertical: 9,
+  },
+  dateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 10,
+  },
+  list: { gap: 7 },
+  badge: {
+    minHeight: 78,
+    borderLeftWidth: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 10,
+  },
+  badgeIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  copy: { flex: 1 },
+  title: { fontSize: 11, fontWeight: "900" },
+  owner: { fontSize: 8, fontWeight: "900", marginTop: 2 },
+  meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  date: { fontSize: 7, fontWeight: "800" },
+  empty: { alignItems: "center", gap: 6, padding: 24 },
+});
