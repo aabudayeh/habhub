@@ -71,12 +71,20 @@ const GOALS = [
   },
 ];
 const HEALTH = [
-  ["sleep", "Sleep"],
-  ["blood_pressure_systolic", "Blood pressure"],
-  ["blood_glucose", "Blood glucose"],
-  ["menstrual_cycle", "Cycle"],
-  ["pulse", "Pulse"],
-  ["body_fat", "Body composition"],
+  { id: "sleep", label: "Sleep", metrics: ["sleep"] },
+  {
+    id: "blood_pressure",
+    label: "Blood pressure & pulse",
+    metrics: ["blood_pressure_systolic", "blood_pressure_diastolic", "pulse"],
+  },
+  { id: "blood_glucose", label: "Blood glucose", metrics: ["blood_glucose"] },
+  { id: "menstrual_cycle", label: "Cycle", metrics: ["menstrual_cycle"] },
+  { id: "pulse", label: "Pulse", metrics: ["pulse"] },
+  {
+    id: "body_composition",
+    label: "Body composition",
+    metrics: ["body_fat", "lean_body_mass"],
+  },
 ] as const;
 const GROUP_LABELS: Record<string, string> = {
   energy: "Weight & energy",
@@ -122,6 +130,9 @@ export default function Onboarding() {
   const [height, setHeight] = useState(String(profile.heightCm));
   const [weight, setWeight] = useState(String(profile.weightKg));
   const [target, setTarget] = useState(String(profile.targetWeightKg));
+  const [weeklyChange, setWeeklyChange] = useState(
+    String(profile.desiredWeeklyLossKg || 0.5),
+  );
   const [sex, setSex] = useState<BiologicalSex>(profile.sex);
   const [activity, setActivity] = useState<ActivityLevel>(
     profile.activityLevel,
@@ -144,12 +155,18 @@ export default function Onboarding() {
       ...profile,
       age: Number(age) || profile.age,
       heightCm: Number(height) || profile.heightCm,
+      startingWeightKg:
+        profile.startingWeightKg ?? (Number(weight) || profile.weightKg),
       weightKg: Number(weight) || profile.weightKg,
       targetWeightKg: Number(target) || profile.targetWeightKg,
+      desiredWeeklyLossKg:
+        direction === "maintain"
+          ? 0
+          : Math.max(0.1, Number(weeklyChange) || profile.desiredWeeklyLossKg),
       sex,
       activityLevel: activity,
     }),
-    [profile, age, height, weight, target, sex, activity],
+    [profile, age, height, weight, target, weeklyChange, direction, sex, activity],
   );
   const desired = useMemo(() => {
     const ids = new Set<string>();
@@ -171,7 +188,10 @@ export default function Onboarding() {
       ].forEach((id) => ids.add(id));
     if (goals.includes("nutrition"))
       ["food", "water"].forEach((id) => ids.add(id));
-    if (goals.includes("health")) healthChoices.forEach((id) => ids.add(id));
+    if (goals.includes("health"))
+      HEALTH.filter((choice) => healthChoices.includes(choice.id)).forEach(
+        (choice) => choice.metrics.forEach((id) => ids.add(id)),
+      );
     if (goals.includes("learning")) ids.add("reading");
     return ids;
   }, [goals, healthChoices]);
@@ -212,13 +232,19 @@ export default function Onboarding() {
   const grouped = useMemo(
     () =>
       Object.entries(
-        proposed.reduce<Record<string, typeof proposed>>((all, item) => {
+        proposed
+          .filter(
+            (item) =>
+              !healthChoices.includes("blood_pressure") ||
+              !["blood_pressure_diastolic", "pulse"].includes(item.templateId),
+          )
+          .reduce<Record<string, typeof proposed>>((all, item) => {
           const key = item.category ?? "other";
           (all[key] ??= []).push(item);
           return all;
-        }, {}),
+          }, {}),
       ),
-    [proposed],
+    [healthChoices, proposed],
   );
   useEffect(() => {
     if (step === 2 && !initialized.current) {
@@ -488,6 +514,23 @@ export default function Onboarding() {
                         ),
                       )}
                     </View>
+                    {direction !== "maintain" ? (
+                      <>
+                        <Text style={[styles.label, { color: colors.ink }]}>
+                          Desired {direction === "gain" ? "gain" : "loss"} per week
+                        </Text>
+                        <View style={styles.wrap}>
+                          {[0.25, 0.5, 0.75, 1].map((rate) => (
+                            <Chip
+                              key={rate}
+                              label={`${rate} kg`}
+                              selected={Number(weeklyChange) === rate}
+                              onPress={() => setWeeklyChange(String(rate))}
+                            />
+                          ))}
+                        </View>
+                      </>
+                    ) : null}
                   </>
                 ) : (
                   <Empty
@@ -511,11 +554,11 @@ export default function Onboarding() {
                       Health readings
                     </Text>
                     <View style={styles.choiceList}>
-                      {HEALTH.map(([id, label]) => (
+                      {HEALTH.map((choice) => (
                         <Pressable
-                          key={id}
+                          key={choice.id}
                           onPress={() =>
-                            toggle(id, setHealthChoices, healthChoices)
+                            toggle(choice.id, setHealthChoices, healthChoices)
                           }
                           style={[
                             styles.choice,
@@ -528,17 +571,17 @@ export default function Onboarding() {
                           <Text
                             style={[styles.goalTitle, { color: colors.ink }]}
                           >
-                            {label}
+                            {choice.label}
                           </Text>
                           <Ionicons
                             name={
-                              healthChoices.includes(id)
+                              healthChoices.includes(choice.id)
                                 ? "checkbox"
                                 : "square-outline"
                             }
                             size={21}
                             color={
-                              healthChoices.includes(id) ? accent : colors.faint
+                              healthChoices.includes(choice.id) ? accent : colors.faint
                             }
                           />
                         </Pressable>

@@ -26,6 +26,7 @@ const pages: {
   { id: "group", label: "Leaderboard", icon: "people-outline" },
   { id: "insights", label: "Progress", icon: "stats-chart-outline" },
   { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
+  { id: "gym", label: "Gym", icon: "barbell-outline" },
 ];
 export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
@@ -35,9 +36,11 @@ export default function DisplaySettings() {
     (page) =>
       (page.id !== "group" || state.settings.showLeaderboard) &&
       (page.id !== "chat" || state.settings.showChat),
+  ).filter(
+    (page) => page.id !== "gym" || state.settings.showGym,
   );
   function toggle(
-    key: "compactMode" | "darkMode" | "showLeaderboard" | "showChat",
+    key: "compactMode" | "darkMode" | "showLeaderboard" | "showChat" | "showGym",
     value: boolean,
   ) {
     const changes: Partial<typeof state.settings> = { [key]: value };
@@ -46,6 +49,7 @@ export default function DisplaySettings() {
       ((key === "showLeaderboard" &&
         state.settings.defaultLandingPage === "group") ||
         (key === "showChat" && state.settings.defaultLandingPage === "chat"))
+        || (key === "showGym" && state.settings.defaultLandingPage === "gym")
     )
       changes.defaultLandingPage = "index";
     updateSettings(changes);
@@ -91,6 +95,12 @@ export default function DisplaySettings() {
             "Hide it for solo tracking",
             "chatbubbles-outline",
           ],
+          [
+            "showGym",
+            "Show Gym",
+            "Pin strength plans and workout logging",
+            "barbell-outline",
+          ],
         ].map(([key, title, copy, icon], index) => (
           <View
             key={key}
@@ -122,7 +132,8 @@ export default function DisplaySettings() {
                     | "compactMode"
                     | "darkMode"
                     | "showLeaderboard"
-                    | "showChat",
+                    | "showChat"
+                    | "showGym",
                   value,
                 )
               }

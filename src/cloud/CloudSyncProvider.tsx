@@ -537,8 +537,64 @@ async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
     .select("payload, revision, updated_at, device_id, schema_version")
     .eq("user_id", userId)
     .maybeSingle();
-  if (error) throw error;
+  if (error) {
+    if (!/revision|device_id|schema_version|schema cache|column/i.test(errorText(error)))
+      throw error;
+    const legacy = await supabase
+      .from("user_snapshots")
+      .select("payload, updated_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (legacy.error) throw legacy.error;
+    return legacy.data
+      ? {
+          payload: legacy.data.payload as AppState,
+          revision: 0,
+          updated_at: legacy.data.updated_at,
+          device_id: null,
+          schema_version: Number(
+            (legacy.data.payload as AppState | undefined)?.version ?? 1,
+          ),
+        }
+      : null;
+  }
   return data as SnapshotRow | null;
+}
+
+async function writeSnapshot(
+  userId: string,
+  payload: AppState,
+  expectedRevision: number,
+  deviceId: string,
+) {
+  if (!supabase) throw new Error("Cloud is not configured.");
+  const current = await supabase.rpc("sync_user_snapshot", {
+    expected_revision: expectedRevision,
+    new_payload: payload,
+    client_device_id: deviceId,
+    client_schema_version: payload.version,
+  });
+  if (!current.error) {
+    const result = Array.isArray(current.data) ? current.data[0] : current.data;
+    return {
+      revision: Number(result?.revision ?? expectedRevision + 1),
+      updatedAt: result?.updated_at ?? new Date().toISOString(),
+    };
+  }
+  if (
+    !/sync_user_snapshot|schema cache|function.*does not exist|revision|schema_version|device_id/i.test(
+      errorText(current.error),
+    )
+  )
+    throw current.error;
+  const updatedAt = new Date().toISOString();
+  const legacy = await supabase.from("user_snapshots").upsert({
+    user_id: userId,
+    payload,
+    updated_at: updatedAt,
+  });
+  if (legacy.error) throw legacy.error;
+  return { revision: 0, updatedAt };
 }
 
 function errorText(error: unknown) {
@@ -620,8 +676,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       revisionRef.current = remote.revision;
       const bound = bindStateToAccount(remote.payload, auth.user);
       let resolved = await resolvePrivateMedia(bound);
-      if (isCloudGroupId(resolved.group.id))
-        resolved = await loadCloudWorkspace(resolved, resolved.group.id);
+      if (isCloudGroupId(resolved.group.id)) {
+        try {
+          resolved = await loadCloudWorkspace(resolved, resolved.group.id);
+        } catch (groupError) {
+          setErrorMessage(
+            `Account synced; group refresh will retry: ${errorText(groupError)}`,
+          );
+        }
+      }
       hashRef.current = stableHash(resolved);
       workspaceHashRef.current = workspaceHash(resolved);
       replaceState(resolved);
@@ -655,6 +718,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = candidate;
         }
         const nextWorkspaceHash = workspaceHash(candidate);
+        let workspaceSynced = true;
+        let workspaceWarning: string | null = null;
         if (
           isCloudGroupId(candidate.group.id) &&
           nextWorkspaceHash !== workspaceHashRef.current
@@ -663,29 +728,28 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           try {
             await pushCloudWorkspace(candidate);
           } catch (error) {
-            throw new Error(
-              `Group data could not sync: ${errorText(error) || "unknown server error"}`,
-            );
+            // Group tables and the private account snapshot are independent.
+            // Preserve settings and imported health data even when one shared
+            // table is temporarily unavailable, then retry group data later.
+            workspaceSynced = false;
+            workspaceWarning = `Group data will retry: ${errorText(error) || "unknown server error"}`;
           }
         }
         const payload = snapshotPayload(candidate);
-        const { data, error } = await supabase.rpc("sync_user_snapshot", {
-          expected_revision: revisionRef.current,
-          new_payload: payload,
-          client_device_id: deviceId,
-          client_schema_version: payload.version,
-        });
-        if (error) throw error;
-        const result = Array.isArray(data) ? data[0] : data;
-        revisionRef.current = Number(
-          result?.revision ?? revisionRef.current + 1,
+        const result = await writeSnapshot(
+          auth.user!.id,
+          payload,
+          revisionRef.current,
+          deviceId,
         );
-        const syncedAt = result?.updated_at ?? new Date().toISOString();
+        revisionRef.current = result.revision;
+        const syncedAt = result.updatedAt;
         hashRef.current = stableHash(candidate);
-        workspaceHashRef.current = nextWorkspaceHash;
+        if (workspaceSynced) workspaceHashRef.current = nextWorkspaceHash;
         setLastSyncedAt(syncedAt);
-        setPendingChanges(false);
+        setPendingChanges(!workspaceSynced);
         setStatus("synced");
+        setErrorMessage(workspaceWarning);
         await supabase.rpc("register_account_device", {
           client_device_id: deviceId,
           client_platform: Platform.OS,
@@ -748,7 +812,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             isDemoBoundState(remote.payload);
           const bound = bindStateToAccount(remote.payload, user);
           let resolved = await resolvePrivateMedia(bound);
-          const existingGroups = await loadCloudGroupShells();
+          let existingGroups: Group[] = [];
+          try {
+            existingGroups = await loadCloudGroupShells();
+          } catch (groupError) {
+            setErrorMessage(
+              `Account restored; group refresh will retry: ${errorText(groupError)}`,
+            );
+          }
           const targetGroup =
             existingGroups.find((group) => group.id === resolved.group.id) ??
             existingGroups[0];
@@ -768,7 +839,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           }
         } else {
           let bound = bindStateToAccount(stateRef.current, user);
-          const existingGroups = await loadCloudGroupShells();
+          let existingGroups: Group[] = [];
+          try {
+            existingGroups = await loadCloudGroupShells();
+          } catch (groupError) {
+            setErrorMessage(
+              `Account ready; group refresh will retry: ${errorText(groupError)}`,
+            );
+          }
           if (existingGroups.length)
             bound = await loadCloudWorkspace(
               { ...bound, groups: existingGroups },

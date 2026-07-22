@@ -8,6 +8,7 @@ import { supabase } from '@/src/lib/supabase';
 import { AppState, NotificationSettings } from '@/src/types';
 import { cycleForecast } from '@/src/domain/cycle';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
+import { isMetricTrackedOnDate, scheduledGoalReached } from '@/src/domain/metrics';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -52,6 +53,58 @@ export async function disablePushNotifications(userId: string) {
 }
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';
+const GOAL_IDS = 'metric-rally-goal-reminder-ids-v1';
+
+function reminderTime(state: AppState, configured: string) {
+  if (!state.settings.notifications.quietHoursEnabled) return configured;
+  const start = state.settings.notifications.quietHoursStart;
+  const end = state.settings.notifications.quietHoursEnd;
+  const quiet = start <= end
+    ? configured >= start && configured < end
+    : configured >= start || configured < end;
+  return quiet ? end : configured;
+}
+
+export async function syncGoalNotifications(state: AppState) {
+  if (Platform.OS === 'web') return;
+  const previous = JSON.parse((await AsyncStorage.getItem(GOAL_IDS)) ?? '[]') as string[];
+  await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  const settings = state.settings.notifications;
+  if (!settings.pushEnabled || !settings.reminders) {
+    await AsyncStorage.setItem(GOAL_IDS, '[]');
+    return;
+  }
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) return;
+  const now = new Date();
+  const today = dateKey(now);
+  const ids: string[] = [];
+  for (let offset = 0; offset < 8 && ids.length < 48; offset += 1) {
+    const localDate = dateWithOffsetFrom(today, offset);
+    for (const metric of state.metrics) {
+      if (
+        !metric.reminder?.enabled ||
+        metric.goalEnabled === false ||
+        !isMetricTrackedOnDate(state, metric, localDate) ||
+        (offset === 0 && scheduledGoalReached(state, metric, state.currentUserId, localDate))
+      ) continue;
+      const time = reminderTime(state, metric.reminder.time || '19:00');
+      const trigger = new Date(`${localDate}T${time}:00`);
+      if (trigger <= now) continue;
+      ids.push(await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `${metric.name} reminder`,
+          body: `A quick check-in can keep your ${metric.name.toLowerCase()} goal on track.`,
+          data: { route: '/metric-detail', metric: metric.id },
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
+      }));
+      if (ids.length >= 48) break;
+    }
+  }
+  await AsyncStorage.setItem(GOAL_IDS, JSON.stringify(ids));
+}
+
 export async function syncCycleNotifications(state: AppState) {
   if (Platform.OS === 'web') return;
   const previous = JSON.parse((await AsyncStorage.getItem(CYCLE_IDS)) ?? '[]') as string[];

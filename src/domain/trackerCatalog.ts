@@ -43,6 +43,7 @@ export function trackerPresets(state: AppState): TrackerPreset[] {
         preset.goalEnabled = false;
         preset.goalRange = undefined;
       }
+      if (item.id === 'blood_pressure_systolic') preset.name = 'Blood pressure';
       return preset;
     });
 }

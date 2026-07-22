@@ -13,7 +13,8 @@ import { AppState, HealthSyncSettings, SyncMode } from '@/src/types';
 const TASK_NAME = 'paceboard-health-background-sync';
 
 function startDate(lastSyncedAt: string | null) {
-  const date = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
+  let date = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
+  if (Number.isNaN(date.getTime())) date = new Date();
   date.setHours(0, 0, 0, 0);
   date.setDate(date.getDate() - (lastSyncedAt ? 2 : 29));
   return date;
@@ -21,22 +22,32 @@ function startDate(lastSyncedAt: string | null) {
 
 TaskManager.defineTask(TASK_NAME, async () => {
   try {
-    const [stateJson, statusJson] = await Promise.all([
-      AsyncStorage.getItem(APP_STORAGE_KEY),
-      AsyncStorage.getItem(HEALTH_STATUS_STORAGE_KEY),
-    ]);
+    const stateJson = await AsyncStorage.getItem(APP_STORAGE_KEY);
     if (!stateJson || !nativeHealthAdapter.provider) return BackgroundTask.BackgroundTaskResult.Success;
     const state = JSON.parse(stateJson) as AppState;
+    const statusJson = await AsyncStorage.getItem(
+      `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
+    );
     if (!state.settings.healthSync.enabled || state.settings.syncMode === 'manual') return BackgroundTask.BackgroundTaskResult.Success;
-    const status = statusJson ? JSON.parse(statusJson) as PersistedHealthStatus : { lastSyncedAt: null };
+    let status: PersistedHealthStatus = { lastSyncedAt: null };
+    if (statusJson) {
+      try { status = JSON.parse(statusJson) as PersistedHealthStatus; }
+      catch { status = { lastSyncedAt: null }; }
+    }
     const dataTypes = enabledHealthDataTypes(state.settings.healthSync.dataTypes);
     if (!dataTypes.length) return BackgroundTask.BackgroundTaskResult.Success;
     const from = startDate(status.lastSyncedAt);
     const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
-    const entries = mapHealthRecordsToEntries(records, state.currentUserId, 'group');
+    const entries = mapHealthRecordsToEntries(
+      records,
+      state.currentUserId,
+      'group',
+      state.metrics,
+      state.settings.energyProfile.weightKg,
+    );
     const nextState: AppState = {
       ...state,
-      entries: mergeHealthEntries(state, entries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes), dateKey(from)),
+      entries: mergeHealthEntries(state, entries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
       lastSavedAt: new Date().toISOString(),
     };
     const nextStatus: PersistedHealthStatus = {
@@ -47,7 +58,7 @@ TaskManager.defineTask(TASK_NAME, async () => {
     };
     await Promise.all([
       AsyncStorage.setItem(APP_STORAGE_KEY, JSON.stringify(nextState)),
-      AsyncStorage.setItem(HEALTH_STATUS_STORAGE_KEY, JSON.stringify(nextStatus)),
+      AsyncStorage.setItem(`${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`, JSON.stringify(nextStatus)),
     ]);
     return BackgroundTask.BackgroundTaskResult.Success;
   } catch (error) {
@@ -57,7 +68,9 @@ TaskManager.defineTask(TASK_NAME, async () => {
       importedCount: 0,
       error: error instanceof Error ? error.message : 'Background health sync failed.',
     };
-    await AsyncStorage.setItem(HEALTH_STATUS_STORAGE_KEY, JSON.stringify(failed)).catch(() => undefined);
+    const stateJson = await AsyncStorage.getItem(APP_STORAGE_KEY).catch(() => null);
+    const userId = stateJson ? (JSON.parse(stateJson) as AppState).currentUserId : "unknown";
+    await AsyncStorage.setItem(`${HEALTH_STATUS_STORAGE_KEY}:${userId}`, JSON.stringify(failed)).catch(() => undefined);
     return BackgroundTask.BackgroundTaskResult.Failed;
   }
 });
@@ -72,4 +85,3 @@ export async function configureBackgroundHealthSync(settings: HealthSyncSettings
   if (registered) await BackgroundTask.unregisterTaskAsync(TASK_NAME);
   await BackgroundTask.registerTaskAsync(TASK_NAME, { minimumInterval });
 }
-

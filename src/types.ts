@@ -73,6 +73,21 @@ export type MetricGoal = {
   target: number;
 };
 
+export type GoalSchedule = {
+  mode:
+    | "daily"
+    | "selected_days"
+    | "every_other_day"
+    | "weekly_min"
+    | "monthly_min";
+  /** JavaScript weekday numbers: Sunday 0 through Saturday 6. */
+  daysOfWeek?: number[];
+  minimumCompletions?: number;
+  anchorDate?: string;
+};
+
+export type GoalReminder = { enabled: boolean; time: string };
+
 export type MetricDefinition = {
   id: string;
   name: string;
@@ -100,6 +115,8 @@ export type MetricDefinition = {
   order: number;
   /** Goals and completion scoring apply from this local date forward. */
   activeFrom: string;
+  goalSchedule?: GoalSchedule;
+  reminder?: GoalReminder;
 };
 
 export type Member = {
@@ -189,7 +206,42 @@ export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
 export type BanterTone = "supportive" | "friendly" | "ruthless" | "off";
 export type FoodGoalMode = "activity_adjusted" | "fixed";
 export type WeightDirection = "lose" | "maintain" | "gain";
-export type LandingPage = "index" | "log" | "insights" | "group" | "chat";
+export type LandingPage = "index" | "log" | "insights" | "group" | "chat" | "gym";
+
+export type GymSet = {
+  id: string;
+  reps: number;
+  weightKg: number;
+  completed: boolean;
+};
+export type GymExercise = { id: string; name: string; sets: GymSet[] };
+export type GymPlanExercise = {
+  id: string;
+  name: string;
+  targetSets: number;
+  targetReps: number;
+  startingWeightKg?: number;
+};
+export type GymPlan = {
+  id: string;
+  userId: string;
+  name: string;
+  exercises: GymPlanExercise[];
+  createdAt: string;
+  updatedAt: string;
+};
+export type GymSession = {
+  id: string;
+  userId: string;
+  planId?: string;
+  name: string;
+  localDate: string;
+  recordedAt: string;
+  durationMinutes: number;
+  calories?: number;
+  exercises: GymExercise[];
+  visibility: Visibility;
+};
 
 export type HealthSyncSettings = {
   enabled: boolean;
@@ -202,6 +254,8 @@ export type EnergyProfile = {
   age: number;
   sex: BiologicalSex;
   heightCm: number;
+  /** Baseline retained for total progress even as current weight updates. */
+  startingWeightKg?: number;
   weightKg: number;
   targetWeightKg: number;
   activityLevel: ActivityLevel;
@@ -232,6 +286,8 @@ export type UserSettings = {
   darkMode: boolean;
   showLeaderboard: boolean;
   showChat: boolean;
+  /** Optional dedicated strength-training tab. */
+  showGym?: boolean;
   onboardingComplete: boolean;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
@@ -309,6 +365,8 @@ export type AppState = {
   messages: ChatMessage[];
   /** Value-free status rows shared when the underlying entry is not exact-value visible. */
   dailyMetricStatuses: DailyMetricStatus[];
+  gymPlans?: GymPlan[];
+  gymSessions?: GymSession[];
   settings: UserSettings;
   /** Preserves which goals counted on each historical date. */
   trackedGoalPeriods: Record<string, TrackedGoalPeriod[]>;
@@ -349,8 +407,11 @@ export type NewMetric = Pick<
   | "healthMapping"
   | "stepFallback"
   | "manualEntry"
+  | "goalSchedule"
+  | "reminder"
 > & {
   formula?: string;
+  activeFrom?: string;
   /** Stable id used when adding a built-in preset after it was previously removed. */
   templateId?: string;
 };

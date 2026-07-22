@@ -33,6 +33,8 @@ import {
   EnergyProfile,
   EntryDetails,
   Group,
+  GymPlan,
+  GymSession,
   MetricDefinition,
   MetricEntry,
   NewMetric,
@@ -120,6 +122,10 @@ type Action =
   | { type: "memberAvatar"; memberId: string; avatarUri?: string }
   | { type: "memberName"; memberId: string; name: string }
   | { type: "memberRole"; memberId: string; role: "admin" | "member" }
+  | { type: "saveGymPlan"; plan: GymPlan }
+  | { type: "deleteGymPlan"; planId: string }
+  | { type: "saveGymSession"; session: GymSession }
+  | { type: "deleteGymSession"; sessionId: string }
   | {
       type: "importHealth";
       entries: MetricEntry[];
@@ -153,6 +159,35 @@ function slugify(name: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
+  const deficitTarget = recommendedDailyDeficit(energyProfile);
+  const direction = state.settings.weightDirection ?? "lose";
+  const foodTarget = recommendedDailyIntakeForDirection(energyProfile, direction);
+  return withPersonalMetrics(
+    {
+      ...state,
+      settings: { ...state.settings, energyProfile },
+      energyProfiles: {
+        ...state.energyProfiles,
+        [state.currentUserId]: energyProfile,
+      },
+    },
+    state.metrics.map((metric) =>
+      metric.id === "deficit"
+        ? direction === "lose"
+          ? { ...metric, name: "Daily deficit", formula: "bmr + daily_activity + exercise - food", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
+          : direction === "gain"
+            ? { ...metric, name: "Daily surplus", formula: "food - bmr - daily_activity - exercise", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
+            : { ...metric, name: "Energy balance", formula: "food - bmr - daily_activity - exercise", goal: { kind: "exact" as const, target: 0 }, goalRange: { min: -150, max: 150 } }
+        : metric.id === "food"
+          ? { ...metric, goal: { kind: "at_most" as const, target: foodTarget } }
+          : metric.id === "weight"
+            ? { ...metric, goal: { kind: direction === "gain" ? "at_least" as const : "at_most" as const, target: energyProfile.targetWeightKg } }
+            : metric,
+    ),
+  );
 }
 
 function withPersonalMetrics(
@@ -238,6 +273,7 @@ function reducer(state: AppState, action: Action): AppState {
       const metric = state.metrics.find(
         (candidate) => candidate.id === action.metricId,
       );
+      if (metric?.id === "steps" || metric?.manualEntry === false) return state;
       const previousValue = metric
         ? safeMetricValue(state, metric, state.currentUserId, localDate)
         : 0;
@@ -252,7 +288,7 @@ function reducer(state: AppState, action: Action): AppState {
                 ),
             )
           : state.entries;
-      const nextState: AppState = {
+      let nextState: AppState = {
         ...state,
         entries: [
           ...cleanedEntries,
@@ -272,6 +308,27 @@ function reducer(state: AppState, action: Action): AppState {
           },
         ],
       };
+      if (
+        metric?.id === "weight" &&
+        typeof action.value === "number" &&
+        Number.isFinite(action.value) &&
+        localDate >=
+          (state.entries
+            .filter(
+              (entry) =>
+                entry.userId === state.currentUserId &&
+                entry.metricId === "weight",
+            )
+            .map((entry) => entry.localDate)
+            .sort()
+            .at(-1) ?? "0000-00-00")
+      ) {
+        const energyProfile = {
+          ...state.settings.energyProfile,
+          weightKg: action.value,
+        };
+        nextState = withEnergyProfile(nextState, energyProfile);
+      }
       if (
         metric &&
         goalCelebrationTiming(metric) === "immediate" &&
@@ -331,7 +388,7 @@ function reducer(state: AppState, action: Action): AppState {
         scoreWeight: 0,
         sections: { today: true, group: true, insights: true },
         order: state.metrics.length,
-        activeFrom: dateKey(),
+        activeFrom: action.metric.activeFrom ?? dateKey(),
       };
       delete (metric as MetricDefinition & { templateId?: string }).templateId;
       return withPersonalMetrics(state, [...state.metrics, metric]);
@@ -345,11 +402,12 @@ function reducer(state: AppState, action: Action): AppState {
                 ...metric,
                 ...action.changes,
                 activeFrom:
-                  action.changes.scoreWeight !== undefined &&
+                  action.changes.activeFrom ??
+                  (action.changes.scoreWeight !== undefined &&
                   action.changes.scoreWeight > 0 &&
                   metric.scoreWeight <= 0
                     ? dateKey()
-                    : metric.activeFrom,
+                    : metric.activeFrom),
               }
             : metric,
         ),
@@ -440,12 +498,16 @@ function reducer(state: AppState, action: Action): AppState {
           ...state,
           metrics: metrics.map((candidate) =>
             candidate.id === metric.id
-              ? {
-                  ...candidate,
-                  activeFrom:
-                    action.historyMode === "history"
-                      ? historyStart
-                      : candidate.activeFrom,
+                ? {
+                    ...candidate,
+                    activeFrom:
+                      action.historyMode === "history"
+                        ? historyStart
+                        : candidate.activeFrom,
+                    goal:
+                      candidate.id === "weekly_deficit_balance"
+                        ? { kind: "at_least" as const, target: 0 }
+                        : candidate.goal,
                   sections: { ...candidate.sections, today: true },
                 }
               : candidate,
@@ -541,7 +603,7 @@ function reducer(state: AppState, action: Action): AppState {
         ...action.metric,
         id,
         order: existing.length,
-        activeFrom: dateKey(),
+        activeFrom: action.metric.activeFrom ?? dateKey(),
         scoreWeight:
           action.metric.dataType === "text" ||
           action.metric.dataType === "photo"
@@ -617,6 +679,34 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "selectGroupMetric":
       return { ...state, selectedGroupMetricId: action.metricId };
+    case "saveGymPlan":
+      return {
+        ...state,
+        gymPlans: [
+          action.plan,
+          ...(state.gymPlans ?? []).filter((item) => item.id !== action.plan.id),
+        ],
+      };
+    case "deleteGymPlan":
+      return {
+        ...state,
+        gymPlans: (state.gymPlans ?? []).filter((item) => item.id !== action.planId),
+      };
+    case "saveGymSession":
+      return {
+        ...state,
+        gymSessions: [
+          action.session,
+          ...(state.gymSessions ?? []).filter((item) => item.id !== action.session.id),
+        ],
+      };
+    case "deleteGymSession":
+      return {
+        ...state,
+        gymSessions: (state.gymSessions ?? []).filter(
+          (item) => item.id !== action.sessionId,
+        ),
+      };
     case "addPhoto": {
       const photo: PhotoUpdate = {
         id: uniqueId("photo"),
@@ -656,66 +746,18 @@ function reducer(state: AppState, action: Action): AppState {
           },
         ],
       };
-    case "settings":
-      return { ...state, settings: { ...state.settings, ...action.changes } };
+    case "settings": {
+      const next = { ...state, settings: { ...state.settings, ...action.changes } };
+      return action.changes.weightDirection
+        ? withEnergyProfile(next, next.settings.energyProfile)
+        : next;
+    }
     case "energyProfile": {
       const energyProfile = {
         ...state.settings.energyProfile,
         ...action.changes,
       };
-      const deficitTarget = recommendedDailyDeficit(energyProfile);
-      const direction = state.settings.weightDirection ?? "lose";
-      const foodTarget = recommendedDailyIntakeForDirection(
-        energyProfile,
-        direction,
-      );
-      return withPersonalMetrics(
-        {
-          ...state,
-          settings: { ...state.settings, energyProfile },
-          energyProfiles: {
-            ...state.energyProfiles,
-            [state.currentUserId]: energyProfile,
-          },
-        },
-        state.metrics.map((metric) =>
-          metric.id === "deficit"
-            ? direction === "lose"
-              ? {
-                  ...metric,
-                  name: "Daily deficit",
-                  formula: "bmr + daily_activity + exercise - food",
-                  goal: { kind: "at_least", target: deficitTarget },
-                  goalRange: undefined,
-                }
-              : direction === "gain"
-                ? {
-                    ...metric,
-                    name: "Daily surplus",
-                    formula: "food - bmr - daily_activity - exercise",
-                    goal: { kind: "at_least", target: deficitTarget },
-                    goalRange: undefined,
-                  }
-                : {
-                    ...metric,
-                    name: "Energy balance",
-                    formula: "food - bmr - daily_activity - exercise",
-                    goal: { kind: "exact", target: 0 },
-                    goalRange: { min: -150, max: 150 },
-                  }
-            : metric.id === "food"
-              ? { ...metric, goal: { kind: "at_most", target: foodTarget } }
-              : metric.id === "weight"
-                ? {
-                    ...metric,
-                    goal: {
-                      kind: direction === "gain" ? "at_least" : "at_most",
-                      target: energyProfile.targetWeightKg,
-                    },
-                  }
-                : metric,
-        ),
-      );
+      return withEnergyProfile(state, energyProfile);
     }
     case "createGroup": {
       const currentMember = state.group.members.find(
@@ -956,7 +998,36 @@ function reducer(state: AppState, action: Action): AppState {
       );
       const byId = new Map(preserved.map((entry) => [entry.id, entry]));
       for (const entry of action.entries) byId.set(entry.id, entry);
-      return { ...state, entries: [...byId.values()] };
+      const latestWeight = action.entries
+        .filter(
+          (entry) =>
+            entry.metricId === "weight" &&
+            entry.userId === state.currentUserId &&
+            Number(entry.value) > 0,
+        )
+        .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+      const existingLatestWeight = state.entries
+        .filter(
+          (entry) =>
+            entry.metricId === "weight" &&
+            entry.userId === state.currentUserId &&
+            Number(entry.value) > 0,
+        )
+        .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+      if (
+        !latestWeight ||
+        (existingLatestWeight &&
+          latestWeight.recordedAt < existingLatestWeight.recordedAt)
+      )
+        return { ...state, entries: [...byId.values()] };
+      const energyProfile = {
+        ...state.settings.energyProfile,
+        weightKg: Number(latestWeight.value),
+      };
+      return withEnergyProfile(
+        { ...state, entries: [...byId.values()] },
+        energyProfile,
+      );
     }
     case "reset":
       return createInitialState();
@@ -1033,6 +1104,10 @@ type AppContextValue = {
   updateMemberAvatar: (memberId: string, avatarUri?: string) => void;
   updateMemberName: (memberId: string, name: string) => void;
   setMemberRole: (memberId: string, role: "admin" | "member") => void;
+  saveGymPlan: (plan: GymPlan) => void;
+  deleteGymPlan: (planId: string) => void;
+  saveGymSession: (session: GymSession) => void;
+  deleteGymSession: (sessionId: string) => void;
   importHealthEntries: (
     entries: MetricEntry[],
     provider: NonNullable<MetricEntry["sourceProvider"]>,
@@ -1400,6 +1475,11 @@ export function AppProvider({ children }: PropsWithChildren) {
         dispatch({ type: "reorderMetric", metricId, targetIndex }),
       selectGroupMetric: (metricId) =>
         dispatch({ type: "selectGroupMetric", metricId }),
+      saveGymPlan: (plan) => dispatch({ type: "saveGymPlan", plan }),
+      deleteGymPlan: (planId) => dispatch({ type: "deleteGymPlan", planId }),
+      saveGymSession: (session) => dispatch({ type: "saveGymSession", session }),
+      deleteGymSession: (sessionId) =>
+        dispatch({ type: "deleteGymSession", sessionId }),
       addPhoto: (uri, caption, visibility, localDate, capturedAt) =>
         dispatch({
           type: "addPhoto",

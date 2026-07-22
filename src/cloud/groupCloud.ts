@@ -5,6 +5,7 @@ import {
   formatMetricValue,
   goalProgress,
   goalReached,
+  metricApplicableOnDate,
   rankedMembers,
   safeMetricValue,
 } from "@/src/domain/metrics";
@@ -82,7 +83,7 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     category: configuration.category ?? "other",
     healthMapping: configuration.healthMapping,
     stepFallback: configuration.stepFallback,
-    manualEntry: configuration.manualEntry ?? true,
+    manualEntry: configuration.manualEntry ?? row.slug !== "steps",
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,
@@ -94,6 +95,8 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     order: Number(configuration.order ?? 0),
     activeFrom:
       configuration.activeFrom ?? new Date().toISOString().slice(0, 10),
+    goalSchedule: configuration.goalSchedule,
+    reminder: configuration.reminder,
   };
 }
 
@@ -123,6 +126,8 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       sections: metric.sections,
       order: metric.order,
       activeFrom: metric.activeFrom,
+      goalSchedule: metric.goalSchedule,
+      reminder: metric.reminder,
     },
   };
 }
@@ -229,11 +234,22 @@ async function groupMembers(groupIds: string[]) {
 
 export async function loadCloudGroupShells(): Promise<Group[]> {
   const client = requireCloud();
-  const { data: memberships, error } = await client
+  const currentMemberships = await client
     .from("group_members")
-    .select("group_id, role");
-  if (error) throw error;
-  const groupIds = (memberships ?? []).map((row) => row.group_id);
+    .select("group_id, role, status");
+  let memberships = currentMemberships.data;
+  if (currentMemberships.error) {
+    if (!/status|column|schema cache/i.test(currentMemberships.error.message))
+      throw currentMemberships.error;
+    const legacy = await client.from("group_members").select("group_id, role");
+    if (legacy.error) throw legacy.error;
+    memberships = (legacy.data ?? []).map((row) => ({ ...row, status: "active" }));
+  }
+  // Pending requests are not workspaces yet. Including them here caused a
+  // failed protected-table load to replace the user's valid active group.
+  const groupIds = (memberships ?? [])
+    .filter((row) => row.status !== "pending")
+    .map((row) => row.group_id);
   if (!groupIds.length) return [];
   const [
     { data: rows, error: groupError },
@@ -296,7 +312,12 @@ export async function createCloudGroup(
       group_theme_color: "#176B4D",
     },
   );
-  if (!atomicError && atomicGroupId) return atomicGroupId as string;
+  if (!atomicError && atomicGroupId) {
+    // The RPC creates membership atomically; this follow-up writes the complete
+    // versioned configuration (including schedules, reminders and mappings).
+    await upsertMetrics(atomicGroupId as string, metrics);
+    return atomicGroupId as string;
+  }
   if (
     atomicError &&
     !/create_group_with_metrics|schema cache|function.*does not exist/i.test(
@@ -406,7 +427,8 @@ export async function leaveCloudGroup(groupId: string) {
   const { error } = await client
     .from("group_members")
     .delete()
-    .eq("group_id", groupId);
+    .eq("group_id", groupId)
+    .eq("user_id", userData.user.id);
   if (error) throw error;
 }
 
@@ -492,7 +514,9 @@ export async function loadCloudWorkspace(
     ]);
   if (entryResult.error) throw entryResult.error;
   if (statusResult.error) throw statusResult.error;
-  if (messageResult.error) throw messageResult.error;
+  // A stale chat schema must not make the entire group disappear. The local
+  // snapshot remains usable while the latest migration is being applied.
+  const messageRows = messageResult.error ? [] : (messageResult.data ?? []);
   if (photoResult.error) throw photoResult.error;
   const mediaIds = (photoResult.data ?? []).map(
     (photo) => photo.media_asset_id,
@@ -509,7 +533,7 @@ export async function loadCloudWorkspace(
     ...(entryResult.data ?? [])
       .map((entry) => entry.image_path)
       .filter(Boolean),
-    ...(messageResult.data ?? [])
+    ...messageRows
       .map((message) => message.image_path)
       .filter(Boolean),
     ...(media ?? []).map((item) => item.storage_path).filter(Boolean),
@@ -546,14 +570,14 @@ export async function loadCloudWorkspace(
     goalReached: status.goal_reached,
     scoreContribution: Number(status.score_contribution ?? 0),
   }));
-  const remoteMessages: ChatMessage[] = (messageResult.data ?? []).map(
+  const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({
       id: message.client_generated_id ?? message.id,
       senderId: message.sender_id ?? "system",
       text: message.content,
       createdAt: message.created_at,
       kind: message.kind,
-      conversationId: message.conversation_id,
+      conversationId: message.conversation_id ?? `group:${groupId}`,
       recipientId: message.recipient_id ?? undefined,
       imageStoragePath: message.image_path ?? undefined,
       imageUri: message.image_path
@@ -577,7 +601,14 @@ export async function loadCloudWorkspace(
           )),
     )
     .forEach((message) => {
-      if (!messagesById.has(message.id)) messagesById.set(message.id, message);
+      const alreadyRemote = remoteMessages.some(
+        (remote) =>
+          remote.senderId === message.senderId &&
+          remote.text === message.text &&
+          remote.createdAt === message.createdAt,
+      );
+      if (!alreadyRemote && !messagesById.has(message.id))
+        messagesById.set(message.id, message);
     });
   const messages = [...messagesById.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
@@ -809,7 +840,17 @@ export async function pushCloudWorkspace(state: AppState) {
     .eq("user_id", state.currentUserId);
   const statuses = statusDates.flatMap((localDate) =>
     (state.group.metricConfiguration ?? [])
-      .filter((metric) => metric.dataType !== "text" && idBySlug.has(metric.id))
+      .filter(
+        (metric) =>
+          metric.dataType !== "text" &&
+          idBySlug.has(metric.id) &&
+          metricApplicableOnDate(
+            state,
+            metric,
+            state.currentUserId,
+            localDate,
+          ),
+      )
       .map((metric) => {
         const value = safeMetricValue(
           state,
@@ -852,22 +893,45 @@ export async function pushCloudWorkspace(state: AppState) {
   const ownedMessages = state.messages.filter(
     (message) => message.senderId === state.currentUserId,
   );
-  const { data: oldMessages, error: oldMessageError } = await client
+  const currentMessageRows = await client
     .from("messages")
     .select("client_generated_id")
     .eq("group_id", state.group.id)
     .eq("sender_id", state.currentUserId);
-  if (oldMessageError) throw oldMessageError;
-  const oldMessageIds = new Set(
-    (oldMessages ?? []).map((message) => message.client_generated_id),
-  );
-  const newMessages = ownedMessages.filter(
-    (message) => !oldMessageIds.has(message.id),
+  let legacyMessageKeys = new Set<string>();
+  let oldMessageIds = new Set<string>();
+  let legacyMessages = false;
+  if (currentMessageRows.error) {
+    if (!/client_generated_id|column|schema cache/i.test(currentMessageRows.error.message))
+      throw currentMessageRows.error;
+    legacyMessages = true;
+    const legacyRows = await client
+      .from("messages")
+      .select("content, created_at")
+      .eq("group_id", state.group.id)
+      .eq("sender_id", state.currentUserId);
+    if (legacyRows.error) throw legacyRows.error;
+    legacyMessageKeys = new Set(
+      (legacyRows.data ?? []).map(
+        (message) => `${message.created_at}|${message.content}`,
+      ),
+    );
+  } else {
+    oldMessageIds = new Set(
+      (currentMessageRows.data ?? []).map(
+        (message) => message.client_generated_id,
+      ),
+    );
+  }
+  const newMessages = ownedMessages.filter((message) =>
+    legacyMessages
+      ? !legacyMessageKeys.has(`${message.createdAt}|${message.text}`)
+      : !oldMessageIds.has(message.id),
   );
   // Chat is append-preserving. Missing local rows may simply be an older or
   // partially loaded snapshot, so absence must not be interpreted as deletion.
-  if (ownedMessages.length) {
-    const { error } = await client.from("messages").upsert(
+  if (ownedMessages.length && !legacyMessages) {
+    const currentUpsert = await client.from("messages").upsert(
       ownedMessages.map((message) => ({
         group_id: state.group.id,
         sender_id: state.currentUserId,
@@ -882,7 +946,31 @@ export async function pushCloudWorkspace(state: AppState) {
       })),
       { onConflict: "sender_id,client_generated_id" },
     );
-    if (error) throw error;
+    if (currentUpsert.error) {
+      if (!/constraint|conflict|client_generated_id|column|schema cache/i.test(currentUpsert.error.message))
+        throw currentUpsert.error;
+      legacyMessages = true;
+    }
+  }
+  if (legacyMessages && newMessages.length) {
+    // Old schemas cannot enforce direct-message or image authorization. Never
+    // downgrade a private message into a group-visible legacy row.
+    const legacySafeMessages = newMessages.filter(
+      (message) => !message.recipientId && !message.imageStoragePath,
+    );
+    if (legacySafeMessages.length) {
+      const legacyInsert = await client.from("messages").insert(
+        legacySafeMessages.map((message) => ({
+          group_id: state.group.id,
+          sender_id: state.currentUserId,
+          kind: message.kind,
+          content: message.text || "Shared an update",
+          metadata: {},
+          created_at: message.createdAt,
+        })),
+      );
+      if (legacyInsert.error) throw legacyInsert.error;
+    }
   }
   await Promise.allSettled(
     newMessages.map((message) =>

@@ -18,6 +18,7 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalReached,
+  metricApplicableOnDate,
   safeMetricValue,
   weeklyDeficitBalance,
   weightProgressStats,
@@ -89,6 +90,24 @@ export default function TrackerDetail() {
         entry.localDate === day,
     )
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
+  const pairedBloodPressure = (entry: (typeof entries)[number]) => {
+    if (tracker.id !== "blood_pressure_systolic") return null;
+    const companions = state.entries.filter(
+      (candidate) =>
+        candidate.userId === entry.userId &&
+        candidate.localDate === entry.localDate &&
+        ["blood_pressure_diastolic", "pulse"].includes(candidate.metricId),
+    );
+    const nearest = (metricId: string) =>
+      companions
+        .filter((candidate) => candidate.metricId === metricId)
+        .sort(
+          (a, b) =>
+            Math.abs(new Date(a.recordedAt).getTime() - new Date(entry.recordedAt).getTime()) -
+            Math.abs(new Date(b.recordedAt).getTime() - new Date(entry.recordedAt).getTime()),
+        )[0];
+    return { diastolic: nearest("blood_pressure_diastolic"), pulse: nearest("pulse") };
+  };
   const dayPhotos =
     tracker.dataType === "photo"
       ? state.photos.filter(
@@ -105,10 +124,28 @@ export default function TrackerDetail() {
           )
           .sort((a, b) => b.localDate.localeCompare(a.localDate))[0]
       : undefined;
-  const values = dates.map((date) =>
+  const chartDates = dates.filter(
+    (date) =>
+      tracker.activeFrom <= date &&
+      metricApplicableOnDate(state, tracker, state.currentUserId, date),
+  );
+  const values = chartDates.map((date) =>
     safeMetricValue(state, tracker, state.currentUserId, date),
   );
-  const loggedDates = dates.filter((date) => hasData(state, tracker, date));
+  const diastolicTracker =
+    tracker.id === "blood_pressure_systolic"
+      ? state.metrics.find((item) => item.id === "blood_pressure_diastolic")
+      : undefined;
+  const pulseTracker =
+    tracker.id === "blood_pressure_systolic"
+      ? state.metrics.find((item) => item.id === "pulse")
+      : undefined;
+  const diastolicValues = diastolicTracker
+    ? chartDates.map((date) =>
+        safeMetricValue(state, diastolicTracker, state.currentUserId, date),
+      )
+    : undefined;
+  const loggedDates = chartDates.filter((date) => hasData(state, tracker, date));
   const average = loggedDates.length
     ? loggedDates.reduce(
         (sum, date) =>
@@ -117,8 +154,23 @@ export default function TrackerDetail() {
       ) / loggedDates.length
     : 0;
   const streaks = streakStats(state, tracker, day);
-  const applicable = tracker.id !== "deficit" || hasFood(state, day);
+  const applicable = metricApplicableOnDate(
+    state,
+    tracker,
+    state.currentUserId,
+    day,
+  );
   const current = safeMetricValue(state, tracker, state.currentUserId, day);
+  const currentDiastolic = diastolicTracker
+    ? safeMetricValue(state, diastolicTracker, state.currentUserId, day)
+    : 0;
+  const currentPulse = pulseTracker
+    ? safeMetricValue(state, pulseTracker, state.currentUserId, day)
+    : 0;
+  const averageDiastolic = diastolicValues?.length
+    ? diastolicValues.reduce((sum, value) => sum + value, 0) /
+      diastolicValues.length
+    : 0;
   const isPhoto = tracker.dataType === "photo";
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
   const latestWeightDate = state.entries
@@ -207,13 +259,17 @@ export default function TrackerDetail() {
                 ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
                 : !applicable
                   ? "Not available"
+                  : tracker.id === "blood_pressure_systolic"
+                    ? `${Math.round(dates.length === 1 ? current : average)}/${Math.round(dates.length === 1 ? currentDiastolic : averageDiastolic)} mmHg`
                   : formatMetricValue(
                       tracker,
                       dates.length === 1 ? current : average,
                     )}
             </Text>
             <Text style={[styles.sub, { color: colors.muted }]}>
-              {summaryLine(state, tracker, day, current, target, applicable)}
+              {tracker.id === "blood_pressure_systolic" && currentPulse > 0
+                ? `Pulse ${Math.round(currentPulse)} bpm`
+                : summaryLine(state, tracker, day, current, target, applicable)}
             </Text>
           </View>
           <View
@@ -229,12 +285,14 @@ export default function TrackerDetail() {
             />
           </View>
         </View>
-        {dates.length > 1 && !isPhoto ? (
+        {dates.length > 1 && values.length > 0 && !isPhoto ? (
           <Trend
             values={values}
             tracker={tracker}
             target={target}
             colors={colors}
+            secondaryValues={diastolicValues}
+            secondaryColor={diastolicTracker?.color}
           />
         ) : null}
         {!isPhoto ? (
@@ -251,7 +309,7 @@ export default function TrackerDetail() {
             />
             <Stat
               label="Goals reached"
-              value={`${dates.filter((date) => goalReached(tracker, safeMetricValue(state, tracker, state.currentUserId, date), effectiveGoalTarget(state, tracker, state.currentUserId, date))).length}/${dates.length}`}
+              value={`${chartDates.filter((date) => goalReached(tracker, safeMetricValue(state, tracker, state.currentUserId, date), effectiveGoalTarget(state, tracker, state.currentUserId, date))).length}/${chartDates.length}`}
               colors={colors}
             />
           </View>
@@ -294,6 +352,15 @@ export default function TrackerDetail() {
             value={`${weightStats.expectedWeeklyChange.toFixed(1)} kg`}
             colors={colors}
           />
+          <Stat
+            label="Expected goal date"
+            value={
+              weightStats.expectedGoalDate
+                ? friendlyDate(weightStats.expectedGoalDate)
+                : "Maintaining"
+            }
+            colors={colors}
+          />
         </Card>
       ) : null}
       {reality ? (
@@ -311,11 +378,18 @@ export default function TrackerDetail() {
                   : `Measured change and reported energy differ across ${Math.round(reality.days)} days.`}
           </Text>
           {reality.status !== "insufficient" ? (
-            <Text style={[styles.entryValue, { color: accent }]}>
-              Reported {Math.round(reality.reportedDailyDeficit)} kcal/day ·
-              scale estimate {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
-              {Math.abs(reality.weightChangeKg).toFixed(1)} kg change
-            </Text>
+            <>
+              <Text style={[styles.entryValue, { color: accent }]}>
+                Reported {Math.round(reality.reportedDailyDeficit)} kcal/day ·
+                scale estimate {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
+                {Math.abs(reality.weightChangeKg).toFixed(1)} kg change
+              </Text>
+              {reality.estimatedDays > 0 ? (
+                <Text style={[styles.sub, { color: colors.muted }]}>
+                  {reality.estimatedDays} unlogged day{reality.estimatedDays === 1 ? "" : "s"} used your logged-day average.
+                </Text>
+              ) : null}
+            </>
           ) : null}
         </Card>
       ) : null}
@@ -323,7 +397,7 @@ export default function TrackerDetail() {
         <Text style={[styles.section, { color: colors.ink }]}>
           {dates.length === 1 ? "Entries" : "Selected day"}
         </Text>
-        {tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
+        {tracker.id !== "steps" && tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
           <Pressable
             onPress={() =>
               router.navigate({
@@ -379,9 +453,14 @@ export default function TrackerDetail() {
                 </Text>
               </View>
               <Text style={[styles.entryValue, { color: tracker.color }]}>
-                {typeof entry.value === "number"
-                  ? formatMetricValue(tracker, entry.value)
-                  : String(entry.value)}
+                {(() => {
+                  const pair = pairedBloodPressure(entry);
+                  if (pair?.diastolic)
+                    return `${Math.round(Number(entry.value))}/${Math.round(Number(pair.diastolic.value))} mmHg${pair.pulse ? ` · ${Math.round(Number(pair.pulse.value))} bpm` : ""}`;
+                  return typeof entry.value === "number"
+                    ? formatMetricValue(tracker, entry.value)
+                    : String(entry.value);
+                })()}
               </Text>
             </View>
             {entry.note ? (
@@ -600,13 +679,17 @@ function Trend({
   tracker,
   target,
   colors,
+  secondaryValues,
+  secondaryColor,
 }: {
   values: number[];
   tracker: MetricDefinition;
   target: number;
   colors: ReturnType<typeof useAppColors>;
+  secondaryValues?: number[];
+  secondaryColor?: string;
 }) {
-  const max = Math.max(...values, target, 1);
+  const max = Math.max(...values, ...(secondaryValues ?? []), target, 1);
   return (
     <View style={styles.chart}>
       <View
@@ -631,6 +714,17 @@ function Trend({
               },
             ]}
           />
+          {secondaryValues ? (
+            <View
+              style={[
+                styles.bar,
+                {
+                  height: `${Math.max(3, ((secondaryValues[index] ?? 0) / max) * 100)}%`,
+                  backgroundColor: secondaryColor ?? colors.muted,
+                },
+              ]}
+            />
+          ) : null}
         </View>
       ))}
     </View>
@@ -816,9 +910,15 @@ const styles = StyleSheet.create({
     gap: 3,
     position: "relative",
   },
-  barSlot: { flex: 1, height: "100%", justifyContent: "flex-end" },
+  barSlot: {
+    flex: 1,
+    height: "100%",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 1,
+  },
   bar: {
-    width: "100%",
+    flex: 1,
     minHeight: 3,
     borderTopLeftRadius: 3,
     borderTopRightRadius: 3,

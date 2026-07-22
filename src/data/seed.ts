@@ -267,7 +267,7 @@ const BASE_METRICS: MetricDefinition[] = [
   },
   {
     id: "blood_pressure_systolic",
-    name: "Blood pressure · systolic",
+    name: "Blood pressure",
     icon: "heart-outline",
     color: "#D95852",
     unit: "mmHg",
@@ -517,7 +517,7 @@ const BASE_METRICS: MetricDefinition[] = [
     dataType: "calculated",
     aggregation: "latest",
     rankingDirection: "closest",
-    goal: { kind: "exact", target: 0 },
+    goal: { kind: "at_least", target: 0 },
     goalEnabled: false,
     scoreWeight: 0,
     defaultVisibility: "group",
@@ -1158,6 +1158,7 @@ export function createInitialState(): AppState {
       darkMode: false,
       showLeaderboard: true,
       showChat: true,
+      showGym: false,
       onboardingComplete: false,
       tutorialComplete: false,
       advancedTutorialComplete: false,
@@ -1190,6 +1191,8 @@ export function createInitialState(): AppState {
         cycleReminderDays: 2,
       },
     },
+    gymPlans: [],
+    gymSessions: [],
     trackedGoalPeriods: Object.fromEntries(
       DEFAULT_METRICS.map((metric) => [
         metric.id,

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import { AppText as Text } from "@/src/components/AppText";
 
@@ -17,27 +17,36 @@ export default function JoinGroupScreen() {
   const cloud = useCloudSync();
   const app = useApp();
   const [busy, setBusy] = useState(false);
+  const attempted = useRef(false);
 
-  async function join() {
+  const join = useCallback(async () => {
     if (!code) return Alert.alert('Invalid invitation', 'This invitation is missing its group code.');
     if (auth.status === 'signedOut') return router.replace({ pathname: '/sign-in', params: { invite: code } });
     setBusy(true);
     try {
-      if (auth.status === 'signedIn') await cloud.joinGroup(code);
-      else app.joinGroup(code);
+      const result = auth.status === 'signedIn' ? await cloud.joinGroup(code) : (app.joinGroup(code), 'active' as const);
+      if (result === 'pending') {
+        Alert.alert('Request sent', 'You will enter the group as soon as an admin approves you.');
+      }
       router.replace('/');
     } catch (error) {
       const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Check that the invitation is still valid.';
       Alert.alert('Could not join group', message);
     } finally { setBusy(false); }
-  }
+  }, [app, auth.status, cloud, code]);
+
+  useEffect(() => {
+    if (!code || attempted.current || (auth.status !== 'signedIn' && auth.status !== 'demo')) return;
+    attempted.current = true;
+    void join();
+  }, [auth.status, code, join]);
 
   return <Screen contentContainerStyle={styles.screen}><Card style={styles.card}>
     <View style={styles.icon}><Ionicons name="people" size={30} color={palette.white}/></View>
     <Text style={styles.title}>You’re invited</Text>
     <Text style={styles.body}>Join this MetricRally group to share the progress you choose, chat, and compete.</Text>
     <View style={styles.code}><Text style={styles.codeLabel}>INVITE CODE</Text><Text style={styles.codeValue}>{code || 'Missing'}</Text></View>
-    <Button label={auth.status === 'signedOut' ? 'Sign in to join' : 'Join group'} icon="enter-outline" loading={busy} onPress={join}/>
+    <Button label={auth.status === 'signedOut' ? 'Sign in to join' : busy ? 'Joining…' : 'Join group'} icon="enter-outline" loading={busy} onPress={join}/>
     <Button label="Not now" variant="ghost" onPress={() => router.replace('/')}/>
   </Card></Screen>;
 }

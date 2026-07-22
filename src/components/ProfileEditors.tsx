@@ -10,13 +10,13 @@ import {
   calculateDailyActivity,
   calculateDailyEnergy,
   recommendedDailyDeficit,
-  recommendedDailyIntake,
+  recommendedDailyIntakeForDirection,
 } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { isMetricTrackedOnDate } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { ActivityLevel, BiologicalSex } from "@/src/types";
+import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
 import { Card, Chip, SectionHeader } from "./ui";
 
 export function EnergyProfileEditor() {
@@ -26,8 +26,15 @@ export function EnergyProfileEditor() {
   const bmr = Math.round(calculateBmr(profile));
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
-  const deficit = recommendedDailyDeficit(profile);
-  const intake = recommendedDailyIntake(profile);
+  const direction = state.settings.weightDirection ?? "lose";
+  const adjustment = recommendedDailyDeficit(profile);
+  const intake = recommendedDailyIntakeForDirection(profile, direction);
+  function setDirection(next: WeightDirection) {
+    updateSettings({ weightDirection: next });
+    updateEnergyProfile({
+      ...(next === "maintain" ? { targetWeightKg: profile.weightKg } : {}),
+    });
+  }
   return (
     <>
       <SectionHeader title="Body & energy profile" />
@@ -35,6 +42,17 @@ export function EnergyProfileEditor() {
         <Text style={[styles.help, { color: colors.muted }]}>
           Used for your private BMR, recommended deficit, and food-intake goals.
         </Text>
+        <Text style={[styles.label, { color: colors.ink }]}>Weight direction</Text>
+        <View style={styles.chips}>
+          {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
+            <Chip
+              key={item}
+              label={item[0].toUpperCase() + item.slice(1)}
+              selected={direction === item}
+              onPress={() => setDirection(item)}
+            />
+          ))}
+        </View>
         <View style={styles.grid}>
           {[
             {
@@ -50,10 +68,16 @@ export function EnergyProfileEditor() {
               key: "heightCm" as const,
             },
             {
-              label: "Starting weight",
+              label: "Current weight",
               value: profile.weightKg,
               unit: "kg",
               key: "weightKg" as const,
+            },
+            {
+              label: "Starting weight",
+              value: profile.startingWeightKg ?? profile.weightKg,
+              unit: "kg",
+              key: "startingWeightKg" as const,
             },
             {
               label: "Target weight",
@@ -109,17 +133,21 @@ export function EnergyProfileEditor() {
             />
           ))}
         </View>
-        <Text style={[styles.label, { color: colors.ink }]}>Planned weight change per week</Text>
-        <View style={styles.chips}>
-          {[0.25, 0.5, 0.75, 1].map((loss) => (
-            <Chip
-              key={loss}
-              label={`${loss} kg`}
-              selected={profile.desiredWeeklyLossKg === loss}
-              onPress={() => updateEnergyProfile({ desiredWeeklyLossKg: loss })}
-            />
-          ))}
-        </View>
+        {direction !== "maintain" ? (
+          <>
+            <Text style={[styles.label, { color: colors.ink }]}>Planned weight {direction === "gain" ? "gain" : "loss"} per week</Text>
+            <View style={styles.chips}>
+              {[0.25, 0.5, 0.75, 1].map((rate) => (
+                <Chip
+                  key={rate}
+                  label={`${rate} kg`}
+                  selected={profile.desiredWeeklyLossKg === rate}
+                  onPress={() => updateEnergyProfile({ desiredWeeklyLossKg: rate })}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
         <View style={[styles.equation, { backgroundColor: colors.canvas }]}>
           <Stat value={bmr} label="BMR kcal" />
           <Text style={[styles.symbol, { color: colors.faint }]}>+</Text>
@@ -134,8 +162,10 @@ export function EnergyProfileEditor() {
               size={19}
               color={palette.purple}
             />
-            <Text style={[styles.recommendationValue, { color: colors.ink }]}>{deficit}</Text>
-            <Text style={[styles.recommendationLabel, { color: colors.muted }]}>recommended deficit</Text>
+            <Text style={[styles.recommendationValue, { color: colors.ink }]}>{direction === "maintain" ? 0 : adjustment}</Text>
+            <Text style={[styles.recommendationLabel, { color: colors.muted }]}>
+              {direction === "gain" ? "recommended surplus" : direction === "maintain" ? "energy adjustment" : "recommended deficit"}
+            </Text>
           </View>
           <View style={[styles.recommendation, { backgroundColor: colors.canvas }]}>
             <Ionicons

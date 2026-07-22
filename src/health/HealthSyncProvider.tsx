@@ -28,7 +28,8 @@ type HealthSyncContextValue = {
 const HealthSyncContext = createContext<HealthSyncContextValue | null>(null);
 
 function syncStart(lastSyncedAt: string | null) {
-  const from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
+  let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
+  if (Number.isNaN(from.getTime())) from = new Date();
   from.setHours(0, 0, 0, 0);
   from.setDate(from.getDate() - (lastSyncedAt ? 2 : 29));
   return from;
@@ -46,9 +47,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   const [status, setStatus] = useState<HealthSyncStatus>('checking');
   const [availability, setAvailability] = useState<HealthAdapterAvailability | null>(null);
   const [persisted, setPersisted] = useState<PersistedHealthStatus>({ lastSyncedAt: null, importedCount: 0, error: null });
+  const persistedRef = useRef(persisted);
   const syncingRef = useRef<Promise<void> | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  persistedRef.current = persisted;
 
   const saveStatus = useCallback(async (next: PersistedHealthStatus) => {
     setPersisted(next);
@@ -59,10 +62,25 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     let cancelled = false;
     setPersisted({ lastSyncedAt:null,importedCount:0,error:null });
     Promise.all([nativeHealthAdapter.availability(), AsyncStorage.getItem(`${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`)])
-      .then(([nextAvailability, saved]) => {
+      .then(async ([nextAvailability, saved]) => {
         if (cancelled) return;
         setAvailability(nextAvailability);
-        if (saved) setPersisted(JSON.parse(saved) as PersistedHealthStatus);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved) as PersistedHealthStatus;
+            setPersisted({
+              lastSyncedAt:
+                parsed.lastSyncedAt && !Number.isNaN(new Date(parsed.lastSyncedAt).getTime())
+                  ? parsed.lastSyncedAt
+                  : null,
+              importedCount: Number(parsed.importedCount ?? 0),
+              error: parsed.error ?? null,
+              lastReason: parsed.lastReason,
+            });
+          } catch {
+            await AsyncStorage.removeItem(`${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`);
+          }
+        }
         setStatus(nextAvailability.available ? (stateRef.current.settings.healthSync.enabled ? 'ready' : 'idle') : 'unavailable');
       })
       .catch((error) => {
@@ -80,7 +98,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     const operation = (async () => {
       setStatus('syncing');
       try {
-        const from = syncStart(persisted.lastSyncedAt);
+        const previous = persistedRef.current;
+        const from = syncStart(previous.lastSyncedAt);
         const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
         const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group',current.metrics,current.settings.energyProfile.weightKg);
         importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes,current.metrics), dateKey(from));
@@ -88,7 +107,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         setStatus('ready');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Health sync failed.';
-        await saveStatus({ ...persisted, lastReason: reason, error: message });
+        await saveStatus({ ...persistedRef.current, lastReason: reason, error: message });
         setStatus('error');
         throw error;
       } finally {
@@ -97,7 +116,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     })();
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, persisted, saveStatus]);
+  }, [importHealthEntries, saveStatus]);
 
   const connect = useCallback(async () => {
     if (!availability?.available) throw new Error(availability?.detail ?? 'Health data is not available on this device.');
@@ -127,19 +146,25 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   }, [state.settings.healthSync, state.settings.syncMode]);
 
   useEffect(() => {
-    if (!state.settings.healthSync.enabled || state.settings.syncMode === 'manual' || !persisted.lastSyncedAt) return;
-    const stale = Date.now() - new Date(persisted.lastSyncedAt).getTime() >= minimumIntervalMs(state.settings.syncMode);
+    if (!state.settings.healthSync.enabled || state.settings.syncMode === 'manual') return;
+    const last = persisted.lastSyncedAt
+      ? new Date(persisted.lastSyncedAt).getTime()
+      : 0;
+    const stale = Date.now() - last >= minimumIntervalMs(state.settings.syncMode);
     if (stale && status !== 'syncing' && status !== 'requesting') runSync('open').catch(() => undefined);
   }, [persisted.lastSyncedAt, runSync, state.settings.healthSync.enabled, state.settings.syncMode, status]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener('change', (next) => {
       if (next !== 'active' || !stateRef.current.settings.healthSync.enabled || stateRef.current.settings.syncMode === 'manual') return;
-      const last = persisted.lastSyncedAt ? new Date(persisted.lastSyncedAt).getTime() : 0;
-      if (Date.now() - last >= minimumIntervalMs(stateRef.current.settings.syncMode)) runSync('open').catch(() => undefined);
+      const lastSyncedAt = persistedRef.current.lastSyncedAt;
+      const last = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
+      // Refresh whenever the app is reopened, with a short guard against the
+      // duplicate active events Android emits around permission screens.
+      if (Date.now() - last >= 2 * 60 * 1000) runSync('open').catch(() => undefined);
     });
     return () => subscription.remove();
-  }, [persisted.lastSyncedAt, runSync]);
+  }, [runSync]);
 
   const sourceOrigins = useMemo(() => [...new Set(state.entries
     .filter((entry) => entry.userId === state.currentUserId && entry.source === 'imported' && entry.sourceOrigin)

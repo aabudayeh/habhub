@@ -17,7 +17,8 @@ import {
   GroupAccentProvider,
   palette,
 } from "@/src/theme";
-import { syncCycleNotifications } from "@/src/notifications/push";
+import { syncCycleNotifications, syncGoalNotifications } from "@/src/notifications/push";
+import { dateKey } from "@/src/domain/date";
 
 const theme = {
   ...DefaultTheme,
@@ -59,6 +60,18 @@ function RootNavigator() {
   useEffect(() => {
     void syncCycleNotifications(cycleStateRef.current).catch(() => undefined);
   }, [cycleNotificationKey]);
+  const goalReminderKey = JSON.stringify({
+    user: state.currentUserId,
+    periods: state.trackedGoalPeriods,
+    reminders: state.metrics.map((metric) => [metric.id, metric.activeFrom, metric.goalSchedule, metric.reminder]),
+    entries: state.entries
+      .filter((entry) => entry.userId === state.currentUserId && entry.localDate >= dateKey())
+      .map((entry) => [entry.metricId, entry.localDate, entry.value]),
+    notifications: state.settings.notifications,
+  });
+  useEffect(() => {
+    void syncGoalNotifications(cycleStateRef.current).catch(() => undefined);
+  }, [goalReminderKey]);
   const inAuthRoute =
     rootSegment === "sign-in" ||
     rootSegment === "auth-callback" ||

@@ -22,6 +22,7 @@ import {
 } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { energyFormulaVariables } from "@/src/domain/energy";
+import { dateKey } from "@/src/domain/date";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
@@ -243,6 +244,22 @@ export default function TrackerEditor() {
   const [manualEntry, setManualEntry] = useState(
     tracker?.manualEntry !== false,
   );
+  const [activeFrom, setActiveFrom] = useState(tracker?.activeFrom ?? dateKey());
+  const [scheduleMode, setScheduleMode] = useState(
+    tracker?.goalSchedule?.mode ?? "daily",
+  );
+  const [minimumCompletions, setMinimumCompletions] = useState(
+    String(tracker?.goalSchedule?.minimumCompletions ?? 3),
+  );
+  const [selectedDays, setSelectedDays] = useState<number[]>(
+    tracker?.goalSchedule?.daysOfWeek ?? [1, 3, 5],
+  );
+  const [reminderEnabled, setReminderEnabled] = useState(
+    tracker?.reminder?.enabled ?? false,
+  );
+  const [reminderTime, setReminderTime] = useState(
+    tracker?.reminder?.time ?? "19:00",
+  );
   const [validation, setValidation] = useState<string | null>(null);
   const source = SOURCES.find((item) => item.id === healthType);
   function applyPreset(preset: TrackerPreset) {
@@ -266,6 +283,8 @@ export default function TrackerEditor() {
     setHealthField(preset.healthMapping?.field ?? "value");
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
+    setActiveFrom(dateKey());
+    setScheduleMode("daily");
     setAdvanced(false);
   }
   function insert(token: string) {
@@ -309,6 +328,8 @@ export default function TrackerEditor() {
       return Alert.alert("Add a name", "Use a short, clear name.");
     if (goalEnabled && dataType !== "text" && !Number.isFinite(target))
       return Alert.alert("Check your target", "Enter a valid number.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(activeFrom))
+      return Alert.alert("Check the start date", "Use YYYY-MM-DD.");
     const builtInCalculation = [
       "weekly_deficit_balance",
       "overall_score",
@@ -343,7 +364,19 @@ export default function TrackerEditor() {
         ? { dataType: healthType, field: healthField }
         : undefined,
       stepFallback,
-      manualEntry,
+      manualEntry:
+        healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
+      activeFrom,
+      goalSchedule: {
+        mode: scheduleMode,
+        daysOfWeek: scheduleMode === "selected_days" ? selectedDays : undefined,
+        minimumCompletions:
+          scheduleMode === "weekly_min" || scheduleMode === "monthly_min"
+            ? Math.max(1, Number(minimumCompletions) || 1)
+            : undefined,
+        anchorDate: scheduleMode === "every_other_day" ? activeFrom : undefined,
+      },
+      reminder: { enabled: reminderEnabled, time: reminderTime },
       rankingDirection: dataType === "boolean" ? "higher" : ranking,
       defaultVisibility: visibility,
       formula:
@@ -666,11 +699,83 @@ export default function TrackerEditor() {
                   Turn off for device-owned values such as steps.
                 </Text>
               </View>
-              <Switch value={manualEntry} onValueChange={setManualEntry} />
+              <Switch
+                value={healthType === "steps" || tracker?.id === "steps" ? false : manualEntry}
+                disabled={healthType === "steps" || tracker?.id === "steps"}
+                onValueChange={setManualEntry}
+              />
             </View>
           </Card>
           <Card>
             <SectionHeader title="How it behaves" />
+            <View style={styles.columns}>
+              <Field
+                label="Goal starts (YYYY-MM-DD)"
+                value={activeFrom}
+                set={setActiveFrom}
+                colors={colors}
+                keyboard={false}
+              />
+              <Field
+                label="Reminder time"
+                value={reminderTime}
+                set={setReminderTime}
+                colors={colors}
+                keyboard={false}
+              />
+            </View>
+            <Text style={[styles.label, { color: colors.ink }]}>How often?</Text>
+            <View style={styles.wrap}>
+              {(
+                [
+                  ["daily", "Every day"],
+                  ["selected_days", "Chosen days"],
+                  ["every_other_day", "Every other day"],
+                  ["weekly_min", "Times per week"],
+                  ["monthly_min", "Times per month"],
+                ] as const
+              ).map(([value, label]) => (
+                <Chip
+                  key={value}
+                  label={label}
+                  selected={scheduleMode === value}
+                  onPress={() => setScheduleMode(value)}
+                />
+              ))}
+            </View>
+            {scheduleMode === "selected_days" ? (
+              <View style={styles.wrap}>
+                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
+                  <Chip
+                    key={label}
+                    label={label}
+                    selected={selectedDays.includes(day)}
+                    onPress={() =>
+                      setSelectedDays((current) =>
+                        current.includes(day)
+                          ? current.filter((item) => item !== day)
+                          : [...current, day],
+                      )
+                    }
+                  />
+                ))}
+              </View>
+            ) : null}
+            {scheduleMode === "weekly_min" || scheduleMode === "monthly_min" ? (
+              <Field
+                label="Minimum completions"
+                value={minimumCompletions}
+                set={setMinimumCompletions}
+                colors={colors}
+              />
+            ) : null}
+            <View style={[styles.switchRow, { borderColor: colors.border }]}>
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>Reminder for this goal</Text>
+                <Text style={[styles.help, { color: colors.muted }]}>Uses the time above and respects global quiet hours.</Text>
+              </View>
+              <Switch value={reminderEnabled} onValueChange={setReminderEnabled} />
+            </View>
             <Text style={[styles.label, { color: colors.ink }]}>
               Entry type
             </Text>

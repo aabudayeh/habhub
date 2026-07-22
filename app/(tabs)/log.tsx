@@ -80,11 +80,14 @@ export default function LogScreen() {
       "workout_duration",
       "workout_calories",
       "workout_distance",
+      "blood_pressure_diastolic",
     ]);
     return [...state.metrics]
       .filter(
         (metric) =>
           metric.dataType !== "calculated" &&
+          metric.id !== "steps" &&
+          !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
           metric.manualEntry !== false &&
           !secondary.has(metric.id),
       )
@@ -125,6 +128,8 @@ export default function LogScreen() {
   const [workoutDuration, setWorkoutDuration] = useState("");
   const [workoutCalories, setWorkoutCalories] = useState("");
   const [workoutDistance, setWorkoutDistance] = useState("");
+  const [bpDiastolic, setBpDiastolic] = useState("");
+  const [bpPulse, setBpPulse] = useState("");
 
   useEffect(() => {
     if (
@@ -232,6 +237,8 @@ export default function LogScreen() {
     setWorkoutDuration("");
     setWorkoutCalories("");
     setWorkoutDistance("");
+    setBpDiastolic("");
+    setBpPulse("");
   }
   function toggleBoolean() {
     if (!selected) return;
@@ -339,6 +346,15 @@ export default function LogScreen() {
     const number = Number(value.replace(",", "."));
     if (!Number.isFinite(number) || number < 0)
       return Alert.alert("Check the value", "Enter a positive number.");
+    if (
+      selected.id === "blood_pressure_systolic" &&
+      (!Number.isFinite(Number(bpDiastolic.replace(",", "."))) ||
+        Number(bpDiastolic.replace(",", ".")) <= 0)
+    )
+      return Alert.alert(
+        "Add diastolic pressure",
+        "A blood pressure reading needs both systolic and diastolic values.",
+      );
     logMetric(
       selected.id,
       number,
@@ -346,6 +362,24 @@ export default function LogScreen() {
       replaceMode ? "replace" : "add",
       details,
     );
+    if (selected.id === "blood_pressure_systolic") {
+      const companionValues = [
+        ["blood_pressure_diastolic", bpDiastolic],
+        ["pulse", bpPulse],
+      ] as const;
+      companionValues.forEach(([metricId, raw]) => {
+        const amount = Number(raw.replace(",", "."));
+        if (
+          state.metrics.some((metric) => metric.id === metricId) &&
+          Number.isFinite(amount) &&
+          amount > 0
+        )
+          logMetric(metricId, amount, visibility, "add", {
+            ...details,
+            label: "Blood pressure reading",
+          });
+      });
+    }
     if (selected.id === "weight" && entryImage)
       addPhoto(
         entryImage,
@@ -638,6 +672,32 @@ export default function LogScreen() {
               style={[styles.fieldInput, styles.textArea]}
               multiline
             />
+          ) : selected.id === "blood_pressure_systolic" ? (
+            <>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Blood pressure reading</Text>
+              <View style={styles.nutritionGrid}>
+                {[
+                  { label: "Systolic", value, set: setValue, unit: "mmHg" },
+                  { label: "Diastolic", value: bpDiastolic, set: setBpDiastolic, unit: "mmHg" },
+                  { label: "Pulse", value: bpPulse, set: setBpPulse, unit: "bpm" },
+                ].map((item) => (
+                  <View key={item.label} style={styles.nutritionField}>
+                    <Text style={[styles.nutritionLabel, { color: colors.muted }]}>{item.label}</Text>
+                    <View style={[styles.nutritionInput, { borderColor: colors.border }]}>
+                      <TextInput
+                        value={item.value}
+                        onChangeText={item.set}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={colors.faint}
+                        style={[styles.nutritionText, { color: colors.ink }]}
+                      />
+                      <Text style={[styles.nutritionUnit, { color: colors.muted }]}>{item.unit}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
           ) : (
             <View style={styles.numberWrap}>
               <TextInput

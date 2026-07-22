@@ -4,6 +4,8 @@ import { router } from "expo-router";
 import React, { PropsWithChildren, ReactNode } from "react";
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   ScrollViewProps,
@@ -36,19 +38,27 @@ export function Screen({
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       edges={["top"]}
     >
-      <ScrollView
-        ref={scrollRef}
-        style={{ backgroundColor: colors.canvas }}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.screen,
-          compact && styles.screenCompact,
-          contentContainerStyle,
-        ]}
-        {...props}
+      <KeyboardAvoidingView
+        style={styles.safe}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <View style={styles.content}>{children}</View>
-      </ScrollView>
+        <ScrollView
+          ref={scrollRef}
+          style={{ backgroundColor: colors.canvas }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+          automaticallyAdjustKeyboardInsets
+          contentContainerStyle={[
+            styles.screen,
+            compact && styles.screenCompact,
+            contentContainerStyle,
+          ]}
+          {...props}
+        >
+          <View style={styles.content}>{children}</View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

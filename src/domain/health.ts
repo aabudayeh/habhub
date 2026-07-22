@@ -140,7 +140,14 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     const knownWorkoutCalories=dayEntries.filter((entry)=>calorieIds.includes(entry.metricId)).reduce((sum,entry)=>sum+Number(entry.value||0),0);
     const stepEntry=dayEntries.find((entry)=>stepIds.includes(entry.metricId))!;
     const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
-    for(const metric of fallback){if(dayEntries.some((entry)=>entry.metricId===metric.id))continue;const calories=knownWorkoutCalories+estimatedCalories;if(calories>0)derived.push(make(metric.id,calories,'calories'));}
+    for(const metric of fallback){
+      const existingActiveCalories=dayEntries.filter((entry)=>entry.metricId===metric.id).reduce((sum,entry)=>sum+Number(entry.value||0),0);
+      // Always add calories for steps not represented by walking/running
+      // workouts. If Health Connect did not expose active-energy rows, retain
+      // known workout calories as the base instead of dropping them.
+      const calories=(existingActiveCalories>0?0:knownWorkoutCalories)+estimatedCalories;
+      if(calories>0)derived.push(make(metric.id,calories,'calories'));
+    }
     if(uncoveredSteps>0){for(const id of distanceIds)derived.push(make(id,distanceKm,'distance'));for(const id of durationIds)derived.push(make(id,durationMinutes,'duration'));}
   }
   return [...entries,...derived];

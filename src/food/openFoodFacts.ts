@@ -136,12 +136,27 @@ export async function foodByBarcode(barcode: string) {
 }
 
 function words(value: string) {
-  return value.toLocaleLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return value.toLocaleLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map((word) =>
+    word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word,
+  );
 }
 
 function matchScore(product: FoodProduct, term: string) {
-  const haystack = `${product.name} ${product.brand ?? ""}`.toLocaleLowerCase();
-  return words(term).reduce((score, word) => score + (haystack === word ? 80 : haystack.startsWith(word) ? 34 : haystack.includes(word) ? 14 : -8), 0);
+  const query = words(term);
+  const name = words(product.name);
+  const brand = words(product.brand ?? "");
+  if (!query.length) return 0;
+  const allInName = query.every((word) => name.includes(word));
+  const exactName = allInName && name.length === query.length;
+  const phraseStart = name.slice(0, query.length).join(" ") === query.join(" ");
+  const relevance = query.reduce((score, word) => {
+    if (name.includes(word)) return score + 100;
+    if (name.some((candidate) => candidate.startsWith(word) || word.startsWith(candidate)))
+      return score + 55;
+    if (brand.includes(word)) return score + 20;
+    return score - 80;
+  }, 0);
+  return relevance + (exactName ? 500 : phraseStart ? 260 : allInName ? 180 : 0) - Math.min(80, Math.max(0, name.length - query.length) * 8);
 }
 
 async function openFoodFactsSearch(term: string) {
@@ -183,8 +198,18 @@ export async function searchFoods(query: string): Promise<FoodProduct[]> {
   const settled = await Promise.allSettled([openFoodFactsSearch(term), usdaSearch(term)]);
   const remote = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const merged = new Map<string, FoodProduct>();
-  for (const product of [...remote, ...offline]) {
-    product.qualityScore += matchScore(product, term) + (product.verified ? 45 : 0);
+  for (const sourceProduct of [...remote, ...offline]) {
+    const relevance = matchScore(sourceProduct, term);
+    if (relevance <= 0) continue;
+    // Relevance leads; verification/completeness only break ties between good
+    // matches. This keeps "Banana" above banana smoothies and puddings.
+    const product = {
+      ...sourceProduct,
+      qualityScore:
+        relevance * 10 +
+        Math.min(180, sourceProduct.qualityScore) +
+        (sourceProduct.verified ? 45 : 0),
+    };
     const duplicateKey = `${product.name.toLocaleLowerCase()}|${product.brand?.toLocaleLowerCase() ?? ""}`;
     const existing = merged.get(duplicateKey);
     if (!existing || product.qualityScore > existing.qualityScore) merged.set(duplicateKey, product);

@@ -240,6 +240,7 @@ export function effectiveGoalTarget(
       state.energyProfiles?.[userId] ?? state.settings.energyProfile;
     const direction = weightDirectionFromProfile(profile);
     if (direction === "maintain") return profile.weightKg;
+    const startingWeight = profile.startingWeightKg ?? profile.weightKg;
     const elapsedDays = Math.max(
       0,
       Math.floor(
@@ -250,8 +251,8 @@ export function effectiveGoalTarget(
     );
     const planned = (profile.desiredWeeklyLossKg * elapsedDays) / 7;
     return direction === "gain"
-      ? Math.min(profile.targetWeightKg, profile.weightKg + planned)
-      : Math.max(profile.targetWeightKg, profile.weightKg - planned);
+      ? Math.min(profile.targetWeightKg, startingWeight + planned)
+      : Math.max(profile.targetWeightKg, startingWeight - planned);
   }
   if (metric.id !== "food") return metric.goal.target;
   const exercise = state.metrics.find(
@@ -287,6 +288,7 @@ export function weightProgressStats(
     .sort((a, b) => a.localDate.localeCompare(b.localDate));
   const currentEntry = entries.at(-1);
   const current = currentEntry ? Number(currentEntry.value) : profile.weightKg;
+  const startingWeight = profile.startingWeightKg ?? entries[0]?.value ?? profile.weightKg;
   const weekEntry = [...entries]
     .reverse()
     .find((entry) => entry.localDate <= dateWithOffsetFrom(anchor, -7));
@@ -303,31 +305,45 @@ export function weightProgressStats(
       : direction === "lose"
         ? from - to
         : -Math.abs(to - from);
-  const totalChange = directional(profile.weightKg, current);
+  const totalChange = directional(Number(startingWeight), current);
   const lastWeekChange = directional(
-    weekEntry ? Number(weekEntry.value) : profile.weightKg,
+    weekEntry ? Number(weekEntry.value) : Number(startingWeight),
     current,
   );
   const scheduledTarget = metric
     ? effectiveGoalTarget(state, metric, userId, anchor)
     : profile.targetWeightKg;
+  const remaining =
+    direction === "gain"
+      ? Math.max(0, profile.targetWeightKg - current)
+      : direction === "lose"
+        ? Math.max(0, current - profile.targetWeightKg)
+        : Math.abs(current - profile.weightKg);
+  const observedWeeklyChange = totalChange / (elapsedDays / 7);
+  const projectedWeeklyChange =
+    observedWeeklyChange > 0.05
+      ? observedWeeklyChange
+      : profile.desiredWeeklyLossKg;
+  const expectedGoalDate =
+    direction !== "maintain" && remaining > 0 && projectedWeeklyChange > 0
+      ? dateWithOffsetFrom(
+          anchor,
+          Math.ceil((remaining / projectedWeeklyChange) * 7),
+        )
+      : undefined;
   return {
     direction,
-    startingWeight: profile.weightKg,
+    startingWeight: Number(startingWeight),
     currentWeight: current,
     finalTarget: profile.targetWeightKg,
     scheduledTarget,
     expectedWeeklyChange:
       direction === "maintain" ? 0 : profile.desiredWeeklyLossKg,
     totalChange,
-    averageWeeklyChange: totalChange / (elapsedDays / 7),
+    averageWeeklyChange: observedWeeklyChange,
     lastWeekChange,
-    remaining:
-      direction === "gain"
-        ? Math.max(0, profile.targetWeightKg - current)
-        : direction === "lose"
-          ? Math.max(0, current - profile.targetWeightKg)
-          : Math.abs(current - profile.weightKg),
+    remaining,
+    expectedGoalDate,
     hasMeasurement: Boolean(currentEntry),
   };
 }
@@ -335,9 +351,11 @@ export function weightProgressStats(
 function weightDirectionFromProfile(profile: {
   weightKg: number;
   targetWeightKg: number;
+  startingWeightKg?: number;
 }): "lose" | "maintain" | "gain" {
-  if (profile.targetWeightKg > profile.weightKg) return "gain";
-  if (profile.targetWeightKg < profile.weightKg) return "lose";
+  const baseline = profile.startingWeightKg ?? profile.weightKg;
+  if (profile.targetWeightKg > baseline) return "gain";
+  if (profile.targetWeightKg < baseline) return "lose";
   return "maintain";
 }
 
@@ -510,6 +528,26 @@ export function goalReached(
   }
 }
 
+/** Whether a result can be judged on this date, independent of its value. */
+export function metricApplicableOnDate(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  if (metric.activeFrom > localDate) return false;
+  if (metric.id === "deficit")
+    return state.entries.some(
+      (entry) =>
+        entry.userId === userId &&
+        entry.metricId === "food" &&
+        entry.localDate === localDate,
+    );
+  if (metric.id === "weekly_deficit_balance")
+    return weeklyDeficitBalance(state, userId, localDate).days > 0;
+  return true;
+}
+
 /**
  * Goals based on a day's accumulating nutrition or a calculated daily result
  * are not final while the day is still in progress. Celebrating them on the
@@ -628,11 +666,68 @@ export function isMetricTrackedOnDate(
   localDate: string,
 ): boolean {
   const periods = state.trackedGoalPeriods?.[metric.id];
-  if (!periods) return metric.sections.today && metric.activeFrom <= localDate;
-  return periods.some(
+  const insidePeriod = !periods
+    ? metric.sections.today && metric.activeFrom <= localDate
+    : periods.some(
     (period) =>
       period.from <= localDate && (!period.to || localDate <= period.to),
   );
+  if (!insidePeriod) return false;
+  const schedule = metric.goalSchedule;
+  if (!schedule || schedule.mode === "daily") return true;
+  if (schedule.mode === "selected_days")
+    return (schedule.daysOfWeek ?? []).includes(
+      new Date(`${localDate}T12:00:00`).getDay(),
+    );
+  if (schedule.mode === "every_other_day") {
+    const anchor = schedule.anchorDate ?? metric.activeFrom;
+    const days = Math.round(
+      (new Date(`${localDate}T12:00:00`).getTime() -
+        new Date(`${anchor}T12:00:00`).getTime()) /
+        86400000,
+    );
+    return days >= 0 && days % 2 === 0;
+  }
+  // Weekly/monthly minimum goals remain visible through their current period;
+  // their completion is evaluated across that period below.
+  return true;
+}
+
+export function scheduledGoalReached(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  const schedule = metric.goalSchedule;
+  if (!schedule || !["weekly_min", "monthly_min"].includes(schedule.mode))
+    return goalReached(
+      metric,
+      safeMetricValue(state, metric, userId, localDate),
+      effectiveGoalTarget(state, metric, userId, localDate),
+    );
+  const anchor = new Date(`${localDate}T12:00:00`);
+  const start = new Date(anchor);
+  if (schedule.mode === "weekly_min") {
+    const mondayOffset = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - mondayOffset);
+  } else start.setDate(1);
+  let completed = 0;
+  const cursor = new Date(start);
+  while (cursor <= anchor) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+    if (
+      metricApplicableOnDate(state, metric, userId, key) &&
+      goalReached(
+        metric,
+        safeMetricValue(state, metric, userId, key),
+        effectiveGoalTarget(state, metric, userId, key),
+      )
+    )
+      completed += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return completed >= Math.max(1, schedule.minimumCompletions ?? 1);
 }
 
 export function trackedGoalSummary(
@@ -651,24 +746,13 @@ export function trackedGoalSummary(
         : isMetricTrackedOnDate(state, metric, localDate)),
   );
   const unavailable = metrics.filter(
-    (metric) =>
-      metric.id === "deficit" &&
-      !state.entries.some(
-        (entry) =>
-          entry.userId === userId &&
-          entry.metricId === "food" &&
-          entry.localDate === localDate,
-      ),
+    (metric) => !metricApplicableOnDate(state, metric, userId, localDate),
   );
   const applicable = metrics.filter(
     (metric) => !unavailable.some((item) => item.id === metric.id),
   );
   const met = applicable.filter((metric) =>
-    goalReached(
-      metric,
-      safeMetricValue(state, metric, userId, localDate),
-      effectiveGoalTarget(state, metric, userId, localDate),
-    ),
+    scheduledGoalReached(state, metric, userId, localDate),
   );
   return {
     met: met.length,
@@ -694,6 +778,8 @@ export type DeficitRealityCheck = {
   reportedDailyDeficit: number;
   days: number;
   weightChangeKg: number;
+  loggedDays: number;
+  estimatedDays: number;
   fromDate?: string;
   toDate?: string;
 };
@@ -722,6 +808,8 @@ function emptyRealityCheck(): DeficitRealityCheck {
     reportedDailyDeficit: 0,
     days: 0,
     weightChangeKg: 0,
+    loggedDays: 0,
+    estimatedDays: 0,
   };
 }
 
@@ -759,7 +847,9 @@ export function deficitRealityCheckAtDate(
   if (previous.localDate !== current.localDate)
     dateCursor.setDate(dateCursor.getDate() + 1);
   const reported: number[] = [];
+  let intervalDays = 0;
   while (dateCursor <= new Date(`${current.localDate}T12:00:00`)) {
+    intervalDays += 1;
     const key = `${dateCursor.getFullYear()}-${String(dateCursor.getMonth() + 1).padStart(2, "0")}-${String(dateCursor.getDate()).padStart(2, "0")}`;
     if (
       state.entries.some(
@@ -787,6 +877,8 @@ export function deficitRealityCheckAtDate(
       reportedDailyDeficit: 0,
       days,
       weightChangeKg,
+      loggedDays: 0,
+      estimatedDays: intervalDays,
       fromDate: previous.localDate,
       toDate: current.localDate,
     };
@@ -797,6 +889,8 @@ export function deficitRealityCheckAtDate(
       reportedDailyDeficit,
       days,
       weightChangeKg,
+      loggedDays: reported.length,
+      estimatedDays: Math.max(0, intervalDays - reported.length),
       fromDate: previous.localDate,
       toDate: current.localDate,
     };
@@ -814,6 +908,8 @@ export function deficitRealityCheckAtDate(
     reportedDailyDeficit,
     days,
     weightChangeKg,
+    loggedDays: reported.length,
+    estimatedDays: Math.max(0, intervalDays - reported.length),
     fromDate: previous.localDate,
     toDate: current.localDate,
   };

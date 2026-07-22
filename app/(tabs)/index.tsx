@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   Alert,
   BackHandler,
   Modal,
@@ -18,20 +19,22 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
-import { compactDayDate, dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import { compactDayDate, dateKey, dateWithOffsetFrom, monthDateRange } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  goalReached,
   isMetricTrackedOnDate,
+  metricApplicableOnDate,
   safeMetricValue,
+  scheduledGoalReached,
   trackedGoalSummary,
   weightProgressStats,
   weeklyDeficitBalance,
 } from "@/src/domain/metrics";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
@@ -39,6 +42,7 @@ import { MetricDefinition } from "@/src/types";
 export default function Today() {
   const { state, reorderMetric, setMetricSection, deleteMetric } = useApp();
   const health = useHealthSync();
+  const cloud = useCloudSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
@@ -51,13 +55,17 @@ export default function Today() {
   )!;
   const goals = trackedGoalSummary(state, state.currentUserId, today);
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
-  const visible = useMemo(
-    () =>
-      state.metrics
+  const visible = useMemo(() => {
+    const ordered = state.metrics
         .filter((item) => item.sections.today && item.activeFrom <= today)
-        .sort((a, b) => a.order - b.order),
-    [state.metrics, today],
-  );
+        .sort((a, b) => a.order - b.order);
+    if (editing) return ordered;
+    return ordered.sort((a, b) => {
+      const aMet = metricApplicableOnDate(state, a, state.currentUserId, today) && scheduledGoalReached(state, a, state.currentUserId, today);
+      const bMet = metricApplicableOnDate(state, b, state.currentUserId, today) && scheduledGoalReached(state, b, state.currentUserId, today);
+      return Number(aMet) - Number(bMet) || a.order - b.order;
+    });
+  }, [editing, state, today]);
   const tileLimit = Math.max(
     3,
     Math.min(8, state.settings.todayTileLimit ?? 5),
@@ -83,6 +91,24 @@ export default function Today() {
         dateWithOffsetFrom(today, -i),
       ).allMet,
   ).every(Boolean);
+  const monthSummaries = monthDateRange(today)
+    .filter((date) => date <= today)
+    .map((date) => trackedGoalSummary(state, state.currentUserId, date))
+    .filter((summary) => summary.applicableTotal > 0);
+  const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
+  const celebration = useRef(new Animated.Value(0)).current;
+  const celebratedRef = useRef(false);
+  useEffect(() => {
+    if (goals.allMet && !celebratedRef.current) {
+      celebration.setValue(0);
+      Animated.sequence([
+        Animated.timing(celebration, { toValue: 1, duration: 650, useNativeDriver: true }),
+        Animated.delay(900),
+        Animated.timing(celebration, { toValue: 0, duration: 450, useNativeDriver: true }),
+      ]).start();
+    }
+    celebratedRef.current = goals.allMet;
+  }, [celebration, goals.allMet]);
   const tileHeight = Math.max(
     52,
     Math.min(
@@ -126,11 +152,19 @@ export default function Today() {
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       edges={["top"]}
     >
+      <ConfettiBurst progress={celebration} special={monthAll || weekAll} />
       <ScrollView
         refreshControl={
           <RefreshControl
-            refreshing={health.status === "syncing"}
-            onRefresh={() => health.syncNow("pull").catch(() => undefined)}
+            refreshing={health.status === "syncing" || cloud.status === "syncing"}
+            onRefresh={async () => {
+              // Save local changes first, refresh shared rows, then import the
+              // newest device health records. The health import is persisted by
+              // the normal local-first cloud debounce without being overwritten.
+              await cloud.syncNow().catch(() => undefined);
+              await cloud.refreshGroup().catch(() => undefined);
+              await health.syncNow("pull").catch(() => undefined);
+            }}
             tintColor={accent}
           />
         }
@@ -255,10 +289,11 @@ export default function Today() {
               const unavailable = goals.unavailable.some(
                 (metric) => metric.id === item.id,
               );
-              const met = goalReached(
+              const met = scheduledGoalReached(
+                state,
                 item,
-                safeMetricValue(state, item, state.currentUserId, today),
-                effectiveGoalTarget(state, item, state.currentUserId, today),
+                state.currentUserId,
+                today,
               );
               return (
                 <View
@@ -290,13 +325,15 @@ export default function Today() {
         </View>
         {goals.allMet ? (
           <Celebration
-            title={weekAll ? "Perfect week" : "Today complete"}
+            title={monthAll ? "Perfect month" : weekAll ? "Perfect week" : "Today complete"}
             copy={
-              weekAll
+              monthAll
+                ? "Every scheduled goal this month is complete. That deserves the rarest badge."
+                : weekAll
                 ? "Seven days of showing up. A special badge is yours."
                 : "Nice work. Your daily completion badge is ready."
             }
-            special={weekAll}
+            special={monthAll || weekAll}
             colors={colors}
           />
         ) : null}
@@ -321,7 +358,9 @@ export default function Today() {
               accent={accent}
               weekly={weekly}
               onEdit={() => setEditing(true)}
-              onMove={(target) => reorderMetric(item.id, target)}
+              onMove={(target) =>
+                reorderMetric(item.id, visible[target]?.order ?? target)
+              }
               onRemove={() => remove(item)}
             />
           ))}
@@ -468,6 +507,48 @@ export default function Today() {
   );
 }
 
+function ConfettiBurst({
+  progress,
+  special,
+}: {
+  progress: Animated.Value;
+  special: boolean;
+}) {
+  const colors = [palette.lime, palette.amber, palette.purple, palette.red, palette.white];
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.confetti,
+        {
+          opacity: progress,
+          transform: [{
+            translateY: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-30, special ? 250 : 180],
+            }),
+          }],
+        },
+      ]}
+    >
+      {Array.from({ length: special ? 24 : 16 }, (_, index) => (
+        <View
+          key={index}
+          style={[
+            styles.confettiPiece,
+            {
+              left: `${(index * 37) % 96}%`,
+              top: (index * 23) % 75,
+              backgroundColor: colors[index % colors.length],
+              transform: [{ rotate: `${index * 29}deg` }],
+            },
+          ]}
+        />
+      ))}
+    </Animated.View>
+  );
+}
+
 function HeaderIcon({
   icon,
   label,
@@ -529,7 +610,11 @@ function TrackerRow({
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
+        onStartShouldSetPanResponderCapture: () => editing,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 3,
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 3,
         onPanResponderRelease: (_event, gesture) =>
           onMove(
             Math.max(
@@ -547,16 +632,16 @@ function TrackerRow({
     item.id === "weekly_deficit_balance"
       ? weekly.balance
       : safeMetricValue(state, item, state.currentUserId, day);
-  const applicable =
-    item.id !== "deficit" ||
-    state.entries.some(
-      (entry) =>
-        entry.userId === state.currentUserId &&
-        entry.metricId === "food" &&
-        entry.localDate === day,
-    );
+  const applicable = metricApplicableOnDate(
+    state,
+    item,
+    state.currentUserId,
+    day,
+  );
   const target = effectiveGoalTarget(state, item, state.currentUserId, day);
-  const met = applicable && goalReached(item, value, target);
+  const met =
+    applicable &&
+    scheduledGoalReached(state, item, state.currentUserId, day);
   const photo =
     item.dataType === "photo"
       ? state.photos.find(
@@ -618,11 +703,14 @@ function TrackerRow({
       )}
       <View style={styles.rowCopy}>
         <View style={styles.nameLine}>
-          <Text style={[styles.name, { color: colors.ink }]} numberOfLines={1}>
+          <Text
+            style={[styles.name, { color: colors.ink }, met && styles.completedText]}
+            numberOfLines={1}
+          >
             {item.name}
           </Text>
           {met ? (
-            <Ionicons name="checkmark-circle" size={15} color={accent} />
+            <Ionicons name="checkmark-circle" size={15} color={palette.lime} />
           ) : null}
         </View>
         <Text
@@ -774,6 +862,15 @@ function Celebration({
   );
 }
 const styles = StyleSheet.create({
+  confetti: {
+    position: "absolute",
+    zIndex: 20,
+    top: 35,
+    left: 8,
+    right: 8,
+    height: 120,
+  },
+  confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
   editActions: { gap: 6 },
   safe: { flex: 1 },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
@@ -887,6 +984,7 @@ const styles = StyleSheet.create({
   rowCopy: { flex: 1, minWidth: 0 },
   nameLine: { flexDirection: "row", alignItems: "center", gap: 5 },
   name: { fontSize: 11, fontWeight: "900" },
+  completedText: { textDecorationLine: "line-through", opacity: 0.68 },
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
   progress: { width: 48 },

@@ -29,7 +29,7 @@ const tabs: { id: Tab; label: string }[] = [
 
 export default function Customize() {
   const params = useLocalSearchParams<{ tab?: string }>();
-  const { state, setMetricSection, setTrackedGoal, updateSettings } = useApp();
+  const { state, setMetricSection, setTrackedGoal, updateSettings, moveMetric } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const initial = tabs.some((item) => item.id === params.tab)
@@ -284,6 +284,8 @@ export default function Customize() {
                 last={index === ordered.length - 1}
                 colors={colors}
                 accent={accent}
+                onMoveUp={() => moveMetric(metric.id, -1)}
+                onMoveDown={() => moveMetric(metric.id, 1)}
                 onChange={() =>
                   setMetricSection(metric.id, tab, !metric.sections[tab])
                 }
@@ -393,6 +395,8 @@ function VisibilityRow({
   colors,
   accent,
   onChange,
+  onMoveUp,
+  onMoveDown,
 }: {
   metric: MetricDefinition;
   section: DashboardSection;
@@ -400,6 +404,8 @@ function VisibilityRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   onChange: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }) {
   return (
     <View
@@ -421,6 +427,14 @@ function VisibilityRow({
         trackColor={{ false: colors.border, true: `${accent}88` }}
         thumbColor={metric.sections[section] ? accent : colors.faint}
       />
+      <View style={styles.orderButtons}>
+        <Pressable accessibilityLabel="Move up" onPress={onMoveUp} hitSlop={8}>
+          <Ionicons name="chevron-up" size={17} color={accent} />
+        </Pressable>
+        <Pressable accessibilityLabel="Move down" onPress={onMoveDown} hitSlop={8}>
+          <Ionicons name="chevron-down" size={17} color={accent} />
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -457,4 +471,5 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 8,
   },
+  orderButtons: { alignItems: "center", justifyContent: "center", gap: 1 },
 });

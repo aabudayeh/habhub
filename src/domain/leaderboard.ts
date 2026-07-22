@@ -10,6 +10,7 @@ import {
   formatMetricValue,
   goalProgress,
   goalReached,
+  metricApplicableOnDate,
   sharedMetricResult,
 } from "@/src/domain/metrics";
 import { longestStreakWithRest } from "@/src/domain/streaks";
@@ -231,14 +232,7 @@ function hasPeriodData(
       (photo) => photo.userId === userId && photo.localDate === date,
     );
   if (metric.dataType === "calculated") {
-    if (metric.id === "deficit")
-      return state.entries.some(
-        (entry) =>
-          entry.userId === userId &&
-          entry.metricId === "food" &&
-          entry.localDate === date,
-      );
-    return true;
+    return metricApplicableOnDate(state, metric, userId, date);
   }
   return state.entries.some(
     (entry) =>

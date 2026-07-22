@@ -27,6 +27,7 @@ import {
   goalProgress,
   goalReached,
   goalRemainingLabel,
+  metricApplicableOnDate,
   safeMetricValue,
   trackedGoalSummary,
   weightProgressStats,
@@ -107,19 +108,31 @@ export default function Insights() {
   }
 
   function rawDayVisuals(day: string) {
-    const visuals = selectedMetrics.map((metric) => ({
-      color: metric.color,
-      progress: goalProgress(
+    const visuals = selectedMetrics.map((metric) => {
+      const applicable = metricApplicableOnDate(
+        state,
         metric,
-        safeMetricValue(state, metric, state.currentUserId, day),
-        effectiveGoalTarget(state, metric, state.currentUserId, day),
-      ),
-      goalReached: goalReached(
-        metric,
-        safeMetricValue(state, metric, state.currentUserId, day),
-        effectiveGoalTarget(state, metric, state.currentUserId, day),
-      ),
-    }));
+        state.currentUserId,
+        day,
+      );
+      return {
+        color: metric.color,
+        progress: applicable
+          ? goalProgress(
+              metric,
+              safeMetricValue(state, metric, state.currentUserId, day),
+              effectiveGoalTarget(state, metric, state.currentUserId, day),
+            )
+          : 0,
+        goalReached:
+          applicable &&
+          goalReached(
+            metric,
+            safeMetricValue(state, metric, state.currentUserId, day),
+            effectiveGoalTarget(state, metric, state.currentUserId, day),
+          ),
+      };
+    });
     if (tracked)
       visuals.unshift({
         color: TRACKED_COLOR,
@@ -345,9 +358,9 @@ function TrackedSummary({
   const totals = dates.map((date) =>
     trackedGoalSummary(state, state.currentUserId, date),
   );
-  const eligible = totals.filter((item) => item.total > 0);
+  const eligible = totals.filter((item) => item.applicableTotal > 0);
   const met = totals.reduce((sum, item) => sum + item.met, 0);
-  const possible = totals.reduce((sum, item) => sum + item.total, 0);
+  const possible = totals.reduce((sum, item) => sum + item.applicableTotal, 0);
   const perfect = eligible.filter((item) => item.allMet).length;
   const streak = longestStreakWithRest(
     state,
@@ -387,18 +400,15 @@ function MetricSummary({
 }) {
   const colors = useAppColors();
   const active = dates.filter((date) => metric.activeFrom <= date);
+  const applicable = active.filter((date) =>
+    metricApplicableOnDate(state, metric, state.currentUserId, date),
+  );
   const measured =
     metric.dataType === "boolean"
-      ? active
-      : active.filter((date) =>
+      ? applicable
+      : applicable.filter((date) =>
           metric.dataType === "calculated"
-            ? metric.id !== "deficit" ||
-              state.entries.some(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === "food" &&
-                  entry.localDate === date,
-              )
+            ? true
             : state.entries.some(
                 (entry) =>
                   entry.userId === state.currentUserId &&
@@ -411,7 +421,7 @@ function MetricSummary({
   );
   const average =
     values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
-  const reached = active.filter((date) =>
+  const reached = applicable.filter((date) =>
     goalReached(
       metric,
       safeMetricValue(state, metric, state.currentUserId, date),
@@ -419,6 +429,7 @@ function MetricSummary({
     ),
   ).length;
   const streak = longestStreakWithRest(state, active, (date) =>
+    metricApplicableOnDate(state, metric, state.currentUserId, date) &&
     goalReached(
       metric,
       safeMetricValue(state, metric, state.currentUserId, date),
@@ -434,18 +445,15 @@ function MetricSummary({
     ) + 1,
   );
   const overallDates = dateRangeEnding(dateKey(), Math.min(days, 730));
+  const overallApplicable = overallDates.filter((date) =>
+    metricApplicableOnDate(state, metric, state.currentUserId, date),
+  );
   const overallMeasured =
     metric.dataType === "boolean"
-      ? overallDates
-      : overallDates.filter((date) =>
+      ? overallApplicable
+      : overallApplicable.filter((date) =>
           metric.dataType === "calculated"
-            ? metric.id !== "deficit" ||
-              state.entries.some(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === "food" &&
-                  entry.localDate === date,
-              )
+            ? true
             : state.entries.some(
                 (entry) =>
                   entry.userId === state.currentUserId &&
@@ -493,18 +501,23 @@ function MetricSummary({
           </Text>
           <Text numberOfLines={1} style={[styles.summaryValue, { color: colors.ink }]}>
           {weightStats
-            ? `${weightStats.currentWeight.toFixed(1)} kg`
+            ? weightStats.currentWeight.toFixed(1)
             : isBoolean
-              ? `${reached}/${active.length} days`
-              : formatMetricValue(metric, average)}
+              ? `${reached}/${applicable.length} days`
+              : Math.abs(average) >= 100
+                ? Math.round(average).toLocaleString()
+                : (Math.round(average * 10) / 10).toLocaleString()}
           </Text>
+          {!isBoolean && metric.unit ? (
+            <Text style={[styles.summaryUnit, { color: colors.muted }]}>{metric.unit}</Text>
+          ) : null}
         </View>
         <View style={styles.summaryDetail}>
         <Text numberOfLines={2} style={[styles.summaryLabel, { color: colors.muted }]}>
           {weightStats
             ? `${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} total · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week average`
             : isBoolean
-              ? `${active.length ? Math.round((reached / active.length) * 100) : 0}% completed in this range`
+              ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
               : `${measured.length ? `daily average across ${measured.length} logged days` : "No entries in this range"} · overall ${formatMetricValue(metric, overall)}`}
         </Text>
         {weightStats ? (
@@ -526,8 +539,8 @@ function MetricSummary({
         </View>
         <View style={styles.summaryGoal}>
         <Text style={styles.goalLine}>
-          {reached}/{active.length} goal days ·{" "}
-          {active.length ? Math.round((reached / active.length) * 100) : 0}%
+          {reached}/{applicable.length} goal days ·{" "}
+          {applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%
         </Text>
         <Text style={[styles.streakLine, { color: colors.muted }]}>
           Longest streak {streak} days
@@ -722,6 +735,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 4,
   },
+  summaryUnit: { fontSize: 8, fontWeight: "800", marginTop: 1 },
   summaryLabel: {
     color: palette.muted,
     fontSize: 8,
