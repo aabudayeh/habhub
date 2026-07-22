@@ -37,6 +37,7 @@ import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 
 export default function Today() {
   const { state, reorderMetric, setMetricSection, deleteMetric } = useApp();
@@ -56,7 +57,12 @@ export default function Today() {
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
   const visible = useMemo(() => {
     const ordered = state.metrics
-        .filter((item) => item.sections.today && item.activeFrom <= today)
+        .filter(
+          (item) =>
+            !isInternalTracker(item) &&
+            item.sections.today &&
+            item.activeFrom <= today,
+        )
         .sort((a, b) => a.order - b.order);
     if (editing) return ordered;
     return ordered.sort((a, b) => {
@@ -78,7 +84,9 @@ export default function Today() {
   const hiddenTrackers = state.metrics
     .filter(
       (metric) =>
-        !metric.sections.today && metric.activeFrom <= today,
+        !isInternalTracker(metric) &&
+        !metric.sections.today &&
+        metric.activeFrom <= today,
     )
     .sort((a, b) => a.order - b.order);
   const weekAll = Array.from(

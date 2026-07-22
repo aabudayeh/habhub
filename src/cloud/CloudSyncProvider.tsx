@@ -202,9 +202,16 @@ function createCleanAccountState(user: User): AppState {
 function bindStateToAccount(state: AppState, user: User): AppState {
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
+  if (Number(state.version ?? 1) >= 20)
+    return {
+      ...state,
+      settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
+    };
   if (Number(state.version ?? 1) >= 19)
     return {
       ...state,
+      version: 20,
+      metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     };
   const historicalStart = state.entries
@@ -214,7 +221,8 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return {
       ...state,
-      version: 19,
+      version: 20,
+      metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
         fontScale: state.settings.fontScale ?? 1,
@@ -238,7 +246,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return {
     ...state,
-    version: 19,
+    version: 20,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -249,10 +257,12 @@ function bindStateToAccount(state: AppState, user: User): AppState {
         ),
       ],
     },
-    metrics: state.metrics.map((metric) =>
-      retrospective.has(metric.id)
-        ? { ...metric, activeFrom: historicalStart }
-        : metric,
+    metrics: upgradeBloodPressureMetrics(
+      state.metrics.map((metric) =>
+        retrospective.has(metric.id)
+          ? { ...metric, activeFrom: historicalStart }
+          : metric,
+      ),
     ),
     trackedGoalPeriods: Object.fromEntries(
       Object.entries(state.trackedGoalPeriods ?? {}).map(
@@ -577,6 +587,29 @@ async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
       : null;
   }
   return data as SnapshotRow | null;
+}
+
+function upgradeBloodPressureMetrics(metrics: AppState["metrics"]) {
+  return metrics.map((metric) => {
+    const isSystolic =
+      metric.id === "blood_pressure_systolic" ||
+      (metric.healthMapping?.dataType === "blood_pressure" &&
+        metric.healthMapping.field === "systolic");
+    const isDiastolic =
+      metric.id === "blood_pressure_diastolic" ||
+      (metric.healthMapping?.dataType === "blood_pressure" &&
+        metric.healthMapping.field === "diastolic");
+    if (!isSystolic && !isDiastolic) return metric;
+    return {
+      ...metric,
+      goalEnabled: true,
+      goal: { kind: "exact" as const, target: isSystolic ? 120 : 80 },
+      goalRange: isSystolic ? { min: 90, max: 120 } : { min: 60, max: 80 },
+      ...(isDiastolic
+        ? { sections: { today: false, group: false, insights: false } }
+        : {}),
+    };
+  });
 }
 
 async function writeSnapshot(

@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -25,11 +26,15 @@ import {
 } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
 
 export default function ChatScreen() {
   const { state, sendMessage, updateSettings } = useApp();
   const accent = useGroupAccent();
   const colors = useAppColors();
+  const cloud = useCloudSync();
+  const health = useHealthSync();
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
@@ -271,6 +276,17 @@ export default function ChatScreen() {
             style={styles.messageScroller}
             contentContainerStyle={styles.messages}
             keyboardShouldPersistTaps="always"
+            refreshControl={
+              <RefreshControl
+                refreshing={cloud.status === "syncing" || health.status === "syncing"}
+                onRefresh={async () => {
+                  await cloud.syncNow().catch(() => undefined);
+                  await cloud.refreshGroup().catch(() => undefined);
+                  await health.syncNow("pull").catch(() => undefined);
+                }}
+                tintColor={accent}
+              />
+            }
             onContentSizeChange={() =>
               messageScroll.current?.scrollToEnd({ animated: false })
             }

@@ -17,7 +17,6 @@ import {
   deficitRealityCheckAtDate,
   effectiveGoalTarget,
   formatMetricValue,
-  goalReached,
   metricApplicableOnDate,
   safeMetricValue,
   scheduledGoalReached,
@@ -45,6 +44,7 @@ export default function TrackerDetail() {
   const [day, setDay] = useState(date ?? dateKey());
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
+  const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
@@ -83,21 +83,40 @@ export default function TrackerDetail() {
         />
       </Screen>
     );
+  const isBloodPressure =
+    tracker.id === "blood_pressure_systolic" ||
+    (tracker.healthMapping?.dataType === "blood_pressure" &&
+      tracker.healthMapping.field === "systolic");
   const entries = state.entries
     .filter(
       (entry) =>
         entry.userId === state.currentUserId &&
         entry.metricId === tracker.id &&
-        entry.localDate === day,
+        dates.includes(entry.localDate),
     )
-    .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
+    .sort(
+      (a, b) =>
+        b.localDate.localeCompare(a.localDate) ||
+        b.recordedAt.localeCompare(a.recordedAt),
+    );
   const pairedBloodPressure = (entry: (typeof entries)[number]) => {
-    if (tracker.id !== "blood_pressure_systolic") return null;
+    if (!isBloodPressure) return null;
+    const diastolicId = state.metrics.find(
+      (candidate) =>
+        candidate.id === "blood_pressure_diastolic" ||
+        (candidate.healthMapping?.dataType === "blood_pressure" &&
+          candidate.healthMapping.field === "diastolic"),
+    )?.id;
+    const pulseId = state.metrics.find(
+      (candidate) =>
+        candidate.id === "pulse" ||
+        candidate.healthMapping?.dataType === "heart_rate",
+    )?.id;
     const companions = state.entries.filter(
       (candidate) =>
         candidate.userId === entry.userId &&
         candidate.localDate === entry.localDate &&
-        ["blood_pressure_diastolic", "pulse"].includes(candidate.metricId),
+        [diastolicId, pulseId].includes(candidate.metricId),
     );
     const nearest = (metricId: string) =>
       companions
@@ -107,13 +126,16 @@ export default function TrackerDetail() {
             Math.abs(new Date(a.recordedAt).getTime() - new Date(entry.recordedAt).getTime()) -
             Math.abs(new Date(b.recordedAt).getTime() - new Date(entry.recordedAt).getTime()),
         )[0];
-    return { diastolic: nearest("blood_pressure_diastolic"), pulse: nearest("pulse") };
+    return {
+      diastolic: diastolicId ? nearest(diastolicId) : undefined,
+      pulse: pulseId ? nearest(pulseId) : undefined,
+    };
   };
   const dayPhotos =
     tracker.dataType === "photo"
       ? state.photos.filter(
           (photo) =>
-            photo.userId === state.currentUserId && photo.localDate === day,
+            photo.userId === state.currentUserId && dates.includes(photo.localDate),
         )
       : [];
   const olderPhoto =
@@ -125,28 +147,35 @@ export default function TrackerDetail() {
           )
           .sort((a, b) => b.localDate.localeCompare(a.localDate))[0]
       : undefined;
-  const chartDates = dates.filter(
-    (date) =>
-      tracker.activeFrom <= date &&
-      metricApplicableOnDate(state, tracker, state.currentUserId, date),
+  const chartDates = dates.filter((date) =>
+    metricApplicableOnDate(state, tracker, state.currentUserId, date),
   );
-  const values = chartDates.map((date) =>
+  const loggedDates = chartDates.filter((date) => hasData(state, tracker, date));
+  const values = loggedDates.map((date) =>
     safeMetricValue(state, tracker, state.currentUserId, date),
   );
   const diastolicTracker =
-    tracker.id === "blood_pressure_systolic"
-      ? (state.metrics.find((item) => item.id === "blood_pressure_diastolic") ?? {
+    isBloodPressure
+      ? (state.metrics.find(
+          (item) =>
+            item.id === "blood_pressure_diastolic" ||
+            (item.healthMapping?.dataType === "blood_pressure" &&
+              item.healthMapping.field === "diastolic"),
+        ) ?? {
           ...tracker,
           id: "blood_pressure_diastolic",
           name: "Diastolic pressure",
           color: "#C45B35",
-          goal: { kind: "at_most", target: 80 },
+          goal: { kind: "exact", target: 80 },
+          goalRange: { min: 60, max: 80 },
           goalEnabled: true,
         })
       : undefined;
   const pulseTracker =
-    tracker.id === "blood_pressure_systolic"
-      ? (state.metrics.find((item) => item.id === "pulse") ?? {
+    isBloodPressure
+      ? (state.metrics.find(
+          (item) => item.id === "pulse" || item.healthMapping?.dataType === "heart_rate",
+        ) ?? {
           ...tracker,
           id: "pulse",
           name: "Pulse",
@@ -155,11 +184,10 @@ export default function TrackerDetail() {
         })
       : undefined;
   const diastolicValues = diastolicTracker
-    ? chartDates.map((date) =>
+    ? loggedDates.map((date) =>
         safeMetricValue(state, diastolicTracker, state.currentUserId, date),
       )
     : undefined;
-  const loggedDates = chartDates.filter((date) => hasData(state, tracker, date));
   const average = loggedDates.length
     ? loggedDates.reduce(
         (sum, date) =>
@@ -186,6 +214,11 @@ export default function TrackerDetail() {
       diastolicValues.length
     : 0;
   const isPhoto = tracker.dataType === "photo";
+  const displayAvailable =
+    applicable &&
+    (tracker.dataType === "calculated" ||
+      (dates.length === 1 ? hasData(state, tracker, day) : loggedDates.length > 0));
+  const highestEver = highestRecordedValue(state, tracker, day);
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
   const latestWeightDate = state.entries
     .filter(
@@ -266,14 +299,18 @@ export default function TrackerDetail() {
         <View style={styles.summaryTop}>
           <View>
             <Text style={[styles.label, { color: colors.faint }]}>
-              {dates.length === 1 ? "CURRENT" : `${dates.length}-DAY AVERAGE`}
+              {dates.length === 1
+                ? day === dateKey()
+                  ? "TODAY"
+                  : friendlyDate(day).toUpperCase()
+                : `${dates.length}-DAY AVERAGE`}
             </Text>
             <Text style={[styles.value, { color: colors.ink }]}>
               {isPhoto
                 ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
-                : !applicable
+                : !displayAvailable
                   ? "Not available"
-                  : tracker.id === "blood_pressure_systolic"
+                  : isBloodPressure
                     ? `${Math.round(dates.length === 1 ? current : average)}/${Math.round(dates.length === 1 ? currentDiastolic : averageDiastolic)} mmHg`
                   : formatMetricValue(
                       tracker,
@@ -281,7 +318,7 @@ export default function TrackerDetail() {
                     )}
             </Text>
             <Text style={[styles.sub, { color: colors.muted }]}>
-              {tracker.id === "blood_pressure_systolic" && currentPulse > 0
+              {isBloodPressure && currentPulse > 0
                 ? `Pulse ${Math.round(currentPulse)} bpm`
                 : summaryLine(state, tracker, day, current, target, applicable)}
             </Text>
@@ -308,6 +345,8 @@ export default function TrackerDetail() {
             secondaryValues={diastolicValues}
             secondaryColor={diastolicTracker?.color}
             secondaryTarget={diastolicTracker?.goal.target}
+            primaryRange={tracker.goalRange}
+            secondaryRange={diastolicTracker?.goalRange}
           />
         ) : null}
         {!isPhoto ? (
@@ -322,11 +361,19 @@ export default function TrackerDetail() {
               value={`${streaks.best} days`}
               colors={colors}
             />
-            <Stat
-              label="Goals reached"
-              value={`${chartDates.filter((date) => scheduledGoalReached(state, tracker, state.currentUserId, date)).length}/${chartDates.length}`}
-              colors={colors}
-            />
+            {dates.length === 1 ? (
+              <Stat
+                label={isBloodPressure ? "Highest systolic" : "Highest day"}
+                value={highestEver === null ? "—" : formatMetricValue(tracker, highestEver)}
+                colors={colors}
+              />
+            ) : (
+              <Stat
+                label="Goals reached"
+                value={`${chartDates.filter((date) => hasData(state, tracker, date) && scheduledGoalReached(state, tracker, state.currentUserId, date)).length}/${chartDates.length}`}
+                colors={colors}
+              />
+            )}
           </View>
         ) : null}
         <Text style={[styles.trackingSince, { color: colors.muted }]}>
@@ -413,7 +460,7 @@ export default function TrackerDetail() {
       ) : null}
       <View style={styles.logHeader}>
         <Text style={[styles.section, { color: colors.ink }]}>
-          {dates.length === 1 ? "Entries" : "Selected day"}
+          Entries
         </Text>
         {tracker.id !== "steps" && tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
           <Pressable
@@ -431,9 +478,40 @@ export default function TrackerDetail() {
         ) : null}
       </View>
       <View style={styles.entries}>
-        {entries.map((entry) => (
+        {entries.map((entry, index) => {
+          const firstOnDate =
+            index === 0 || entries[index - 1].localDate !== entry.localDate;
+          const collapsed = collapsedEntryDates.includes(entry.localDate);
+          return (
+          <React.Fragment key={entry.id}>
+          {dates.length > 1 && firstOnDate ? (
+            <Pressable
+              onPress={() =>
+                setCollapsedEntryDates((current) =>
+                  current.includes(entry.localDate)
+                    ? current.filter((date) => date !== entry.localDate)
+                    : [...current, entry.localDate],
+                )
+              }
+              style={[styles.dateGroupHeader, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                {friendlyDate(entry.localDate)}
+              </Text>
+              <View style={styles.dateGroupMeta}>
+                <Text style={[styles.time, { color: colors.muted }]}>
+                  {entries.filter((item) => item.localDate === entry.localDate).length}
+                </Text>
+                <Ionicons
+                  name={collapsed ? "chevron-down" : "chevron-up"}
+                  size={16}
+                  color={accent}
+                />
+              </View>
+            </Pressable>
+          ) : null}
+          {!collapsed ? (
           <Pressable
-            key={entry.id}
             delayLongPress={450}
             onLongPress={
               entry.source === "manual"
@@ -501,7 +579,10 @@ export default function TrackerDetail() {
             ) : null}
           </Card>
           </Pressable>
-        ))}
+          ) : null}
+          </React.Fragment>
+          );
+        })}
         {dayPhotos.map((photo) => (
           <Pressable
             key={photo.id}
@@ -702,6 +783,8 @@ function Trend({
   secondaryValues,
   secondaryColor,
   secondaryTarget,
+  primaryRange,
+  secondaryRange,
 }: {
   values: number[];
   tracker: MetricDefinition;
@@ -710,7 +793,20 @@ function Trend({
   secondaryValues?: number[];
   secondaryColor?: string;
   secondaryTarget?: number;
+  primaryRange?: { min: number; max: number };
+  secondaryRange?: { min: number; max: number };
 }) {
+  if (secondaryValues)
+    return (
+      <BloodPressureTrend
+        systolic={values}
+        diastolic={secondaryValues}
+        systolicColor={tracker.color}
+        diastolicColor={secondaryColor ?? colors.muted}
+        systolicRange={primaryRange ?? { min: 90, max: 120 }}
+        diastolicRange={secondaryRange ?? { min: 60, max: 80 }}
+      />
+    );
   const max = Math.max(
     ...values,
     ...(secondaryValues ?? []),
@@ -781,6 +877,119 @@ function Trend({
     </View>
   );
 }
+
+function BloodPressureTrend({
+  systolic,
+  diastolic,
+  systolicColor,
+  diastolicColor,
+  systolicRange,
+  diastolicRange,
+}: {
+  systolic: number[];
+  diastolic: number[];
+  systolicColor: string;
+  diastolicColor: string;
+  systolicRange: { min: number; max: number };
+  diastolicRange: { min: number; max: number };
+}) {
+  const [width, setWidth] = useState(0);
+  const height = 116;
+  const all = [...systolic, ...diastolic, systolicRange.max, diastolicRange.max];
+  const minValue = Math.max(
+    0,
+    Math.min(...all, systolicRange.min, diastolicRange.min) - 15,
+  );
+  const maxValue = Math.max(...all, 1) + 15;
+  const y = (value: number) =>
+    height - ((value - minValue) / (maxValue - minValue)) * height;
+  const points = (values: number[]) =>
+    values.map((value, index) => ({
+      x:
+        values.length === 1
+          ? width / 2
+          : (index / Math.max(1, values.length - 1)) * width,
+      y: y(value),
+    }));
+  const draw = (values: number[], color: string) => {
+    const series = points(values);
+    return (
+      <>
+        {series.slice(1).map((point, index) => {
+          const previous = series[index];
+          const dx = point.x - previous.x;
+          const dy = point.y - previous.y;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          return (
+            <View
+              key={`line-${index}`}
+              style={[
+                styles.chartSegment,
+                {
+                  backgroundColor: color,
+                  left: previous.x,
+                  top: previous.y,
+                  width: length,
+                  transform: [{ rotate: `${Math.atan2(dy, dx)}rad` }],
+                },
+              ]}
+            />
+          );
+        })}
+        {series.map((point, index) => (
+          <View
+            key={`dot-${index}`}
+            style={[
+              styles.chartDot,
+              {
+                backgroundColor: color,
+                left: point.x - 4,
+                top: point.y - 4,
+              },
+            ]}
+          />
+        ))}
+      </>
+    );
+  };
+  return (
+    <View>
+      <View style={styles.bpLegend}>
+        <LegendDot label="Systolic" color={systolicColor} />
+        <LegendDot label="Diastolic" color={diastolicColor} />
+      </View>
+      <View
+        style={[styles.bpChart, { height }]}
+        onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
+      >
+        {[systolicRange, diastolicRange].map((range, index) => (
+          <View
+            key={index}
+            style={[
+              styles.bpGoalBand,
+              {
+                backgroundColor: `${index === 0 ? systolicColor : diastolicColor}12`,
+                bottom: height - y(range.min),
+                height: Math.max(2, y(range.min) - y(range.max)),
+              },
+            ]}
+          />
+        ))}
+        {width > 0 ? draw(systolic, systolicColor) : null}
+        {width > 0 ? draw(diastolic, diastolicColor) : null}
+      </View>
+    </View>
+  );
+}
+
+function LegendDot({ label, color }: { label: string; color: string }) {
+  return (
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={[styles.time, { color }]}>{label}</Text>
+    </View>
+  );
+}
 function Stat({
   label,
   value,
@@ -826,6 +1035,36 @@ function hasData(
           entry.localDate === day,
       );
 }
+function highestRecordedValue(
+  state: ReturnType<typeof useApp>["state"],
+  tracker: MetricDefinition,
+  throughDate: string,
+) {
+  if (tracker.dataType === "photo" || tracker.dataType === "text") return null;
+  const dates =
+    tracker.dataType === "calculated"
+      ? Array.from({ length: 365 }, (_, index) =>
+          dateWithOffsetFrom(throughDate, -index),
+        ).filter((date) => hasData(state, tracker, date))
+      : Array.from(
+          new Set(
+            state.entries
+              .filter(
+                (entry) =>
+                  entry.userId === state.currentUserId &&
+                  entry.metricId === tracker.id &&
+                  entry.localDate <= throughDate,
+              )
+              .map((entry) => entry.localDate),
+          ),
+        );
+  if (!dates.length) return null;
+  return Math.max(
+    ...dates.map((date) =>
+      safeMetricValue(state, tracker, state.currentUserId, date),
+    ),
+  );
+}
 function streakStats(
   state: ReturnType<typeof useApp>["state"],
   tracker: MetricDefinition,
@@ -838,22 +1077,17 @@ function streakStats(
     const date = dateWithOffsetFrom(day, -i);
     const met =
       tracker.goalEnabled !== false &&
-      goalReached(
-        tracker,
-        safeMetricValue(state, tracker, state.currentUserId, date),
-        effectiveGoalTarget(state, tracker, state.currentUserId, date),
-      );
+      hasData(state, tracker, date) &&
+      scheduledGoalReached(state, tracker, state.currentUserId, date);
     run = met ? run + 1 : 0;
     best = Math.max(best, run);
   }
   for (let i = 0; i < 90; i++) {
     const date = dateWithOffsetFrom(day, -i);
     if (
-      goalReached(
-        tracker,
-        safeMetricValue(state, tracker, state.currentUserId, date),
-        effectiveGoalTarget(state, tracker, state.currentUserId, date),
-      )
+      tracker.goalEnabled !== false &&
+      hasData(state, tracker, date) &&
+      scheduledGoalReached(state, tracker, state.currentUserId, date)
     )
       current++;
     else break;
@@ -961,6 +1195,34 @@ const styles = StyleSheet.create({
     gap: 3,
     position: "relative",
   },
+  bpLegend: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+    marginTop: 12,
+  },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  legendDot: { width: 7, height: 7, borderRadius: 4 },
+  bpChart: {
+    marginTop: 9,
+    position: "relative",
+    overflow: "hidden",
+  },
+  bpGoalBand: { position: "absolute", left: 0, right: 0 },
+  chartSegment: {
+    position: "absolute",
+    height: 2,
+    borderRadius: 1,
+    transformOrigin: "left center",
+    zIndex: 2,
+  },
+  chartDot: {
+    position: "absolute",
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    zIndex: 3,
+  },
   barSlot: {
     flex: 1,
     height: "100%",
@@ -1018,6 +1280,15 @@ const styles = StyleSheet.create({
   },
   logButtonText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   entries: { gap: 7 },
+  dateGroupHeader: {
+    minHeight: 38,
+    borderBottomWidth: 1,
+    paddingHorizontal: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dateGroupMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
   entry: { padding: 12 },
   entryTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   grow: { flex: 1 },

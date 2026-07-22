@@ -8,6 +8,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   ScrollViewProps,
   TextInput as NativeTextInput,
@@ -18,6 +19,8 @@ import {
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
 
 import {
   palette,
@@ -31,12 +34,16 @@ export function Screen({
   children,
   contentContainerStyle,
   scrollRef,
+  refreshControl,
   ...props
 }: ScrollViewProps & { scrollRef?: React.RefObject<ScrollView | null> }) {
   const compact = useCompactMode();
   const colors = useAppColors();
+  const accent = useGroupAccent();
   const internalRef = useRef<ScrollView>(null);
   const activeRef = scrollRef ?? internalRef;
+  const cloud = useCloudSync();
+  const health = useHealthSync();
   useKeyboardReveal(activeRef);
   return (
     <SafeAreaView
@@ -54,6 +61,21 @@ export function Screen({
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           automaticallyAdjustKeyboardInsets
+          refreshControl={
+            refreshControl ?? (
+              <RefreshControl
+                refreshing={
+                  cloud.status === "syncing" || health.status === "syncing"
+                }
+                onRefresh={async () => {
+                  await cloud.syncNow().catch(() => undefined);
+                  await cloud.refreshGroup().catch(() => undefined);
+                  await health.syncNow("pull").catch(() => undefined);
+                }}
+                tintColor={accent}
+              />
+            )
+          }
           contentContainerStyle={[
             styles.screen,
             compact && styles.screenCompact,

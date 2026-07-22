@@ -27,6 +27,7 @@ import {
 } from "@/src/domain/metrics";
 import { randomMessage } from "@/src/domain/social";
 import { defaultReminderTimes } from "@/src/domain/reminders";
+import { formulaIdentifiers } from "@/src/domain/formula";
 import { palette } from "@/src/theme";
 import {
   AppState,
@@ -141,17 +142,25 @@ function uniqueId(prefix: string) {
 }
 
 function goalHistoryStart(state: AppState, metric: MetricDefinition) {
+  const sourceIds =
+    metric.dataType === "calculated"
+      ? metric.id === "deficit"
+        ? ["food"]
+        : formulaIdentifiers(metric.formula ?? "").filter((id) =>
+            state.metrics.some((candidate) => candidate.id === id),
+          )
+      : [metric.id];
   const ownDates = state.entries
     .filter((entry) => entry.userId === state.currentUserId)
-    .filter(
-      (entry) =>
-        entry.metricId === metric.id || metric.dataType === "calculated",
-    )
+    .filter((entry) => sourceIds.includes(entry.metricId))
     .map((entry) => entry.localDate);
-  const allOwnDates = state.entries
-    .filter((entry) => entry.userId === state.currentUserId)
-    .map((entry) => entry.localDate);
-  return [...ownDates, ...allOwnDates, metric.activeFrom].sort()[0];
+  const photoDates =
+    metric.dataType === "photo"
+      ? state.photos
+          .filter((photo) => photo.userId === state.currentUserId)
+          .map((photo) => photo.localDate)
+      : [];
+  return [...ownDates, ...photoDates].sort()[0] ?? metric.activeFrom;
 }
 
 function slugify(name: string) {
@@ -388,6 +397,10 @@ function reducer(state: AppState, action: Action): AppState {
       let suffix = 2;
       while (state.metrics.some((metric) => metric.id === id))
         id = `${baseId}_${suffix++}`;
+      const internalCompanion =
+        baseId === "blood_pressure_diastolic" ||
+        (action.metric.healthMapping?.dataType === "blood_pressure" &&
+          action.metric.healthMapping.field === "diastolic");
       const metric: MetricDefinition = {
         ...action.metric,
         id,
@@ -400,7 +413,9 @@ function reducer(state: AppState, action: Action): AppState {
               ? "latest"
               : "sum"),
         scoreWeight: 0,
-        sections: { today: true, group: true, insights: true },
+        sections: internalCompanion
+          ? { today: false, group: false, insights: false }
+          : { today: true, group: true, insights: true },
         order: state.metrics.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
       };
@@ -613,6 +628,10 @@ function reducer(state: AppState, action: Action): AppState {
       const existing = state.group.metricConfiguration ?? [];
       while (existing.some((metric) => metric.id === id))
         id = `${base}_${suffix++}`;
+      const internalCompanion =
+        base === "blood_pressure_diastolic" ||
+        (action.metric.healthMapping?.dataType === "blood_pressure" &&
+          action.metric.healthMapping.field === "diastolic");
       const metric: MetricDefinition = {
         ...action.metric,
         id,
@@ -623,7 +642,9 @@ function reducer(state: AppState, action: Action): AppState {
           action.metric.dataType === "photo"
             ? 0
             : 1,
-        sections: { today: true, insights: true, group: true },
+        sections: internalCompanion
+          ? { today: false, insights: false, group: false }
+          : { today: true, insights: true, group: true },
       };
       const group = {
         ...state.group,
@@ -1285,7 +1306,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 19,
+            version: 20,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -1385,7 +1406,7 @@ export function AppProvider({ children }: PropsWithChildren) {
                       formula: "bmr + daily_activity + exercise - food",
                     }
                   : enriched;
-              const upgraded =
+              const reminderUpgraded =
                 restoredVersion < 18
                   ? {
                       ...normalized,
@@ -1396,20 +1417,38 @@ export function AppProvider({ children }: PropsWithChildren) {
                               enabled: normalized.reminder?.enabled ?? false,
                               time,
                             })),
-                      ...(["blood_pressure_systolic", "blood_pressure_diastolic"].includes(normalized.id)
+                    }
+                  : normalized;
+              const upgraded =
+                restoredVersion < 20 &&
+                ["blood_pressure_systolic", "blood_pressure_diastolic"].includes(
+                  reminderUpgraded.id,
+                )
+                  ? {
+                      ...reminderUpgraded,
+                      goalEnabled: true,
+                      goal: {
+                        kind: "exact" as const,
+                        target:
+                          reminderUpgraded.id === "blood_pressure_systolic"
+                            ? 120
+                            : 80,
+                      },
+                      goalRange:
+                        reminderUpgraded.id === "blood_pressure_systolic"
+                          ? { min: 90, max: 120 }
+                          : { min: 60, max: 80 },
+                      ...(reminderUpgraded.id === "blood_pressure_diastolic"
                         ? {
-                            goalEnabled: true,
-                            goal: {
-                              kind: "at_most" as const,
-                              target:
-                                normalized.id === "blood_pressure_systolic"
-                                  ? 120
-                                  : 80,
+                            sections: {
+                              today: false,
+                              group: false,
+                              insights: false,
                             },
                           }
                         : {}),
                     }
-                  : normalized;
+                  : reminderUpgraded;
               if (restoredVersion < 4 && upgraded.id === "weight")
                 return {
                   ...upgraded,

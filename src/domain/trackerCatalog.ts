@@ -5,12 +5,24 @@ import { defaultReminderTimes } from '@/src/domain/reminders';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
-export function trackerPresets(state: AppState): TrackerPreset[] {
+export function isInternalTracker(metric: { id: string; healthMapping?: NewMetric["healthMapping"] }) {
+  return (
+    metric.id === "blood_pressure_diastolic" ||
+    (metric.healthMapping?.dataType === "blood_pressure" &&
+      metric.healthMapping.field === "diastolic")
+  );
+}
+
+export function trackerPresets(state: AppState, includeInternal = false): TrackerPreset[] {
   const profile = state.settings.energyProfile;
   const direction = state.settings.weightDirection ?? 'lose';
   const adjustment = recommendedDailyDeficit(profile);
   return DEFAULT_METRICS
-    .filter((item) => item.id !== 'workout_calories')
+    .filter(
+      (item) =>
+        item.id !== 'workout_calories' &&
+        (includeInternal || !isInternalTracker(item)),
+    )
     .map((item): TrackerPreset => {
       const preset: TrackerPreset = {
         templateId: item.id,
@@ -50,11 +62,8 @@ export function trackerPresets(state: AppState): TrackerPreset[] {
       if (item.id === 'blood_pressure_systolic') {
         preset.name = 'Blood pressure';
         preset.goalEnabled = true;
-        preset.goal = { kind: 'at_most', target: 120 };
-      }
-      if (item.id === 'blood_pressure_diastolic') {
-        preset.goalEnabled = true;
-        preset.goal = { kind: 'at_most', target: 80 };
+        preset.goal = { kind: 'exact', target: 120 };
+        preset.goalRange = { min: 90, max: 120 };
       }
       return preset;
     });
@@ -67,7 +76,7 @@ function presetDescription(id: string) {
   if (id === 'exercise') return 'One activity-calorie total from health data, workouts and step estimates.';
   if (id === 'workout') return 'Workout sessions with type, duration, distance and calories.';
   if (id === 'pulse') return 'Daily average pulse; no target until you choose a personal range.';
-  if (id.startsWith('blood_pressure')) return 'Daily average blood-pressure reading; observational by default.';
+  if (id.startsWith('blood_pressure')) return 'One combined systolic/diastolic reading with editable preferred ranges.';
   if (id === 'sleep') return 'Sleep duration with a ready-made 7–9 hour target range.';
   return 'Ready-made logging, goals, sharing and health mapping.';
 }

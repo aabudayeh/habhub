@@ -29,6 +29,7 @@ import {
 } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 
 const GROUP_COLORS = [
   "#176B4D",
@@ -61,7 +62,9 @@ export default function GroupSettings() {
     (member) => member.id === state.currentUserId,
   )!;
   const canEdit = me.role === "owner" || me.role === "admin";
-  const groupMetrics = state.group.metricConfiguration ?? [];
+  const groupMetrics = (state.group.metricConfiguration ?? []).filter(
+    (metric) => !isInternalTracker(metric),
+  );
   const total = groupMetrics.reduce(
     (sum, metric) => sum + metric.scoreWeight,
     0,

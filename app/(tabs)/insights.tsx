@@ -36,6 +36,7 @@ import { longestStreakWithRest } from "@/src/domain/streaks";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 
 const TRACKED = "tracked_goals";
 const TRACKED_COLOR = "#9B6BDB";
@@ -48,7 +49,10 @@ export default function Insights() {
   const accent = useGroupAccent();
   const today = dateKey();
   const metrics = state.metrics.filter(
-    (metric) => metric.sections.insights && metric.dataType !== "text",
+    (metric) =>
+      !isInternalTracker(metric) &&
+      metric.sections.insights &&
+      metric.dataType !== "text",
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(
     (state.settings.progressMetricIds?.length

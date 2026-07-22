@@ -356,7 +356,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 19;
+  version: 20;
   currentUserId: string;
   group: Group;
   groups: Group[];

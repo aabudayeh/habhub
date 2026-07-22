@@ -221,6 +221,9 @@ export default function TrackerEditor() {
   const [diastolicGoal, setDiastolicGoal] = useState(
     String(existingDiastolic?.goal.target ?? 80),
   );
+  const [diastolicMin, setDiastolicMin] = useState(
+    String(existingDiastolic?.goalRange?.min ?? 60),
+  );
   const [rangeMin, setRangeMin] = useState(
     String(tracker?.goalRange?.min ?? ""),
   );
@@ -283,8 +286,10 @@ export default function TrackerEditor() {
     setGoalEnabled(preset.goalEnabled !== false);
     setGoalKind(preset.goal.kind);
     setGoal(String(preset.goal.target));
-    if (preset.templateId === "blood_pressure_systolic")
+    if (preset.templateId === "blood_pressure_systolic") {
       setDiastolicGoal("80");
+      setDiastolicMin("60");
+    }
     setRangeMin(preset.goalRange ? String(preset.goalRange.min) : "");
     setRangeMax(preset.goalRange ? String(preset.goalRange.max) : "");
     setFormula(preset.formula ?? "");
@@ -342,17 +347,23 @@ export default function TrackerEditor() {
   function save() {
     const target = Number(goal.replace(",", "."));
     const diastolicTarget = Number(diastolicGoal.replace(",", "."));
+    const systolicMinimum = Number(rangeMin.replace(",", "."));
+    const diastolicMinimum = Number(diastolicMin.replace(",", "."));
     if (!name.trim())
       return Alert.alert("Add a name", "Use a short, clear name.");
     if (goalEnabled && dataType !== "text" && !Number.isFinite(target))
       return Alert.alert("Check your target", "Enter a valid number.");
     if (
       (presetId || tracker?.id) === "blood_pressure_systolic" &&
-      (!Number.isFinite(diastolicTarget) || diastolicTarget <= 0)
+      (!Number.isFinite(systolicMinimum) ||
+        !Number.isFinite(diastolicMinimum) ||
+        !Number.isFinite(diastolicTarget) ||
+        systolicMinimum >= target ||
+        diastolicMinimum >= diastolicTarget)
     )
       return Alert.alert(
-        "Check diastolic target",
-        "Blood pressure needs both systolic and diastolic targets.",
+        "Check blood-pressure ranges",
+        "Each range needs a lower value below its upper value.",
       );
     if (!/^\d{4}-\d{2}-\d{2}$/.test(activeFrom))
       return Alert.alert("Check the start date", "Use YYYY-MM-DD.");
@@ -378,7 +389,7 @@ export default function TrackerEditor() {
           dataType === "boolean" || dataType === "photo"
             ? "complete"
             : (presetId || tracker?.id) === "blood_pressure_systolic"
-              ? "at_most"
+              ? "exact"
             : goalKind,
         target: Number.isFinite(target) ? target : 0,
       },
@@ -427,7 +438,7 @@ export default function TrackerEditor() {
     else addMetric(common);
     if ((presetId || tracker?.id) === "blood_pressure_systolic") {
       const presetsById = new Map(
-        trackerPresets(state).map((preset) => [preset.templateId, preset]),
+        trackerPresets(state, true).map((preset) => [preset.templateId, preset]),
       );
       const ensure = (companionId: "blood_pressure_diastolic" | "pulse") => {
         const existing = sourceMetrics.find((item) => item.id === companionId);
@@ -437,7 +448,11 @@ export default function TrackerEditor() {
           companionId === "blood_pressure_diastolic"
             ? {
                 goalEnabled,
-                goal: { kind: "at_most" as const, target: diastolicTarget },
+                goal: { kind: "exact" as const, target: diastolicTarget },
+                goalRange: {
+                  min: diastolicMinimum,
+                  max: diastolicTarget,
+                },
                 activeFrom,
               }
             : { activeFrom };
@@ -584,7 +599,7 @@ export default function TrackerEditor() {
           <>
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
               <Text style={[styles.help, { color: colors.muted }]}>
-                The reading meets its goal when both numbers are at or below their targets.
+                Both readings must be inside their preferred ranges. The adult defaults are 90–120 systolic and 60–80 diastolic; personalize these with a clinician when appropriate.
               </Text>
             ) : (
             <>
@@ -624,13 +639,25 @@ export default function TrackerEditor() {
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
               <View style={styles.columns}>
                 <Field
-                  label="Systolic target"
+                  label="Systolic from"
+                  value={rangeMin}
+                  set={setRangeMin}
+                  colors={colors}
+                />
+                <Field
+                  label="Systolic to"
                   value={goal}
                   set={setGoal}
                   colors={colors}
                 />
                 <Field
-                  label="Diastolic target"
+                  label="Diastolic from"
+                  value={diastolicMin}
+                  set={setDiastolicMin}
+                  colors={colors}
+                />
+                <Field
+                  label="Diastolic to"
                   value={diastolicGoal}
                   set={setDiastolicGoal}
                   colors={colors}

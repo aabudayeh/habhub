@@ -14,6 +14,7 @@ import {
 } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { isMetricTrackedOnDate } from "@/src/domain/metrics";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
@@ -233,6 +234,7 @@ export function MetricGoalsEditor() {
   const metrics = state.metrics
     .filter(
       (metric) =>
+        !isInternalTracker(metric) &&
         metric.dataType !== "text" &&
         metric.dataType !== "photo" &&
         isMetricTrackedOnDate(state, metric, dateKey()),

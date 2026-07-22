@@ -14,6 +14,7 @@ import {
 } from "@/src/components/ui";
 import { formatMetricValue, isMetricTrackedOnDate } from "@/src/domain/metrics";
 import { messageLibrary } from "@/src/domain/social";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { BanterTone, DashboardSection, MetricDefinition } from "@/src/types";
@@ -36,7 +37,9 @@ export default function Customize() {
     ? (params.tab as Tab)
     : "trackers";
   const [tab, setTab] = useState<Tab>(initial);
-  const ordered = [...state.metrics].sort((a, b) => a.order - b.order);
+  const ordered = state.metrics
+    .filter((metric) => !isInternalTracker(metric))
+    .sort((a, b) => a.order - b.order);
 
   function changeTrackedGoal(metric: MetricDefinition, value: boolean) {
     const action = value ? "Start tracking" : "Stop tracking";

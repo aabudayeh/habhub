@@ -535,7 +535,21 @@ export function metricApplicableOnDate(
   userId: string,
   localDate: string,
 ) {
-  if (metric.activeFrom > localDate) return false;
+  const hasExplicitData =
+    metric.dataType === "photo"
+      ? state.photos.some(
+          (photo) =>
+            photo.userId === userId && photo.localDate === localDate,
+        )
+      : state.entries.some(
+          (entry) =>
+            entry.userId === userId &&
+            entry.metricId === metric.id &&
+            entry.localDate === localDate,
+        );
+  // A backdated entry remains viewable even when the tracker itself was added
+  // later. This does not make the goal retroactively tracked.
+  if (metric.activeFrom > localDate && !hasExplicitData) return false;
   if (metric.id === "deficit")
     return state.entries.some(
       (entry) =>
@@ -706,16 +720,24 @@ export function scheduledGoalReached(
       safeMetricValue(state, metric, userId, date),
       effectiveGoalTarget(state, metric, userId, date),
     );
-    if (metric.id !== "blood_pressure_systolic") return primaryReached;
+    const isBloodPressure =
+      metric.id === "blood_pressure_systolic" ||
+      (metric.healthMapping?.dataType === "blood_pressure" &&
+        metric.healthMapping.field === "systolic");
+    if (!isBloodPressure) return primaryReached;
     const diastolic = state.metrics.find(
-      (candidate) => candidate.id === "blood_pressure_diastolic",
+      (candidate) =>
+        candidate.id === "blood_pressure_diastolic" ||
+        (candidate.healthMapping?.dataType === "blood_pressure" &&
+          candidate.healthMapping.field === "diastolic"),
     );
     const companion =
       diastolic ??
       ({
         ...metric,
         id: "blood_pressure_diastolic",
-        goal: { kind: "at_most", target: 80 },
+        goal: { kind: "exact", target: 80 },
+        goalRange: { min: 60, max: 80 },
         goalEnabled: true,
       } as MetricDefinition);
     return (
