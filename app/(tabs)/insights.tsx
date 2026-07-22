@@ -423,9 +423,9 @@ function TrackedSummary({
   const totals = dates.map((date) =>
     trackedGoalSummary(state, state.currentUserId, date),
   );
-  const eligible = totals.filter((item) => item.applicableTotal > 0);
+  const eligible = totals.filter((item) => item.total > 0);
   const met = totals.reduce((sum, item) => sum + item.met, 0);
-  const possible = totals.reduce((sum, item) => sum + item.applicableTotal, 0);
+  const possible = totals.reduce((sum, item) => sum + item.total, 0);
   const perfect = eligible.filter((item) => item.allMet).length;
   const streak = longestStreakWithRest(
     state,
@@ -433,24 +433,38 @@ function TrackedSummary({
     (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
   );
   return (
-    <Pressable onLongPress={onEdit}>
-    <Card style={styles.trackedSummary}>
+    <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
+    <Card style={styles.summary}>
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
         <Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} />
       </View>
-      <View style={styles.trackedCopy}>
-        <Text style={[styles.summaryName, { color: colors.ink }]}>Tracked goals</Text>
-        <Text style={[styles.summaryLabel, { color: colors.muted }]}>
-          {met}/{possible} goals · {possible ? Math.round((met / possible) * 100) : 0}%
+      <View style={styles.summaryPrimary}>
+        <Text numberOfLines={1} style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}>Tracked goals</Text>
+        <Text style={[styles.summaryValue, { color: colors.ink }]}>{met}/{possible}</Text>
+        <Text style={[styles.summaryUnit, { color: colors.muted }]}>goals complete</Text>
+      </View>
+      <View style={styles.summaryDetail}>
+        <Text
+          numberOfLines={2}
+          style={[styles.summaryLabel, { color: colors.muted }]}
+        >
+          {possible ? Math.round((met / possible) * 100) : 0}% completed across this range
+        </Text>
+        <Text
+          numberOfLines={2}
+          style={[styles.remaining, { color: colors.ink }]}
+        >
+          {perfect}/{eligible.length} days with every goal complete
         </Text>
       </View>
-      <View style={styles.trackedStat}>
-        <Text style={[styles.summaryValue, { color: colors.ink }]}>{perfect}/{eligible.length}</Text>
-        <Text style={[styles.summaryLabel, { color: colors.muted }]}>all-goal days</Text>
+      <View style={styles.summaryGoal}>
+        <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
+          {perfect}/{eligible.length} all-goal days
+        </Text>
+        <Text style={[styles.streakLine, { color: colors.muted }]}>Longest streak {streak} days</Text>
       </View>
-      <Text style={[styles.streakLine, { color: TRACKED_COLOR }]}>Best {streak}d</Text>
       {editing ? (
         <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
           <Ionicons name="remove" size={16} color={palette.white} />

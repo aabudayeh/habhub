@@ -1031,7 +1031,7 @@ export function createInitialState(): AppState {
     metricConfiguration: DEFAULT_METRICS,
   };
   return {
-    version: 18,
+    version: 19,
     currentUserId: "ahmad",
     group,
     groups: [group],

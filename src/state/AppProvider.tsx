@@ -1285,10 +1285,20 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 18,
+            version: 19,
             settings: {
               ...defaults.settings,
               ...restored.settings,
+              progressMetricIds:
+                restoredVersion < 19
+                  ? [
+                      "tracked_goals",
+                      ...(restored.settings?.progressMetricIds ?? []).filter(
+                        (id) => id !== "tracked_goals",
+                      ),
+                    ]
+                  : (restored.settings?.progressMetricIds ??
+                    defaults.settings.progressMetricIds),
               onboardingComplete:
                 restored.settings?.onboardingComplete ?? restoredVersion < 15,
               energyProfile: {

@@ -93,7 +93,7 @@ export default function Today() {
   const monthSummaries = monthDateRange(today)
     .filter((date) => date <= today)
     .map((date) => trackedGoalSummary(state, state.currentUserId, date))
-    .filter((summary) => summary.applicableTotal > 0);
+    .filter((summary) => summary.total > 0);
   const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
@@ -312,7 +312,7 @@ export default function Today() {
                   style={[
                     styles.dot,
                     {
-                      backgroundColor: met
+                      backgroundColor: !unavailable && met
                         ? palette.lime
                         : "rgba(255,255,255,.16)",
                     },

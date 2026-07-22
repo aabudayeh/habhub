@@ -700,6 +700,7 @@ export function scheduledGoalReached(
   localDate: string,
 ) {
   const reachedOnDate = (date: string) => {
+    if (!metricApplicableOnDate(state, metric, userId, date)) return false;
     const primaryReached = goalReached(
       metric,
       safeMetricValue(state, metric, userId, date),

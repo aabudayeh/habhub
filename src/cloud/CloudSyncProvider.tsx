@@ -202,7 +202,7 @@ function createCleanAccountState(user: User): AppState {
 function bindStateToAccount(state: AppState, user: User): AppState {
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
-  if (Number(state.version ?? 1) >= 18)
+  if (Number(state.version ?? 1) >= 19)
     return {
       ...state,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
@@ -214,8 +214,17 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return {
       ...state,
-      version: 18,
-      settings: { ...state.settings, fontScale: 1 },
+      version: 19,
+      settings: {
+        ...state.settings,
+        fontScale: state.settings.fontScale ?? 1,
+        progressMetricIds: [
+          "tracked_goals",
+          ...(state.settings.progressMetricIds ?? []).filter(
+            (id) => id !== "tracked_goals",
+          ),
+        ],
+      },
     };
   const retrospective = new Set(
     state.metrics
@@ -229,8 +238,17 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return {
     ...state,
-    version: 18,
-    settings: { ...state.settings, fontScale: 1 },
+    version: 19,
+    settings: {
+      ...state.settings,
+      fontScale: state.settings.fontScale ?? 1,
+      progressMetricIds: [
+        "tracked_goals",
+        ...(state.settings.progressMetricIds ?? []).filter(
+          (id) => id !== "tracked_goals",
+        ),
+      ],
+    },
     metrics: state.metrics.map((metric) =>
       retrospective.has(metric.id)
         ? { ...metric, activeFrom: historicalStart }
