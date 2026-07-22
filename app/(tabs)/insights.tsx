@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -59,12 +59,14 @@ export default function Insights() {
     ),
   );
   const [filterTouched, setFilterTouched] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
   const [view, setView] = useState<ViewMode>("week");
   const [month, setMonth] = useState(today);
   const [weekAnchor, setWeekAnchor] = useState(today);
-  const selectedMetrics = metrics.filter((metric) =>
-    selectedIds.includes(metric.id),
-  );
+  const selectedMetrics = selectedIds
+    .map((id) => metrics.find((metric) => metric.id === id))
+    .filter((metric): metric is MetricDefinition => Boolean(metric));
   const tracked = selectedIds.includes(TRACKED);
   const dates =
     view === "week"
@@ -90,6 +92,14 @@ export default function Insights() {
     setSelectedIds(ids);
     updateSettings({ progressMetricIds: ids });
     setFilterTouched(true);
+  }
+  function move(metricId: string, targetIndex: number) {
+    const current = selectedIds.filter((id) => id !== TRACKED);
+    const index = current.indexOf(metricId);
+    if (index < 0) return;
+    const [item] = current.splice(index, 1);
+    current.splice(Math.max(0, Math.min(targetIndex, current.length)), 0, item);
+    select(selectedIds.includes(TRACKED) ? [TRACKED, ...current] : current);
   }
 
   function openDay(day: string) {
@@ -173,7 +183,22 @@ export default function Insights() {
 
   return (
     <Screen contentContainerStyle={{ paddingBottom: 14 }}>
-      <PageHeader title="Progress" />
+      <PageHeader
+        title="Progress"
+        action={
+          editing ? (
+            <Pressable
+              onPress={() => {
+                setEditing(false);
+                setShowPicker(false);
+              }}
+              style={[styles.done, { backgroundColor: accent }]}
+            >
+              <Text style={styles.doneText}>Done</Text>
+            </Pressable>
+          ) : undefined
+        }
+      />
       <View style={styles.controls}>
         <View style={styles.mode}>
           <Chip
@@ -323,26 +348,60 @@ export default function Insights() {
           </Text>
         </Card>
       )}
-      <MetricSelector
-        items={selectorItems}
-        selectedIds={selectedIds}
-        onChange={select}
-        title="What to show"
-      />
       <SectionHeader
         title={`${view === "week" ? "7-day" : "Month"} summaries`}
       />
       <View style={styles.summaries}>
-        {tracked ? <TrackedSummary state={state} dates={dates} /> : null}
-        {selectedMetrics.map((metric) => (
+        {tracked ? (
+          <TrackedSummary
+            state={state}
+            dates={dates}
+            editing={editing}
+            onEdit={() => setEditing(true)}
+            onRemove={() => select(selectedIds.filter((id) => id !== TRACKED))}
+          />
+        ) : null}
+        {selectedMetrics.map((metric, index) => (
           <MetricSummary
             key={metric.id}
             state={state}
             metric={metric}
             dates={dates}
+            editing={editing}
+            index={index}
+            count={selectedMetrics.length}
+            onEdit={() => setEditing(true)}
+            onMove={(target) => move(metric.id, target)}
+            onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
           />
         ))}
       </View>
+      {editing ? (
+        <>
+          <Pressable
+            onPress={() => setShowPicker((value) => !value)}
+            style={[styles.addExisting, { borderColor: accent }]}
+          >
+            <Ionicons name="add" size={18} color={accent} />
+            <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
+          </Pressable>
+          {showPicker ? (
+            <MetricSelector
+              items={selectorItems}
+              selectedIds={selectedIds}
+              onChange={select}
+              title="What to show"
+            />
+          ) : null}
+        </>
+      ) : (
+        <Pressable
+          onPress={() => setEditing(true)}
+          style={styles.editHint}
+        >
+          <Text style={[styles.hint, { color: colors.muted }]}>Hold a summary to edit what Progress shows</Text>
+        </Pressable>
+      )}
     </Screen>
   );
 }
@@ -350,9 +409,15 @@ export default function Insights() {
 function TrackedSummary({
   state,
   dates,
+  editing,
+  onEdit,
+  onRemove,
 }: {
   state: AppState;
   dates: string[];
+  editing: boolean;
+  onEdit: () => void;
+  onRemove: () => void;
 }) {
   const colors = useAppColors();
   const totals = dates.map((date) =>
@@ -368,6 +433,7 @@ function TrackedSummary({
     (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
   );
   return (
+    <Pressable onLongPress={onEdit}>
     <Card style={styles.trackedSummary}>
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
@@ -385,7 +451,13 @@ function TrackedSummary({
         <Text style={[styles.summaryLabel, { color: colors.muted }]}>all-goal days</Text>
       </View>
       <Text style={[styles.streakLine, { color: TRACKED_COLOR }]}>Best {streak}d</Text>
+      {editing ? (
+        <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+          <Ionicons name="remove" size={16} color={palette.white} />
+        </Pressable>
+      ) : null}
     </Card>
+    </Pressable>
   );
 }
 
@@ -393,12 +465,36 @@ function MetricSummary({
   state,
   metric,
   dates,
+  editing,
+  index,
+  count,
+  onEdit,
+  onMove,
+  onRemove,
 }: {
   state: AppState;
   metric: MetricDefinition;
   dates: string[];
+  editing: boolean;
+  index: number;
+  count: number;
+  onEdit: () => void;
+  onMove: (target: number) => void;
+  onRemove: () => void;
 }) {
   const colors = useAppColors();
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 3,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: (_event, gesture) =>
+          onMove(Math.max(0, Math.min(count - 1, index + Math.round(gesture.dy / 82)))),
+      }),
+    [count, editing, index, onMove],
+  );
   const active = dates.filter((date) => metric.activeFrom <= date);
   const applicable = active.filter((date) =>
     metricApplicableOnDate(state, metric, state.currentUserId, date),
@@ -475,14 +571,20 @@ function MetricSummary({
   return (
     <Pressable
       style={styles.summaryWrap}
+      onLongPress={onEdit}
       onPress={() =>
-        router.navigate({
+        editing ? undefined : router.navigate({
           pathname: "/metric-detail" as never,
           params: { metric: metric.id, date: dates[dates.length - 1] },
         } as never)
       }
     >
       <Card style={styles.summary}>
+        {editing ? (
+          <View {...responder.panHandlers} style={styles.drag}>
+            <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
+          </View>
+        ) : null}
         <View
           style={[styles.summaryIcon, { backgroundColor: `${metric.color}18` }]}
         >
@@ -546,12 +648,24 @@ function MetricSummary({
           Longest streak {streak} days
         </Text>
         </View>
+        {editing ? (
+          <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+            <Ionicons name="remove" size={16} color={palette.white} />
+          </Pressable>
+        ) : null}
       </Card>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
+  doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
+  addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },
+  addExistingText: { fontSize: 10, fontWeight: "900" },
+  editHint: { alignItems: "center", paddingVertical: 8 },
+  drag: { width: 28, alignItems: "center", justifyContent: "center" },
+  remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
   recap: {
     flexDirection: "row",
     alignItems: "center",

@@ -8,7 +8,7 @@ import { supabase } from '@/src/lib/supabase';
 import { AppState, NotificationSettings } from '@/src/types';
 import { cycleForecast } from '@/src/domain/cycle';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
-import { isMetricTrackedOnDate, scheduledGoalReached } from '@/src/domain/metrics';
+import { effectiveGoalTarget, isMetricTrackedOnDate, safeMetricValue, scheduledGoalReached } from '@/src/domain/metrics';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -65,6 +65,40 @@ function reminderTime(state: AppState, configured: string) {
   return quiet ? end : configured;
 }
 
+function goalReminderBody(state: AppState, metric: AppState['metrics'][number], localDate: string) {
+  const value = safeMetricValue(state, metric, state.currentUserId, localDate);
+  const target = effectiveGoalTarget(state, metric, state.currentUserId, localDate);
+  const remaining = Math.max(0, target - value);
+  if (metric.id === 'steps')
+    return remaining > 0
+      ? `${Math.round(remaining).toLocaleString()} steps remain. A short walk can move today forward.`
+      : 'Your step goal is complete.';
+  if (metric.id === 'food') {
+    if (value <= 0) return 'Log your meal when you are ready so today’s energy plan stays accurate.';
+    const lastMeal = state.entries
+      .filter((entry) => entry.userId === state.currentUserId && entry.metricId === 'food' && entry.localDate === localDate)
+      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0]?.nutrition?.mealType;
+    return value > target
+      ? `You are ${Math.round(value - target)} kcal over today’s current food allowance. Activity can still improve the daily balance.`
+      : `${lastMeal ? `${lastMeal[0].toUpperCase()}${lastMeal.slice(1)} logged. ` : ''}${Math.round(remaining)} kcal remain for today.`;
+  }
+  if (['exercise', 'workout_duration'].includes(metric.id)) {
+    const deficit = state.metrics.find((item) => item.id === 'deficit');
+    const needed = deficit
+      ? Math.max(0, effectiveGoalTarget(state, deficit, state.currentUserId, localDate) - safeMetricValue(state, deficit, state.currentUserId, localDate))
+      : remaining;
+    const walkingKcalPerMinute = Math.max(3, state.settings.energyProfile.weightKg * 0.055);
+    return needed > 0
+      ? `About ${Math.round(needed)} active kcal—or roughly ${Math.ceil(needed / walkingKcalPerMinute)} minutes of walking—would close today’s energy gap.`
+      : `You have ${Math.round(remaining)} ${metric.unit} left for this goal.`;
+  }
+  if (metric.goal.kind === 'at_most')
+    return value > target
+      ? `${metric.name} is ${Math.round(value - target)} ${metric.unit} over its target.`
+      : `${Math.round(target - value)} ${metric.unit} remain within today’s target.`;
+  return `${Math.round(remaining)} ${metric.unit} remain to reach today’s ${metric.name.toLowerCase()} goal.`;
+}
+
 export async function syncGoalNotifications(state: AppState) {
   if (Platform.OS === 'web') return;
   const previous = JSON.parse((await AsyncStorage.getItem(GOAL_IDS)) ?? '[]') as string[];
@@ -79,27 +113,32 @@ export async function syncGoalNotifications(state: AppState) {
   const now = new Date();
   const today = dateKey(now);
   const ids: string[] = [];
-  for (let offset = 0; offset < 8 && ids.length < 48; offset += 1) {
+  for (let offset = 0; offset < 8 && ids.length < 64; offset += 1) {
     const localDate = dateWithOffsetFrom(today, offset);
     for (const metric of state.metrics) {
       if (
-        !metric.reminder?.enabled ||
+        !(metric.reminders?.some((item) => item.enabled) || metric.reminder?.enabled) ||
         metric.goalEnabled === false ||
         !isMetricTrackedOnDate(state, metric, localDate) ||
         (offset === 0 && scheduledGoalReached(state, metric, state.currentUserId, localDate))
       ) continue;
-      const time = reminderTime(state, metric.reminder.time || '19:00');
-      const trigger = new Date(`${localDate}T${time}:00`);
-      if (trigger <= now) continue;
-      ids.push(await Notifications.scheduleNotificationAsync({
-        content: {
-          title: `${metric.name} reminder`,
-          body: `A quick check-in can keep your ${metric.name.toLowerCase()} goal on track.`,
-          data: { route: '/metric-detail', metric: metric.id },
-        },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
-      }));
-      if (ids.length >= 48) break;
+      const configured = metric.reminders?.length ? metric.reminders : metric.reminder ? [metric.reminder] : [];
+      for (const reminder of configured.filter((item) => item.enabled)) {
+        if (!/^\d{2}:\d{2}$/.test(reminder.time)) continue;
+        const time = reminderTime(state, reminder.time);
+        const trigger = new Date(`${localDate}T${time}:00`);
+        if (trigger <= now) continue;
+        ids.push(await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `${metric.name} reminder`,
+            body: goalReminderBody(state, metric, localDate),
+            data: { route: '/metric-detail', metric: metric.id },
+          },
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
+        }));
+        if (ids.length >= 64) break;
+      }
+      if (ids.length >= 64) break;
     }
   }
   await AsyncStorage.setItem(GOAL_IDS, JSON.stringify(ids));

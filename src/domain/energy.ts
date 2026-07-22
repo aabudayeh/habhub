@@ -37,13 +37,13 @@ export const KCAL_PER_KG_ESTIMATE = 7700;
 
 export function recommendedDailyDeficit(profile: EnergyProfile): number {
   const requested = Math.max(0, profile.desiredWeeklyLossKg) * KCAL_PER_KG_ESTIMATE / 7;
-  // A conservative product guardrail: never recommend more than ~1% body weight/week.
-  const weightBasedCeiling = Math.max(0, profile.weightKg * 0.01) * KCAL_PER_KG_ESTIMATE / 7;
-  return Math.round(Math.min(requested, weightBasedCeiling, 1100));
+  // Respect the selected plan consistently. The UI separately warns when the
+  // resulting intake is aggressive rather than silently flattening 0.75/1 kg.
+  return Math.round(Math.min(requested, 1100));
 }
 
 export function recommendedDailyIntake(profile: EnergyProfile): number {
-  return Math.max(profile.sex === 'male' ? 1500 : 1200, Math.round(calculateDailyEnergy(profile) - recommendedDailyDeficit(profile)));
+  return Math.max(0, Math.round(calculateDailyEnergy(profile) - recommendedDailyDeficit(profile)));
 }
 
 export function recommendedDailyIntakeForDirection(profile:EnergyProfile,direction:WeightDirection){

@@ -26,6 +26,8 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
 
+type MealType = "breakfast" | "lunch" | "dinner" | "snack";
+
 const privacyOptions: {
   value: Visibility;
   label: string;
@@ -130,6 +132,15 @@ export default function LogScreen() {
   const [workoutDistance, setWorkoutDistance] = useState("");
   const [bpDiastolic, setBpDiastolic] = useState("");
   const [bpPulse, setBpPulse] = useState("");
+  const [mealType, setMealType] = useState<MealType>(
+    now.getHours() < 11
+      ? "breakfast"
+      : now.getHours() < 16
+        ? "lunch"
+        : now.getHours() < 21
+          ? "dinner"
+          : "snack",
+  );
 
   useEffect(() => {
     if (
@@ -259,6 +270,7 @@ export default function LogScreen() {
         "Use YYYY-MM-DD and a 24-hour time such as 18:30.",
       );
     const nutrition = {
+      mealType,
       proteinG: Number(protein) || undefined,
       fatG: Number(fat) || undefined,
       carbsG: Number(carbs) || undefined,
@@ -370,7 +382,6 @@ export default function LogScreen() {
       companionValues.forEach(([metricId, raw]) => {
         const amount = Number(raw.replace(",", "."));
         if (
-          state.metrics.some((metric) => metric.id === metricId) &&
           Number.isFinite(amount) &&
           amount > 0
         )
@@ -575,6 +586,17 @@ export default function LogScreen() {
           </View>
           {selected.id === "food" ? (
             <>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>Meal</Text>
+              <View style={styles.mealTypes}>
+                {(["breakfast", "lunch", "dinner", "snack"] as MealType[]).map((item) => (
+                  <Chip
+                    key={item}
+                    label={item[0].toUpperCase() + item.slice(1)}
+                    selected={mealType === item}
+                    onPress={() => setMealType(item)}
+                  />
+                ))}
+              </View>
               <Text style={[styles.fieldLabel, { color: colors.muted }]}>
                 What did you eat?
               </Text>
@@ -1016,6 +1038,7 @@ export default function LogScreen() {
 }
 
 const styles = StyleSheet.create({
+  mealTypes: { flexDirection: "row", flexWrap: "wrap", gap: 5, marginBottom: 8 },
   compactHeader: {
     height: 38,
     flexDirection: "row",

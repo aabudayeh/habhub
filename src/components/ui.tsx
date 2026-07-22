@@ -1,14 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import React, { PropsWithChildren, ReactNode } from "react";
+import React, { PropsWithChildren, ReactNode, useEffect, useRef } from "react";
 import {
   ActivityIndicator,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   ScrollViewProps,
+  TextInput as NativeTextInput,
   StyleProp,
   StyleSheet,
   View,
@@ -33,6 +35,9 @@ export function Screen({
 }: ScrollViewProps & { scrollRef?: React.RefObject<ScrollView | null> }) {
   const compact = useCompactMode();
   const colors = useAppColors();
+  const internalRef = useRef<ScrollView>(null);
+  const activeRef = scrollRef ?? internalRef;
+  useKeyboardReveal(activeRef);
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
@@ -43,7 +48,7 @@ export function Screen({
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <ScrollView
-          ref={scrollRef}
+          ref={activeRef}
           style={{ backgroundColor: colors.canvas }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
@@ -61,6 +66,23 @@ export function Screen({
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+export function useKeyboardReveal(
+  scrollRef: React.RefObject<ScrollView | null>,
+) {
+  useEffect(() => {
+    const subscription = Keyboard.addListener("keyboardDidShow", () => {
+      const focused = NativeTextInput.State.currentlyFocusedInput?.();
+      if (!focused) return;
+      setTimeout(() => {
+        scrollRef.current
+          ?.getScrollResponder()
+          ?.scrollResponderScrollNativeHandleToKeyboard(focused, 96, true);
+      }, 20);
+    });
+    return () => subscription.remove();
+  }, [scrollRef]);
 }
 
 export function PageHeader({

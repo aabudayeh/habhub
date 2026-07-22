@@ -26,6 +26,7 @@ import {
   safeMetricValue,
 } from "@/src/domain/metrics";
 import { randomMessage } from "@/src/domain/social";
+import { defaultReminderTimes } from "@/src/domain/reminders";
 import { palette } from "@/src/theme";
 import {
   AppState,
@@ -162,16 +163,29 @@ function slugify(name: string) {
 }
 
 function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
-  const deficitTarget = recommendedDailyDeficit(energyProfile);
   const direction = state.settings.weightDirection ?? "lose";
-  const foodTarget = recommendedDailyIntakeForDirection(energyProfile, direction);
+  const weightKg = Math.max(0.1, energyProfile.weightKg);
+  const normalizedProfile: EnergyProfile = {
+    ...energyProfile,
+    weightKg,
+    targetWeightKg:
+      direction === "maintain"
+        ? weightKg
+        : direction === "lose"
+          ? Math.min(energyProfile.targetWeightKg, Math.max(0.1, weightKg - 0.1))
+          : Math.max(energyProfile.targetWeightKg, weightKg + 0.1),
+    desiredWeeklyLossKg:
+      direction === "maintain" ? 0 : energyProfile.desiredWeeklyLossKg,
+  };
+  const deficitTarget = recommendedDailyDeficit(normalizedProfile);
+  const foodTarget = recommendedDailyIntakeForDirection(normalizedProfile, direction);
   return withPersonalMetrics(
     {
       ...state,
-      settings: { ...state.settings, energyProfile },
+      settings: { ...state.settings, energyProfile: normalizedProfile },
       energyProfiles: {
         ...state.energyProfiles,
-        [state.currentUserId]: energyProfile,
+        [state.currentUserId]: normalizedProfile,
       },
     },
     state.metrics.map((metric) =>
@@ -184,7 +198,7 @@ function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
         : metric.id === "food"
           ? { ...metric, goal: { kind: "at_most" as const, target: foodTarget } }
           : metric.id === "weight"
-            ? { ...metric, goal: { kind: direction === "gain" ? "at_least" as const : "at_most" as const, target: energyProfile.targetWeightKg } }
+            ? { ...metric, goal: { kind: direction === "gain" ? "at_least" as const : "at_most" as const, target: normalizedProfile.targetWeightKg } }
             : metric,
     ),
   );
@@ -757,7 +771,31 @@ function reducer(state: AppState, action: Action): AppState {
         ...state.settings.energyProfile,
         ...action.changes,
       };
-      return withEnergyProfile(state, energyProfile);
+      const next = withEnergyProfile(state, energyProfile);
+      if (!Object.prototype.hasOwnProperty.call(action.changes, "weightKg"))
+        return next;
+      const localDate = dateKey();
+      const id = `profile-weight:${state.currentUserId}:${localDate}`;
+      return {
+        ...next,
+        entries: [
+          ...next.entries.filter((entry) => entry.id !== id),
+          {
+            id,
+            metricId: "weight",
+            userId: state.currentUserId,
+            value: next.settings.energyProfile.weightKg,
+            localDate,
+            recordedAt: new Date().toISOString(),
+            visibility:
+              next.metrics.find((metric) => metric.id === "weight")
+                ?.defaultVisibility ?? "group",
+            source: "manual",
+            label: "Profile weight",
+            note: "Updated from Body & energy profile",
+          },
+        ],
+      };
     }
     case "createGroup": {
       const currentMember = state.group.members.find(
@@ -1247,7 +1285,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 17,
+            version: 18,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -1337,10 +1375,35 @@ export function AppProvider({ children }: PropsWithChildren) {
                       formula: "bmr + daily_activity + exercise - food",
                     }
                   : enriched;
-              if (restoredVersion < 4 && normalized.id === "weight")
+              const upgraded =
+                restoredVersion < 18
+                  ? {
+                      ...normalized,
+                      reminders:
+                        normalized.reminders?.length
+                          ? normalized.reminders
+                          : defaultReminderTimes(normalized).map((time) => ({
+                              enabled: normalized.reminder?.enabled ?? false,
+                              time,
+                            })),
+                      ...(["blood_pressure_systolic", "blood_pressure_diastolic"].includes(normalized.id)
+                        ? {
+                            goalEnabled: true,
+                            goal: {
+                              kind: "at_most" as const,
+                              target:
+                                normalized.id === "blood_pressure_systolic"
+                                  ? 120
+                                  : 80,
+                            },
+                          }
+                        : {}),
+                    }
+                  : normalized;
+              if (restoredVersion < 4 && upgraded.id === "weight")
                 return {
-                  ...normalized,
-                  sections: { ...normalized.sections, today: false },
+                  ...upgraded,
+                  sections: { ...upgraded.sections, today: false },
                 };
               const profile = {
                 ...defaults.settings.energyProfile,
@@ -1348,29 +1411,29 @@ export function AppProvider({ children }: PropsWithChildren) {
               };
               if (
                 restoredVersion < 4 &&
-                normalized.id === "deficit" &&
-                normalized.goal.target === 500
+                upgraded.id === "deficit" &&
+                upgraded.goal.target === 500
               )
                 return {
-                  ...normalized,
+                  ...upgraded,
                   goal: {
-                    ...normalized.goal,
+                    ...upgraded.goal,
                     target: recommendedDailyDeficit(profile),
                   },
                 };
               if (
                 restoredVersion < 4 &&
-                normalized.id === "food" &&
-                normalized.goal.target === 2000
+                upgraded.id === "food" &&
+                upgraded.goal.target === 2000
               )
                 return {
-                  ...normalized,
+                  ...upgraded,
                   goal: {
-                    ...normalized.goal,
+                    ...upgraded.goal,
                     target: recommendedDailyIntake(profile),
                   },
                 };
-              return normalized;
+              return upgraded;
             }),
             group: {
               ...(restored.group ?? defaults.group),

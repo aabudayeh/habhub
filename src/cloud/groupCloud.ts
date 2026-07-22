@@ -97,6 +97,7 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
       configuration.activeFrom ?? new Date().toISOString().slice(0, 10),
     goalSchedule: configuration.goalSchedule,
     reminder: configuration.reminder,
+    reminders: configuration.reminders,
   };
 }
 
@@ -128,6 +129,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       activeFrom: metric.activeFrom,
       goalSchedule: metric.goalSchedule,
       reminder: metric.reminder,
+      reminders: metric.reminders,
     },
   };
 }

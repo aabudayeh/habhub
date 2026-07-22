@@ -630,6 +630,9 @@ function EntryRow({
         </View>
         {entry.label ? (
           <Text style={[styles.entryLabel, { color: colors.ink }]}>
+            {entry.nutrition?.mealType
+              ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} · `
+              : ""}
             {entry.label}
           </Text>
         ) : null}
@@ -648,7 +651,7 @@ function EntryRow({
               ["Sodium", entry.nutrition.sodiumMg, "mg"],
             ]
               .filter((item) => item[1])
-              .map((item) => `${item[0]} ${item[1]}${item[2]}`)
+              .map((item) => `${item[0]} ${Math.round(Number(item[1]) * 10) / 10}${item[2]}`)
               .join(" · ")}
           </Text>
         ) : null}

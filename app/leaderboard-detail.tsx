@@ -482,7 +482,9 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
         <View style={styles.logTop}>
           <Text style={[styles.logValue, { color: colors.ink }]}>
             {value}
-            {entry.label ? ` · ${entry.label}` : ""}
+            {entry.label
+              ? ` · ${entry.nutrition?.mealType ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} · ` : ""}${entry.label}`
+              : ""}
           </Text>
           <Text style={[styles.logDate, { color: colors.faint }]}>
             {friendlyDate(entry.localDate)}
@@ -501,7 +503,7 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
               ["Sodium", entry.nutrition.sodiumMg, "mg"],
             ]
               .filter((item) => item[1])
-              .map((item) => `${item[0]} ${item[1]}${item[2]}`)
+              .map((item) => `${item[0]} ${Math.round(Number(item[1]) * 10) / 10}${item[2]}`)
               .join(" · ")}
           </Text>
         ) : null}

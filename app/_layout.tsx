@@ -7,7 +7,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
-import { CloudSyncProvider, useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { CloudSyncProvider } from "@/src/cloud/CloudSyncProvider";
 import { HealthSyncProvider } from "@/src/health/HealthSyncProvider";
 import { AppProvider, useApp } from "@/src/state/AppProvider";
 import {
@@ -46,7 +46,6 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const auth = useAuth();
-  const cloud = useCloudSync();
   const { state } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
@@ -63,7 +62,7 @@ function RootNavigator() {
   const goalReminderKey = JSON.stringify({
     user: state.currentUserId,
     periods: state.trackedGoalPeriods,
-    reminders: state.metrics.map((metric) => [metric.id, metric.activeFrom, metric.goalSchedule, metric.reminder]),
+    reminders: state.metrics.map((metric) => [metric.id, metric.activeFrom, metric.goalSchedule, metric.reminder, metric.reminders]),
     entries: state.entries
       .filter((entry) => entry.userId === state.currentUserId && entry.localDate >= dateKey())
       .map((entry) => [entry.metricId, entry.localDate, entry.value]),
@@ -80,19 +79,6 @@ function RootNavigator() {
     rootSegment === "onboarding";
 
   if (auth.status === "loading") {
-    return (
-      <View style={styles.loading}>
-        <View style={styles.mark}>
-          <Text style={styles.initial}>N</Text>
-        </View>
-        <ActivityIndicator color={palette.primary} />
-      </View>
-    );
-  }
-  if (
-    auth.status === "signedIn" &&
-    (cloud.status === "disabled" || cloud.status === "initializing")
-  ) {
     return (
       <View style={styles.loading}>
         <View style={styles.mark}>

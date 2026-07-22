@@ -15,7 +15,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth/AuthProvider";
-import { Button, Chip, ProgressBar } from "@/src/components/ui";
+import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
@@ -150,6 +150,8 @@ export default function Onboarding() {
       : "index",
   );
   const initialized = useRef(false);
+  const scrollRef = useRef<ScrollView>(null);
+  useKeyboardReveal(scrollRef);
   const nextProfile = useMemo(
     () => ({
       ...profile,
@@ -246,6 +248,10 @@ export default function Onboarding() {
       ),
     [healthChoices, proposed],
   );
+  const targetIsValid =
+    direction === "maintain" ||
+    (direction === "lose" && nextProfile.targetWeightKg < nextProfile.weightKg) ||
+    (direction === "gain" && nextProfile.targetWeightKg > nextProfile.weightKg);
   useEffect(() => {
     if (step === 2 && !initialized.current) {
       initialized.current = true;
@@ -282,6 +288,7 @@ export default function Onboarding() {
         healthMapping: item.healthMapping,
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
+        reminders: item.reminders,
         rankingDirection: item.rankingDirection,
         defaultVisibility: item.defaultVisibility,
         formula: item.formula,
@@ -367,6 +374,7 @@ export default function Onboarding() {
           </View>
           <ProgressBar progress={(step + 1) / 5} color={accent} />
           <ScrollView
+            ref={scrollRef}
             style={styles.body}
             contentContainerStyle={styles.bodyContent}
             showsVerticalScrollIndicator={false}
@@ -514,6 +522,13 @@ export default function Onboarding() {
                         ),
                       )}
                     </View>
+                    {!targetIsValid ? (
+                      <Text style={[styles.validation, { color: palette.red }]}>
+                        {direction === "lose"
+                          ? "Choose a target below your current weight."
+                          : "Choose a target above your current weight."}
+                      </Text>
+                    ) : null}
                     {direction !== "maintain" ? (
                       <>
                         <Text style={[styles.label, { color: colors.ink }]}>
@@ -844,6 +859,7 @@ export default function Onboarding() {
                 label={step === 4 ? "Start using MetricRally" : "Continue"}
                 disabled={
                   (step === 0 && !goals.length) ||
+                  (step === 1 && goals.includes("weight") && !targetIsValid) ||
                   (step === 2 && !selected.length)
                 }
                 onPress={() => {
@@ -1034,6 +1050,7 @@ const styles = StyleSheet.create({
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   fields: { flexDirection: "row", gap: 8 },
   fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 },
+  validation: { fontSize: 9, fontWeight: "800", marginBottom: 8 },
   input: {
     height: 41,
     borderWidth: 1,

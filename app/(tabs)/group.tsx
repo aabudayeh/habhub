@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Pressable, Share, StyleSheet, View } from "react-native";
+import React, { ReactNode, useMemo, useState } from "react";
+import { PanResponder, Pressable, Share, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -33,6 +33,8 @@ export default function LeaderboardScreen() {
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
   const tracked = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
       metric.scoreWeight > 0 &&
@@ -67,6 +69,24 @@ export default function LeaderboardScreen() {
       message: groupInviteMessage(state.group.name, state.group.inviteCode),
     });
   }
+  function saveSelection(ids: string[]) {
+    const next = ids.length ? ids : [SCORE_ID];
+    setSelectedIds(next);
+    updateSettings({
+      leaderboardMetricIdsByGroup: {
+        ...state.settings.leaderboardMetricIdsByGroup,
+        [state.group.id]: next,
+      },
+    });
+  }
+  function move(id: string, target: number) {
+    const next = [...selected];
+    const index = next.indexOf(id);
+    if (index < 0) return;
+    const [item] = next.splice(index, 1);
+    next.splice(Math.max(0, Math.min(target, next.length)), 0, item);
+    saveSelection(next);
+  }
   const options = [
     {
       id: SCORE_ID,
@@ -100,9 +120,22 @@ export default function LeaderboardScreen() {
     <Screen contentContainerStyle={{ paddingBottom: 14 }}>
       <PageHeader
         title="Leaderboard"
+        action={
+          editing ? (
+            <Pressable
+              onPress={() => {
+                setEditing(false);
+                setShowPicker(false);
+              }}
+              style={[styles.done, { backgroundColor: accent }]}
+            >
+              <Text style={styles.doneText}>Done</Text>
+            </Pressable>
+          ) : undefined
+        }
         subtitle={`${state.group.name} · ${state.group.members.length} friends`}
       />
-      {selected.map((id) => {
+      {selected.map((id, cardIndex) => {
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
         const rows = leaderboardRows(
@@ -113,10 +146,20 @@ export default function LeaderboardScreen() {
           includeScore,
         );
         return (
-          <Card key={id} style={styles.ranking}>
+          <EditableRankingCard
+            key={id}
+            editing={editing}
+            index={cardIndex}
+            count={selected.length}
+            colors={colors}
+            onMove={(target) => move(id, target)}
+            onRemove={() => saveSelection(selected.filter((item) => item !== id))}
+          >
+          <Card style={styles.ranking}>
             <Pressable
+              onLongPress={() => setEditing(true)}
               onPress={() =>
-                router.navigate({
+                editing ? undefined : router.navigate({
                   pathname: "/leaderboard-detail",
                   params: { period, anchor, metrics: id },
                 } as never)
@@ -164,7 +207,7 @@ export default function LeaderboardScreen() {
                 <Pressable
                   key={row.member.id}
                   onPress={() =>
-                    router.navigate({
+                    editing ? undefined : router.navigate({
                       pathname: "/member/[id]",
                       params: {
                         id: row.member.id,
@@ -241,8 +284,32 @@ export default function LeaderboardScreen() {
               );
             })}
           </Card>
+          </EditableRankingCard>
         );
       })}
+      {editing ? (
+        <>
+          <Pressable
+            onPress={() => setShowPicker((value) => !value)}
+            style={[styles.addExisting, { borderColor: accent }]}
+          >
+            <Ionicons name="add" size={18} color={accent} />
+            <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
+          </Pressable>
+          {showPicker ? (
+            <MetricSelector
+              title="What to show"
+              items={options}
+              selectedIds={selected}
+              onChange={saveSelection}
+            />
+          ) : null}
+        </>
+      ) : (
+        <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
+          <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
+        </Pressable>
+      )}
       <Card style={styles.controls}>
         <MetricSelector
           title="Time range"
@@ -284,21 +351,6 @@ export default function LeaderboardScreen() {
             ) : null}
           </View>
         ) : null}
-        <MetricSelector
-          title="What to show"
-          items={options}
-          selectedIds={selected}
-          onChange={(ids) => {
-            const next = ids.length ? ids : [SCORE_ID];
-            setSelectedIds(next);
-            updateSettings({
-              leaderboardMetricIdsByGroup: {
-                ...state.settings.leaderboardMetricIdsByGroup,
-                [state.group.id]: next,
-              },
-            });
-          }}
-        />
       </Card>
       <View style={styles.actions}>
         <Pressable
@@ -319,8 +371,71 @@ export default function LeaderboardScreen() {
     </Screen>
   );
 }
+
+function EditableRankingCard({
+  children,
+  editing,
+  index,
+  count,
+  colors,
+  onMove,
+  onRemove,
+}: {
+  children: ReactNode;
+  editing: boolean;
+  index: number;
+  count: number;
+  colors: ReturnType<typeof useAppColors>;
+  onMove: (target: number) => void;
+  onRemove: () => void;
+}) {
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 3,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: (_event, gesture) =>
+          onMove(
+            Math.max(
+              0,
+              Math.min(count - 1, index + Math.round(gesture.dy / 180)),
+            ),
+          ),
+      }),
+    [count, editing, index, onMove],
+  );
+  return (
+    <View style={styles.rankingWrap}>
+      {editing ? (
+        <View style={[styles.editBar, { borderColor: colors.border }]}>
+          <View {...responder.panHandlers} style={styles.drag}>
+            <Ionicons name="reorder-three-outline" size={24} color={colors.faint} />
+          </View>
+          <Text style={[styles.dragText, { color: colors.muted }]}>Drag to reorder</Text>
+          <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+            <Ionicons name="remove" size={16} color={palette.white} />
+          </Pressable>
+        </View>
+      ) : null}
+      {children}
+    </View>
+  );
+}
 const styles = StyleSheet.create({
-  ranking: { padding: 7, marginBottom: 6 },
+  done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
+  doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
+  rankingWrap: { marginBottom: 6 },
+  editBar: { height: 38, borderWidth: 1, borderBottomWidth: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, flexDirection: "row", alignItems: "center", paddingHorizontal: 8 },
+  drag: { width: 34, alignItems: "center", justifyContent: "center" },
+  dragText: { flex: 1, fontSize: 9, fontWeight: "800" },
+  remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
+  addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 6 },
+  addExistingText: { fontSize: 10, fontWeight: "900" },
+  editHint: { alignItems: "center", paddingVertical: 7 },
+  hint: { fontSize: 9, fontWeight: "700" },
+  ranking: { padding: 7 },
   rankingHead: {
     flexDirection: "row",
     alignItems: "center",

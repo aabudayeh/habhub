@@ -202,7 +202,7 @@ function createCleanAccountState(user: User): AppState {
 function bindStateToAccount(state: AppState, user: User): AppState {
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
-  if (Number(state.version ?? 1) >= 17)
+  if (Number(state.version ?? 1) >= 18)
     return {
       ...state,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
@@ -214,7 +214,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return {
       ...state,
-      version: 17,
+      version: 18,
       settings: { ...state.settings, fontScale: 1 },
     };
   const retrospective = new Set(
@@ -229,7 +229,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return {
     ...state,
-    version: 17,
+    version: 18,
     settings: { ...state.settings, fontScale: 1 },
     metrics: state.metrics.map((metric) =>
       retrospective.has(metric.id)

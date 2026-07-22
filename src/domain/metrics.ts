@@ -699,13 +699,36 @@ export function scheduledGoalReached(
   userId: string,
   localDate: string,
 ) {
+  const reachedOnDate = (date: string) => {
+    const primaryReached = goalReached(
+      metric,
+      safeMetricValue(state, metric, userId, date),
+      effectiveGoalTarget(state, metric, userId, date),
+    );
+    if (metric.id !== "blood_pressure_systolic") return primaryReached;
+    const diastolic = state.metrics.find(
+      (candidate) => candidate.id === "blood_pressure_diastolic",
+    );
+    const companion =
+      diastolic ??
+      ({
+        ...metric,
+        id: "blood_pressure_diastolic",
+        goal: { kind: "at_most", target: 80 },
+        goalEnabled: true,
+      } as MetricDefinition);
+    return (
+      primaryReached &&
+      goalReached(
+        companion,
+        safeMetricValue(state, companion, userId, date),
+        effectiveGoalTarget(state, companion, userId, date),
+      )
+    );
+  };
   const schedule = metric.goalSchedule;
   if (!schedule || !["weekly_min", "monthly_min"].includes(schedule.mode))
-    return goalReached(
-      metric,
-      safeMetricValue(state, metric, userId, localDate),
-      effectiveGoalTarget(state, metric, userId, localDate),
-    );
+    return reachedOnDate(localDate);
   const anchor = new Date(`${localDate}T12:00:00`);
   const start = new Date(anchor);
   if (schedule.mode === "weekly_min") {
@@ -718,11 +741,7 @@ export function scheduledGoalReached(
     const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
     if (
       metricApplicableOnDate(state, metric, userId, key) &&
-      goalReached(
-        metric,
-        safeMetricValue(state, metric, userId, key),
-        effectiveGoalTarget(state, metric, userId, key),
-      )
+      reachedOnDate(key)
     )
       completed += 1;
     cursor.setDate(cursor.getDate() + 1);

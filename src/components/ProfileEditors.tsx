@@ -29,10 +29,20 @@ export function EnergyProfileEditor() {
   const direction = state.settings.weightDirection ?? "lose";
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
+  const planningFloor = profile.sex === "male" ? 1500 : 1200;
   function setDirection(next: WeightDirection) {
     updateSettings({ weightDirection: next });
     updateEnergyProfile({
-      ...(next === "maintain" ? { targetWeightKg: profile.weightKg } : {}),
+      targetWeightKg:
+        next === "maintain"
+          ? profile.weightKg
+          : next === "lose"
+            ? Math.min(profile.targetWeightKg, profile.weightKg - 0.1)
+            : Math.max(profile.targetWeightKg, profile.weightKg + 0.1),
+      desiredWeeklyLossKg:
+        next === "maintain"
+          ? 0
+          : Math.max(0.25, profile.desiredWeeklyLossKg || 0.5),
     });
   }
   return (
@@ -53,6 +63,13 @@ export function EnergyProfileEditor() {
             />
           ))}
         </View>
+        <Text style={[styles.help, { color: colors.muted }]}>
+          {direction === "lose"
+            ? "Target weight must be below your current weight."
+            : direction === "gain"
+              ? "Target weight must be above your current weight."
+              : "Maintenance keeps target weight equal to current weight."}
+        </Text>
         <View style={styles.grid}>
           {[
             {
@@ -200,6 +217,9 @@ export function EnergyProfileEditor() {
         <Text style={[styles.disclaimer, { color: colors.muted }]}>
           Planning estimates, not medical advice. Updating this profile
           automatically refreshes the built-in Deficit, Food, and Weight goals.
+          {intake < planningFloor
+            ? ` This selected pace produces an aggressive ${intake} kcal estimate below the usual ${planningFloor} kcal planning guardrail; consider a slower rate or professional guidance.`
+            : ""}
         </Text>
       </Card>
     </>

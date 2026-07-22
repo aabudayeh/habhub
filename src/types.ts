@@ -117,6 +117,8 @@ export type MetricDefinition = {
   activeFrom: string;
   goalSchedule?: GoalSchedule;
   reminder?: GoalReminder;
+  /** Multiple local reminder times; `reminder` remains as a legacy fallback. */
+  reminders?: GoalReminder[];
 };
 
 export type Member = {
@@ -152,6 +154,7 @@ export type MetricEntry = {
 };
 
 export type NutritionDetails = {
+  mealType?: "breakfast" | "lunch" | "dinner" | "snack";
   proteinG?: number;
   fatG?: number;
   carbsG?: number;
@@ -353,7 +356,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 17;
+  version: 18;
   currentUserId: string;
   group: Group;
   groups: Group[];
@@ -409,6 +412,7 @@ export type NewMetric = Pick<
   | "manualEntry"
   | "goalSchedule"
   | "reminder"
+  | "reminders"
 > & {
   formula?: string;
   activeFrom?: string;

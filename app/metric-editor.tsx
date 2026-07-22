@@ -24,6 +24,7 @@ import { MetricSelector } from "@/src/components/MetricSelector";
 import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
+import { defaultReminderTimes } from "@/src/domain/reminders";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -33,6 +34,7 @@ import {
   HealthDataType,
   HealthMetricField,
   MetricDataType,
+  MetricDefinition,
   NewMetric,
   RankingDirection,
   TrackerCategory,
@@ -213,6 +215,12 @@ export default function TrackerEditor() {
     tracker?.goal.kind ?? "at_least",
   );
   const [goal, setGoal] = useState(String(tracker?.goal.target ?? ""));
+  const existingDiastolic = sourceMetrics.find(
+    (item) => item.id === "blood_pressure_diastolic",
+  );
+  const [diastolicGoal, setDiastolicGoal] = useState(
+    String(existingDiastolic?.goal.target ?? 80),
+  );
   const [rangeMin, setRangeMin] = useState(
     String(tracker?.goalRange?.min ?? ""),
   );
@@ -257,8 +265,11 @@ export default function TrackerEditor() {
   const [reminderEnabled, setReminderEnabled] = useState(
     tracker?.reminder?.enabled ?? false,
   );
-  const [reminderTime, setReminderTime] = useState(
-    tracker?.reminder?.time ?? "19:00",
+  const [reminderTimes, setReminderTimes] = useState<string[]>(
+    tracker?.reminders?.map((item) => item.time) ??
+      (tracker?.reminder?.time
+        ? [tracker.reminder.time]
+        : defaultReminderTimes(tracker ?? { id: presetId || "custom", category } as MetricDefinition)),
   );
   const [validation, setValidation] = useState<string | null>(null);
   const source = SOURCES.find((item) => item.id === healthType);
@@ -272,6 +283,8 @@ export default function TrackerEditor() {
     setGoalEnabled(preset.goalEnabled !== false);
     setGoalKind(preset.goal.kind);
     setGoal(String(preset.goal.target));
+    if (preset.templateId === "blood_pressure_systolic")
+      setDiastolicGoal("80");
     setRangeMin(preset.goalRange ? String(preset.goalRange.min) : "");
     setRangeMax(preset.goalRange ? String(preset.goalRange.max) : "");
     setFormula(preset.formula ?? "");
@@ -284,6 +297,10 @@ export default function TrackerEditor() {
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
     setActiveFrom(dateKey());
+    setReminderTimes(
+      preset.reminders?.map((item) => item.time) ??
+        defaultReminderTimes({ id: preset.templateId, category: preset.category }),
+    );
     setScheduleMode("daily");
     setAdvanced(false);
   }
@@ -324,10 +341,19 @@ export default function TrackerEditor() {
   }
   function save() {
     const target = Number(goal.replace(",", "."));
+    const diastolicTarget = Number(diastolicGoal.replace(",", "."));
     if (!name.trim())
       return Alert.alert("Add a name", "Use a short, clear name.");
     if (goalEnabled && dataType !== "text" && !Number.isFinite(target))
       return Alert.alert("Check your target", "Enter a valid number.");
+    if (
+      (presetId || tracker?.id) === "blood_pressure_systolic" &&
+      (!Number.isFinite(diastolicTarget) || diastolicTarget <= 0)
+    )
+      return Alert.alert(
+        "Check diastolic target",
+        "Blood pressure needs both systolic and diastolic targets.",
+      );
     if (!/^\d{4}-\d{2}-\d{2}$/.test(activeFrom))
       return Alert.alert("Check the start date", "Use YYYY-MM-DD.");
     const builtInCalculation = [
@@ -351,6 +377,8 @@ export default function TrackerEditor() {
         kind:
           dataType === "boolean" || dataType === "photo"
             ? "complete"
+            : (presetId || tracker?.id) === "blood_pressure_systolic"
+              ? "at_most"
             : goalKind,
         target: Number.isFinite(target) ? target : 0,
       },
@@ -376,7 +404,14 @@ export default function TrackerEditor() {
             : undefined,
         anchorDate: scheduleMode === "every_other_day" ? activeFrom : undefined,
       },
-      reminder: { enabled: reminderEnabled, time: reminderTime },
+      reminder: {
+        enabled: reminderEnabled,
+        time: reminderTimes[0] ?? "19:00",
+      },
+      reminders: reminderTimes.map((time) => ({
+        enabled: reminderEnabled,
+        time,
+      })),
       rankingDirection: dataType === "boolean" ? "higher" : ranking,
       defaultVisibility: visibility,
       formula:
@@ -390,6 +425,34 @@ export default function TrackerEditor() {
       else addGroupMetric(common);
     } else if (tracker) updateMetric(tracker.id, common);
     else addMetric(common);
+    if ((presetId || tracker?.id) === "blood_pressure_systolic") {
+      const presetsById = new Map(
+        trackerPresets(state).map((preset) => [preset.templateId, preset]),
+      );
+      const ensure = (companionId: "blood_pressure_diastolic" | "pulse") => {
+        const existing = sourceMetrics.find((item) => item.id === companionId);
+        const preset = presetsById.get(companionId);
+        if (!preset) return;
+        const changes =
+          companionId === "blood_pressure_diastolic"
+            ? {
+                goalEnabled,
+                goal: { kind: "at_most" as const, target: diastolicTarget },
+                activeFrom,
+              }
+            : { activeFrom };
+        if (existing) {
+          if (groupScope) updateGroupMetric(existing.id, changes);
+          else updateMetric(existing.id, changes);
+        } else {
+          const next = { ...preset, ...changes, templateId: companionId };
+          if (groupScope) addGroupMetric(next);
+          else addMetric(next);
+        }
+      };
+      ensure("blood_pressure_diastolic");
+      ensure("pulse");
+    }
     if (healthType)
       updateSettings({
         healthSync: {
@@ -519,10 +582,14 @@ export default function TrackerEditor() {
         </View>
         {goalEnabled && dataType !== "text" ? (
           <>
-            <Text style={[styles.label, { color: colors.ink }]}>
-              Success means
-            </Text>
-            <View style={styles.wrap}>
+            {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
+              <Text style={[styles.help, { color: colors.muted }]}>
+                The reading meets its goal when both numbers are at or below their targets.
+              </Text>
+            ) : (
+            <>
+              <Text style={[styles.label, { color: colors.ink }]}>Success means</Text>
+              <View style={styles.wrap}>
               <Chip
                 label="At least"
                 selected={goalKind === "at_least"}
@@ -551,8 +618,25 @@ export default function TrackerEditor() {
                   setRangeMax(rangeMax || "100");
                 }}
               />
-            </View>
-            {rangeMin || rangeMax ? (
+              </View>
+            </>
+            )}
+            {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
+              <View style={styles.columns}>
+                <Field
+                  label="Systolic target"
+                  value={goal}
+                  set={setGoal}
+                  colors={colors}
+                />
+                <Field
+                  label="Diastolic target"
+                  value={diastolicGoal}
+                  set={setDiastolicGoal}
+                  colors={colors}
+                />
+              </View>
+            ) : rangeMin || rangeMax ? (
               <View style={styles.columns}>
                 <Field
                   label="From"
@@ -708,7 +792,7 @@ export default function TrackerEditor() {
           </Card>
           <Card>
             <SectionHeader title="How it behaves" />
-            <View style={styles.columns}>
+            {tracker ? (
               <Field
                 label="Goal starts (YYYY-MM-DD)"
                 value={activeFrom}
@@ -716,14 +800,45 @@ export default function TrackerEditor() {
                 colors={colors}
                 keyboard={false}
               />
-              <Field
-                label="Reminder time"
-                value={reminderTime}
-                set={setReminderTime}
-                colors={colors}
-                keyboard={false}
-              />
-            </View>
+            ) : null}
+            <Text style={[styles.label, { color: colors.ink }]}>Reminder times</Text>
+            {reminderTimes.map((time, index) => (
+              <View key={index} style={styles.reminderRow}>
+                <View style={styles.grow}>
+                  <Field
+                    label={`Reminder ${index + 1}`}
+                    value={time}
+                    set={(value) =>
+                      setReminderTimes((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? value : item,
+                        ),
+                      )
+                    }
+                    colors={colors}
+                    keyboard={false}
+                  />
+                </View>
+                {reminderTimes.length > 1 ? (
+                  <IconButton
+                    icon="trash-outline"
+                    label="Remove reminder"
+                    onPress={() =>
+                      setReminderTimes((current) =>
+                        current.filter((_, itemIndex) => itemIndex !== index),
+                      )
+                    }
+                  />
+                ) : null}
+              </View>
+            ))}
+            <Pressable
+              onPress={() => setReminderTimes((current) => [...current, "19:00"])}
+              style={[styles.addReminder, { borderColor: accent }]}
+            >
+              <Ionicons name="add" size={16} color={accent} />
+              <Text style={[styles.help, { color: accent }]}>Add reminder</Text>
+            </Pressable>
             <Text style={[styles.label, { color: colors.ink }]}>How often?</Text>
             <View style={styles.wrap}>
               {(
@@ -772,7 +887,7 @@ export default function TrackerEditor() {
             <View style={[styles.switchRow, { borderColor: colors.border }]}>
               <View style={styles.grow}>
                 <Text style={[styles.rowTitle, { color: colors.ink }]}>Reminder for this goal</Text>
-                <Text style={[styles.help, { color: colors.muted }]}>Uses the time above and respects global quiet hours.</Text>
+                <Text style={[styles.help, { color: colors.muted }]}>Uses every time above and respects global quiet hours.</Text>
               </View>
               <Switch value={reminderEnabled} onValueChange={setReminderEnabled} />
             </View>
@@ -1026,6 +1141,18 @@ const styles = StyleSheet.create({
   },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 8 },
   columns: { flexDirection: "row", gap: 9 },
+  reminderRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  addReminder: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginBottom: 6,
+  },
   grow: { flex: 1 },
   switchRow: {
     minHeight: 62,

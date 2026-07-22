@@ -25,7 +25,6 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  isMetricTrackedOnDate,
   metricApplicableOnDate,
   safeMetricValue,
   scheduledGoalReached,
@@ -76,10 +75,10 @@ export default function Today() {
   const extra = state.settings.showAllTodayTiles
     ? []
     : visible.slice(tileLimit);
-  const hiddenTracked = state.metrics
+  const hiddenTrackers = state.metrics
     .filter(
       (metric) =>
-        !metric.sections.today && isMetricTrackedOnDate(state, metric, today),
+        !metric.sections.today && metric.activeFrom <= today,
     )
     .sort((a, b) => a.order - b.order);
   const weekAll = Array.from(
@@ -97,9 +96,21 @@ export default function Today() {
     .filter((summary) => summary.applicableTotal > 0);
   const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
   const celebration = useRef(new Animated.Value(0)).current;
-  const celebratedRef = useRef(false);
+  const [celebrationSpecial, setCelebrationSpecial] = useState(false);
+  const celebratedGoalsRef = useRef("");
+  const goalCelebrationKey = goals.metrics
+    .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
+    .map((item) => item.id)
+    .sort()
+    .join("|");
   useEffect(() => {
-    if (goals.allMet && !celebratedRef.current) {
+    const previous = new Set(celebratedGoalsRef.current.split("|").filter(Boolean));
+    const newlyCompleted = goalCelebrationKey
+      .split("|")
+      .filter(Boolean)
+      .some((id) => !previous.has(id));
+    if (newlyCompleted) {
+      setCelebrationSpecial(goals.allMet && (monthAll || weekAll));
       celebration.setValue(0);
       Animated.sequence([
         Animated.timing(celebration, { toValue: 1, duration: 650, useNativeDriver: true }),
@@ -107,8 +118,8 @@ export default function Today() {
         Animated.timing(celebration, { toValue: 0, duration: 450, useNativeDriver: true }),
       ]).start();
     }
-    celebratedRef.current = goals.allMet;
-  }, [celebration, goals.allMet]);
+    celebratedGoalsRef.current = goalCelebrationKey;
+  }, [celebration, goalCelebrationKey, goals.allMet, monthAll, weekAll]);
   const tileHeight = Math.max(
     52,
     Math.min(
@@ -152,7 +163,7 @@ export default function Today() {
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       edges={["top"]}
     >
-      <ConfettiBurst progress={celebration} special={monthAll || weekAll} />
+      <ConfettiBurst progress={celebration} special={celebrationSpecial} />
       <ScrollView
         refreshControl={
           <RefreshControl
@@ -302,7 +313,7 @@ export default function Today() {
                     styles.dot,
                     {
                       backgroundColor: met
-                        ? palette.white
+                        ? palette.lime
                         : "rgba(255,255,255,.16)",
                     },
                   ]}
@@ -316,7 +327,7 @@ export default function Today() {
                           : (item.icon as keyof typeof Ionicons.glyphMap)
                     }
                     size={11}
-                    color={met ? accent : palette.white}
+                    color={met ? "#214218" : palette.white}
                   />
                 </View>
               );
@@ -390,7 +401,7 @@ export default function Today() {
             >
               <Ionicons name="add" size={19} color={accent} />
               <Text style={[styles.addText, { color: accent }]}>
-                Add existing goal tile
+                Add existing tracker
               </Text>
             </Pressable>
             <Pressable
@@ -468,10 +479,10 @@ export default function Today() {
         >
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
             <Text style={[styles.sheetTitle, { color: colors.ink }]}>
-              Add a tracked goal
+              Add an existing tracker
             </Text>
-            {hiddenTracked.length ? (
-              hiddenTracked.map((item) => (
+            {hiddenTrackers.length ? (
+              hiddenTrackers.map((item) => (
                 <Pressable
                   key={item.id}
                   onPress={() => {
@@ -497,7 +508,7 @@ export default function Today() {
               ))
             ) : (
               <Text style={[styles.moreCount, { color: colors.muted }]}>
-                Every tracked goal already has a Today tile.
+                Every available tracker already has a Today tile.
               </Text>
             )}
           </View>
@@ -615,6 +626,7 @@ function TrackerRow({
           editing && Math.abs(gesture.dy) > 3,
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
+        onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: (_event, gesture) =>
           onMove(
             Math.max(
@@ -628,10 +640,11 @@ function TrackerRow({
       }),
     [count, editing, height, onMove],
   );
-  const value =
+  const actualValue =
     item.id === "weekly_deficit_balance"
       ? weekly.balance
       : safeMetricValue(state, item, state.currentUserId, day);
+  const value = useAnimatedNumber(actualValue);
   const applicable = metricApplicableOnDate(
     state,
     item,
@@ -675,19 +688,27 @@ function TrackerRow({
         styles.row,
         {
           height,
-          backgroundColor: colors.card,
-          borderColor: editing ? `${accent}66` : colors.border,
+          backgroundColor: met
+            ? colors.isDark
+              ? "#193625"
+              : "#EFF9DE"
+            : colors.card,
+          borderColor: met
+            ? palette.lime
+            : editing
+              ? `${accent}66`
+              : colors.border,
         },
       ]}
     >
       {editing ? (
-        <Pressable {...responder.panHandlers} style={styles.drag}>
+        <View {...responder.panHandlers} style={styles.drag}>
           <Ionicons
             name="reorder-three-outline"
             size={24}
             color={colors.faint}
           />
-        </Pressable>
+        </View>
       ) : (
         <View style={[styles.icon, { backgroundColor: `${item.color}18` }]}>
           {photo ? (
@@ -738,7 +759,7 @@ function TrackerRow({
         <View style={styles.progress}>
           <ProgressBar
             progress={goalProgress(item, value, target)}
-            color={item.color}
+            color={met ? palette.lime : item.color}
           />
         </View>
       ) : null}
@@ -751,6 +772,28 @@ function TrackerRow({
       )}
     </Pressable>
   );
+}
+
+function useAnimatedNumber(target: number) {
+  const [value, setValue] = useState(0);
+  const current = useRef(0);
+  useEffect(() => {
+    if (!Number.isFinite(target)) return;
+    const from = current.current;
+    const started = Date.now();
+    let frame = 0;
+    const tick = () => {
+      const elapsed = Math.min(1, (Date.now() - started) / 520);
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      const next = from + (target - from) * eased;
+      current.current = next;
+      setValue(next);
+      if (elapsed < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target]);
+  return value;
 }
 function displayValue(
   state: ReturnType<typeof useApp>["state"],

@@ -20,6 +20,7 @@ import {
   goalReached,
   metricApplicableOnDate,
   safeMetricValue,
+  scheduledGoalReached,
   weeklyDeficitBalance,
   weightProgressStats,
 } from "@/src/domain/metrics";
@@ -134,11 +135,24 @@ export default function TrackerDetail() {
   );
   const diastolicTracker =
     tracker.id === "blood_pressure_systolic"
-      ? state.metrics.find((item) => item.id === "blood_pressure_diastolic")
+      ? (state.metrics.find((item) => item.id === "blood_pressure_diastolic") ?? {
+          ...tracker,
+          id: "blood_pressure_diastolic",
+          name: "Diastolic pressure",
+          color: "#C45B35",
+          goal: { kind: "at_most", target: 80 },
+          goalEnabled: true,
+        })
       : undefined;
   const pulseTracker =
     tracker.id === "blood_pressure_systolic"
-      ? state.metrics.find((item) => item.id === "pulse")
+      ? (state.metrics.find((item) => item.id === "pulse") ?? {
+          ...tracker,
+          id: "pulse",
+          name: "Pulse",
+          unit: "bpm",
+          goalEnabled: false,
+        })
       : undefined;
   const diastolicValues = diastolicTracker
     ? chartDates.map((date) =>
@@ -293,6 +307,7 @@ export default function TrackerDetail() {
             colors={colors}
             secondaryValues={diastolicValues}
             secondaryColor={diastolicTracker?.color}
+            secondaryTarget={diastolicTracker?.goal.target}
           />
         ) : null}
         {!isPhoto ? (
@@ -309,11 +324,14 @@ export default function TrackerDetail() {
             />
             <Stat
               label="Goals reached"
-              value={`${chartDates.filter((date) => goalReached(tracker, safeMetricValue(state, tracker, state.currentUserId, date), effectiveGoalTarget(state, tracker, state.currentUserId, date))).length}/${chartDates.length}`}
+              value={`${chartDates.filter((date) => scheduledGoalReached(state, tracker, state.currentUserId, date)).length}/${chartDates.length}`}
               colors={colors}
             />
           </View>
         ) : null}
+        <Text style={[styles.trackingSince, { color: colors.muted }]}>
+          Goal tracked since {new Date(`${tracker.activeFrom}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+        </Text>
       </Card>
       {["menstrual_cycle", "menstrual_flow", "cycle_day", "days_until_period"].includes(tracker.id) ? (
         <Card style={{ gap: 4 }}>
@@ -356,7 +374,7 @@ export default function TrackerDetail() {
             label="Expected goal date"
             value={
               weightStats.expectedGoalDate
-                ? friendlyDate(weightStats.expectedGoalDate)
+                ? new Date(`${weightStats.expectedGoalDate}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
                 : "Maintaining"
             }
             colors={colors}
@@ -439,7 +457,9 @@ export default function TrackerDetail() {
             <View style={styles.entryTop}>
               <View style={styles.grow}>
                 <Text style={[styles.entryTitle, { color: colors.ink }]}>
-                  {entry.label || tracker.name}
+                  {entry.nutrition?.mealType
+                    ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} Â· ${entry.label || tracker.name}`
+                    : entry.label || tracker.name}
                 </Text>
                 <Text style={[styles.time, { color: colors.faint }]}>
                   {new Date(entry.recordedAt).toLocaleTimeString([], {
@@ -681,6 +701,7 @@ function Trend({
   colors,
   secondaryValues,
   secondaryColor,
+  secondaryTarget,
 }: {
   values: number[];
   tracker: MetricDefinition;
@@ -688,8 +709,15 @@ function Trend({
   colors: ReturnType<typeof useAppColors>;
   secondaryValues?: number[];
   secondaryColor?: string;
+  secondaryTarget?: number;
 }) {
-  const max = Math.max(...values, ...(secondaryValues ?? []), target, 1);
+  const max = Math.max(
+    ...values,
+    ...(secondaryValues ?? []),
+    target,
+    secondaryTarget ?? 0,
+    1,
+  );
   return (
     <View style={styles.chart}>
       <View
@@ -701,8 +729,31 @@ function Trend({
           },
         ]}
       >
-        <Text style={[styles.goalLabel, { color: tracker.color }]}>goal</Text>
+        <Text style={[styles.goalLabel, { color: tracker.color }]}>
+          {secondaryValues ? "systolic goal" : "goal"}
+        </Text>
       </View>
+      {secondaryValues && secondaryTarget ? (
+        <View
+          style={[
+            styles.goalLine,
+            {
+              bottom: `${Math.min(1, secondaryTarget / max) * 100}%`,
+              borderColor: secondaryColor ?? colors.muted,
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.goalLabel,
+              styles.secondaryGoalLabel,
+              { color: secondaryColor ?? colors.muted },
+            ]}
+          >
+            diastolic goal
+          </Text>
+        </View>
+      ) : null}
       {values.map((value, index) => (
         <View key={index} style={styles.barSlot}>
           <View
@@ -939,6 +990,8 @@ const styles = StyleSheet.create({
     fontSize: 7,
     fontWeight: "900",
   },
+  secondaryGoalLabel: { left: 0, right: undefined },
+  trackingSince: { fontSize: 8, fontWeight: "800", marginTop: 8 },
   stats: {
     flexDirection: "row",
     borderTopWidth: 1,

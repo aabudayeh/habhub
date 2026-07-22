@@ -1,6 +1,7 @@
 import { DEFAULT_METRICS } from '@/src/data/seed';
 import { recommendedDailyDeficit, recommendedDailyIntakeForDirection } from '@/src/domain/energy';
 import { AppState, NewMetric } from '@/src/types';
+import { defaultReminderTimes } from '@/src/domain/reminders';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
@@ -29,6 +30,9 @@ export function trackerPresets(state: AppState): TrackerPreset[] {
         rankingDirection: item.rankingDirection,
         defaultVisibility: item.defaultVisibility,
         formula: item.formula,
+        reminders: (item.reminders?.length
+          ? item.reminders
+          : defaultReminderTimes(item).map((time) => ({ enabled: false, time }))),
         description: presetDescription(item.id),
       };
       if (item.id === 'food') preset.goal.target = recommendedDailyIntakeForDirection(profile, direction);
@@ -39,11 +43,19 @@ export function trackerPresets(state: AppState): TrackerPreset[] {
         preset.goalRange = direction === 'maintain' ? { min: -150, max: 150 } : undefined;
         preset.formula = direction === 'lose' ? 'bmr + daily_activity + exercise - food' : 'food - bmr - daily_activity - exercise';
       }
-      if (['pulse', 'blood_pressure_systolic', 'blood_pressure_diastolic', 'blood_glucose'].includes(item.id)) {
+      if (['pulse', 'blood_glucose'].includes(item.id)) {
         preset.goalEnabled = false;
         preset.goalRange = undefined;
       }
-      if (item.id === 'blood_pressure_systolic') preset.name = 'Blood pressure';
+      if (item.id === 'blood_pressure_systolic') {
+        preset.name = 'Blood pressure';
+        preset.goalEnabled = true;
+        preset.goal = { kind: 'at_most', target: 120 };
+      }
+      if (item.id === 'blood_pressure_diastolic') {
+        preset.goalEnabled = true;
+        preset.goal = { kind: 'at_most', target: 80 };
+      }
       return preset;
     });
 }

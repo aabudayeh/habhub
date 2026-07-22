@@ -241,10 +241,10 @@ export default function NotificationsScreen() {
         />
         {value.cyclePredictions !== false ? (
           <View style={styles.times}>
-            <Text style={[styles.label, { color: colors.muted }]}>Remind me before</Text>
+            <Text style={[styles.label, { color: colors.muted }]}>Period estimate timing</Text>
             {[1, 2, 3, 5].map((days) => (
               <Pressable key={days} onPress={() => patch({ cycleReminderDays: days })}>
-                <Text style={{ color: (value.cycleReminderDays ?? 2) === days ? accent : colors.muted, fontWeight: "900" }}>{days}d</Text>
+                <Text style={{ color: (value.cycleReminderDays ?? 2) === days ? accent : colors.muted, fontWeight: "900" }}>{days} day{days === 1 ? "" : "s"} before</Text>
               </Pressable>
             ))}
           </View>
