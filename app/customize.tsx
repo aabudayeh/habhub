@@ -13,7 +13,10 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { animateReorder } from "@/src/components/reorderAnimation";
+import {
+  animateReorder,
+  useDelayedReorder,
+} from "@/src/components/reorderAnimation";
 
 import {
   Card,
@@ -501,9 +504,21 @@ function VisibilityRow({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const lastDragY = useRef(0);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
+  const {
+    schedule: scheduleReorder,
+    flush: flushReorder,
+    cancel: cancelReorder,
+  } = useDelayedReorder((target) => {
+    liveTarget.current = target;
+    dragY.setValue(
+      lastDragY.current - (target - dragOrigin.current) * 56,
+    );
+    onMoveRef.current(target);
+  });
   useEffect(() => {
     if (!dragging) {
       wiggle.stopAnimation();
@@ -539,11 +554,14 @@ function VisibilityRow({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           Math.abs(gesture.dy) > 2,
         onPanResponderGrant: () => {
+          cancelReorder();
           setDragging(true);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
+          lastDragY.current = 0;
         },
         onPanResponderMove: (_event, gesture) => {
+          lastDragY.current = gesture.dy;
           const target = Math.max(
             0,
             Math.min(
@@ -551,14 +569,15 @@ function VisibilityRow({
               dragOrigin.current + Math.round(gesture.dy / 56),
             ),
           );
-          dragY.setValue(gesture.dy - (target - dragOrigin.current) * 56);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onMoveRef.current(target);
-          }
+          dragY.setValue(
+            gesture.dy - (liveTarget.current - dragOrigin.current) * 56,
+          );
+          if (target !== liveTarget.current) scheduleReorder(target);
+          else cancelReorder();
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
+          flushReorder();
           setDragging(false);
           Animated.spring(dragY, {
             toValue: 0,
@@ -566,6 +585,7 @@ function VisibilityRow({
           }).start();
         },
         onPanResponderTerminate: () => {
+          cancelReorder();
           setDragging(false);
           Animated.spring(dragY, {
             toValue: 0,
@@ -573,7 +593,12 @@ function VisibilityRow({
           }).start();
         },
       }),
-    [dragY],
+    [
+      cancelReorder,
+      dragY,
+      flushReorder,
+      scheduleReorder,
+    ],
   );
   return (
     <Animated.View

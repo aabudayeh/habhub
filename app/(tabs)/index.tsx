@@ -19,7 +19,10 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { animateReorder } from "@/src/components/reorderAnimation";
+import {
+  animateReorder,
+  useDelayedReorder,
+} from "@/src/components/reorderAnimation";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -470,32 +473,68 @@ export default function Today() {
           <View style={styles.editActions}>
             <Pressable
               onPress={() => setShowAddTiles(true)}
-              style={[styles.add, { borderColor: accent }]}
+              style={[styles.add, styles.editActionButton, { borderColor: accent }]}
             >
               <Ionicons name="add" size={19} color={accent} />
-              <Text style={[styles.addText, { color: accent }]}>
-                Add existing tracker
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[styles.addText, { color: accent }]}
+              >
+                Add existing
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() =>
+                router.navigate({
+                  pathname: "/metric-editor",
+                  params: { id: "new" },
+                })
+              }
+              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
+            >
+              <Ionicons name="create-outline" size={18} color={accent} />
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[styles.addText, { color: accent }]}
+              >
+                Create tracker
               </Text>
             </Pressable>
             <Pressable
               onPress={() => router.navigate("/customize?tab=goals" as never)}
-              style={[styles.add, { borderColor: colors.border }]}
+              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
             >
               <Ionicons
                 name="checkmark-done-outline"
                 size={18}
                 color={accent}
               />
-              <Text style={[styles.addText, { color: accent }]}>
-                Edit tracked goals
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[styles.addText, { color: accent }]}
+              >
+                Tracked goals
               </Text>
             </Pressable>
             <Pressable
               onPress={() => setShowDayEnd(true)}
-              style={[styles.add, { borderColor: colors.border }]}
+              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
             >
               <Ionicons name="moon-outline" size={18} color={accent} />
-              <Text style={[styles.addText, { color: accent }]}>Day ends {state.settings.dayEndTime ?? "00:00"}</Text>
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[styles.addText, { color: accent }]}
+              >
+                Day ends {state.settings.dayEndTime ?? "00:00"}
+              </Text>
             </Pressable>
           </View>
         ) : null}
@@ -785,12 +824,24 @@ function TrackerRow({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const lastDragY = useRef(0);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const arrival = useRef(new Animated.Value(1)).current;
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
+  const {
+    schedule: scheduleReorder,
+    flush: flushReorder,
+    cancel: cancelReorder,
+  } = useDelayedReorder((target) => {
+    liveTarget.current = target;
+    dragY.setValue(
+      lastDragY.current - (target - dragOrigin.current) * height,
+    );
+    onMoveRef.current(target);
+  });
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -803,6 +854,7 @@ function TrackerRow({
   }, [arrival, celebrating]);
   useEffect(() => {
     if (!editing) {
+      cancelReorder();
       wiggle.stopAnimation();
       wiggle.setValue(0);
       dragY.setValue(0);
@@ -817,7 +869,7 @@ function TrackerRow({
     );
     animation.start();
     return () => animation.stop();
-  }, [dragY, editing, wiggle]);
+  }, [cancelReorder, dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -828,10 +880,13 @@ function TrackerRow({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
+          cancelReorder();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
+          lastDragY.current = 0;
         },
         onPanResponderMove: (_event, gesture) => {
+          lastDragY.current = gesture.dy;
           const target = Math.max(
             0,
             Math.min(
@@ -840,21 +895,32 @@ function TrackerRow({
             ),
           );
           dragY.setValue(
-            gesture.dy - (target - dragOrigin.current) * height,
+            gesture.dy - (liveTarget.current - dragOrigin.current) * height,
           );
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onMoveRef.current(target);
-          }
+          if (target !== liveTarget.current) scheduleReorder(target);
+          else cancelReorder();
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
+          flushReorder();
           Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
         },
-        onPanResponderTerminate: () =>
-          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start(),
+        onPanResponderTerminate: () => {
+          cancelReorder();
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
       }),
-    [dragY, editing, height],
+    [
+      cancelReorder,
+      dragY,
+      editing,
+      flushReorder,
+      height,
+      scheduleReorder,
+    ],
   );
   const actualValue =
     item.id === "weekly_deficit_balance"
@@ -862,7 +928,9 @@ function TrackerRow({
       : safeMetricValue(state, item, state.currentUserId, day);
   const value = useAnimatedNumber(actualValue);
   const weeklyBalanceAhead =
-    item.id === "weekly_deficit_balance" && weekly.balance >= 0;
+    item.id === "weekly_deficit_balance" &&
+    weekly.days > 0 &&
+    weekly.balance >= 0;
   const applicable = metricApplicableOnDate(
     state,
     item,
@@ -873,6 +941,8 @@ function TrackerRow({
   const met =
     applicable &&
     scheduledGoalReached(state, item, state.currentUserId, day);
+  const cardComplete =
+    item.id === "weekly_deficit_balance" ? weeklyBalanceAhead : met;
   const gold = useRef(
     new Animated.Value(allGoalsMet && trackedGoal && met ? 1 : 0),
   ).current;
@@ -960,10 +1030,10 @@ function TrackerRow({
         styles.row,
         {
           height,
-          backgroundColor: met
+          backgroundColor: cardComplete
             ? completedBackground
             : colors.card,
-          borderColor: met
+          borderColor: cardComplete
             ? completedBorder
             : editing
               ? `${accent}66`
@@ -1036,9 +1106,7 @@ function TrackerRow({
             {
               color:
                 item.id === "weekly_deficit_balance"
-                  ? weeklyBalanceAhead
-                    ? palette.lime
-                    : palette.red
+                  ? colors.ink
                   : item.goal.kind === "at_most" && value > target
                   ? palette.red
                   : colors.ink,
@@ -1333,7 +1401,16 @@ const styles = StyleSheet.create({
   },
   confettiSpecial: { top: 0, left: 0, right: 0, bottom: 0, height: undefined },
   confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
-  editActions: { gap: 6 },
+  editActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  editActionButton: {
+    flexBasis: "48%",
+    flexGrow: 1,
+    minWidth: 0,
+  },
   rowEditActions: {
     flexDirection: "row",
     alignItems: "center",

@@ -12,7 +12,10 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { animateReorder } from "@/src/components/reorderAnimation";
+import {
+  animateReorder,
+  useDelayedReorder,
+} from "@/src/components/reorderAnimation";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -596,11 +599,24 @@ function MetricSummary({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const lastDragY = useRef(0);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
+  const {
+    schedule: scheduleReorder,
+    flush: flushReorder,
+    cancel: cancelReorder,
+  } = useDelayedReorder((target) => {
+    liveTarget.current = target;
+    dragY.setValue(
+      lastDragY.current - (target - dragOrigin.current) * 82,
+    );
+    onMoveRef.current(target);
+  });
   useEffect(() => {
     if (!editing) {
+      cancelReorder();
       dragY.setValue(0);
       wiggle.stopAnimation();
       wiggle.setValue(0);
@@ -615,7 +631,7 @@ function MetricSummary({
     );
     animation.start();
     return () => animation.stop();
-  }, [dragY, editing, wiggle]);
+  }, [cancelReorder, dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -623,10 +639,13 @@ function MetricSummary({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
+          cancelReorder();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
+          lastDragY.current = 0;
         },
         onPanResponderMove: (_event, gesture) => {
+          lastDragY.current = gesture.dy;
           const target = Math.max(
             0,
             Math.min(
@@ -634,26 +653,35 @@ function MetricSummary({
               dragOrigin.current + Math.round(gesture.dy / 82),
             ),
           );
-          dragY.setValue(gesture.dy - (target - dragOrigin.current) * 82);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onMoveRef.current(target);
-          }
+          dragY.setValue(
+            gesture.dy - (liveTarget.current - dragOrigin.current) * 82,
+          );
+          if (target !== liveTarget.current) scheduleReorder(target);
+          else cancelReorder();
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
+          flushReorder();
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
           }).start();
         },
-        onPanResponderTerminate: () =>
+        onPanResponderTerminate: () => {
+          cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start(),
+          }).start();
+        },
       }),
-    [dragY, editing],
+    [
+      cancelReorder,
+      dragY,
+      editing,
+      flushReorder,
+      scheduleReorder,
+    ],
   );
   const periodStats = metricPeriodStats(
     state,
