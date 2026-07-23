@@ -18,10 +18,13 @@ import {
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import {
+  averageGymRestSeconds,
   ExerciseObservation,
   exerciseHistory,
   exerciseIdentity,
   exerciseStats,
+  formatGymDuration,
+  totalGymRestSeconds,
 } from "@/src/domain/gym";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -97,6 +100,9 @@ export default function GymExerciseScreen() {
         : stats.trend === "regressing"
           ? palette.red
           : colors.border;
+  const averageRest = averageGymRestSeconds(
+    entries.map(({ exercise }) => exercise),
+  );
 
   function saveGoal() {
     setGymExerciseGoal(key, {
@@ -168,6 +174,10 @@ export default function GymExerciseScreen() {
           }
         />
         <Stat label="Sessions" value={String(stats.sessions)} />
+        <Stat
+          label={`Avg rest · ${period === 0 ? "all" : `${period}d`}`}
+          value={averageRest ? formatGymDuration(averageRest) : "—"}
+        />
       </View>
 
       <SectionHeader title="Your target" />
@@ -247,10 +257,41 @@ export default function GymExerciseScreen() {
                 <Text style={[styles.setText, { color: colors.ink }]}>
                   {completed.length
                     ? completed
-                        .map((set) => `${set.weightKg} kg × ${set.reps}`)
-                        .join("  ·  ")
+                        .map(
+                          (set, setIndex) =>
+                            `${set.weightKg} kg × ${set.reps}${
+                              set.restSeconds
+                                ? `\nSet ${setIndex + 1} rest · ${formatGymDuration(set.restSeconds)}`
+                                : ""
+                            }`,
+                        )
+                        .join("\n")
                     : "Planned — no completed sets"}
                 </Text>
+                {exercise.restAfterSeconds ? (
+                  <View
+                    style={[
+                      styles.restEntry,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons
+                      name="walk-outline"
+                      size={13}
+                      color={accent}
+                    />
+                    <Text style={[styles.smallStrong, { color: colors.ink }]}>
+                      Between exercises ·{" "}
+                      {formatGymDuration(exercise.restAfterSeconds)}
+                    </Text>
+                  </View>
+                ) : null}
+                {totalGymRestSeconds([exercise]) ? (
+                  <Text style={[styles.small, { color: colors.muted }]}>
+                    Total logged rest for this exercise ·{" "}
+                    {formatGymDuration(totalGymRestSeconds([exercise]))}
+                  </Text>
+                ) : null}
                 {exercise.notes ? (
                   <Text style={[styles.copy, { color: colors.muted }]}>
                     {exercise.notes}
@@ -470,5 +511,13 @@ const styles = StyleSheet.create({
   entryHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
   entryDate: { fontSize: 10, fontWeight: "900" },
   setText: { fontSize: 9, lineHeight: 14, fontWeight: "700" },
+  restEntry: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    minHeight: 26,
+  },
   empty: { fontSize: 9, textAlign: "center", paddingVertical: 20 },
 });

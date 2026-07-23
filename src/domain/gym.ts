@@ -254,6 +254,31 @@ export function totalGymRestSeconds(exercises: GymExercise[]) {
   );
 }
 
+export function gymSessionTimeBreakdown(
+  durationMinutes: number,
+  exercises: GymExercise[],
+) {
+  const totalSeconds = Math.max(0, Math.round(durationMinutes * 60));
+  const restSeconds = Math.min(
+    totalSeconds,
+    totalGymRestSeconds(exercises),
+  );
+  return {
+    totalSeconds,
+    restSeconds,
+    exerciseSeconds: Math.max(0, totalSeconds - restSeconds),
+  };
+}
+
+export function formatGymDuration(seconds: number) {
+  const rounded = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  if (!minutes) return `${remainder}s`;
+  if (!remainder) return `${minutes}m`;
+  return `${minutes}m ${remainder}s`;
+}
+
 export function averageGymRestSeconds(exercises: GymExercise[]) {
   const rests = exercises.flatMap((exercise) => [
     ...(exercise.restAfterSeconds ? [exercise.restAfterSeconds] : []),
@@ -462,11 +487,12 @@ export function gymRecap(
       tone: "neutral",
     });
   const recentRest = last7.flatMap((session) =>
-    session.exercises.flatMap((exercise) =>
-      exercise.sets
+    session.exercises.flatMap((exercise) => [
+      ...exercise.sets
         .map((set) => set.restSeconds)
         .filter((value): value is number => value !== undefined && value > 0),
-    ),
+      ...(exercise.restAfterSeconds ? [exercise.restAfterSeconds] : []),
+    ]),
   );
   if (recentRest.length) {
     const average = Math.round(

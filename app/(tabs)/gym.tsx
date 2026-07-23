@@ -29,6 +29,8 @@ import {
   exerciseHistory,
   exerciseIdentity,
   exerciseTrend,
+  formatGymDuration,
+  gymSessionTimeBreakdown,
   gymRecap,
   muscleGroupStats,
   recommendedRestSeconds,
@@ -172,6 +174,10 @@ export default function GymScreen() {
       intensity,
       exercises,
     );
+  const timeBreakdown = gymSessionTimeBreakdown(
+    inferredDuration,
+    exercises,
+  );
   const recaps = gymRecap(sessions, state.currentUserId, localDate);
   const restElapsed = restTimer
     ? Math.max(0, Math.floor((restNow - restTimer.startedAt) / 1000))
@@ -505,6 +511,10 @@ export default function GymScreen() {
         intensity,
         sessionExercises,
       );
+    const sessionTime = gymSessionTimeBreakdown(
+      sessionDuration,
+      sessionExercises,
+    );
     saveGymSession({
       id: selectedSession?.id ?? sessionId,
       userId: state.currentUserId,
@@ -525,7 +535,7 @@ export default function GymScreen() {
     Alert.alert(
       completedSets ? "Workout saved" : "Day planned",
       completedSets
-        ? `${completedSets} sets · ${Math.round(volume).toLocaleString()} kg volume · ~${sessionCalories} active kcal`
+        ? `${completedSets} sets · ${Math.round(volume).toLocaleString()} kg volume · ${formatGymDuration(sessionTime.exerciseSeconds)} exercise · ${formatGymDuration(sessionTime.restSeconds)} rest · ~${sessionCalories} active kcal`
         : "The exercise plan is saved without marking the workout complete.",
     );
   }
@@ -882,38 +892,82 @@ export default function GymScreen() {
                         <Text style={[styles.setLabel, { color: colors.muted }]}>reps</Text>
                         <View style={styles.closeSpace} />
                       </View>
-                      {exercise.sets.map((set) => (
-                        <View key={set.id} style={styles.setRow}>
-                          <Pressable onPress={() => toggleSet(exercise.id, set)}>
-                            <Ionicons
-                              name={set.completed ? "checkmark-circle" : "ellipse-outline"}
-                              size={25}
-                              color={set.completed ? palette.lime : colors.faint}
+                      {exercise.sets.map((set, setIndex) => (
+                        <View key={set.id} style={styles.setBlock}>
+                          <View style={styles.setRow}>
+                            <Pressable onPress={() => toggleSet(exercise.id, set)}>
+                              <Ionicons
+                                name={set.completed ? "checkmark-circle" : "ellipse-outline"}
+                                size={25}
+                                color={set.completed ? palette.lime : colors.faint}
+                              />
+                            </Pressable>
+                            <DraftNumberInput
+                              value={set.weightKg}
+                              onCommit={(value) => updateSet(exercise.id, set.id, { weightKg: value })}
+                              keyboardType="decimal-pad"
+                              style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
                             />
-                          </Pressable>
-                          <DraftNumberInput
-                            value={set.weightKg}
-                            onCommit={(value) => updateSet(exercise.id, set.id, { weightKg: value })}
-                            keyboardType="decimal-pad"
-                            style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
-                          />
-                          <DraftNumberInput
-                            value={set.reps}
-                            onCommit={(value) => updateSet(exercise.id, set.id, { reps: Math.round(value) })}
-                            keyboardType="number-pad"
-                            style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
-                          />
-                          <Pressable
-                            onPress={() =>
-                              patchExercise(exercise.id, {
-                                sets: exercise.sets.filter((item) => item.id !== set.id),
-                              })
-                            }
-                          >
-                            <Ionicons name="close" size={19} color={colors.faint} />
-                          </Pressable>
+                            <DraftNumberInput
+                              value={set.reps}
+                              onCommit={(value) => updateSet(exercise.id, set.id, { reps: Math.round(value) })}
+                              keyboardType="number-pad"
+                              style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
+                            />
+                            <Pressable
+                              onPress={() =>
+                                patchExercise(exercise.id, {
+                                  sets: exercise.sets.filter((item) => item.id !== set.id),
+                                })
+                              }
+                            >
+                              <Ionicons name="close" size={19} color={colors.faint} />
+                            </Pressable>
+                          </View>
+                          {set.restSeconds ? (
+                            <View style={styles.restNote}>
+                              <Ionicons
+                                name="timer-outline"
+                                size={12}
+                                color={accent}
+                              />
+                              <Text
+                                style={[
+                                  styles.restNoteText,
+                                  { color: colors.muted },
+                                ]}
+                              >
+                                Rest after set {setIndex + 1} ·{" "}
+                                {formatGymDuration(set.restSeconds)}
+                              </Text>
+                            </View>
+                          ) : null}
                         </View>
                       ))}
+                      {exercise.restAfterSeconds ? (
+                        <View
+                          style={[
+                            styles.restNote,
+                            styles.exerciseRestNote,
+                            { backgroundColor: colors.primarySoft },
+                          ]}
+                        >
+                          <Ionicons
+                            name="walk-outline"
+                            size={13}
+                            color={accent}
+                          />
+                          <Text
+                            style={[
+                              styles.restNoteText,
+                              { color: colors.ink },
+                            ]}
+                          >
+                            Rest between exercises ·{" "}
+                            {formatGymDuration(exercise.restAfterSeconds)}
+                          </Text>
+                        </View>
+                      ) : null}
                       <TextInput
                         value={exercise.notes ?? ""}
                         onChangeText={(notes) => patchExercise(exercise.id, { notes })}
@@ -958,6 +1012,25 @@ export default function GymScreen() {
             </Pressable>
             {exercises.length ? (
               <>
+                {completedSets > 0 ? (
+                  <Card style={styles.timeSummary}>
+                    <TimeSummaryItem
+                      label="Exercise time"
+                      value={formatGymDuration(timeBreakdown.exerciseSeconds)}
+                      color={accent}
+                    />
+                    <TimeSummaryItem
+                      label="Rest time"
+                      value={formatGymDuration(timeBreakdown.restSeconds)}
+                      color={palette.amber}
+                    />
+                    <TimeSummaryItem
+                      label="Total"
+                      value={formatGymDuration(timeBreakdown.totalSeconds)}
+                      color={colors.ink}
+                    />
+                  </Card>
+                ) : null}
                 <View style={styles.privacyRow}>
                   <Text style={[styles.label, { color: colors.muted }]}>Share completed workout</Text>
                   <View style={styles.privacyChoices}>
@@ -1062,6 +1135,13 @@ export default function GymScreen() {
                     <Text style={[styles.exerciseName, { color: colors.ink }]}>{session.name}</Text>
                     <Text style={[styles.meta, { color: colors.muted }]}>
                       {friendlyDate(session.localDate)} · {completedGymSets(session.exercises)} sets · {session.durationMinutes} min
+                      {" · "}
+                      {formatGymDuration(
+                        gymSessionTimeBreakdown(
+                          session.durationMinutes,
+                          session.exercises,
+                        ).restSeconds,
+                      )} rest
                     </Text>
                   </View>
                   <Text style={[styles.historyValue, { color: accent }]}>
@@ -1177,6 +1257,26 @@ export default function GymScreen() {
   );
 }
 
+function TimeSummaryItem({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  const colors = useAppColors();
+  return (
+    <View style={styles.timeSummaryItem}>
+      <Text style={[styles.timeSummaryValue, { color }]}>{value}</Text>
+      <Text style={[styles.timeSummaryLabel, { color: colors.muted }]}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   page: { paddingBottom: 18 },
   roundAction: { width: 37, height: 37, borderRadius: 13, alignItems: "center", justifyContent: "center" },
@@ -1219,7 +1319,22 @@ const styles = StyleSheet.create({
   setSmall: { width: 28, textAlign: "center", fontSize: 7 },
   setLabel: { flex: 1, textAlign: "center", fontSize: 7 },
   closeSpace: { width: 19 },
+  setBlock: { gap: 2 },
   setRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  restNote: {
+    marginLeft: 35,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    minHeight: 20,
+  },
+  exerciseRestNote: {
+    marginLeft: 0,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    marginTop: 2,
+  },
+  restNoteText: { fontSize: 8, fontWeight: "700" },
   setInput: { flex: 1, height: 36, borderWidth: 1, borderRadius: 9, textAlign: "center", fontSize: 11, fontWeight: "800" },
   exerciseNotes: { borderWidth: 1, borderRadius: 9, minHeight: 37, paddingHorizontal: 9, fontSize: 9 },
   exerciseActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -1229,6 +1344,19 @@ const styles = StyleSheet.create({
   addText: { fontSize: 9, fontWeight: "900" },
   privacyRow: { marginTop: 8, gap: 7 },
   privacyChoices: { flexDirection: "row", gap: 7 },
+  timeSummary: {
+    flexDirection: "row",
+    paddingVertical: 9,
+    paddingHorizontal: 6,
+    marginTop: 7,
+  },
+  timeSummaryItem: { flex: 1, alignItems: "center", gap: 2 },
+  timeSummaryValue: { fontSize: 13, fontWeight: "900" },
+  timeSummaryLabel: {
+    fontSize: 7,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
   templateActions: { flexDirection: "row", gap: 9, marginVertical: 2 },
   action: { flex: 1 },
   progressLead: { gap: 11 },
