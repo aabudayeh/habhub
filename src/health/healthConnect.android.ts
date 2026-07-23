@@ -443,12 +443,17 @@ export const healthConnectAdapter: HealthAdapter = {
       accessType: "read" as const,
       recordType,
     }));
+    const history = {
+      accessType: "read" as const,
+      recordType: "ReadHealthDataHistory" as const,
+    };
     if (!base.length)
       throw new Error("Choose at least one health data category.");
     if (backgroundAccess) {
       try {
         await requestPermission([
           ...base,
+          history,
           { accessType: "read", recordType: "BackgroundAccessPermission" },
         ]);
         return;
@@ -456,7 +461,13 @@ export const healthConnectAdapter: HealthAdapter = {
         // Some devices expose normal records but not the optional background feature.
       }
     }
-    await requestPermission(base);
+    try {
+      await requestPermission([...base, history]);
+    } catch {
+      // Android versions before extended-history permission still support the
+      // standard Health Connect read window.
+      await requestPermission(base);
+    }
   },
   read: async ({ from, to, dataTypes }) => {
     const options = {
@@ -472,9 +483,20 @@ export const healthConnectAdapter: HealthAdapter = {
     let successfulReads = 0;
     const readSafe = async (recordType: string) => {
       try {
-        const result = await readRecords(recordType, options);
+        const records: Record<string, unknown>[] = [];
+        let pageToken: string | undefined;
+        let page = 0;
+        do {
+          const result = await readRecords(recordType, {
+            ...options,
+            ...(pageToken ? { pageToken } : {}),
+          });
+          records.push(...(result.records as Record<string, unknown>[]));
+          pageToken = result.pageToken;
+          page += 1;
+        } while (pageToken && page < 50);
         successfulReads += 1;
-        return result.records as Record<string, unknown>[];
+        return records;
       } catch (error) {
         failures.push(`${recordType}: ${error instanceof Error ? error.message : "permission or provider error"}`);
         return [];

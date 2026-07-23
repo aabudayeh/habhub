@@ -45,6 +45,7 @@
         "android.permission.health.READ_SLEEP",
         "android.permission.health.READ_BLOOD_GLUCOSE",
         "android.permission.health.READ_MENSTRUATION",
+        "android.permission.health.READ_HEALTH_DATA_HISTORY",
         "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
       ],
       "edgeToEdgeEnabled": false,

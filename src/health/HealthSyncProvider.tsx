@@ -6,7 +6,7 @@ import { dateKey } from '@/src/domain/date';
 import { enabledHealthDataTypes, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
-import { HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
+import { HEALTH_HISTORY_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
 import { HealthAdapterAvailability, PersistedHealthStatus } from '@/src/health/types';
 import { useApp } from '@/src/state/AppProvider';
 
@@ -31,7 +31,12 @@ function syncStart(lastSyncedAt: string | null, fullRefresh = false) {
   let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
   if (Number.isNaN(from.getTime())) from = new Date();
   from.setHours(0, 0, 0, 0);
-  from.setDate(from.getDate() - (lastSyncedAt && !fullRefresh ? 2 : 29));
+  // Connect, manual refresh, and pull-to-refresh repair two years of
+  // history. Routine background/open syncs only overlap two days so late
+  // provider edits are corrected without repeatedly downloading everything.
+  from.setDate(
+    from.getDate() - (lastSyncedAt && !fullRefresh ? 2 : HEALTH_HISTORY_DAYS),
+  );
   return from;
 }
 
