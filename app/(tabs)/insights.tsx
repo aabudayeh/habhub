@@ -113,10 +113,9 @@ export default function Insights() {
     view === "week"
       ? dateRangeEnding(weekAnchor, 7)
       : monthDateRange(month).filter((date) => date <= today);
-  const summaryDates =
-    view === "week"
-      ? dates
-      : dateRangeEnding(dates.at(-1) ?? today, 30);
+  // Keep the visual and summaries on the same calendar range. This also makes
+  // Month agree with the Leaderboard Month calculation.
+  const summaryDates = dates;
   const selectorItems = [
     {
       id: TRACKED,
@@ -813,7 +812,7 @@ function MetricSummary({
     state,
     metric,
     state.currentUserId,
-    dates[dates.length - 1],
+    dateKey(),
   );
   const overall = metricOverallAverage(
     state,

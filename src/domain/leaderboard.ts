@@ -12,6 +12,7 @@ import {
   goalProgress,
   goalReached,
   metricApplicableOnDate,
+  metricPeriodStats,
   metricStreakStats,
   scheduledGoalReached,
   sharedMetricResult,
@@ -261,17 +262,28 @@ export function periodMetricResult(
           effectiveGoalTarget(state, goalMetric, subjectUserId, date),
         );
   }).length;
+  // Keep the signed-in member's goal-day count identical to Progress. Shared
+  // daily status remains authoritative for every other group member.
+  const resolvedCompletedDays =
+    subjectUserId === state.currentUserId
+      ? metricPeriodStats(
+          state,
+          goalMetric,
+          subjectUserId,
+          dates,
+        ).goalsReached
+      : completedDays;
   const streak =
     subjectUserId === state.currentUserId
       ? metricStreakStats(
           state,
           goalMetric,
           subjectUserId,
-          dates.at(-1) ?? dateKey(),
+          dateKey(),
         ).current
       : currentStreakWithRest(
           state,
-          dateRangeEnding(dates.at(-1) ?? dateKey(), 90),
+          dateRangeEnding(dateKey(), 90),
           (date) => metGoalOnDate(state, metric, subjectUserId, date),
         );
   const matchingEntries = state.entries.filter(
@@ -293,12 +305,12 @@ export function periodMetricResult(
       mode: "status",
       total: 0,
       average: 0,
-      completedDays,
+      completedDays: resolvedCompletedDays,
       visibleDays: statuses.length,
       streak,
       lastRecordedAt,
       lastSyncedAt,
-      label: `${completedDays}/${goalResults.length} goal days`,
+      label: `${resolvedCompletedDays}/${goalResults.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
       averageGoalProgress,
       averageDisplayProgress,
@@ -331,7 +343,7 @@ export function periodMetricResult(
       mode: "exact",
       total: progress,
       average: progress,
-      completedDays,
+      completedDays: resolvedCompletedDays,
       visibleDays: ordered.length,
       streak,
       lastRecordedAt,
@@ -351,7 +363,7 @@ export function periodMetricResult(
       mode: "exact",
       total: done,
       average: exact.length ? done / exact.length : 0,
-      completedDays: done,
+      completedDays: resolvedCompletedDays,
       visibleDays: exact.length,
       streak,
       lastRecordedAt,
@@ -368,7 +380,7 @@ export function periodMetricResult(
     mode: "exact",
     total,
     average,
-    completedDays,
+    completedDays: resolvedCompletedDays,
     visibleDays: exact.length,
     streak,
     lastRecordedAt,
@@ -378,7 +390,7 @@ export function periodMetricResult(
     personalGoalKind,
     label: formatMetricValue(metric, multipleDays ? average : total),
     averageLabel: multipleDays
-      ? `${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
+      ? `${resolvedCompletedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
       : undefined,
   };
 }
