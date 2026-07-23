@@ -158,10 +158,9 @@ export default function Today() {
               duration,
             );
           }
-          completed.forEach((id) => previous.add(id));
           AsyncStorage.setItem(
             celebrationStorageKey,
-            [...previous].sort().join("|"),
+            [...completed].sort().join("|"),
           ).catch(() => undefined);
         })
         .catch(() => undefined);
@@ -408,8 +407,8 @@ export default function Today() {
                 pathname: "/badges",
                 params: {
                   anchor: today,
-                  filter: "all",
-                  highlight: "today",
+                  filter: "achievement",
+                  highlight: "perfect-day",
                 },
               } as never)
             }
@@ -1136,7 +1135,7 @@ function Celebration({
         },
       ]}
     >
-      <Text style={styles.sparkles}>{special ? "✦ ✨ ✦" : "✦"}</Text>
+      <Text style={styles.sparkles}>✨</Text>
       <View style={styles.rowCopy}>
         <Text
           style={[styles.name, { color: special ? "#6B4A00" : colors.ink }]}

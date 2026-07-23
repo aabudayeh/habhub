@@ -687,18 +687,13 @@ export default function MemberProfile() {
           onChange={setSelectedIds}
         />
       </View>
-      <Card
-        style={[
-          styles.privacy,
-          { backgroundColor: colors.primarySoft, borderColor: colors.border },
-        ]}
-      >
+      <View style={[styles.privacy, { borderTopColor: colors.border }]}>
         <Ionicons name="lock-closed-outline" size={19} color={colors.primary} />
         <Text style={[styles.privacyText, { color: colors.muted }]}>
           Private values and photos never enter this comparison. Goal-status
           sharing can show completion without revealing the underlying number.
         </Text>
-      </Card>
+      </View>
     </Screen>
   );
 }
@@ -1111,9 +1106,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 9,
-    backgroundColor: palette.primarySoft,
-    borderColor: "#C9E7D5",
-    marginTop: 18,
+    borderTopWidth: 1,
+    marginTop: 14,
+    paddingTop: 12,
+    paddingHorizontal: 2,
   },
   privacyText: {
     flex: 1,

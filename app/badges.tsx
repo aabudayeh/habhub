@@ -143,6 +143,9 @@ export default function BadgesScreen() {
                       (item) => item.id === badge.memberId,
                     )
                   : undefined;
+                const highlightPerfectDay =
+                  params.highlight === "perfect-day" &&
+                  badge.id === `perfect-days:${state.currentUserId}`;
                 return (
                   <Pressable
                     key={badge.id}
@@ -156,12 +159,12 @@ export default function BadgesScreen() {
                       style={[
                         styles.badge,
                         { borderLeftColor: badge.color },
-                        params.highlight === "today" &&
-                          badge.anchorDate === anchor &&
-                          badge.memberId === state.currentUserId && {
-                            borderColor: `${badge.color}88`,
-                            backgroundColor: `${badge.color}10`,
-                          },
+                        highlightPerfectDay && {
+                          borderColor: "#D6A82F",
+                          backgroundColor: colors.isDark
+                            ? "#332B17"
+                            : "#FFF9E8",
+                        },
                       ]}
                     >
                       {member ? (

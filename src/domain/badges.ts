@@ -210,6 +210,13 @@ export function buildBadges(
         .map((member) => ({
           member,
           days: week.filter((date) => {
+            const foodLogged = state.entries.some(
+              (entry) =>
+                entry.userId === member.id &&
+                entry.metricId === "food" &&
+                entry.localDate === date &&
+                Number(entry.value) > 0,
+            );
             const result = leaderboardRows(
               state,
               [carb],
@@ -218,6 +225,7 @@ export function buildBadges(
               false,
             ).find((row) => row.member.id === member.id)?.metrics[0]?.result;
             return (
+              foodLogged &&
               result?.mode === "exact" &&
               result.average > 0 &&
               result.average <= 50
