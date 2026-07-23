@@ -1,14 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import React, { useCallback, useMemo, useState } from "react";
+import { Alert, PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
-  Chip,
   IconButton,
   PageHeader,
   ProgressBar,
@@ -48,6 +47,13 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 
+const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "yesterday", label: "Yesterday" },
+  { id: "week", label: "7 days" },
+  { id: "month", label: "30 days" },
+];
+
 export default function TrackerDetail() {
   const { metric: trackerId, date } = useLocalSearchParams<{
     metric: string;
@@ -79,6 +85,34 @@ export default function TrackerDetail() {
       setDay(next);
     }
   }
+  const chooseDetailPeriod = useCallback(
+    (next: Exclude<LeaderboardPeriod, "custom">) => {
+      setPeriod(next);
+      if (next === "today") setDay(dateKey());
+      if (next === "yesterday")
+        setDay(dateWithOffsetFrom(dateKey(), -1));
+    },
+    [],
+  );
+  const pageSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          Math.abs(gesture.dx) > 22 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 55) return;
+          const currentIndex =
+            period === "custom"
+              ? 1
+              : DETAIL_PERIODS.findIndex((item) => item.id === period);
+          const direction = gesture.dx < 0 ? 1 : -1;
+          const next = DETAIL_PERIODS[currentIndex + direction];
+          if (next) chooseDetailPeriod(next.id);
+        },
+      }),
+    [chooseDetailPeriod, period],
+  );
   if (weekly)
     return (
       <WeeklyDetail
@@ -301,29 +335,39 @@ export default function TrackerDetail() {
           />
         }
       />
+      <View {...pageSwipeResponder.panHandlers}>
       <View style={styles.controls}>
-        <View style={styles.periods}>
-          <Chip
-            label="Today"
-            selected={period === "today"}
-            onPress={() => { setPeriod("today"); setDay(dateKey()); }}
-          />
-          <Chip
-            label="Yesterday"
-            selected={period === "yesterday"}
-            onPress={() => { setPeriod("yesterday"); setDay(dateWithOffsetFrom(dateKey(), -1)); }}
-          />
-          <Chip
-            label="7 days"
-            selected={period === "week"}
-            onPress={() => setPeriod("week")}
-          />
-          <Chip
-            label="30 days"
-            selected={period === "month"}
-            onPress={() => setPeriod("month")}
-          />
-        </View>
+        <Card style={styles.periodCard}>
+          <View style={styles.periodBar}>
+            {DETAIL_PERIODS.map((item) => {
+              const selectedPeriod = period === item.id;
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => chooseDetailPeriod(item.id)}
+                  style={[
+                    styles.periodChoice,
+                    {
+                      backgroundColor: selectedPeriod
+                        ? colors.primarySoft
+                        : "transparent",
+                      borderColor: selectedPeriod ? accent : "transparent",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.periodText,
+                      { color: selectedPeriod ? accent : colors.muted },
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
         <Card style={styles.navigator}>
           <View style={styles.dateNav}>
             <IconButton
@@ -944,6 +988,7 @@ export default function TrackerDetail() {
           </Text>
         </Card>
       ) : null}
+      </View>
     </Screen>
   );
 }
@@ -1381,7 +1426,17 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 10,
   },
-  periods: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  periodCard: { padding: 5 },
+  periodBar: { flexDirection: "row", alignItems: "center", gap: 3 },
+  periodChoice: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  periodText: { fontSize: 10, fontWeight: "900" },
   navigator: {
     padding: 8,
   },
