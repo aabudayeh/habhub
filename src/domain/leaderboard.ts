@@ -62,6 +62,8 @@ export type PeriodMetricResult = {
   visibleDays: number;
   label: string;
   averageLabel?: string;
+  /** Normalized against this member's own private goal when available. */
+  averageGoalProgress?: number;
   streak?: number;
   lastRecordedAt?: string;
 };
@@ -72,13 +74,25 @@ function metGoalOnDate(
   userId: string,
   date: string,
 ): boolean {
+  const status = state.dailyMetricStatuses?.find(
+    (item) =>
+      item.groupId === state.group.id &&
+      item.metricId === metric.id &&
+      item.userId === userId &&
+      item.localDate === date,
+  );
+  if (status) return status.goalReached;
+  const goalMetric =
+    userId === state.currentUserId
+      ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
+      : metric;
   const result = sharedMetricResult(state, metric, userId, userId, date);
   if (result.mode === "status") return result.label === "Goal met";
   if (result.mode === "exact")
     return goalReached(
-      metric,
+      goalMetric,
       result.value,
-      effectiveGoalTarget(state, metric, userId, date),
+      effectiveGoalTarget(state, goalMetric, userId, date),
     );
   return false;
 }
@@ -108,6 +122,40 @@ export function periodMetricResult(
       hasPeriodData(state, metric, subjectUserId, date),
   );
   const statuses = results.filter(({ result }) => result.mode === "status");
+  const goalMetric =
+    subjectUserId === state.currentUserId
+      ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
+      : metric;
+  const statusForDate = (date: string) =>
+    state.dailyMetricStatuses?.find(
+      (status) =>
+        status.groupId === state.group.id &&
+        status.metricId === metric.id &&
+        status.userId === subjectUserId &&
+        status.localDate === date,
+    );
+  const progressValues = results.flatMap(({ date, result }) => {
+    const status = statusForDate(date);
+    if (status)
+      return [Math.min(1, Math.max(0, status.scoreContribution / 100))];
+    if (result.mode === "status")
+      return [result.label === "Goal met" ? 1 : 0];
+    if (result.mode !== "exact") return [];
+    return [
+      Math.min(
+        1,
+        goalProgress(
+          goalMetric,
+          result.value,
+          effectiveGoalTarget(state, goalMetric, subjectUserId, date),
+        ),
+      ),
+    ];
+  });
+  const averageGoalProgress = progressValues.length
+    ? progressValues.reduce((sum, value) => sum + value, 0) /
+      progressValues.length
+    : undefined;
   if (!exact.length && !statuses.length) {
     return {
       mode: "private",
@@ -118,16 +166,18 @@ export function periodMetricResult(
       label: subjectUserId === viewerUserId ? "No data" : "Private",
     };
   }
-  const completedDays = results.filter(({ date, result }) =>
-    result.mode === "status"
+  const completedDays = results.filter(({ date, result }) => {
+    const status = statusForDate(date);
+    if (status) return status.goalReached;
+    return result.mode === "status"
       ? result.label === "Goal met"
       : result.mode === "exact" &&
         goalReached(
-          metric,
+          goalMetric,
           result.value,
-          effectiveGoalTarget(state, metric, subjectUserId, date),
-        ),
-  ).length;
+          effectiveGoalTarget(state, goalMetric, subjectUserId, date),
+        );
+  }).length;
   const streak = longestStreakWithRest(state, dates, (d) =>
     metGoalOnDate(state, metric, subjectUserId, d),
   );
@@ -152,6 +202,7 @@ export function periodMetricResult(
       lastRecordedAt,
       label: `${completedDays}/${results.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
+      averageGoalProgress,
     };
   }
   if (metric.id === "weight") {
@@ -184,6 +235,7 @@ export function periodMetricResult(
       visibleDays: ordered.length,
       streak,
       lastRecordedAt,
+      averageGoalProgress,
       label: `${raw > 0 ? "+" : ""}${raw.toFixed(1)} ${metric.unit}`,
       averageLabel: `${baseline.toFixed(1)} → ${current.toFixed(1)} ${metric.unit}`,
     };
@@ -200,6 +252,7 @@ export function periodMetricResult(
       visibleDays: exact.length,
       streak,
       lastRecordedAt,
+      averageGoalProgress,
       label: `${done}/${results.length}`,
       averageLabel: `${Math.round((done / Math.max(results.length, 1)) * 100)}% of period`,
     };
@@ -213,6 +266,7 @@ export function periodMetricResult(
     visibleDays: exact.length,
     streak,
     lastRecordedAt,
+    averageGoalProgress,
     label: formatMetricValue(metric, multipleDays ? average : total),
     averageLabel: multipleDays
       ? `${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
@@ -265,7 +319,8 @@ export function leaderboardRows(
       .map(({ metric, result }) =>
         result.mode === "status"
           ? result.completedDays / Math.max(result.visibleDays, 1)
-          : goalProgress(metric, result.average),
+          : (result.averageGoalProgress ??
+            goalProgress(metric, result.average)),
       );
     const configuredScore =
       dates.reduce((sum, date) => sum + dailyScore(state, member.id, date), 0) /
@@ -289,6 +344,14 @@ export function leaderboardRows(
       if (metric.id === "weight") return rightValue - leftValue;
       if (metric.rankingDirection === "lower") return leftValue - rightValue;
       if (metric.rankingDirection === "closest") {
+        if (
+          left.averageGoalProgress !== undefined ||
+          right.averageGoalProgress !== undefined
+        )
+          return (
+            (right.averageGoalProgress ?? 0) -
+            (left.averageGoalProgress ?? 0)
+          );
         const leftTarget =
           dates.reduce(
             (sum, day) =>

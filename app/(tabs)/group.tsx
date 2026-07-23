@@ -1,7 +1,25 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
-import React, { ReactNode, useCallback, useMemo, useState } from "react";
-import { BackHandler, PanResponder, Pressable, Share, StyleSheet, View } from "react-native";
+import React, {
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Animated,
+  BackHandler,
+  LayoutAnimation,
+  PanResponder,
+  Platform,
+  Pressable,
+  Share,
+  StyleSheet,
+  UIManager,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -27,6 +45,14 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 const SCORE_ID = "__score";
+
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 export default function LeaderboardScreen() {
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
@@ -86,6 +112,7 @@ export default function LeaderboardScreen() {
     if (index < 0) return;
     const [item] = next.splice(index, 1);
     next.splice(Math.max(0, Math.min(target, next.length)), 0, item);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     saveSelection(next);
   }
   const options = [
@@ -205,6 +232,15 @@ export default function LeaderboardScreen() {
               const value = includeScore
                 ? `${Math.round(row.score)} pts`
                 : (result?.label ?? "No data");
+              const resultColor =
+                !includeScore &&
+                result &&
+                result.mode !== "private" &&
+                result.visibleDays > 0
+                  ? result.completedDays >= result.visibleDays
+                    ? palette.lime
+                    : palette.red
+                  : row.member.color;
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
                 result?.streak && result.streak > 1
@@ -285,7 +321,7 @@ export default function LeaderboardScreen() {
                           ? row.score / 100
                           : Math.min(row.score / 100, 1)
                       }
-                      color={row.member.color}
+                      color={resultColor}
                     />
                   </View>
                   <Ionicons
@@ -403,25 +439,71 @@ function EditableRankingCard({
   onMove: (target: number) => void;
   onRemove: () => void;
 }) {
+  const dragY = useRef(new Animated.Value(0)).current;
+  const wiggle = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!editing) {
+      dragY.setValue(0);
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, { toValue: 1, duration: 140, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: -1, duration: 280, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: 0, duration: 140, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
+        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
         onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) =>
+        onPanResponderRelease: (_event, gesture) => {
           onMove(
             Math.max(
               0,
               Math.min(count - 1, index + Math.round(gesture.dy / 180)),
             ),
-          ),
+          );
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
+        onPanResponderTerminate: () =>
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start(),
       }),
-    [count, editing, index, onMove],
+    [count, dragY, editing, index, onMove],
   );
   return (
-    <View style={styles.rankingWrap}>
+    <Animated.View
+      style={[
+        styles.rankingWrap,
+        {
+          transform: [
+            { translateY: dragY },
+            {
+              rotate: wiggle.interpolate({
+                inputRange: [-1, 1],
+                outputRange: ["-0.3deg", "0.3deg"],
+              }),
+            },
+          ],
+          zIndex: editing ? 3 : 0,
+        },
+      ]}
+    >
       {editing ? (
         <View style={[styles.editBar, { borderColor: colors.border }]}>
           <View {...responder.panHandlers} style={styles.drag}>
@@ -434,7 +516,7 @@ function EditableRankingCard({
         </View>
       ) : null}
       {children}
-    </View>
+    </Animated.View>
   );
 }
 const styles = StyleSheet.create({

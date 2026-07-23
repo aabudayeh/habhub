@@ -7,12 +7,15 @@ import {
   Animated,
   Alert,
   BackHandler,
+  LayoutAnimation,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
+  UIManager,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -39,6 +42,13 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
+
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 export default function Today() {
   const { state, reorderMetric, setMetricSection, deleteMetric, updateMetric, updateSettings } = useApp();
@@ -111,55 +121,61 @@ export default function Today() {
   const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
-  const [celebrationsReady, setCelebrationsReady] = useState(false);
-  const celebratedGoalsRef = useRef("");
+  const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
   const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
   const goalCelebrationKey = goals.metrics
     .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
     .map((item) => item.id)
     .sort()
     .join("|");
-  useEffect(() => {
-    let cancelled = false;
-    setCelebrationsReady(false);
-    AsyncStorage.getItem(celebrationStorageKey)
-      .then((saved) => {
-        if (cancelled) return;
-        celebratedGoalsRef.current = saved ?? "";
-        setCelebrationsReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) setCelebrationsReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [celebrationStorageKey]);
-  useEffect(() => {
-    if (!celebrationsReady) return;
-    const previous = new Set(celebratedGoalsRef.current.split("|").filter(Boolean));
-    const completed = goalCelebrationKey.split("|").filter(Boolean);
-    const newlyCompleted = completed.some((id) => !previous.has(id));
-    if (newlyCompleted) {
-      setCelebrationSpecial(goals.allMet);
-      celebration.setValue(0);
-      Animated.sequence([
-        Animated.timing(celebration, { toValue: 1, duration: 650, useNativeDriver: true }),
-        Animated.delay(900),
-        Animated.timing(celebration, { toValue: 0, duration: 450, useNativeDriver: true }),
-      ]).start();
-    }
-    completed.forEach((id) => previous.add(id));
-    const saved = [...previous].sort().join("|");
-    celebratedGoalsRef.current = saved;
-    AsyncStorage.setItem(celebrationStorageKey, saved).catch(() => undefined);
-  }, [
-    celebration,
-    celebrationStorageKey,
-    celebrationsReady,
-    goalCelebrationKey,
-    goals.allMet,
-  ]);
+  const celebrationSnapshot = useRef({ goalCelebrationKey, allMet: goals.allMet });
+  celebrationSnapshot.current = { goalCelebrationKey, allMet: goals.allMet };
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      let clearTiles: ReturnType<typeof setTimeout> | undefined;
+      AsyncStorage.getItem(celebrationStorageKey)
+        .then((saved) => {
+          if (cancelled) return;
+          const previous = new Set((saved ?? "").split("|").filter(Boolean));
+          const completed = celebrationSnapshot.current.goalCelebrationKey
+            .split("|")
+            .filter(Boolean);
+          const newlyCompleted = completed.filter((id) => !previous.has(id));
+          if (newlyCompleted.length) {
+            setCelebratingGoalIds(newlyCompleted);
+            setCelebrationSpecial(celebrationSnapshot.current.allMet);
+            celebration.setValue(0);
+            Animated.sequence([
+              Animated.timing(celebration, {
+                toValue: 1,
+                duration: 650,
+                useNativeDriver: true,
+              }),
+              Animated.delay(900),
+              Animated.timing(celebration, {
+                toValue: 0,
+                duration: 450,
+                useNativeDriver: true,
+              }),
+            ]).start();
+            clearTiles = setTimeout(() => setCelebratingGoalIds([]), 1800);
+          }
+          completed.forEach((id) => previous.add(id));
+          AsyncStorage.setItem(
+            celebrationStorageKey,
+            [...previous].sort().join("|"),
+          ).catch(() => undefined);
+        })
+        .catch(() => undefined);
+      return () => {
+        cancelled = true;
+        if (clearTiles) clearTimeout(clearTiles);
+        celebration.stopAnimation();
+        celebration.setValue(0);
+      };
+    }, [celebration, celebrationStorageKey]),
+  );
   const tileHeight = Math.max(
     52,
     Math.min(
@@ -408,10 +424,14 @@ export default function Today() {
               colors={colors}
               accent={accent}
               weekly={weekly}
+              celebrating={celebratingGoalIds.includes(item.id)}
               onEdit={() => setEditing(true)}
-              onMove={(target) =>
-                reorderMetric(item.id, visible[target]?.order ?? target)
-              }
+              onMove={(target) => {
+                LayoutAnimation.configureNext(
+                  LayoutAnimation.Presets.easeInEaseOut,
+                );
+                reorderMetric(item.id, visible[target]?.order ?? target);
+              }}
               onRemove={() => remove(item)}
               onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
             />
@@ -664,6 +684,7 @@ function TrackerRow({
   colors,
   accent,
   weekly,
+  celebrating,
   onEdit,
   onMove,
   onRemove,
@@ -679,6 +700,7 @@ function TrackerRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   weekly: ReturnType<typeof weeklyDeficitBalance>;
+  celebrating: boolean;
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
@@ -687,7 +709,18 @@ function TrackerRow({
   const start = useRef(index);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
+  const arrival = useRef(new Animated.Value(1)).current;
   start.current = index;
+  useEffect(() => {
+    if (!celebrating) return;
+    arrival.setValue(0);
+    Animated.spring(arrival, {
+      toValue: 1,
+      damping: 12,
+      stiffness: 145,
+      useNativeDriver: true,
+    }).start();
+  }, [arrival, celebrating]);
   useEffect(() => {
     if (!editing) {
       wiggle.stopAnimation();
@@ -775,7 +808,21 @@ function TrackerRow({
   return (
     <Animated.View style={{
       transform: [
-        { translateY: dragY },
+        {
+          translateY: Animated.add(
+            dragY,
+            arrival.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-34, 0],
+            }),
+          ),
+        },
+        {
+          scale: arrival.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0.96, 1],
+          }),
+        },
         { rotate: wiggle.interpolate({ inputRange: [-1, 1], outputRange: ["-0.35deg", "0.35deg"] }) },
       ],
       zIndex: editing ? 4 : 0,
@@ -879,7 +926,7 @@ function TrackerRow({
         </View>
       ) : null}
       {editing ? (
-        <View style={styles.editActions}>
+        <View style={styles.rowEditActions}>
           <Pressable onPress={onPin} hitSlop={8} style={[styles.editTracker, { borderColor: item.pinnedTodayAt ? palette.amber : accent }]}>
             <Ionicons name={item.pinnedTodayAt ? "pin" : "pin-outline"} size={14} color={item.pinnedTodayAt ? palette.amber : accent} />
           </Pressable>
@@ -1080,6 +1127,11 @@ const styles = StyleSheet.create({
   confettiSpecial: { top: 0, left: 0, right: 0, bottom: 0, height: undefined },
   confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
   editActions: { gap: 6 },
+  rowEditActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },

@@ -1,9 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   Alert,
   Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   TextInput,
@@ -174,7 +175,11 @@ const SOURCES: {
 ];
 
 export default function TrackerEditor() {
-  const { id, scope } = useLocalSearchParams<{ id?: string; scope?: string }>();
+  const { id, scope, focus } = useLocalSearchParams<{
+    id?: string;
+    scope?: string;
+    focus?: string;
+  }>();
   const groupScope = scope === "group";
   const {
     state,
@@ -230,6 +235,7 @@ export default function TrackerEditor() {
   const [rangeMax, setRangeMax] = useState(
     String(tracker?.goalRange?.max ?? ""),
   );
+  const [rangeGoal, setRangeGoal] = useState(Boolean(tracker?.goalRange));
   const [formula, setFormula] = useState(tracker?.formula ?? "");
   const [icon, setIcon] = useState(tracker?.icon ?? ICONS[0]);
   const [visibility, setVisibility] = useState<Visibility>(
@@ -241,7 +247,9 @@ export default function TrackerEditor() {
   const [ranking, setRanking] = useState<RankingDirection>(
     tracker?.rankingDirection ?? "higher",
   );
-  const [advanced, setAdvanced] = useState(false);
+  const [advanced, setAdvanced] = useState(focus === "goal-start");
+  const scrollRef = useRef<ScrollView>(null);
+  const scrolledToGoalStart = useRef(false);
   const [showIcons, setShowIcons] = useState(false);
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
@@ -292,6 +300,7 @@ export default function TrackerEditor() {
     }
     setRangeMin(preset.goalRange ? String(preset.goalRange.min) : "");
     setRangeMax(preset.goalRange ? String(preset.goalRange.max) : "");
+    setRangeGoal(Boolean(preset.goalRange));
     setFormula(preset.formula ?? "");
     setIcon(preset.icon);
     setVisibility(preset.defaultVisibility);
@@ -395,7 +404,9 @@ export default function TrackerEditor() {
       },
       goalEnabled,
       goalRange:
-        rangeMin && rangeMax
+        (presetId || tracker?.id) === "blood_pressure_systolic"
+          ? { min: systolicMinimum, max: target }
+          : rangeGoal && rangeMin && rangeMax
           ? { min: Number(rangeMin), max: Number(rangeMax) }
           : undefined,
       category,
@@ -511,7 +522,10 @@ export default function TrackerEditor() {
     );
   }
   return (
-    <Screen keyboardShouldPersistTaps="handled">
+    <Screen
+      scrollRef={scrollRef}
+      keyboardShouldPersistTaps="handled"
+    >
       <PageHeader
         eyebrow={groupScope ? state.group.name : "Personal setup"}
         title={
@@ -608,27 +622,39 @@ export default function TrackerEditor() {
               <Chip
                 label="At least"
                 selected={goalKind === "at_least"}
-                onPress={() => setGoalKind("at_least")}
+                onPress={() => {
+                  setGoalKind("at_least");
+                  setRangeGoal(false);
+                  setRangeMin("");
+                  setRangeMax("");
+                }}
               />
               <Chip
                 label="No more than"
                 selected={goalKind === "at_most"}
-                onPress={() => setGoalKind("at_most")}
+                onPress={() => {
+                  setGoalKind("at_most");
+                  setRangeGoal(false);
+                  setRangeMin("");
+                  setRangeMax("");
+                }}
               />
               <Chip
                 label="Near target"
-                selected={goalKind === "exact" && !rangeMin}
+                selected={goalKind === "exact" && !rangeGoal}
                 onPress={() => {
                   setGoalKind("exact");
+                  setRangeGoal(false);
                   setRangeMin("");
                   setRangeMax("");
                 }}
               />
               <Chip
                 label="Inside a range"
-                selected={Boolean(rangeMin || rangeMax)}
+                selected={rangeGoal}
                 onPress={() => {
                   setGoalKind("exact");
+                  setRangeGoal(true);
                   setRangeMin(rangeMin || "60");
                   setRangeMax(rangeMax || "100");
                 }}
@@ -663,7 +689,7 @@ export default function TrackerEditor() {
                   colors={colors}
                 />
               </View>
-            ) : rangeMin || rangeMax ? (
+            ) : rangeGoal ? (
               <View style={styles.columns}>
                 <Field
                   label="From"
@@ -817,16 +843,37 @@ export default function TrackerEditor() {
               />
             </View>
           </Card>
+          <View
+            onLayout={(event) => {
+              if (
+                focus !== "goal-start" ||
+                scrolledToGoalStart.current
+              )
+                return;
+              scrolledToGoalStart.current = true;
+              const y = event.nativeEvent.layout.y;
+              setTimeout(
+                () =>
+                  scrollRef.current?.scrollTo({
+                    y: Math.max(0, y - 75),
+                    animated: true,
+                  }),
+                80,
+              );
+            }}
+          >
           <Card>
             <SectionHeader title="How it behaves" />
             {tracker && state.trackedGoalPeriods[tracker.id]?.length ? (
-              <Field
-                label="Tracked goal starts (YYYY-MM-DD)"
-                value={activeFrom}
-                set={setActiveFrom}
-                colors={colors}
-                keyboard={false}
-              />
+              <View>
+                <Field
+                  label="Tracked goal starts (YYYY-MM-DD)"
+                  value={activeFrom}
+                  set={setActiveFrom}
+                  colors={colors}
+                  keyboard={false}
+                />
+              </View>
             ) : null}
             <Text style={[styles.label, { color: colors.ink }]}>Reminder times</Text>
             {reminderTimes.map((time, index) => (
@@ -1107,6 +1154,7 @@ export default function TrackerEditor() {
               </View>
             ) : null}
           </Card>
+          </View>
         </>
       ) : null}
       <View style={styles.actions}>

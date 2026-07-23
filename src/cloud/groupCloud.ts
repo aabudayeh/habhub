@@ -5,10 +5,10 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  goalReached,
   metricApplicableOnDate,
   rankedMembers,
   safeMetricValue,
+  scheduledGoalReached,
 } from "@/src/domain/metrics";
 import { normalizeEnergyProfile } from "@/src/domain/energy";
 import { supabase } from "@/src/lib/supabase";
@@ -893,18 +893,25 @@ export async function pushCloudWorkspace(state: AppState) {
     .eq("user_id", state.currentUserId);
   const statuses = statusDates.flatMap((localDate) =>
     (state.group.metricConfiguration ?? [])
-      .filter(
-        (metric) =>
-          metric.dataType !== "text" &&
-          idBySlug.has(metric.id) &&
+      .filter((groupMetric) => {
+        const personalMetric =
+          state.metrics.find((metric) => metric.id === groupMetric.id) ??
+          groupMetric;
+        return (
+          groupMetric.dataType !== "text" &&
+          idBySlug.has(groupMetric.id) &&
           metricApplicableOnDate(
             state,
-            metric,
+            personalMetric,
             state.currentUserId,
             localDate,
-          ),
-      )
-      .map((metric) => {
+          )
+        );
+      })
+      .map((groupMetric) => {
+        const metric =
+          state.metrics.find((candidate) => candidate.id === groupMetric.id) ??
+          groupMetric;
         const value = safeMetricValue(
           state,
           metric,
@@ -913,13 +920,14 @@ export async function pushCloudWorkspace(state: AppState) {
         );
         return {
           group_id: state.group.id,
-          metric_id: idBySlug.get(metric.id),
+          metric_id: idBySlug.get(groupMetric.id),
           user_id: state.currentUserId,
           local_date: localDate,
-          goal_reached: goalReached(
+          goal_reached: scheduledGoalReached(
+            state,
             metric,
-            value,
-            effectiveGoalTarget(state, metric, state.currentUserId, localDate),
+            state.currentUserId,
+            localDate,
           ),
           score_contribution:
             Math.min(

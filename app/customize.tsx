@@ -231,7 +231,12 @@ export default function Customize() {
                     {selected ? (
                       <Pressable
                         accessibilityLabel={`Change ${metric.name} goal start date`}
-                        onPress={() => router.push({ pathname: "/metric-editor" as never, params: { id: metric.id } })}
+                        onPress={() =>
+                          router.push({
+                            pathname: "/metric-editor" as never,
+                            params: { id: metric.id, focus: "goal-start" },
+                          })
+                        }
                         style={[styles.dateEdit, { borderColor: colors.border }]}
                       >
                         <Ionicons name="calendar-outline" size={15} color={accent} />

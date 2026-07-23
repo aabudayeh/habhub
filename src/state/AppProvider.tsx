@@ -212,9 +212,32 @@ function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
             ? { ...metric, name: "Daily surplus", formula: "food - bmr - daily_activity - exercise", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
             : { ...metric, name: "Energy balance", formula: "food - bmr - daily_activity - exercise", goal: { kind: "exact" as const, target: 0 }, goalRange: { min: -150, max: 150 } }
         : metric.id === "food"
-          ? { ...metric, goal: { kind: "at_most" as const, target: foodTarget } }
+          ? {
+              ...metric,
+              goal: {
+                kind:
+                  direction === "gain"
+                    ? ("at_least" as const)
+                    : direction === "maintain"
+                      ? ("exact" as const)
+                      : ("at_most" as const),
+                target: foodTarget,
+              },
+              goalRange: undefined,
+            }
           : metric.id === "weight"
-            ? { ...metric, goal: { kind: direction === "gain" ? "at_least" as const : "at_most" as const, target: normalizedProfile.targetWeightKg } }
+            ? {
+                ...metric,
+                goal: {
+                  kind:
+                    direction === "gain"
+                      ? ("at_least" as const)
+                      : direction === "maintain"
+                        ? ("exact" as const)
+                        : ("at_most" as const),
+                  target: normalizedProfile.targetWeightKg,
+                },
+              }
             : metric,
     ),
   );

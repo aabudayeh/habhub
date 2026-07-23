@@ -13,7 +13,10 @@ import {
   recommendedDailyIntakeForDirection,
 } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
-import { isMetricTrackedOnDate } from "@/src/domain/metrics";
+import {
+  isMetricTrackedOnDate,
+  weightProgressStats,
+} from "@/src/domain/metrics";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -32,6 +35,18 @@ export function EnergyProfileEditor() {
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
   const planningFloor = profile.sex === "male" ? 1500 : 1200;
+  const weightPlan = weightProgressStats(
+    state,
+    state.currentUserId,
+    dateKey(),
+  );
+  const expectedDate = weightPlan.expectedGoalDate
+    ? new Intl.DateTimeFormat(undefined, {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
+    : null;
   function setDirection(next: WeightDirection) {
     updateSettings({ weightDirection: next });
     updateEnergyProfile({
@@ -163,6 +178,36 @@ export function EnergyProfileEditor() {
                 />
               ))}
             </View>
+            <View style={styles.customRate}>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Custom rate
+              </Text>
+              <View
+                style={[styles.rateInputWrap, { borderColor: colors.border }]}
+              >
+                <DraftNumberInput
+                  value={profile.desiredWeeklyLossKg}
+                  selectTextOnFocus
+                  keyboardType="decimal-pad"
+                  minimum={0.05}
+                  maximum={2}
+                  onCommit={(desiredWeeklyLossKg) =>
+                    updateEnergyProfile({ desiredWeeklyLossKg })
+                  }
+                  style={[styles.rateInput, { color: colors.ink }]}
+                />
+                <Text style={[styles.unit, { color: colors.muted }]}>
+                  kg/week
+                </Text>
+              </View>
+            </View>
+            {expectedDate ? (
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Estimated target date: {expectedDate}. This follows your recent
+                measured pace when enough weigh-ins exist; otherwise it uses
+                your selected plan.
+              </Text>
+            ) : null}
           </>
         ) : null}
         <View style={[styles.equation, { backgroundColor: colors.canvas }]}>
@@ -338,6 +383,28 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   unit: { color: palette.muted, fontSize: 9 },
+  customRate: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginTop: 2,
+  },
+  rateInputWrap: {
+    width: 136,
+    height: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+  },
+  rateInput: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: "900",
+    paddingVertical: 7,
+  },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
   equation: {
     flexDirection: "row",

@@ -46,7 +46,18 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
           : defaultReminderTimes(item).map((time) => ({ enabled: false, time }))),
         description: presetDescription(item.id),
       };
-      if (item.id === 'food') preset.goal.target = recommendedDailyIntakeForDirection(profile, direction);
+      if (item.id === 'food') {
+        preset.goal = {
+          kind:
+            direction === 'gain'
+              ? 'at_least'
+              : direction === 'maintain'
+                ? 'exact'
+                : 'at_most',
+          target: recommendedDailyIntakeForDirection(profile, direction),
+        };
+        preset.goalRange = undefined;
+      }
       if (item.id === 'weight') preset.goal.target = profile.targetWeightKg;
       if (item.id === 'deficit') {
         preset.name = direction === 'gain' ? 'Daily surplus' : direction === 'maintain' ? 'Energy balance' : 'Daily deficit';

@@ -31,8 +31,10 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  goalReached,
+  isMetricTrackedOnDate,
+  metricApplicableOnDate,
   safeMetricValue,
+  scheduledGoalReached,
   trackedGoalSummary,
 } from "@/src/domain/metrics";
 import { imageSourceUri } from "@/src/domain/media";
@@ -322,7 +324,22 @@ export default function DayDetail() {
             state.currentUserId,
             day,
           );
-          const reached = goalReached(metric, value, target);
+          const applicable =
+            isMetricTrackedOnDate(state, metric, day) &&
+            metricApplicableOnDate(
+              state,
+              metric,
+              state.currentUserId,
+              day,
+            );
+          const reached =
+            applicable &&
+            scheduledGoalReached(
+              state,
+              metric,
+              state.currentUserId,
+              day,
+            );
           const entries = dayEntries.filter(
             (entry) => entry.metricId === metric.id,
           );
@@ -333,6 +350,7 @@ export default function DayDetail() {
               value={value}
               target={target}
               reached={reached}
+              applicable={applicable}
               entries={entries}
               day={day}
             />
@@ -451,6 +469,7 @@ function DayTracker({
   value,
   target,
   reached,
+  applicable,
   entries,
   day,
 }: {
@@ -458,13 +477,34 @@ function DayTracker({
   value: number;
   target: number;
   reached: boolean;
+  applicable: boolean;
   entries: MetricEntry[];
   day: string;
 }) {
   const [open, setOpen] = useState(false);
   const colors = useAppColors();
+  const historicGoal =
+    day < dateKey() &&
+    applicable &&
+    metric.goalEnabled !== false &&
+    metric.dataType !== "text";
+  const statusColor = reached ? palette.lime : palette.red;
   return (
-    <Card style={styles.metricCard}>
+    <Card
+      style={[
+        styles.metricCard,
+        historicGoal && {
+          borderColor: statusColor,
+          backgroundColor: reached
+            ? colors.isDark
+              ? "#183523"
+              : "#F0F9E7"
+            : colors.isDark
+              ? "#351D22"
+              : "#FFF1F1",
+        },
+      ]}
+    >
       <Pressable
         onPress={() => setOpen((value) => !value)}
         style={styles.metricHeader}
@@ -479,7 +519,16 @@ function DayTracker({
           />
         </View>
         <View style={styles.grow}>
-          <Text style={[styles.metricName, { color: colors.muted }]}>
+          <Text
+            style={[
+              styles.metricName,
+              {
+                color: historicGoal ? statusColor : colors.muted,
+                textDecorationLine:
+                  historicGoal && reached ? "line-through" : "none",
+              },
+            ]}
+          >
             {metric.name}
           </Text>
           <Text style={[styles.metricValue, { color: colors.ink }]}>
@@ -488,7 +537,7 @@ function DayTracker({
               : formatMetricValue(metric, value)}
           </Text>
         </View>
-        {metric.goalEnabled !== false ? (
+        {metric.goalEnabled !== false && applicable ? (
           <Chip label={reached ? "Goal met" : "Not met"} selected={reached} />
         ) : null}
         <Ionicons
@@ -499,10 +548,12 @@ function DayTracker({
       </Pressable>
       {open ? (
         <>
-          {metric.dataType !== "text" && metric.goalEnabled !== false ? (
+          {metric.dataType !== "text" &&
+          metric.goalEnabled !== false &&
+          applicable ? (
             <ProgressBar
               progress={goalProgress(metric, value, target)}
-              color={metric.color}
+              color={historicGoal ? statusColor : metric.color}
             />
           ) : null}
           {entries.map((entry) => (
@@ -533,15 +584,44 @@ function TrackedCard({ state, day }: { state: AppState; day: string }) {
   const [open, setOpen] = useState(false);
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const historic = day < dateKey() && summary.total > 0;
+  const statusColor = summary.allMet ? palette.lime : palette.red;
   return (
-    <Card style={[styles.tracked, { backgroundColor: colors.card, borderColor: accent }]}>
+    <Card
+      style={[
+        styles.tracked,
+        {
+          backgroundColor: historic
+            ? summary.allMet
+              ? colors.isDark
+                ? "#183523"
+                : "#F0F9E7"
+              : colors.isDark
+                ? "#351D22"
+                : "#FFF1F1"
+            : colors.card,
+          borderColor: historic ? statusColor : accent,
+        },
+      ]}
+    >
       <Pressable
         onPress={() => setOpen((value) => !value)}
         style={styles.trackedTop}
       >
         <Ionicons name="checkmark-done" size={22} color={accent} />
         <View style={styles.grow}>
-          <Text style={[styles.trackedTitle, { color: colors.ink }]}>Tracked goals</Text>
+          <Text
+            style={[
+              styles.trackedTitle,
+              {
+                color: historic ? statusColor : colors.ink,
+                textDecorationLine:
+                  historic && summary.allMet ? "line-through" : "none",
+              },
+            ]}
+          >
+            Tracked goals
+          </Text>
           <Text style={[styles.meta, { color: colors.muted }]}>
             {summary.met}/{summary.total} goals completed on this date
           </Text>
@@ -561,10 +641,11 @@ function TrackedCard({ state, day }: { state: AppState; day: string }) {
             const unavailable = summary.unavailable.some(
               (item) => item.id === metric.id,
             );
-            const reached = goalReached(
+            const reached = scheduledGoalReached(
+              state,
               metric,
-              safeMetricValue(state, metric, state.currentUserId, day),
-              effectiveGoalTarget(state, metric, state.currentUserId, day),
+              state.currentUserId,
+              day,
             );
             return (
               <Chip

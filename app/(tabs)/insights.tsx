@@ -1,7 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
-import { BackHandler, PanResponder, Pressable, StyleSheet, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  BackHandler,
+  LayoutAnimation,
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  UIManager,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -42,6 +52,13 @@ const TRACKED = "tracked_goals";
 const TRACKED_COLOR = "#9B6BDB";
 const WEEK_CHART_MAX = 1.4;
 type ViewMode = "week" | "month";
+
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 export default function Insights() {
   const { state, updateSettings } = useApp();
@@ -116,6 +133,7 @@ export default function Insights() {
     if (index < 0) return;
     const [item] = current.splice(index, 1);
     current.splice(Math.max(0, Math.min(targetIndex, current.length)), 0, item);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     select(selectedIds.includes(TRACKED) ? [TRACKED, ...current] : current);
   }
 
@@ -434,6 +452,23 @@ function TrackedSummary({
   onRemove: () => void;
 }) {
   const colors = useAppColors();
+  const wiggle = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!editing) {
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, { toValue: 1, duration: 140, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: -1, duration: 280, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: 0, duration: 140, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [editing, wiggle]);
   const totals = dates.map((date) =>
     trackedGoalSummary(state, state.currentUserId, date),
   );
@@ -441,32 +476,40 @@ function TrackedSummary({
   const met = totals.reduce((sum, item) => sum + item.met, 0);
   const possible = totals.reduce((sum, item) => sum + item.total, 0);
   const perfect = eligible.filter((item) => item.allMet).length;
-  const latest = totals[totals.length - 1];
-  const latestApplicable = Boolean(latest?.total);
-  const latestMet = latestApplicable && latest.allMet;
   const streak = longestStreakWithRest(
     state,
     dates,
     (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
   );
   return (
+    <Animated.View
+      style={{
+        transform: [
+          {
+            rotate: wiggle.interpolate({
+              inputRange: [-1, 1],
+              outputRange: ["-0.3deg", "0.3deg"],
+            }),
+          },
+        ],
+      }}
+    >
     <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
-    <Card style={[
-      styles.summary,
-      latestApplicable && {
-        borderColor: latestMet ? palette.lime : palette.red,
-        backgroundColor: latestMet
-          ? (colors.isDark ? "#183523" : "#F0F9E7")
-          : (colors.isDark ? "#351D22" : "#FFF1F1"),
-      },
-    ]}>
+    <Card style={styles.summary}>
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
         <Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} />
       </View>
       <View style={styles.summaryPrimary}>
-        <Text numberOfLines={1} style={[styles.summaryName, styles.summaryNameRow, latestMet && styles.goalComplete, { color: latestApplicable ? (latestMet ? palette.lime : palette.red) : colors.ink }]}>Tracked goals</Text>
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.78}
+          style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}
+        >
+          Tracked goals
+        </Text>
         <Text style={[styles.summaryValue, { color: colors.ink }]}>{met}/{possible}</Text>
         <Text style={[styles.summaryUnit, { color: colors.muted }]}>goals complete</Text>
       </View>
@@ -497,6 +540,7 @@ function TrackedSummary({
       ) : null}
     </Card>
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -522,17 +566,53 @@ function MetricSummary({
   onRemove: () => void;
 }) {
   const colors = useAppColors();
+  const accent = useGroupAccent();
+  const dragY = useRef(new Animated.Value(0)).current;
+  const wiggle = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!editing) {
+      dragY.setValue(0);
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, { toValue: 1, duration: 135, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: -1, duration: 270, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: 0, duration: 135, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
+        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
         onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) =>
-          onMove(Math.max(0, Math.min(count - 1, index + Math.round(gesture.dy / 82)))),
+        onPanResponderRelease: (_event, gesture) => {
+          onMove(
+            Math.max(
+              0,
+              Math.min(count - 1, index + Math.round(gesture.dy / 82)),
+            ),
+          );
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
+        onPanResponderTerminate: () =>
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start(),
       }),
-    [count, editing, index, onMove],
+    [count, dragY, editing, index, onMove],
   );
   const active = dates.filter((date) => metric.activeFrom <= date);
   const applicable = active.filter((date) =>
@@ -599,17 +679,21 @@ function MetricSummary({
     metric.id === "weight"
       ? weightProgressStats(state, state.currentUserId, dates[dates.length - 1])
       : null;
-  const latestDate = dates[dates.length - 1];
-  const latestApplicable = metricApplicableOnDate(
-    state,
-    metric,
-    state.currentUserId,
-    latestDate,
-  );
-  const latestMet =
-    latestApplicable &&
-    scheduledGoalReached(state, metric, state.currentUserId, latestDate);
   return (
+    <Animated.View
+      style={{
+        transform: [
+          { translateY: dragY },
+          {
+            rotate: wiggle.interpolate({
+              inputRange: [-1, 1],
+              outputRange: ["-0.3deg", "0.3deg"],
+            }),
+          },
+        ],
+        zIndex: editing ? 3 : 0,
+      }}
+    >
     <Pressable
       style={styles.summaryWrap}
       onLongPress={onEdit}
@@ -620,15 +704,7 @@ function MetricSummary({
         } as never)
       }
     >
-      <Card style={[
-        styles.summary,
-        latestApplicable && {
-          borderColor: latestMet ? palette.lime : palette.red,
-          backgroundColor: latestMet
-            ? (colors.isDark ? "#183523" : "#F0F9E7")
-            : (colors.isDark ? "#351D22" : "#FFF1F1"),
-        },
-      ]}>
+      <Card style={styles.summary}>
         {editing ? (
           <View {...responder.panHandlers} style={styles.drag}>
             <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
@@ -646,14 +722,19 @@ function MetricSummary({
         <View style={styles.summaryPrimary}>
           <Text
             numberOfLines={1}
-            style={[styles.summaryName, styles.summaryNameRow, latestMet && styles.goalComplete, { color: latestApplicable ? (latestMet ? palette.lime : palette.red) : colors.ink }]}
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}
           >
             {metric.name}
           </Text>
-          <Text numberOfLines={1} style={[styles.summaryValue, { color: colors.ink }]}>
-          {weightStats
-            ? weightStats.currentWeight.toFixed(1)
-            : isBoolean
+          <Text
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+            style={[styles.summaryValue, { color: colors.ink }]}
+          >
+          {isBoolean
               ? `${reached}/${applicable.length} days`
               : Math.abs(average) >= 100
                 ? Math.round(average).toLocaleString()
@@ -664,15 +745,20 @@ function MetricSummary({
           ) : null}
         </View>
         <View style={styles.summaryDetail}>
-        <Text numberOfLines={2} style={[styles.summaryLabel, { color: colors.muted }]}>
+        <Text
+          numberOfLines={3}
+          adjustsFontSizeToFit
+          minimumFontScale={0.82}
+          style={[styles.summaryLabel, { color: colors.muted }]}
+        >
           {weightStats
-            ? `${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} total · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week average`
+            ? `${dates.length}-day avg · ${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week`
             : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
-              : `${measured.length ? `daily average across ${measured.length} logged days` : "No entries in this range"} · overall ${formatMetricValue(metric, overall)}`}
+              : `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${formatMetricValue(metric, overall)}`}
         </Text>
         {weightStats ? (
-          <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.82} style={[styles.remaining, { color: colors.ink }]}>
             Last 7 days {Math.abs(weightStats.lastWeekChange).toFixed(1)} kg ·
             planned {weightStats.expectedWeeklyChange.toFixed(1)} kg/week ·{" "}
             {weightStats.remaining.toFixed(1)} kg remaining
@@ -689,7 +775,7 @@ function MetricSummary({
         ) : null}
         </View>
         <View style={styles.summaryGoal}>
-        <Text style={styles.goalLine}>
+        <Text style={[styles.goalLine, { color: accent }]}>
           {reached}/{applicable.length} goal days ·{" "}
           {applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%
         </Text>
@@ -704,6 +790,7 @@ function MetricSummary({
         ) : null}
       </Card>
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -857,16 +944,16 @@ const styles = StyleSheet.create({
   summaryWrap: { width: "100%" },
   summary: {
     width: "100%",
-    minHeight: 72,
+    minHeight: 84,
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
     paddingVertical: 8,
     paddingHorizontal: 10,
   },
-  summaryPrimary: { width: 78, minWidth: 68 },
+  summaryPrimary: { width: 82, minWidth: 70 },
   summaryDetail: { flex: 1, minWidth: 0 },
-  summaryGoal: { width: 74, alignItems: "flex-end" },
+  summaryGoal: { width: 82, alignItems: "flex-end" },
   trackedSummary: {
     width: "100%",
     minHeight: 66,
@@ -892,7 +979,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   summaryNameRow: { marginTop: 0 },
-  goalComplete: { textDecorationLine: "line-through" },
   summaryValue: {
     color: palette.ink,
     fontSize: 15,

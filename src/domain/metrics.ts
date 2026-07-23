@@ -519,8 +519,18 @@ export function goalReached(
   switch (metric.goal.kind) {
     case "at_most":
       return value <= targetOverride && value > 0;
-    case "exact":
-      return value === targetOverride;
+    case "exact": {
+      const tolerance =
+        metric.unit === "kcal"
+          ? Math.max(50, Math.abs(targetOverride) * 0.05)
+          : metric.unit === "kg"
+            ? 0.2
+            : Math.max(0.1, Math.abs(targetOverride) * 0.02);
+      return (
+        Math.abs(value - targetOverride) <=
+        tolerance
+      );
+    }
     case "complete":
       return value > 0;
     default:
@@ -616,22 +626,7 @@ export function dailyScore(
         item.userId === userId &&
         item.localDate === localDate,
     );
-    const hasVisibleValue =
-      metric.dataType === "photo"
-        ? state.photos.some(
-            (photo) =>
-              photo.userId === userId &&
-              photo.localDate === localDate &&
-              photo.visibility === "group",
-          )
-        : state.entries.some(
-            (entry) =>
-              entry.metricId === metric.id &&
-              entry.userId === userId &&
-              entry.localDate === localDate &&
-              entry.visibility === "group",
-          );
-    if (status && !hasVisibleValue && userId !== state.currentUserId) {
+    if (status && userId !== state.currentUserId) {
       return (
         score +
         (metric.scoreWeight / totalWeight) *
@@ -665,11 +660,15 @@ export function dailyScore(
         metric.aggregation,
       );
     }
+    const personalMetric =
+      userId === state.currentUserId
+        ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
+        : metric;
     const cappedProgress = Math.min(
       goalProgress(
-        metric,
+        personalMetric,
         value,
-        effectiveGoalTarget(state, metric, userId, localDate),
+        effectiveGoalTarget(state, personalMetric, userId, localDate),
       ),
       1,
     );
