@@ -24,6 +24,9 @@ export default function TabLayout() {
       initialRouteName={state.settings.defaultLandingPage ?? "index"}
       screenOptions={({ route }) => ({
         headerShown: false,
+        lazy: true,
+        // Health/chat updates should not recalculate every inactive chart tab.
+        freezeOnBlur: true,
         tabBarButton: HapticTab,
         tabBarActiveTintColor: accent,
         tabBarInactiveTintColor: colors.faint,

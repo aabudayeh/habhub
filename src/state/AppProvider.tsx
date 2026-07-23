@@ -9,7 +9,13 @@ import React, {
   useReducer,
   useState,
 } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  InteractionManager,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 import { createInitialState } from "@/src/data/seed";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
@@ -701,10 +707,13 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "configurePersonalMetrics": {
       const today = dateKey();
+      const configuredState = { ...state, metrics: action.metrics };
       const metrics = action.metrics.map((metric, order) => ({
         ...metric,
         order,
-        activeFrom: today,
+        activeFrom: action.trackedGoalIds.includes(metric.id)
+          ? goalHistoryStart(configuredState, metric)
+          : today,
       }));
       return {
         ...state,
@@ -712,7 +721,9 @@ function reducer(state: AppState, action: Action): AppState {
         trackedGoalPeriods: Object.fromEntries(
           metrics.map((metric) => [
             metric.id,
-            action.trackedGoalIds.includes(metric.id) ? [{ from: today }] : [],
+            action.trackedGoalIds.includes(metric.id)
+              ? [{ from: metric.activeFrom }]
+              : [],
           ]),
         ),
         selectedGroupMetricId: state.selectedGroupMetricId,
@@ -1254,6 +1265,40 @@ function reducer(state: AppState, action: Action): AppState {
       const dismissed = new Set(state.settings.dismissedHealthEntryIds ?? []);
       for (const entry of action.entries)
         if (!dismissed.has(entry.id)) byId.set(entry.id, entry);
+      const importedState = { ...state, entries: [...byId.values()] };
+      const withOnboardingGoalHistory = (next: AppState): AppState => {
+        if (next.settings.onboardingComplete) return next;
+        const starts = new Map<string, string>();
+        next.metrics.forEach((metric) => {
+          const periods = next.trackedGoalPeriods[metric.id] ?? [];
+          if (!periods.length) return;
+          const start = goalHistoryStart(next, metric);
+          if (start < periods[0].from) starts.set(metric.id, start);
+        });
+        if (!starts.size) return next;
+        return {
+          ...next,
+          metrics: next.metrics.map((metric) =>
+            starts.has(metric.id)
+              ? { ...metric, activeFrom: starts.get(metric.id)! }
+              : metric,
+          ),
+          trackedGoalPeriods: Object.fromEntries(
+            Object.entries(next.trackedGoalPeriods).map(
+              ([metricId, periods]) => [
+                metricId,
+                starts.has(metricId)
+                  ? periods.map((period, index) =>
+                      index === 0
+                        ? { ...period, from: starts.get(metricId)! }
+                        : period,
+                    )
+                  : periods,
+              ],
+            ),
+          ),
+        };
+      };
       const latestWeight = action.entries
         .filter(
           (entry) =>
@@ -1275,13 +1320,13 @@ function reducer(state: AppState, action: Action): AppState {
         (existingLatestWeight &&
           latestWeight.recordedAt < existingLatestWeight.recordedAt)
       )
-        return { ...state, entries: [...byId.values()] };
+        return withOnboardingGoalHistory(importedState);
       const energyProfile = {
         ...state.settings.energyProfile,
         weightKg: Number(latestWeight.value),
       };
       return withEnergyProfile(
-        { ...state, entries: [...byId.values()] },
+        withOnboardingGoalHistory(importedState),
         energyProfile,
       );
     }
@@ -1736,13 +1781,20 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!hydrated) return;
+    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
     const timeout = setTimeout(() => {
-      AsyncStorage.setItem(
-        APP_STORAGE_KEY,
-        JSON.stringify({ ...state, lastSavedAt: new Date().toISOString() }),
-      ).catch(() => undefined);
-    }, 250);
-    return () => clearTimeout(timeout);
+      task = InteractionManager.runAfterInteractions(() => {
+        AsyncStorage.setItem(
+          APP_STORAGE_KEY,
+          JSON.stringify({ ...state, lastSavedAt: new Date().toISOString() }),
+        ).catch(() => undefined);
+      });
+    }, 700);
+    return () => {
+      clearTimeout(timeout);
+      task?.cancel();
+    };
   }, [hydrated, state]);
 
   const replaceState = useCallback(

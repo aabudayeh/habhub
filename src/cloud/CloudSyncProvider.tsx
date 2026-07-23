@@ -767,9 +767,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       try {
         const deviceId = deviceIdRef.current ?? (await getDeviceId());
         deviceIdRef.current = deviceId;
+        const previousHash = stableHash(stateRef.current);
         let candidate = bindStateToAccount(stateRef.current, auth.user!);
         candidate = await uploadOwnedMedia(candidate);
-        if (stableHash(candidate) !== stableHash(stateRef.current)) {
+        const candidateHash = stableHash(candidate);
+        if (candidateHash !== previousHash) {
           replaceState(candidate);
           stateRef.current = candidate;
         }
@@ -800,7 +802,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         );
         revisionRef.current = result.revision;
         const syncedAt = result.updatedAt;
-        hashRef.current = stableHash(candidate);
+        hashRef.current = candidateHash;
         if (workspaceSynced) workspaceHashRef.current = nextWorkspaceHash;
         setLastSyncedAt(syncedAt);
         setPendingChanges(!workspaceSynced);
@@ -956,11 +958,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       initializedUserRef.current !== auth.user?.id
     )
       return;
-    const hash = stableHash(state);
-    if (hash === hashRef.current) return;
-    setPendingChanges(true);
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => performSync(), 1200);
+    // Coalesce and defer full-snapshot hashing. Serializing the whole offline
+    // state synchronously on every tap or keystroke caused phone UI stutter.
+    timerRef.current = setTimeout(() => {
+      const hash = stableHash(stateRef.current);
+      if (hash === hashRef.current) return;
+      setPendingChanges(true);
+      performSync().catch(() => undefined);
+    }, 1800);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
