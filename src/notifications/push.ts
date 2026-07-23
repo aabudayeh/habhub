@@ -21,16 +21,17 @@ function storedPreferences(preferences: NotificationSettings) {
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
-  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'MetricRally', importance: Notifications.AndroidImportance.DEFAULT });
+  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'MetricRally', importance: Notifications.AndroidImportance.HIGH, vibrationPattern: [0, 200, 120, 200] });
   let permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
-  if (!permission.granted) throw new Error('Notification permission was not granted. You can enable it in system settings.');
+  const granted = () => permission.granted || permission.status === Notifications.PermissionStatus.GRANTED;
+  if (!granted()) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
+  if (!granted()) throw new Error('Android/iOS has not granted notification permission. Enable it in system settings and retry.');
   const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
   if (!projectId) throw new Error('This build is missing its EAS project ID.');
   const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
   if (supabase) {
     const { error } = await supabase.from('device_push_tokens').upsert({ token, user_id: userId, platform: Platform.OS, preferences: storedPreferences(preferences) });
-    if (error) throw error;
+    if (error) throw new Error(`Permission is enabled, but cloud registration failed: ${error.message}`);
   }
   return token;
 }

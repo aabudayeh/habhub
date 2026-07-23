@@ -1173,6 +1173,7 @@ export function createInitialState(): AppState {
       leaderboardMetricIdsByGroup: { "weekend-warriors": ["__score", "steps"] },
       comparisonMetricIdsByGroup: { "weekend-warriors": ["steps"] },
       comparisonPeriodByGroup: { "weekend-warriors": "week" },
+      dismissedHealthEntryIds: [],
       notifications: {
         pushEnabled: true,
         groupMetricActivity: true,

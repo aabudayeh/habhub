@@ -1,12 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const PENDING_INVITE_KEY = 'metric-rally-pending-invite-v1';
-const DEFAULT_PUBLIC_APP_URL = 'https://paceboard-92551.web.app';
-
 export function groupInviteLink(code: string) {
   const normalized = code.trim().toUpperCase();
-  const base = process.env.EXPO_PUBLIC_APP_URL?.trim() || DEFAULT_PUBLIC_APP_URL;
-  return `${base.replace(/\/$/, '')}/join?code=${encodeURIComponent(normalized)}`;
+  const cloudBase = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim();
+  const publicBase = process.env.EXPO_PUBLIC_APP_URL?.trim();
+  if (publicBase)
+    return `${publicBase.replace(/\/$/, '')}/join?code=${encodeURIComponent(normalized)}`;
+  if (cloudBase)
+    return `${cloudBase.replace(/\/$/, '')}/functions/v1/group-invite?code=${encodeURIComponent(normalized)}`;
+  return `paceboard://join?code=${encodeURIComponent(normalized)}`;
 }
 
 export function groupInviteMessage(groupName: string, code: string) {

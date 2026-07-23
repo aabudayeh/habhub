@@ -65,7 +65,8 @@ export default function NotificationsScreen() {
             ? error.message
             : "This phone could not be registered.",
         );
-        updateSettings({ notifications: { ...value, pushEnabled: false } });
+        // Keep the user's preference enabled when system permission exists;
+        // registration is retried on the next settings/foreground visit.
       });
   }, [auth.user, updateSettings, value]);
   async function togglePush() {
@@ -91,7 +92,6 @@ export default function NotificationsScreen() {
       patch({ pushEnabled: true });
       setPermissionNote("This phone is registered for MetricRally notifications.");
     } catch (error) {
-      patch({ pushEnabled: false });
       const message =
         error instanceof Error
           ? error.message

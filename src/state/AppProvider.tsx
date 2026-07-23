@@ -466,15 +466,24 @@ function reducer(state: AppState, action: Action): AppState {
             : state.selectedGroupMetricId,
       };
     case "deleteEntry":
-      return {
-        ...state,
-        entries: state.entries.filter(
-          (entry) =>
-            entry.id !== action.entryId ||
-            entry.userId !== state.currentUserId ||
-            entry.source !== "manual",
-        ),
-      };
+      {
+        const target = state.entries.find(
+          (entry) => entry.id === action.entryId && entry.userId === state.currentUserId,
+        );
+        if (!target || target.source === "calculated") return state;
+        return {
+          ...state,
+          entries: state.entries.filter((entry) => entry.id !== action.entryId),
+          settings: target.source === "imported"
+            ? {
+                ...state.settings,
+                dismissedHealthEntryIds: [
+                  ...new Set([...(state.settings.dismissedHealthEntryIds ?? []), target.id]),
+                ],
+              }
+            : state.settings,
+        };
+      }
     case "deletePhoto":
       return {
         ...state,
@@ -1059,7 +1068,9 @@ function reducer(state: AppState, action: Action): AppState {
           ),
       );
       const byId = new Map(preserved.map((entry) => [entry.id, entry]));
-      for (const entry of action.entries) byId.set(entry.id, entry);
+      const dismissed = new Set(state.settings.dismissedHealthEntryIds ?? []);
+      for (const entry of action.entries)
+        if (!dismissed.has(entry.id)) byId.set(entry.id, entry);
       const latestWeight = action.entries
         .filter(
           (entry) =>

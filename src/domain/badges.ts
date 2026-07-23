@@ -11,6 +11,7 @@ import {
   dailyScore,
   effectiveGoalTarget,
   goalReached,
+  metricApplicableOnDate,
   safeMetricValue,
   trackedGoalSummary,
 } from "@/src/domain/metrics";
@@ -37,6 +38,8 @@ export type EarnedBadge = {
   periodLabel: string;
   anchorDate: string;
   metricId?: string;
+  earnedCount?: number;
+  nextTarget?: number;
 };
 
 const labels: Record<BadgePeriod, string> = {
@@ -222,6 +225,74 @@ export function buildBadges(
         }))
         .sort((a, b) => b.days - a.days)[0]
     : undefined;
+  const milestone = (count: number) =>
+    [1, 3, 7, 14, 30, 50, 100, 250, 500, 1000].find((target) => target > count);
+  const achievementDates = dateRangeEnding(anchor, 365);
+  const goalMetrics = state.metrics.filter(
+    (metric) =>
+      metric.goalEnabled !== false &&
+      metric.dataType !== "text" &&
+      metric.dataType !== "photo" &&
+      metric.id !== "overall_score" &&
+      metric.id !== "weekly_deficit_balance",
+  );
+  const trackerGoalBadges = state.group.members.flatMap((member) =>
+    goalMetrics.map((metric): EarnedBadge => {
+      const count = achievementDates.filter(
+        (day) =>
+          metric.activeFrom <= day &&
+          metricApplicableOnDate(state, metric, member.id, day) &&
+          goalReached(
+            metric,
+            safeMetricValue(state, metric, member.id, day),
+            effectiveGoalTarget(state, metric, member.id, day),
+          ),
+      ).length;
+      const nextTarget = milestone(count);
+      return {
+        id: `goal-count:${member.id}:${metric.id}`,
+        metricId: metric.id,
+        icon: metric.icon as EarnedBadge["icon"],
+        title: `${metric.name} goals`,
+        owner: memberDisplayName(state, member),
+        memberId: member.id,
+        caption: `${count} earned`,
+        description: nextTarget
+          ? `Complete this goal ${nextTarget - count} more time${nextTarget - count === 1 ? "" : "s"} to reach the ${nextTarget}-completion milestone.`
+          : "Top completion milestone reached.",
+        earnedCount: count,
+        nextTarget,
+        color: metric.color,
+        period: "achievement",
+        periodLabel: labels.achievement,
+        anchorDate: anchor,
+      };
+    }),
+  );
+  const perfectDayBadges = state.group.members.map((member): EarnedBadge => {
+    const count = achievementDates.filter((day) => {
+      const summary = trackedGoalSummary(state, member.id, day);
+      return summary.total > 0 && summary.allMet;
+    }).length;
+    const nextTarget = milestone(count);
+    return {
+      id: `perfect-days:${member.id}`,
+      icon: "sparkles",
+      title: "All daily goals",
+      owner: memberDisplayName(state, member),
+      memberId: member.id,
+      caption: `${count} perfect day${count === 1 ? "" : "s"}`,
+      description: nextTarget
+        ? `${nextTarget - count} more perfect day${nextTarget - count === 1 ? "" : "s"} until the ${nextTarget}-day milestone.`
+        : "Top perfect-day milestone reached.",
+      earnedCount: count,
+      nextTarget,
+      color: palette.lime,
+      period: "achievement",
+      periodLabel: labels.achievement,
+      anchorDate: anchor,
+    };
+  });
   return [
     overall(
       "live",
@@ -264,6 +335,8 @@ export function buildBadges(
       "Highest average normalized score in the selected month.",
     ),
     ...metricBadges,
+    ...perfectDayBadges,
+    ...trackerGoalBadges,
     ...streakBadges,
     {
       id: "comeback",

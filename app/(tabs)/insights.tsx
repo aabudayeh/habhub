@@ -445,6 +445,9 @@ function TrackedSummary({
   const met = totals.reduce((sum, item) => sum + item.met, 0);
   const possible = totals.reduce((sum, item) => sum + item.total, 0);
   const perfect = eligible.filter((item) => item.allMet).length;
+  const latest = totals[totals.length - 1];
+  const latestApplicable = Boolean(latest?.total);
+  const latestMet = latestApplicable && latest.allMet;
   const streak = longestStreakWithRest(
     state,
     dates,
@@ -452,14 +455,22 @@ function TrackedSummary({
   );
   return (
     <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
-    <Card style={styles.summary}>
+    <Card style={[
+      styles.summary,
+      latestApplicable && {
+        borderColor: latestMet ? palette.lime : palette.red,
+        backgroundColor: latestMet
+          ? (colors.isDark ? "#183523" : "#F0F9E7")
+          : (colors.isDark ? "#351D22" : "#FFF1F1"),
+      },
+    ]}>
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
         <Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} />
       </View>
       <View style={styles.summaryPrimary}>
-        <Text numberOfLines={1} style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}>Tracked goals</Text>
+        <Text numberOfLines={1} style={[styles.summaryName, styles.summaryNameRow, latestMet && styles.goalComplete, { color: latestApplicable ? (latestMet ? palette.lime : palette.red) : colors.ink }]}>Tracked goals</Text>
         <Text style={[styles.summaryValue, { color: colors.ink }]}>{met}/{possible}</Text>
         <Text style={[styles.summaryUnit, { color: colors.muted }]}>goals complete</Text>
       </View>
@@ -600,6 +611,20 @@ function MetricSummary({
     metric.id === "weight"
       ? weightProgressStats(state, state.currentUserId, dates[dates.length - 1])
       : null;
+  const latestDate = dates[dates.length - 1];
+  const latestApplicable = metricApplicableOnDate(
+    state,
+    metric,
+    state.currentUserId,
+    latestDate,
+  );
+  const latestMet =
+    latestApplicable &&
+    goalReached(
+      metric,
+      safeMetricValue(state, metric, state.currentUserId, latestDate),
+      effectiveGoalTarget(state, metric, state.currentUserId, latestDate),
+    );
   return (
     <Pressable
       style={styles.summaryWrap}
@@ -611,7 +636,15 @@ function MetricSummary({
         } as never)
       }
     >
-      <Card style={styles.summary}>
+      <Card style={[
+        styles.summary,
+        latestApplicable && {
+          borderColor: latestMet ? palette.lime : palette.red,
+          backgroundColor: latestMet
+            ? (colors.isDark ? "#183523" : "#F0F9E7")
+            : (colors.isDark ? "#351D22" : "#FFF1F1"),
+        },
+      ]}>
         {editing ? (
           <View {...responder.panHandlers} style={styles.drag}>
             <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
@@ -629,7 +662,7 @@ function MetricSummary({
         <View style={styles.summaryPrimary}>
           <Text
             numberOfLines={1}
-            style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}
+            style={[styles.summaryName, styles.summaryNameRow, latestMet && styles.goalComplete, { color: latestApplicable ? (latestMet ? palette.lime : palette.red) : colors.ink }]}
           >
             {metric.name}
           </Text>
@@ -875,6 +908,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   summaryNameRow: { marginTop: 0 },
+  goalComplete: { textDecorationLine: "line-through" },
   summaryValue: {
     color: palette.ink,
     fontSize: 15,

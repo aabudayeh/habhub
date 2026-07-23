@@ -1,5 +1,5 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
-import { Redirect, Stack, useSegments } from "expo-router";
+import { Redirect, router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
@@ -46,9 +46,10 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const auth = useAuth();
-  const { state } = useApp();
+  const { state, hydrated } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
+  const landingApplied = useRef(false);
   const cycleSignature = state.entries
     .filter((entry) => entry.userId === state.currentUserId && entry.metricId === "menstrual_cycle")
     .map((entry) => `${entry.localDate}:${entry.value}`)
@@ -71,6 +72,19 @@ function RootNavigator() {
   useEffect(() => {
     void syncGoalNotifications(cycleStateRef.current).catch(() => undefined);
   }, [goalReminderKey]);
+  useEffect(() => {
+    if (
+      landingApplied.current ||
+      !hydrated ||
+      !state.settings.onboardingComplete ||
+      auth.status === "loading" ||
+      rootSegment !== "(tabs)"
+    ) return;
+    landingApplied.current = true;
+    const target = state.settings.defaultLandingPage ?? "index";
+    if (target !== "index")
+      setTimeout(() => router.replace(`/${target}` as never), 0);
+  }, [auth.status, hydrated, rootSegment, state.settings.defaultLandingPage, state.settings.onboardingComplete]);
   const inAuthRoute =
     rootSegment === "sign-in" ||
     rootSegment === "auth-callback" ||

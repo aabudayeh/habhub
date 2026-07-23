@@ -514,11 +514,13 @@ export default function TrackerDetail() {
           <Pressable
             delayLongPress={450}
             onLongPress={
-              entry.source === "manual"
+              entry.source !== "calculated"
                 ? () =>
                     Alert.alert(
-                      "Delete entry?",
-                      "This removes this manually logged item.",
+                      entry.source === "imported" ? "Hide imported entry?" : "Delete entry?",
+                      entry.source === "imported"
+                        ? "This imported record will remain hidden after future health syncs."
+                        : "This removes this manually logged item.",
                       [
                         { text: "Cancel", style: "cancel" },
                         {

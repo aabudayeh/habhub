@@ -108,7 +108,7 @@ export default function Today() {
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebrationsReady, setCelebrationsReady] = useState(false);
   const celebratedGoalsRef = useRef("");
-  const celebrationStorageKey = `metric-rally-celebrations:${state.currentUserId}:${today}`;
+  const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
   const goalCelebrationKey = goals.metrics
     .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
     .map((item) => item.id)
@@ -581,7 +581,7 @@ function ConfettiBurst({
         },
       ]}
     >
-      {Array.from({ length: special ? 60 : 16 }, (_, index) => (
+      {Array.from({ length: special ? 80 : 32 }, (_, index) => (
         <View
           key={index}
           style={[
@@ -655,7 +655,26 @@ function TrackerRow({
   onRemove: () => void;
 }) {
   const start = useRef(index);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const wiggle = useRef(new Animated.Value(0)).current;
   start.current = index;
+  useEffect(() => {
+    if (!editing) {
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      dragY.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, { toValue: 1, duration: 130, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: -1, duration: 260, useNativeDriver: true }),
+        Animated.timing(wiggle, { toValue: 0, duration: 130, useNativeDriver: true }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -665,8 +684,9 @@ function TrackerRow({
           editing && Math.abs(gesture.dy) > 3,
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
+        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
         onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) =>
+        onPanResponderRelease: (_event, gesture) => {
           onMove(
             Math.max(
               0,
@@ -675,9 +695,13 @@ function TrackerRow({
                 start.current + Math.round(gesture.dy / height),
               ),
             ),
-          ),
+          );
+          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+        },
+        onPanResponderTerminate: () =>
+          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start(),
       }),
-    [count, editing, height, onMove],
+    [count, dragY, editing, height, onMove],
   );
   const actualValue =
     item.id === "weekly_deficit_balance"
@@ -711,6 +735,13 @@ function TrackerRow({
     weekly,
   );
   return (
+    <Animated.View style={{
+      transform: [
+        { translateY: dragY },
+        { rotate: wiggle.interpolate({ inputRange: [-1, 1], outputRange: ["-0.35deg", "0.35deg"] }) },
+      ],
+      zIndex: editing ? 4 : 0,
+    }}>
     <Pressable
       onLongPress={onEdit}
       onPress={() =>
@@ -803,13 +834,23 @@ function TrackerRow({
         </View>
       ) : null}
       {editing ? (
-        <Pressable onPress={onRemove} hitSlop={10} style={styles.remove}>
-          <Ionicons name="remove" size={17} color={palette.white} />
-        </Pressable>
+        <View style={styles.editActions}>
+          <Pressable
+            onPress={() => router.navigate({ pathname: "/metric-editor", params: { metric: item.id } } as never)}
+            hitSlop={8}
+            style={[styles.editTracker, { borderColor: accent }]}
+          >
+            <Ionicons name="create-outline" size={15} color={accent} />
+          </Pressable>
+          <Pressable onPress={onRemove} hitSlop={10} style={styles.remove}>
+            <Ionicons name="remove" size={17} color={palette.white} />
+          </Pressable>
+        </View>
       ) : (
         <Ionicons name="chevron-forward" size={16} color={colors.faint} />
       )}
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -951,10 +992,12 @@ const styles = StyleSheet.create({
     left: 8,
     right: 8,
     height: 120,
+    elevation: 50,
   },
   confettiSpecial: { top: 0, left: 0, right: 0, bottom: 0, height: undefined },
   confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
   editActions: { gap: 6 },
+  editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
   header: {

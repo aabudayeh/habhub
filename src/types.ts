@@ -309,6 +309,8 @@ export type UserSettings = {
     string,
     "today" | "yesterday" | "week" | "month" | "custom"
   >;
+  /** Imported health records the user explicitly hid/deleted. */
+  dismissedHealthEntryIds?: string[];
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;

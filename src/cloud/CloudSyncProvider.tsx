@@ -321,12 +321,11 @@ async function uploadMedia(
   const response = await fetch(uri);
   if (!response.ok)
     throw new Error(`Could not read the selected ${kind} image.`);
-  const blob = await response.blob();
-  if (blob.size > 25 * 1024 * 1024)
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength > 25 * 1024 * 1024)
     throw new Error("Images must be smaller than 25 MB.");
-  const info = mediaInfo(uri, blob.type);
+  const info = mediaInfo(uri, response.headers.get("content-type"));
   const path = `${userId}/account/${safePart(kind)}/${safePart(id)}.${info.extension}`;
-  const bytes = await blob.arrayBuffer();
   const { error } = await supabase.storage
     .from(MEDIA_BUCKET)
     .upload(path, bytes, {
@@ -762,7 +761,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       return;
     if (syncPromiseRef.current) return syncPromiseRef.current;
     const operation = (async () => {
-      setStatus("syncing");
+      // Routine debounced saves stay visually quiet. Explicit refresh controls
+      // already expose their own progress and should not flash on every tap.
       setErrorMessage(null);
       try {
         const deviceId = deviceIdRef.current ?? (await getDeviceId());

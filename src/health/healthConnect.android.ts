@@ -152,14 +152,36 @@ function individualIntervals(records: Record<string, unknown>[]) {
 function sourcePriority(source: string, kind: "activity" | "nutrition") {
   const normalized = source.toLowerCase();
   if (kind === "nutrition" && normalized.includes("myfitnesspal")) return 0;
+  if (kind === "nutrition") {
+    // Samsung/Health Connect often re-publish entries originally written by a
+    // dedicated food logger. Prefer the originating food app when both exist.
+    if (normalized.includes("samsung") || normalized.includes("shealth")) return 8;
+    if (normalized.includes("healthconnect.phone")) return 9;
+    return 1;
+  }
   if (normalized.includes("samsung") || normalized.includes("shealth")) return 1;
-  if (kind === "nutrition") return 2;
   if (
     normalized.includes("healthconnect.phone") ||
     normalized.includes("com.google.android.apps.healthdata")
   )
     return 9;
   return 3;
+}
+
+function nutritionEquivalent(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+) {
+  const clean = (value: unknown) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const leftName = clean(left.name ?? left.mealName);
+  const rightName = clean(right.name ?? right.mealName);
+  if (leftName && rightName && leftName !== rightName && !leftName.includes(rightName) && !rightName.includes(leftName))
+    return false;
+  const a = nutrition(left);
+  const b = nutrition(right);
+  const pairs = [[a.proteinG, b.proteinG], [a.carbsG, b.carbsG], [a.fatG, b.fatG]] as const;
+  const present = pairs.filter(([x, y]) => Number(x) > 0 || Number(y) > 0);
+  return !present.length || present.every(([x, y]) => Math.abs(Number(x) - Number(y)) <= Math.max(1, Number(x) * 0.08));
 }
 
 function intervalSimilarity(
@@ -194,8 +216,9 @@ function dedupeCrossSource(
         origin(candidate) !== origin(record) &&
         intervalSimilarity(candidate, record) &&
         (kind === "activity" ||
-          Math.abs(value(candidate) - value(record)) <=
-            Math.max(2, Math.abs(value(candidate)) * 0.08)),
+          (Math.abs(value(candidate) - value(record)) <=
+            Math.max(2, Math.abs(value(candidate)) * 0.08) &&
+            nutritionEquivalent(candidate, record))),
     );
     if (duplicateIndex < 0) {
       chosen.push(record);
@@ -271,7 +294,10 @@ function convert(
     unit = "kg";
   }
   if (type === "nutrition") {
-    value = nestedNumber(record, "energy", "inKilocalories");
+    value =
+      nestedNumber(record, "energy", "inKilocalories") ||
+      nestedNumber(record, "energy", "inCalories") / 1000 ||
+      Number(record.calories ?? 0);
     unit = "kcal";
   }
   if (type === "water") {
@@ -569,7 +595,10 @@ export const healthConnectAdapter: HealthAdapter = {
             return dedupeCrossSource(
               records,
               "nutrition",
-              (record) => nestedNumber(record, "energy", "inKilocalories"),
+              (record) =>
+                nestedNumber(record, "energy", "inKilocalories") ||
+                nestedNumber(record, "energy", "inCalories") / 1000 ||
+                Number(record.calories ?? 0),
             ).map((record) => convert(type, record));
           return records.map((record) => convert(type, record));
         } catch {

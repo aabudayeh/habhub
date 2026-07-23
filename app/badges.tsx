@@ -37,16 +37,16 @@ export default function BadgesScreen() {
   const accent = useGroupAccent();
   const [anchor, setAnchor] = useState(dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [filter, setFilter] = useState<Filter>("week");
+  const [filter, setFilter] = useState<Filter>("achievement");
   const [memberIds, setMemberIds] = useState(
-    state.group.members.map((member) => member.id),
+    [state.currentUserId],
   );
   const badges = useMemo(() => buildBadges(state, anchor), [anchor, state]);
   const visible = badges.filter(
     (badge) =>
       (filter === "all" || badge.period === filter) &&
       (!badge.memberId || memberIds.includes(badge.memberId)),
-  );
+  ).sort((a, b) => (b.earnedCount ?? -1) - (a.earnedCount ?? -1));
   const sections = filters
     .filter((item) => item.id !== "all")
     .map((item) => ({
