@@ -48,6 +48,10 @@ import { MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const GOLD_HERO_FADE_MS = 1300;
+const GOLD_TILE_FADE_MS = 950;
+const GOLD_TILE_START_DELAY_MS = 1450;
+const GOLD_TILE_STAGGER_MS = 1050;
 
 if (
   Platform.OS === "android" &&
@@ -100,6 +104,9 @@ export default function Today() {
   const primary = editing || state.settings.showAllTodayTiles
     ? visible
     : visible.slice(0, tileLimit);
+  const goldGoalOrder = primary
+    .filter((item) => isMetricTrackedOnDate(state, item, today))
+    .map((item) => item.id);
   const extra = editing || state.settings.showAllTodayTiles
     ? []
     : visible.slice(tileLimit);
@@ -119,13 +126,13 @@ export default function Today() {
   useEffect(() => {
     const animation = Animated.timing(heroGold, {
       toValue: goals.allMet ? 1 : 0,
-      duration: goals.allMet ? 620 : 260,
-      delay: goals.allMet ? goals.metrics.length * 170 : 0,
+      duration: goals.allMet ? GOLD_HERO_FADE_MS : 260,
+      delay: 0,
       useNativeDriver: false,
     });
     animation.start();
     return () => animation.stop();
-  }, [goals.allMet, goals.metrics.length, heroGold]);
+  }, [goals.allMet, heroGold]);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
@@ -371,7 +378,7 @@ export default function Today() {
             />
           </View>
           <View style={styles.goalDots}>
-            {goals.metrics.map((item, index) => {
+            {goals.metrics.map((item) => {
               const unavailable = goals.unavailable.some(
                 (metric) => metric.id === item.id,
               );
@@ -385,7 +392,6 @@ export default function Today() {
                 <GoalCompletionDot
                   key={item.id}
                   icon={item.icon as keyof typeof Ionicons.glyphMap}
-                  index={index}
                   met={met}
                   unavailable={unavailable}
                   allMet={goals.allMet}
@@ -438,9 +444,7 @@ export default function Today() {
                 today,
               )}
               allGoalsMet={goals.allMet}
-              goalSequenceIndex={goals.metrics.findIndex(
-                (metric) => metric.id === item.id,
-              )}
+              goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
               celebrating={celebratingGoalIds.includes(item.id)}
               onEdit={() => setEditing(true)}
               onMove={(target) => {
@@ -715,13 +719,11 @@ function ConfettiBurst({
 
 function GoalCompletionDot({
   icon,
-  index,
   met,
   unavailable,
   allMet,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
-  index: number;
   met: boolean;
   unavailable: boolean;
   allMet: boolean;
@@ -730,13 +732,13 @@ function GoalCompletionDot({
   useEffect(() => {
     const animation = Animated.timing(gold, {
       toValue: allMet && met ? 1 : 0,
-      duration: allMet ? 520 : 220,
-      delay: allMet && met ? index * 170 : 0,
+      duration: allMet ? GOLD_HERO_FADE_MS : 220,
+      delay: 0,
       useNativeDriver: false,
     });
     animation.start();
     return () => animation.stop();
-  }, [allMet, gold, index, met]);
+  }, [allMet, gold, met]);
   const backgroundColor = met
     ? gold.interpolate({
         inputRange: [0, 1],
@@ -950,8 +952,11 @@ function TrackerRow({
     const becomesGold = allGoalsMet && trackedGoal && met;
     const animation = Animated.timing(gold, {
       toValue: becomesGold ? 1 : 0,
-      duration: becomesGold ? 520 : 220,
-      delay: becomesGold ? Math.max(0, goalSequenceIndex) * 170 : 0,
+      duration: becomesGold ? GOLD_TILE_FADE_MS : 220,
+      delay: becomesGold
+        ? GOLD_TILE_START_DELAY_MS +
+          Math.max(0, goalSequenceIndex) * GOLD_TILE_STAGGER_MS
+        : 0,
       useNativeDriver: false,
     });
     animation.start();
