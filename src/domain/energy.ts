@@ -16,6 +16,29 @@ export const ACTIVITY_LABELS: Record<ActivityLevel, string> = {
   athlete: 'Athlete / physical job',
 };
 
+function bounded(value: number, fallback: number, minimum: number, maximum: number) {
+  return Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, value))
+    : fallback;
+}
+
+/** Keeps persisted/cloud energy data inside the database and formula ranges. */
+export function normalizeEnergyProfile(profile: EnergyProfile): EnergyProfile {
+  const weightKg = bounded(profile.weightKg, 70, 20, 500);
+  return {
+    ...profile,
+    age: Math.round(bounded(profile.age, 30, 13, 120)),
+    heightCm: bounded(profile.heightCm, 170, 80, 260),
+    weightKg,
+    startingWeightKg:
+      profile.startingWeightKg === undefined
+        ? undefined
+        : bounded(profile.startingWeightKg, weightKg, 20, 500),
+    targetWeightKg: bounded(profile.targetWeightKg, weightKg, 20, 500),
+    desiredWeeklyLossKg: bounded(profile.desiredWeeklyLossKg, 0.5, 0, 2),
+  };
+}
+
 /** Mifflin-St Jeor. The result is an estimate, not a medical measurement. */
 export function calculateBmr(profile: EnergyProfile): number {
   const base = 10 * profile.weightKg + 6.25 * profile.heightCm - 5 * profile.age;

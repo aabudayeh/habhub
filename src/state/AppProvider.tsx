@@ -14,6 +14,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { createInitialState } from "@/src/data/seed";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
+  normalizeEnergyProfile,
   recommendedDailyDeficit,
   recommendedDailyIntake,
   recommendedDailyIntakeForDirection,
@@ -173,7 +174,8 @@ function slugify(name: string) {
 
 function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
   const direction = state.settings.weightDirection ?? "lose";
-  const weightKg = Math.max(0.1, energyProfile.weightKg);
+  energyProfile = normalizeEnergyProfile(energyProfile);
+  const weightKg = energyProfile.weightKg;
   const normalizedProfile: EnergyProfile = {
     ...energyProfile,
     weightKg,
@@ -1322,10 +1324,10 @@ export function AppProvider({ children }: PropsWithChildren) {
                     defaults.settings.progressMetricIds),
               onboardingComplete:
                 restored.settings?.onboardingComplete ?? restoredVersion < 15,
-              energyProfile: {
+              energyProfile: normalizeEnergyProfile({
                 ...defaults.settings.energyProfile,
                 ...restored.settings?.energyProfile,
-              },
+              }),
               healthSync: {
                 ...defaults.settings.healthSync,
                 ...restored.settings?.healthSync,
@@ -1503,14 +1505,19 @@ export function AppProvider({ children }: PropsWithChildren) {
                   ? restoredMetrics
                   : (group.metricConfiguration ?? restoredMetrics),
             })),
-            energyProfiles: {
-              ...defaults.energyProfiles,
-              ...restored.energyProfiles,
-              [restored.currentUserId ?? defaults.currentUserId]: {
-                ...defaults.settings.energyProfile,
-                ...restored.settings?.energyProfile,
-              },
-            },
+            energyProfiles: Object.fromEntries(
+              Object.entries({
+                ...defaults.energyProfiles,
+                ...restored.energyProfiles,
+                [restored.currentUserId ?? defaults.currentUserId]: {
+                  ...defaults.settings.energyProfile,
+                  ...restored.settings?.energyProfile,
+                },
+              }).map(([userId, profile]) => [
+                userId,
+                normalizeEnergyProfile(profile),
+              ]),
+            ),
             messages: (restored.messages ?? defaults.messages).map(
               (message) => ({
                 ...message,

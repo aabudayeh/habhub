@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
+import { BackHandler, PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
-import { MetricSelector } from "@/src/components/MetricSelector";
+import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
@@ -91,6 +91,19 @@ export default function Insights() {
       color: metric.color,
     })),
   ];
+  const hiddenItems = selectorItems.filter((item) => !selectedIds.includes(item.id));
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+        if (!editing) return false;
+        setEditing(false);
+        setShowPicker(false);
+        return true;
+      });
+      return () => subscription.remove();
+    }, [editing]),
+  );
 
   function select(ids: string[]) {
     setSelectedIds(ids);
@@ -389,14 +402,6 @@ export default function Insights() {
             <Ionicons name="add" size={18} color={accent} />
             <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
           </Pressable>
-          {showPicker ? (
-            <MetricSelector
-              items={selectorItems}
-              selectedIds={selectedIds}
-              onChange={select}
-              title="What to show"
-            />
-          ) : null}
         </>
       ) : (
         <Pressable
@@ -406,6 +411,15 @@ export default function Insights() {
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a summary to edit what Progress shows</Text>
         </Pressable>
       )}
+      <AddTrackerModal
+        visible={showPicker}
+        items={hiddenItems}
+        onClose={() => setShowPicker(false)}
+        onAdd={(id) => {
+          select([...selectedIds, id]);
+          setShowPicker(false);
+        }}
+      />
     </Screen>
   );
 }

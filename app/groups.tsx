@@ -156,7 +156,8 @@ export default function GroupsScreen() {
                   styles.group,
                   active && {
                     borderColor: accent,
-                    backgroundColor: colors.primarySoft,
+                    borderWidth: 2,
+                    backgroundColor: colors.card,
                   },
                 ]}
               >

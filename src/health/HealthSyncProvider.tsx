@@ -27,11 +27,11 @@ type HealthSyncContextValue = {
 
 const HealthSyncContext = createContext<HealthSyncContextValue | null>(null);
 
-function syncStart(lastSyncedAt: string | null) {
+function syncStart(lastSyncedAt: string | null, fullRefresh = false) {
   let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
   if (Number.isNaN(from.getTime())) from = new Date();
   from.setHours(0, 0, 0, 0);
-  from.setDate(from.getDate() - (lastSyncedAt ? 2 : 29));
+  from.setDate(from.getDate() - (lastSyncedAt && !fullRefresh ? 2 : 29));
   return from;
 }
 
@@ -99,7 +99,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       setStatus('syncing');
       try {
         const previous = persistedRef.current;
-        const from = syncStart(previous.lastSyncedAt);
+        // A user-initiated refresh also repairs records that another health app
+        // wrote late or that were skipped before a permission was granted.
+        const fullRefresh = reason === 'connect' || reason === 'manual' || reason === 'pull';
+        if (fullRefresh) {
+          await nativeHealthAdapter.requestPermissions(
+            dataTypes,
+            current.settings.syncMode !== 'manual',
+          );
+        }
+        const from = syncStart(previous.lastSyncedAt, fullRefresh);
         const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
         const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group',current.metrics,current.settings.energyProfile.weightKg);
         importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes,current.metrics), dateKey(from));

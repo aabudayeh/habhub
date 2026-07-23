@@ -362,10 +362,20 @@ export const healthConnectAdapter: HealthAdapter = {
         endTime: to.toISOString(),
       },
       ascendingOrder: true,
+      pageSize: 5000,
     };
-    const readSafe = async (recordType: string) =>
-      (await readRecords(recordType, options).catch(() => ({ records: [] })))
-        .records as Record<string, unknown>[];
+    const failures: string[] = [];
+    let successfulReads = 0;
+    const readSafe = async (recordType: string) => {
+      try {
+        const result = await readRecords(recordType, options);
+        successfulReads += 1;
+        return result.records as Record<string, unknown>[];
+      } catch (error) {
+        failures.push(`${recordType}: ${error instanceof Error ? error.message : "permission or provider error"}`);
+        return [];
+      }
+    };
     const needsWorkoutDetails = dataTypes.includes("workouts");
     const calorieRecords =
       dataTypes.includes("active_energy") || needsWorkoutDetails
@@ -426,6 +436,9 @@ export const healthConnectAdapter: HealthAdapter = {
         }
       }),
     );
+    if (!successfulReads && failures.length) {
+      throw new Error(`Health Connect could not read the selected data. Open Health Connect permissions and try again. ${failures[0]}`);
+    }
     return results.flat();
   },
   openSettings: openHealthConnectSettings,

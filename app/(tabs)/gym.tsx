@@ -3,6 +3,7 @@ import React, { useMemo, useState } from "react";
 import { Alert, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import { DraftNumberInput } from "@/src/components/DraftNumberInput";
 import { Button, Card, Chip, PageHeader, Screen, SectionHeader } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import { completedGymSets, trainingVolumeKg } from "@/src/domain/gym";
@@ -282,17 +283,17 @@ export default function GymScreen() {
                         color={set.completed ? accent : colors.faint}
                       />
                     </Pressable>
-                    <TextInput
-                      value={String(set.weightKg || "")}
-                      onChangeText={(value) => updateSet(exercise.id, set.id, { weightKg: Math.max(0, Number(value) || 0) })}
+                    <DraftNumberInput
+                      value={set.weightKg}
+                      onCommit={(value) => updateSet(exercise.id, set.id, { weightKg: value })}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={colors.faint}
                       style={[styles.setInput, { color: colors.ink, borderColor: colors.border }]}
                     />
-                    <TextInput
-                      value={String(set.reps || "")}
-                      onChangeText={(value) => updateSet(exercise.id, set.id, { reps: Math.max(0, Number(value) || 0) })}
+                    <DraftNumberInput
+                      value={set.reps}
+                      onCommit={(value) => updateSet(exercise.id, set.id, { reps: Math.round(value) })}
                       keyboardType="number-pad"
                       placeholder="0"
                       placeholderTextColor={colors.faint}

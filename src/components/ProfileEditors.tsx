@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import {
@@ -19,6 +19,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
 import { Card, Chip, SectionHeader } from "./ui";
+import { DraftNumberInput } from "./DraftNumberInput";
 
 export function EnergyProfileEditor() {
   const { state, updateEnergyProfile, updateSettings } = useApp();
@@ -107,15 +108,13 @@ export function EnergyProfileEditor() {
             <View key={field.key} style={styles.field}>
               <Text style={[styles.label, { color: colors.ink }]}>{field.label}</Text>
               <View style={[styles.inputWrap, { borderColor: colors.border }]}>
-                <TextInput
-                  value={String(field.value)}
+                <DraftNumberInput
+                  value={field.value}
                   selectTextOnFocus
                   keyboardType="decimal-pad"
-                  onChangeText={(text) => {
-                    const value = Number(text.replace(",", "."));
-                    if (Number.isFinite(value) && value > 0)
-                      updateEnergyProfile({ [field.key]: value });
-                  }}
+                  minimum={field.key === "age" ? 13 : field.key === "heightCm" ? 80 : 20}
+                  maximum={field.key === "age" ? 120 : field.key === "heightCm" ? 260 : 500}
+                  onCommit={(value) => updateEnergyProfile({ [field.key]: value })}
                   style={[styles.input, { color: colors.ink }]}
                 />
                 <Text style={[styles.unit, { color: colors.muted }]}>{field.unit}</Text>
@@ -277,17 +276,13 @@ export function MetricGoalsEditor() {
                 </Text>
               </View>
               <View style={[styles.goalInput, { borderColor: colors.border }]}>
-                <TextInput
-                  value={String(metric.goal.target)}
+                <DraftNumberInput
+                  value={metric.goal.target}
                   selectTextOnFocus
                   keyboardType="decimal-pad"
-                  onChangeText={(text) => {
-                    const target = Number(text.replace(",", "."));
-                    if (Number.isFinite(target) && target >= 0)
-                      updateMetric(metric.id, {
-                        goal: { ...metric.goal, target },
-                      });
-                  }}
+                  onCommit={(target) => updateMetric(metric.id, {
+                    goal: { ...metric.goal, target },
+                  })}
                   style={[styles.goalText, { color: colors.ink }]}
                 />
                 <Text style={[styles.goalUnit, { color: colors.muted }]}>{metric.unit}</Text>

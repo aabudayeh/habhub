@@ -9,6 +9,7 @@ import {
   rankedMembers,
   safeMetricValue,
 } from "@/src/domain/metrics";
+import { normalizeEnergyProfile } from "@/src/domain/energy";
 import { supabase } from "@/src/lib/supabase";
 import {
   AppState,
@@ -670,8 +671,9 @@ export async function pushCloudWorkspace(state: AppState) {
     })
     .eq("id", state.currentUserId);
   if (profileError) throw profileError;
-  const profile =
-    state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile;
+  const profile = normalizeEnergyProfile(
+    state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile,
+  );
   const { error: energyError } = await client.from("energy_profiles").upsert({
     user_id: state.currentUserId,
     age: profile.age,

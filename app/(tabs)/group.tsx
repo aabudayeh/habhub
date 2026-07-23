@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import React, { ReactNode, useMemo, useState } from "react";
-import { PanResponder, Pressable, Share, StyleSheet, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
+import React, { ReactNode, useCallback, useMemo, useState } from "react";
+import { BackHandler, PanResponder, Pressable, Share, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
+import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Avatar,
@@ -101,6 +102,18 @@ export default function LeaderboardScreen() {
       color: metric.color,
     })),
   ];
+  const hiddenOptions = options.filter((item) => !selected.includes(item.id));
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+        if (!editing) return false;
+        setEditing(false);
+        setShowPicker(false);
+        return true;
+      });
+      return () => subscription.remove();
+    }, [editing]),
+  );
   const periods = [
     { id: "today", label: "Today", icon: "today-outline" as const },
     { id: "yesterday", label: "Yesterday", icon: "play-back-outline" as const },
@@ -296,14 +309,6 @@ export default function LeaderboardScreen() {
             <Ionicons name="add" size={18} color={accent} />
             <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
           </Pressable>
-          {showPicker ? (
-            <MetricSelector
-              title="What to show"
-              items={options}
-              selectedIds={selected}
-              onChange={saveSelection}
-            />
-          ) : null}
         </>
       ) : (
         <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
@@ -368,6 +373,15 @@ export default function LeaderboardScreen() {
           {state.group.inviteCode}
         </Text>
       </View>
+      <AddTrackerModal
+        visible={showPicker}
+        items={hiddenOptions}
+        onClose={() => setShowPicker(false)}
+        onAdd={(id) => {
+          saveSelection([...selected, id]);
+          setShowPicker(false);
+        }}
+      />
     </Screen>
   );
 }
