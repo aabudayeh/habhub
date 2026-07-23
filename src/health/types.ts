@@ -39,7 +39,7 @@ export type HealthAdapter = {
 
 export type PersistedHealthStatus = {
   lastSyncedAt: string | null;
-  lastReason?: 'connect' | 'open' | 'pull' | 'manual' | 'background';
+  lastReason?: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'background';
   importedCount?: number;
   error?: string | null;
 };

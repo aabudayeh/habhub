@@ -21,6 +21,7 @@ type HealthSyncContextValue = {
   sourceOrigins: string[];
   connect: () => Promise<void>;
   syncNow: (reason?: 'open' | 'pull' | 'manual') => Promise<void>;
+  syncHistory: () => Promise<void>;
   disconnect: () => Promise<void>;
   openSettings: () => Promise<void>;
 };
@@ -31,9 +32,8 @@ function syncStart(lastSyncedAt: string | null, fullRefresh = false) {
   let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
   if (Number.isNaN(from.getTime())) from = new Date();
   from.setHours(0, 0, 0, 0);
-  // Connect, manual refresh, and pull-to-refresh repair two years of
-  // history. Routine background/open syncs only overlap two days so late
-  // provider edits are corrected without repeatedly downloading everything.
+  // First setup and explicit history repair import two years. Every routine
+  // sync overlaps two days so late provider edits are corrected cheaply.
   from.setDate(
     from.getDate() - (lastSyncedAt && !fullRefresh ? 2 : HEALTH_HISTORY_DAYS),
   );
@@ -94,7 +94,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     return () => { cancelled = true; };
   }, [state.currentUserId]);
 
-  const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual', forceEnabled = false) => {
+  const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual' | 'history', forceEnabled = false) => {
     if (syncingRef.current) return syncingRef.current;
     const current = stateRef.current;
     if ((!current.settings.healthSync.enabled && !forceEnabled) || !nativeHealthAdapter.provider) return;
@@ -104,9 +104,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       setStatus('syncing');
       try {
         const previous = persistedRef.current;
-        // A user-initiated refresh also repairs records that another health app
-        // wrote late or that were skipped before a permission was granted.
-        const fullRefresh = reason === 'connect' || reason === 'manual' || reason === 'pull';
+        const fullRefresh =
+          reason === 'history' ||
+          (reason === 'connect' && !previous.lastSyncedAt);
         if (fullRefresh) {
           await nativeHealthAdapter.requestPermissions(
             dataTypes,
@@ -193,6 +193,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     sourceOrigins,
     connect,
     syncNow: (reason = 'manual') => runSync(reason),
+    syncHistory: () => runSync('history'),
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
   }), [availability, connect, disconnect, persisted, runSync, sourceOrigins, status]);

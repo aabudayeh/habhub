@@ -165,7 +165,7 @@ export default function SettingsScreen() {
   const accent = useGroupAccent();
   const colors = useAppColors();
   const [busy, setBusy] = useState<
-    "sync" | "pull" | "health" | "signout" | "delete" | null
+    "sync" | "pull" | "health" | "history" | "signout" | "delete" | null
   >(null);
   const [showDevices, setShowDevices] = useState(false);
   const [showHealthTypes, setShowHealthTypes] = useState(false);
@@ -518,29 +518,71 @@ export default function SettingsScreen() {
           ) : null}
         </View>
         {state.settings.healthSync.enabled ? (
-          <View style={styles.healthLinks}>
+          <>
+            <View style={styles.healthLinks}>
+              <Pressable
+                onPress={() =>
+                  health
+                    .openSettings()
+                    .catch((error) =>
+                      Alert.alert(
+                        "Could not open settings",
+                        error instanceof Error ? error.message : "Try again.",
+                      ),
+                    )
+                }
+              >
+                <Text style={[styles.healthLink, { color: accent }]}>
+                  Open system health settings
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => health.disconnect()}>
+                <Text style={[styles.healthLink, { color: palette.red }]}>
+                  Disconnect
+                </Text>
+              </Pressable>
+            </View>
             <Pressable
+              disabled={busy === "history" || health.status === "syncing"}
               onPress={() =>
-                health
-                  .openSettings()
-                  .catch((error) =>
-                    Alert.alert(
-                      "Could not open settings",
-                      error instanceof Error ? error.message : "Try again.",
-                    ),
-                  )
+                Alert.alert(
+                  "Repair health history?",
+                  "This rechecks up to two years and can take longer. Normal syncing only checks recent changes.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Repair history",
+                      onPress: () =>
+                        run(
+                          "history",
+                          health.syncHistory,
+                          "History repair failed",
+                        ),
+                    },
+                  ],
+                )
               }
+              style={[
+                styles.historyRepair,
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.canvas,
+                },
+              ]}
             >
-              <Text style={[styles.healthLink, { color: accent }]}>
-                Open system health settings
-              </Text>
+              <Ionicons name="time-outline" size={18} color={accent} />
+              <View style={styles.copy}>
+                <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                  {busy === "history"
+                    ? "Repairing history…"
+                    : "Repair health history"}
+                </Text>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  Re-import up to two years only when data is missing.
+                </Text>
+              </View>
             </Pressable>
-            <Pressable onPress={() => health.disconnect()}>
-              <Text style={[styles.healthLink, { color: palette.red }]}>
-                Disconnect
-              </Text>
-            </Pressable>
-          </View>
+          </>
         ) : null}
         {health.sourceOrigins.length ? (
           <View style={styles.origins}>
@@ -888,6 +930,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
     marginTop: 13,
+  },
+  historyRepair: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    marginTop: 10,
   },
   healthLink: { color: palette.primary, fontSize: 10, fontWeight: "900" },
   healthType: {
