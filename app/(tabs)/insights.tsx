@@ -12,10 +12,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  animateReorder,
-  useDelayedReorder,
-} from "@/src/components/reorderAnimation";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { useDelayedReorder } from "@/src/components/reorderAnimation";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -146,7 +144,6 @@ export default function Insights() {
     if (index < 0) return;
     const [item] = current.splice(index, 1);
     current.splice(Math.max(0, Math.min(targetIndex, current.length)), 0, item);
-    animateReorder();
     select(selectedIds.includes(TRACKED) ? [TRACKED, ...current] : current);
   }
 
@@ -409,18 +406,19 @@ export default function Insights() {
           />
         ) : null}
         {selectedMetrics.map((metric, index) => (
-          <MetricSummary
-            key={metric.id}
-            state={state}
-            metric={metric}
-            dates={summaryDates}
-            editing={editing}
-            index={index}
-            count={selectedMetrics.length}
-            onEdit={() => setEditing(true)}
-            onMove={(target) => move(metric.id, target)}
-            onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
-          />
+          <ReorderItem key={metric.id}>
+            <MetricSummary
+              state={state}
+              metric={metric}
+              dates={summaryDates}
+              editing={editing}
+              index={index}
+              count={selectedMetrics.length}
+              onEdit={() => setEditing(true)}
+              onMove={(target) => move(metric.id, target)}
+              onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
+            />
+          </ReorderItem>
         ))}
       </View>
       {editing ? (

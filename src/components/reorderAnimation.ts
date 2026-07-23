@@ -1,23 +1,4 @@
-import { LayoutAnimation } from "react-native";
 import { useCallback, useEffect, useRef } from "react";
-
-/** Keeps neighboring cards visibly gliding into place during live dragging. */
-export function animateReorder() {
-  LayoutAnimation.configureNext({
-    duration: 820,
-    update: {
-      type: LayoutAnimation.Types.easeInEaseOut,
-    },
-    create: {
-      type: LayoutAnimation.Types.easeInEaseOut,
-      property: LayoutAnimation.Properties.opacity,
-    },
-    delete: {
-      type: LayoutAnimation.Types.easeInEaseOut,
-      property: LayoutAnimation.Properties.opacity,
-    },
-  });
-}
 
 /** Requires a brief hover over the new slot before committing a live reorder. */
 export function useDelayedReorder(

@@ -19,10 +19,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  animateReorder,
-  useDelayedReorder,
-} from "@/src/components/reorderAnimation";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { useDelayedReorder } from "@/src/components/reorderAnimation";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -118,21 +116,35 @@ export default function Today() {
         metric.activeFrom <= today,
     )
     .sort((a, b) => a.order - b.order);
+  const [goldSequenceRun, setGoldSequenceRun] = useState(0);
   const heroGold = useRef(new Animated.Value(goals.allMet ? 1 : 0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
     outputRange: [palette.lime, "#FFD166"],
   });
+  const heroBackgroundColor = heroGold.interpolate({
+    inputRange: [0, 1],
+    outputRange: [accent, colors.isDark ? "#806018" : "#B98212"],
+  });
   useEffect(() => {
+    if (!goals.allMet) {
+      heroGold.stopAnimation();
+      heroGold.setValue(0);
+    }
+  }, [goals.allMet, heroGold]);
+  useEffect(() => {
+    if (!goals.allMet || goldSequenceRun === 0) return;
+    heroGold.stopAnimation();
+    heroGold.setValue(0);
     const animation = Animated.timing(heroGold, {
-      toValue: goals.allMet ? 1 : 0,
-      duration: goals.allMet ? GOLD_HERO_FADE_MS : 260,
+      toValue: 1,
+      duration: GOLD_HERO_FADE_MS,
       delay: 0,
       useNativeDriver: false,
     });
     animation.start();
     return () => animation.stop();
-  }, [goals.allMet, heroGold]);
+  }, [goals.allMet, goldSequenceRun, heroGold]);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
@@ -159,6 +171,7 @@ export default function Today() {
           if (newlyCompleted.length) {
             const special = celebrationSnapshot.current.allMet;
             const duration = special ? 3800 : 2700;
+            if (special) setGoldSequenceRun((value) => value + 1);
             setCelebratingGoalIds(newlyCompleted);
             setCelebrationSpecial(special);
             celebration.setValue(0);
@@ -299,12 +312,12 @@ export default function Today() {
             </Pressable>
           </View>
         </View>
-        <View
+        <Animated.View
           style={[
             styles.hero,
             {
-              backgroundColor: accent,
-              borderColor: accent,
+              backgroundColor: heroBackgroundColor,
+              borderColor: heroCompletionColor,
             },
           ]}
         >
@@ -395,11 +408,12 @@ export default function Today() {
                   met={met}
                   unavailable={unavailable}
                   allMet={goals.allMet}
+                  sequenceRun={goldSequenceRun}
                 />
               );
             })}
           </View>
-        </View>
+        </Animated.View>
         {goals.allMet ? (
           <Celebration
             title="All goals complete"
@@ -426,34 +440,35 @@ export default function Today() {
         </View>
         <View style={styles.list}>
           {primary.map((item, index) => (
-            <TrackerRow
-              key={item.id}
-              item={item}
-              index={index}
-              count={visible.length}
-              height={tileHeight}
-              state={state}
-              day={today}
-              editing={editing}
-              colors={colors}
-              accent={accent}
-              weekly={weekly}
-              trackedGoal={isMetricTrackedOnDate(
-                state,
-                item,
-                today,
-              )}
-              allGoalsMet={goals.allMet}
-              goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
-              celebrating={celebratingGoalIds.includes(item.id)}
-              onEdit={() => setEditing(true)}
-              onMove={(target) => {
-                animateReorder();
-                reorderMetric(item.id, visible[target]?.order ?? target);
-              }}
-              onRemove={() => remove(item)}
-              onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
-            />
+            <ReorderItem key={item.id}>
+              <TrackerRow
+                item={item}
+                index={index}
+                count={visible.length}
+                height={tileHeight}
+                state={state}
+                day={today}
+                editing={editing}
+                colors={colors}
+                accent={accent}
+                weekly={weekly}
+                trackedGoal={isMetricTrackedOnDate(
+                  state,
+                  item,
+                  today,
+                )}
+                allGoalsMet={goals.allMet}
+                goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
+                goldSequenceRun={goldSequenceRun}
+                celebrating={celebratingGoalIds.includes(item.id)}
+                onEdit={() => setEditing(true)}
+                onMove={(target) =>
+                  reorderMetric(item.id, visible[target]?.order ?? target)
+                }
+                onRemove={() => remove(item)}
+                onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
+              />
+            </ReorderItem>
           ))}
         </View>
         {extra.length ? (
@@ -722,23 +737,34 @@ function GoalCompletionDot({
   met,
   unavailable,
   allMet,
+  sequenceRun,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   met: boolean;
   unavailable: boolean;
   allMet: boolean;
+  sequenceRun: number;
 }) {
   const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
   useEffect(() => {
+    if (!allMet || !met) {
+      gold.stopAnimation();
+      gold.setValue(0);
+    }
+  }, [allMet, gold, met]);
+  useEffect(() => {
+    if (!allMet || !met || sequenceRun === 0) return;
+    gold.stopAnimation();
+    gold.setValue(0);
     const animation = Animated.timing(gold, {
-      toValue: allMet && met ? 1 : 0,
-      duration: allMet ? GOLD_HERO_FADE_MS : 220,
+      toValue: 1,
+      duration: GOLD_HERO_FADE_MS,
       delay: 0,
       useNativeDriver: false,
     });
     animation.start();
     return () => animation.stop();
-  }, [allMet, gold, met]);
+  }, [allMet, gold, met, sequenceRun]);
   const backgroundColor = met
     ? gold.interpolate({
         inputRange: [0, 1],
@@ -796,6 +822,7 @@ function TrackerRow({
   trackedGoal,
   allGoalsMet,
   goalSequenceIndex,
+  goldSequenceRun,
   celebrating,
   onEdit,
   onMove,
@@ -815,6 +842,7 @@ function TrackerRow({
   trackedGoal: boolean;
   allGoalsMet: boolean;
   goalSequenceIndex: number;
+  goldSequenceRun: number;
   celebrating: boolean;
   onEdit: () => void;
   onMove: (target: number) => void;
@@ -949,19 +977,34 @@ function TrackerRow({
     new Animated.Value(allGoalsMet && trackedGoal && met ? 1 : 0),
   ).current;
   useEffect(() => {
+    if (!allGoalsMet || !trackedGoal || !met) {
+      gold.stopAnimation();
+      gold.setValue(0);
+    }
+  }, [allGoalsMet, gold, met, trackedGoal]);
+  useEffect(() => {
     const becomesGold = allGoalsMet && trackedGoal && met;
+    if (!becomesGold || goldSequenceRun === 0) return;
+    gold.stopAnimation();
+    gold.setValue(0);
     const animation = Animated.timing(gold, {
-      toValue: becomesGold ? 1 : 0,
-      duration: becomesGold ? GOLD_TILE_FADE_MS : 220,
-      delay: becomesGold
-        ? GOLD_TILE_START_DELAY_MS +
-          Math.max(0, goalSequenceIndex) * GOLD_TILE_STAGGER_MS
-        : 0,
+      toValue: 1,
+      duration: GOLD_TILE_FADE_MS,
+      delay:
+        GOLD_TILE_START_DELAY_MS +
+        Math.max(0, goalSequenceIndex) * GOLD_TILE_STAGGER_MS,
       useNativeDriver: false,
     });
     animation.start();
     return () => animation.stop();
-  }, [allGoalsMet, goalSequenceIndex, gold, met, trackedGoal]);
+  }, [
+    allGoalsMet,
+    goalSequenceIndex,
+    gold,
+    goldSequenceRun,
+    met,
+    trackedGoal,
+  ]);
   const completedBackground = gold.interpolate({
     inputRange: [0, 1],
     outputRange: [

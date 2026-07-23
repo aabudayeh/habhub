@@ -13,10 +13,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  animateReorder,
-  useDelayedReorder,
-} from "@/src/components/reorderAnimation";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { useDelayedReorder } from "@/src/components/reorderAnimation";
 
 import {
   Card,
@@ -362,21 +360,19 @@ export default function Customize() {
           />
           <Card style={styles.list}>
             {ordered.map((metric, index) => (
-              <VisibilityRow
-                key={metric.id}
-                metric={metric}
-                section={tab}
-                last={index === ordered.length - 1}
-                colors={colors}
-                accent={accent}
-                index={index}
-                count={ordered.length}
-                onMove={(target) => {
-                  animateReorder();
-                  reorderForSection(metric.id, target);
-                }}
-                onChange={() => changeSection(metric)}
-              />
+              <ReorderItem key={metric.id}>
+                <VisibilityRow
+                  metric={metric}
+                  section={tab}
+                  last={index === ordered.length - 1}
+                  colors={colors}
+                  accent={accent}
+                  index={index}
+                  count={ordered.length}
+                  onMove={(target) => reorderForSection(metric.id, target)}
+                  onChange={() => changeSection(metric)}
+                />
+              </ReorderItem>
             ))}
           </Card>
         </>

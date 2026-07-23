@@ -20,10 +20,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  animateReorder,
-  useDelayedReorder,
-} from "@/src/components/reorderAnimation";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { useDelayedReorder } from "@/src/components/reorderAnimation";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -120,7 +118,6 @@ export default function LeaderboardScreen() {
     if (index < 0) return;
     const [item] = next.splice(index, 1);
     next.splice(Math.max(0, Math.min(target, next.length)), 0, item);
-    animateReorder();
     saveSelection(next);
   }
   const options = [
@@ -199,16 +196,16 @@ export default function LeaderboardScreen() {
           includeScore,
         );
         return (
-          <EditableRankingCard
-            key={id}
-            editing={editing}
-            index={cardIndex}
-            count={selected.length}
-            colors={colors}
-            onMove={(target) => move(id, target)}
-            onRemove={() => saveSelection(selected.filter((item) => item !== id))}
-          >
-          <Card style={styles.ranking}>
+          <ReorderItem key={id}>
+            <EditableRankingCard
+              editing={editing}
+              index={cardIndex}
+              count={selected.length}
+              colors={colors}
+              onMove={(target) => move(id, target)}
+              onRemove={() => saveSelection(selected.filter((item) => item !== id))}
+            >
+            <Card style={styles.ranking}>
             <Pressable
               onLongPress={() => setEditing(true)}
               onPress={() =>
@@ -353,8 +350,9 @@ export default function LeaderboardScreen() {
                 </Pressable>
               );
             })}
-          </Card>
-          </EditableRankingCard>
+            </Card>
+            </EditableRankingCard>
+          </ReorderItem>
         );
       })}
       {editing ? (
