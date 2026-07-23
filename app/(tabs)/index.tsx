@@ -22,7 +22,6 @@ import {
   ScrollView,
   StyleSheet,
   UIManager,
-  unstable_batchedUpdates,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -1044,10 +1043,8 @@ function TrackerRow({
               return;
             }
             pendingDropTarget.current = target;
-            unstable_batchedUpdates(() => {
-              onDragCancelRef.current();
-              onMoveRef.current(target);
-            });
+            onDragCancelRef.current();
+            onMoveRef.current(target);
             dropFallback.current = setTimeout(() => {
               pendingDropTarget.current = null;
               dragY.setValue(0);
