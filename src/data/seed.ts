@@ -1033,7 +1033,7 @@ export function createInitialState(): AppState {
     metricConfiguration: DEFAULT_METRICS,
   };
   return {
-    version: 20,
+    version: 21,
     currentUserId: "ahmad",
     group,
     groups: [group],
@@ -1154,8 +1154,8 @@ export function createInitialState(): AppState {
       featuredTodayCard: "score",
       defaultLandingPage: "index",
       compactMode: false,
-      fontScale: 1,
-      showAllTodayTiles: false,
+      fontScale: 1.12,
+      showAllTodayTiles: true,
       todayTileLimit: 5,
       darkMode: false,
       showLeaderboard: true,

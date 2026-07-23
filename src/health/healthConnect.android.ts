@@ -83,6 +83,13 @@ const EXERCISE_NAMES: Record<number, string> = {
   83: "Yoga",
 };
 
+const MEAL_NAMES: Record<number, NutritionDetails["mealType"]> = {
+  1: "breakfast",
+  2: "lunch",
+  3: "dinner",
+  4: "snack",
+};
+
 function workoutLabel(record: Record<string, unknown>) {
   const code = Number(record.exerciseType);
   const title = String(record.title ?? "").trim();
@@ -142,6 +149,68 @@ function individualIntervals(records: Record<string, unknown>[]) {
   });
 }
 
+function sourcePriority(source: string, kind: "activity" | "nutrition") {
+  const normalized = source.toLowerCase();
+  if (kind === "nutrition" && normalized.includes("myfitnesspal")) return 0;
+  if (normalized.includes("samsung") || normalized.includes("shealth")) return 1;
+  if (kind === "nutrition") return 2;
+  if (
+    normalized.includes("healthconnect.phone") ||
+    normalized.includes("com.google.android.apps.healthdata")
+  )
+    return 9;
+  return 3;
+}
+
+function intervalSimilarity(
+  left: Record<string, unknown>,
+  right: Record<string, unknown>,
+) {
+  const leftStart = new Date(String(left.startTime ?? left.time)).getTime();
+  const rightStart = new Date(String(right.startTime ?? right.time)).getTime();
+  const leftEnd = new Date(String(left.endTime ?? left.time)).getTime();
+  const rightEnd = new Date(String(right.endTime ?? right.time)).getTime();
+  if (![leftStart, rightStart, leftEnd, rightEnd].every(Number.isFinite))
+    return false;
+  const startClose = Math.abs(leftStart - rightStart) <= 2 * 60 * 1000;
+  const endClose = Math.abs(leftEnd - rightEnd) <= 2 * 60 * 1000;
+  const overlap = Math.max(
+    0,
+    Math.min(leftEnd, rightEnd) - Math.max(leftStart, rightStart),
+  );
+  const shorter = Math.max(1, Math.min(leftEnd - leftStart, rightEnd - rightStart));
+  return (startClose && endClose) || overlap / shorter >= 0.9;
+}
+
+function dedupeCrossSource(
+  records: Record<string, unknown>[],
+  kind: "activity" | "nutrition",
+  value: (record: Record<string, unknown>) => number,
+) {
+  const chosen: Record<string, unknown>[] = [];
+  for (const record of records) {
+    const duplicateIndex = chosen.findIndex(
+      (candidate) =>
+        origin(candidate) !== origin(record) &&
+        intervalSimilarity(candidate, record) &&
+        (kind === "activity" ||
+          Math.abs(value(candidate) - value(record)) <=
+            Math.max(2, Math.abs(value(candidate)) * 0.08)),
+    );
+    if (duplicateIndex < 0) {
+      chosen.push(record);
+      continue;
+    }
+    const current = chosen[duplicateIndex];
+    if (
+      sourcePriority(origin(record), kind) <
+      sourcePriority(origin(current), kind)
+    )
+      chosen[duplicateIndex] = record;
+  }
+  return chosen;
+}
+
 function overlaps(record: Record<string, unknown>, start: string, end: string) {
   return String(record.endTime) > start && String(record.startTime) < end;
 }
@@ -149,6 +218,7 @@ function overlaps(record: Record<string, unknown>, start: string, end: string) {
 function nutrition(record: Record<string, unknown>): NutritionDetails {
   const oneDecimal = (value: number) => Math.round(value * 10) / 10;
   return {
+    mealType: MEAL_NAMES[Number(record.mealType)],
     proteinG: oneDecimal(nestedNumber(record, "protein", "inGrams")),
     fatG: oneDecimal(nestedNumber(record, "totalFat", "inGrams")),
     carbsG: oneDecimal(nestedNumber(record, "totalCarbohydrate", "inGrams")),
@@ -277,7 +347,13 @@ function convert(
         : undefined,
     label:
       type === "nutrition"
-        ? String(record.mealName ?? record.name ?? "Meal summary")
+        ? String(
+            record.name ??
+              record.mealName ??
+              (MEAL_NAMES[Number(record.mealType)]
+                ? `${MEAL_NAMES[Number(record.mealType)]} meal`
+                : "Meal summary"),
+          )
         : type === "workouts"
           ? workoutLabel(record)
           : undefined,
@@ -331,6 +407,8 @@ export const healthConnectAdapter: HealthAdapter = {
         dataTypes.flatMap((type) =>
           type === "workouts"
             ? ["ExerciseSession", "Distance", "TotalCaloriesBurned"]
+            : type === "active_energy"
+              ? ["TotalCaloriesBurned", "ExerciseSession"]
             : [RECORD_TYPES[type]],
         ),
       ),
@@ -377,57 +455,122 @@ export const healthConnectAdapter: HealthAdapter = {
       }
     };
     const needsWorkoutDetails = dataTypes.includes("workouts");
+    const needsWorkoutNames =
+      needsWorkoutDetails || dataTypes.includes("active_energy");
     const calorieRecords =
       dataTypes.includes("active_energy") || needsWorkoutDetails
-        ? individualIntervals(await readSafe("TotalCaloriesBurned"))
+        ? dedupeCrossSource(
+            individualIntervals(await readSafe("TotalCaloriesBurned")),
+            "activity",
+            (record) => nestedNumber(record, "energy", "inKilocalories"),
+          )
         : [];
     const distanceRecords = needsWorkoutDetails
-      ? individualIntervals(await readSafe("Distance"))
+      ? dedupeCrossSource(
+          individualIntervals(await readSafe("Distance")),
+          "activity",
+          (record) =>
+            nestedNumber(record, "distance", "inKilometers") ||
+            nestedNumber(record, "distance", "inMeters") / 1000,
+        )
       : [];
+    const workoutRecords = needsWorkoutNames
+      ? dedupeCrossSource(
+          await readSafe("ExerciseSession"),
+          "activity",
+          (record) => recordDuration(record) / 60000,
+        )
+      : [];
+    const workoutImports = workoutRecords.map((record) => {
+      const converted = convert("workouts", record);
+      const start = String(record.startTime);
+      const end = String(record.endTime);
+      const source = origin(record);
+      const matching = (items: Record<string, unknown>[]) => {
+        const overlapping = items.filter((item) => overlaps(item, start, end));
+        const sameSource = overlapping.filter((item) => origin(item) === source);
+        return sameSource.length ? sameSource : overlapping;
+      };
+      const calories = matching(calorieRecords).reduce(
+        (sum, item) =>
+          sum + nestedNumber(item, "energy", "inKilocalories"),
+        0,
+      );
+      const distance = matching(distanceRecords).reduce(
+        (sum, item) =>
+          sum +
+          (nestedNumber(item, "distance", "inKilometers") ||
+            nestedNumber(item, "distance", "inMeters") / 1000),
+        0,
+      );
+      const activeCalories =
+        calories || converted.measurements?.activeCalories || 0;
+      const distanceKm = distance || converted.measurements?.distanceKm || 0;
+      const details = [
+        converted.measurements?.durationMinutes
+          ? `${Math.round(converted.measurements.durationMinutes)} min`
+          : undefined,
+        distanceKm ? `${Math.round(distanceKm * 100) / 100} km` : undefined,
+        activeCalories ? `${Math.round(activeCalories)} kcal` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return {
+        ...converted,
+        note: [converted.note, details].filter(Boolean).join(" · ") || undefined,
+        measurements: {
+          ...converted.measurements,
+          activeCalories,
+          distanceKm,
+        },
+      };
+    });
+    const activeEnergyImports = calorieRecords.map((record) => {
+      const converted = convert("active_energy", record);
+      const matchingWorkout = workoutRecords.find(
+        (workout) =>
+          overlaps(workout, converted.startTime, converted.endTime) &&
+          origin(workout) === origin(record),
+      ) ?? workoutRecords.find((workout) =>
+        overlaps(workout, converted.startTime, converted.endTime),
+      );
+      return matchingWorkout
+        ? { ...converted, label: workoutLabel(matchingWorkout) }
+        : converted;
+    });
+    for (const workout of workoutImports) {
+      const calories = workout.measurements?.activeCalories ?? 0;
+      if (
+        calories > 0 &&
+        !activeEnergyImports.some((energy) =>
+          overlaps(
+            { startTime: energy.startTime, endTime: energy.endTime },
+            workout.startTime,
+            workout.endTime,
+          ),
+        )
+      ) {
+        activeEnergyImports.push({
+          ...workout,
+          id: `workout-energy:${workout.id}`,
+          type: "active_energy",
+          value: calories,
+          unit: "kcal",
+        });
+      }
+    }
     const results = await Promise.all(
       dataTypes.map(async (type) => {
         try {
-          if (type === "active_energy")
-            return calorieRecords.map((record) => convert(type, record));
+          if (type === "active_energy") return activeEnergyImports;
+          if (type === "workouts") return workoutImports;
           const records = await readSafe(RECORD_TYPES[type]);
-          if (type === "workouts")
-            return records.map((record) => {
-              const converted = convert(type, record);
-              const start = String(record.startTime);
-              const end = String(record.endTime);
-              const source = origin(record);
-              const calories = calorieRecords
-                .filter(
-                  (item) =>
-                    origin(item) === source && overlaps(item, start, end),
-                )
-                .reduce(
-                  (sum, item) =>
-                    sum + nestedNumber(item, "energy", "inKilocalories"),
-                  0,
-                );
-              const distance = distanceRecords
-                .filter(
-                  (item) =>
-                    origin(item) === source && overlaps(item, start, end),
-                )
-                .reduce(
-                  (sum, item) =>
-                    sum +
-                    (nestedNumber(item, "distance", "inKilometers") ||
-                      nestedNumber(item, "distance", "inMeters") / 1000),
-                  0,
-                );
-              return {
-                ...converted,
-                measurements: {
-                  ...converted.measurements,
-                  activeCalories:
-                    calories || converted.measurements?.activeCalories,
-                  distanceKm: distance || converted.measurements?.distanceKm,
-                },
-              };
-            });
+          if (type === "nutrition")
+            return dedupeCrossSource(
+              records,
+              "nutrition",
+              (record) => nestedNumber(record, "energy", "inKilocalories"),
+            ).map((record) => convert(type, record));
           return records.map((record) => convert(type, record));
         } catch {
           // A vendor may not expose every requested record type. Keep the other

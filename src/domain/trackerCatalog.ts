@@ -20,8 +20,7 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
   return DEFAULT_METRICS
     .filter(
       (item) =>
-        item.id !== 'workout_calories' &&
-        (includeInternal || !isInternalTracker(item)),
+        includeInternal || !isInternalTracker(item),
     )
     .map((item): TrackerPreset => {
       const preset: TrackerPreset = {

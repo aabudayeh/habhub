@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -105,20 +106,37 @@ export default function Today() {
   const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
+  const [celebrationsReady, setCelebrationsReady] = useState(false);
   const celebratedGoalsRef = useRef("");
+  const celebrationStorageKey = `metric-rally-celebrations:${state.currentUserId}:${today}`;
   const goalCelebrationKey = goals.metrics
     .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
     .map((item) => item.id)
     .sort()
     .join("|");
   useEffect(() => {
+    let cancelled = false;
+    setCelebrationsReady(false);
+    AsyncStorage.getItem(celebrationStorageKey)
+      .then((saved) => {
+        if (cancelled) return;
+        celebratedGoalsRef.current = saved ?? "";
+        setCelebrationsReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setCelebrationsReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [celebrationStorageKey]);
+  useEffect(() => {
+    if (!celebrationsReady) return;
     const previous = new Set(celebratedGoalsRef.current.split("|").filter(Boolean));
-    const newlyCompleted = goalCelebrationKey
-      .split("|")
-      .filter(Boolean)
-      .some((id) => !previous.has(id));
+    const completed = goalCelebrationKey.split("|").filter(Boolean);
+    const newlyCompleted = completed.some((id) => !previous.has(id));
     if (newlyCompleted) {
-      setCelebrationSpecial(goals.allMet && (monthAll || weekAll));
+      setCelebrationSpecial(goals.allMet);
       celebration.setValue(0);
       Animated.sequence([
         Animated.timing(celebration, { toValue: 1, duration: 650, useNativeDriver: true }),
@@ -126,8 +144,17 @@ export default function Today() {
         Animated.timing(celebration, { toValue: 0, duration: 450, useNativeDriver: true }),
       ]).start();
     }
-    celebratedGoalsRef.current = goalCelebrationKey;
-  }, [celebration, goalCelebrationKey, goals.allMet, monthAll, weekAll]);
+    completed.forEach((id) => previous.add(id));
+    const saved = [...previous].sort().join("|");
+    celebratedGoalsRef.current = saved;
+    AsyncStorage.setItem(celebrationStorageKey, saved).catch(() => undefined);
+  }, [
+    celebration,
+    celebrationStorageKey,
+    celebrationsReady,
+    goalCelebrationKey,
+    goals.allMet,
+  ]);
   const tileHeight = Math.max(
     52,
     Math.min(
@@ -533,31 +560,35 @@ function ConfettiBurst({
   progress: Animated.Value;
   special: boolean;
 }) {
-  const colors = [palette.lime, palette.amber, palette.purple, palette.red, palette.white];
+  const { height } = useWindowDimensions();
+  const colors = special
+    ? ["#FFD700", "#FFB000", "#FFF1A8", "#F6C445"]
+    : [palette.lime, palette.amber, palette.purple, palette.red, palette.white];
   return (
     <Animated.View
       pointerEvents="none"
       style={[
         styles.confetti,
+        special && styles.confettiSpecial,
         {
           opacity: progress,
           transform: [{
             translateY: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [-30, special ? 250 : 180],
+              outputRange: [-30, special ? 110 : 180],
             }),
           }],
         },
       ]}
     >
-      {Array.from({ length: special ? 24 : 16 }, (_, index) => (
+      {Array.from({ length: special ? 60 : 16 }, (_, index) => (
         <View
           key={index}
           style={[
             styles.confettiPiece,
             {
               left: `${(index * 37) % 96}%`,
-              top: (index * 23) % 75,
+              top: special ? (index * 47) % Math.max(320, height - 120) : (index * 23) % 75,
               backgroundColor: colors[index % colors.length],
               transform: [{ rotate: `${index * 29}deg` }],
             },
@@ -921,6 +952,7 @@ const styles = StyleSheet.create({
     right: 8,
     height: 120,
   },
+  confettiSpecial: { top: 0, left: 0, right: 0, bottom: 0, height: undefined },
   confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
   editActions: { gap: 6 },
   safe: { flex: 1 },

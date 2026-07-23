@@ -26,6 +26,7 @@ import {
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
 import { dateKey } from "@/src/domain/date";
+import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -38,6 +39,7 @@ import {
 } from "@/src/types";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
+const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
 const MEDIA_BUCKET = "paceboard-media";
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
@@ -200,28 +202,31 @@ function createCleanAccountState(user: User): AppState {
 
 /** Cloud identities never inherit another local account or the seeded demo member. */
 function bindStateToAccount(state: AppState, user: User): AppState {
+  const defaults = createInitialState();
+  const sourceVersion = Number(state.version ?? 1);
   if (state.currentUserId !== user.id || isDemoBoundState(state))
     return createCleanAccountState(user);
-  if (Number(state.version ?? 1) >= 20)
-    return {
+  if (sourceVersion >= 20)
+    return upgradeStateV21({
       ...state,
+      version: 21,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
-    };
-  if (Number(state.version ?? 1) >= 19)
-    return {
+    }, defaults, sourceVersion);
+  if (sourceVersion >= 19)
+    return upgradeStateV21({
       ...state,
-      version: 20,
+      version: 21,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
-    };
+    }, defaults, sourceVersion);
   const historicalStart = state.entries
     .filter((entry) => entry.userId === user.id)
     .map((entry) => entry.localDate)
     .sort()[0];
   if (!historicalStart)
-    return {
+    return upgradeStateV21({
       ...state,
-      version: 20,
+      version: 21,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -233,7 +238,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
           ),
         ],
       },
-    };
+    }, defaults, sourceVersion);
   const retrospective = new Set(
     state.metrics
       .filter((metric) =>
@@ -244,9 +249,9 @@ function bindStateToAccount(state: AppState, user: User): AppState {
       )
       .map((metric) => metric.id),
   );
-  return {
+  return upgradeStateV21({
     ...state,
-    version: 20,
+    version: 21,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -274,7 +279,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
         ],
       ),
     ),
-  };
+  }, defaults, sourceVersion);
 }
 
 function photoUri(uri: PhotoUpdate["uri"]) {
@@ -989,6 +994,54 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     };
   }, [auth.status, auth.user, pullLatest]);
 
+  useEffect(() => {
+    if (!supabase || auth.status !== "signedIn" || !auth.user) return;
+    let cancelled = false;
+    const activateIfApproved = async (groupId: string) => {
+      const shells = await loadCloudGroupShells();
+      if (cancelled || !shells.some((group) => group.id === groupId)) return;
+      const next = await loadCloudWorkspace(
+        { ...stateRef.current, groups: shells },
+        groupId,
+      );
+      if (cancelled) return;
+      stateRef.current = next;
+      hashRef.current = stableHash(next);
+      workspaceHashRef.current = workspaceHash(next);
+      replaceState(next);
+      await AsyncStorage.removeItem(PENDING_GROUP_KEY);
+    };
+    AsyncStorage.getItem(PENDING_GROUP_KEY)
+      .then((groupId) => {
+        if (groupId) return activateIfApproved(groupId);
+      })
+      .catch(() => undefined);
+    const channel = supabase
+      .channel(`membership-approval:${auth.user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "group_members",
+          filter: `user_id=eq.${auth.user.id}`,
+        },
+        (event) => {
+          const membership = event.new as {
+            group_id?: string;
+            status?: string;
+          };
+          if (membership.group_id && membership.status === "active")
+            activateIfApproved(membership.group_id).catch(() => undefined);
+        },
+      )
+      .subscribe();
+    return () => {
+      cancelled = true;
+      supabase?.removeChannel(channel).catch(() => undefined);
+    };
+  }, [auth.status, auth.user, replaceState]);
+
   const refreshGroup = useCallback(async () => {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
     const refreshed = await loadCloudWorkspace(
@@ -1025,6 +1078,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           event: "*",
           schema: "public",
           table: "messages",
+          filter: `group_id=eq.${state.group.id}`,
+        },
+        queueRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "metric_entries",
           filter: `group_id=eq.${state.group.id}`,
         },
         queueRefresh,
@@ -1140,13 +1203,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       joinGroup: async (code) => {
         const result = await joinCloudGroup(code);
-        if (result.status === "pending") return "pending";
+        if (result.status === "pending") {
+          await AsyncStorage.setItem(PENDING_GROUP_KEY, result.groupId);
+          return "pending";
+        }
         const groupId = result.groupId;
         const next = await loadCloudWorkspace(stateRef.current, groupId);
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
         setPendingChanges(true);
+        await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         return "active";
       },
       switchGroup: async (groupId) => {

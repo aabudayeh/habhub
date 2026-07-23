@@ -534,7 +534,7 @@ function TrackedCard({ state, day }: { state: AppState; day: string }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   return (
-    <Card style={[styles.tracked, { backgroundColor: colors.primarySoft }]}>
+    <Card style={[styles.tracked, { backgroundColor: colors.card, borderColor: accent }]}>
       <Pressable
         onPress={() => setOpen((value) => !value)}
         style={styles.trackedTop}
@@ -748,7 +748,7 @@ const styles = StyleSheet.create({
     paddingTop: 11,
     marginTop: 9,
   },
-  tracked: { marginTop: 10, backgroundColor: "#F5FAF7" },
+  tracked: { marginTop: 10, borderLeftWidth: 3 },
   trackedTop: { flexDirection: "row", alignItems: "center", gap: 10 },
   grow: { flex: 1 },
   trackedTitle: { color: palette.ink, fontSize: 14, fontWeight: "900" },

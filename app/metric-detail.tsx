@@ -536,7 +536,7 @@ export default function TrackerDetail() {
               <View style={styles.grow}>
                 <Text style={[styles.entryTitle, { color: colors.ink }]}>
                   {entry.nutrition?.mealType
-                    ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} Â· ${entry.label || tracker.name}`
+                    ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} · ${entry.label || tracker.name}`
                     : entry.label || tracker.name}
                 </Text>
                 <Text style={[styles.time, { color: colors.faint }]}>

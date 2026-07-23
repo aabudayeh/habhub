@@ -28,6 +28,7 @@ import {
 } from "@/src/domain/metrics";
 import { randomMessage } from "@/src/domain/social";
 import { defaultReminderTimes } from "@/src/domain/reminders";
+import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { palette } from "@/src/theme";
 import {
@@ -1308,7 +1309,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 20,
+            version: 21,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -1528,7 +1529,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           };
           dispatch({
             type: "hydrate",
-            state: restoredState,
+            state: upgradeStateV21(restoredState, defaults, restoredVersion),
           });
         }
       })

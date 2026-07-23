@@ -1,5 +1,6 @@
 import { User } from "@supabase/supabase-js";
 
+import { DEFAULT_METRICS } from "@/src/data/seed";
 import {
   effectiveGoalTarget,
   formatMetricValue,
@@ -69,9 +70,10 @@ function inviteCode() {
 
 function metricFromRow(row: Record<string, any>): MetricDefinition {
   const configuration = (row.configuration ?? {}) as Partial<MetricDefinition>;
+  const preset = DEFAULT_METRICS.find((metric) => metric.id === row.slug);
   return {
     id: row.slug,
-    name: row.name,
+    name: row.slug === "blood_pressure_systolic" ? "Blood pressure" : row.name,
     icon: row.icon,
     color: row.color,
     unit: row.unit,
@@ -81,10 +83,11 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     goal: configuration.goal ?? { kind: "at_least", target: 1 },
     goalEnabled: configuration.goalEnabled ?? true,
     goalRange: configuration.goalRange,
-    category: configuration.category ?? "other",
-    healthMapping: configuration.healthMapping,
-    stepFallback: configuration.stepFallback,
-    manualEntry: configuration.manualEntry ?? row.slug !== "steps",
+    category: configuration.category ?? preset?.category ?? "other",
+    healthMapping: configuration.healthMapping ?? preset?.healthMapping,
+    stepFallback: configuration.stepFallback ?? preset?.stepFallback,
+    manualEntry:
+      configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,
@@ -471,6 +474,9 @@ export async function loadCloudWorkspace(
             goalRange: personal.goalRange,
             goalEnabled: personal.goalEnabled,
             defaultVisibility: personal.defaultVisibility,
+            healthMapping: personal.healthMapping ?? shared.healthMapping,
+            stepFallback: personal.stepFallback ?? shared.stepFallback,
+            manualEntry: personal.manualEntry ?? shared.manualEntry,
             sections: {
               ...shared.sections,
               today: personal.sections.today,
@@ -542,7 +548,7 @@ export async function loadCloudWorkspace(
     ...(media ?? []).map((item) => item.storage_path).filter(Boolean),
   ];
   const urls = await signedUrls(paths);
-  const entries: MetricEntry[] = (entryResult.data ?? []).map((entry) => ({
+  const remoteEntries: MetricEntry[] = (entryResult.data ?? []).map((entry) => ({
     id: entry.client_generated_id,
     metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
     userId: entry.user_id,
@@ -563,6 +569,49 @@ export async function loadCloudWorkspace(
       ? (urls.get(entry.image_path) ?? undefined)
       : undefined,
   }));
+  // Realtime group refreshes can arrive before a newly imported/corrected
+  // health row finishes its cloud upsert. Keep the newer owned local row so a
+  // chat message or membership event cannot roll health data backward.
+  const entriesById = new Map(
+    remoteEntries.map((entry) => [entry.id, entry]),
+  );
+  const cloudMetricSlugs = new Set(slugById.values());
+  state.entries
+    .filter((entry) => entry.userId === state.currentUserId)
+    .forEach((local) => {
+      const remote = entriesById.get(local.id);
+      const healthPayloadChanged =
+        Boolean(local.sourceProvider) &&
+        Boolean(remote) &&
+        JSON.stringify({
+          value: local.value,
+          label: local.label,
+          note: local.note,
+          nutrition: local.nutrition,
+          recordedAt: local.recordedAt,
+        }) !==
+          JSON.stringify({
+            value: remote?.value,
+            label: remote?.label,
+            note: remote?.note,
+            nutrition: remote?.nutrition,
+            recordedAt: remote?.recordedAt,
+          });
+      const localIsNewer =
+        Boolean(local.sourceUpdatedAt) &&
+        (!remote?.sourceUpdatedAt ||
+          local.sourceUpdatedAt! > remote.sourceUpdatedAt);
+      if (
+        !cloudMetricSlugs.has(local.metricId) ||
+        !remote ||
+        localIsNewer ||
+        healthPayloadChanged
+      )
+        entriesById.set(local.id, local);
+    });
+  const entries = [...entriesById.values()].sort((a, b) =>
+    a.recordedAt.localeCompare(b.recordedAt),
+  );
   const dailyMetricStatuses: DailyMetricStatus[] = (
     statusResult.data ?? []
   ).map((status) => ({

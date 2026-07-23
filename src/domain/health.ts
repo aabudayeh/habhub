@@ -52,7 +52,9 @@ function entryFor(
     recordedAt: record.endTime || record.startTime,
     visibility,
     source: 'imported',
-    label: record.label ?? (origin ? `Imported from ${friendlyHealthOrigin(origin)}` : undefined),
+    // The primary label describes the item (for example Walking or Banana).
+    // Provider provenance stays in the note/subtext instead of replacing it.
+    label: record.label,
     note: [record.note,origin ? `Synced from ${friendlyHealthOrigin(origin)}` : undefined].filter(Boolean).join(' · ') || undefined,
     nutrition,
     sourceProvider: record.provider,

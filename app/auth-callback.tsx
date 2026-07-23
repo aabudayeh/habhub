@@ -1,14 +1,30 @@
 import { Redirect } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from '@/src/auth/AuthProvider';
 import { palette } from '@/src/theme';
+import { clearPendingInvite, pendingInvite } from '@/src/domain/invites';
 
 export default function AuthCallbackScreen() {
   const { status } = useAuth();
-  if (status === 'signedIn') return <Redirect href="/" />;
+  const [destination, setDestination] = useState<string | null>(null);
+  useEffect(() => {
+    if (status !== 'signedIn') return;
+    pendingInvite()
+      .then(async (code) => {
+        if (code) {
+          setDestination(`/join?code=${encodeURIComponent(code)}`);
+          return;
+        }
+        await clearPendingInvite();
+        setDestination('/');
+      })
+      .catch(() => setDestination('/'));
+  }, [status]);
+  if (status === 'signedIn' && destination)
+    return <Redirect href={destination as never} />;
   if (status === 'signedOut') return <Redirect href={'/sign-in' as never} />;
   return <View style={styles.root}><ActivityIndicator color={palette.primary}/><Text style={styles.text}>Securing your session…</Text></View>;
 }

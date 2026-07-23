@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 
 import { Button, Card, Screen } from '@/src/components/ui';
 import { useAuth } from '@/src/auth/AuthProvider';
 import { palette } from '@/src/theme';
+import { rememberPendingInvite } from '@/src/domain/invites';
 
 type Mode = 'sign-in' | 'sign-up' | 'magic';
 
@@ -17,6 +18,10 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void rememberPendingInvite(params.invite);
+  }, [params.invite]);
 
   if (auth.status === 'loading') return <View style={styles.loading}><ActivityIndicator color={palette.primary} /></View>;
   if (auth.status === 'signedIn' || auth.status === 'demo') return <Redirect href={params.invite ? `/join?code=${encodeURIComponent(params.invite)}` : '/'} />;

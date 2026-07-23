@@ -9,6 +9,7 @@ import { useCloudSync } from '@/src/cloud/CloudSyncProvider';
 import { Button, Card, Screen } from '@/src/components/ui';
 import { useApp } from '@/src/state/AppProvider';
 import { palette } from '@/src/theme';
+import { clearPendingInvite, rememberPendingInvite } from '@/src/domain/invites';
 
 export default function JoinGroupScreen() {
   const params = useLocalSearchParams<{ code?: string | string[] }>();
@@ -21,12 +22,17 @@ export default function JoinGroupScreen() {
 
   const join = useCallback(async () => {
     if (!code) return Alert.alert('Invalid invitation', 'This invitation is missing its group code.');
-    if (auth.status === 'signedOut') return router.replace({ pathname: '/sign-in', params: { invite: code } });
+    if (auth.status === 'signedOut') {
+      await rememberPendingInvite(code);
+      return router.replace({ pathname: '/sign-in', params: { invite: code } });
+    }
     setBusy(true);
     try {
       const result = auth.status === 'signedIn' ? await cloud.joinGroup(code) : (app.joinGroup(code), 'active' as const);
       if (result === 'pending') {
         Alert.alert('Request sent', 'You will enter the group as soon as an admin approves you.');
+      } else {
+        await clearPendingInvite();
       }
       router.replace('/');
     } catch (error) {

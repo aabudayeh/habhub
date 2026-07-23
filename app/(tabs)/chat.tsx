@@ -117,6 +117,8 @@ export default function ChatScreen() {
     setDraft("");
     setImageUri(null);
     setTimeout(() => messageScroll.current?.scrollToEnd({ animated: true }), 50);
+    // Chat should feel realtime; do not wait for the normal workspace debounce.
+    setTimeout(() => cloud.syncNow().catch(() => undefined), 120);
   }
   function suggest(kind: MessageCategory) {
     setDraft(randomMessage(kind, state.settings.banterTone));
