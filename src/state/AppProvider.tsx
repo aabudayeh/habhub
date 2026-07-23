@@ -66,6 +66,7 @@ type Action =
     }
   | { type: "deleteMetric"; metricId: string }
   | { type: "deleteEntry"; entryId: string }
+  | { type: "skipGoal"; metricId: string; localDate: string }
   | { type: "deletePhoto"; photoId: string }
   | {
       type: "setMetricSection";
@@ -494,6 +495,29 @@ function reducer(state: AppState, action: Action): AppState {
             : state.settings,
         };
       }
+    case "skipGoal": {
+      const metric = state.metrics.find((item) => item.id === action.metricId);
+      if (!metric || metric.goalEnabled === false) return state;
+      const id = `goal-skip:${state.currentUserId}:${metric.id}:${action.localDate}`;
+      return {
+        ...state,
+        entries: [
+          ...state.entries.filter((entry) => entry.id !== id),
+          {
+            id,
+            metricId: metric.id,
+            userId: state.currentUserId,
+            value: "skipped",
+            localDate: action.localDate,
+            recordedAt: new Date().toISOString(),
+            visibility: metric.defaultVisibility,
+            source: "manual",
+            label: "Goal skipped",
+            note: "Marked complete as a planned skip/rest day.",
+          },
+        ],
+      };
+    }
     case "deletePhoto":
       return {
         ...state,
@@ -1133,6 +1157,7 @@ type AppContextValue = {
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
   deleteEntry: (entryId: string) => void;
+  skipGoal: (metricId: string, localDate: string) => void;
   deletePhoto: (photoId: string) => void;
   setMetricSection: (
     metricId: string,
@@ -1592,6 +1617,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         dispatch({ type: "updateMetric", metricId, changes }),
       deleteMetric: (metricId) => dispatch({ type: "deleteMetric", metricId }),
       deleteEntry: (entryId) => dispatch({ type: "deleteEntry", entryId }),
+      skipGoal: (metricId, localDate) => dispatch({ type: "skipGoal", metricId, localDate }),
       deletePhoto: (photoId) => dispatch({ type: "deletePhoto", photoId }),
       setMetricSection: (metricId, section, value, historyMode) =>
         dispatch({

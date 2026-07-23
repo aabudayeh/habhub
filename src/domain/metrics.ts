@@ -716,6 +716,13 @@ export function scheduledGoalReached(
   userId: string,
   localDate: string,
 ) {
+  if (state.entries.some(
+    (entry) =>
+      entry.userId === userId &&
+      entry.metricId === metric.id &&
+      entry.localDate === localDate &&
+      entry.value === "skipped",
+  )) return true;
   if (
     goalCelebrationTiming(metric) === "end_of_day" &&
     !isGoalFinalForDate(state, localDate)

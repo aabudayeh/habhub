@@ -38,7 +38,7 @@ export default function TrackerDetail() {
     metric: string;
     date?: string;
   }>();
-  const { state, deleteEntry, deletePhoto } = useApp();
+  const { state, deleteEntry, deletePhoto, skipGoal } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
@@ -295,6 +295,24 @@ export default function TrackerDetail() {
           />
         </Card>
       </View>
+      {day === dateKey() && tracker.goalEnabled !== false ? (
+        <Pressable
+          onPress={() =>
+            Alert.alert(
+              `Skip ${tracker.name} today?`,
+              "This counts today as complete and records a visible skip entry that you can delete later.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Skip today", onPress: () => skipGoal(tracker.id, day) },
+              ],
+            )
+          }
+          style={[styles.skipToday, { borderColor: colors.border, backgroundColor: colors.card }]}
+        >
+          <Ionicons name="play-skip-forward-outline" size={16} color={accent} />
+          <Text style={[styles.skipTodayText, { color: accent }]}>Skip today · count complete</Text>
+        </Pressable>
+      ) : null}
       <Card style={styles.summary}>
         <View style={styles.summaryTop}>
           <View>
@@ -431,7 +449,7 @@ export default function TrackerDetail() {
         </Card>
       ) : null}
       {reality ? (
-        <Card>
+      <Card>
           <Text style={[styles.entryTitle, { color: colors.ink }]}>
             Reported vs scale-estimated energy
           </Text>
@@ -1258,6 +1276,8 @@ const styles = StyleSheet.create({
   },
   secondaryGoalLabel: { left: 0, right: undefined },
   trackingSince: { fontSize: 8, fontWeight: "800", marginTop: 8 },
+  skipToday: { minHeight: 40, borderWidth: 1, borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, paddingHorizontal: 12 },
+  skipTodayText: { fontSize: 9, fontWeight: "900" },
   stats: {
     flexDirection: "row",
     borderTopWidth: 1,
