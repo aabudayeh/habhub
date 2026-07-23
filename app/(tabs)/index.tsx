@@ -7,7 +7,6 @@ import {
   Animated,
   Alert,
   BackHandler,
-  LayoutAnimation,
   Modal,
   PanResponder,
   Platform,
@@ -101,13 +100,6 @@ export default function Today() {
     requestAnimationFrame(() => {
       setEditing(false);
       requestAnimationFrame(() => {
-        LayoutAnimation.configureNext(
-          LayoutAnimation.create(
-            220,
-            LayoutAnimation.Types.easeInEaseOut,
-            LayoutAnimation.Properties.opacity,
-          ),
-        );
         setCompletionSortEnabled(true);
         setDragPlacement(null);
         exitingEditMode.current = false;
@@ -494,6 +486,9 @@ export default function Today() {
               active={draggingMetricId === item.id}
               shift={reorderShift(index, dragPlacement)}
               settling={Boolean(dragPlacement?.settling)}
+              animateLayout={
+                !editing && completionSortEnabled && !dragPlacement
+              }
             >
               <TrackerRow
                 item={item}
