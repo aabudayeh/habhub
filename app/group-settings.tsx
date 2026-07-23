@@ -66,7 +66,13 @@ export default function GroupSettings() {
     (metric) => !isInternalTracker(metric),
   );
   const total = groupMetrics.reduce(
-    (sum, metric) => sum + metric.scoreWeight,
+    (sum, metric) =>
+      sum +
+      (metric.sections.group &&
+      metric.dataType !== "text" &&
+      metric.dataType !== "photo"
+        ? metric.scoreWeight
+        : 0),
     0,
   );
   const aliases = state.settings.memberNicknamesByGroup?.[state.group.id] ?? {};
@@ -217,7 +223,7 @@ export default function GroupSettings() {
             const competitive =
               metric.dataType !== "text" && metric.dataType !== "photo";
             const tracked = competitive
-              ? metric.scoreWeight > 0
+              ? metric.scoreWeight > 0 && metric.sections.group
               : metric.sections.group;
             return (
               <View

@@ -59,10 +59,12 @@ export function calculateDailyEnergy(profile: EnergyProfile): number {
 export const KCAL_PER_KG_ESTIMATE = 7700;
 
 export function recommendedDailyDeficit(profile: EnergyProfile): number {
-  const requested = Math.max(0, profile.desiredWeeklyLossKg) * KCAL_PER_KG_ESTIMATE / 7;
-  // Respect the selected plan consistently. The UI separately warns when the
-  // resulting intake is aggressive rather than silently flattening 0.75/1 kg.
-  return Math.round(Math.min(requested, 1100));
+  // Preserve the user's exact preset or custom weekly rate. Safety guidance is
+  // presented separately; silently capping this value made different custom
+  // rates produce identical deficit/surplus and food targets.
+  return Math.round(
+    (Math.max(0, profile.desiredWeeklyLossKg) * KCAL_PER_KG_ESTIMATE) / 7,
+  );
 }
 
 export function recommendedDailyIntake(profile: EnergyProfile): number {

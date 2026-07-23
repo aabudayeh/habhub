@@ -62,6 +62,11 @@ export default function LeaderboardScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const currentMember = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  );
+  const canManageGroup =
+    currentMember?.role === "owner" || currentMember?.role === "admin";
   const tracked = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
       metric.scoreWeight > 0 &&
@@ -121,12 +126,14 @@ export default function LeaderboardScreen() {
       label: "Overall score",
       icon: "speedometer-outline" as const,
       color: palette.purple,
+      sublabel: "Calculated from this group's scoring rules",
     },
     ...tracked.map((metric) => ({
       id: metric.id,
       label: metric.name,
       icon: metric.icon as keyof typeof Ionicons.glyphMap,
       color: metric.color,
+      sublabel: "Allowed in Group settings",
     })),
   ];
   const hiddenOptions = options.filter((item) => !selected.includes(item.id));
@@ -348,15 +355,35 @@ export default function LeaderboardScreen() {
         );
       })}
       {editing ? (
-        <>
+        <View style={styles.editActions}>
           <Pressable
             onPress={() => setShowPicker((value) => !value)}
-            style={[styles.addExisting, { borderColor: accent }]}
+            style={[styles.addExisting, styles.editAction, { borderColor: accent }]}
           >
             <Ionicons name="add" size={18} color={accent} />
             <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
           </Pressable>
-        </>
+          {canManageGroup ? (
+            <Pressable
+              onPress={() =>
+                router.navigate({
+                  pathname: "/metric-editor",
+                  params: { id: "new", scope: "group" },
+                })
+              }
+              style={[
+                styles.addExisting,
+                styles.editAction,
+                { borderColor: accent },
+              ]}
+            >
+              <Ionicons name="create-outline" size={17} color={accent} />
+              <Text style={[styles.addExistingText, { color: accent }]}>
+                Create tracker
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : (
         <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
@@ -558,6 +585,8 @@ const styles = StyleSheet.create({
   dragText: { flex: 1, fontSize: 9, fontWeight: "800" },
   remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 6 },
+  editActions: { flexDirection: "row", gap: 7 },
+  editAction: { flex: 1, minWidth: 0, paddingHorizontal: 7 },
   addExistingText: { fontSize: 10, fontWeight: "900" },
   editHint: { alignItems: "center", paddingVertical: 7 },
   hint: { fontSize: 9, fontWeight: "700" },
