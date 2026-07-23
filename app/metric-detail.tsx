@@ -731,7 +731,7 @@ export default function TrackerDetail() {
             onPress={() =>
               router.navigate({
                 pathname: "/(tabs)/log",
-                params: { metric: tracker.id },
+                params: { metric: tracker.id, date: day },
               })
             }
             style={[styles.logButton, { backgroundColor: accent }]}

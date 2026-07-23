@@ -34,22 +34,30 @@ export default function DisplaySettings() {
   const accent = useGroupAccent();
   const visible = pages.filter(
     (page) =>
+      (page.id !== "log" || state.settings.showLog) &&
       (page.id !== "group" || state.settings.showLeaderboard) &&
       (page.id !== "chat" || state.settings.showChat),
   ).filter(
     (page) => page.id !== "gym" || state.settings.showGym,
   );
   function toggle(
-    key: "compactMode" | "darkMode" | "showLeaderboard" | "showChat" | "showGym",
+    key:
+      | "compactMode"
+      | "darkMode"
+      | "showLog"
+      | "showLeaderboard"
+      | "showChat"
+      | "showGym",
     value: boolean,
   ) {
     const changes: Partial<typeof state.settings> = { [key]: value };
     if (
       !value &&
-      ((key === "showLeaderboard" &&
-        state.settings.defaultLandingPage === "group") ||
-        (key === "showChat" && state.settings.defaultLandingPage === "chat"))
-        || (key === "showGym" && state.settings.defaultLandingPage === "gym")
+      ((key === "showLog" && state.settings.defaultLandingPage === "log") ||
+        (key === "showLeaderboard" &&
+          state.settings.defaultLandingPage === "group") ||
+        (key === "showChat" && state.settings.defaultLandingPage === "chat") ||
+        (key === "showGym" && state.settings.defaultLandingPage === "gym"))
     )
       changes.defaultLandingPage = "index";
     updateSettings(changes);
@@ -82,6 +90,12 @@ export default function DisplaySettings() {
             "Dark mode",
             "Use the complete dark color scheme",
             "moon-outline",
+          ],
+          [
+            "showLog",
+            "Show Log",
+            "Hide the shortcut; logging stays available from tracker pages",
+            "add-circle-outline",
           ],
           [
             "showLeaderboard",
@@ -131,6 +145,7 @@ export default function DisplaySettings() {
                   key as
                     | "compactMode"
                     | "darkMode"
+                    | "showLog"
                     | "showLeaderboard"
                     | "showChat"
                     | "showGym",

@@ -1160,6 +1160,7 @@ export function createInitialState(): AppState {
       showAllTodayTiles: true,
       todayTileLimit: 5,
       darkMode: false,
+      showLog: true,
       showLeaderboard: true,
       showChat: true,
       showGym: false,

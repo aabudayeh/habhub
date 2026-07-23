@@ -328,6 +328,8 @@ export type UserSettings = {
   /** Maximum main-screen tiles before More appears when showAllTodayTiles is off. */
   todayTileLimit: number;
   darkMode: boolean;
+  /** Optional shortcut tab; logging remains available from tracker details. */
+  showLog: boolean;
   showLeaderboard: boolean;
   showChat: boolean;
   /** Optional dedicated strength-training tab. */

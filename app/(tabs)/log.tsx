@@ -41,6 +41,7 @@ const privacyOptions: {
 export default function LogScreen() {
   const params = useLocalSearchParams<{
     metric?: string;
+    date?: string;
     foodName?: string;
     calories?: string;
     protein?: string;
@@ -106,7 +107,7 @@ export default function LogScreen() {
   );
   const [entryImage, setEntryImage] = useState<string | null>(null);
   const now = new Date();
-  const [logDate, setLogDate] = useState(dateKey());
+  const [logDate, setLogDate] = useState(params.date ?? dateKey());
   const [logCalendarOpen, setLogCalendarOpen] = useState(false);
   const [logTime, setLogTime] = useState(
     `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
@@ -152,6 +153,10 @@ export default function LogScreen() {
     )
       setSelectedId(params.metric);
   }, [params.metric, state.metrics]);
+  useEffect(() => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(params.date ?? ""))
+      setLogDate(params.date!);
+  }, [params.date]);
   useEffect(() => {
     if (!params.foodName) return;
     setSelectedId("food");

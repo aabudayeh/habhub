@@ -53,7 +53,10 @@ export default function TabLayout() {
       })}
     >
       <Tabs.Screen name="index" options={{ title: "Today" }} />
-      <Tabs.Screen name="log" options={{ title: "Log" }} />
+      <Tabs.Screen
+        name="log"
+        options={{ title: "Log", href: state.settings.showLog ? "/log" : null }}
+      />
       <Tabs.Screen
         name="group"
         options={{
