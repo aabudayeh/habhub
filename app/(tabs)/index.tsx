@@ -7,6 +7,7 @@ import {
   Animated,
   Alert,
   BackHandler,
+  LayoutAnimation,
   Modal,
   PanResponder,
   Platform,
@@ -69,6 +70,8 @@ export default function Today() {
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
   const [editing, setEditing] = useState(false);
+  const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
+  const exitingEditMode = useRef(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [dragPlacement, setDragPlacement] =
     useState<ReorderDragState | null>(null);
@@ -78,9 +81,39 @@ export default function Today() {
   useEffect(() => {
     if (!editing) {
       setDraggingMetricId(null);
-      setDragPlacement(null);
     }
   }, [editing]);
+  const beginEditing = useCallback(() => {
+    exitingEditMode.current = false;
+    setCompletionSortEnabled(false);
+    setEditing(true);
+  }, []);
+  const finishEditing = useCallback(() => {
+    if (exitingEditMode.current) return;
+    exitingEditMode.current = true;
+    // First render every card at its resting edit-order position. Applying
+    // completed-goal sorting while drag transforms still exist leaves visual
+    // holes because the transforms are relative to the previous order.
+    setDragPlacement((current) =>
+      current ? { ...current, settling: true } : current,
+    );
+    setDraggingMetricId(null);
+    requestAnimationFrame(() => {
+      setEditing(false);
+      requestAnimationFrame(() => {
+        LayoutAnimation.configureNext(
+          LayoutAnimation.create(
+            220,
+            LayoutAnimation.Types.easeInEaseOut,
+            LayoutAnimation.Properties.opacity,
+          ),
+        );
+        setCompletionSortEnabled(true);
+        setDragPlacement(null);
+        exitingEditMode.current = false;
+      });
+    });
+  }, []);
   const today = dateKey();
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
@@ -96,7 +129,7 @@ export default function Today() {
             item.activeFrom <= today,
         )
         .sort((a, b) => a.order - b.order);
-    if (editing) return ordered;
+    if (editing || !completionSortEnabled) return ordered;
     return ordered.sort((a, b) => {
       const pinOrder = Number(Boolean(b.pinnedTodayAt)) - Number(Boolean(a.pinnedTodayAt));
       if (pinOrder) return pinOrder;
@@ -106,7 +139,7 @@ export default function Today() {
       const bMet = metricApplicableOnDate(state, b, state.currentUserId, today) && scheduledGoalReached(state, b, state.currentUserId, today);
       return Number(aMet) - Number(bMet) || a.order - b.order;
     });
-  }, [editing, state, today]);
+  }, [completionSortEnabled, editing, state, today]);
   const tileLimit = Math.max(
     3,
     Math.min(8, state.settings.todayTileLimit ?? 5),
@@ -224,12 +257,12 @@ export default function Today() {
         "hardwareBackPress",
         () => {
           if (!editing) return false;
-          setEditing(false);
+          finishEditing();
           return true;
         },
       );
       return () => subscription.remove();
-    }, [editing]),
+    }, [editing, finishEditing]),
   );
   function remove(item: MetricDefinition) {
     Alert.alert(
@@ -293,7 +326,7 @@ export default function Today() {
           <View style={styles.headerActions}>
             {editing ? (
               <Pressable
-                onPress={() => setEditing(false)}
+                onPress={finishEditing}
                 style={[styles.done, { backgroundColor: accent }]}
               >
                 <Text style={styles.doneText}>Done</Text>
@@ -482,7 +515,7 @@ export default function Today() {
                 goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
                 goldSequenceRun={goldSequenceRun}
                 celebrating={celebratingGoalIds.includes(item.id)}
-                onEdit={() => setEditing(true)}
+                onEdit={beginEditing}
                 onMove={(target) =>
                   reorderMetric(item.id, visible[target]?.order ?? target)
                 }
