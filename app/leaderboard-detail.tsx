@@ -29,6 +29,7 @@ import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
   leaderboardRows,
   LeaderboardPeriod,
+  periodAverageGoalReached,
   PeriodMetricResult,
   periodDates,
   periodTitle,
@@ -379,15 +380,9 @@ export default function LeaderboardDetail() {
                 {row.metrics.map(({ metric, result }) => {
                   const progress = result.averageDisplayProgress;
                   const progressCopy = personalGoalProgressCopy(result);
-                  const progressColor =
-                    result.personalGoalKind === "at_most"
-                      ? (progress ?? 0) <= 1
-                        ? palette.lime
-                        : palette.red
-                      : result.completedDays >= result.visibleDays &&
-                          result.visibleDays > 0
-                        ? palette.lime
-                        : palette.red;
+                  const progressColor = periodAverageGoalReached(result)
+                    ? palette.lime
+                    : palette.red;
                   return (
                   <View
                     key={metric.id}

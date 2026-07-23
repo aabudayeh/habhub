@@ -19,8 +19,11 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { ReorderItem } from "@/src/components/ReorderItem";
-import { useDelayedReorder } from "@/src/components/reorderAnimation";
+import {
+  ReorderDragState,
+  ReorderItem,
+  reorderShift,
+} from "@/src/components/ReorderItem";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -67,11 +70,16 @@ export default function Today() {
   const { height } = useWindowDimensions();
   const [editing, setEditing] = useState(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
+  const [dragPlacement, setDragPlacement] =
+    useState<ReorderDragState | null>(null);
   const [showMore, setShowMore] = useState(false);
   const [showAddTiles, setShowAddTiles] = useState(false);
   const [showDayEnd, setShowDayEnd] = useState(false);
   useEffect(() => {
-    if (!editing) setDraggingMetricId(null);
+    if (!editing) {
+      setDraggingMetricId(null);
+      setDragPlacement(null);
+    }
   }, [editing]);
   const today = dateKey();
   const user = state.group.members.find(
@@ -448,7 +456,12 @@ export default function Today() {
         </View>
         <View style={styles.list}>
           {primary.map((item, index) => (
-            <ReorderItem key={item.id} active={draggingMetricId === item.id}>
+            <ReorderItem
+              key={item.id}
+              active={draggingMetricId === item.id}
+              shift={reorderShift(index, dragPlacement)}
+              settling={Boolean(dragPlacement?.settling)}
+            >
               <TrackerRow
                 item={item}
                 index={index}
@@ -475,8 +488,29 @@ export default function Today() {
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
-                onDragStart={() => setDraggingMetricId(item.id)}
-                onDragEnd={() => setDraggingMetricId(null)}
+                onDragStart={() => {
+                  setDraggingMetricId(item.id);
+                  setDragPlacement({
+                    id: item.id,
+                    origin: index,
+                    target: index,
+                    step: tileHeight + 6,
+                  });
+                }}
+                onDragHover={(target) =>
+                  setDragPlacement((current) =>
+                    current?.id === item.id ? { ...current, target } : current,
+                  )
+                }
+                onDragCancel={() =>
+                  setDragPlacement((current) =>
+                    current ? { ...current, settling: true } : current,
+                  )
+                }
+                onDragEnd={() => {
+                  setDragPlacement(null);
+                  setDraggingMetricId(null);
+                }}
               />
             </ReorderItem>
           ))}
@@ -839,6 +873,8 @@ function TrackerRow({
   onRemove,
   onPin,
   onDragStart,
+  onDragHover,
+  onDragCancel,
   onDragEnd,
 }: {
   item: MetricDefinition;
@@ -861,6 +897,8 @@ function TrackerRow({
   onRemove: () => void;
   onPin: () => void;
   onDragStart: () => void;
+  onDragHover: (target: number) => void;
+  onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
   const dragOrigin = useRef(index);
@@ -868,6 +906,10 @@ function TrackerRow({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const onDragStartRef = useRef(onDragStart);
+  const onDragHoverRef = useRef(onDragHover);
+  const onDragCancelRef = useRef(onDragCancel);
+  const onDragEndRef = useRef(onDragEnd);
   const lastDragY = useRef(0);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
@@ -876,17 +918,10 @@ function TrackerRow({
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
-  const {
-    schedule: scheduleReorder,
-    flush: flushReorder,
-    cancel: cancelReorder,
-  } = useDelayedReorder((target) => {
-    liveTarget.current = target;
-    dragY.setValue(
-      lastDragY.current - (target - dragOrigin.current) * dragStep,
-    );
-    onMoveRef.current(target);
-  });
+  onDragStartRef.current = onDragStart;
+  onDragHoverRef.current = onDragHover;
+  onDragCancelRef.current = onDragCancel;
+  onDragEndRef.current = onDragEnd;
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -899,7 +934,6 @@ function TrackerRow({
   }, [arrival, celebrating]);
   useEffect(() => {
     if (!editing) {
-      cancelReorder();
       wiggle.stopAnimation();
       wiggle.setValue(0);
       dragY.setValue(0);
@@ -914,7 +948,7 @@ function TrackerRow({
     );
     animation.start();
     return () => animation.stop();
-  }, [cancelReorder, dragY, editing, wiggle]);
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -925,8 +959,7 @@ function TrackerRow({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
-          onDragStart();
-          cancelReorder();
+          onDragStartRef.current();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
           lastDragY.current = 0;
@@ -940,28 +973,30 @@ function TrackerRow({
               dragOrigin.current + Math.round(gesture.dy / dragStep),
             ),
           );
-          dragY.setValue(
-            gesture.dy - (liveTarget.current - dragOrigin.current) * dragStep,
-          );
-          if (target !== liveTarget.current) scheduleReorder(target);
-          else cancelReorder();
+          dragY.setValue(gesture.dy);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onDragHoverRef.current(target);
+          }
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
-          flushReorder();
-          requestAnimationFrame(() =>
-            Animated.spring(dragY, {
-              toValue: 0,
-              damping: 22,
-              stiffness: 240,
-              mass: 0.75,
-              overshootClamping: true,
-              useNativeDriver: true,
-            }).start(onDragEnd),
-          );
+          const target = liveTarget.current;
+          Animated.spring(dragY, {
+            toValue: (target - dragOrigin.current) * dragStep,
+            damping: 24,
+            stiffness: 220,
+            mass: 0.72,
+            overshootClamping: true,
+            useNativeDriver: true,
+          }).start(() => {
+            dragY.setValue(0);
+            onMoveRef.current(target);
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
         onPanResponderTerminate: () => {
-          cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             damping: 22,
@@ -969,19 +1004,13 @@ function TrackerRow({
             mass: 0.75,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(onDragEnd);
+          }).start(() => {
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
       }),
-    [
-      cancelReorder,
-      dragY,
-      editing,
-      flushReorder,
-      dragStep,
-      onDragEnd,
-      onDragStart,
-      scheduleReorder,
-    ],
+    [dragY, editing, dragStep],
   );
   const actualValue =
     item.id === "weekly_deficit_balance"
@@ -1262,7 +1291,17 @@ function TrackerRow({
           </Pressable>
         </View>
       ) : (
-        <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+        <View style={styles.rowEnd}>
+          {item.pinnedTodayAt ? (
+            <Ionicons
+              name="pin"
+              size={13}
+              color={palette.amber}
+              accessibilityLabel="Pinned"
+            />
+          ) : null}
+          <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+        </View>
       )}
     </AnimatedPressable>
     </Animated.View>
@@ -1495,6 +1534,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
+  rowEnd: { flexDirection: "row", alignItems: "center", gap: 5 },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },

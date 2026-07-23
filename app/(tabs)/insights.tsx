@@ -12,8 +12,11 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { ReorderItem } from "@/src/components/ReorderItem";
-import { useDelayedReorder } from "@/src/components/reorderAnimation";
+import {
+  ReorderDragState,
+  ReorderItem,
+  reorderShift,
+} from "@/src/components/ReorderItem";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -90,12 +93,17 @@ export default function Insights() {
   const [filterTouched, setFilterTouched] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
+  const [dragPlacement, setDragPlacement] =
+    useState<ReorderDragState | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [view, setView] = useState<ViewMode>("week");
   const [month, setMonth] = useState(today);
   const [weekAnchor, setWeekAnchor] = useState(today);
   useEffect(() => {
-    if (!editing) setDraggingMetricId(null);
+    if (!editing) {
+      setDraggingMetricId(null);
+      setDragPlacement(null);
+    }
   }, [editing]);
   const selectedMetrics = selectedIds
     .map((id) => metrics.find((metric) => metric.id === id))
@@ -417,7 +425,12 @@ export default function Insights() {
           />
         ) : null}
         {selectedMetrics.map((metric, index) => (
-          <ReorderItem key={metric.id} active={draggingMetricId === metric.id}>
+          <ReorderItem
+            key={metric.id}
+            active={draggingMetricId === metric.id}
+            shift={reorderShift(index, dragPlacement)}
+            settling={Boolean(dragPlacement?.settling)}
+          >
             <MetricSummary
               state={state}
               metric={metric}
@@ -428,8 +441,29 @@ export default function Insights() {
               onEdit={() => setEditing(true)}
               onMove={(target) => move(metric.id, target)}
               onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
-              onDragStart={() => setDraggingMetricId(metric.id)}
-              onDragEnd={() => setDraggingMetricId(null)}
+              onDragStart={(step) => {
+                setDraggingMetricId(metric.id);
+                setDragPlacement({
+                  id: metric.id,
+                  origin: index,
+                  target: index,
+                  step,
+                });
+              }}
+              onDragHover={(target) =>
+                setDragPlacement((current) =>
+                  current?.id === metric.id ? { ...current, target } : current,
+                )
+              }
+              onDragCancel={() =>
+                setDragPlacement((current) =>
+                  current ? { ...current, settling: true } : current,
+                )
+              }
+              onDragEnd={() => {
+                setDragPlacement(null);
+                setDraggingMetricId(null);
+              }}
             />
           </ReorderItem>
         ))}
@@ -625,6 +659,8 @@ function MetricSummary({
   onMove,
   onRemove,
   onDragStart,
+  onDragHover,
+  onDragCancel,
   onDragEnd,
 }: {
   state: AppState;
@@ -636,7 +672,9 @@ function MetricSummary({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
-  onDragStart: () => void;
+  onDragStart: (step: number) => void;
+  onDragHover: (target: number) => void;
+  onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
   const colors = useAppColors();
@@ -648,26 +686,21 @@ function MetricSummary({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const onDragStartRef = useRef(onDragStart);
+  const onDragHoverRef = useRef(onDragHover);
+  const onDragCancelRef = useRef(onDragCancel);
+  const onDragEndRef = useRef(onDragEnd);
   const lastDragY = useRef(0);
   const dragStep = useRef(93);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
-  const {
-    schedule: scheduleReorder,
-    flush: flushReorder,
-    cancel: cancelReorder,
-  } = useDelayedReorder((target) => {
-    liveTarget.current = target;
-    dragY.setValue(
-      lastDragY.current -
-        (target - dragOrigin.current) * dragStep.current,
-    );
-    onMoveRef.current(target);
-  });
+  onDragStartRef.current = onDragStart;
+  onDragHoverRef.current = onDragHover;
+  onDragCancelRef.current = onDragCancel;
+  onDragEndRef.current = onDragEnd;
   useEffect(() => {
     if (!editing) {
-      cancelReorder();
       dragY.setValue(0);
       wiggle.stopAnimation();
       wiggle.setValue(0);
@@ -682,7 +715,7 @@ function MetricSummary({
     );
     animation.start();
     return () => animation.stop();
-  }, [cancelReorder, dragY, editing, wiggle]);
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -690,8 +723,7 @@ function MetricSummary({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
-          onDragStart();
-          cancelReorder();
+          onDragStartRef.current(dragStep.current);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
           lastDragY.current = 0;
@@ -705,29 +737,30 @@ function MetricSummary({
               dragOrigin.current + Math.round(gesture.dy / dragStep.current),
             ),
           );
-          dragY.setValue(
-            gesture.dy -
-              (liveTarget.current - dragOrigin.current) * dragStep.current,
-          );
-          if (target !== liveTarget.current) scheduleReorder(target);
-          else cancelReorder();
+          dragY.setValue(gesture.dy);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onDragHoverRef.current(target);
+          }
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
-          flushReorder();
-          requestAnimationFrame(() =>
-            Animated.spring(dragY, {
-              toValue: 0,
-              damping: 22,
-              stiffness: 240,
-              mass: 0.75,
-              overshootClamping: true,
-              useNativeDriver: true,
-            }).start(onDragEnd),
-          );
+          const target = liveTarget.current;
+          Animated.spring(dragY, {
+            toValue: (target - dragOrigin.current) * dragStep.current,
+            damping: 24,
+            stiffness: 220,
+            mass: 0.72,
+            overshootClamping: true,
+            useNativeDriver: true,
+          }).start(() => {
+            dragY.setValue(0);
+            onMoveRef.current(target);
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
         onPanResponderTerminate: () => {
-          cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             damping: 22,
@@ -735,18 +768,13 @@ function MetricSummary({
             mass: 0.75,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(onDragEnd);
+          }).start(() => {
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
       }),
-    [
-      cancelReorder,
-      dragY,
-      editing,
-      flushReorder,
-      onDragEnd,
-      onDragStart,
-      scheduleReorder,
-    ],
+    [dragY, editing],
   );
   const periodStats = metricPeriodStats(
     state,

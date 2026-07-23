@@ -74,6 +74,23 @@ export type PeriodMetricResult = {
   lastRecordedAt?: string;
 };
 
+/** Whether the member's period average satisfies their own goal. */
+export function periodAverageGoalReached(result: PeriodMetricResult): boolean {
+  if (result.mode === "private" || result.visibleDays < 1) return false;
+  const progress = result.averageDisplayProgress;
+  if (progress === undefined) return false;
+  switch (result.personalGoalKind) {
+    case "at_most":
+      return progress > 0 && progress <= 1;
+    case "exact":
+      return progress >= 0.95 && progress <= 1.05;
+    case "complete":
+      return result.completedDays >= result.visibleDays;
+    default:
+      return progress >= 1;
+  }
+}
+
 function metGoalOnDate(
   state: AppState,
   metric: MetricDefinition,

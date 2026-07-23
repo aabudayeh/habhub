@@ -254,9 +254,13 @@ export default function TrackerEditor() {
   const [ranking, setRanking] = useState<RankingDirection>(
     tracker?.rankingDirection ?? "higher",
   );
-  const [advanced, setAdvanced] = useState(focus === "goal-start");
+  const [advanced, setAdvanced] = useState(
+    focus === "goal-start" || focus === "notifications",
+  );
   const scrollRef = useRef<ScrollView>(null);
   const scrolledToGoalStart = useRef(false);
+  const scrolledToNotifications = useRef(false);
+  const behaviorSectionY = useRef(0);
   const [showIcons, setShowIcons] = useState(false);
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
@@ -946,6 +950,7 @@ export default function TrackerEditor() {
           </Card>
           <View
             onLayout={(event) => {
+              behaviorSectionY.current = event.nativeEvent.layout.y;
               if (
                 focus !== "goal-start" ||
                 scrolledToGoalStart.current
@@ -1060,6 +1065,26 @@ export default function TrackerEditor() {
                     ) : null}
                   </View>
             ) : null}
+            <View
+              onLayout={(event) => {
+                if (
+                  focus !== "notifications" ||
+                  scrolledToNotifications.current
+                )
+                  return;
+                scrolledToNotifications.current = true;
+                const y =
+                  behaviorSectionY.current + event.nativeEvent.layout.y;
+                setTimeout(
+                  () =>
+                    scrollRef.current?.scrollTo({
+                      y: Math.max(0, y - 75),
+                      animated: true,
+                    }),
+                  100,
+                );
+              }}
+            >
             <Text style={[styles.label, { color: colors.ink }]}>Reminder times</Text>
             {reminderTimes.map((time, index) => (
               <View key={index} style={styles.reminderRow}>
@@ -1149,6 +1174,7 @@ export default function TrackerEditor() {
                 <Text style={[styles.help, { color: colors.muted }]}>Uses every time above and respects global quiet hours.</Text>
               </View>
               <Switch value={reminderEnabled} onValueChange={setReminderEnabled} />
+            </View>
             </View>
             <Text style={[styles.label, { color: colors.ink }]}>
               Entry type

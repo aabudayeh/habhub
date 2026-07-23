@@ -21,8 +21,11 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { ReorderItem } from "@/src/components/ReorderItem";
-import { useDelayedReorder } from "@/src/components/reorderAnimation";
+import {
+  ReorderDragState,
+  ReorderItem,
+  reorderShift,
+} from "@/src/components/ReorderItem";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -39,6 +42,7 @@ import { groupInviteMessage } from "@/src/domain/invites";
 import {
   LeaderboardPeriod,
   leaderboardRows,
+  periodAverageGoalReached,
   periodDates,
   periodTitle,
 } from "@/src/domain/leaderboard";
@@ -66,8 +70,13 @@ export default function LeaderboardScreen() {
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [dragPlacement, setDragPlacement] =
+    useState<ReorderDragState | null>(null);
   useEffect(() => {
-    if (!editing) setDraggingCardId(null);
+    if (!editing) {
+      setDraggingCardId(null);
+      setDragPlacement(null);
+    }
   }, [editing]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
@@ -221,7 +230,12 @@ export default function LeaderboardScreen() {
           includeScore,
         );
         return (
-          <ReorderItem key={id} active={draggingCardId === id}>
+          <ReorderItem
+            key={id}
+            active={draggingCardId === id}
+            shift={reorderShift(cardIndex, dragPlacement)}
+            settling={Boolean(dragPlacement?.settling)}
+          >
             <EditableRankingCard
               editing={editing}
               index={cardIndex}
@@ -240,8 +254,29 @@ export default function LeaderboardScreen() {
                   ? undefined
                   : () => chooseVisibility(metric.id, metric.name)
               }
-              onDragStart={() => setDraggingCardId(id)}
-              onDragEnd={() => setDraggingCardId(null)}
+              onDragStart={(step) => {
+                setDraggingCardId(id);
+                setDragPlacement({
+                  id,
+                  origin: cardIndex,
+                  target: cardIndex,
+                  step,
+                });
+              }}
+              onDragHover={(target) =>
+                setDragPlacement((current) =>
+                  current?.id === id ? { ...current, target } : current,
+                )
+              }
+              onDragCancel={() =>
+                setDragPlacement((current) =>
+                  current ? { ...current, settling: true } : current,
+                )
+              }
+              onDragEnd={() => {
+                setDragPlacement(null);
+                setDraggingCardId(null);
+              }}
             >
             <Card style={styles.ranking}>
             <Pressable
@@ -285,13 +320,9 @@ export default function LeaderboardScreen() {
                 result &&
                 result.mode !== "private" &&
                 result.visibleDays > 0
-                  ? result.personalGoalKind === "at_most"
-                    ? (result.averageDisplayProgress ?? 0) <= 1
-                      ? palette.lime
-                      : palette.red
-                    : result.completedDays >= result.visibleDays
-                      ? palette.lime
-                      : palette.red
+                  ? periodAverageGoalReached(result)
+                    ? palette.lime
+                    : palette.red
                   : row.member.color;
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
@@ -544,6 +575,8 @@ function EditableRankingCard({
   visibility,
   onVisibilityPress,
   onDragStart,
+  onDragHover,
+  onDragCancel,
   onDragEnd,
 }: {
   children: ReactNode;
@@ -555,7 +588,9 @@ function EditableRankingCard({
   onRemove: () => void;
   visibility?: Visibility;
   onVisibilityPress?: () => void;
-  onDragStart: () => void;
+  onDragStart: (step: number) => void;
+  onDragHover: (target: number) => void;
+  onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
   const dragY = useRef(new Animated.Value(0)).current;
@@ -565,26 +600,21 @@ function EditableRankingCard({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
+  const onDragStartRef = useRef(onDragStart);
+  const onDragHoverRef = useRef(onDragHover);
+  const onDragCancelRef = useRef(onDragCancel);
+  const onDragEndRef = useRef(onDragEnd);
   const lastDragY = useRef(0);
   const dragStep = useRef(240);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
-  const {
-    schedule: scheduleReorder,
-    flush: flushReorder,
-    cancel: cancelReorder,
-  } = useDelayedReorder((target) => {
-    liveTarget.current = target;
-    dragY.setValue(
-      lastDragY.current -
-        (target - dragOrigin.current) * dragStep.current,
-    );
-    onMoveRef.current(target);
-  });
+  onDragStartRef.current = onDragStart;
+  onDragHoverRef.current = onDragHover;
+  onDragCancelRef.current = onDragCancel;
+  onDragEndRef.current = onDragEnd;
   useEffect(() => {
     if (!editing) {
-      cancelReorder();
       dragY.setValue(0);
       wiggle.stopAnimation();
       wiggle.setValue(0);
@@ -599,7 +629,7 @@ function EditableRankingCard({
     );
     animation.start();
     return () => animation.stop();
-  }, [cancelReorder, dragY, editing, wiggle]);
+  }, [dragY, editing, wiggle]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -607,8 +637,7 @@ function EditableRankingCard({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
-          onDragStart();
-          cancelReorder();
+          onDragStartRef.current(dragStep.current);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
           lastDragY.current = 0;
@@ -622,29 +651,30 @@ function EditableRankingCard({
               dragOrigin.current + Math.round(gesture.dy / dragStep.current),
             ),
           );
-          dragY.setValue(
-            gesture.dy -
-              (liveTarget.current - dragOrigin.current) * dragStep.current,
-          );
-          if (target !== liveTarget.current) scheduleReorder(target);
-          else cancelReorder();
+          dragY.setValue(gesture.dy);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onDragHoverRef.current(target);
+          }
         },
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
-          flushReorder();
-          requestAnimationFrame(() =>
-            Animated.spring(dragY, {
-              toValue: 0,
-              damping: 22,
-              stiffness: 240,
-              mass: 0.75,
-              overshootClamping: true,
-              useNativeDriver: true,
-            }).start(onDragEnd),
-          );
+          const target = liveTarget.current;
+          Animated.spring(dragY, {
+            toValue: (target - dragOrigin.current) * dragStep.current,
+            damping: 24,
+            stiffness: 220,
+            mass: 0.72,
+            overshootClamping: true,
+            useNativeDriver: true,
+          }).start(() => {
+            dragY.setValue(0);
+            onMoveRef.current(target);
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
         onPanResponderTerminate: () => {
-          cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             damping: 22,
@@ -652,18 +682,13 @@ function EditableRankingCard({
             mass: 0.75,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(onDragEnd);
+          }).start(() => {
+            onDragCancelRef.current();
+            requestAnimationFrame(() => onDragEndRef.current());
+          });
         },
       }),
-    [
-      cancelReorder,
-      dragY,
-      editing,
-      flushReorder,
-      onDragEnd,
-      onDragStart,
-      scheduleReorder,
-    ],
+    [dragY, editing],
   );
   return (
     <Animated.View

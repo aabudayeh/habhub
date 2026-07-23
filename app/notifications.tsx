@@ -15,7 +15,6 @@ import {
   IconButton,
   PageHeader,
   Screen,
-  SectionHeader,
 } from "@/src/components/ui";
 import { useApp } from "@/src/state/AppProvider";
 import { useAuth } from "@/src/auth/AuthProvider";
@@ -34,9 +33,16 @@ export default function NotificationsScreen() {
   const accent = useGroupAccent();
   const value = state.settings.notifications;
   const [permissionNote, setPermissionNote] = useState<string | null>(null);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [trackersOpen, setTrackersOpen] = useState(false);
+  const [quietOpen, setQuietOpen] = useState(false);
   const registrationAttempted = useRef(false);
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => metric.scoreWeight > 0 && metric.dataType !== "text",
+  );
+  const reminderTrackers = state.metrics.filter(
+    (metric) => metric.goalEnabled !== false && metric.dataType !== "text",
   );
   function patch(changes: Partial<NotificationSettings>) {
     updateSettings({ notifications: { ...value, ...changes } });
@@ -129,8 +135,12 @@ export default function NotificationsScreen() {
           </Text>
         ) : null}
       </Card>
-      <SectionHeader title="Group activity" />
-      <Card style={styles.list}>
+      <CollapsibleTitle
+        title="Group activity"
+        open={groupOpen}
+        onPress={() => setGroupOpen((open) => !open)}
+      />
+      {groupOpen ? <Card style={styles.list}>
         <ToggleRow
           icon="pulse-outline"
           title="Tracked activity"
@@ -178,9 +188,13 @@ export default function NotificationsScreen() {
             />
           </Pressable>
         ))}
-      </Card>
-      <SectionHeader title="Other notifications" />
-      <Card style={styles.list}>
+      </Card> : null}
+      <CollapsibleTitle
+        title="Other notifications"
+        open={otherOpen}
+        onPress={() => setOtherOpen((open) => !open)}
+      />
+      {otherOpen ? <Card style={styles.list}>
         <ToggleRow
           icon="swap-vertical-outline"
           title="Lead changes"
@@ -290,9 +304,66 @@ export default function NotificationsScreen() {
             ))}
           </View>
         ) : null}
-      </Card>
-      <SectionHeader title="Quiet hours" />
-      <Card>
+      </Card> : null}
+      <CollapsibleTitle
+        title="Tracker reminders"
+        open={trackersOpen}
+        onPress={() => setTrackersOpen((open) => !open)}
+      />
+      {trackersOpen ? (
+        <Card style={styles.list}>
+          {reminderTrackers.map((metric) => {
+            const reminders = metric.reminders?.length
+              ? metric.reminders
+              : metric.reminder
+                ? [metric.reminder]
+                : [];
+            const active = reminders.filter((item) => item.enabled);
+            return (
+              <Pressable
+                key={metric.id}
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/metric-editor",
+                    params: { id: metric.id, focus: "notifications" },
+                  } as never)
+                }
+                style={[styles.metric, { borderBottomColor: colors.border }]}
+              >
+                <View
+                  style={[
+                    styles.metricIcon,
+                    { backgroundColor: `${metric.color}18` },
+                  ]}
+                >
+                  <Ionicons
+                    name={metric.icon as keyof typeof Ionicons.glyphMap}
+                    size={18}
+                    color={metric.color}
+                  />
+                </View>
+                <View style={styles.copy}>
+                  <Text style={[styles.metricName, { color: colors.ink }]}>
+                    {metric.name}
+                  </Text>
+                  <Text style={[styles.copyText, { color: colors.muted }]}>
+                    {active.length
+                      ? active.map((item) => item.time).join(" · ")
+                      : "Reminders off"}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+              </Pressable>
+            );
+          })}
+        </Card>
+      ) : null}
+      <CollapsibleTitle
+        title="Quiet hours"
+        open={quietOpen}
+        onPress={() => setQuietOpen((open) => !open)}
+      />
+      {quietOpen ? <Card>
         <ToggleRow
           icon="moon-outline"
           title="Quiet hours"
@@ -334,7 +405,7 @@ export default function NotificationsScreen() {
             </View>
           </View>
         ) : null}
-      </Card>
+      </Card> : null}
       <Text style={[styles.note, { color: colors.muted }]}>
         The installed app requests system permission and registers this phone.
         Expo Go on Android cannot receive remote push notifications; use an EAS
@@ -343,6 +414,32 @@ export default function NotificationsScreen() {
     </Screen>
   );
 }
+
+function CollapsibleTitle({
+  title,
+  open,
+  onPress,
+}: {
+  title: string;
+  open: boolean;
+  onPress: () => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  return (
+    <Pressable onPress={onPress} style={styles.collapseTitle}>
+      <Text style={[styles.collapseTitleText, { color: colors.ink }]}>
+        {title}
+      </Text>
+      <Ionicons
+        name={open ? "chevron-up" : "chevron-down"}
+        size={18}
+        color={accent}
+      />
+    </Pressable>
+  );
+}
+
 function ToggleRow({
   icon,
   title,
@@ -384,6 +481,15 @@ function ToggleRow({
   );
 }
 const styles = StyleSheet.create({
+  collapseTitle: {
+    minHeight: 40,
+    marginTop: 8,
+    paddingHorizontal: 3,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  collapseTitleText: { fontSize: 12, fontWeight: "900" },
   list: { paddingVertical: 4, paddingHorizontal: 13 },
   row: {
     minHeight: 65,
@@ -431,6 +537,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 9,
     paddingHorizontal: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   metricIcon: {
     width: 34,
