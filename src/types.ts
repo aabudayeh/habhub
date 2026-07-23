@@ -115,6 +115,8 @@ export type MetricDefinition = {
   order: number;
   /** Goals and completion scoring apply from this local date forward. */
   activeFrom: string;
+  /** Personal Today preference; older pins sort first. */
+  pinnedTodayAt?: string;
   goalSchedule?: GoalSchedule;
   reminder?: GoalReminder;
   /** Multiple local reminder times; `reminder` remains as a legacy fallback. */
@@ -279,6 +281,8 @@ export type UserSettings = {
   /** Legacy v15 setting retained while old snapshots migrate. */
   featuredTodayCard: "score" | string;
   defaultLandingPage: LandingPage;
+  /** Local clock time after which accumulating daily goals become final. */
+  dayEndTime?: string;
   compactMode: boolean;
   /** App-controlled text scale; system font scaling is disabled so layouts stay synchronized. */
   fontScale: number;

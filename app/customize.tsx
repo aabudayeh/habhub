@@ -224,10 +224,19 @@ export default function Customize() {
                         {metric.goalEnabled === false
                           ? "Informational by default; selecting it enables its configured target"
                           : selected
-                            ? "Included in daily completion"
+                            ? `Included since ${new Date(`${(state.trackedGoalPeriods[metric.id]?.find((period) => !period.to)?.from ?? metric.activeFrom)}T12:00:00`).toLocaleDateString()}`
                             : "Not counted"}
                       </Text>
                     </View>
+                    {selected ? (
+                      <Pressable
+                        accessibilityLabel={`Change ${metric.name} goal start date`}
+                        onPress={() => router.push({ pathname: "/metric-editor" as never, params: { id: metric.id } })}
+                        style={[styles.dateEdit, { borderColor: colors.border }]}
+                      >
+                        <Ionicons name="calendar-outline" size={15} color={accent} />
+                      </Pressable>
+                    ) : null}
                     <Switch
                       value={selected}
                       onValueChange={(value) =>
@@ -475,4 +484,5 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   orderButtons: { alignItems: "center", justifyContent: "center", gap: 1 },
+  dateEdit: { width: 32, height: 32, borderWidth: 1, borderRadius: 10, alignItems: "center", justifyContent: "center" },
 });

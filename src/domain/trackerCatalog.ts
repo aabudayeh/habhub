@@ -54,9 +54,17 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         preset.goalRange = direction === 'maintain' ? { min: -150, max: 150 } : undefined;
         preset.formula = direction === 'lose' ? 'bmr + daily_activity + exercise - food' : 'food - bmr - daily_activity - exercise';
       }
-      if (['pulse', 'blood_glucose'].includes(item.id)) {
+      if (item.id === 'blood_glucose') {
         preset.goalEnabled = false;
         preset.goalRange = undefined;
+      }
+      if (item.id === 'pulse') {
+        preset.goalEnabled = true;
+        preset.goal = { kind: 'exact', target: 75 };
+        preset.goalRange = {
+          min: profile.activityLevel === 'athlete' ? 45 : 60,
+          max: profile.age < 18 ? 110 : 100,
+        };
       }
       if (item.id === 'blood_pressure_systolic') {
         preset.name = 'Blood pressure';

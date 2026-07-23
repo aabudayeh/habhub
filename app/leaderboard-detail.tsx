@@ -389,7 +389,7 @@ export default function LeaderboardDetail() {
                         ? "Scale change roughly matches the reported deficit."
                         : alignment.status === "insufficient"
                           ? "A prior weight entry is needed."
-                          : `Reported ${Math.round(alignment.reportedDailyDeficit)} vs scale estimate ${Math.round(alignment.actualDailyDeficit)} kcal/day.`}
+                          : `Logged energy balance ${Math.round(alignment.reportedDailyDeficit)} vs scale-implied ${Math.round(alignment.actualDailyDeficit)} kcal/day (positive follows the member's deficit/surplus plan).`}
                     </Text>
                   </View>
                 </View>

@@ -706,8 +706,8 @@ function AlignmentCard({
           </Text>
           {status.status !== "insufficient" ? (
             <Text style={[styles.nutrition, { color: accent }]}>
-              Reported {Math.round(status.reportedDailyDeficit)} kcal/day ·
-              scale estimate {Math.round(status.actualDailyDeficit)} kcal/day
+              Logged planned energy balance {Math.round(status.reportedDailyDeficit)} kcal/day ·
+              scale-implied balance {Math.round(status.actualDailyDeficit)} kcal/day
             </Text>
           ) : null}
         </View>

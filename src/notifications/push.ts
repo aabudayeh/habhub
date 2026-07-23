@@ -70,6 +70,17 @@ function goalReminderBody(state: AppState, metric: AppState['metrics'][number], 
   const value = safeMetricValue(state, metric, state.currentUserId, localDate);
   const target = effectiveGoalTarget(state, metric, state.currentUserId, localDate);
   const remaining = Math.max(0, target - value);
+  if (metric.id === 'sleep') {
+    if (value <= 0) return 'Your wind-down reminder: an earlier bedtime makes the 7–9 hour sleep range easier to reach.';
+    if (metric.goalRange && value < metric.goalRange.min) return `${(metric.goalRange.min - value).toFixed(1)} more hours would reach your sleep range.`;
+    if (metric.goalRange && value > metric.goalRange.max) return `Sleep is ${(value - metric.goalRange.max).toFixed(1)} hours above your selected range.`;
+    return 'Your sleep duration is inside your selected range.';
+  }
+  if (metric.goalRange) {
+    if (value < metric.goalRange.min) return `${metric.name} is ${Math.round(metric.goalRange.min - value)} ${metric.unit} below your range.`;
+    if (value > metric.goalRange.max) return `${metric.name} is ${Math.round(value - metric.goalRange.max)} ${metric.unit} above your range.`;
+    return `${metric.name} is inside your selected range.`;
+  }
   if (metric.id === 'steps')
     return remaining > 0
       ? `${Math.round(remaining).toLocaleString()} steps remain. A short walk can move today forward.`

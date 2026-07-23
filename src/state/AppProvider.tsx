@@ -425,8 +425,8 @@ function reducer(state: AppState, action: Action): AppState {
       delete (metric as MetricDefinition & { templateId?: string }).templateId;
       return withPersonalMetrics(state, [...state.metrics, metric]);
     }
-    case "updateMetric":
-      return withPersonalMetrics(
+    case "updateMetric": {
+      const next = withPersonalMetrics(
         state,
         state.metrics.map((metric) =>
           metric.id === action.metricId
@@ -444,6 +444,16 @@ function reducer(state: AppState, action: Action): AppState {
             : metric,
         ),
       );
+      if (!action.changes.activeFrom || !(state.trackedGoalPeriods[action.metricId]?.length))
+        return next;
+      return {
+        ...next,
+        trackedGoalPeriods: {
+          ...next.trackedGoalPeriods,
+          [action.metricId]: [{ from: action.changes.activeFrom }],
+        },
+      };
+    }
     case "deleteMetric":
       return {
         ...withPersonalMetrics(

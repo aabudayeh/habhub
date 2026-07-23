@@ -376,9 +376,11 @@ export default function TrackerDetail() {
             )}
           </View>
         ) : null}
-        <Text style={[styles.trackingSince, { color: colors.muted }]}>
-          Goal tracked since {new Date(`${tracker.activeFrom}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-        </Text>
+        {state.trackedGoalPeriods[tracker.id]?.length ? (
+          <Text style={[styles.trackingSince, { color: colors.muted }]}>
+            Goal tracked since {new Date(`${state.trackedGoalPeriods[tracker.id].find((period) => !period.to)?.from ?? state.trackedGoalPeriods[tracker.id][0].from}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+          </Text>
+        ) : null}
       </Card>
       {["menstrual_cycle", "menstrual_flow", "cycle_day", "days_until_period"].includes(tracker.id) ? (
         <Card style={{ gap: 4 }}>
@@ -445,8 +447,8 @@ export default function TrackerDetail() {
           {reality.status !== "insufficient" ? (
             <>
               <Text style={[styles.entryValue, { color: accent }]}>
-                Reported {Math.round(reality.reportedDailyDeficit)} kcal/day ·
-                scale estimate {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
+                Logged {state.settings.weightDirection === "gain" ? "surplus" : "deficit"} {Math.round(reality.reportedDailyDeficit)} kcal/day ·
+                scale-implied {state.settings.weightDirection === "gain" ? "surplus" : "deficit"} {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
                 {Math.abs(reality.weightChangeKg).toFixed(1)} kg change
               </Text>
               {reality.estimatedDays > 0 ? (

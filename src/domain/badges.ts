@@ -13,6 +13,7 @@ import {
   goalReached,
   metricApplicableOnDate,
   safeMetricValue,
+  scheduledGoalReached,
   trackedGoalSummary,
 } from "@/src/domain/metrics";
 import { memberDisplayName } from "@/src/domain/members";
@@ -242,11 +243,7 @@ export function buildBadges(
         (day) =>
           metric.activeFrom <= day &&
           metricApplicableOnDate(state, metric, member.id, day) &&
-          goalReached(
-            metric,
-            safeMetricValue(state, metric, member.id, day),
-            effectiveGoalTarget(state, metric, member.id, day),
-          ),
+          scheduledGoalReached(state, metric, member.id, day),
       ).length;
       const nextTarget = milestone(count);
       return {

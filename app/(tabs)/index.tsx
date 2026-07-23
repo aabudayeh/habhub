@@ -41,7 +41,7 @@ import { MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 
 export default function Today() {
-  const { state, reorderMetric, setMetricSection, deleteMetric } = useApp();
+  const { state, reorderMetric, setMetricSection, deleteMetric, updateMetric, updateSettings } = useApp();
   const health = useHealthSync();
   const cloud = useCloudSync();
   const colors = useAppColors();
@@ -50,6 +50,7 @@ export default function Today() {
   const [editing, setEditing] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const [showAddTiles, setShowAddTiles] = useState(false);
+  const [showDayEnd, setShowDayEnd] = useState(false);
   const today = dateKey();
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
@@ -67,6 +68,10 @@ export default function Today() {
         .sort((a, b) => a.order - b.order);
     if (editing) return ordered;
     return ordered.sort((a, b) => {
+      const pinOrder = Number(Boolean(b.pinnedTodayAt)) - Number(Boolean(a.pinnedTodayAt));
+      if (pinOrder) return pinOrder;
+      if (a.pinnedTodayAt && b.pinnedTodayAt)
+        return a.pinnedTodayAt.localeCompare(b.pinnedTodayAt);
       const aMet = metricApplicableOnDate(state, a, state.currentUserId, today) && scheduledGoalReached(state, a, state.currentUserId, today);
       const bMet = metricApplicableOnDate(state, b, state.currentUserId, today) && scheduledGoalReached(state, b, state.currentUserId, today);
       return Number(aMet) - Number(bMet) || a.order - b.order;
@@ -408,6 +413,7 @@ export default function Today() {
                 reorderMetric(item.id, visible[target]?.order ?? target)
               }
               onRemove={() => remove(item)}
+              onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
             />
           ))}
         </View>
@@ -451,6 +457,13 @@ export default function Today() {
               <Text style={[styles.addText, { color: accent }]}>
                 Edit tracked goals
               </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowDayEnd(true)}
+              style={[styles.add, { borderColor: colors.border }]}
+            >
+              <Ionicons name="moon-outline" size={18} color={accent} />
+              <Text style={[styles.addText, { color: accent }]}>Day ends {state.settings.dayEndTime ?? "00:00"}</Text>
             </Pressable>
           </View>
         ) : null}
@@ -499,6 +512,21 @@ export default function Today() {
                 </Text>
               </Pressable>
             ))}
+          </View>
+        </Pressable>
+      </Modal>
+      <Modal transparent animationType="fade" visible={showDayEnd} onRequestClose={() => setShowDayEnd(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowDayEnd(false)}>
+          <View style={[styles.sheet, { backgroundColor: colors.card }]}>
+            <Text style={[styles.sheetTitle, { color: colors.ink }]}>When does your day finish?</Text>
+            <Text style={[styles.moreCount, { color: colors.muted }]}>Food and energy-balance goals become final at this time.</Text>
+            <View style={styles.dayEndOptions}>
+              {["21:00", "22:00", "23:00", "00:00"].map((time) => (
+                <Pressable key={time} onPress={() => { updateSettings({ dayEndTime: time }); setShowDayEnd(false); }} style={[styles.dayEndChoice, { borderColor: time === (state.settings.dayEndTime ?? "00:00") ? accent : colors.border }]}>
+                  <Text style={[styles.name, { color: colors.ink }]}>{time}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
         </Pressable>
       </Modal>
@@ -639,6 +667,7 @@ function TrackerRow({
   onEdit,
   onMove,
   onRemove,
+  onPin,
 }: {
   item: MetricDefinition;
   index: number;
@@ -653,6 +682,7 @@ function TrackerRow({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
+  onPin: () => void;
 }) {
   const start = useRef(index);
   const dragY = useRef(new Animated.Value(0)).current;
@@ -718,6 +748,14 @@ function TrackerRow({
   const met =
     applicable &&
     scheduledGoalReached(state, item, state.currentUserId, day);
+  const diastolic =
+    item.id === "blood_pressure_systolic" ||
+    (item.healthMapping?.dataType === "blood_pressure" && item.healthMapping.field === "systolic")
+      ? state.metrics.find((candidate) => candidate.id === "blood_pressure_diastolic" || (candidate.healthMapping?.dataType === "blood_pressure" && candidate.healthMapping.field === "diastolic"))
+      : undefined;
+  const diastolicValue = diastolic
+    ? safeMetricValue(state, diastolic, state.currentUserId, day)
+    : 0;
   const photo =
     item.dataType === "photo"
       ? state.photos.find(
@@ -826,17 +864,27 @@ function TrackerRow({
         </Text>
       </View>
       {item.goalEnabled !== false && applicable ? (
-        <View style={styles.progress}>
-          <ProgressBar
-            progress={goalProgress(item, value, target)}
-            color={met ? palette.lime : item.color}
-          />
+        <View style={diastolic ? styles.bpProgress : styles.progress}>
+          {diastolic ? <Text style={[styles.bpLabel, { color: colors.muted }]}>SYS</Text> : null}
+          <ProgressBar progress={todayProgress(state, item, value, target)} color={todayProgressColor(state, item, value, target, met)} />
+          {diastolic ? (
+            <>
+              <Text style={[styles.bpLabel, { color: colors.muted }]}>DIA</Text>
+              <ProgressBar
+                progress={goalProgress(diastolic, diastolicValue, effectiveGoalTarget(state, diastolic, state.currentUserId, day))}
+                color={diastolic.goalRange && diastolicValue >= diastolic.goalRange.min && diastolicValue <= diastolic.goalRange.max ? palette.lime : palette.red}
+              />
+            </>
+          ) : null}
         </View>
       ) : null}
       {editing ? (
         <View style={styles.editActions}>
+          <Pressable onPress={onPin} hitSlop={8} style={[styles.editTracker, { borderColor: item.pinnedTodayAt ? palette.amber : accent }]}>
+            <Ionicons name={item.pinnedTodayAt ? "pin" : "pin-outline"} size={14} color={item.pinnedTodayAt ? palette.amber : accent} />
+          </Pressable>
           <Pressable
-            onPress={() => router.navigate({ pathname: "/metric-editor", params: { metric: item.id } } as never)}
+            onPress={() => router.navigate({ pathname: "/metric-editor", params: { id: item.id } } as never)}
             hitSlop={8}
             style={[styles.editTracker, { borderColor: accent }]}
           >
@@ -852,6 +900,41 @@ function TrackerRow({
     </Pressable>
     </Animated.View>
   );
+}
+
+function todayProgress(
+  state: ReturnType<typeof useApp>["state"],
+  item: MetricDefinition,
+  value: number,
+  target: number,
+) {
+  const direction = state.settings.weightDirection ?? "lose";
+  if (item.goal.kind === "at_most") {
+    if (item.id === "food" && direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
+    return Math.min(1, Math.abs(target - value) / Math.max(target, 1));
+  }
+  if (item.id === "deficit") {
+    if (direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
+    return Math.min(1, Math.abs(value - target) / Math.max(target, 1));
+  }
+  return goalProgress(item, value, target);
+}
+
+function todayProgressColor(
+  state: ReturnType<typeof useApp>["state"],
+  item: MetricDefinition,
+  value: number,
+  target: number,
+  met: boolean,
+) {
+  const direction = state.settings.weightDirection ?? "lose";
+  if (item.goalRange)
+    return value >= item.goalRange.min && value <= item.goalRange.max ? palette.lime : palette.red;
+  if (item.goal.kind === "at_most")
+    return item.id === "food" && direction === "gain" ? (value >= target ? palette.lime : palette.red) : (value <= target ? palette.lime : palette.red);
+  if (item.id === "deficit")
+    return value >= target ? palette.lime : palette.red;
+  return met ? palette.lime : item.color;
 }
 
 function useAnimatedNumber(target: number) {
@@ -998,6 +1081,8 @@ const styles = StyleSheet.create({
   confettiPiece: { position: "absolute", width: 8, height: 14, borderRadius: 3 },
   editActions: { gap: 6 },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
+  dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
   header: {
@@ -1114,6 +1199,8 @@ const styles = StyleSheet.create({
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
   progress: { width: 48 },
+  bpProgress: { width: 55, gap: 2 },
+  bpLabel: { fontSize: 6, fontWeight: "900" },
   remove: {
     width: 25,
     height: 25,

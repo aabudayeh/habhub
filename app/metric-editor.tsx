@@ -819,9 +819,9 @@ export default function TrackerEditor() {
           </Card>
           <Card>
             <SectionHeader title="How it behaves" />
-            {tracker ? (
+            {tracker && state.trackedGoalPeriods[tracker.id]?.length ? (
               <Field
-                label="Goal starts (YYYY-MM-DD)"
+                label="Tracked goal starts (YYYY-MM-DD)"
                 value={activeFrom}
                 set={setActiveFrom}
                 colors={colors}

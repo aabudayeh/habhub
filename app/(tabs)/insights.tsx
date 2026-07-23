@@ -25,10 +25,10 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  goalReached,
   goalRemainingLabel,
   metricApplicableOnDate,
   safeMetricValue,
+  scheduledGoalReached,
   trackedGoalSummary,
   weightProgressStats,
 } from "@/src/domain/metrics";
@@ -153,11 +153,7 @@ export default function Insights() {
           : 0,
         goalReached:
           applicable &&
-          goalReached(
-            metric,
-            safeMetricValue(state, metric, state.currentUserId, day),
-            effectiveGoalTarget(state, metric, state.currentUserId, day),
-          ),
+          scheduledGoalReached(state, metric, state.currentUserId, day),
       };
     });
     if (tracked)
@@ -561,19 +557,11 @@ function MetricSummary({
   const average =
     values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
   const reached = applicable.filter((date) =>
-    goalReached(
-      metric,
-      safeMetricValue(state, metric, state.currentUserId, date),
-      effectiveGoalTarget(state, metric, state.currentUserId, date),
-    ),
+    scheduledGoalReached(state, metric, state.currentUserId, date),
   ).length;
   const streak = longestStreakWithRest(state, active, (date) =>
     metricApplicableOnDate(state, metric, state.currentUserId, date) &&
-    goalReached(
-      metric,
-      safeMetricValue(state, metric, state.currentUserId, date),
-      effectiveGoalTarget(state, metric, state.currentUserId, date),
-    ),
+    scheduledGoalReached(state, metric, state.currentUserId, date),
   );
   const days = Math.max(
     1,
@@ -620,11 +608,7 @@ function MetricSummary({
   );
   const latestMet =
     latestApplicable &&
-    goalReached(
-      metric,
-      safeMetricValue(state, metric, state.currentUserId, latestDate),
-      effectiveGoalTarget(state, metric, state.currentUserId, latestDate),
-    );
+    scheduledGoalReached(state, metric, state.currentUserId, latestDate);
   return (
     <Pressable
       style={styles.summaryWrap}

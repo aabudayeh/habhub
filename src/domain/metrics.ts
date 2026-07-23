@@ -1,5 +1,5 @@
 import { AppState, MetricDefinition, MetricEntry } from "@/src/types";
-import { dateWithOffsetFrom } from "./date";
+import { dateKey, dateWithOffsetFrom } from "./date";
 import {
   dailyFoodGoal,
   energyFormulaVariables,
@@ -550,6 +550,9 @@ export function metricApplicableOnDate(
   // A backdated entry remains viewable even when the tracker itself was added
   // later. This does not make the goal retroactively tracked.
   if (metric.activeFrom > localDate && !hasExplicitData) return false;
+  // A weigh-in target is judged only on days with an actual measurement;
+  // carrying yesterday's weight forward must not create a false daily win.
+  if (metric.id === "weight") return hasExplicitData;
   if (metric.id === "deficit")
     return state.entries.some(
       (entry) =>
@@ -713,6 +716,10 @@ export function scheduledGoalReached(
   userId: string,
   localDate: string,
 ) {
+  if (
+    goalCelebrationTiming(metric) === "end_of_day" &&
+    !isGoalFinalForDate(state, localDate)
+  ) return false;
   const reachedOnDate = (date: string) => {
     if (!metricApplicableOnDate(state, metric, userId, date)) return false;
     const primaryReached = goalReached(
@@ -770,6 +777,21 @@ export function scheduledGoalReached(
     cursor.setDate(cursor.getDate() + 1);
   }
   return completed >= Math.max(1, schedule.minimumCompletions ?? 1);
+}
+
+export function isGoalFinalForDate(
+  state: AppState,
+  localDate: string,
+  now = new Date(),
+) {
+  const today = dateKey(now);
+  if (localDate < today) return true;
+  if (localDate > today) return false;
+  const end = state.settings.dayEndTime ?? "00:00";
+  if (end === "00:00") return false;
+  const [hour, minute] = end.split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return false;
+  return now.getHours() * 60 + now.getMinutes() >= hour * 60 + minute;
 }
 
 export function trackedGoalSummary(
