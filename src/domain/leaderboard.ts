@@ -12,9 +12,11 @@ import {
   goalProgress,
   goalReached,
   metricApplicableOnDate,
+  metricStreakStats,
+  scheduledGoalReached,
   sharedMetricResult,
 } from "@/src/domain/metrics";
-import { longestStreakWithRest } from "@/src/domain/streaks";
+import { currentStreakWithRest } from "@/src/domain/streaks";
 import { AppState, GoalKind, Member, MetricDefinition } from "@/src/types";
 
 export type LeaderboardPeriod =
@@ -78,13 +80,16 @@ function metGoalOnDate(
   userId: string,
   date: string,
 ): boolean {
-  const status = state.dailyMetricStatuses?.find(
-    (item) =>
-      item.groupId === state.group.id &&
-      item.metricId === metric.id &&
-      item.userId === userId &&
-      item.localDate === date,
-  );
+  const status =
+    userId === state.currentUserId
+      ? undefined
+      : state.dailyMetricStatuses?.find(
+          (item) =>
+            item.groupId === state.group.id &&
+            item.metricId === metric.id &&
+            item.userId === userId &&
+            item.localDate === date,
+        );
   if (status) return status.goalReached;
   const goalMetric =
     userId === state.currentUserId
@@ -108,17 +113,21 @@ export function periodMetricResult(
   viewerUserId: string,
   dates: string[],
 ): PeriodMetricResult {
+  const goalMetric =
+    subjectUserId === state.currentUserId
+      ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
+      : metric;
   const results = dates
     .filter(
       (date) =>
-        metric.activeFrom <= date &&
-        metricApplicableOnDate(state, metric, subjectUserId, date),
+        goalMetric.activeFrom <= date &&
+        metricApplicableOnDate(state, goalMetric, subjectUserId, date),
     )
     .map((date) => ({
       date,
       result: sharedMetricResult(
         state,
-        metric,
+        goalMetric,
         subjectUserId,
         viewerUserId,
         date,
@@ -127,21 +136,19 @@ export function periodMetricResult(
   const exact = results.filter(
     ({ date, result }) =>
       result.mode === "exact" &&
-      hasPeriodData(state, metric, subjectUserId, date),
+      hasPeriodData(state, goalMetric, subjectUserId, date),
   );
   const statuses = results.filter(({ result }) => result.mode === "status");
-  const goalMetric =
-    subjectUserId === state.currentUserId
-      ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
-      : metric;
   const statusForDate = (date: string) =>
-    state.dailyMetricStatuses?.find(
-      (status) =>
-        status.groupId === state.group.id &&
-        status.metricId === metric.id &&
-        status.userId === subjectUserId &&
-        status.localDate === date,
-    );
+    subjectUserId === state.currentUserId
+      ? undefined
+      : state.dailyMetricStatuses?.find(
+          (status) =>
+            status.groupId === state.group.id &&
+            status.metricId === metric.id &&
+            status.userId === subjectUserId &&
+            status.localDate === date,
+        );
   const progressValues = results.flatMap(({ date, result }) => {
     const status = statusForDate(date);
     if (status)
@@ -150,7 +157,7 @@ export function periodMetricResult(
       return [result.label === "Goal met" ? 1 : 0];
     if (
       result.mode !== "exact" ||
-      !hasPeriodData(state, metric, subjectUserId, date)
+      !hasPeriodData(state, goalMetric, subjectUserId, date)
     )
       return [];
     return [
@@ -174,7 +181,7 @@ export function periodMetricResult(
       return [Math.max(0, Math.min(2, status.goalProgress / 100))];
     if (
       result.mode !== "exact" ||
-      !hasPeriodData(state, metric, subjectUserId, date)
+      !hasPeriodData(state, goalMetric, subjectUserId, date)
     )
       return [];
     return [
@@ -195,7 +202,7 @@ export function periodMetricResult(
       .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
   if (!exact.length && !statuses.length) {
     const hasUnsharedData = results.some(({ date }) =>
-      hasPeriodData(state, metric, subjectUserId, date),
+      hasPeriodData(state, goalMetric, subjectUserId, date),
     );
     return {
       mode: "private",
@@ -210,21 +217,42 @@ export function periodMetricResult(
     };
   }
   const completedDays = results.filter(({ date, result }) => {
+    if (subjectUserId === state.currentUserId)
+      return (
+        result.mode === "exact" &&
+        hasPeriodData(state, goalMetric, subjectUserId, date) &&
+        scheduledGoalReached(
+          state,
+          goalMetric,
+          subjectUserId,
+          date,
+        )
+      );
     const status = statusForDate(date);
     if (status) return status.goalReached;
     return result.mode === "status"
       ? result.label === "Goal met"
       : result.mode === "exact" &&
-        hasPeriodData(state, metric, subjectUserId, date) &&
+        hasPeriodData(state, goalMetric, subjectUserId, date) &&
         goalReached(
           goalMetric,
           result.value,
           effectiveGoalTarget(state, goalMetric, subjectUserId, date),
         );
   }).length;
-  const streak = longestStreakWithRest(state, dates, (d) =>
-    metGoalOnDate(state, metric, subjectUserId, d),
-  );
+  const streak =
+    subjectUserId === state.currentUserId
+      ? metricStreakStats(
+          state,
+          goalMetric,
+          subjectUserId,
+          dates.at(-1) ?? dateKey(),
+        ).current
+      : currentStreakWithRest(
+          state,
+          dateRangeEnding(dates.at(-1) ?? dateKey(), 90),
+          (date) => metGoalOnDate(state, metric, subjectUserId, date),
+        );
   const matchingEntries = state.entries.filter(
     (entry) =>
       entry.userId === subjectUserId &&

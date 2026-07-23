@@ -511,6 +511,7 @@ function VisibilityRow({
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
   const lastDragY = useRef(0);
+  const dragStep = useRef(56);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
@@ -521,7 +522,8 @@ function VisibilityRow({
   } = useDelayedReorder((target) => {
     liveTarget.current = target;
     dragY.setValue(
-      lastDragY.current - (target - dragOrigin.current) * 56,
+      lastDragY.current -
+        (target - dragOrigin.current) * dragStep.current,
     );
     onMoveRef.current(target);
   });
@@ -573,11 +575,12 @@ function VisibilityRow({
             0,
             Math.min(
               countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / 56),
+              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
             ),
           );
           dragY.setValue(
-            gesture.dy - (liveTarget.current - dragOrigin.current) * 56,
+            gesture.dy -
+              (liveTarget.current - dragOrigin.current) * dragStep.current,
           );
           if (target !== liveTarget.current) scheduleReorder(target);
           else cancelReorder();
@@ -585,18 +588,28 @@ function VisibilityRow({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          Animated.spring(dragY, {
-            toValue: 0,
-            useNativeDriver: true,
-          }).start(() => {
-            setDragging(false);
-            onDragEnd();
-          });
+          requestAnimationFrame(() =>
+            Animated.spring(dragY, {
+              toValue: 0,
+              damping: 22,
+              stiffness: 240,
+              mass: 0.75,
+              overshootClamping: true,
+              useNativeDriver: true,
+            }).start(() => {
+              setDragging(false);
+              onDragEnd();
+            }),
+          );
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
+            damping: 22,
+            stiffness: 240,
+            mass: 0.75,
+            overshootClamping: true,
             useNativeDriver: true,
           }).start(() => {
             setDragging(false);
@@ -615,6 +628,9 @@ function VisibilityRow({
   );
   return (
     <Animated.View
+      onLayout={(event) => {
+        dragStep.current = event.nativeEvent.layout.height;
+      }}
       style={[
         styles.row,
         !last && { borderBottomColor: colors.border, borderBottomWidth: 1 },

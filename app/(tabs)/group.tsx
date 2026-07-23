@@ -305,19 +305,8 @@ export default function LeaderboardScreen() {
                 .filter(Boolean)
                 .join(" · ");
               return (
-                <Pressable
+                <View
                   key={row.member.id}
-                  onPress={() =>
-                    editing ? undefined : router.navigate({
-                      pathname: "/member/[id]",
-                      params: {
-                        id: row.member.id,
-                        period,
-                        anchor,
-                        metrics: id,
-                      },
-                    } as never)
-                  }
                   style={[
                     styles.row,
                     { borderTopColor: colors.border },
@@ -328,6 +317,21 @@ export default function LeaderboardScreen() {
                     },
                   ]}
                 >
+                  <Pressable
+                    disabled={editing}
+                    onPress={() =>
+                      router.navigate({
+                        pathname: "/member/[id]",
+                        params: {
+                          id: row.member.id,
+                          period,
+                          anchor,
+                          metrics: id,
+                        },
+                      } as never)
+                    }
+                    style={styles.memberLink}
+                  >
                   <Text
                     style={[
                       styles.rank,
@@ -363,10 +367,10 @@ export default function LeaderboardScreen() {
                       {details}
                     </Text>
                   </View>
+                  </Pressable>
                   <Pressable
                     disabled={editing}
-                    onPress={(event) => {
-                      event.stopPropagation();
+                    onPress={() => {
                       router.navigate({
                         pathname: "/leaderboard-detail",
                         params: { period, anchor, metrics: id },
@@ -397,7 +401,7 @@ export default function LeaderboardScreen() {
                       color={colors.faint}
                     />
                   </Pressable>
-                </Pressable>
+                </View>
               );
             })}
             </Card>
@@ -562,6 +566,7 @@ function EditableRankingCard({
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
   const lastDragY = useRef(0);
+  const dragStep = useRef(240);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
@@ -572,7 +577,8 @@ function EditableRankingCard({
   } = useDelayedReorder((target) => {
     liveTarget.current = target;
     dragY.setValue(
-      lastDragY.current - (target - dragOrigin.current) * 180,
+      lastDragY.current -
+        (target - dragOrigin.current) * dragStep.current,
     );
     onMoveRef.current(target);
   });
@@ -613,11 +619,12 @@ function EditableRankingCard({
             0,
             Math.min(
               countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / 180),
+              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
             ),
           );
           dragY.setValue(
-            gesture.dy - (liveTarget.current - dragOrigin.current) * 180,
+            gesture.dy -
+              (liveTarget.current - dragOrigin.current) * dragStep.current,
           );
           if (target !== liveTarget.current) scheduleReorder(target);
           else cancelReorder();
@@ -625,15 +632,25 @@ function EditableRankingCard({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          Animated.spring(dragY, {
-            toValue: 0,
-            useNativeDriver: true,
-          }).start(onDragEnd);
+          requestAnimationFrame(() =>
+            Animated.spring(dragY, {
+              toValue: 0,
+              damping: 22,
+              stiffness: 240,
+              mass: 0.75,
+              overshootClamping: true,
+              useNativeDriver: true,
+            }).start(onDragEnd),
+          );
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
+            damping: 22,
+            stiffness: 240,
+            mass: 0.75,
+            overshootClamping: true,
             useNativeDriver: true,
           }).start(onDragEnd);
         },
@@ -650,6 +667,9 @@ function EditableRankingCard({
   );
   return (
     <Animated.View
+      onLayout={(event) => {
+        dragStep.current = event.nativeEvent.layout.height + 6;
+      }}
       style={[
         styles.rankingWrap,
         {
@@ -746,6 +766,13 @@ const styles = StyleSheet.create({
   },
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },
+  memberLink: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   copy: { flex: 1 },
   metricLink: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4 },
   name: { fontSize: 12, fontWeight: "900" },

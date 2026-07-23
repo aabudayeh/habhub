@@ -5,8 +5,8 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 
-const glideTransition = LinearTransition.duration(620).easing(
-  Easing.inOut(Easing.cubic),
+const glideTransition = LinearTransition.duration(260).easing(
+  Easing.out(Easing.cubic),
 );
 
 export function ReorderItem({

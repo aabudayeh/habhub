@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
 
-/** Requires a brief hover over the new slot before committing a live reorder. */
+/** Briefly settles over a new slot, then lets neighboring cards move into place. */
 export function useDelayedReorder(
   onCommit: (target: number) => void,
-  delay = 340,
+  delay = 80,
 ) {
   const callback = useRef(onCommit);
   const pending = useRef<number | null>(null);

@@ -464,7 +464,7 @@ export default function Insights() {
             style={[
               styles.addExisting,
               styles.editActionButton,
-              { borderColor: colors.border },
+              { borderColor: accent },
             ]}
           >
             <Ionicons name="flag-outline" size={17} color={accent} />
@@ -649,6 +649,7 @@ function MetricSummary({
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
   const lastDragY = useRef(0);
+  const dragStep = useRef(93);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
@@ -659,7 +660,8 @@ function MetricSummary({
   } = useDelayedReorder((target) => {
     liveTarget.current = target;
     dragY.setValue(
-      lastDragY.current - (target - dragOrigin.current) * 82,
+      lastDragY.current -
+        (target - dragOrigin.current) * dragStep.current,
     );
     onMoveRef.current(target);
   });
@@ -700,11 +702,12 @@ function MetricSummary({
             0,
             Math.min(
               countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / 82),
+              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
             ),
           );
           dragY.setValue(
-            gesture.dy - (liveTarget.current - dragOrigin.current) * 82,
+            gesture.dy -
+              (liveTarget.current - dragOrigin.current) * dragStep.current,
           );
           if (target !== liveTarget.current) scheduleReorder(target);
           else cancelReorder();
@@ -712,15 +715,25 @@ function MetricSummary({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          Animated.spring(dragY, {
-            toValue: 0,
-            useNativeDriver: true,
-          }).start(onDragEnd);
+          requestAnimationFrame(() =>
+            Animated.spring(dragY, {
+              toValue: 0,
+              damping: 22,
+              stiffness: 240,
+              mass: 0.75,
+              overshootClamping: true,
+              useNativeDriver: true,
+            }).start(onDragEnd),
+          );
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
+            damping: 22,
+            stiffness: 240,
+            mass: 0.75,
+            overshootClamping: true,
             useNativeDriver: true,
           }).start(onDragEnd);
         },
@@ -769,6 +782,9 @@ function MetricSummary({
       : null;
   return (
     <Animated.View
+      onLayout={(event) => {
+        dragStep.current = event.nativeEvent.layout.height + 9;
+      }}
       style={[
         styles.animatedSummary,
         {
@@ -994,7 +1010,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   legend: { color: palette.muted, fontSize: 9 },
-  legendWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
+  legendWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: -8 },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",

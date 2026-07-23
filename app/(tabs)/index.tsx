@@ -521,7 +521,7 @@ export default function Today() {
                   params: { id: "new" },
                 })
               }
-              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
+              style={[styles.add, styles.editActionButton, { borderColor: accent }]}
             >
               <Ionicons name="create-outline" size={18} color={accent} />
               <Text
@@ -535,7 +535,7 @@ export default function Today() {
             </Pressable>
             <Pressable
               onPress={() => router.navigate("/customize?tab=goals" as never)}
-              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
+              style={[styles.add, styles.editActionButton, { borderColor: accent }]}
             >
               <Ionicons
                 name="checkmark-done-outline"
@@ -553,7 +553,7 @@ export default function Today() {
             </Pressable>
             <Pressable
               onPress={() => setShowDayEnd(true)}
-              style={[styles.add, styles.editActionButton, { borderColor: colors.border }]}
+              style={[styles.add, styles.editActionButton, { borderColor: accent }]}
             >
               <Ionicons name="moon-outline" size={18} color={accent} />
               <Text
@@ -872,6 +872,7 @@ function TrackerRow({
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const arrival = useRef(new Animated.Value(1)).current;
+  const dragStep = height + 6;
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
@@ -882,7 +883,7 @@ function TrackerRow({
   } = useDelayedReorder((target) => {
     liveTarget.current = target;
     dragY.setValue(
-      lastDragY.current - (target - dragOrigin.current) * height,
+      lastDragY.current - (target - dragOrigin.current) * dragStep,
     );
     onMoveRef.current(target);
   });
@@ -936,11 +937,11 @@ function TrackerRow({
             0,
             Math.min(
               countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / height),
+              dragOrigin.current + Math.round(gesture.dy / dragStep),
             ),
           );
           dragY.setValue(
-            gesture.dy - (liveTarget.current - dragOrigin.current) * height,
+            gesture.dy - (liveTarget.current - dragOrigin.current) * dragStep,
           );
           if (target !== liveTarget.current) scheduleReorder(target);
           else cancelReorder();
@@ -948,14 +949,25 @@ function TrackerRow({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start(
-            onDragEnd,
+          requestAnimationFrame(() =>
+            Animated.spring(dragY, {
+              toValue: 0,
+              damping: 22,
+              stiffness: 240,
+              mass: 0.75,
+              overshootClamping: true,
+              useNativeDriver: true,
+            }).start(onDragEnd),
           );
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
+            damping: 22,
+            stiffness: 240,
+            mass: 0.75,
+            overshootClamping: true,
             useNativeDriver: true,
           }).start(onDragEnd);
         },
@@ -965,7 +977,7 @@ function TrackerRow({
       dragY,
       editing,
       flushReorder,
-      height,
+      dragStep,
       onDragEnd,
       onDragStart,
       scheduleReorder,
@@ -1297,8 +1309,8 @@ function todayProgress(
     return Math.min(1, Math.abs(target - value) / Math.max(target, 1));
   }
   if (item.id === "deficit") {
-    if (direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
-    return Math.min(1, Math.abs(value - target) / Math.max(target, 1));
+    const ratio = Math.max(0, value) / Math.max(Math.abs(target), 1);
+    return ratio <= 1 ? ratio : Math.min(1, ratio - 1);
   }
   return goalProgress(item, value, target);
 }
@@ -1316,7 +1328,7 @@ function todayProgressColor(
   if (item.goal.kind === "at_most")
     return item.id === "food" && direction === "gain" ? (value >= target ? palette.lime : palette.red) : (value <= target ? palette.lime : palette.red);
   if (item.id === "deficit")
-    return value >= target ? palette.lime : palette.red;
+    return value >= target ? palette.lime : item.color;
   return met ? palette.lime : item.color;
 }
 

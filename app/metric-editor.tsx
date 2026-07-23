@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useRef, useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -182,6 +182,7 @@ export default function TrackerEditor() {
     focus?: string;
   }>();
   const groupScope = scope === "group";
+  const navigation = useNavigation();
   const {
     state,
     addMetric,
@@ -298,6 +299,45 @@ export default function TrackerEditor() {
         : defaultReminderTimes(tracker ?? { id: presetId || "custom", category } as MetricDefinition)),
   );
   const [validation, setValidation] = useState<string | null>(null);
+  const draftSignature = JSON.stringify({
+    presetId,
+    name,
+    color,
+    category,
+    unit,
+    dataType,
+    goalEnabled,
+    goalKind,
+    goal,
+    diastolicGoal,
+    diastolicMin,
+    rangeMin,
+    rangeMax,
+    rangeGoal,
+    formula,
+    icon,
+    visibility,
+    aggregation,
+    ranking,
+    healthType,
+    healthField,
+    stepFallback,
+    manualEntry,
+    activeFrom,
+    trackGoal,
+    scheduleMode,
+    minimumCompletions,
+    selectedDays,
+    reminderEnabled,
+    reminderTimes,
+  });
+  const initialDraftSignature = useRef(draftSignature);
+  const dirtyRef = useRef(false);
+  const allowExit = useRef(false);
+  const requestCloseRef = useRef<(exit?: () => void) => void>(
+    () => undefined,
+  );
+  dirtyRef.current = draftSignature !== initialDraftSignature.current;
   const source = SOURCES.find((item) => item.id === healthType);
   function applyPreset(preset: TrackerPreset) {
     setPresetId(preset.templateId);
@@ -370,7 +410,7 @@ export default function TrackerEditor() {
       return false;
     }
   }
-  function save() {
+  function save(onSaved: () => void = () => router.back()) {
     const target = Number(goal.replace(",", "."));
     const diastolicTarget = Number(diastolicGoal.replace(",", "."));
     const systolicMinimum = Number(rangeMin.replace(",", "."));
@@ -519,8 +559,38 @@ export default function TrackerEditor() {
           },
         },
       });
-    router.back();
+    allowExit.current = true;
+    onSaved();
   }
+  function requestClose(exit: () => void = () => router.back()) {
+    if (!dirtyRef.current) {
+      allowExit.current = true;
+      exit();
+      return;
+    }
+    Alert.alert("Save your changes?", "You have unsaved tracker changes.", [
+      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Discard",
+        style: "destructive",
+        onPress: () => {
+          allowExit.current = true;
+          exit();
+        },
+      },
+      { text: "Save", onPress: () => save(exit) },
+    ]);
+  }
+  requestCloseRef.current = requestClose;
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", (event) => {
+        if (allowExit.current || !dirtyRef.current) return;
+        event.preventDefault();
+        requestCloseRef.current(() => navigation.dispatch(event.data.action));
+      }),
+    [navigation],
+  );
   function remove() {
     if (!tracker) return;
     const dependencies = sourceMetrics.filter(
@@ -545,6 +615,7 @@ export default function TrackerEditor() {
           onPress: () => {
             if (groupScope) deleteGroupMetric(tracker.id);
             else deleteMetric(tracker.id);
+            allowExit.current = true;
             router.back();
           },
         },
@@ -575,7 +646,7 @@ export default function TrackerEditor() {
           <IconButton
             icon="close"
             label="Close"
-            onPress={() => router.back()}
+            onPress={() => requestClose()}
           />
         }
       />
@@ -1283,7 +1354,7 @@ export default function TrackerEditor() {
               tracker ? "Save" : groupScope ? "Add to group" : "Add tracker"
             }
             icon="checkmark"
-            onPress={save}
+            onPress={() => save()}
           />
         </View>
       </View>
