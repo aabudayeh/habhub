@@ -234,6 +234,32 @@ export default function Insights() {
       color: metric.color,
     })),
   ].slice(0, 5);
+  const shiftVisualPeriod = useCallback((direction: -1 | 1) => {
+    if (view === "week") {
+      const next = dateWithOffsetFrom(weekAnchor, direction * 7);
+      setWeekAnchor(next > today ? today : next);
+      return;
+    }
+    const current = new Date(`${month}T12:00:00`);
+    current.setDate(1);
+    current.setMonth(current.getMonth() + direction);
+    const next = dateKey(current);
+    if (next.slice(0, 7) <= today.slice(0, 7)) setMonth(next);
+  }, [month, today, view, weekAnchor]);
+  const visualSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          !editing &&
+          Math.abs(gesture.dx) > 18 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.35,
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dx < -50) shiftVisualPeriod(1);
+          else if (gesture.dx > 50) shiftVisualPeriod(-1);
+        },
+      }),
+    [editing, shiftVisualPeriod],
+  );
 
   return (
     <Screen
@@ -272,6 +298,7 @@ export default function Insights() {
           </View>
         ))}
       </View>
+      <View {...visualSwipeResponder.panHandlers}>
       {view === "month" ? (
         <Card style={styles.visualCard}>
           <View style={styles.cardHeading}>
@@ -411,6 +438,7 @@ export default function Insights() {
           </View>
         </Card>
       )}
+      </View>
       <SectionHeader
         title={`${view === "week" ? "7-day" : "30-day"} summaries`}
       />

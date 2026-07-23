@@ -27,7 +27,6 @@ import {
   reorderShift,
 } from "@/src/components/ReorderItem";
 
-import { MetricSelector } from "@/src/components/MetricSelector";
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
@@ -52,6 +51,13 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
 
 const SCORE_ID = "__score";
+const PERIODS: { id: LeaderboardPeriod; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "yesterday", label: "Yesterday" },
+  { id: "week", label: "7 days" },
+  { id: "month", label: "Month" },
+  { id: "custom", label: "Pick day" },
+];
 
 if (
   Platform.OS === "android" &&
@@ -107,10 +113,28 @@ export default function LeaderboardScreen() {
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
-    if (next === "today") setAnchor(dateKey());
+    if (next === "today" || next === "week" || next === "month")
+      setAnchor(dateKey());
     if (next === "yesterday") setAnchor(dateKeyWithOffset(-1));
     setCalendarOpen(next === "custom");
   }
+  const pageSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !editing &&
+          Math.abs(gesture.dx) > 22 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 55) return;
+          const index = PERIODS.findIndex((item) => item.id === period);
+          const direction = gesture.dx < 0 ? 1 : -1;
+          const next = PERIODS[index + direction];
+          if (next) choosePeriod(next.id);
+        },
+      }),
+    [editing, period],
+  );
   async function invite() {
     await Share.share({
       message: groupInviteMessage(state.group.name, state.group.inviteCode),
@@ -182,21 +206,6 @@ export default function LeaderboardScreen() {
       return () => subscription.remove();
     }, [editing]),
   );
-  const periods = [
-    { id: "today", label: "Today", icon: "today-outline" as const },
-    { id: "yesterday", label: "Yesterday", icon: "play-back-outline" as const },
-    { id: "week", label: "Last 7 days", icon: "calendar-outline" as const },
-    {
-      id: "month",
-      label: "This month",
-      icon: "calendar-number-outline" as const,
-    },
-    {
-      id: "custom",
-      label: "Pick a date",
-      icon: "calendar-clear-outline" as const,
-    },
-  ];
   return (
     <Screen
       contentContainerStyle={{ paddingBottom: 14 }}
@@ -219,6 +228,74 @@ export default function LeaderboardScreen() {
         }
         subtitle={`${state.group.name} · ${state.group.members.length} friends`}
       />
+      <View {...pageSwipeResponder.panHandlers}>
+      <Card style={styles.periodCard}>
+        <View style={styles.periodBar}>
+          {PERIODS.map((item) => {
+            const selectedPeriod = period === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => choosePeriod(item.id)}
+                style={[
+                  styles.periodChoice,
+                  {
+                    backgroundColor: selectedPeriod
+                      ? colors.primarySoft
+                      : "transparent",
+                    borderColor: selectedPeriod ? accent : "transparent",
+                  },
+                ]}
+              >
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.72}
+                  style={[
+                    styles.periodText,
+                    { color: selectedPeriod ? accent : colors.muted },
+                  ]}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {period === "custom" ? (
+          <View style={[styles.calendar, { borderTopColor: colors.border }]}>
+            <Pressable
+              onPress={() => setCalendarOpen((value) => !value)}
+              style={styles.dateButton}
+            >
+              <Ionicons name="calendar-outline" size={17} color={accent} />
+              <Text style={[styles.dateText, { color: colors.ink }]}>
+                {periodTitle("custom", anchor)}
+              </Text>
+              <Ionicons
+                name={calendarOpen ? "chevron-up" : "chevron-down"}
+                size={17}
+                color={colors.muted}
+              />
+            </Pressable>
+            {calendarOpen ? (
+              <View
+                style={[styles.calendarBody, { borderTopColor: colors.border }]}
+              >
+                <MonthCalendar
+                  monthDate={anchor}
+                  selectedDate={anchor}
+                  onSelect={(date) => {
+                    setAnchor(date);
+                    setCalendarOpen(false);
+                  }}
+                  onMonthChange={setAnchor}
+                />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+      </Card>
       {selected.map((id, cardIndex) => {
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
@@ -493,48 +570,6 @@ export default function LeaderboardScreen() {
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
         </Pressable>
       )}
-      <Card style={styles.controls}>
-        <MetricSelector
-          title="Time range"
-          items={periods}
-          selectedIds={[period]}
-          onChange={(ids) => choosePeriod(ids[0] as LeaderboardPeriod)}
-          multiple={false}
-        />
-        {period === "custom" ? (
-          <View style={[styles.calendar, { borderTopColor: colors.border }]}>
-            <Pressable
-              onPress={() => setCalendarOpen((value) => !value)}
-              style={styles.dateButton}
-            >
-              <Ionicons name="calendar-outline" size={18} color={accent} />
-              <Text style={[styles.dateText, { color: colors.ink }]}>
-                {periodTitle("custom", anchor)}
-              </Text>
-              <Ionicons
-                name={calendarOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={colors.muted}
-              />
-            </Pressable>
-            {calendarOpen ? (
-              <View
-                style={[styles.calendarBody, { borderTopColor: colors.border }]}
-              >
-                <MonthCalendar
-                  monthDate={anchor}
-                  selectedDate={anchor}
-                  onSelect={(date) => {
-                    setAnchor(date);
-                    setCalendarOpen(false);
-                  }}
-                  onMonthChange={setAnchor}
-                />
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-      </Card>
       {!editing ? <View style={styles.actions}>
         <Pressable
           onPress={() => router.navigate("/groups" as never)}
@@ -560,6 +595,7 @@ export default function LeaderboardScreen() {
           setShowPicker(false);
         }}
       />
+      </View>
     </Screen>
   );
 }
@@ -806,7 +842,19 @@ const styles = StyleSheet.create({
   private: { fontStyle: "italic" },
   bar: { width: 68, gap: 4 },
   score: { fontSize: 12, fontWeight: "900", textAlign: "right" },
-  controls: { padding: 12, marginTop: 2, gap: 7 },
+  periodCard: { padding: 5, marginBottom: 7 },
+  periodBar: { flexDirection: "row", alignItems: "center", gap: 3 },
+  periodChoice: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 33,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  periodText: { fontSize: 9, fontWeight: "900" },
   calendar: { borderTopWidth: 1, paddingTop: 7 },
   dateButton: {
     height: 38,
