@@ -2,7 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Alert,
@@ -486,9 +493,6 @@ export default function Today() {
               active={draggingMetricId === item.id}
               shift={reorderShift(index, dragPlacement)}
               settling={Boolean(dragPlacement?.settling)}
-              animateLayout={
-                !editing && completionSortEnabled && !dragPlacement
-              }
             >
               <TrackerRow
                 item={item}
@@ -938,7 +942,8 @@ function TrackerRow({
   const onDragHoverRef = useRef(onDragHover);
   const onDragCancelRef = useRef(onDragCancel);
   const onDragEndRef = useRef(onDragEnd);
-  const lastDragY = useRef(0);
+  const pendingDropTarget = useRef<number | null>(null);
+  const dropFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const arrival = useRef(new Animated.Value(1)).current;
@@ -950,6 +955,21 @@ function TrackerRow({
   onDragHoverRef.current = onDragHover;
   onDragCancelRef.current = onDragCancel;
   onDragEndRef.current = onDragEnd;
+  useLayoutEffect(() => {
+    if (pendingDropTarget.current === null || index !== pendingDropTarget.current)
+      return;
+    if (dropFallback.current) clearTimeout(dropFallback.current);
+    dropFallback.current = null;
+    pendingDropTarget.current = null;
+    dragY.setValue(0);
+    requestAnimationFrame(() => onDragEndRef.current());
+  }, [dragY, index]);
+  useEffect(
+    () => () => {
+      if (dropFallback.current) clearTimeout(dropFallback.current);
+    },
+    [],
+  );
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -990,10 +1010,8 @@ function TrackerRow({
           onDragStartRef.current();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
-          lastDragY.current = 0;
         },
         onPanResponderMove: (_event, gesture) => {
-          lastDragY.current = gesture.dy;
           const target = Math.max(
             0,
             Math.min(
@@ -1018,10 +1036,20 @@ function TrackerRow({
             overshootClamping: true,
             useNativeDriver: true,
           }).start(() => {
-            dragY.setValue(0);
-            onMoveRef.current(target);
+            if (target === dragOrigin.current) {
+              dragY.setValue(0);
+              onDragCancelRef.current();
+              requestAnimationFrame(() => onDragEndRef.current());
+              return;
+            }
+            pendingDropTarget.current = target;
             onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onMoveRef.current(target);
+            dropFallback.current = setTimeout(() => {
+              pendingDropTarget.current = null;
+              dragY.setValue(0);
+              onDragEndRef.current();
+            }, 350);
           });
         },
         onPanResponderTerminate: () => {

@@ -2,15 +2,10 @@ import { PropsWithChildren, useEffect } from "react";
 import { StyleProp, ViewStyle } from "react-native";
 import Animated, {
   Easing,
-  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-
-const orderTransition = LinearTransition.duration(230).easing(
-  Easing.out(Easing.cubic),
-);
 
 export function ReorderItem({
   children,
@@ -18,13 +13,11 @@ export function ReorderItem({
   active = false,
   shift = 0,
   settling = false,
-  animateLayout = false,
 }: PropsWithChildren<{
   style?: StyleProp<ViewStyle>;
   active?: boolean;
   shift?: number;
   settling?: boolean;
-  animateLayout?: boolean;
 }>) {
   const offset = useSharedValue(shift);
   useEffect(() => {
@@ -40,7 +33,6 @@ export function ReorderItem({
   }));
   return (
     <Animated.View
-      layout={animateLayout && !active ? orderTransition : undefined}
       style={[
         {
           width: "100%",
