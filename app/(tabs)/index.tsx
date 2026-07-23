@@ -5,7 +5,6 @@ import { router, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +33,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
+import { DEFAULT_METRICS } from "@/src/data/seed";
 import { compactDayDate, dateKey } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
@@ -554,11 +554,7 @@ export default function Today() {
                     current?.id === item.id ? { ...current, target } : current,
                   )
                 }
-                onDragCancel={() =>
-                  setDragPlacement((current) =>
-                    current ? { ...current, settling: true } : current,
-                  )
-                }
+                onDragCancel={() => setDragPlacement(null)}
                 onDragEnd={() => {
                   setDragPlacement(null);
                   setDraggingMetricId(null);
@@ -962,8 +958,6 @@ function TrackerRow({
   const onDragHoverRef = useRef(onDragHover);
   const onDragCancelRef = useRef(onDragCancel);
   const onDragEndRef = useRef(onDragEnd);
-  const pendingDropTarget = useRef<number | null>(null);
-  const dropFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const arrival = useRef(new Animated.Value(1)).current;
@@ -975,21 +969,6 @@ function TrackerRow({
   onDragHoverRef.current = onDragHover;
   onDragCancelRef.current = onDragCancel;
   onDragEndRef.current = onDragEnd;
-  useLayoutEffect(() => {
-    if (pendingDropTarget.current === null || index !== pendingDropTarget.current)
-      return;
-    if (dropFallback.current) clearTimeout(dropFallback.current);
-    dropFallback.current = null;
-    pendingDropTarget.current = null;
-    dragY.setValue(0);
-    requestAnimationFrame(() => onDragEndRef.current());
-  }, [dragY, index]);
-  useEffect(
-    () => () => {
-      if (dropFallback.current) clearTimeout(dropFallback.current);
-    },
-    [],
-  );
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -1056,20 +1035,9 @@ function TrackerRow({
             overshootClamping: true,
             useNativeDriver: true,
           }).start(() => {
-            if (target === dragOrigin.current) {
-              dragY.setValue(0);
-              onDragCancelRef.current();
-              requestAnimationFrame(() => onDragEndRef.current());
-              return;
-            }
-            pendingDropTarget.current = target;
-            onDragCancelRef.current();
-            onMoveRef.current(target);
-            dropFallback.current = setTimeout(() => {
-              pendingDropTarget.current = null;
-              dragY.setValue(0);
-              onDragEndRef.current();
-            }, 350);
+            if (target !== dragOrigin.current) onMoveRef.current(target);
+            dragY.setValue(0);
+            onDragEndRef.current();
           });
         },
         onPanResponderTerminate: () => {
@@ -1082,7 +1050,7 @@ function TrackerRow({
             useNativeDriver: true,
           }).start(() => {
             onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onDragEndRef.current();
           });
         },
       }),
@@ -1152,11 +1120,24 @@ function TrackerRow({
     inputRange: [0, 1],
     outputRange: [palette.lime, "#FFD166"],
   });
-  const diastolic =
+  const isBloodPressure =
+    item.id === "blood_pressure" ||
     item.id === "blood_pressure_systolic" ||
-    (item.healthMapping?.dataType === "blood_pressure" && item.healthMapping.field === "systolic")
-      ? state.metrics.find((candidate) => candidate.id === "blood_pressure_diastolic" || (candidate.healthMapping?.dataType === "blood_pressure" && candidate.healthMapping.field === "diastolic"))
-      : undefined;
+    item.name.trim().toLowerCase() === "blood pressure" ||
+    (item.healthMapping?.dataType === "blood_pressure" &&
+      item.healthMapping.field !== "diastolic");
+  const diastolic = isBloodPressure
+    ? state.metrics.find(
+        (candidate) =>
+          candidate.id === "blood_pressure_diastolic" ||
+          candidate.id.toLowerCase().includes("diastolic") ||
+          (candidate.healthMapping?.dataType === "blood_pressure" &&
+            candidate.healthMapping.field === "diastolic"),
+      ) ??
+      DEFAULT_METRICS.find(
+        (candidate) => candidate.id === "blood_pressure_diastolic",
+      )
+    : undefined;
   const diastolicValue = diastolic
     ? safeMetricValue(state, diastolic, state.currentUserId, day)
     : 0;

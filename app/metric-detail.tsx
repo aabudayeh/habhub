@@ -1367,8 +1367,24 @@ function summaryLine(
   target: number,
   applicable: boolean,
 ) {
-  if (!applicable)
-    return "Food has not been recorded, so no energy result is calculated.";
+  if (!applicable) {
+    if (
+      tracker.id === "daily_deficit" ||
+      tracker.id === "weekly_deficit_balance"
+    )
+      return "Food has not been recorded, so no energy result is calculated.";
+    if (
+      tracker.id === "blood_pressure_systolic" ||
+      tracker.healthMapping?.dataType === "blood_pressure"
+    )
+      return "No blood-pressure reading has been recorded for this date.";
+    if (
+      tracker.id === "sleep" ||
+      tracker.healthMapping?.dataType === "sleep"
+    )
+      return "No sleep has been recorded for this date.";
+    return `No ${tracker.name.toLowerCase()} data has been recorded for this date.`;
+  }
   if (tracker.goalEnabled === false)
     return "Informational reading · no target attached";
   if (tracker.id === "food")

@@ -345,11 +345,7 @@ export default function LeaderboardScreen() {
                   current?.id === id ? { ...current, target } : current,
                 )
               }
-              onDragCancel={() =>
-                setDragPlacement((current) =>
-                  current ? { ...current, settling: true } : current,
-                )
-              }
+              onDragCancel={() => setDragPlacement(null)}
               onDragEnd={() => {
                 setDragPlacement(null);
                 setDraggingCardId(null);
@@ -403,11 +399,13 @@ export default function LeaderboardScreen() {
                   : row.member.color;
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
-                result?.streak && result.streak > 1
-                  ? `${result.streak}d streak`
+                result && result.mode !== "private"
+                  ? `${result.streak ?? 0}d streak`
                   : undefined,
-                result?.lastRecordedAt
-                  ? relativeTime(result.lastRecordedAt)
+                result?.lastSyncedAt || result?.lastRecordedAt
+                  ? `Synced ${relativeTime(
+                      result.lastSyncedAt ?? result.lastRecordedAt!,
+                    )}`
                   : undefined,
               ]
                 .filter(Boolean)
@@ -704,10 +702,9 @@ function EditableRankingCard({
             overshootClamping: true,
             useNativeDriver: true,
           }).start(() => {
+            if (target !== dragOrigin.current) onMoveRef.current(target);
             dragY.setValue(0);
-            onMoveRef.current(target);
-            onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onDragEndRef.current();
           });
         },
         onPanResponderTerminate: () => {
@@ -720,7 +717,7 @@ function EditableRankingCard({
             useNativeDriver: true,
           }).start(() => {
             onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onDragEndRef.current();
           });
         },
       }),

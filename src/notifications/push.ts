@@ -10,6 +10,7 @@ import { cycleForecast } from '@/src/domain/cycle';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
 import { effectiveGoalTarget, isMetricTrackedOnDate, safeMetricValue, scheduledGoalReached } from '@/src/domain/metrics';
 import {
+  averageGymRestSeconds,
   completedGymSets,
   estimatedOneRepMax,
   exerciseHistory,
@@ -255,13 +256,30 @@ export async function syncGymNotifications(state: AppState) {
           ? [exercise.name]
           : [];
       });
+      const previousComparable =
+        sessions
+          .slice(1)
+          .find(
+            (session) =>
+              (latest.planId && session.planId === latest.planId) ||
+              session.name.trim().toLowerCase() ===
+                latest.name.trim().toLowerCase(),
+          ) ?? sessions[1];
+      const latestRest = averageGymRestSeconds(latest.exercises);
+      const priorRest = previousComparable
+        ? averageGymRestSeconds(previousComparable.exercises)
+        : 0;
+      const restCopy =
+        latestRest > 0 && priorRest > 0
+          ? ` Average rest was ${Math.abs(latestRest - priorRest)}s ${latestRest > priorRest ? 'longer' : 'shorter'} than ${previousComparable.name}.`
+          : '';
       ids.push(
         await Notifications.scheduleNotificationAsync({
           content: {
             title: records.length ? 'New gym best' : 'Workout saved',
             body: records.length
-              ? `${records.slice(0, 2).join(' and ')} moved above your prior estimated best.`
-              : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString()} kg of volume logged.`,
+              ? `${records.slice(0, 2).join(' and ')} moved above your prior estimated best.${restCopy}`
+              : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString()} kg of volume logged.${restCopy}`,
             data: { route: '/gym' },
           },
           trigger: null,

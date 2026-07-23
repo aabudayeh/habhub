@@ -626,6 +626,7 @@ export async function loadCloudWorkspace(
       status.exact_value === null || status.exact_value === undefined
         ? undefined
         : Number(status.exact_value),
+    syncedAt: status.updated_at ?? undefined,
   }));
   const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({

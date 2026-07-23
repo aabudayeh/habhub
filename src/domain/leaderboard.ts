@@ -72,6 +72,7 @@ export type PeriodMetricResult = {
   personalGoalKind?: GoalKind;
   streak?: number;
   lastRecordedAt?: string;
+  lastSyncedAt?: string;
 };
 
 /** Whether the member's period average satisfies their own goal. */
@@ -283,6 +284,10 @@ export function periodMetricResult(
     b.recordedAt.localeCompare(a.recordedAt),
   )[0];
   const lastRecordedAt = latestEntry?.recordedAt;
+  const lastSyncedAt = results
+    .map(({ date }) => statusForDate(date)?.syncedAt)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.localeCompare(a))[0];
   if (!exact.length) {
     return {
       mode: "status",
@@ -292,6 +297,7 @@ export function periodMetricResult(
       visibleDays: statuses.length,
       streak,
       lastRecordedAt,
+      lastSyncedAt,
       label: `${completedDays}/${goalResults.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
       averageGoalProgress,
@@ -329,6 +335,7 @@ export function periodMetricResult(
       visibleDays: ordered.length,
       streak,
       lastRecordedAt,
+      lastSyncedAt,
       averageGoalProgress,
       averageDisplayProgress,
       personalGoalKind,
@@ -348,6 +355,7 @@ export function periodMetricResult(
       visibleDays: exact.length,
       streak,
       lastRecordedAt,
+      lastSyncedAt,
       averageGoalProgress,
       averageDisplayProgress,
       personalGoalKind,
@@ -364,6 +372,7 @@ export function periodMetricResult(
     visibleDays: exact.length,
     streak,
     lastRecordedAt,
+    lastSyncedAt,
     averageGoalProgress,
     averageDisplayProgress,
     personalGoalKind,

@@ -47,3 +47,6 @@ app-example
 # Codex scratch/output folders
 /work/
 /outputs/
+
+# The public invite landing page is deployed as a separate Sites project.
+/invite-site/

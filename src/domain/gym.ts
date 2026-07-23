@@ -198,9 +198,11 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
         (set) => (set.restSeconds ?? 0) > 0,
       );
       const restSeconds =
-        rests.reduce((sum, set) => sum + (set.restSeconds ?? 0), 0) /
+        (rests.reduce((sum, set) => sum + (set.restSeconds ?? 0), 0) +
+          (exercise.restAfterSeconds ?? 0)) /
         muscles.length;
-      const restSamples = rests.length / muscles.length;
+      const restSamples =
+        (rests.length + (exercise.restAfterSeconds ? 1 : 0)) / muscles.length;
       for (const muscle of muscles) {
         const current = map.get(muscle) ?? {
           muscle,
@@ -243,6 +245,7 @@ export function totalGymRestSeconds(exercises: GymExercise[]) {
   return exercises.reduce(
     (total, exercise) =>
       total +
+      Math.max(0, exercise.restAfterSeconds ?? 0) +
       exercise.sets.reduce(
         (sum, set) => sum + Math.max(0, set.restSeconds ?? 0),
         0,
@@ -252,11 +255,12 @@ export function totalGymRestSeconds(exercises: GymExercise[]) {
 }
 
 export function averageGymRestSeconds(exercises: GymExercise[]) {
-  const rests = exercises.flatMap((exercise) =>
-    exercise.sets
+  const rests = exercises.flatMap((exercise) => [
+    ...(exercise.restAfterSeconds ? [exercise.restAfterSeconds] : []),
+    ...exercise.sets
       .map((set) => set.restSeconds)
       .filter((value): value is number => value !== undefined && value > 0),
-  );
+  ]);
   return rests.length
     ? Math.round(rests.reduce((sum, value) => sum + value, 0) / rests.length)
     : 0;
@@ -269,9 +273,10 @@ export function recommendedRestSeconds(intensity: GymIntensity) {
 /**
  * Net active-energy estimate from the 2024 Adult Compendium.
  * Subtracting 1 MET avoids counting resting energy already represented by BMR.
- * Logged rest uses a low 1.3 MET value instead of treating the full session as
- * continuous lifting. Reps and load inform intensity/progress, but are not
- * multiplied directly into calories because that would imply false precision.
+ * Compendium resistance-training METs describe a whole session, including
+ * normal between-set rest. Completed reps, external load and set density make
+ * a deliberately bounded adjustment rather than pretending lifted kg converts
+ * directly to calories.
  */
 export function estimateGymActiveCalories(
   weightKg: number,
@@ -295,18 +300,40 @@ export function estimateGymActiveCalories(
       : intensity === "vigorous"
         ? Math.max(catalogMet, METS.vigorous)
         : catalogMet;
-  const restMinutes = Math.min(
-    Math.max(durationMinutes, 0),
-    totalGymRestSeconds(exercises) / 60,
+  const completedSets = exercises.flatMap((exercise) =>
+    exercise.sets.filter((set) => set.completed),
   );
-  const activeMinutes = Math.max(0, durationMinutes - restMinutes);
-  const activeCalories =
-    ((met - 1) * 3.5 * weightKg * activeMinutes) / 200;
-  const restCalories =
-    ((1.3 - 1) * 3.5 * weightKg * restMinutes) / 200;
+  const completedReps = completedSets.reduce(
+    (sum, set) => sum + Math.max(0, set.reps),
+    0,
+  );
+  const volume = trainingVolumeKg(exercises);
+  const setDensity = completedSets.length / Math.max(durationMinutes, 1);
+  const loadPerRepRatio =
+    completedReps > 0 && weightKg > 0
+      ? volume / completedReps / weightKg
+      : 0;
+  const workloadModifier = Math.min(
+    1.16,
+    Math.max(
+      0.94,
+      0.96 +
+        Math.min(0.1, setDensity * 0.25) +
+        Math.min(0.1, loadPerRepRatio * 0.12),
+    ),
+  );
+  const restRatio =
+    totalGymRestSeconds(exercises) /
+    Math.max(durationMinutes * 60, 1);
+  // Normal lifting rests are already represented by the session MET. Only
+  // unusually rest-heavy sessions receive a small discount.
+  const excessiveRestModifier =
+    restRatio > 0.65 ? Math.max(0.9, 1 - (restRatio - 0.65) * 0.2) : 1;
+  const sessionCalories =
+    ((met - 1) * 3.5 * weightKg * durationMinutes) / 200;
   return Math.max(
     0,
-    Math.round(activeCalories + restCalories),
+    Math.round(sessionCalories * workloadModifier * excessiveRestModifier),
   );
 }
 

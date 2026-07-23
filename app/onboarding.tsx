@@ -119,15 +119,9 @@ export default function Onboarding() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [step, setStep] = useState(0);
-  const currentMember = state.group.members.find(
-    (member) => member.id === state.currentUserId,
-  );
-  const [displayName, setDisplayName] = useState(() => {
-    const existing = currentMember?.name.trim() ?? "";
-    return existing.includes("@") || existing === "MetricRally member"
-      ? ""
-      : existing;
-  });
+  // Every unfinished account chooses its own name. Prefilling from the initial
+  // demo snapshot could briefly show "Ahmad" before cloud account binding.
+  const [displayName, setDisplayName] = useState("");
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );

@@ -62,6 +62,7 @@ function fromCatalog(item: ExerciseCatalogItem, previous?: GymExercise): GymExer
     muscleGroups: item.muscles,
     customMet: item.met,
     notes: previous?.notes,
+    completed: false,
     sets: previous?.sets.length
       ? previous.sets.map((set) => ({ ...set, id: uniqueId("set"), completed: false }))
       : [blankSet()],
@@ -72,6 +73,13 @@ function cloneExercises(exercises: GymExercise[], preserveCompletion = false) {
   return exercises.map((exercise) => ({
     ...exercise,
     id: uniqueId("exercise"),
+    completed: preserveCompletion ? exercise.completed : false,
+    restAfterSeconds: preserveCompletion
+      ? exercise.restAfterSeconds
+      : undefined,
+    restTargetSeconds: preserveCompletion
+      ? exercise.restTargetSeconds
+      : undefined,
     sets: exercise.sets.map((set) => ({
       ...set,
       id: uniqueId("set"),
@@ -111,8 +119,9 @@ export default function GymScreen() {
   const [recapOpen, setRecapOpen] = useState(false);
   const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
   const [restTimer, setRestTimer] = useState<{
+    kind: "set" | "exercise";
     exerciseId: string;
-    setId: string;
+    setId?: string;
     startedAt: number;
     targetSeconds: number;
   } | null>(null);
@@ -148,7 +157,12 @@ export default function GymScreen() {
     Number(duration) ||
     Math.max(
       completedSets > 0 ? 1 : 0,
-      Math.round(completedSets * 0.75 + loggedRestSeconds / 60),
+      Math.round(
+        Math.max(
+          completedSets * 3,
+          completedSets * 0.75 + loggedRestSeconds / 60,
+        ),
+      ),
     );
   const estimatedCalories =
     Number(calories) ||
@@ -328,12 +342,39 @@ export default function GymScreen() {
       1,
       Math.floor((Date.now() - restTimer.startedAt) / 1000),
     );
-    updateSet(restTimer.exerciseId, restTimer.setId, {
-      restSeconds: seconds,
-      restTargetSeconds: restTimer.targetSeconds,
-    });
+    if (restTimer.kind === "set" && restTimer.setId)
+      updateSet(restTimer.exerciseId, restTimer.setId, {
+        restSeconds: seconds,
+        restTargetSeconds: restTimer.targetSeconds,
+      });
+    else
+      patchExercise(restTimer.exerciseId, {
+        restAfterSeconds: seconds,
+        restTargetSeconds: restTimer.targetSeconds,
+      });
     setRestTimer(null);
     restAlerted.current = false;
+  }
+
+  function startRest(
+    kind: "set" | "exercise",
+    exerciseId: string,
+    setId?: string,
+  ) {
+    const targetSeconds =
+      kind === "exercise"
+        ? Math.max(120, recommendedRestSeconds(intensity))
+        : recommendedRestSeconds(intensity);
+    restAlerted.current = false;
+    const startedAt = Date.now();
+    setRestNow(startedAt);
+    setRestTimer({
+      kind,
+      exerciseId,
+      setId,
+      startedAt,
+      targetSeconds,
+    });
   }
 
   function toggleSet(exerciseId: string, set: GymSet) {
@@ -341,15 +382,14 @@ export default function GymScreen() {
     const completed = !set.completed;
     updateSet(exerciseId, set.id, { completed });
     if (!completed) return;
-    const targetSeconds = recommendedRestSeconds(intensity);
-    restAlerted.current = false;
-    setRestNow(Date.now());
-    setRestTimer({
-      exerciseId,
-      setId: set.id,
-      startedAt: Date.now(),
-      targetSeconds,
-    });
+    startRest("set", exerciseId, set.id);
+  }
+
+  function finishExercise(exercise: GymExercise) {
+    if (restTimer) stopRest();
+    patchExercise(exercise.id, { completed: true });
+    setOpenExerciseId(null);
+    startRest("exercise", exercise.id);
   }
 
   function patchExercise(exerciseId: string, changes: Partial<GymExercise>) {
@@ -377,6 +417,7 @@ export default function GymScreen() {
   }
 
   function addCatalogExercise(item: ExerciseCatalogItem) {
+    if (restTimer) stopRest();
     const exercise = fromCatalog(item, latestExercise(item.key));
     setExercises((current) => [...current, exercise]);
     setOpenExerciseId(exercise.id);
@@ -412,20 +453,34 @@ export default function GymScreen() {
           exercise.id === restTimer.exerciseId
             ? {
                 ...exercise,
-                sets: exercise.sets.map((set) =>
-                  set.id === restTimer.setId
-                    ? {
-                        ...set,
-                        restSeconds: Math.max(
-                          1,
-                          Math.floor(
-                            (Date.now() - restTimer.startedAt) / 1000,
-                          ),
+                ...(restTimer.kind === "exercise"
+                  ? {
+                      restAfterSeconds: Math.max(
+                        1,
+                        Math.floor(
+                          (Date.now() - restTimer.startedAt) / 1000,
                         ),
-                        restTargetSeconds: restTimer.targetSeconds,
-                      }
-                    : set,
-                ),
+                      ),
+                      restTargetSeconds: restTimer.targetSeconds,
+                    }
+                  : {}),
+                sets:
+                  restTimer.kind === "set"
+                    ? exercise.sets.map((set) =>
+                        set.id === restTimer.setId
+                          ? {
+                              ...set,
+                              restSeconds: Math.max(
+                                1,
+                                Math.floor(
+                                  (Date.now() - restTimer.startedAt) / 1000,
+                                ),
+                              ),
+                              restTargetSeconds: restTimer.targetSeconds,
+                            }
+                          : set,
+                      )
+                    : exercise.sets,
               }
             : exercise,
         )
@@ -435,8 +490,11 @@ export default function GymScreen() {
       Math.max(
         completedSets > 0 ? 1 : 0,
         Math.round(
-          completedSets * 0.75 +
-            totalGymRestSeconds(sessionExercises) / 60,
+          Math.max(
+            completedSets * 3,
+            completedSets * 0.75 +
+              totalGymRestSeconds(sessionExercises) / 60,
+          ),
         ),
       );
     const sessionCalories =
@@ -680,7 +738,10 @@ export default function GymScreen() {
                   <Ionicons name="timer-outline" size={20} color={accent} />
                   <View style={styles.grow}>
                     <Text style={[styles.exerciseName, { color: colors.ink }]}>
-                      Rest {Math.floor(restElapsed / 60)}:
+                      {restTimer.kind === "exercise"
+                        ? "Between exercises"
+                        : "Between sets"}{" "}
+                      {Math.floor(restElapsed / 60)}:
                       {String(restElapsed % 60).padStart(2, "0")}
                     </Text>
                     <Text style={[styles.meta, { color: colors.muted }]}>
@@ -722,7 +783,7 @@ export default function GymScreen() {
                     onPress={stopRest}
                     style={[styles.restStop, { backgroundColor: accent }]}
                   >
-                    <Text style={styles.restStopText}>Done</Text>
+                    <Text style={styles.restStopText}>Next</Text>
                   </Pressable>
                 </View>
               </Card>
@@ -754,7 +815,15 @@ export default function GymScreen() {
                     style={styles.exerciseHeader}
                     onPress={() => setOpenExerciseId(open ? null : exercise.id)}
                   >
-                    <View style={[styles.exerciseDot, { backgroundColor: statusColor }]} />
+                    {exercise.completed ? (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        color={palette.lime}
+                      />
+                    ) : (
+                      <View style={[styles.exerciseDot, { backgroundColor: statusColor }]} />
+                    )}
                     <View style={styles.grow}>
                       <Text style={[styles.exerciseName, { color: colors.ink }]}>{exercise.name}</Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
@@ -864,6 +933,17 @@ export default function GymScreen() {
                           <Text style={styles.removeText}>Remove</Text>
                         </Pressable>
                       </View>
+                      <Button
+                        label={
+                          exercise.completed
+                            ? "Exercise complete"
+                            : "Finish exercise"
+                        }
+                        icon="checkmark-circle-outline"
+                        variant={exercise.completed ? "secondary" : "primary"}
+                        disabled={exercise.completed}
+                        onPress={() => finishExercise(exercise)}
+                      />
                     </View>
                   ) : null}
                 </Card>
@@ -880,26 +960,26 @@ export default function GymScreen() {
               <>
                 <View style={styles.privacyRow}>
                   <Text style={[styles.label, { color: colors.muted }]}>Share completed workout</Text>
-                  <Chip label="Group" selected={visibility === "group"} onPress={() => setVisibility("group")} />
-                  <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
+                  <View style={styles.privacyChoices}>
+                    <Chip label="Group" selected={visibility === "group"} onPress={() => setVisibility("group")} />
+                    <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
+                  </View>
                 </View>
-                <View style={styles.actions}>
+                <View style={styles.templateActions}>
                   <View style={styles.action}>
                     <Button
-                      label={selectedPlanId ? "Update template" : "Save template"}
+                      label={selectedPlanId ? "Update" : "Save template"}
                       variant="secondary"
                       onPress={() => savePlan(false)}
                     />
                   </View>
                   {selectedPlanId ? (
                     <View style={styles.action}>
-                      <Button label="Save as new" variant="secondary" onPress={() => savePlan(true)} />
+                      <Button label="Save copy" variant="secondary" onPress={() => savePlan(true)} />
                     </View>
                   ) : null}
-                  <View style={styles.action}>
-                    <Button label="Save day" icon="checkmark" onPress={saveDay} />
-                  </View>
                 </View>
+                <Button label="Save workout day" icon="checkmark" onPress={saveDay} />
               </>
             ) : null}
           </>
@@ -1145,10 +1225,11 @@ const styles = StyleSheet.create({
   exerciseActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   removeExercise: { flexDirection: "row", gap: 4, alignItems: "center", padding: 8 },
   removeText: { color: palette.red, fontSize: 8, fontWeight: "900" },
-  addExercise: { minHeight: 43, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  addExercise: { minHeight: 46, marginTop: 4, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   addText: { fontSize: 9, fontWeight: "900" },
-  privacyRow: { flexDirection: "row", alignItems: "center", gap: 7 },
-  actions: { flexDirection: "row", gap: 6 },
+  privacyRow: { marginTop: 8, gap: 7 },
+  privacyChoices: { flexDirection: "row", gap: 7 },
+  templateActions: { flexDirection: "row", gap: 9, marginVertical: 2 },
   action: { flex: 1 },
   progressLead: { gap: 11 },
   progressLeadTop: { flexDirection: "row", alignItems: "center", gap: 8 },

@@ -210,6 +210,8 @@ export type DailyMetricStatus = {
   goalKind?: GoalKind;
   /** Exact daily value is populated only when the member shared exact values. */
   exactValue?: number;
+  /** Last cloud update for this member's daily group snapshot. */
+  syncedAt?: string;
 };
 
 export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
@@ -255,6 +257,10 @@ export type GymExercise = {
   sets: GymSet[];
   notes?: string;
   customMet?: number;
+  /** Exercise-level completion and rest between exercises. */
+  completed?: boolean;
+  restAfterSeconds?: number;
+  restTargetSeconds?: number;
 };
 export type GymPlanExercise = {
   id: string;

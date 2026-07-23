@@ -66,11 +66,48 @@ export default function LeaderboardDetail() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
-  const visibleEntries = state.entries.filter(
-    (entry) =>
-      dates.includes(entry.localDate) &&
-      (entry.userId === state.currentUserId || entry.visibility === "group"),
-  );
+  const visibleEntries = useMemo(() => {
+    const shared = state.entries.filter(
+      (entry) =>
+        dates.includes(entry.localDate) &&
+        (entry.userId === state.currentUserId || entry.visibility === "group"),
+    );
+    const exactDailySnapshots: MetricEntry[] = (
+      state.dailyMetricStatuses ?? []
+    )
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.userId !== state.currentUserId &&
+          dates.includes(status.localDate) &&
+          status.exactValue !== undefined &&
+          !shared.some(
+            (entry) =>
+              entry.userId === status.userId &&
+              entry.metricId === status.metricId &&
+              entry.localDate === status.localDate,
+          ),
+      )
+      .map((status) => ({
+        id: `shared-total:${status.userId}:${status.metricId}:${status.localDate}`,
+        metricId: status.metricId,
+        userId: status.userId,
+        value: status.exactValue!,
+        localDate: status.localDate,
+        recordedAt:
+          status.syncedAt ?? `${status.localDate}T12:00:00.000Z`,
+        visibility: "group",
+        source: "calculated",
+        label: "Shared daily total",
+      }));
+    return [...shared, ...exactDailySnapshots];
+  }, [
+    dates,
+    state.currentUserId,
+    state.dailyMetricStatuses,
+    state.entries,
+    state.group.id,
+  ]);
   const loggedIds = [...new Set(visibleEntries.map((entry) => entry.metricId))];
   const available = (state.group.metricConfiguration ?? []).filter(
     (metric) => metric.sections.group && metric.dataType !== "photo",

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, Linking, Platform, StyleSheet, View } from 'react-native';
 import { AppText as Text } from "@/src/components/AppText";
 
 import { useAuth } from '@/src/auth/AuthProvider';
@@ -19,6 +19,7 @@ export default function JoinGroupScreen() {
   const app = useApp();
   const [busy, setBusy] = useState(false);
   const attempted = useRef(false);
+  const appLink = `paceboard://join?code=${encodeURIComponent(code)}`;
 
   const join = useCallback(async () => {
     if (!code) return Alert.alert('Invalid invitation', 'This invitation is missing its group code.');
@@ -42,18 +43,50 @@ export default function JoinGroupScreen() {
   }, [app, auth.status, cloud, code]);
 
   useEffect(() => {
-    if (!code || attempted.current || (auth.status !== 'signedIn' && auth.status !== 'demo')) return;
+    if (
+      Platform.OS === "web" ||
+      !code ||
+      attempted.current ||
+      (auth.status !== 'signedIn' && auth.status !== 'demo')
+    ) return;
     attempted.current = true;
     void join();
   }, [auth.status, code, join]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !code || attempted.current) return;
+    attempted.current = true;
+    void Linking.openURL(appLink);
+  }, [appLink, code]);
 
   return <Screen contentContainerStyle={styles.screen}><Card style={styles.card}>
     <View style={styles.icon}><Ionicons name="people" size={30} color={palette.white}/></View>
     <Text style={styles.title}>You’re invited</Text>
     <Text style={styles.body}>Join this MetricRally group to share the progress you choose, chat, and compete.</Text>
     <View style={styles.code}><Text style={styles.codeLabel}>INVITE CODE</Text><Text style={styles.codeValue}>{code || 'Missing'}</Text></View>
-    <Button label={auth.status === 'signedOut' ? 'Sign in to join' : busy ? 'Joining…' : 'Join group'} icon="enter-outline" loading={busy} onPress={join}/>
-    <Button label="Not now" variant="ghost" onPress={() => router.replace('/')}/>
+    <Button
+      label={
+        Platform.OS === "web"
+          ? "Open MetricRally"
+          : auth.status === "signedOut"
+            ? "Sign in to join"
+            : busy
+              ? "Joining…"
+              : "Join group"
+      }
+      icon="enter-outline"
+      loading={busy}
+      onPress={() =>
+        Platform.OS === "web" ? Linking.openURL(appLink) : join()
+      }
+    />
+    {Platform.OS !== "web" ? (
+      <Button
+        label="Not now"
+        variant="ghost"
+        onPress={() => router.replace("/")}
+      />
+    ) : null}
   </Card></Screen>;
 }
 

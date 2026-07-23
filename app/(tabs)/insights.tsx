@@ -483,11 +483,7 @@ export default function Insights() {
                   current?.id === metric.id ? { ...current, target } : current,
                 )
               }
-              onDragCancel={() =>
-                setDragPlacement((current) =>
-                  current ? { ...current, settling: true } : current,
-                )
-              }
+              onDragCancel={() => setDragPlacement(null)}
               onDragEnd={() => {
                 setDragPlacement(null);
                 setDraggingMetricId(null);
@@ -782,10 +778,9 @@ function MetricSummary({
             overshootClamping: true,
             useNativeDriver: true,
           }).start(() => {
+            if (target !== dragOrigin.current) onMoveRef.current(target);
             dragY.setValue(0);
-            onMoveRef.current(target);
-            onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onDragEndRef.current();
           });
         },
         onPanResponderTerminate: () => {
@@ -798,7 +793,7 @@ function MetricSummary({
             useNativeDriver: true,
           }).start(() => {
             onDragCancelRef.current();
-            requestAnimationFrame(() => onDragEndRef.current());
+            onDragEndRef.current();
           });
         },
       }),

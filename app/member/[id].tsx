@@ -3,7 +3,12 @@ import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
-import { Pressable, StyleSheet, View } from "react-native";
+import {
+  InteractionManager,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -129,13 +134,23 @@ export default function MemberProfile() {
   );
   const periodBadge =
     period === "week" ? "week" : period === "month" ? "month" : "today";
-  const badges = useMemo(
-    () =>
-      buildBadges(state, anchor).filter(
-        (badge) => badge.memberId === member.id && badge.period === periodBadge,
-      ),
-    [anchor, member.id, periodBadge, state],
-  );
+  const [badges, setBadges] = useState<ReturnType<typeof buildBadges>>([]);
+  useEffect(() => {
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (!active) return;
+      setBadges(
+        buildBadges(state, anchor).filter(
+          (badge) =>
+            badge.memberId === member.id && badge.period === periodBadge,
+        ),
+      );
+    });
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, [anchor, member.id, periodBadge, state]);
   const showcase = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
   const displayedBadges = [...badges]
     .sort(
@@ -927,7 +942,7 @@ const styles = StyleSheet.create({
     marginBottom: 7,
   },
   profile: { flexDirection: "row", alignItems: "center", gap: 12 },
-  copy: { flex: 1 },
+  copy: { flex: 1, minWidth: 0 },
   name: { color: palette.ink, fontSize: 18, fontWeight: "900" },
   original: { color: palette.faint, fontSize: 9, marginTop: 2 },
   meta: { color: palette.muted, fontSize: 11, marginTop: 3 },
@@ -1008,7 +1023,12 @@ const styles = StyleSheet.create({
     textAlign: "right",
     marginTop: 3,
   },
-  headEmpty: { flexDirection: "row", alignItems: "center", gap: 9 },
+  headEmpty: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 9,
+    overflow: "hidden",
+  },
   metricCards: { gap: 12, marginTop: 18 },
   chartCard: { padding: 15 },
   chartHeading: {
@@ -1101,7 +1121,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 3,
   },
-  emptyPhotos: { color: palette.muted, fontSize: 10, fontStyle: "italic" },
+  emptyPhotos: {
+    color: palette.muted,
+    fontSize: 10,
+    fontStyle: "italic",
+    flex: 1,
+    flexShrink: 1,
+    lineHeight: 15,
+  },
   privacy: {
     flexDirection: "row",
     alignItems: "flex-start",
