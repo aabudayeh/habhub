@@ -220,25 +220,31 @@ export default function GroupsScreen() {
           </View>
         </View>
         <View style={styles.buttons}>
-          <Button
-            label="Share invite"
-            icon="share-outline"
-            variant="secondary"
-            onPress={() =>
-              Share.share({
-                message: groupInviteMessage(
-                  state.group.name,
-                  state.group.inviteCode,
-                ),
-              })
-            }
-          />
-          {canManage ? (
+          <View style={styles.actionButton}>
             <Button
-              label="Group settings"
-              icon="settings-outline"
-              onPress={() => router.navigate("/group-settings" as never)}
+              label="Share invite"
+              icon="share-outline"
+              variant="secondary"
+              size="small"
+              onPress={() =>
+                Share.share({
+                  message: groupInviteMessage(
+                    state.group.name,
+                    state.group.inviteCode,
+                  ),
+                })
+              }
             />
+          </View>
+          {canManage ? (
+            <View style={styles.actionButton}>
+              <Button
+                label="Group settings"
+                icon="settings-outline"
+                size="small"
+                onPress={() => router.navigate("/group-settings" as never)}
+              />
+            </View>
           ) : null}
         </View>
       </Card>
@@ -312,7 +318,8 @@ const styles = StyleSheet.create({
   active: { fontSize: 7, fontWeight: "900" },
   leave: { padding: 6 },
   invite: { marginTop: 10, gap: 9 },
-  buttons: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
+  buttons: { flexDirection: "row", gap: 7 },
+  actionButton: { flex: 1, minWidth: 0 },
   input: {
     height: 42,
     borderWidth: 1,

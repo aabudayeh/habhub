@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Animated,
   BackHandler,
-  LayoutAnimation,
   PanResponder,
   Platform,
   Pressable,
@@ -13,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { animateReorder } from "@/src/components/reorderAnimation";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -143,7 +143,7 @@ export default function Insights() {
     if (index < 0) return;
     const [item] = current.splice(index, 1);
     current.splice(Math.max(0, Math.min(targetIndex, current.length)), 0, item);
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    animateReorder();
     select(selectedIds.includes(TRACKED) ? [TRACKED, ...current] : current);
   }
 
@@ -223,7 +223,10 @@ export default function Insights() {
   ].slice(0, 5);
 
   return (
-    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
+    <Screen
+      contentContainerStyle={{ paddingBottom: 14 }}
+      refreshEnabled={!editing}
+    >
       <PageHeader
         title="Progress"
         action={

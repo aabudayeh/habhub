@@ -11,7 +11,6 @@ import React, {
 import {
   Animated,
   BackHandler,
-  LayoutAnimation,
   PanResponder,
   Platform,
   Pressable,
@@ -21,6 +20,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { animateReorder } from "@/src/components/reorderAnimation";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -112,7 +112,7 @@ export default function LeaderboardScreen() {
     if (index < 0) return;
     const [item] = next.splice(index, 1);
     next.splice(Math.max(0, Math.min(target, next.length)), 0, item);
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    animateReorder();
     saveSelection(next);
   }
   const options = [
@@ -157,7 +157,10 @@ export default function LeaderboardScreen() {
     },
   ];
   return (
-    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
+    <Screen
+      contentContainerStyle={{ paddingBottom: 14 }}
+      refreshEnabled={!editing}
+    >
       <PageHeader
         title="Leaderboard"
         action={

@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
-  LayoutAnimation,
   PanResponder,
   Platform,
   Pressable,
@@ -14,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { animateReorder } from "@/src/components/reorderAnimation";
 
 import {
   Card,
@@ -159,7 +159,7 @@ export default function Customize() {
   }
 
   return (
-    <Screen>
+    <Screen refreshEnabled={false}>
       <PageHeader
         title="Customize"
         subtitle="Only your selected trackers appear here. Group competition is managed in Group settings."
@@ -369,9 +369,7 @@ export default function Customize() {
                 index={index}
                 count={ordered.length}
                 onMove={(target) => {
-                  LayoutAnimation.configureNext(
-                    LayoutAnimation.Presets.easeInEaseOut,
-                  );
+                  animateReorder();
                   reorderForSection(metric.id, target);
                 }}
                 onChange={() => changeSection(metric)}

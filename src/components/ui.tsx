@@ -35,8 +35,12 @@ export function Screen({
   contentContainerStyle,
   scrollRef,
   refreshControl,
+  refreshEnabled = true,
   ...props
-}: ScrollViewProps & { scrollRef?: React.RefObject<ScrollView | null> }) {
+}: ScrollViewProps & {
+  scrollRef?: React.RefObject<ScrollView | null>;
+  refreshEnabled?: boolean;
+}) {
   const compact = useCompactMode();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -62,19 +66,21 @@ export function Screen({
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           automaticallyAdjustKeyboardInsets
           refreshControl={
-            refreshControl ?? (
-              <RefreshControl
-                refreshing={
-                  cloud.status === "syncing" || health.status === "syncing"
-                }
-                onRefresh={async () => {
-                  await cloud.syncNow().catch(() => undefined);
-                  await cloud.refreshGroup().catch(() => undefined);
-                  await health.syncNow("pull").catch(() => undefined);
-                }}
-                tintColor={accent}
-              />
-            )
+            refreshEnabled
+              ? refreshControl ?? (
+                  <RefreshControl
+                    refreshing={
+                      cloud.status === "syncing" || health.status === "syncing"
+                    }
+                    onRefresh={async () => {
+                      await cloud.syncNow().catch(() => undefined);
+                      await cloud.refreshGroup().catch(() => undefined);
+                      await health.syncNow("pull").catch(() => undefined);
+                    }}
+                    tintColor={accent}
+                  />
+                )
+              : undefined
           }
           contentContainerStyle={[
             styles.screen,
@@ -236,6 +242,7 @@ export function Button({
   onPress,
   icon,
   variant = "primary",
+  size = "default",
   disabled,
   loading,
 }: {
@@ -243,6 +250,7 @@ export function Button({
   onPress: () => void;
   icon?: keyof typeof Ionicons.glyphMap;
   variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "default" | "small";
   disabled?: boolean;
   loading?: boolean;
 }) {
@@ -257,6 +265,7 @@ export function Button({
       style={({ pressed }) => [
         styles.button,
         compact && styles.buttonCompact,
+        size === "small" && styles.buttonSmall,
         styles[`button_${variant}`],
         variant === "secondary" && {
           backgroundColor: colors.primarySoft,
@@ -280,13 +289,14 @@ export function Button({
           {icon ? (
             <Ionicons
               name={icon}
-              size={18}
+              size={size === "small" ? 15 : 18}
               color={variant === "primary" ? palette.white : accent}
             />
           ) : null}
           <Text
             style={[
               styles.buttonText,
+              size === "small" && styles.buttonTextSmall,
               {
                 color:
                   variant === "primary"
@@ -296,6 +306,9 @@ export function Button({
                       : accent,
               },
             ]}
+            numberOfLines={1}
+            adjustsFontSizeToFit={size === "small"}
+            minimumFontScale={0.72}
           >
             {label}
           </Text>
@@ -524,6 +537,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonCompact: { minHeight: 40, paddingHorizontal: 13, borderRadius: 12 },
+  buttonSmall: {
+    minHeight: 34,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+    gap: 5,
+  },
   button_primary: {
     backgroundColor: palette.primary,
     borderColor: palette.primary,
@@ -535,6 +555,7 @@ const styles = StyleSheet.create({
   button_ghost: { backgroundColor: "transparent", borderColor: palette.border },
   button_danger: { backgroundColor: "#FFF1F0", borderColor: "#F3C6C3" },
   buttonText: { color: palette.primary, fontSize: 15, fontWeight: "800" },
+  buttonTextSmall: { fontSize: 11 },
   buttonTextPrimary: { color: palette.white },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.72, transform: [{ scale: 0.985 }] },

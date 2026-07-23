@@ -7,7 +7,6 @@ import {
   Animated,
   Alert,
   BackHandler,
-  LayoutAnimation,
   Modal,
   PanResponder,
   Platform,
@@ -20,6 +19,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { animateReorder } from "@/src/components/reorderAnimation";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -220,7 +220,11 @@ export default function Today() {
       <ScrollView
         refreshControl={
           <RefreshControl
-            refreshing={health.status === "syncing" || cloud.status === "syncing"}
+            enabled={!editing}
+            refreshing={
+              !editing &&
+              (health.status === "syncing" || cloud.status === "syncing")
+            }
             onRefresh={async () => {
               // Save local changes first, refresh shared rows, then import the
               // newest device health records. The health import is persisted by
@@ -434,9 +438,7 @@ export default function Today() {
               celebrating={celebratingGoalIds.includes(item.id)}
               onEdit={() => setEditing(true)}
               onMove={(target) => {
-                LayoutAnimation.configureNext(
-                  LayoutAnimation.Presets.easeInEaseOut,
-                );
+                animateReorder();
                 reorderMetric(item.id, visible[target]?.order ?? target);
               }}
               onRemove={() => remove(item)}
