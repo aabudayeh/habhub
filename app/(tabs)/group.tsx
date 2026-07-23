@@ -237,9 +237,13 @@ export default function LeaderboardScreen() {
                 result &&
                 result.mode !== "private" &&
                 result.visibleDays > 0
-                  ? result.completedDays >= result.visibleDays
-                    ? palette.lime
-                    : palette.red
+                  ? result.personalGoalKind === "at_most"
+                    ? (result.averageDisplayProgress ?? 0) <= 1
+                      ? palette.lime
+                      : palette.red
+                    : result.completedDays >= result.visibleDays
+                      ? palette.lime
+                      : palette.red
                   : row.member.color;
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
@@ -319,7 +323,11 @@ export default function LeaderboardScreen() {
                       progress={
                         includeScore
                           ? row.score / 100
-                          : Math.min(row.score / 100, 1)
+                          : Math.min(
+                              result?.averageDisplayProgress ??
+                                row.score / 100,
+                              1,
+                            )
                       }
                       color={resultColor}
                     />

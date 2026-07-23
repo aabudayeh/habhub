@@ -3,6 +3,7 @@ import { User } from "@supabase/supabase-js";
 import { DEFAULT_METRICS } from "@/src/data/seed";
 import {
   effectiveGoalTarget,
+  displayGoalProgress,
   formatMetricValue,
   goalProgress,
   metricApplicableOnDate,
@@ -621,6 +622,11 @@ export async function loadCloudWorkspace(
     localDate: status.local_date,
     goalReached: status.goal_reached,
     scoreContribution: Number(status.score_contribution ?? 0),
+    goalProgress:
+      status.goal_progress === null || status.goal_progress === undefined
+        ? undefined
+        : Number(status.goal_progress),
+    goalKind: status.goal_kind ?? undefined,
   }));
   const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({
@@ -943,11 +949,36 @@ export async function pushCloudWorkspace(state: AppState) {
               ),
               1,
             ) * 100,
+          goal_progress:
+            displayGoalProgress(
+              metric,
+              value,
+              effectiveGoalTarget(
+                state,
+                metric,
+                state.currentUserId,
+                localDate,
+              ),
+            ) * 100,
+          goal_kind: metric.goal.kind,
         };
       }),
   );
   if (statuses.length) {
-    const { error } = await client.from("daily_metric_status").insert(statuses);
+    let { error } = await client.from("daily_metric_status").insert(statuses);
+    if (
+      error &&
+      /goal_progress|goal_kind/i.test(
+        `${error.code ?? ""} ${error.message ?? ""}`,
+      )
+    ) {
+      const legacyStatuses = statuses.map(
+        ({ goal_progress: _progress, goal_kind: _kind, ...status }) => status,
+      );
+      ({ error } = await client
+        .from("daily_metric_status")
+        .insert(legacyStatuses));
+    }
     if (error) throw error;
   }
 

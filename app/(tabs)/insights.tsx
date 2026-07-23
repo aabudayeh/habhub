@@ -42,7 +42,10 @@ import {
   trackedGoalSummary,
   weightProgressStats,
 } from "@/src/domain/metrics";
-import { longestStreakWithRest } from "@/src/domain/streaks";
+import {
+  currentStreakWithRest,
+  longestStreakWithRest,
+} from "@/src/domain/streaks";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
@@ -93,6 +96,10 @@ export default function Insights() {
     view === "week"
       ? dateRangeEnding(weekAnchor, 7)
       : monthDateRange(month).filter((date) => date <= today);
+  const summaryDates =
+    view === "week"
+      ? dates
+      : dateRangeEnding(dates.at(-1) ?? today, 30);
   const selectorItems = [
     {
       id: TRACKED,
@@ -380,13 +387,13 @@ export default function Insights() {
         </Card>
       )}
       <SectionHeader
-        title={`${view === "week" ? "7-day" : "Month"} summaries`}
+        title={`${view === "week" ? "7-day" : "30-day"} summaries`}
       />
       <View style={styles.summaries}>
         {tracked ? (
           <TrackedSummary
             state={state}
-            dates={dates}
+            dates={summaryDates}
             editing={editing}
             onEdit={() => setEditing(true)}
             onRemove={() => select(selectedIds.filter((id) => id !== TRACKED))}
@@ -397,7 +404,7 @@ export default function Insights() {
             key={metric.id}
             state={state}
             metric={metric}
-            dates={dates}
+            dates={summaryDates}
             editing={editing}
             index={index}
             count={selectedMetrics.length}
@@ -481,18 +488,27 @@ function TrackedSummary({
     dates,
     (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
   );
+  const currentStreak = currentStreakWithRest(
+    state,
+    dates,
+    (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
+  );
+  const completion = possible ? Math.round((met / possible) * 100) : 0;
   return (
     <Animated.View
-      style={{
-        transform: [
+      style={[
+        styles.animatedSummary,
+        {
+          transform: [
           {
             rotate: wiggle.interpolate({
               inputRange: [-1, 1],
               outputRange: ["-0.3deg", "0.3deg"],
             }),
           },
-        ],
-      }}
+          ],
+        },
+      ]}
     >
     <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
     <Card style={styles.summary}>
@@ -510,28 +526,28 @@ function TrackedSummary({
         >
           Tracked goals
         </Text>
-        <Text style={[styles.summaryValue, { color: colors.ink }]}>{met}/{possible}</Text>
-        <Text style={[styles.summaryUnit, { color: colors.muted }]}>goals complete</Text>
+        <Text style={[styles.summaryValue, { color: colors.ink }]}>{completion}%</Text>
+        <Text style={[styles.summaryUnit, { color: colors.muted }]}>all goals in range</Text>
       </View>
       <View style={styles.summaryDetail}>
         <Text
           numberOfLines={2}
           style={[styles.summaryLabel, { color: colors.muted }]}
         >
-          {possible ? Math.round((met / possible) * 100) : 0}% completed across this range
+          {met}/{possible} individual goals completed
         </Text>
         <Text
           numberOfLines={2}
           style={[styles.remaining, { color: colors.ink }]}
         >
-          {perfect}/{eligible.length} days with every goal complete
+          {perfect}/{eligible.length} all-goal days
         </Text>
       </View>
       <View style={styles.summaryGoal}>
         <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-          {perfect}/{eligible.length} all-goal days
+          Current streak {currentStreak}d
         </Text>
-        <Text style={[styles.streakLine, { color: colors.muted }]}>Longest streak {streak} days</Text>
+        <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streak}d</Text>
       </View>
       {editing ? (
         <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
@@ -643,6 +659,10 @@ function MetricSummary({
     metricApplicableOnDate(state, metric, state.currentUserId, date) &&
     scheduledGoalReached(state, metric, state.currentUserId, date),
   );
+  const currentStreak = currentStreakWithRest(state, active, (date) =>
+    metricApplicableOnDate(state, metric, state.currentUserId, date) &&
+    scheduledGoalReached(state, metric, state.currentUserId, date),
+  );
   const days = Math.max(
     1,
     Math.floor(
@@ -681,8 +701,10 @@ function MetricSummary({
       : null;
   return (
     <Animated.View
-      style={{
-        transform: [
+      style={[
+        styles.animatedSummary,
+        {
+          transform: [
           { translateY: dragY },
           {
             rotate: wiggle.interpolate({
@@ -690,9 +712,10 @@ function MetricSummary({
               outputRange: ["-0.3deg", "0.3deg"],
             }),
           },
-        ],
-        zIndex: editing ? 3 : 0,
-      }}
+          ],
+          zIndex: editing ? 3 : 0,
+        },
+      ]}
     >
     <Pressable
       style={styles.summaryWrap}
@@ -735,14 +758,20 @@ function MetricSummary({
             style={[styles.summaryValue, { color: colors.ink }]}
           >
           {isBoolean
-              ? `${reached}/${applicable.length} days`
+              ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%`
               : Math.abs(average) >= 100
                 ? Math.round(average).toLocaleString()
                 : (Math.round(average * 10) / 10).toLocaleString()}
           </Text>
-          {!isBoolean && metric.unit ? (
-            <Text style={[styles.summaryUnit, { color: colors.muted }]}>{metric.unit}</Text>
-          ) : null}
+          {isBoolean ? (
+            <Text style={[styles.summaryUnit, { color: colors.muted }]}>
+              {dates.length}-day completion avg
+            </Text>
+          ) : (
+            <Text style={[styles.summaryUnit, { color: colors.muted }]}>
+              {dates.length}-day avg{metric.unit ? ` · ${metric.unit}` : ""}
+            </Text>
+          )}
         </View>
         <View style={styles.summaryDetail}>
         <Text
@@ -752,7 +781,7 @@ function MetricSummary({
           style={[styles.summaryLabel, { color: colors.muted }]}
         >
           {weightStats
-            ? `${dates.length}-day avg · ${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week`
+            ? `${dates.length}-day average · ${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week`
             : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
               : `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${formatMetricValue(metric, overall)}`}
@@ -780,7 +809,7 @@ function MetricSummary({
           {applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%
         </Text>
         <Text style={[styles.streakLine, { color: colors.muted }]}>
-          Longest streak {streak} days
+          Current {currentStreak}d · Best {streak}d
         </Text>
         </View>
         {editing ? (
@@ -941,6 +970,7 @@ const styles = StyleSheet.create({
   },
   dayNumber: { color: palette.ink, fontSize: 9, fontWeight: "900" },
   summaries: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
+  animatedSummary: { width: "100%" },
   summaryWrap: { width: "100%" },
   summary: {
     width: "100%",

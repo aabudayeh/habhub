@@ -6,6 +6,7 @@ import {
 } from "@/src/domain/date";
 import {
   dailyScore,
+  displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
@@ -14,7 +15,7 @@ import {
   sharedMetricResult,
 } from "@/src/domain/metrics";
 import { longestStreakWithRest } from "@/src/domain/streaks";
-import { AppState, Member, MetricDefinition } from "@/src/types";
+import { AppState, GoalKind, Member, MetricDefinition } from "@/src/types";
 
 export type LeaderboardPeriod =
   | "today"
@@ -64,6 +65,9 @@ export type PeriodMetricResult = {
   averageLabel?: string;
   /** Normalized against this member's own private goal when available. */
   averageGoalProgress?: number;
+  /** Average percent of the member's personal target reached/consumed. */
+  averageDisplayProgress?: number;
+  personalGoalKind?: GoalKind;
   streak?: number;
   lastRecordedAt?: string;
 };
@@ -156,6 +160,27 @@ export function periodMetricResult(
     ? progressValues.reduce((sum, value) => sum + value, 0) /
       progressValues.length
     : undefined;
+  const displayProgressValues = results.flatMap(({ date, result }) => {
+    const status = statusForDate(date);
+    if (status?.goalProgress !== undefined)
+      return [Math.max(0, Math.min(2, status.goalProgress / 100))];
+    if (result.mode !== "exact") return [];
+    return [
+      displayGoalProgress(
+        goalMetric,
+        result.value,
+        effectiveGoalTarget(state, goalMetric, subjectUserId, date),
+      ),
+    ];
+  });
+  const averageDisplayProgress = displayProgressValues.length
+    ? displayProgressValues.reduce((sum, value) => sum + value, 0) /
+      displayProgressValues.length
+    : undefined;
+  const personalGoalKind =
+    results
+      .map(({ date }) => statusForDate(date)?.goalKind)
+      .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
   if (!exact.length && !statuses.length) {
     return {
       mode: "private",
@@ -203,6 +228,8 @@ export function periodMetricResult(
       label: `${completedDays}/${results.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
       averageGoalProgress,
+      averageDisplayProgress,
+      personalGoalKind,
     };
   }
   if (metric.id === "weight") {
@@ -236,6 +263,8 @@ export function periodMetricResult(
       streak,
       lastRecordedAt,
       averageGoalProgress,
+      averageDisplayProgress,
+      personalGoalKind,
       label: `${raw > 0 ? "+" : ""}${raw.toFixed(1)} ${metric.unit}`,
       averageLabel: `${baseline.toFixed(1)} → ${current.toFixed(1)} ${metric.unit}`,
     };
@@ -253,6 +282,8 @@ export function periodMetricResult(
       streak,
       lastRecordedAt,
       averageGoalProgress,
+      averageDisplayProgress,
+      personalGoalKind,
       label: `${done}/${results.length}`,
       averageLabel: `${Math.round((done / Math.max(results.length, 1)) * 100)}% of period`,
     };
@@ -267,6 +298,8 @@ export function periodMetricResult(
     streak,
     lastRecordedAt,
     averageGoalProgress,
+    averageDisplayProgress,
+    personalGoalKind,
     label: formatMetricValue(metric, multipleDays ? average : total),
     averageLabel: multipleDays
       ? `${completedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`

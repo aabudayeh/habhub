@@ -205,6 +205,9 @@ export type DailyMetricStatus = {
   localDate: string;
   goalReached: boolean;
   scoreContribution: number;
+  /** Percent of this member's personal target reached/consumed; target stays private. */
+  goalProgress?: number;
+  goalKind?: GoalKind;
 };
 
 export type SyncMode = "manual" | "battery" | "balanced" | "frequent";

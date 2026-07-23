@@ -508,6 +508,19 @@ export function goalProgress(
   }
 }
 
+/** Visual progress toward/through a target without revealing the target value. */
+export function displayGoalProgress(
+  metric: MetricDefinition,
+  value: number,
+  targetOverride = metric.goal.target,
+): number {
+  if (metric.goalEnabled === false) return 0;
+  if (metric.goalRange) return goalProgress(metric, value, targetOverride);
+  if (metric.goal.kind === "complete") return value > 0 ? 1 : 0;
+  const target = Math.max(Math.abs(targetOverride), 0.0001);
+  return Math.max(0, Math.min(2, value / target));
+}
+
 export function goalReached(
   metric: MetricDefinition,
   value: number,

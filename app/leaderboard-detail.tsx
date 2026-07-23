@@ -29,6 +29,7 @@ import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
   leaderboardRows,
   LeaderboardPeriod,
+  PeriodMetricResult,
   periodDates,
   periodTitle,
 } from "@/src/domain/leaderboard";
@@ -233,13 +234,6 @@ export default function LeaderboardDetail() {
           ) : null}
         </Card>
       ) : null}
-      <MetricSelector
-        title="What to show"
-        items={options}
-        selectedIds={selectedIds}
-        onChange={setSelectedIds}
-        emptyLabel="No shared logs in this range"
-      />
       {false ? (
         <View style={styles.range}>
           <Ionicons name="calendar-outline" size={15} color={accent} />
@@ -325,7 +319,19 @@ export default function LeaderboardDetail() {
                 />
               ) : null}
               <View style={styles.metricList}>
-                {row.metrics.map(({ metric, result }) => (
+                {row.metrics.map(({ metric, result }) => {
+                  const progress = result.averageDisplayProgress;
+                  const progressCopy = personalGoalProgressCopy(result);
+                  const progressColor =
+                    result.personalGoalKind === "at_most"
+                      ? (progress ?? 0) <= 1
+                        ? palette.lime
+                        : palette.red
+                      : result.completedDays >= result.visibleDays &&
+                          result.visibleDays > 0
+                        ? palette.lime
+                        : palette.red;
+                  return (
                   <View
                     key={metric.id}
                     style={[styles.metric, { borderBottomColor: colors.border }]}
@@ -350,6 +356,22 @@ export default function LeaderboardDetail() {
                         {result.averageLabel ??
                           `${result.visibleDays} visible day${result.visibleDays === 1 ? "" : "s"}`}
                       </Text>
+                      {progressCopy && progress !== undefined ? (
+                        <View style={styles.metricGoal}>
+                          <Text
+                            style={[
+                              styles.metricGoalText,
+                              { color: colors.muted },
+                            ]}
+                          >
+                            {progressCopy}
+                          </Text>
+                          <ProgressBar
+                            progress={Math.min(progress, 1)}
+                            color={progressColor}
+                          />
+                        </View>
+                      ) : null}
                     </View>
                     <Text
                       style={[
@@ -364,7 +386,8 @@ export default function LeaderboardDetail() {
                       {result.label}
                     </Text>
                   </View>
-                ))}
+                  );
+                })}
               </View>
               {alignment ? (
                 <View
@@ -439,8 +462,32 @@ export default function LeaderboardDetail() {
           );
         })}
       </View>
+      <MetricSelector
+        title="What to show"
+        items={options}
+        selectedIds={selectedIds}
+        onChange={setSelectedIds}
+        emptyLabel="No shared logs in this range"
+      />
     </Screen>
   );
+}
+
+function personalGoalProgressCopy(result: PeriodMetricResult) {
+  if (
+    result.mode === "private" ||
+    result.averageDisplayProgress === undefined
+  )
+    return undefined;
+  const percent = Math.round(result.averageDisplayProgress * 100);
+  if (result.personalGoalKind === "at_most")
+    return percent <= 100
+      ? `${percent}% allowance used · ${100 - percent}% remaining`
+      : `${percent - 100}% over personal allowance`;
+  if (percent < 100)
+    return `${percent}% toward personal goal · ${100 - percent}% remaining`;
+  if (percent === 100) return "Personal goal reached";
+  return `${percent - 100}% beyond personal goal`;
 }
 
 function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
@@ -799,6 +846,8 @@ const styles = StyleSheet.create({
   },
   metricName: { color: palette.ink, fontSize: 11, fontWeight: "900" },
   metricSub: { color: palette.muted, fontSize: 8, marginTop: 2 },
+  metricGoal: { gap: 4, marginTop: 5 },
+  metricGoalText: { fontSize: 8, fontWeight: "700" },
   metricValue: { color: palette.primary, fontSize: 12, fontWeight: "900" },
   private: { color: palette.faint, fontStyle: "italic" },
   alignment: {
