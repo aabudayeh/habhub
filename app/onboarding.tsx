@@ -112,12 +112,22 @@ export default function Onboarding() {
     updateSettings,
     updateEnergyProfile,
     configurePersonalMetrics,
+    updateMemberName,
   } = useApp();
   const auth = useAuth();
   const health = useHealthSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [step, setStep] = useState(0);
+  const currentMember = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  );
+  const [displayName, setDisplayName] = useState(() => {
+    const existing = currentMember?.name.trim() ?? "";
+    return existing.includes("@") || existing === "MetricRally member"
+      ? ""
+      : existing;
+  });
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );
@@ -345,7 +355,15 @@ export default function Onboarding() {
       );
     }
   }
-  function finish() {
+  async function saveDisplayName() {
+    const name = displayName.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (!name) return;
+    updateMemberName(state.currentUserId, name);
+    if (auth.status === "signedIn")
+      await auth.updateDisplayName(name).catch(() => undefined);
+  }
+  async function finish() {
+    await saveDisplayName();
     updateSettings({
       onboardingComplete: true,
       tutorialComplete: true,
@@ -355,6 +373,24 @@ export default function Onboarding() {
     router.replace(
       (landingPage === "index" ? "/" : `/${landingPage}`) as never,
     );
+  }
+  async function continueFlow() {
+    if (step === 0) await saveDisplayName();
+    if (step === 2) configure();
+    if (step === 4) await finish();
+    else setStep((value) => value + 1);
+  }
+  async function skipSetup() {
+    if (!displayName.trim()) {
+      Alert.alert("Add your name", "Enter the name you want friends to see.");
+      return;
+    }
+    await saveDisplayName();
+    updateSettings({
+      onboardingComplete: true,
+      tutorialComplete: false,
+    });
+    router.replace("/(tabs)" as never);
   }
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
@@ -387,6 +423,29 @@ export default function Onboarding() {
                   copy="Choose only what matters now. MetricRally builds the rest for you."
                   colors={colors}
                 />
+                <View style={styles.nameField}>
+                  <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                    What should we call you?
+                  </Text>
+                  <TextInput
+                    value={displayName}
+                    onChangeText={setDisplayName}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    maxLength={40}
+                    placeholder="Your name"
+                    placeholderTextColor={colors.faint}
+                    returnKeyType="done"
+                    style={[
+                      styles.input,
+                      {
+                        color: colors.ink,
+                        borderColor: colors.border,
+                        backgroundColor: colors.card,
+                      },
+                    ]}
+                  />
+                </View>
                 <View style={styles.goalGrid}>
                   {GOALS.map((goal) => (
                     <Pressable
@@ -840,13 +899,7 @@ export default function Onboarding() {
               </Pressable>
             ) : (
               <Pressable
-                onPress={() => {
-                  updateSettings({
-                    onboardingComplete: true,
-                    tutorialComplete: false,
-                  });
-                  router.replace("/(tabs)" as never);
-                }}
+                onPress={skipSetup}
                 style={styles.back}
               >
                 <Text style={[styles.backText, { color: colors.muted }]}>
@@ -858,15 +911,11 @@ export default function Onboarding() {
               <Button
                 label={step === 4 ? "Start using MetricRally" : "Continue"}
                 disabled={
-                  (step === 0 && !goals.length) ||
+                  (step === 0 && (!displayName.trim() || !goals.length)) ||
                   (step === 1 && goals.includes("weight") && !targetIsValid) ||
                   (step === 2 && !selected.length)
                 }
-                onPress={() => {
-                  if (step === 2) configure();
-                  if (step === 4) finish();
-                  else setStep((value) => value + 1);
-                }}
+                onPress={continueFlow}
               />
             </View>
           </View>
@@ -1050,6 +1099,7 @@ const styles = StyleSheet.create({
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   fields: { flexDirection: "row", gap: 8 },
   fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 },
+  nameField: { marginBottom: 10 },
   validation: { fontSize: 9, fontWeight: "800", marginBottom: 8 },
   input: {
     height: 41,

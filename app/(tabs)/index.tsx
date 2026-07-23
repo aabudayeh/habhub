@@ -266,11 +266,15 @@ export default function Today() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View>
+          <View style={styles.headerIdentity}>
             <Text style={[styles.eyebrow, { color: accent }]}>
               {compactDayDate(today)}
             </Text>
-            <Text style={[styles.greeting, { color: colors.ink }]}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              style={[styles.greeting, { color: colors.ink }]}
+            >
               Hi, {memberDisplayName(state, user)}
             </Text>
           </View>
@@ -1475,6 +1479,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerIdentity: { flex: 1, minWidth: 0, paddingRight: 8 },
   eyebrow: { fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
   greeting: {
     fontSize: 19,
@@ -1482,7 +1487,12 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     marginTop: 1,
   },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexShrink: 0,
+    gap: 6,
+  },
   headerIcon: {
     width: 36,
     height: 36,

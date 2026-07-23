@@ -23,6 +23,7 @@ type AuthContextValue = {
   signInWithProvider: (provider: 'apple' | 'google') => Promise<void>;
   requestPasswordReset: (email: string) => Promise<void>;
   updatePassword: (password: string) => Promise<void>;
+  updateDisplayName: (name: string) => Promise<void>;
   continueInDemo: () => Promise<void>;
   useCloudAccount: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -141,6 +142,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const { error } = await client.auth.updateUser({ password });
       if (error) throw error;
       setPasswordRecovery(false);
+    },
+    updateDisplayName: async (name) => {
+      const client = requireClient();
+      const trimmed = name.trim().replace(/\s+/g, " ").slice(0, 40);
+      if (!trimmed || !session?.user)
+        throw new Error("Enter a display name before continuing.");
+      const { error: authError } = await client.auth.updateUser({
+        data: { display_name: trimmed, full_name: trimmed },
+      });
+      if (authError) throw authError;
+      const { error: profileError } = await client
+        .from("profiles")
+        .update({ display_name: trimmed })
+        .eq("id", session.user.id);
+      if (profileError) throw profileError;
     },
     continueInDemo: async () => {
       await AsyncStorage.setItem(DEMO_MODE_KEY, 'true');

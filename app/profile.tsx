@@ -30,7 +30,7 @@ export default function ProfileScreen(){
       <View style={styles.copy}><Text style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text style={[styles.original,{color:colors.faint}]}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in {state.group.name}</Text></View>
       {me.avatarUri?<Pressable accessibilityLabel="Remove profile photo" onPress={()=>updateMemberAvatar(me.id,undefined)} style={styles.remove}><Ionicons name="trash-outline" size={18} color={palette.red}/></Pressable>:null}
     </Card>
-    <Card style={styles.nameCard}><View style={styles.copy}><Text style={[styles.fieldLabel,{color:colors.muted}]}>Account display name</Text><TextInput value={name} onChangeText={setName} placeholder="Your name" placeholderTextColor={colors.faint} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/></View><Button label="Save" variant="ghost" onPress={()=>updateMemberName(me.id,name)}/></Card>
+    <Card style={styles.nameCard}><View style={styles.copy}><Text style={[styles.fieldLabel,{color:colors.muted}]}>Account display name</Text><TextInput value={name} onChangeText={setName} maxLength={40} placeholder="Your name" placeholderTextColor={colors.faint} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/></View><Button label="Save" variant="ghost" onPress={()=>updateMemberName(me.id,name)}/></Card>
     <Text style={[styles.note,{color:colors.muted}]}>Your account name comes from your profile. Friend nicknames are set separately inside each group.</Text>
     <EnergyProfileEditor/>
     <MetricGoalsEditor/>

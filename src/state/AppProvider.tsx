@@ -1131,7 +1131,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, groups, group: updateMembers(state.group) };
     }
     case "memberName": {
-      const name = action.name.trim();
+      const name = action.name.trim().replace(/\s+/g, " ").slice(0, 40);
       if (!name) return state;
       const updateMembers = (group: Group): Group => ({
         ...group,
