@@ -1,4 +1,4 @@
-import { PropsWithChildren, useEffect } from "react";
+import { PropsWithChildren, useLayoutEffect } from "react";
 import { StyleProp, ViewStyle } from "react-native";
 import Animated, {
   Easing,
@@ -20,17 +20,20 @@ export function ReorderItem({
   settling?: boolean;
 }>) {
   const offset = useSharedValue(shift);
-  useEffect(() => {
+  useLayoutEffect(() => {
     offset.value = settling
-      ? shift
+      ? 0
       : withTiming(shift, {
           duration: 130,
           easing: Easing.out(Easing.cubic),
         });
   }, [offset, settling, shift]);
-  const shiftStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: offset.value }],
-  }));
+  const shiftStyle = useAnimatedStyle(
+    () => ({
+      transform: [{ translateY: settling ? 0 : offset.value }],
+    }),
+    [settling],
+  );
   return (
     <Animated.View
       style={[
@@ -39,7 +42,7 @@ export function ReorderItem({
           zIndex: active ? 10 : 0,
           elevation: active ? 10 : 0,
         },
-        settling ? { transform: [{ translateY: 0 }] } : shiftStyle,
+        shiftStyle,
         style,
       ]}
     >
