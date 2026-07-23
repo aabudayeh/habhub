@@ -255,6 +255,15 @@ export default function NotificationsScreen() {
             patch({ gymAchievements: value.gymAchievements === false })
           }
         />
+        <ToggleRow
+          icon="timer-outline"
+          title="Gym rest alerts"
+          copy="Alert when a running rest timer goes more than a minute past its target"
+          enabled={value.gymRestAlerts !== false}
+          onPress={() =>
+            patch({ gymRestAlerts: value.gymRestAlerts === false })
+          }
+        />
         {value.gymReminders !== false ? (
           <View style={styles.times}>
             <Text style={[styles.label, { color: colors.muted }]}>

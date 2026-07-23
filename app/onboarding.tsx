@@ -370,8 +370,10 @@ export default function Onboarding() {
       advancedTutorialComplete: advancedTutorial,
       defaultLandingPage: landingPage,
     });
-    router.replace(
-      (landingPage === "index" ? "/" : `/${landingPage}`) as never,
+    requestAnimationFrame(() =>
+      router.replace(
+        (landingPage === "index" ? "/" : `/${landingPage}`) as never,
+      ),
     );
   }
   async function continueFlow() {
@@ -390,7 +392,7 @@ export default function Onboarding() {
       onboardingComplete: true,
       tutorialComplete: false,
     });
-    router.replace("/(tabs)" as never);
+    requestAnimationFrame(() => router.replace("/(tabs)" as never));
   }
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>

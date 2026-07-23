@@ -137,11 +137,13 @@ export function periodMetricResult(
   const results = dates
     .filter(
       (date) =>
-        goalMetric.activeFrom <= date &&
         metricApplicableOnDate(state, goalMetric, subjectUserId, date),
     )
     .map((date) => ({
       date,
+      // Backfilled measurements remain comparable before a goal started, but
+      // those dates must not retroactively count as goal days.
+      goalEligible: goalMetric.activeFrom <= date,
       result: sharedMetricResult(
         state,
         goalMetric,
@@ -156,6 +158,7 @@ export function periodMetricResult(
       hasPeriodData(state, goalMetric, subjectUserId, date),
   );
   const statuses = results.filter(({ result }) => result.mode === "status");
+  const goalResults = results.filter(({ goalEligible }) => goalEligible);
   const statusForDate = (date: string) =>
     subjectUserId === state.currentUserId
       ? undefined
@@ -166,7 +169,7 @@ export function periodMetricResult(
             status.userId === subjectUserId &&
             status.localDate === date,
         );
-  const progressValues = results.flatMap(({ date, result }) => {
+  const progressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
     if (status)
       return [Math.min(1, Math.max(0, status.scoreContribution / 100))];
@@ -192,7 +195,7 @@ export function periodMetricResult(
     ? progressValues.reduce((sum, value) => sum + value, 0) /
       progressValues.length
     : undefined;
-  const displayProgressValues = results.flatMap(({ date, result }) => {
+  const displayProgressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
     if (status?.goalProgress !== undefined)
       return [Math.max(0, Math.min(2, status.goalProgress / 100))];
@@ -214,7 +217,7 @@ export function periodMetricResult(
       displayProgressValues.length
     : undefined;
   const personalGoalKind =
-    results
+    goalResults
       .map(({ date }) => statusForDate(date)?.goalKind)
       .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
   if (!exact.length && !statuses.length) {
@@ -233,7 +236,7 @@ export function periodMetricResult(
           : "Private",
     };
   }
-  const completedDays = results.filter(({ date, result }) => {
+  const completedDays = goalResults.filter(({ date, result }) => {
     if (subjectUserId === state.currentUserId)
       return (
         result.mode === "exact" &&
@@ -289,7 +292,7 @@ export function periodMetricResult(
       visibleDays: statuses.length,
       streak,
       lastRecordedAt,
-      label: `${completedDays}/${results.length} goal days`,
+      label: `${completedDays}/${goalResults.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
       averageGoalProgress,
       averageDisplayProgress,
@@ -377,6 +380,17 @@ function hasPeriodData(
   userId: string,
   date: string,
 ) {
+  if (
+    state.dailyMetricStatuses?.some(
+      (status) =>
+        status.groupId === state.group.id &&
+        status.metricId === metric.id &&
+        status.userId === userId &&
+        status.localDate === date &&
+        status.exactValue !== undefined,
+    )
+  )
+    return true;
   if (metric.dataType === "boolean")
     return state.entries.some(
       (entry) =>

@@ -317,11 +317,32 @@ function finalizeEndOfDayGoals(state: AppState, localDate: string): AppState {
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
-    case "hydrate":
+    case "hydrate": {
+      // Completing onboarding is monotonic for the current account. A delayed
+      // cloud snapshot must never send a user back into the startup flow.
+      const hydrated =
+        action.state.currentUserId === state.currentUserId &&
+        state.settings.onboardingComplete &&
+        !action.state.settings.onboardingComplete
+          ? {
+              ...action.state,
+              settings: {
+                ...action.state.settings,
+                onboardingComplete: true,
+                tutorialComplete:
+                  state.settings.tutorialComplete ||
+                  action.state.settings.tutorialComplete,
+                advancedTutorialComplete:
+                  state.settings.advancedTutorialComplete ||
+                  action.state.settings.advancedTutorialComplete,
+              },
+            }
+          : action.state;
       return finalizeEndOfDayGoals(
-        action.state,
+        hydrated,
         dateWithOffsetFrom(dateKey(), -1),
       );
+    }
     case "log": {
       const localDate = action.details?.localDate ?? dateKey();
       const metric = state.metrics.find(

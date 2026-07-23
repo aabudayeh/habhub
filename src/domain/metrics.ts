@@ -451,6 +451,12 @@ export function sharedMetricResult(
             ? "status"
             : "private";
 
+  if (sharedStatus?.exactValue !== undefined)
+    return {
+      mode: "exact",
+      value: sharedStatus.exactValue,
+      label: formatMetricValue(metric, sharedStatus.exactValue),
+    };
   if (subjectUserId !== viewerUserId && !entries.length && sharedStatus)
     return {
       mode: "status",
@@ -570,12 +576,21 @@ export function metricApplicableOnDate(
             entry.metricId === metric.id &&
             entry.localDate === localDate,
         );
+  const hasSharedDailyStatus = state.dailyMetricStatuses?.some(
+    (status) =>
+      status.groupId === state.group.id &&
+      status.metricId === metric.id &&
+      status.userId === userId &&
+      status.localDate === localDate,
+  );
+  const hasRecordedData = hasExplicitData || hasSharedDailyStatus;
   // A backdated entry remains viewable even when the tracker itself was added
   // later. This does not make the goal retroactively tracked.
-  if (metric.activeFrom > localDate && !hasExplicitData) return false;
+  if (metric.activeFrom > localDate && !hasRecordedData) return false;
   // A weigh-in target is judged only on days with an actual measurement;
   // carrying yesterday's weight forward must not create a false daily win.
-  if (metric.id === "weight") return hasExplicitData;
+  if (metric.id === "weight") return hasRecordedData;
+  if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
   if (metric.id === "deficit")
     return state.entries.some(
       (entry) =>

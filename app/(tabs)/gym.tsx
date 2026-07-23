@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
+import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -23,12 +24,15 @@ import {
 } from "@/src/domain/exerciseCatalog";
 import {
   completedGymSets,
+  averageGymRestSeconds,
   estimateGymActiveCalories,
   exerciseHistory,
   exerciseIdentity,
   exerciseTrend,
   gymRecap,
   muscleGroupStats,
+  recommendedRestSeconds,
+  totalGymRestSeconds,
   trainingVolumeKg,
 } from "@/src/domain/gym";
 import { useApp } from "@/src/state/AppProvider";
@@ -72,6 +76,8 @@ function cloneExercises(exercises: GymExercise[], preserveCompletion = false) {
       ...set,
       id: uniqueId("set"),
       completed: preserveCompletion ? set.completed : false,
+      restSeconds: preserveCompletion ? set.restSeconds : undefined,
+      restTargetSeconds: preserveCompletion ? set.restTargetSeconds : undefined,
     })),
   }));
 }
@@ -103,6 +109,15 @@ export default function GymScreen() {
   const [customExerciseName, setCustomExerciseName] = useState("");
   const [pickerMuscle, setPickerMuscle] = useState<MuscleGroup | "all">("all");
   const [recapOpen, setRecapOpen] = useState(false);
+  const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
+  const [restTimer, setRestTimer] = useState<{
+    exerciseId: string;
+    setId: string;
+    startedAt: number;
+    targetSeconds: number;
+  } | null>(null);
+  const [restNow, setRestNow] = useState(Date.now());
+  const restAlerted = useRef(false);
   const initializedDate = useRef<string | null>(null);
 
   const plans = useMemo(
@@ -128,7 +143,13 @@ export default function GymScreen() {
   );
   const completedSets = completedGymSets(exercises);
   const volume = trainingVolumeKg(exercises);
-  const inferredDuration = Number(duration) || completedSets * 3;
+  const loggedRestSeconds = totalGymRestSeconds(exercises);
+  const inferredDuration =
+    Number(duration) ||
+    Math.max(
+      completedSets > 0 ? 1 : 0,
+      Math.round(completedSets * 0.75 + loggedRestSeconds / 60),
+    );
   const estimatedCalories =
     Number(calories) ||
     estimateGymActiveCalories(
@@ -138,6 +159,9 @@ export default function GymScreen() {
       exercises,
     );
   const recaps = gymRecap(sessions, state.currentUserId, localDate);
+  const restElapsed = restTimer
+    ? Math.max(0, Math.floor((restNow - restTimer.startedAt) / 1000))
+    : 0;
   const muscles = muscleGroupStats(
     sessions.filter(
       (session) =>
@@ -192,7 +216,7 @@ export default function GymScreen() {
         ? cloneExercises(prior.exercises)
         : instantiatePlan(plan);
       setExercises(next);
-      setOpenExerciseId(next[0]?.id ?? null);
+      setOpenExerciseId(null);
     },
     [instantiatePlan, localDate, sessions],
   );
@@ -216,6 +240,8 @@ export default function GymScreen() {
 
   useEffect(() => {
     if (initializedDate.current === localDate) return;
+    setRestTimer(null);
+    restAlerted.current = false;
     initializedDate.current = localDate;
     const existing = sessions.find((session) => session.localDate === localDate);
     if (existing) {
@@ -229,7 +255,7 @@ export default function GymScreen() {
       setSelectedPlanId(existing.planId ?? null);
       const next = cloneExercises(existing.exercises, true);
       setExercises(next);
-      setOpenExerciseId(next[0]?.id ?? null);
+      setOpenExerciseId(null);
       return;
     }
     setSessionId(uniqueId("gym"));
@@ -247,6 +273,40 @@ export default function GymScreen() {
     }
   }, [loadPlan, localDate, plans, selectedPlanId, sessions]);
 
+  useEffect(() => {
+    if (!restTimer) return;
+    const timer = setInterval(() => setRestNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [restTimer]);
+
+  useEffect(() => {
+    if (
+      !restTimer ||
+      restAlerted.current ||
+      restElapsed <= restTimer.targetSeconds + 60 ||
+      state.settings.notifications.gymRestAlerts === false
+    )
+      return;
+    restAlerted.current = true;
+    void Notifications.getPermissionsAsync()
+      .then((permission) => {
+        if (!permission.granted) return;
+        return Notifications.scheduleNotificationAsync({
+          content: {
+            title: "Rest timer",
+            body: `Rest is ${Math.floor(restElapsed / 60)}:${String(restElapsed % 60).padStart(2, "0")}. Ready for the next set?`,
+            data: { route: "/gym" },
+          },
+          trigger: null,
+        });
+      })
+      .catch(() => undefined);
+  }, [
+    restElapsed,
+    restTimer,
+    state.settings.notifications.gymRestAlerts,
+  ]);
+
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
       current.map((exercise) =>
@@ -260,6 +320,36 @@ export default function GymScreen() {
           : exercise,
       ),
     );
+  }
+
+  function stopRest() {
+    if (!restTimer) return;
+    const seconds = Math.max(
+      1,
+      Math.floor((Date.now() - restTimer.startedAt) / 1000),
+    );
+    updateSet(restTimer.exerciseId, restTimer.setId, {
+      restSeconds: seconds,
+      restTargetSeconds: restTimer.targetSeconds,
+    });
+    setRestTimer(null);
+    restAlerted.current = false;
+  }
+
+  function toggleSet(exerciseId: string, set: GymSet) {
+    if (restTimer) stopRest();
+    const completed = !set.completed;
+    updateSet(exerciseId, set.id, { completed });
+    if (!completed) return;
+    const targetSeconds = recommendedRestSeconds(intensity);
+    restAlerted.current = false;
+    setRestNow(Date.now());
+    setRestTimer({
+      exerciseId,
+      setId: set.id,
+      startedAt: Date.now(),
+      targetSeconds,
+    });
   }
 
   function patchExercise(exerciseId: string, changes: Partial<GymExercise>) {
@@ -317,6 +407,46 @@ export default function GymScreen() {
       localDate === dateKey()
         ? new Date().toISOString()
         : `${localDate}T18:00:00.000Z`;
+    const sessionExercises = restTimer
+      ? exercises.map((exercise) =>
+          exercise.id === restTimer.exerciseId
+            ? {
+                ...exercise,
+                sets: exercise.sets.map((set) =>
+                  set.id === restTimer.setId
+                    ? {
+                        ...set,
+                        restSeconds: Math.max(
+                          1,
+                          Math.floor(
+                            (Date.now() - restTimer.startedAt) / 1000,
+                          ),
+                        ),
+                        restTargetSeconds: restTimer.targetSeconds,
+                      }
+                    : set,
+                ),
+              }
+            : exercise,
+        )
+      : exercises;
+    const sessionDuration =
+      Number(duration) ||
+      Math.max(
+        completedSets > 0 ? 1 : 0,
+        Math.round(
+          completedSets * 0.75 +
+            totalGymRestSeconds(sessionExercises) / 60,
+        ),
+      );
+    const sessionCalories =
+      Number(calories) ||
+      estimateGymActiveCalories(
+        state.settings.energyProfile.weightKg,
+        sessionDuration,
+        intensity,
+        sessionExercises,
+      );
     saveGymSession({
       id: selectedSession?.id ?? sessionId,
       userId: state.currentUserId,
@@ -324,17 +454,20 @@ export default function GymScreen() {
       name: sessionName.trim() || "Gym day",
       localDate,
       recordedAt,
-      durationMinutes: inferredDuration,
-      calories: completedSets ? estimatedCalories : undefined,
+      durationMinutes: sessionDuration,
+      calories: completedSets ? sessionCalories : undefined,
       intensity,
       notes: sessionNotes.trim() || undefined,
-      exercises,
+      exercises: sessionExercises,
       visibility,
     });
+    setExercises(sessionExercises);
+    setRestTimer(null);
+    restAlerted.current = false;
     Alert.alert(
       completedSets ? "Workout saved" : "Day planned",
       completedSets
-        ? `${completedSets} sets · ${Math.round(volume).toLocaleString()} kg volume · ~${estimatedCalories} active kcal`
+        ? `${completedSets} sets · ${Math.round(volume).toLocaleString()} kg volume · ~${sessionCalories} active kcal`
         : "The exercise plan is saved without marking the workout complete.",
     );
   }
@@ -388,7 +521,6 @@ export default function GymScreen() {
       <Screen contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
         <PageHeader
           title="Gym"
-          subtitle="Day-specific training, reusable workouts and personal progress"
           action={
             <Pressable
               onPress={() => setRecapOpen(true)}
@@ -427,23 +559,45 @@ export default function GymScreen() {
                   />
                 </Pressable>
               </View>
-              {plans.length ? (
-                <View style={styles.planRow}>
-                  {plans.map((plan) => (
-                    <Pressable
-                      key={plan.id}
-                      onPress={() => loadPlan(plan)}
-                      onLongPress={() =>
-                        Alert.alert("Delete template?", plan.name, [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteGymPlan(plan.id) },
-                        ])
-                      }
-                    >
-                      <Chip label={plan.name} selected={selectedPlanId === plan.id} />
-                    </Pressable>
-                  ))}
+              <Pressable
+                onPress={() => setSessionDetailsOpen((value) => !value)}
+                style={[styles.detailsToggle, { borderColor: colors.border }]}
+              >
+                <View style={styles.grow}>
+                  <Text style={[styles.exerciseName, { color: colors.ink }]}>
+                    {sessionName || "Gym day"}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {completedSets} sets · {inferredDuration} min · ~{estimatedCalories} active kcal
+                  </Text>
                 </View>
+                <Ionicons
+                  name={sessionDetailsOpen ? "chevron-up" : "options-outline"}
+                  size={18}
+                  color={accent}
+                />
+              </Pressable>
+              {sessionDetailsOpen ? (
+                <>
+              {plans.length ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View style={styles.planRow}>
+                    {plans.map((plan) => (
+                      <Pressable
+                        key={plan.id}
+                        onPress={() => loadPlan(plan)}
+                        onLongPress={() =>
+                          Alert.alert("Delete template?", plan.name, [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteGymPlan(plan.id) },
+                          ])
+                        }
+                      >
+                        <Chip label={plan.name} selected={selectedPlanId === plan.id} />
+                      </Pressable>
+                    ))}
+                  </View>
+                </ScrollView>
               ) : null}
               <TextInput
                 value={sessionName}
@@ -506,7 +660,73 @@ export default function GymScreen() {
                 multiline
                 style={[styles.notes, { color: colors.ink, borderColor: colors.border }]}
               />
+                </>
+              ) : null}
             </Card>
+
+            {restTimer ? (
+              <Card
+                style={[
+                  styles.restCard,
+                  {
+                    borderColor:
+                      restElapsed > restTimer.targetSeconds + 60
+                        ? palette.red
+                        : accent,
+                  },
+                ]}
+              >
+                <View style={styles.restMain}>
+                  <Ionicons name="timer-outline" size={20} color={accent} />
+                  <View style={styles.grow}>
+                    <Text style={[styles.exerciseName, { color: colors.ink }]}>
+                      Rest {Math.floor(restElapsed / 60)}:
+                      {String(restElapsed % 60).padStart(2, "0")}
+                    </Text>
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      Target {Math.floor(restTimer.targetSeconds / 60)}:
+                      {String(restTimer.targetSeconds % 60).padStart(2, "0")}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() =>
+                      setRestTimer((current) =>
+                        current
+                          ? {
+                              ...current,
+                              targetSeconds: Math.max(
+                                30,
+                                current.targetSeconds - 30,
+                              ),
+                            }
+                          : current,
+                      )
+                    }
+                    style={[styles.restAdjust, { borderColor: colors.border }]}
+                  >
+                    <Text style={[styles.restAdjustText, { color: colors.ink }]}>−30</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() =>
+                      setRestTimer((current) =>
+                        current
+                          ? { ...current, targetSeconds: current.targetSeconds + 30 }
+                          : current,
+                      )
+                    }
+                    style={[styles.restAdjust, { borderColor: colors.border }]}
+                  >
+                    <Text style={[styles.restAdjustText, { color: colors.ink }]}>+30</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={stopRest}
+                    style={[styles.restStop, { backgroundColor: accent }]}
+                  >
+                    <Text style={styles.restStopText}>Done</Text>
+                  </Pressable>
+                </View>
+              </Card>
+            ) : null}
 
             <SectionHeader
               title="Exercises"
@@ -539,6 +759,9 @@ export default function GymScreen() {
                       <Text style={[styles.exerciseName, { color: colors.ink }]}>{exercise.name}</Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
                         {(exercise.muscleGroups ?? ["full_body"]).map((muscle) => MUSCLE_LABELS[muscle]).join(" · ")}
+                        {averageGymRestSeconds([exercise])
+                          ? ` · ${averageGymRestSeconds([exercise])}s avg rest`
+                          : ""}
                       </Text>
                     </View>
                     <Pressable
@@ -592,7 +815,7 @@ export default function GymScreen() {
                       </View>
                       {exercise.sets.map((set) => (
                         <View key={set.id} style={styles.setRow}>
-                          <Pressable onPress={() => updateSet(exercise.id, set.id, { completed: !set.completed })}>
+                          <Pressable onPress={() => toggleSet(exercise.id, set)}>
                             <Ionicons
                               name={set.completed ? "checkmark-circle" : "ellipse-outline"}
                               size={25}
@@ -702,6 +925,9 @@ export default function GymScreen() {
                       <Text style={[styles.muscleName, { color: colors.ink }]}>{muscle.label}</Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
                         {Math.round(muscle.sets)} sets · {muscle.sessions} days
+                        {muscle.averageRestSeconds
+                          ? ` · ${muscle.averageRestSeconds}s avg rest`
+                          : ""}
                       </Text>
                     </View>
                     <ProgressBar progress={muscle.volumeKg / max} color={accent} />
@@ -812,7 +1038,7 @@ export default function GymScreen() {
               </Pressable>
             </View>
             <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled">
-              {pickerItems.slice(0, 14).map((item) => (
+              {pickerItems.slice(0, 40).map((item) => (
                 <Pressable
                   key={item.key}
                   onPress={() => addCatalogExercise(item)}
@@ -876,11 +1102,12 @@ const styles = StyleSheet.create({
   roundAction: { width: 37, height: 37, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   modeRow: { flexDirection: "row", gap: 7, marginBottom: 8 },
   dayCard: { gap: 9 },
+  detailsToggle: { minHeight: 43, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
   dateRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   center: { flex: 1, alignItems: "center" },
   date: { fontSize: 13, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
-  planRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  planRow: { flexDirection: "row", gap: 6, paddingRight: 8 },
   nameInput: { borderWidth: 1, borderRadius: 11, minHeight: 41, paddingHorizontal: 11, fontSize: 11, fontWeight: "800" },
   compactRow: { flexDirection: "row", gap: 7 },
   field: { width: 76, gap: 4 },
@@ -891,6 +1118,12 @@ const styles = StyleSheet.create({
   intensity: { flex: 1, height: 37, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   intensityText: { fontSize: 9, fontWeight: "900" },
   notes: { borderWidth: 1, borderRadius: 10, minHeight: 42, maxHeight: 70, padding: 9, fontSize: 9, textAlignVertical: "top" },
+  restCard: { paddingVertical: 8, paddingHorizontal: 10 },
+  restMain: { flexDirection: "row", alignItems: "center", gap: 7 },
+  restAdjust: { minWidth: 38, height: 32, paddingHorizontal: 5, borderWidth: 1, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  restAdjustText: { fontSize: 8, fontWeight: "900" },
+  restStop: { height: 32, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  restStopText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   summary: { fontSize: 9, fontWeight: "900" },
   exerciseCard: { paddingVertical: 2, paddingHorizontal: 9 },
   exerciseHeader: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8 },

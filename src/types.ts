@@ -208,6 +208,8 @@ export type DailyMetricStatus = {
   /** Percent of this member's personal target reached/consumed; target stays private. */
   goalProgress?: number;
   goalKind?: GoalKind;
+  /** Exact daily value is populated only when the member shared exact values. */
+  exactValue?: number;
 };
 
 export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
@@ -240,6 +242,9 @@ export type GymSet = {
   reps: number;
   weightKg: number;
   completed: boolean;
+  /** Rest taken after this set. Optional for older saved sessions. */
+  restSeconds?: number;
+  restTargetSeconds?: number;
 };
 export type GymExercise = {
   id: string;
@@ -384,6 +389,8 @@ export type NotificationSettings = {
   gymAchievements?: boolean;
   /** Wait this many full days after the latest completed gym session. */
   gymReminderDays?: number;
+  /** Alert while a live rest timer is running substantially past its target. */
+  gymRestAlerts?: boolean;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };

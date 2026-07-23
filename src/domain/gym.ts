@@ -177,7 +177,14 @@ export function exerciseStats(
 export function muscleGroupStats(sessions: GymSession[], userId: string) {
   const map = new Map<
     MuscleGroup,
-    { muscle: MuscleGroup; volumeKg: number; sets: number; sessions: Set<string> }
+    {
+      muscle: MuscleGroup;
+      volumeKg: number;
+      sets: number;
+      sessions: Set<string>;
+      restSeconds: number;
+      restSamples: number;
+    }
   >();
   for (const session of sessions.filter((item) => item.userId === userId)) {
     for (const exercise of session.exercises) {
@@ -187,15 +194,26 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
       const volume = trainingVolumeKg([exercise]) / muscles.length;
       const sets =
         exercise.sets.filter((set) => set.completed).length / muscles.length;
+      const rests = exercise.sets.filter(
+        (set) => (set.restSeconds ?? 0) > 0,
+      );
+      const restSeconds =
+        rests.reduce((sum, set) => sum + (set.restSeconds ?? 0), 0) /
+        muscles.length;
+      const restSamples = rests.length / muscles.length;
       for (const muscle of muscles) {
         const current = map.get(muscle) ?? {
           muscle,
           volumeKg: 0,
           sets: 0,
           sessions: new Set<string>(),
+          restSeconds: 0,
+          restSamples: 0,
         };
         current.volumeKg += volume;
         current.sets += sets;
+        current.restSeconds += restSeconds;
+        current.restSamples += restSamples;
         current.sessions.add(session.id);
         map.set(muscle, current);
       }
@@ -208,6 +226,9 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
       volumeKg: item.volumeKg,
       sets: item.sets,
       sessions: item.sessions.size,
+      averageRestSeconds: item.restSamples
+        ? Math.round(item.restSeconds / item.restSamples)
+        : 0,
     }))
     .sort((a, b) => b.volumeKg - a.volumeKg);
 }
@@ -218,9 +239,39 @@ const METS: Record<GymIntensity, number> = {
   vigorous: 6,
 };
 
+export function totalGymRestSeconds(exercises: GymExercise[]) {
+  return exercises.reduce(
+    (total, exercise) =>
+      total +
+      exercise.sets.reduce(
+        (sum, set) => sum + Math.max(0, set.restSeconds ?? 0),
+        0,
+      ),
+    0,
+  );
+}
+
+export function averageGymRestSeconds(exercises: GymExercise[]) {
+  const rests = exercises.flatMap((exercise) =>
+    exercise.sets
+      .map((set) => set.restSeconds)
+      .filter((value): value is number => value !== undefined && value > 0),
+  );
+  return rests.length
+    ? Math.round(rests.reduce((sum, value) => sum + value, 0) / rests.length)
+    : 0;
+}
+
+export function recommendedRestSeconds(intensity: GymIntensity) {
+  return intensity === "vigorous" ? 150 : intensity === "light" ? 60 : 90;
+}
+
 /**
  * Net active-energy estimate from the 2024 Adult Compendium.
  * Subtracting 1 MET avoids counting resting energy already represented by BMR.
+ * Logged rest uses a low 1.3 MET value instead of treating the full session as
+ * continuous lifting. Reps and load inform intensity/progress, but are not
+ * multiplied directly into calories because that would imply false precision.
  */
 export function estimateGymActiveCalories(
   weightKg: number,
@@ -244,9 +295,18 @@ export function estimateGymActiveCalories(
       : intensity === "vigorous"
         ? Math.max(catalogMet, METS.vigorous)
         : catalogMet;
+  const restMinutes = Math.min(
+    Math.max(durationMinutes, 0),
+    totalGymRestSeconds(exercises) / 60,
+  );
+  const activeMinutes = Math.max(0, durationMinutes - restMinutes);
+  const activeCalories =
+    ((met - 1) * 3.5 * weightKg * activeMinutes) / 200;
+  const restCalories =
+    ((1.3 - 1) * 3.5 * weightKg * restMinutes) / 200;
   return Math.max(
     0,
-    Math.round(((met - 1) * 3.5 * weightKg * durationMinutes) / 200),
+    Math.round(activeCalories + restCalories),
   );
 }
 
@@ -374,6 +434,27 @@ export function gymRecap(
       body: `${Math.round(muscles[0].sets)} allocated sets across ${muscles[0].sessions} sessions in the selected history.`,
       tone: "neutral",
     });
+  const recentRest = last7.flatMap((session) =>
+    session.exercises.flatMap((exercise) =>
+      exercise.sets
+        .map((set) => set.restSeconds)
+        .filter((value): value is number => value !== undefined && value > 0),
+    ),
+  );
+  if (recentRest.length) {
+    const average = Math.round(
+      recentRest.reduce((sum, value) => sum + value, 0) / recentRest.length,
+    );
+    cards.push({
+      id: "rest",
+      title: `${average}s average rest`,
+      body:
+        average > 210
+          ? "Your logged rests are long. That can suit heavy strength work; review unusually long gaps if they were accidental."
+          : "Rest timing is now included in your workout and calorie estimate.",
+      tone: average > 210 ? "attention" : "neutral",
+    });
+  }
   return cards.slice(0, 6);
 }
 

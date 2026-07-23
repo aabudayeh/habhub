@@ -1198,6 +1198,7 @@ export function createInitialState(): AppState {
         gymReminders: true,
         gymAchievements: true,
         gymReminderDays: 3,
+        gymRestAlerts: true,
       },
     },
     gymPlans: [],

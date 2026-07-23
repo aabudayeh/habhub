@@ -190,6 +190,7 @@ export default function Today() {
     return () => animation.stop();
   }, [goals.allMet, goldSequenceRun, heroGold]);
   const celebration = useRef(new Animated.Value(0)).current;
+  const [confettiVisible, setConfettiVisible] = useState(false);
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
   const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
@@ -204,6 +205,7 @@ export default function Today() {
     useCallback(() => {
       let cancelled = false;
       let clearTiles: ReturnType<typeof setTimeout> | undefined;
+      let clearConfetti: ReturnType<typeof setTimeout> | undefined;
       AsyncStorage.getItem(celebrationStorageKey)
         .then((saved) => {
           if (cancelled) return;
@@ -218,12 +220,26 @@ export default function Today() {
             if (special) setGoldSequenceRun((value) => value + 1);
             setCelebratingGoalIds(newlyCompleted);
             setCelebrationSpecial(special);
+            setConfettiVisible(true);
+            celebration.stopAnimation();
             celebration.setValue(0);
             Animated.timing(celebration, {
               toValue: 1,
               duration,
               useNativeDriver: true,
-            }).start();
+            }).start(() => {
+              if (cancelled) return;
+              setConfettiVisible(false);
+              celebration.setValue(0);
+            });
+            // Android can pause a native animation while sync or the app
+            // lifecycle changes. This guarantees the overlay is removed.
+            clearConfetti = setTimeout(() => {
+              if (cancelled) return;
+              celebration.stopAnimation();
+              celebration.setValue(0);
+              setConfettiVisible(false);
+            }, duration + 500);
             clearTiles = setTimeout(
               () => setCelebratingGoalIds([]),
               duration,
@@ -238,8 +254,10 @@ export default function Today() {
       return () => {
         cancelled = true;
         if (clearTiles) clearTimeout(clearTiles);
+        if (clearConfetti) clearTimeout(clearConfetti);
         celebration.stopAnimation();
         celebration.setValue(0);
+        setConfettiVisible(false);
       };
     }, [celebration, celebrationStorageKey]),
   );
@@ -286,7 +304,9 @@ export default function Today() {
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       edges={["top"]}
     >
-      <ConfettiBurst progress={celebration} special={celebrationSpecial} />
+      {confettiVisible ? (
+        <ConfettiBurst progress={celebration} special={celebrationSpecial} />
+      ) : null}
       <ScrollView
         refreshControl={
           <RefreshControl

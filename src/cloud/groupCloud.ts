@@ -622,6 +622,10 @@ export async function loadCloudWorkspace(
         ? undefined
         : Number(status.goal_progress),
     goalKind: status.goal_kind ?? undefined,
+    exactValue:
+      status.exact_value === null || status.exact_value === undefined
+        ? undefined
+        : Number(status.exact_value),
   }));
   const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({
@@ -919,6 +923,15 @@ export async function pushCloudWorkspace(state: AppState) {
           state.currentUserId,
           localDate,
         );
+        const exactShared =
+          metric.defaultVisibility === "group" &&
+          (metric.dataType === "calculated" ||
+            ownedEntries.some(
+              (entry) =>
+                entry.metricId === metric.id &&
+                entry.localDate === localDate &&
+                entry.visibility === "group",
+            ));
         return {
           group_id: state.group.id,
           metric_id: idBySlug.get(groupMetric.id),
@@ -956,6 +969,7 @@ export async function pushCloudWorkspace(state: AppState) {
               ),
             ) * 100,
           goal_kind: metric.goal.kind,
+          exact_value: exactShared ? value : null,
         };
       }),
   );
@@ -963,12 +977,17 @@ export async function pushCloudWorkspace(state: AppState) {
     let { error } = await client.from("daily_metric_status").insert(statuses);
     if (
       error &&
-      /goal_progress|goal_kind/i.test(
+      /goal_progress|goal_kind|exact_value/i.test(
         `${error.code ?? ""} ${error.message ?? ""}`,
       )
     ) {
       const legacyStatuses = statuses.map(
-        ({ goal_progress: _progress, goal_kind: _kind, ...status }) => status,
+        ({
+          goal_progress: _progress,
+          goal_kind: _kind,
+          exact_value: _exact,
+          ...status
+        }) => status,
       );
       ({ error } = await client
         .from("daily_metric_status")
@@ -1142,7 +1161,7 @@ export async function pushCloudWorkspace(state: AppState) {
       owner_user_id: state.currentUserId,
       group_id: state.group.id,
       subject_user_id: memberId,
-      alias: alias.trim(),
+      nickname: alias.trim(),
     }));
   if (aliasRows.length) {
     const { error } = await client

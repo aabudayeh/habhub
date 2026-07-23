@@ -107,7 +107,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         const fullRefresh =
           reason === 'history' ||
           (reason === 'connect' && !previous.lastSyncedAt);
-        if (fullRefresh) {
+        if (reason === 'history') {
           await nativeHealthAdapter.requestPermissions(
             dataTypes,
             current.settings.syncMode !== 'manual',
@@ -140,9 +140,18 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     setStatus('requesting');
     try {
       await nativeHealthAdapter.requestPermissions(dataTypes, backgroundAccess);
-      updateSettings({ healthSync: { ...current.healthSync, enabled: true, backgroundAccess } });
-      stateRef.current = { ...stateRef.current, settings: { ...current, healthSync: { ...current.healthSync, enabled: true, backgroundAccess } } };
       await runSync('connect', true);
+      const latest = stateRef.current.settings;
+      const healthSync = {
+        ...latest.healthSync,
+        enabled: true,
+        backgroundAccess,
+      };
+      updateSettings({ healthSync });
+      stateRef.current = {
+        ...stateRef.current,
+        settings: { ...latest, healthSync },
+      };
     } catch (error) {
       setStatus('error');
       throw error;
@@ -161,16 +170,22 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!state.settings.healthSync.enabled || state.settings.syncMode === 'manual') return;
+    // An automatic failure must remain quiet until the user retries or the app
+    // is reopened. Including `error` here previously created an immediate loop.
+    if (status !== 'ready') return;
     const last = persisted.lastSyncedAt
       ? new Date(persisted.lastSyncedAt).getTime()
       : 0;
     const stale = Date.now() - last >= minimumIntervalMs(state.settings.syncMode);
-    if (stale && status !== 'syncing' && status !== 'requesting') runSync('open').catch(() => undefined);
+    if (stale) runSync('open').catch(() => undefined);
   }, [persisted.lastSyncedAt, runSync, state.settings.healthSync.enabled, state.settings.syncMode, status]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener('change', (next) => {
       if (next !== 'active' || !stateRef.current.settings.healthSync.enabled || stateRef.current.settings.syncMode === 'manual') return;
+      // A denied/revoked permission stays quiet until the user explicitly
+      // reconnects; Android emits several active events around permission UI.
+      if (persistedRef.current.error) return;
       const lastSyncedAt = persistedRef.current.lastSyncedAt;
       const last = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
       // Refresh whenever the app is reopened, with a short guard against the
