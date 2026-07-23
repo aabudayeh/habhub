@@ -801,6 +801,8 @@ function TrackerRow({
       ? weekly.balance
       : safeMetricValue(state, item, state.currentUserId, day);
   const value = useAnimatedNumber(actualValue);
+  const weeklyBalanceAhead =
+    item.id === "weekly_deficit_balance" && weekly.balance >= 0;
   const applicable = metricApplicableOnDate(
     state,
     item,
@@ -924,7 +926,11 @@ function TrackerRow({
             styles.primary,
             {
               color:
-                item.goal.kind === "at_most" && value > target
+                item.id === "weekly_deficit_balance"
+                  ? weeklyBalanceAhead
+                    ? palette.lime
+                    : palette.red
+                  : item.goal.kind === "at_most" && value > target
                   ? palette.red
                   : colors.ink,
             },
