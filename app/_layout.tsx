@@ -1,6 +1,7 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Redirect, router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import * as Notifications from "expo-notifications";
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
@@ -17,7 +18,11 @@ import {
   GroupAccentProvider,
   palette,
 } from "@/src/theme";
-import { syncCycleNotifications, syncGoalNotifications } from "@/src/notifications/push";
+import {
+  syncCycleNotifications,
+  syncGoalNotifications,
+  syncGymNotifications,
+} from "@/src/notifications/push";
 import { dateKey } from "@/src/domain/date";
 
 const theme = {
@@ -72,6 +77,42 @@ function RootNavigator() {
   useEffect(() => {
     void syncGoalNotifications(cycleStateRef.current).catch(() => undefined);
   }, [goalReminderKey]);
+  const gymNotificationKey = JSON.stringify({
+    user: state.currentUserId,
+    gym: (state.gymSessions ?? []).map((session) => [
+      session.id,
+      session.recordedAt,
+      session.exercises.flatMap((exercise) =>
+        exercise.sets.map((set) => [set.weightKg, set.reps, set.completed]),
+      ),
+    ]),
+    enabled: state.settings.showGym,
+    notifications: [
+      state.settings.notifications.pushEnabled,
+      state.settings.notifications.quietHoursEnabled,
+      state.settings.notifications.quietHoursStart,
+      state.settings.notifications.quietHoursEnd,
+      state.settings.notifications.gymReminders,
+      state.settings.notifications.gymAchievements,
+      state.settings.notifications.gymReminderDays,
+    ],
+  });
+  useEffect(() => {
+    void syncGymNotifications(cycleStateRef.current).catch(() => undefined);
+  }, [gymNotificationKey]);
+  useEffect(() => {
+    const open = (response: Notifications.NotificationResponse) => {
+      const route = response.notification.request.content.data?.route;
+      if (typeof route === "string" && route.startsWith("/"))
+        router.push(route as never);
+    };
+    const subscription =
+      Notifications.addNotificationResponseReceivedListener(open);
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) open(response);
+    });
+    return () => subscription.remove();
+  }, []);
   useEffect(() => {
     if (
       landingApplied.current ||
@@ -163,6 +204,10 @@ function RootNavigator() {
               />
               <Stack.Screen
                 name="metric-detail"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="gym-exercise"
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen name="(tabs)" />

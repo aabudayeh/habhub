@@ -226,6 +226,47 @@ export default function NotificationsScreen() {
           onPress={() => patch({ reminders: !value.reminders })}
         />
         <ToggleRow
+          icon="barbell-outline"
+          title="Gym reminders"
+          copy={`Private prompt after ${value.gymReminderDays ?? 3} days without a completed workout`}
+          enabled={value.gymReminders !== false}
+          onPress={() => patch({ gymReminders: value.gymReminders === false })}
+        />
+        <ToggleRow
+          icon="sparkles-outline"
+          title="Gym encouragement"
+          copy="Personal-best and completed-workout encouragement on this device"
+          enabled={value.gymAchievements !== false}
+          onPress={() =>
+            patch({ gymAchievements: value.gymAchievements === false })
+          }
+        />
+        {value.gymReminders !== false ? (
+          <View style={styles.times}>
+            <Text style={[styles.label, { color: colors.muted }]}>
+              Prompt after
+            </Text>
+            {[2, 3, 4, 7].map((days) => (
+              <Pressable
+                key={days}
+                onPress={() => patch({ gymReminderDays: days })}
+              >
+                <Text
+                  style={{
+                    color:
+                      (value.gymReminderDays ?? 3) === days
+                        ? accent
+                        : colors.muted,
+                    fontWeight: "900",
+                  }}
+                >
+                  {days} days
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        <ToggleRow
           icon="calendar-outline"
           title="Upcoming period estimate"
           copy={`Private reminder ${value.cycleReminderDays ?? 2} days before the rolling estimate`}

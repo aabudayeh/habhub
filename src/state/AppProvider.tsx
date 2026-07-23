@@ -30,6 +30,7 @@ import { randomMessage } from "@/src/domain/social";
 import { defaultReminderTimes } from "@/src/domain/reminders";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
+import { completedGymSets } from "@/src/domain/gym";
 import { palette } from "@/src/theme";
 import {
   AppState,
@@ -39,6 +40,7 @@ import {
   Group,
   GymPlan,
   GymSession,
+  GymExerciseGoal,
   MetricDefinition,
   MetricEntry,
   NewMetric,
@@ -131,6 +133,7 @@ type Action =
   | { type: "deleteGymPlan"; planId: string }
   | { type: "saveGymSession"; session: GymSession }
   | { type: "deleteGymSession"; sessionId: string }
+  | { type: "gymExerciseGoal"; exerciseKey: string; goal: GymExerciseGoal }
   | {
       type: "importHealth";
       entries: MetricEntry[];
@@ -773,20 +776,66 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         gymPlans: (state.gymPlans ?? []).filter((item) => item.id !== action.planId),
       };
-    case "saveGymSession":
+    case "saveGymSession": {
+      const session = action.session;
+      const completedSets = completedGymSets(session.exercises);
+      const calorieValue = Math.max(0, Number(session.calories ?? 0));
+      const synced = (completedSets > 0 ? [
+        { metricId: "workout", value: true },
+        { metricId: "workout_duration", value: session.durationMinutes },
+        { metricId: "workout_calories", value: calorieValue },
+        { metricId: "exercise", value: calorieValue },
+      ] : [])
+        .filter(
+          (item) =>
+            state.metrics.some((metric) => metric.id === item.metricId) &&
+            (item.metricId === "workout" || Number(item.value) > 0),
+        )
+        .map((item): MetricEntry => ({
+          id: `gym-sync:${session.id}:${item.metricId}`,
+          metricId: item.metricId,
+          userId: state.currentUserId,
+          value: item.value,
+          localDate: session.localDate,
+          recordedAt: session.recordedAt,
+          visibility:
+            state.metrics.find((metric) => metric.id === item.metricId)
+              ?.defaultVisibility ?? session.visibility,
+          source: "manual",
+          label: session.name,
+          note: `Gym session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
+        }));
       return {
         ...state,
         gymSessions: [
-          action.session,
-          ...(state.gymSessions ?? []).filter((item) => item.id !== action.session.id),
+          session,
+          ...(state.gymSessions ?? []).filter((item) => item.id !== session.id),
+        ],
+        entries: [
+          ...state.entries.filter(
+            (entry) => !entry.id.startsWith(`gym-sync:${session.id}:`),
+          ),
+          ...synced,
         ],
       };
+    }
     case "deleteGymSession":
       return {
         ...state,
         gymSessions: (state.gymSessions ?? []).filter(
           (item) => item.id !== action.sessionId,
         ),
+        entries: state.entries.filter(
+          (entry) => !entry.id.startsWith(`gym-sync:${action.sessionId}:`),
+        ),
+      };
+    case "gymExerciseGoal":
+      return {
+        ...state,
+        gymExerciseGoals: {
+          ...(state.gymExerciseGoals ?? {}),
+          [action.exerciseKey]: action.goal,
+        },
       };
     case "addPhoto": {
       const photo: PhotoUpdate = {
@@ -1216,6 +1265,7 @@ type AppContextValue = {
   deleteGymPlan: (planId: string) => void;
   saveGymSession: (session: GymSession) => void;
   deleteGymSession: (sessionId: string) => void;
+  setGymExerciseGoal: (exerciseKey: string, goal: GymExerciseGoal) => void;
   importHealthEntries: (
     entries: MetricEntry[],
     provider: NonNullable<MetricEntry["sourceProvider"]>,
@@ -1647,6 +1697,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       saveGymSession: (session) => dispatch({ type: "saveGymSession", session }),
       deleteGymSession: (sessionId) =>
         dispatch({ type: "deleteGymSession", sessionId }),
+      setGymExerciseGoal: (exerciseKey, goal) =>
+        dispatch({ type: "gymExerciseGoal", exerciseKey, goal }),
       addPhoto: (uri, caption, visibility, localDate, capturedAt) =>
         dispatch({
           type: "addPhoto",

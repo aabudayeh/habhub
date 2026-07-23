@@ -1,4 +1,12 @@
-import { GymExercise, GymSession } from "@/src/types";
+import { dateWithOffsetFrom } from "@/src/domain/date";
+import { exerciseKey, MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
+import {
+  GymExercise,
+  GymExerciseGoal,
+  GymIntensity,
+  GymSession,
+  MuscleGroup,
+} from "@/src/types";
 
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
@@ -8,7 +16,7 @@ export function completedGymSets(exercises: GymExercise[]) {
   );
 }
 
-/** Standard strength-training volume: sum of completed reps × load. */
+/** Standard strength-training volume: sum of completed reps × external load. */
 export function trainingVolumeKg(exercises: GymExercise[]) {
   return exercises.reduce(
     (sessionTotal, exercise) =>
@@ -16,10 +24,229 @@ export function trainingVolumeKg(exercises: GymExercise[]) {
       exercise.sets.reduce(
         (exerciseTotal, set) =>
           exerciseTotal +
-          (set.completed ? Math.max(0, set.reps) * Math.max(0, set.weightKg) : 0),
+          (set.completed
+            ? Math.max(0, set.reps) * Math.max(0, set.weightKg)
+            : 0),
         0,
       ),
     0,
+  );
+}
+
+/** Epley estimate. It is shown only as a training trend, never a safe load prescription. */
+export function estimatedOneRepMax(weightKg: number, reps: number) {
+  if (weightKg <= 0 || reps <= 0) return 0;
+  if (reps === 1) return weightKg;
+  return weightKg * (1 + Math.min(reps, 12) / 30);
+}
+
+export function exerciseIdentity(exercise: Pick<GymExercise, "name" | "exerciseKey">) {
+  return exerciseKey(exercise.name, exercise.exerciseKey);
+}
+
+export type ExerciseObservation = {
+  sessionId: string;
+  localDate: string;
+  name: string;
+  maxWeightKg: number;
+  repsAtMax: number;
+  estimatedOneRepMaxKg: number;
+  volumeKg: number;
+  completedSets: number;
+  muscles: MuscleGroup[];
+};
+
+export function exerciseHistory(
+  sessions: GymSession[],
+  userId: string,
+  key: string,
+) {
+  return sessions
+    .filter((session) => session.userId === userId)
+    .flatMap((session) =>
+      session.exercises
+        .filter((exercise) => exerciseIdentity(exercise) === key)
+        .map((exercise): ExerciseObservation => {
+          const sets = exercise.sets.filter((set) => set.completed);
+          const max = [...sets].sort(
+            (a, b) => b.weightKg - a.weightKg || b.reps - a.reps,
+          )[0];
+          return {
+            sessionId: session.id,
+            localDate: session.localDate,
+            name: exercise.name,
+            maxWeightKg: max?.weightKg ?? 0,
+            repsAtMax: max?.reps ?? 0,
+            estimatedOneRepMaxKg: Math.max(
+              0,
+              ...sets.map((set) =>
+                estimatedOneRepMax(set.weightKg, set.reps),
+              ),
+            ),
+            volumeKg: sets.reduce(
+              (sum, set) => sum + set.weightKg * set.reps,
+              0,
+            ),
+            completedSets: sets.length,
+            muscles: exercise.muscleGroups ?? [],
+          };
+        }),
+    )
+    .filter((item) => item.completedSets > 0)
+    .sort((a, b) => a.localDate.localeCompare(b.localDate));
+}
+
+export type GymTrend = "building" | "steady" | "regressing" | "learning";
+
+/**
+ * Conservative trend classification:
+ * - no judgement before 4 logged exposures across >=21 days;
+ * - building at >=2% estimated-1RM improvement;
+ * - orange/steady only after 28 days without a 2% best;
+ * - regressing only after two recent observations average >=5% below baseline.
+ *
+ * The 2% threshold is deliberately below ACSM's 2–10% load-progression band,
+ * while the exposure gate avoids judging occasional gym visits.
+ */
+export function exerciseTrend(history: ExerciseObservation[]): GymTrend {
+  if (
+    history.length < 4 ||
+    daysBetween(history[0].localDate, history.at(-1)!.localDate) < 21
+  )
+    return "learning";
+  const recent = history.slice(-2);
+  const prior = history.slice(0, -2);
+  const recentBest = Math.max(...recent.map((item) => item.estimatedOneRepMaxKg));
+  const priorBest = Math.max(...prior.map((item) => item.estimatedOneRepMaxKg));
+  if (priorBest > 0 && recentBest >= priorBest * 1.02) return "building";
+  const recentAverage =
+    recent.reduce((sum, item) => sum + item.estimatedOneRepMaxKg, 0) /
+    recent.length;
+  const priorRecent = prior.slice(-2);
+  const priorAverage =
+    priorRecent.reduce((sum, item) => sum + item.estimatedOneRepMaxKg, 0) /
+    Math.max(priorRecent.length, 1);
+  if (priorAverage > 0 && recentAverage < priorAverage * 0.95)
+    return "regressing";
+  return daysBetween(
+    prior.find(
+      (item) => item.estimatedOneRepMaxKg >= priorBest * 0.99,
+    )?.localDate ?? history[0].localDate,
+    history.at(-1)!.localDate,
+  ) >= 28
+    ? "steady"
+    : "learning";
+}
+
+export function exerciseStats(
+  sessions: GymSession[],
+  userId: string,
+  key: string,
+  goal?: GymExerciseGoal,
+) {
+  const history = exerciseHistory(sessions, userId, key);
+  const first = history[0];
+  const latest = history.at(-1);
+  const bestOneRepMax = Math.max(
+    0,
+    ...history.map((item) => item.estimatedOneRepMaxKg),
+  );
+  const bestWeight = Math.max(0, ...history.map((item) => item.maxWeightKg));
+  const bestWeightObservation = [...history]
+    .reverse()
+    .find((item) => item.maxWeightKg === bestWeight);
+  const improvement =
+    first?.estimatedOneRepMaxKg && latest
+      ? ((latest.estimatedOneRepMaxKg - first.estimatedOneRepMaxKg) /
+          first.estimatedOneRepMaxKg) *
+        100
+      : 0;
+  const target = goal?.targetOneRepMaxKg ?? 0;
+  return {
+    history,
+    trend: exerciseTrend(history),
+    bestOneRepMax,
+    bestWeight,
+    repsAtBestWeight: bestWeightObservation?.repsAtMax ?? 0,
+    improvement,
+    sessions: history.length,
+    goalProgress: target > 0 ? Math.min(1, bestOneRepMax / target) : 0,
+  };
+}
+
+export function muscleGroupStats(sessions: GymSession[], userId: string) {
+  const map = new Map<
+    MuscleGroup,
+    { muscle: MuscleGroup; volumeKg: number; sets: number; sessions: Set<string> }
+  >();
+  for (const session of sessions.filter((item) => item.userId === userId)) {
+    for (const exercise of session.exercises) {
+      const muscles = exercise.muscleGroups?.length
+        ? exercise.muscleGroups
+        : ["full_body" as const];
+      const volume = trainingVolumeKg([exercise]) / muscles.length;
+      const sets =
+        exercise.sets.filter((set) => set.completed).length / muscles.length;
+      for (const muscle of muscles) {
+        const current = map.get(muscle) ?? {
+          muscle,
+          volumeKg: 0,
+          sets: 0,
+          sessions: new Set<string>(),
+        };
+        current.volumeKg += volume;
+        current.sets += sets;
+        current.sessions.add(session.id);
+        map.set(muscle, current);
+      }
+    }
+  }
+  return [...map.values()]
+    .map((item) => ({
+      muscle: item.muscle,
+      label: MUSCLE_LABELS[item.muscle],
+      volumeKg: item.volumeKg,
+      sets: item.sets,
+      sessions: item.sessions.size,
+    }))
+    .sort((a, b) => b.volumeKg - a.volumeKg);
+}
+
+const METS: Record<GymIntensity, number> = {
+  light: 3.5,
+  moderate: 5,
+  vigorous: 6,
+};
+
+/**
+ * Net active-energy estimate from the 2024 Adult Compendium.
+ * Subtracting 1 MET avoids counting resting energy already represented by BMR.
+ */
+export function estimateGymActiveCalories(
+  weightKg: number,
+  durationMinutes: number,
+  intensity: GymIntensity,
+  exercises: GymExercise[] = [],
+) {
+  const completed = exercises
+    .map((exercise) => ({
+      met: exercise.customMet ?? METS[intensity],
+      sets: exercise.sets.filter((set) => set.completed).length,
+    }))
+    .filter((item) => item.sets > 0);
+  const totalSets = completed.reduce((sum, item) => sum + item.sets, 0);
+  const catalogMet = totalSets
+    ? completed.reduce((sum, item) => sum + item.met * item.sets, 0) / totalSets
+    : METS[intensity];
+  const met =
+    intensity === "light"
+      ? Math.min(catalogMet, METS.light)
+      : intensity === "vigorous"
+        ? Math.max(catalogMet, METS.vigorous)
+        : catalogMet;
+  return Math.max(
+    0,
+    Math.round(((met - 1) * 3.5 * weightKg * durationMinutes) / 200),
   );
 }
 
@@ -51,4 +278,112 @@ export function recentGymVolume(sessions: GymSession[], userId: string) {
       date: session.localDate,
       volumeKg: trainingVolumeKg(session.exercises),
     }));
+}
+
+export type GymRecapCard = {
+  id: string;
+  title: string;
+  body: string;
+  tone: "positive" | "attention" | "neutral";
+};
+
+export function gymRecap(
+  sessions: GymSession[],
+  userId: string,
+  anchor: string,
+) {
+  const mine = sessions
+    .filter(
+      (session) =>
+        session.userId === userId &&
+        session.localDate <= anchor &&
+        session.localDate >= dateWithOffsetFrom(anchor, -59),
+    )
+    .sort((a, b) => a.localDate.localeCompare(b.localDate));
+  if (!mine.length)
+    return [
+      {
+        id: "start",
+        title: "Your first baseline",
+        body: "Complete a workout to start exercise and muscle-group trends.",
+        tone: "neutral",
+      },
+    ] satisfies GymRecapCard[];
+  const cards: GymRecapCard[] = [];
+  const last7 = mine.filter(
+    (item) => item.localDate >= dateWithOffsetFrom(anchor, -6),
+  );
+  const prior7 = mine.filter(
+    (item) =>
+      item.localDate >= dateWithOffsetFrom(anchor, -13) &&
+      item.localDate < dateWithOffsetFrom(anchor, -6),
+  );
+  const volume = (items: GymSession[]) =>
+    items.reduce((sum, session) => sum + trainingVolumeKg(session.exercises), 0);
+  const currentVolume = volume(last7);
+  const priorVolume = volume(prior7);
+  const volumeChange = priorVolume
+    ? ((currentVolume - priorVolume) / priorVolume) * 100
+    : 0;
+  cards.push({
+    id: "week",
+    title: `${last7.length} workout${last7.length === 1 ? "" : "s"} this week`,
+    body: prior7.length
+      ? `${Math.round(currentVolume).toLocaleString()} kg volume versus ${Math.round(priorVolume).toLocaleString()} kg in the prior seven days (${volumeChange >= 0 ? "+" : ""}${volumeChange.toFixed(0)}%).`
+      : `${Math.round(currentVolume).toLocaleString()} kg of completed-set volume logged.`,
+    tone: last7.length >= 2 ? "positive" : "neutral",
+  });
+  const keys = [
+    ...new Set(
+      mine.flatMap((session) =>
+        session.exercises.map((exercise) => exerciseIdentity(exercise)),
+      ),
+    ),
+  ];
+  const trends = keys.map((key) => ({
+    key,
+    name:
+      mine
+        .flatMap((item) => item.exercises)
+        .find((exercise) => exerciseIdentity(exercise) === key)?.name ?? key,
+    stats: exerciseStats(mine, userId, key),
+  }));
+  const improved = trends
+    .filter((item) => item.stats.trend === "building")
+    .sort((a, b) => b.stats.improvement - a.stats.improvement)[0];
+  if (improved)
+    cards.push({
+      id: "best",
+      title: `${improved.name} is moving`,
+      body: `${Math.max(0, improved.stats.improvement).toFixed(1)}% estimated-strength improvement from your first logged session.`,
+      tone: "positive",
+    });
+  const stagnant = trends.find((item) => item.stats.trend === "steady");
+  if (stagnant)
+    cards.push({
+      id: "stagnant",
+      title: `Review ${stagnant.name}`,
+      body: "No clear estimated-strength best for at least four weeks. Recovery, technique, repetitions, or a small 2–10% load progression may be worth reviewing.",
+      tone: "attention",
+    });
+  const muscles = muscleGroupStats(mine, userId);
+  if (muscles.length)
+    cards.push({
+      id: "muscle",
+      title: `${muscles[0].label} leads your volume`,
+      body: `${Math.round(muscles[0].sets)} allocated sets across ${muscles[0].sessions} sessions in the selected history.`,
+      tone: "neutral",
+    });
+  return cards.slice(0, 6);
+}
+
+function daysBetween(from: string, to: string) {
+  return Math.max(
+    0,
+    Math.round(
+      (new Date(`${to}T12:00:00`).getTime() -
+        new Date(`${from}T12:00:00`).getTime()) /
+        86400000,
+    ),
+  );
 }

@@ -213,19 +213,51 @@ export type FoodGoalMode = "activity_adjusted" | "fixed";
 export type WeightDirection = "lose" | "maintain" | "gain";
 export type LandingPage = "index" | "log" | "insights" | "group" | "chat" | "gym";
 
+export type MuscleGroup =
+  | "chest"
+  | "back"
+  | "shoulders"
+  | "biceps"
+  | "triceps"
+  | "forearms"
+  | "abs"
+  | "glutes"
+  | "quadriceps"
+  | "hamstrings"
+  | "calves"
+  | "full_body";
+export type GymIntensity = "light" | "moderate" | "vigorous";
+export type GymExerciseGoal = {
+  targetOneRepMaxKg?: number;
+  targetWeightKg?: number;
+  targetReps?: number;
+};
 export type GymSet = {
   id: string;
   reps: number;
   weightKg: number;
   completed: boolean;
 };
-export type GymExercise = { id: string; name: string; sets: GymSet[] };
+export type GymExercise = {
+  id: string;
+  /** Stable catalog id keeps history continuous when display names change. */
+  exerciseKey?: string;
+  name: string;
+  muscleGroups?: MuscleGroup[];
+  sets: GymSet[];
+  notes?: string;
+  customMet?: number;
+};
 export type GymPlanExercise = {
   id: string;
+  exerciseKey?: string;
   name: string;
+  muscleGroups?: MuscleGroup[];
   targetSets: number;
   targetReps: number;
   startingWeightKg?: number;
+  notes?: string;
+  customMet?: number;
 };
 export type GymPlan = {
   id: string;
@@ -244,6 +276,8 @@ export type GymSession = {
   recordedAt: string;
   durationMinutes: number;
   calories?: number;
+  intensity?: GymIntensity;
+  notes?: string;
   exercises: GymExercise[];
   visibility: Visibility;
 };
@@ -339,6 +373,12 @@ export type NotificationSettings = {
   cyclePredictions?: boolean;
   cyclePhaseUpdates?: boolean;
   cycleReminderDays?: number;
+  /** Private inactivity reminders for the strength-training workspace. */
+  gymReminders?: boolean;
+  /** Private personal-best and consistency encouragement. */
+  gymAchievements?: boolean;
+  /** Wait this many full days after the latest completed gym session. */
+  gymReminderDays?: number;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };
@@ -376,6 +416,7 @@ export type AppState = {
   dailyMetricStatuses: DailyMetricStatus[];
   gymPlans?: GymPlan[];
   gymSessions?: GymSession[];
+  gymExerciseGoals?: Record<string, GymExerciseGoal>;
   settings: UserSettings;
   /** Preserves which goals counted on each historical date. */
   trackedGoalPeriods: Record<string, TrackedGoalPeriod[]>;

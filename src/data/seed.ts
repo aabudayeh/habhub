@@ -1194,10 +1194,14 @@ export function createInitialState(): AppState {
         cyclePredictions: true,
         cyclePhaseUpdates: false,
         cycleReminderDays: 2,
+        gymReminders: true,
+        gymAchievements: true,
+        gymReminderDays: 3,
       },
     },
     gymPlans: [],
     gymSessions: [],
+    gymExerciseGoals: {},
     trackedGoalPeriods: Object.fromEntries(
       DEFAULT_METRICS.map((metric) => [
         metric.id,

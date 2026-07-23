@@ -9,6 +9,13 @@ import { AppState, NotificationSettings } from '@/src/types';
 import { cycleForecast } from '@/src/domain/cycle';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
 import { effectiveGoalTarget, isMetricTrackedOnDate, safeMetricValue, scheduledGoalReached } from '@/src/domain/metrics';
+import {
+  completedGymSets,
+  estimatedOneRepMax,
+  exerciseHistory,
+  exerciseIdentity,
+  trainingVolumeKg,
+} from '@/src/domain/gym';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -55,6 +62,8 @@ export async function disablePushNotifications(userId: string) {
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';
 const GOAL_IDS = 'metric-rally-goal-reminder-ids-v1';
+const GYM_IDS = 'metric-rally-gym-notification-ids-v1';
+const GYM_ACHIEVEMENT = 'metric-rally-gym-achievement-v1';
 
 function reminderTime(state: AppState, configured: string) {
   if (!state.settings.notifications.quietHoursEnabled) return configured;
@@ -194,4 +203,100 @@ export async function syncCycleNotifications(state: AppState) {
     ids.push(await Notifications.scheduleNotificationAsync({ content: { title: item.title, body: item.body, data: { route: '/metric-detail', metric: 'menstrual_cycle' } }, trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger } }));
   }
   await AsyncStorage.setItem(CYCLE_IDS, JSON.stringify(ids));
+}
+
+/**
+ * Keeps gym prompts private and on-device. Group activity still uses the
+ * regular shared tracker entries created from a completed session.
+ */
+export async function syncGymNotifications(state: AppState) {
+  if (Platform.OS === 'web') return;
+  const settings = state.settings.notifications;
+  const idsKey = `${GYM_IDS}:${state.currentUserId}`;
+  const achievementKey = `${GYM_ACHIEVEMENT}:${state.currentUserId}`;
+  const previous = JSON.parse((await AsyncStorage.getItem(idsKey)) ?? '[]') as string[];
+  await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  if (!settings.pushEnabled || state.settings.showGym === false) {
+    await AsyncStorage.setItem(idsKey, '[]');
+    return;
+  }
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) return;
+  const sessions = (state.gymSessions ?? [])
+    .filter(
+      (session) =>
+        session.userId === state.currentUserId &&
+        completedGymSets(session.exercises) > 0,
+    )
+    .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
+  const latest = sessions[0];
+  const ids: string[] = [];
+
+  if (settings.gymAchievements !== false && latest) {
+    const alreadyNotified = await AsyncStorage.getItem(achievementKey);
+    if (alreadyNotified !== latest.id) {
+      const records = latest.exercises.flatMap((exercise) => {
+        const current = Math.max(
+          0,
+          ...exercise.sets
+            .filter((set) => set.completed)
+            .map((set) => estimatedOneRepMax(set.weightKg, set.reps)),
+        );
+        const previousHistory = exerciseHistory(
+          sessions.filter((session) => session.id !== latest.id),
+          state.currentUserId,
+          exerciseIdentity(exercise),
+        );
+        const previousBest = Math.max(
+          0,
+          ...previousHistory.map((item) => item.estimatedOneRepMaxKg),
+        );
+        return current > 0 && previousBest > 0 && current >= previousBest * 1.005
+          ? [exercise.name]
+          : [];
+      });
+      ids.push(
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: records.length ? 'New gym best' : 'Workout saved',
+            body: records.length
+              ? `${records.slice(0, 2).join(' and ')} moved above your prior estimated best.`
+              : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString()} kg of volume logged.`,
+            data: { route: '/gym' },
+          },
+          trigger: null,
+        }),
+      );
+      await AsyncStorage.setItem(achievementKey, latest.id);
+    }
+  }
+
+  if (settings.gymReminders !== false) {
+    const waitDays = Math.max(1, Math.min(14, settings.gymReminderDays ?? 3));
+    const baseDate = latest?.localDate ?? dateKey();
+    let reminderDate = dateWithOffsetFrom(baseDate, waitDays);
+    const now = new Date();
+    const time = reminderTime(state, '18:00');
+    let trigger = new Date(`${reminderDate}T${time}:00`);
+    if (trigger <= now) {
+      reminderDate = dateWithOffsetFrom(dateKey(), 1);
+      trigger = new Date(`${reminderDate}T${time}:00`);
+    }
+    ids.push(
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Ready for your next gym day?',
+          body: latest
+            ? `It has been ${waitDays} days since ${latest.name}. Reuse it or choose another saved workout when you are ready.`
+            : 'Start a workout to build your personal exercise baseline.',
+          data: { route: '/gym' },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: trigger,
+        },
+      }),
+    );
+  }
+  await AsyncStorage.setItem(idsKey, JSON.stringify(ids));
 }
