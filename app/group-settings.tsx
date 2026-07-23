@@ -12,7 +12,10 @@ import {
 import { AppText as Text } from "@/src/components/AppText";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
-import { isCloudGroupId } from "@/src/cloud/groupCloud";
+import {
+  isCloudGroupId,
+  setCloudGroupApprovalRequired,
+} from "@/src/cloud/groupCloud";
 
 import {
   Avatar,
@@ -102,6 +105,20 @@ export default function GroupSettings() {
     if (auth.status === "signedIn" && isCloudGroupId(state.group.id))
       await cloud.approveMember(memberId);
     else approveMember(memberId);
+  }
+
+  async function updateApprovalRequirement(required: boolean) {
+    setGroupApprovalRequired(required);
+    if (auth.status !== "signedIn" || !isCloudGroupId(state.group.id)) return;
+    try {
+      await setCloudGroupApprovalRequired(state.group.id, required);
+    } catch (error) {
+      setGroupApprovalRequired(!required);
+      Alert.alert(
+        "Could not update approval",
+        error instanceof Error ? error.message : "Try again.",
+      );
+    }
   }
 
   async function remove(memberId: string) {
@@ -374,7 +391,9 @@ export default function GroupSettings() {
           </View>
           <Switch
             value={!state.group.requireMemberApproval}
-            onValueChange={(allow) => setGroupApprovalRequired(!allow)}
+            onValueChange={(allow) =>
+              void updateApprovalRequirement(!allow)
+            }
             trackColor={{ false: colors.border, true: `${accent}88` }}
             thumbColor={!state.group.requireMemberApproval ? accent : colors.faint}
           />

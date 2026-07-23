@@ -140,6 +140,24 @@ export default function GroupsScreen() {
         }
       />
       <View style={styles.list}>
+        {cloud.pendingGroup ? (
+          <Card style={[styles.group, { borderColor: accent }]}>
+            <View
+              style={[styles.icon, { backgroundColor: colors.primarySoft }]}
+            >
+              <Ionicons name="time-outline" size={20} color={accent} />
+            </View>
+            <View style={styles.copy}>
+              <Text style={[styles.title, { color: colors.ink }]}>
+                {cloud.pendingGroup.groupName ?? "Invited group"}
+              </Text>
+              <Text style={[styles.meta, { color: colors.muted }]}>
+                Pending admin approval
+              </Text>
+            </View>
+            <Text style={[styles.active, { color: accent }]}>PENDING</Text>
+          </Card>
+        ) : null}
         {state.groups.map((group) => {
           const active = group.id === state.group.id;
           const member = group.members.find(

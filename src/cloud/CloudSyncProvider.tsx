@@ -65,6 +65,7 @@ type CloudSyncContextValue = {
   lastSyncedAt: string | null;
   errorMessage: string | null;
   pendingChanges: boolean;
+  pendingGroup: PendingGroupRequest | null;
   devices: AccountDevice[];
   syncNow: () => Promise<void>;
   pullLatest: () => Promise<void>;
@@ -80,6 +81,11 @@ type CloudSyncContextValue = {
   removeMember: (userId: string) => Promise<void>;
 };
 
+export type PendingGroupRequest = {
+  groupId: string;
+  groupName?: string;
+};
+
 type SnapshotRow = {
   payload: AppState;
   revision: number;
@@ -89,6 +95,17 @@ type SnapshotRow = {
 };
 
 const CloudSyncContext = createContext<CloudSyncContextValue | null>(null);
+
+function parsePendingGroup(value: string | null): PendingGroupRequest | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as PendingGroupRequest;
+    if (parsed?.groupId) return parsed;
+  } catch {
+    // Older builds stored only the group id.
+  }
+  return { groupId: value };
+}
 
 function uniqueDeviceId() {
   return `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -689,6 +706,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingChanges, setPendingChanges] = useState(false);
+  const [pendingGroup, setPendingGroup] =
+    useState<PendingGroupRequest | null>(null);
   const [devices, setDevices] = useState<AccountDevice[]>([]);
   const stateRef = useRef(state);
   const revisionRef = useRef(0);
@@ -700,6 +719,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressGroupRefreshUntilRef = useRef(0);
   stateRef.current = state;
+
+  useEffect(() => {
+    if (auth.status !== "signedIn") setPendingGroup(null);
+  }, [auth.status]);
 
   const loadDevices = useCallback(async () => {
     if (!supabase || !auth.user) return;
@@ -1016,10 +1039,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       workspaceHashRef.current = workspaceHash(next);
       replaceState(next);
       await AsyncStorage.removeItem(PENDING_GROUP_KEY);
+      setPendingGroup(null);
     };
     AsyncStorage.getItem(PENDING_GROUP_KEY)
-      .then((groupId) => {
-        if (groupId) return activateIfApproved(groupId);
+      .then((stored) => {
+        const request = parsePendingGroup(stored);
+        setPendingGroup(request);
+        if (request) return activateIfApproved(request.groupId);
       })
       .catch(() => undefined);
     const channel = supabase
@@ -1039,6 +1065,19 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           };
           if (membership.group_id && membership.status === "active")
             activateIfApproved(membership.group_id).catch(() => undefined);
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "group_members",
+          filter: `user_id=eq.${auth.user.id}`,
+        },
+        () => {
+          AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
+          setPendingGroup(null);
         },
       )
       .subscribe();
@@ -1161,6 +1200,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       lastSyncedAt,
       errorMessage,
       pendingChanges,
+      pendingGroup,
       devices,
       syncNow: performSync,
       pullLatest,
@@ -1210,7 +1250,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       joinGroup: async (code) => {
         const result = await joinCloudGroup(code);
         if (result.status === "pending") {
-          await AsyncStorage.setItem(PENDING_GROUP_KEY, result.groupId);
+          const request = {
+            groupId: result.groupId,
+            groupName: result.groupName,
+          };
+          await AsyncStorage.setItem(
+            PENDING_GROUP_KEY,
+            JSON.stringify(request),
+          );
+          setPendingGroup(request);
           return "pending";
         }
         const groupId = result.groupId;
@@ -1220,6 +1268,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         replaceState(next);
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
+        setPendingGroup(null);
         return "active";
       },
       switchGroup: async (groupId) => {
@@ -1268,6 +1317,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       lastSyncedAt,
       loadDevices,
       pendingChanges,
+      pendingGroup,
       performSync,
       pullLatest,
       refreshGroup,

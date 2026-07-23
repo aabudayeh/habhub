@@ -361,16 +361,40 @@ export async function joinCloudGroup(code: string) {
     code: code.trim().toUpperCase(),
   });
   if (error) {
-    if (!/request_group_membership|schema cache|does not exist/i.test(error.message))
-      throw error;
-    const legacy = await client.rpc("join_group_with_code", {
-      code: code.trim().toUpperCase(),
-    });
-    if (legacy.error) throw legacy.error;
-    return { groupId: legacy.data as string, status: "active" as const };
+    if (/request_group_membership|schema cache|does not exist/i.test(error.message))
+      throw new Error(
+        "Group approval is not installed on the cloud project yet. Apply the latest Supabase migration and try again.",
+      );
+    throw error;
   }
-  const result = data as { groupId: string; status: "active" | "pending" };
+  const result = data as {
+    groupId: string;
+    groupName?: string;
+    status: "active" | "pending";
+  };
   return result;
+}
+
+export async function setCloudGroupApprovalRequired(
+  groupId: string,
+  required: boolean,
+) {
+  const client = requireCloud();
+  const { data, error } = await client
+    .from("groups")
+    .select("settings")
+    .eq("id", groupId)
+    .single();
+  if (error) throw error;
+  const settings = {
+    ...((data?.settings as Record<string, unknown> | null) ?? {}),
+    requireMemberApproval: required,
+  };
+  const { error: updateError } = await client
+    .from("groups")
+    .update({ settings })
+    .eq("id", groupId);
+  if (updateError) throw updateError;
 }
 
 export async function approveCloudGroupMember(groupId: string, userId: string) {
@@ -927,6 +951,7 @@ export async function pushCloudWorkspace(state: AppState) {
         const exactShared =
           metric.defaultVisibility === "group" &&
           (metric.dataType === "calculated" ||
+            metric.stepFallback === true ||
             ownedEntries.some(
               (entry) =>
                 entry.metricId === metric.id &&
