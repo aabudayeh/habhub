@@ -194,13 +194,19 @@ export function periodMetricResult(
       .map(({ date }) => statusForDate(date)?.goalKind)
       .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
   if (!exact.length && !statuses.length) {
+    const hasUnsharedData = results.some(({ date }) =>
+      hasPeriodData(state, metric, subjectUserId, date),
+    );
     return {
       mode: "private",
       total: 0,
       average: 0,
       completedDays: 0,
       visibleDays: 0,
-      label: subjectUserId === viewerUserId ? "No data" : "Private",
+      label:
+        subjectUserId === viewerUserId || !hasUnsharedData
+          ? "No data"
+          : "Private",
     };
   }
   const completedDays = results.filter(({ date, result }) => {

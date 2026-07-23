@@ -36,6 +36,7 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
+  isMetricTrackedOnDate,
   metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
   metricOverallAverage,
@@ -434,15 +435,49 @@ export default function Insights() {
         ))}
       </View>
       {editing ? (
-        <>
+        <View style={styles.editActions}>
           <Pressable
             onPress={() => setShowPicker((value) => !value)}
-            style={[styles.addExisting, { borderColor: accent }]}
+            style={[
+              styles.addExisting,
+              styles.editActionButton,
+              { borderColor: accent },
+            ]}
           >
             <Ionicons name="add" size={18} color={accent} />
-            <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+              style={[styles.addExistingText, { color: accent }]}
+            >
+              Add existing tracker
+            </Text>
           </Pressable>
-        </>
+          <Pressable
+            onPress={() =>
+              router.navigate({
+                pathname: "/customize",
+                params: { tab: "goals" },
+              } as never)
+            }
+            style={[
+              styles.addExisting,
+              styles.editActionButton,
+              { borderColor: colors.border },
+            ]}
+          >
+            <Ionicons name="flag-outline" size={17} color={accent} />
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+              style={[styles.addExistingText, { color: accent }]}
+            >
+              Edit tracked goals
+            </Text>
+          </Pressable>
+        </View>
       ) : (
         <Pressable
           onPress={() => setEditing(true)}
@@ -723,6 +758,11 @@ function MetricSummary({
     dates[dates.length - 1],
   );
   const isBoolean = metric.dataType === "boolean";
+  const trackedGoal = isMetricTrackedOnDate(
+    state,
+    metric,
+    dateKey(),
+  );
   const weightStats =
     metric.id === "weight"
       ? weightProgressStats(state, state.currentUserId, dates[dates.length - 1])
@@ -771,14 +811,32 @@ function MetricSummary({
           />
         </View>
         <View style={styles.summaryPrimary}>
-          <Text
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.78}
-            style={[styles.summaryName, styles.summaryNameRow, { color: colors.ink }]}
-          >
-            {metric.name}
-          </Text>
+          <View style={styles.summaryTitleLine}>
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+              style={[
+                styles.summaryName,
+                styles.summaryNameRow,
+                styles.summaryTitleText,
+                { color: colors.ink },
+              ]}
+            >
+              {metric.name}
+            </Text>
+            {trackedGoal ? (
+              <View
+                accessibilityLabel="Tracked goal"
+                style={[
+                  styles.trackedMarker,
+                  { backgroundColor: colors.primarySoft },
+                ]}
+              >
+                <Ionicons name="flag" size={9} color={accent} />
+              </View>
+            ) : null}
+          </View>
           <Text
             numberOfLines={1}
             adjustsFontSizeToFit
@@ -840,9 +898,26 @@ function MetricSummary({
         </Text>
         </View>
         {editing ? (
-          <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
-            <Ionicons name="remove" size={16} color={palette.white} />
-          </Pressable>
+          <View style={styles.cardEditActions}>
+            {trackedGoal ? (
+              <Pressable
+                accessibilityLabel={`Change ${metric.name} goal start date`}
+                onPress={() =>
+                  router.push({
+                    pathname: "/metric-editor" as never,
+                    params: { id: metric.id, focus: "goal-start" },
+                  })
+                }
+                style={[styles.goalDate, { borderColor: colors.border }]}
+                hitSlop={6}
+              >
+                <Ionicons name="calendar-outline" size={15} color={accent} />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+              <Ionicons name="remove" size={16} color={palette.white} />
+            </Pressable>
+          </View>
         ) : null}
       </Card>
     </Pressable>
@@ -855,9 +930,13 @@ const styles = StyleSheet.create({
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },
   addExistingText: { fontSize: 10, fontWeight: "900" },
+  editActions: { flexDirection: "row", gap: 7 },
+  editActionButton: { flex: 1, minWidth: 0, paddingHorizontal: 7 },
   editHint: { alignItems: "center", paddingVertical: 8 },
   drag: { width: 28, alignItems: "center", justifyContent: "center" },
   remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
+  cardEditActions: { flexDirection: "row", alignItems: "center", gap: 5 },
+  goalDate: { width: 27, height: 27, borderRadius: 9, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   recap: {
     flexDirection: "row",
     alignItems: "center",
@@ -1042,6 +1121,15 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   summaryNameRow: { marginTop: 0 },
+  summaryTitleLine: { flexDirection: "row", alignItems: "center", gap: 4 },
+  summaryTitleText: { flexShrink: 1 },
+  trackedMarker: {
+    width: 18,
+    height: 18,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   summaryValue: {
     color: palette.ink,
     fontSize: 15,
