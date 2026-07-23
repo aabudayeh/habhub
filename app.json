@@ -100,14 +100,15 @@
       "typedRoutes": true,
       "reactCompiler": true
     },
+    "updates": {
+      "url": "https://u.expo.dev/86572f88-3935-494f-b653-ecaf2e9712d1"
+    },
+    "owner": "sethanolics",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "bc338000-2432-42da-8a7f-1502fa2482e4"
+        "projectId": "86572f88-3935-494f-b653-ecaf2e9712d1"
       }
-    },
-    "updates": {
-      "url": "https://u.expo.dev/bc338000-2432-42da-8a7f-1502fa2482e4"
     }
   }
 }
