@@ -109,7 +109,11 @@ export function periodMetricResult(
   dates: string[],
 ): PeriodMetricResult {
   const results = dates
-    .filter((date) => metric.activeFrom <= date)
+    .filter(
+      (date) =>
+        metric.activeFrom <= date &&
+        metricApplicableOnDate(state, metric, subjectUserId, date),
+    )
     .map((date) => ({
       date,
       result: sharedMetricResult(
@@ -144,7 +148,11 @@ export function periodMetricResult(
       return [Math.min(1, Math.max(0, status.scoreContribution / 100))];
     if (result.mode === "status")
       return [result.label === "Goal met" ? 1 : 0];
-    if (result.mode !== "exact") return [];
+    if (
+      result.mode !== "exact" ||
+      !hasPeriodData(state, metric, subjectUserId, date)
+    )
+      return [];
     return [
       Math.min(
         1,
@@ -164,7 +172,11 @@ export function periodMetricResult(
     const status = statusForDate(date);
     if (status?.goalProgress !== undefined)
       return [Math.max(0, Math.min(2, status.goalProgress / 100))];
-    if (result.mode !== "exact") return [];
+    if (
+      result.mode !== "exact" ||
+      !hasPeriodData(state, metric, subjectUserId, date)
+    )
+      return [];
     return [
       displayGoalProgress(
         goalMetric,
@@ -197,6 +209,7 @@ export function periodMetricResult(
     return result.mode === "status"
       ? result.label === "Goal met"
       : result.mode === "exact" &&
+        hasPeriodData(state, metric, subjectUserId, date) &&
         goalReached(
           goalMetric,
           result.value,
@@ -313,7 +326,13 @@ function hasPeriodData(
   userId: string,
   date: string,
 ) {
-  if (metric.dataType === "boolean") return true;
+  if (metric.dataType === "boolean")
+    return state.entries.some(
+      (entry) =>
+        entry.userId === userId &&
+        entry.metricId === metric.id &&
+        entry.localDate === date,
+    );
   if (metric.dataType === "photo")
     return state.photos.some(
       (photo) => photo.userId === userId && photo.localDate === date,

@@ -622,6 +622,15 @@ export default function TrackerDetail() {
                 />
               </>
             )}
+            {dates.length > 1 &&
+            tracker.aggregation === "sum" &&
+            tracker.dataType !== "boolean" ? (
+              <Stat
+                label="Period total"
+                value={formatMetricValue(tracker, periodStats.total)}
+                colors={colors}
+              />
+            ) : null}
             <Stat
               label="Overall average"
               value={formatMetricValue(tracker, overallAverage)}

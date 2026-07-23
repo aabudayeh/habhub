@@ -519,13 +519,15 @@ export default function LeaderboardDetail() {
           );
         })}
       </View>
-      <MetricSelector
-        title="What to show"
-        items={options}
-        selectedIds={selectedIds}
-        onChange={setSelectedIds}
-        emptyLabel="No shared logs in this range"
-      />
+      <View style={styles.whatToShow}>
+        <MetricSelector
+          title="What to show"
+          items={options}
+          selectedIds={selectedIds}
+          onChange={setSelectedIds}
+          emptyLabel="No shared logs in this range"
+        />
+      </View>
     </Screen>
   );
 }
@@ -866,6 +868,7 @@ const styles = StyleSheet.create({
   },
   rangeText: { color: palette.muted, fontSize: 10, fontWeight: "700" },
   members: { gap: 11 },
+  whatToShow: { marginTop: 15, paddingTop: 2 },
   memberCard: { padding: 13 },
   heading: {
     flexDirection: "row",

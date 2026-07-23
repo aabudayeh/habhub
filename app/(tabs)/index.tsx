@@ -66,9 +66,13 @@ export default function Today() {
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
   const [editing, setEditing] = useState(false);
+  const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [showMore, setShowMore] = useState(false);
   const [showAddTiles, setShowAddTiles] = useState(false);
   const [showDayEnd, setShowDayEnd] = useState(false);
+  useEffect(() => {
+    if (!editing) setDraggingMetricId(null);
+  }, [editing]);
   const today = dateKey();
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
@@ -444,7 +448,7 @@ export default function Today() {
         </View>
         <View style={styles.list}>
           {primary.map((item, index) => (
-            <ReorderItem key={item.id}>
+            <ReorderItem key={item.id} active={draggingMetricId === item.id}>
               <TrackerRow
                 item={item}
                 index={index}
@@ -471,6 +475,8 @@ export default function Today() {
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
+                onDragStart={() => setDraggingMetricId(item.id)}
+                onDragEnd={() => setDraggingMetricId(null)}
               />
             </ReorderItem>
           ))}
@@ -832,6 +838,8 @@ function TrackerRow({
   onMove,
   onRemove,
   onPin,
+  onDragStart,
+  onDragEnd,
 }: {
   item: MetricDefinition;
   index: number;
@@ -852,6 +860,8 @@ function TrackerRow({
   onMove: (target: number) => void;
   onRemove: () => void;
   onPin: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const dragOrigin = useRef(index);
   const liveTarget = useRef(index);
@@ -914,6 +924,7 @@ function TrackerRow({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
+          onDragStart();
           cancelReorder();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
@@ -937,14 +948,16 @@ function TrackerRow({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start(
+            onDragEnd,
+          );
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(onDragEnd);
         },
       }),
     [
@@ -953,6 +966,8 @@ function TrackerRow({
       editing,
       flushReorder,
       height,
+      onDragEnd,
+      onDragStart,
       scheduleReorder,
     ],
   );

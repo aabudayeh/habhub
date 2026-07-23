@@ -465,7 +465,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "updateMetric": {
-      const next = withPersonalMetrics(
+      let next = withPersonalMetrics(
         state,
         state.metrics.map((metric) =>
           metric.id === action.metricId
@@ -481,8 +481,30 @@ function reducer(state: AppState, action: Action): AppState {
                     : metric.activeFrom),
               }
             : metric,
-        ),
+          ),
       );
+      if (action.changes.defaultVisibility) {
+        next = {
+          ...next,
+          entries: next.entries.map((entry) =>
+            entry.userId === state.currentUserId &&
+            entry.metricId === action.metricId
+              ? { ...entry, visibility: action.changes.defaultVisibility! }
+              : entry,
+          ),
+          photos:
+            action.metricId === "progress_photo"
+              ? next.photos.map((photo) =>
+                  photo.userId === state.currentUserId
+                    ? {
+                        ...photo,
+                        visibility: action.changes.defaultVisibility!,
+                      }
+                    : photo,
+                )
+              : next.photos,
+        };
+      }
       if (!action.changes.activeFrom || !(state.trackedGoalPeriods[action.metricId]?.length))
         return next;
       return {
@@ -683,7 +705,7 @@ function reducer(state: AppState, action: Action): AppState {
             : metric,
       );
       const group = { ...state.group, metricConfiguration: configuration };
-      const metrics = state.metrics.map((personal) =>
+      let metrics = state.metrics.map((personal) =>
         personal.id === action.metricId
           ? {
               ...personal,
@@ -697,6 +719,23 @@ function reducer(state: AppState, action: Action): AppState {
             }
           : personal,
       );
+      const sharedMetric = configuration.find(
+        (metric) => metric.id === action.metricId && metric.sections.group,
+      );
+      if (
+        sharedMetric &&
+        !metrics.some((personal) => personal.id === sharedMetric.id)
+      ) {
+        metrics = [
+          ...metrics,
+          {
+            ...sharedMetric,
+            defaultVisibility: "group",
+            sections: { ...sharedMetric.sections, today: true, insights: true },
+            order: metrics.length,
+          },
+        ];
+      }
       return {
         ...state,
         metrics,
@@ -723,6 +762,7 @@ function reducer(state: AppState, action: Action): AppState {
       const metric: MetricDefinition = {
         ...definition,
         id,
+        defaultVisibility: "group",
         order: existing.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
         scoreWeight:

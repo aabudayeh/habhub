@@ -454,19 +454,13 @@ export async function loadCloudWorkspace(
   const missingTracked = groupMetrics.filter(
     (metric) =>
       metric.sections.group &&
-      (metric.scoreWeight > 0 ||
-        metric.dataType === "photo" ||
-        metric.dataType === "text") &&
       !state.metrics.some((personal) => personal.id === metric.id),
   );
   const personalMetrics = [
     ...state.metrics.map((personal) => {
       const shared = groupMetrics.find(
         (metric) =>
-          metric.id === personal.id &&
-          (metric.scoreWeight > 0 ||
-            metric.dataType === "photo" ||
-            metric.dataType === "text"),
+          metric.id === personal.id && metric.sections.group,
       );
       return shared
         ? {
@@ -490,6 +484,7 @@ export async function loadCloudWorkspace(
     }),
     ...missingTracked.map((metric, index) => ({
       ...metric,
+      defaultVisibility: "group" as const,
       order: state.metrics.length + index,
       sections: { ...metric.sections, today: true, insights: true },
     })),

@@ -12,11 +12,12 @@ const glideTransition = LinearTransition.duration(620).easing(
 export function ReorderItem({
   children,
   style,
-}: PropsWithChildren<{ style?: StyleProp<ViewStyle> }>) {
+  active = false,
+}: PropsWithChildren<{ style?: StyleProp<ViewStyle>; active?: boolean }>) {
   return (
     <Animated.View
-      layout={glideTransition}
-      style={[{ width: "100%" }, style]}
+      layout={active ? undefined : glideTransition}
+      style={[{ width: "100%", zIndex: active ? 10 : 0 }, style]}
     >
       {children}
     </Animated.View>

@@ -88,10 +88,14 @@ export default function Insights() {
   );
   const [filterTouched, setFilterTouched] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [view, setView] = useState<ViewMode>("week");
   const [month, setMonth] = useState(today);
   const [weekAnchor, setWeekAnchor] = useState(today);
+  useEffect(() => {
+    if (!editing) setDraggingMetricId(null);
+  }, [editing]);
   const selectedMetrics = selectedIds
     .map((id) => metrics.find((metric) => metric.id === id))
     .filter((metric): metric is MetricDefinition => Boolean(metric));
@@ -243,20 +247,6 @@ export default function Insights() {
           ) : undefined
         }
       />
-      <View style={styles.controls}>
-        <View style={styles.mode}>
-          <Chip
-            label="7 days"
-            selected={view === "week"}
-            onPress={() => setView("week")}
-          />
-          <Chip
-            label="Month"
-            selected={view === "month"}
-            onPress={() => setView("month")}
-          />
-        </View>
-      </View>
       <View style={styles.legendWrap}>
         {legendItems.map((item) => (
           <View
@@ -303,6 +293,16 @@ export default function Insights() {
             Each colored line is one selected item. Tap a date for its filtered
             log.
           </Text>
+          <View
+            style={[
+              styles.mode,
+              styles.modeInside,
+              { borderTopColor: colors.border },
+            ]}
+          >
+            <Chip label="7 days" selected={false} onPress={() => setView("week")} />
+            <Chip label="Month" selected onPress={() => setView("month")} />
+          </View>
         </Card>
       ) : (
         <Card style={styles.visualCard}>
@@ -390,6 +390,16 @@ export default function Insights() {
             The dashed line is each item’s own goal. Bars can extend to 140%, so
             exceeding a goal stays visible across different units.
           </Text>
+          <View
+            style={[
+              styles.mode,
+              styles.modeInside,
+              { borderTopColor: colors.border },
+            ]}
+          >
+            <Chip label="7 days" selected onPress={() => setView("week")} />
+            <Chip label="Month" selected={false} onPress={() => setView("month")} />
+          </View>
         </Card>
       )}
       <SectionHeader
@@ -406,7 +416,7 @@ export default function Insights() {
           />
         ) : null}
         {selectedMetrics.map((metric, index) => (
-          <ReorderItem key={metric.id}>
+          <ReorderItem key={metric.id} active={draggingMetricId === metric.id}>
             <MetricSummary
               state={state}
               metric={metric}
@@ -417,6 +427,8 @@ export default function Insights() {
               onEdit={() => setEditing(true)}
               onMove={(target) => move(metric.id, target)}
               onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
+              onDragStart={() => setDraggingMetricId(metric.id)}
+              onDragEnd={() => setDraggingMetricId(null)}
             />
           </ReorderItem>
         ))}
@@ -577,6 +589,8 @@ function MetricSummary({
   onEdit,
   onMove,
   onRemove,
+  onDragStart,
+  onDragEnd,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -587,6 +601,8 @@ function MetricSummary({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -637,6 +653,7 @@ function MetricSummary({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
+          onDragStart();
           cancelReorder();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
@@ -663,14 +680,14 @@ function MetricSummary({
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(onDragEnd);
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(onDragEnd);
         },
       }),
     [
@@ -678,6 +695,8 @@ function MetricSummary({
       dragY,
       editing,
       flushReorder,
+      onDragEnd,
+      onDragStart,
       scheduleReorder,
     ],
   );
@@ -870,6 +889,12 @@ const styles = StyleSheet.create({
   },
   controls: { gap: 9, marginBottom: 4 },
   mode: { flexDirection: "row", gap: 7 },
+  modeInside: {
+    borderTopWidth: 1,
+    marginTop: 8,
+    paddingTop: 8,
+    justifyContent: "center",
+  },
   visualCard: { marginTop: 10, marginBottom: 14 },
   cardHeading: {
     flexDirection: "row",

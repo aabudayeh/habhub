@@ -624,8 +624,9 @@ export function metricPeriodStats(
   const values = loggedDates.map((date) =>
     safeMetricValue(state, metric, userId, date),
   );
+  const total = values.reduce((sum, value) => sum + value, 0);
   const average = values.length
-    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    ? total / values.length
     : 0;
   const goalsReached = loggedDates.filter((date) =>
     scheduledGoalReached(state, metric, userId, date),
@@ -640,6 +641,7 @@ export function metricPeriodStats(
     applicableDates,
     loggedDates,
     values,
+    total,
     average,
     averageTarget,
     goalsReached,

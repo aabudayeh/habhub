@@ -424,7 +424,7 @@ export default function Onboarding() {
                   colors={colors}
                 />
                 <View style={styles.nameField}>
-                  <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                  <Text style={[styles.nameLabel, { color: colors.ink }]}>
                     What should we call you?
                   </Text>
                   <TextInput
@@ -1093,6 +1093,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   goalTitle: { fontSize: 11, fontWeight: "900" },
+  nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 },
   goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 },
   grow: { flex: 1 },
   label: { fontSize: 10, fontWeight: "900", marginTop: 6, marginBottom: 6 },

@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import {
+  Alert,
   Animated,
   BackHandler,
   PanResponder,
@@ -44,6 +45,7 @@ import {
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import { Visibility } from "@/src/types";
 
 const SCORE_ID = "__score";
 
@@ -55,7 +57,7 @@ if (
 }
 
 export default function LeaderboardScreen() {
-  const { state, updateSettings } = useApp();
+  const { state, updateMetric, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
@@ -63,6 +65,10 @@ export default function LeaderboardScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editing) setDraggingCardId(null);
+  }, [editing]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -70,7 +76,6 @@ export default function LeaderboardScreen() {
     currentMember?.role === "owner" || currentMember?.role === "admin";
   const tracked = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
-      metric.scoreWeight > 0 &&
       metric.dataType !== "text" &&
       metric.dataType !== "photo" &&
       metric.sections.group,
@@ -101,6 +106,26 @@ export default function LeaderboardScreen() {
     await Share.share({
       message: groupInviteMessage(state.group.name, state.group.inviteCode),
     });
+  }
+  function chooseVisibility(metricId: string, metricName: string) {
+    Alert.alert(`${metricName} visibility`, "What can this group see?", [
+      {
+        text: "Exact values",
+        onPress: () =>
+          updateMetric(metricId, { defaultVisibility: "group" }),
+      },
+      {
+        text: "Goal status only",
+        onPress: () =>
+          updateMetric(metricId, { defaultVisibility: "status" }),
+      },
+      {
+        text: "Private",
+        onPress: () =>
+          updateMetric(metricId, { defaultVisibility: "private" }),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   }
   function saveSelection(ids: string[]) {
     const next = ids.length ? ids : [SCORE_ID];
@@ -196,7 +221,7 @@ export default function LeaderboardScreen() {
           includeScore,
         );
         return (
-          <ReorderItem key={id}>
+          <ReorderItem key={id} active={draggingCardId === id}>
             <EditableRankingCard
               editing={editing}
               index={cardIndex}
@@ -204,6 +229,19 @@ export default function LeaderboardScreen() {
               colors={colors}
               onMove={(target) => move(id, target)}
               onRemove={() => saveSelection(selected.filter((item) => item !== id))}
+              visibility={
+                id === SCORE_ID
+                  ? undefined
+                  : state.metrics.find((item) => item.id === id)
+                      ?.defaultVisibility
+              }
+              onVisibilityPress={
+                id === SCORE_ID || !metric
+                  ? undefined
+                  : () => chooseVisibility(metric.id, metric.name)
+              }
+              onDragStart={() => setDraggingCardId(id)}
+              onDragEnd={() => setDraggingCardId(null)}
             >
             <Card style={styles.ranking}>
             <Pressable
@@ -325,28 +363,40 @@ export default function LeaderboardScreen() {
                       {details}
                     </Text>
                   </View>
-                  <View style={styles.bar}>
-                    <Text style={[styles.score, { color: colors.ink }]}>
-                      {value}
-                    </Text>
-                    <ProgressBar
-                      progress={
-                        includeScore
-                          ? row.score / 100
-                          : Math.min(
-                              result?.averageDisplayProgress ??
-                                row.score / 100,
-                              1,
-                            )
-                      }
-                      color={resultColor}
+                  <Pressable
+                    disabled={editing}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      router.navigate({
+                        pathname: "/leaderboard-detail",
+                        params: { period, anchor, metrics: id },
+                      } as never);
+                    }}
+                    style={styles.metricLink}
+                  >
+                    <View style={styles.bar}>
+                      <Text style={[styles.score, { color: colors.ink }]}>
+                        {value}
+                      </Text>
+                      <ProgressBar
+                        progress={
+                          includeScore
+                            ? row.score / 100
+                            : Math.min(
+                                result?.averageDisplayProgress ??
+                                  row.score / 100,
+                                1,
+                              )
+                        }
+                        color={resultColor}
+                      />
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={15}
+                      color={colors.faint}
                     />
-                  </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={15}
-                    color={colors.faint}
-                  />
+                  </Pressable>
                 </Pressable>
               );
             })}
@@ -356,35 +406,53 @@ export default function LeaderboardScreen() {
         );
       })}
       {editing ? (
-        <View style={styles.editActions}>
-          <Pressable
-            onPress={() => setShowPicker((value) => !value)}
-            style={[styles.addExisting, styles.editAction, { borderColor: accent }]}
-          >
-            <Ionicons name="add" size={18} color={accent} />
-            <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
-          </Pressable>
-          {canManageGroup ? (
+        <>
+          <View style={styles.editActions}>
             <Pressable
-              onPress={() =>
-                router.navigate({
-                  pathname: "/metric-editor",
-                  params: { id: "new", scope: "group" },
-                })
-              }
-              style={[
-                styles.addExisting,
-                styles.editAction,
-                { borderColor: accent },
-              ]}
+              onPress={() => setShowPicker((value) => !value)}
+              style={[styles.addExisting, styles.editAction, { borderColor: accent }]}
             >
-              <Ionicons name="create-outline" size={17} color={accent} />
-              <Text style={[styles.addExistingText, { color: accent }]}>
-                Create tracker
-              </Text>
+              <Ionicons name="add" size={18} color={accent} />
+              <Text style={[styles.addExistingText, { color: accent }]}>Add existing tracker</Text>
             </Pressable>
-          ) : null}
-        </View>
+            {canManageGroup ? (
+              <Pressable
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/metric-editor",
+                    params: { id: "new", scope: "group" },
+                  })
+                }
+                style={[
+                  styles.addExisting,
+                  styles.editAction,
+                  { borderColor: accent },
+                ]}
+              >
+                <Ionicons name="create-outline" size={17} color={accent} />
+                <Text style={[styles.addExistingText, { color: accent }]}>
+                  Create tracker
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <View style={styles.editGroupActions}>
+            <Pressable
+              onPress={() => router.navigate("/groups" as never)}
+              style={[styles.editGroupAction, { backgroundColor: colors.primarySoft }]}
+            >
+              <Ionicons name="swap-horizontal" size={17} color={accent} />
+              <Text style={[styles.link, { color: accent }]}>Manage groups</Text>
+            </Pressable>
+            <Pressable
+              onPress={invite}
+              style={[styles.editGroupAction, { backgroundColor: colors.primarySoft }]}
+            >
+              <Ionicons name="person-add-outline" size={17} color={accent} />
+              <Text style={[styles.link, { color: accent }]}>Invite</Text>
+            </Pressable>
+          </View>
+        </>
       ) : (
         <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
@@ -432,7 +500,7 @@ export default function LeaderboardScreen() {
           </View>
         ) : null}
       </Card>
-      <View style={styles.actions}>
+      {!editing ? <View style={styles.actions}>
         <Pressable
           onPress={() => router.navigate("/groups" as never)}
           style={styles.inline}
@@ -447,7 +515,7 @@ export default function LeaderboardScreen() {
         <Text style={[styles.code, { color: colors.faint }]}>
           {state.group.inviteCode}
         </Text>
-      </View>
+      </View> : null}
       <AddTrackerModal
         visible={showPicker}
         items={hiddenOptions}
@@ -469,6 +537,10 @@ function EditableRankingCard({
   colors,
   onMove,
   onRemove,
+  visibility,
+  onVisibilityPress,
+  onDragStart,
+  onDragEnd,
 }: {
   children: ReactNode;
   editing: boolean;
@@ -477,6 +549,10 @@ function EditableRankingCard({
   colors: ReturnType<typeof useAppColors>;
   onMove: (target: number) => void;
   onRemove: () => void;
+  visibility?: Visibility;
+  onVisibilityPress?: () => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
@@ -525,6 +601,7 @@ function EditableRankingCard({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
+          onDragStart();
           cancelReorder();
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
@@ -551,14 +628,14 @@ function EditableRankingCard({
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(onDragEnd);
         },
         onPanResponderTerminate: () => {
           cancelReorder();
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(onDragEnd);
         },
       }),
     [
@@ -566,6 +643,8 @@ function EditableRankingCard({
       dragY,
       editing,
       flushReorder,
+      onDragEnd,
+      onDragStart,
       scheduleReorder,
     ],
   );
@@ -593,6 +672,32 @@ function EditableRankingCard({
             <Ionicons name="reorder-three-outline" size={24} color={colors.faint} />
           </View>
           <Text style={[styles.dragText, { color: colors.muted }]}>Drag to reorder</Text>
+          {visibility && onVisibilityPress ? (
+            <Pressable
+              onPress={onVisibilityPress}
+              style={styles.visibility}
+              hitSlop={6}
+            >
+              <Ionicons
+                name={
+                  visibility === "group"
+                    ? "eye-outline"
+                    : visibility === "status"
+                      ? "checkmark-circle-outline"
+                      : "lock-closed-outline"
+                }
+                size={15}
+                color={colors.muted}
+              />
+              <Text style={[styles.visibilityText, { color: colors.muted }]}>
+                {visibility === "group"
+                  ? "Exact"
+                  : visibility === "status"
+                    ? "Goal only"
+                    : "Private"}
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
             <Ionicons name="remove" size={16} color={palette.white} />
           </Pressable>
@@ -609,9 +714,13 @@ const styles = StyleSheet.create({
   editBar: { height: 38, borderWidth: 1, borderBottomWidth: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, flexDirection: "row", alignItems: "center", paddingHorizontal: 8 },
   drag: { width: 34, alignItems: "center", justifyContent: "center" },
   dragText: { flex: 1, fontSize: 9, fontWeight: "800" },
+  visibility: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, minHeight: 28 },
+  visibilityText: { fontSize: 8, fontWeight: "900" },
   remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 6 },
   editActions: { flexDirection: "row", gap: 7 },
+  editGroupActions: { flexDirection: "row", gap: 7, marginBottom: 7 },
+  editGroupAction: { flex: 1, minHeight: 38, borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   editAction: { flex: 1, minWidth: 0, paddingHorizontal: 7 },
   addExistingText: { fontSize: 10, fontWeight: "900" },
   editHint: { alignItems: "center", paddingVertical: 7 },
@@ -638,6 +747,7 @@ const styles = StyleSheet.create({
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },
   copy: { flex: 1 },
+  metricLink: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4 },
   name: { fontSize: 12, fontWeight: "900" },
   original: { fontSize: 8, marginTop: 1 },
   detail: { fontSize: 8, lineHeight: 12, marginTop: 2 },

@@ -62,6 +62,7 @@ export default function Customize() {
     ? (params.tab as Tab)
     : "trackers";
   const [tab, setTab] = useState<Tab>(initial);
+  const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const ordered = state.metrics
     .filter((metric) => !isInternalTracker(metric))
     .sort((a, b) => a.order - b.order);
@@ -360,7 +361,10 @@ export default function Customize() {
           />
           <Card style={styles.list}>
             {ordered.map((metric, index) => (
-              <ReorderItem key={metric.id}>
+              <ReorderItem
+                key={metric.id}
+                active={draggingMetricId === metric.id}
+              >
                 <VisibilityRow
                   metric={metric}
                   section={tab}
@@ -371,6 +375,8 @@ export default function Customize() {
                   count={ordered.length}
                   onMove={(target) => reorderForSection(metric.id, target)}
                   onChange={() => changeSection(metric)}
+                  onDragStart={() => setDraggingMetricId(metric.id)}
+                  onDragEnd={() => setDraggingMetricId(null)}
                 />
               </ReorderItem>
             ))}
@@ -481,6 +487,8 @@ function VisibilityRow({
   index,
   count,
   onMove,
+  onDragStart,
+  onDragEnd,
 }: {
   metric: MetricDefinition;
   section: DashboardSection;
@@ -491,6 +499,8 @@ function VisibilityRow({
   index: number;
   count: number;
   onMove: (target: number) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
@@ -550,6 +560,7 @@ function VisibilityRow({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           Math.abs(gesture.dy) > 2,
         onPanResponderGrant: () => {
+          onDragStart();
           cancelReorder();
           setDragging(true);
           dragOrigin.current = indexRef.current;
@@ -574,25 +585,31 @@ function VisibilityRow({
         onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           flushReorder();
-          setDragging(false);
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(() => {
+            setDragging(false);
+            onDragEnd();
+          });
         },
         onPanResponderTerminate: () => {
           cancelReorder();
-          setDragging(false);
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
-          }).start();
+          }).start(() => {
+            setDragging(false);
+            onDragEnd();
+          });
         },
       }),
     [
       cancelReorder,
       dragY,
       flushReorder,
+      onDragEnd,
+      onDragStart,
       scheduleReorder,
     ],
   );
