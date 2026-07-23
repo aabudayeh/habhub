@@ -34,11 +34,13 @@ export function Screen({
   children,
   contentContainerStyle,
   scrollRef,
+  fixedTop,
   refreshControl,
   refreshEnabled = true,
   ...props
 }: ScrollViewProps & {
   scrollRef?: React.RefObject<ScrollView | null>;
+  fixedTop?: ReactNode;
   refreshEnabled?: boolean;
 }) {
   const compact = useCompactMode();
@@ -58,6 +60,17 @@ export function Screen({
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
+        {fixedTop ? (
+          <View
+            style={[
+              styles.fixedTop,
+              compact && styles.fixedTopCompact,
+              { backgroundColor: colors.canvas },
+            ]}
+          >
+            <View style={styles.content}>{fixedTop}</View>
+          </View>
+        ) : null}
         <ScrollView
           ref={activeRef}
           style={{ backgroundColor: colors.canvas }}
@@ -457,6 +470,8 @@ const styles = StyleSheet.create({
   screen: { paddingHorizontal: 18, paddingBottom: 120 },
   screenCompact: { paddingHorizontal: 12, paddingBottom: 90 },
   content: { width: "100%", maxWidth: 760, alignSelf: "center" },
+  fixedTop: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 6 },
+  fixedTopCompact: { paddingHorizontal: 12, paddingVertical: 4 },
   header: {
     flexDirection: "row",
     alignItems: "center",

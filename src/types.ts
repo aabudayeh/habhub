@@ -244,6 +244,8 @@ export type GymSet = {
   reps: number;
   weightKg: number;
   completed: boolean;
+  /** Active time from starting to finishing this set. */
+  workSeconds?: number;
   /** Rest taken after this set. Optional for older saved sessions. */
   restSeconds?: number;
   restTargetSeconds?: number;
@@ -288,6 +290,10 @@ export type GymSession = {
   name: string;
   localDate: string;
   recordedAt: string;
+  /** Present for sessions recorded with the guided workout timer. */
+  startedAt?: string;
+  completedAt?: string;
+  pausedSeconds?: number;
   durationMinutes: number;
   calories?: number;
   intensity?: GymIntensity;

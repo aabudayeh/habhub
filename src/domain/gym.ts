@@ -53,6 +53,7 @@ export type ExerciseObservation = {
   estimatedOneRepMaxKg: number;
   volumeKg: number;
   completedSets: number;
+  workSeconds: number;
   muscles: MuscleGroup[];
 };
 
@@ -88,6 +89,10 @@ export function exerciseHistory(
               0,
             ),
             completedSets: sets.length,
+            workSeconds: sets.reduce(
+              (sum, set) => sum + Math.max(0, set.workSeconds ?? 0),
+              0,
+            ),
             muscles: exercise.muscleGroups ?? [],
           };
         }),
@@ -162,6 +167,7 @@ export function exerciseStats(
         100
       : 0;
   const target = goal?.targetOneRepMaxKg ?? 0;
+  const timedHistory = history.filter((item) => item.workSeconds > 0);
   return {
     history,
     trend: exerciseTrend(history),
@@ -170,6 +176,12 @@ export function exerciseStats(
     repsAtBestWeight: bestWeightObservation?.repsAtMax ?? 0,
     improvement,
     sessions: history.length,
+    averageWorkSeconds: timedHistory.length
+      ? Math.round(
+          timedHistory.reduce((sum, item) => sum + item.workSeconds, 0) /
+            timedHistory.length,
+        )
+      : 0,
     goalProgress: target > 0 ? Math.min(1, bestOneRepMax / target) : 0,
   };
 }
@@ -184,6 +196,7 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
       sessions: Set<string>;
       restSeconds: number;
       restSamples: number;
+      workSeconds: number;
     }
   >();
   for (const session of sessions.filter((item) => item.userId === userId)) {
@@ -203,6 +216,11 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
         muscles.length;
       const restSamples =
         (rests.length + (exercise.restAfterSeconds ? 1 : 0)) / muscles.length;
+      const workSeconds =
+        exercise.sets.reduce(
+          (sum, set) => sum + Math.max(0, set.workSeconds ?? 0),
+          0,
+        ) / muscles.length;
       for (const muscle of muscles) {
         const current = map.get(muscle) ?? {
           muscle,
@@ -211,11 +229,13 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
           sessions: new Set<string>(),
           restSeconds: 0,
           restSamples: 0,
+          workSeconds: 0,
         };
         current.volumeKg += volume;
         current.sets += sets;
         current.restSeconds += restSeconds;
         current.restSamples += restSamples;
+        current.workSeconds += workSeconds;
         current.sessions.add(session.id);
         map.set(muscle, current);
       }
@@ -230,6 +250,9 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
       sessions: item.sessions.size,
       averageRestSeconds: item.restSamples
         ? Math.round(item.restSeconds / item.restSamples)
+        : 0,
+      averageWorkSeconds: item.sessions.size
+        ? Math.round(item.workSeconds / item.sessions.size)
         : 0,
     }))
     .sort((a, b) => b.volumeKg - a.volumeKg);
@@ -254,19 +277,67 @@ export function totalGymRestSeconds(exercises: GymExercise[]) {
   );
 }
 
+export function totalGymSetWorkSeconds(exercises: GymExercise[]) {
+  return exercises.reduce(
+    (total, exercise) =>
+      total +
+      exercise.sets.reduce(
+        (sum, set) => sum + Math.max(0, set.workSeconds ?? 0),
+        0,
+      ),
+    0,
+  );
+}
+
+export function gymRestBreakdown(exercises: GymExercise[]) {
+  const setRests = exercises.flatMap((exercise) =>
+    exercise.sets
+      .map((set) => set.restSeconds)
+      .filter((value): value is number => value !== undefined && value > 0),
+  );
+  const exerciseRests = exercises
+    .map((exercise) => exercise.restAfterSeconds)
+    .filter((value): value is number => value !== undefined && value > 0);
+  const setRestSeconds = setRests.reduce((sum, value) => sum + value, 0);
+  const exerciseRestSeconds = exerciseRests.reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+  return {
+    setRestSeconds,
+    exerciseRestSeconds,
+    totalRestSeconds: setRestSeconds + exerciseRestSeconds,
+    averageSetRestSeconds: setRests.length
+      ? Math.round(setRestSeconds / setRests.length)
+      : 0,
+    averageExerciseRestSeconds: exerciseRests.length
+      ? Math.round(exerciseRestSeconds / exerciseRests.length)
+      : 0,
+  };
+}
+
 export function gymSessionTimeBreakdown(
   durationMinutes: number,
   exercises: GymExercise[],
 ) {
-  const totalSeconds = Math.max(0, Math.round(durationMinutes * 60));
-  const restSeconds = Math.min(
-    totalSeconds,
-    totalGymRestSeconds(exercises),
+  const rest = gymRestBreakdown(exercises);
+  const recordedWorkSeconds = totalGymSetWorkSeconds(exercises);
+  const recordedTotalSeconds =
+    recordedWorkSeconds + rest.totalRestSeconds;
+  const totalSeconds = Math.max(
+    recordedTotalSeconds,
+    Math.max(0, Math.round(durationMinutes * 60)),
   );
+  const restSeconds = Math.min(totalSeconds, rest.totalRestSeconds);
   return {
     totalSeconds,
     restSeconds,
-    exerciseSeconds: Math.max(0, totalSeconds - restSeconds),
+    exerciseSeconds:
+      recordedWorkSeconds || Math.max(0, totalSeconds - restSeconds),
+    setRestSeconds: rest.setRestSeconds,
+    exerciseRestSeconds: rest.exerciseRestSeconds,
+    averageSetRestSeconds: rest.averageSetRestSeconds,
+    averageExerciseRestSeconds: rest.averageExerciseRestSeconds,
   };
 }
 
@@ -280,14 +351,18 @@ export function formatGymDuration(seconds: number) {
 }
 
 export function averageGymRestSeconds(exercises: GymExercise[]) {
-  const rests = exercises.flatMap((exercise) => [
-    ...(exercise.restAfterSeconds ? [exercise.restAfterSeconds] : []),
-    ...exercise.sets
-      .map((set) => set.restSeconds)
-      .filter((value): value is number => value !== undefined && value > 0),
-  ]);
-  return rests.length
-    ? Math.round(rests.reduce((sum, value) => sum + value, 0) / rests.length)
+  const breakdown = gymRestBreakdown(exercises);
+  const sampleCount =
+    exercises.reduce(
+      (total, exercise) =>
+        total +
+        exercise.sets.filter((set) => (set.restSeconds ?? 0) > 0).length,
+      0,
+    ) +
+    exercises.filter((exercise) => (exercise.restAfterSeconds ?? 0) > 0)
+      .length;
+  return sampleCount
+    ? Math.round(breakdown.totalRestSeconds / sampleCount)
     : 0;
 }
 
@@ -350,15 +425,23 @@ export function estimateGymActiveCalories(
   const restRatio =
     totalGymRestSeconds(exercises) /
     Math.max(durationMinutes * 60, 1);
-  // Normal lifting rests are already represented by the session MET. Only
-  // unusually rest-heavy sessions receive a small discount.
-  const excessiveRestModifier =
-    restRatio > 0.65 ? Math.max(0.9, 1 - (restRatio - 0.65) * 0.2) : 1;
+  const hasPreciseTiming = totalGymSetWorkSeconds(exercises) > 0;
+  /*
+   * Compendium resistance-training METs describe a complete session and
+   * therefore already contain ordinary rests. Exact timer data adjusts that
+   * session estimate conservatively around a typical rest-heavy lifting
+   * pattern instead of applying the lifting MET to every resting minute.
+   */
+  const timingModifier = hasPreciseTiming
+    ? Math.min(1.08, Math.max(0.82, 1 + (0.55 - restRatio) * 0.35))
+    : restRatio > 0.65
+      ? Math.max(0.9, 1 - (restRatio - 0.65) * 0.2)
+      : 1;
   const sessionCalories =
     ((met - 1) * 3.5 * weightKg * durationMinutes) / 200;
   return Math.max(
     0,
-    Math.round(sessionCalories * workloadModifier * excessiveRestModifier),
+    Math.round(sessionCalories * workloadModifier * timingModifier),
   );
 }
 

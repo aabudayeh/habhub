@@ -30,11 +30,13 @@ import {
   exerciseIdentity,
   exerciseTrend,
   formatGymDuration,
+  gymRestBreakdown,
   gymSessionTimeBreakdown,
   gymRecap,
   muscleGroupStats,
   recommendedRestSeconds,
   totalGymRestSeconds,
+  totalGymSetWorkSeconds,
   trainingVolumeKg,
 } from "@/src/domain/gym";
 import { useApp } from "@/src/state/AppProvider";
@@ -51,6 +53,33 @@ import {
 const uniqueId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 const intensities: GymIntensity[] = ["light", "moderate", "vigorous"];
+type RunningWorkoutPhase = "work" | "set_rest" | "exercise_rest";
+type WorkoutPhase = RunningWorkoutPhase | "paused";
+type WorkoutTimer = {
+  phase: WorkoutPhase;
+  resumePhase?: RunningWorkoutPhase;
+  startedAt: number;
+  phaseStartedAt: number;
+  phaseElapsedSeconds: number;
+  completedElapsedSeconds: number;
+  pausedSeconds: number;
+  pauseStartedAt?: number;
+  exerciseId: string;
+  setId?: string;
+};
+
+function timerPhaseElapsed(timer: WorkoutTimer, now: number) {
+  return (
+    timer.phaseElapsedSeconds +
+    (timer.phase === "paused"
+      ? 0
+      : Math.max(0, Math.floor((now - timer.phaseStartedAt) / 1000)))
+  );
+}
+
+function timerSessionElapsed(timer: WorkoutTimer, now: number) {
+  return timer.completedElapsedSeconds + timerPhaseElapsed(timer, now);
+}
 
 function blankSet(reps = 10, weightKg = 0): GymSet {
   return { id: uniqueId("set"), reps, weightKg, completed: false };
@@ -102,6 +131,8 @@ export default function GymScreen() {
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const scrollRef = useRef<ScrollView>(null);
+  const targetOffsets = useRef<Record<string, number>>({});
   const [localDate, setLocalDate] = useState(dateKey());
   const [mode, setMode] = useState<"workout" | "progress">("workout");
   const [sessionId, setSessionId] = useState(() => uniqueId("gym"));
@@ -120,14 +151,8 @@ export default function GymScreen() {
   const [pickerMuscle, setPickerMuscle] = useState<MuscleGroup | "all">("all");
   const [recapOpen, setRecapOpen] = useState(false);
   const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
-  const [restTimer, setRestTimer] = useState<{
-    kind: "set" | "exercise";
-    exerciseId: string;
-    setId?: string;
-    startedAt: number;
-    targetSeconds: number;
-  } | null>(null);
-  const [restNow, setRestNow] = useState(Date.now());
+  const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
+  const [timerNow, setTimerNow] = useState(Date.now());
   const restAlerted = useRef(false);
   const initializedDate = useRef<string | null>(null);
 
@@ -179,8 +204,11 @@ export default function GymScreen() {
     exercises,
   );
   const recaps = gymRecap(sessions, state.currentUserId, localDate);
-  const restElapsed = restTimer
-    ? Math.max(0, Math.floor((restNow - restTimer.startedAt) / 1000))
+  const timerPhaseSeconds = workoutTimer
+    ? timerPhaseElapsed(workoutTimer, timerNow)
+    : 0;
+  const timerTotalSeconds = workoutTimer
+    ? timerSessionElapsed(workoutTimer, timerNow)
     : 0;
   const muscles = muscleGroupStats(
     sessions.filter(
@@ -189,6 +217,36 @@ export default function GymScreen() {
         session.localDate <= localDate,
     ),
     state.currentUserId,
+  );
+  const timedSessionBreakdowns = sessions
+    .filter((session) => totalGymSetWorkSeconds(session.exercises) > 0)
+    .map((session) =>
+      gymSessionTimeBreakdown(session.durationMinutes, session.exercises),
+    );
+  const averageTimedWorkoutSeconds = timedSessionBreakdowns.length
+    ? Math.round(
+        timedSessionBreakdowns.reduce(
+          (sum, item) => sum + item.totalSeconds,
+          0,
+        ) / timedSessionBreakdowns.length,
+      )
+    : 0;
+  const averageTimedActiveSeconds = timedSessionBreakdowns.length
+    ? Math.round(
+        timedSessionBreakdowns.reduce(
+          (sum, item) => sum + item.exerciseSeconds,
+          0,
+        ) / timedSessionBreakdowns.length,
+      )
+    : 0;
+  const recentRestStats = gymRestBreakdown(
+    sessions
+      .filter(
+        (session) =>
+          session.localDate >= dateWithOffsetFrom(localDate, -29) &&
+          session.localDate <= localDate,
+      )
+      .flatMap((session) => session.exercises),
   );
   const latestExercise = useCallback(
     (key: string) =>
@@ -260,7 +318,7 @@ export default function GymScreen() {
 
   useEffect(() => {
     if (initializedDate.current === localDate) return;
-    setRestTimer(null);
+    setWorkoutTimer(null);
     restAlerted.current = false;
     initializedDate.current = localDate;
     const existing = sessions.find((session) => session.localDate === localDate);
@@ -294,16 +352,17 @@ export default function GymScreen() {
   }, [loadPlan, localDate, plans, selectedPlanId, sessions]);
 
   useEffect(() => {
-    if (!restTimer) return;
-    const timer = setInterval(() => setRestNow(Date.now()), 1000);
+    if (!workoutTimer || workoutTimer.phase === "paused") return;
+    const timer = setInterval(() => setTimerNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [restTimer]);
+  }, [workoutTimer]);
 
   useEffect(() => {
     if (
-      !restTimer ||
+      !workoutTimer ||
+      !["set_rest", "exercise_rest"].includes(workoutTimer.phase) ||
       restAlerted.current ||
-      restElapsed <= restTimer.targetSeconds + 60 ||
+      timerPhaseSeconds <= recommendedRestSeconds(intensity) + 60 ||
       state.settings.notifications.gymRestAlerts === false
     )
       return;
@@ -314,7 +373,7 @@ export default function GymScreen() {
         return Notifications.scheduleNotificationAsync({
           content: {
             title: "Rest timer",
-            body: `Rest is ${Math.floor(restElapsed / 60)}:${String(restElapsed % 60).padStart(2, "0")}. Ready for the next set?`,
+            body: `Rest is ${formatGymDuration(timerPhaseSeconds)}. Ready to continue?`,
             data: { route: "/gym" },
           },
           trigger: null,
@@ -322,9 +381,10 @@ export default function GymScreen() {
       })
       .catch(() => undefined);
   }, [
-    restElapsed,
-    restTimer,
+    intensity,
     state.settings.notifications.gymRestAlerts,
+    timerPhaseSeconds,
+    workoutTimer,
   ]);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
@@ -342,60 +402,100 @@ export default function GymScreen() {
     );
   }
 
-  function stopRest() {
-    if (!restTimer) return;
-    const seconds = Math.max(
-      1,
-      Math.floor((Date.now() - restTimer.startedAt) / 1000),
-    );
-    if (restTimer.kind === "set" && restTimer.setId)
-      updateSet(restTimer.exerciseId, restTimer.setId, {
-        restSeconds: seconds,
-        restTargetSeconds: restTimer.targetSeconds,
-      });
-    else
-      patchExercise(restTimer.exerciseId, {
-        restAfterSeconds: seconds,
-        restTargetSeconds: restTimer.targetSeconds,
-      });
-    setRestTimer(null);
-    restAlerted.current = false;
+  function scrollToWorkoutTarget(exerciseId: string, setId?: string) {
+    setOpenExerciseId(exerciseId);
+    const targetKey = setId ? `set:${setId}` : `exercise:${exerciseId}`;
+    setTimeout(() => {
+      const y = targetOffsets.current[targetKey];
+      if (y !== undefined)
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 18), animated: true });
+    }, 90);
   }
 
-  function startRest(
-    kind: "set" | "exercise",
-    exerciseId: string,
-    setId?: string,
+  function firstPendingTarget(
+    source: GymExercise[],
+    startExerciseIndex = 0,
   ) {
-    const targetSeconds =
-      kind === "exercise"
-        ? Math.max(120, recommendedRestSeconds(intensity))
-        : recommendedRestSeconds(intensity);
-    restAlerted.current = false;
-    const startedAt = Date.now();
-    setRestNow(startedAt);
-    setRestTimer({
-      kind,
-      exerciseId,
-      setId,
-      startedAt,
-      targetSeconds,
+    for (let index = startExerciseIndex; index < source.length; index += 1) {
+      const exercise = source[index];
+      const set = exercise.sets.find((item) => !item.completed);
+      if (set) return { exercise, set, exerciseIndex: index };
+    }
+    return null;
+  }
+
+  function startGuidedWorkout() {
+    const target = firstPendingTarget(exercises);
+    if (!target) {
+      Alert.alert(
+        "Workout already complete",
+        "Add a set or load a fresh workout template to start another timed session.",
+      );
+      return;
+    }
+    const now = Date.now();
+    setDuration("");
+    setTimerNow(now);
+    setWorkoutTimer({
+      phase: "work",
+      startedAt: now,
+      phaseStartedAt: now,
+      phaseElapsedSeconds: 0,
+      completedElapsedSeconds: 0,
+      pausedSeconds: 0,
+      exerciseId: target.exercise.id,
+      setId: target.set.id,
+    });
+    scrollToWorkoutTarget(target.exercise.id, target.set.id);
+  }
+
+  function pauseOrResumeWorkout() {
+    if (!workoutTimer) return;
+    const now = Date.now();
+    setTimerNow(now);
+    if (workoutTimer.phase === "paused") {
+      setWorkoutTimer({
+        ...workoutTimer,
+        phase: workoutTimer.resumePhase ?? "work",
+        resumePhase: undefined,
+        phaseStartedAt: now,
+        pausedSeconds:
+          workoutTimer.pausedSeconds +
+          Math.max(
+            0,
+            Math.floor((now - (workoutTimer.pauseStartedAt ?? now)) / 1000),
+          ),
+        pauseStartedAt: undefined,
+      });
+      return;
+    }
+    setWorkoutTimer({
+      ...workoutTimer,
+      phase: "paused",
+      resumePhase: workoutTimer.phase,
+      phaseElapsedSeconds: timerPhaseElapsed(workoutTimer, now),
+      phaseStartedAt: now,
+      pauseStartedAt: now,
     });
   }
 
   function toggleSet(exerciseId: string, set: GymSet) {
-    if (restTimer) stopRest();
-    const completed = !set.completed;
-    updateSet(exerciseId, set.id, { completed });
-    if (!completed) return;
-    startRest("set", exerciseId, set.id);
+    if (workoutTimer) {
+      if (
+        workoutTimer.phase === "work" &&
+        workoutTimer.exerciseId === exerciseId &&
+        workoutTimer.setId === set.id
+      )
+        advanceWorkoutTimer();
+      return;
+    }
+    updateSet(exerciseId, set.id, { completed: !set.completed });
   }
 
   function finishExercise(exercise: GymExercise) {
-    if (restTimer) stopRest();
+    if (workoutTimer) return;
     patchExercise(exercise.id, { completed: true });
     setOpenExerciseId(null);
-    startRest("exercise", exercise.id);
   }
 
   function patchExercise(exerciseId: string, changes: Partial<GymExercise>) {
@@ -407,6 +507,13 @@ export default function GymScreen() {
   }
 
   function addSet(exerciseId: string) {
+    if (workoutTimer) {
+      Alert.alert(
+        "Workout in progress",
+        "Finish this timed workout before changing its set structure.",
+      );
+      return;
+    }
     setExercises((current) =>
       current.map((exercise) => {
         if (exercise.id !== exerciseId) return exercise;
@@ -423,7 +530,13 @@ export default function GymScreen() {
   }
 
   function addCatalogExercise(item: ExerciseCatalogItem) {
-    if (restTimer) stopRest();
+    if (workoutTimer) {
+      Alert.alert(
+        "Workout in progress",
+        "Finish the timed workout before changing its exercise list.",
+      );
+      return;
+    }
     const exercise = fromCatalog(item, latestExercise(item.key));
     setExercises((current) => [...current, exercise]);
     setOpenExerciseId(exercise.id);
@@ -445,74 +558,74 @@ export default function GymScreen() {
     addCatalogExercise(item);
   }
 
-  function saveDay() {
-    if (!exercises.length) {
-      Alert.alert("Add an exercise", "Choose at least one exercise for this day.");
-      return;
-    }
+  function recordTimerPhase(
+    source: GymExercise[],
+    timer: WorkoutTimer,
+    elapsedSeconds: number,
+  ) {
+    return source.map((exercise) => {
+      if (exercise.id !== timer.exerciseId) return exercise;
+      if (timer.phase === "exercise_rest")
+        return {
+          ...exercise,
+          restAfterSeconds:
+            Math.max(0, exercise.restAfterSeconds ?? 0) + elapsedSeconds,
+          restTargetSeconds: Math.max(
+            120,
+            recommendedRestSeconds(intensity),
+          ),
+        };
+      return {
+        ...exercise,
+        sets: exercise.sets.map((set) => {
+          if (set.id !== timer.setId) return set;
+          if (timer.phase === "set_rest")
+            return {
+              ...set,
+              restSeconds:
+                Math.max(0, set.restSeconds ?? 0) + elapsedSeconds,
+              restTargetSeconds: recommendedRestSeconds(intensity),
+            };
+          return {
+            ...set,
+            completed: true,
+            workSeconds:
+              Math.max(0, set.workSeconds ?? 0) + elapsedSeconds,
+          };
+        }),
+      };
+    });
+  }
+
+  function persistSession(
+    sessionExercises: GymExercise[],
+    sessionDuration: number,
+    timing?: {
+      startedAt: string;
+      completedAt: string;
+      pausedSeconds: number;
+    },
+  ) {
+    const sessionCompletedSets = completedGymSets(sessionExercises);
+    const sessionVolume = trainingVolumeKg(sessionExercises);
     const recordedAt =
       localDate === dateKey()
         ? new Date().toISOString()
         : `${localDate}T18:00:00.000Z`;
-    const sessionExercises = restTimer
-      ? exercises.map((exercise) =>
-          exercise.id === restTimer.exerciseId
-            ? {
-                ...exercise,
-                ...(restTimer.kind === "exercise"
-                  ? {
-                      restAfterSeconds: Math.max(
-                        1,
-                        Math.floor(
-                          (Date.now() - restTimer.startedAt) / 1000,
-                        ),
-                      ),
-                      restTargetSeconds: restTimer.targetSeconds,
-                    }
-                  : {}),
-                sets:
-                  restTimer.kind === "set"
-                    ? exercise.sets.map((set) =>
-                        set.id === restTimer.setId
-                          ? {
-                              ...set,
-                              restSeconds: Math.max(
-                                1,
-                                Math.floor(
-                                  (Date.now() - restTimer.startedAt) / 1000,
-                                ),
-                              ),
-                              restTargetSeconds: restTimer.targetSeconds,
-                            }
-                          : set,
-                      )
-                    : exercise.sets,
-              }
-            : exercise,
-        )
-      : exercises;
-    const sessionDuration =
-      Number(duration) ||
-      Math.max(
-        completedSets > 0 ? 1 : 0,
-        Math.round(
-          Math.max(
-            completedSets * 3,
-            completedSets * 0.75 +
-              totalGymRestSeconds(sessionExercises) / 60,
-          ),
-        ),
-      );
+    const preciseDuration = Math.max(
+      sessionCompletedSets > 0 ? 0.1 : 0,
+      Math.round(sessionDuration * 100) / 100,
+    );
     const sessionCalories =
       Number(calories) ||
       estimateGymActiveCalories(
         state.settings.energyProfile.weightKg,
-        sessionDuration,
+        preciseDuration,
         intensity,
         sessionExercises,
       );
     const sessionTime = gymSessionTimeBreakdown(
-      sessionDuration,
+      preciseDuration,
       sessionExercises,
     );
     saveGymSession({
@@ -522,22 +635,158 @@ export default function GymScreen() {
       name: sessionName.trim() || "Gym day",
       localDate,
       recordedAt,
-      durationMinutes: sessionDuration,
-      calories: completedSets ? sessionCalories : undefined,
+      startedAt: timing?.startedAt ?? selectedSession?.startedAt,
+      completedAt: timing?.completedAt ?? selectedSession?.completedAt,
+      pausedSeconds: timing?.pausedSeconds ?? selectedSession?.pausedSeconds,
+      durationMinutes: preciseDuration,
+      calories: sessionCompletedSets ? sessionCalories : undefined,
       intensity,
       notes: sessionNotes.trim() || undefined,
       exercises: sessionExercises,
       visibility,
     });
     setExercises(sessionExercises);
-    setRestTimer(null);
+    setDuration(
+      preciseDuration ? String(Math.round(preciseDuration * 10) / 10) : "",
+    );
+    setWorkoutTimer(null);
     restAlerted.current = false;
     Alert.alert(
-      completedSets ? "Workout saved" : "Day planned",
-      completedSets
-        ? `${completedSets} sets · ${Math.round(volume).toLocaleString()} kg volume · ${formatGymDuration(sessionTime.exerciseSeconds)} exercise · ${formatGymDuration(sessionTime.restSeconds)} rest · ~${sessionCalories} active kcal`
+      sessionCompletedSets ? "Workout saved" : "Day planned",
+      sessionCompletedSets
+        ? `${sessionCompletedSets} sets · ${Math.round(sessionVolume).toLocaleString()} kg volume · ${formatGymDuration(sessionTime.exerciseSeconds)} exercise · ${formatGymDuration(sessionTime.setRestSeconds)} set rest · ${formatGymDuration(sessionTime.exerciseRestSeconds)} between exercises · ~${sessionCalories} active kcal`
         : "The exercise plan is saved without marking the workout complete.",
     );
+  }
+
+  function advanceWorkoutTimer() {
+    if (!workoutTimer) return;
+    if (workoutTimer.phase === "paused") {
+      pauseOrResumeWorkout();
+      return;
+    }
+    const now = Date.now();
+    const phaseSeconds = Math.max(
+      1,
+      timerPhaseElapsed(workoutTimer, now),
+    );
+    let nextExercises = recordTimerPhase(
+      exercises,
+      workoutTimer,
+      phaseSeconds,
+    );
+    const completedElapsedSeconds =
+      workoutTimer.completedElapsedSeconds + phaseSeconds;
+    const currentExerciseIndex = nextExercises.findIndex(
+      (exercise) => exercise.id === workoutTimer.exerciseId,
+    );
+    const currentExercise = nextExercises[currentExerciseIndex];
+
+    if (workoutTimer.phase === "work") {
+      const currentSetIndex =
+        currentExercise?.sets.findIndex(
+          (set) => set.id === workoutTimer.setId,
+        ) ?? -1;
+      const nextSet = currentExercise?.sets
+        .slice(currentSetIndex + 1)
+        .find((set) => !set.completed);
+      if (nextSet) {
+        setExercises(nextExercises);
+        setTimerNow(now);
+        restAlerted.current = false;
+        setWorkoutTimer({
+          ...workoutTimer,
+          phase: "set_rest",
+          phaseStartedAt: now,
+          phaseElapsedSeconds: 0,
+          completedElapsedSeconds,
+        });
+        return;
+      }
+
+      nextExercises = nextExercises.map((exercise) =>
+        exercise.id === workoutTimer.exerciseId
+          ? { ...exercise, completed: true }
+          : exercise,
+      );
+      const nextExercise = firstPendingTarget(
+        nextExercises,
+        currentExerciseIndex + 1,
+      );
+      if (nextExercise) {
+        setExercises(nextExercises);
+        setTimerNow(now);
+        restAlerted.current = false;
+        setWorkoutTimer({
+          ...workoutTimer,
+          phase: "exercise_rest",
+          setId: undefined,
+          phaseStartedAt: now,
+          phaseElapsedSeconds: 0,
+          completedElapsedSeconds,
+        });
+        return;
+      }
+
+      persistSession(nextExercises, completedElapsedSeconds / 60, {
+        startedAt: new Date(workoutTimer.startedAt).toISOString(),
+        completedAt: new Date(now).toISOString(),
+        pausedSeconds: workoutTimer.pausedSeconds,
+      });
+      return;
+    }
+
+    const nextTarget =
+      workoutTimer.phase === "set_rest"
+        ? firstPendingTarget(nextExercises, currentExerciseIndex)
+        : firstPendingTarget(nextExercises, currentExerciseIndex + 1);
+    if (!nextTarget) {
+      persistSession(nextExercises, completedElapsedSeconds / 60, {
+        startedAt: new Date(workoutTimer.startedAt).toISOString(),
+        completedAt: new Date(now).toISOString(),
+        pausedSeconds: workoutTimer.pausedSeconds,
+      });
+      return;
+    }
+    setExercises(nextExercises);
+    setTimerNow(now);
+    restAlerted.current = false;
+    setWorkoutTimer({
+      ...workoutTimer,
+      phase: "work",
+      exerciseId: nextTarget.exercise.id,
+      setId: nextTarget.set.id,
+      phaseStartedAt: now,
+      phaseElapsedSeconds: 0,
+      completedElapsedSeconds,
+    });
+    scrollToWorkoutTarget(nextTarget.exercise.id, nextTarget.set.id);
+  }
+
+  function saveDay() {
+    if (!exercises.length) {
+      Alert.alert("Add an exercise", "Choose at least one exercise for this day.");
+      return;
+    }
+    if (workoutTimer) {
+      Alert.alert(
+        "Workout timer is running",
+        "Use the fixed Next button to finish the guided workout, or pause it before returning later.",
+      );
+      return;
+    }
+    const sessionDuration =
+      Number(duration) ||
+      Math.max(
+        completedSets > 0 ? 1 : 0,
+        Math.round(
+          Math.max(
+            completedSets * 3,
+            completedSets * 0.75 + totalGymRestSeconds(exercises) / 60,
+          ),
+        ),
+      );
+    persistSession(exercises, sessionDuration);
   }
 
   function savePlan(asNew: boolean) {
@@ -583,10 +832,102 @@ export default function GymScreen() {
         ))
     );
   });
+  const timerExercise = workoutTimer
+    ? exercises.find((exercise) => exercise.id === workoutTimer.exerciseId)
+    : undefined;
+  const timerExerciseIndex = timerExercise
+    ? exercises.findIndex((exercise) => exercise.id === timerExercise.id)
+    : -1;
+  const timerSetIndex =
+    timerExercise && workoutTimer?.setId
+      ? timerExercise.sets.findIndex((set) => set.id === workoutTimer.setId)
+      : -1;
+  const timerNextTarget = workoutTimer
+    ? workoutTimer.phase === "set_rest"
+      ? firstPendingTarget(exercises, timerExerciseIndex)
+      : workoutTimer.phase === "exercise_rest"
+        ? firstPendingTarget(exercises, timerExerciseIndex + 1)
+        : null
+    : null;
+  const timerColor =
+    workoutTimer?.phase === "paused"
+      ? palette.red
+      : workoutTimer?.phase === "work"
+        ? palette.lime
+        : palette.amber;
+  const timerHeading =
+    workoutTimer?.phase === "paused"
+      ? "Workout paused"
+      : workoutTimer?.phase === "work"
+        ? `${timerExercise?.name ?? "Exercise"} · Set ${timerSetIndex + 1}/${timerExercise?.sets.length ?? 0}`
+        : workoutTimer?.phase === "set_rest"
+          ? `Set rest · next is set ${timerNextTarget ? timerNextTarget.exercise.sets.findIndex((set) => set.id === timerNextTarget.set.id) + 1 : ""}`
+          : `Between exercises · next is ${timerNextTarget?.exercise.name ?? "finish"}`;
+  const timerNextLabel =
+    workoutTimer?.phase === "paused"
+      ? "Resume"
+      : workoutTimer?.phase === "set_rest"
+        ? "Start next set"
+        : workoutTimer?.phase === "exercise_rest"
+          ? "Start exercise"
+          : timerExercise?.sets
+                .slice(timerSetIndex + 1)
+                .some((set) => !set.completed)
+            ? "Finish set"
+            : firstPendingTarget(exercises, timerExerciseIndex + 1)
+              ? "Finish exercise"
+              : "Finish workout";
+  const workoutTimerBar = workoutTimer ? (
+    <View
+      style={[
+        styles.workoutTimer,
+        {
+          borderColor: timerColor,
+          backgroundColor: `${timerColor}24`,
+        },
+      ]}
+    >
+      <View style={[styles.timerPulse, { backgroundColor: timerColor }]} />
+      <View style={styles.timerCopy}>
+        <Text style={[styles.timerHeading, { color: colors.ink }]}>
+          {timerHeading}
+        </Text>
+        <Text style={[styles.timerMeta, { color: colors.muted }]}>
+          {formatGymDuration(timerPhaseSeconds)} now ·{" "}
+          {formatGymDuration(timerTotalSeconds)} workout
+        </Text>
+      </View>
+      <Pressable
+        accessibilityLabel={
+          workoutTimer.phase === "paused" ? "Resume workout" : "Pause workout"
+        }
+        onPress={pauseOrResumeWorkout}
+        style={[styles.timerControl, { borderColor: timerColor }]}
+      >
+        <Ionicons
+          name={workoutTimer.phase === "paused" ? "play" : "pause"}
+          size={17}
+          color={timerColor}
+        />
+      </Pressable>
+      <Pressable
+        onPress={advanceWorkoutTimer}
+        style={[styles.timerNext, { backgroundColor: timerColor }]}
+      >
+        <Text style={styles.timerNextText}>{timerNextLabel}</Text>
+        <Ionicons name="chevron-forward" size={15} color={palette.ink} />
+      </Pressable>
+    </View>
+  ) : undefined;
 
   return (
     <>
-      <Screen contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <Screen
+        scrollRef={scrollRef}
+        fixedTop={workoutTimerBar}
+        contentContainerStyle={styles.page}
+        keyboardShouldPersistTaps="handled"
+      >
         <PageHeader
           title="Gym"
           action={
@@ -732,71 +1073,23 @@ export default function GymScreen() {
               ) : null}
             </Card>
 
-            {restTimer ? (
-              <Card
-                style={[
-                  styles.restCard,
-                  {
-                    borderColor:
-                      restElapsed > restTimer.targetSeconds + 60
-                        ? palette.red
-                        : accent,
-                  },
-                ]}
-              >
-                <View style={styles.restMain}>
-                  <Ionicons name="timer-outline" size={20} color={accent} />
-                  <View style={styles.grow}>
-                    <Text style={[styles.exerciseName, { color: colors.ink }]}>
-                      {restTimer.kind === "exercise"
-                        ? "Between exercises"
-                        : "Between sets"}{" "}
-                      {Math.floor(restElapsed / 60)}:
-                      {String(restElapsed % 60).padStart(2, "0")}
-                    </Text>
-                    <Text style={[styles.meta, { color: colors.muted }]}>
-                      Target {Math.floor(restTimer.targetSeconds / 60)}:
-                      {String(restTimer.targetSeconds % 60).padStart(2, "0")}
-                    </Text>
-                  </View>
-                  <Pressable
-                    onPress={() =>
-                      setRestTimer((current) =>
-                        current
-                          ? {
-                              ...current,
-                              targetSeconds: Math.max(
-                                30,
-                                current.targetSeconds - 30,
-                              ),
-                            }
-                          : current,
-                      )
-                    }
-                    style={[styles.restAdjust, { borderColor: colors.border }]}
-                  >
-                    <Text style={[styles.restAdjustText, { color: colors.ink }]}>−30</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() =>
-                      setRestTimer((current) =>
-                        current
-                          ? { ...current, targetSeconds: current.targetSeconds + 30 }
-                          : current,
-                      )
-                    }
-                    style={[styles.restAdjust, { borderColor: colors.border }]}
-                  >
-                    <Text style={[styles.restAdjustText, { color: colors.ink }]}>+30</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={stopRest}
-                    style={[styles.restStop, { backgroundColor: accent }]}
-                  >
-                    <Text style={styles.restStopText}>Next</Text>
-                  </Pressable>
+            {exercises.length && !workoutTimer ? (
+              <View style={styles.timerStartRow}>
+                <View style={styles.grow}>
+                  <Text style={[styles.exerciseName, { color: colors.ink }]}>
+                    Guided timer
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    Optional · otherwise tick sets and save manually.
+                  </Text>
                 </View>
-              </Card>
+                <Button
+                  label={completedSets ? "Time remaining sets" : "Start workout"}
+                  icon="play"
+                  size="small"
+                  onPress={startGuidedWorkout}
+                />
+              </View>
             ) : null}
 
             <SectionHeader
@@ -807,8 +1100,11 @@ export default function GymScreen() {
                 </Text>
               }
             />
-            {exercises.map((exercise) => {
+            {exercises.map((exercise, exerciseIndex) => {
               const open = openExerciseId === exercise.id;
+              const active = workoutTimer?.exerciseId === exercise.id;
+              const activeExerciseRest =
+                active && workoutTimer?.phase === "exercise_rest";
               const history = exerciseHistory(sessions, state.currentUserId, exerciseIdentity(exercise));
               const trend = exerciseTrend(history);
               const statusColor =
@@ -820,7 +1116,25 @@ export default function GymScreen() {
                       ? palette.red
                       : colors.border;
               return (
-                <Card key={exercise.id} style={[styles.exerciseCard, { borderColor: statusColor }]}>
+                <View
+                  key={exercise.id}
+                  style={styles.exerciseContainer}
+                  onLayout={(event) => {
+                    targetOffsets.current[`exercise:${exercise.id}`] =
+                      event.nativeEvent.layout.y;
+                  }}
+                >
+                <Card
+                  style={[
+                    styles.exerciseCard,
+                    {
+                      borderColor: active ? timerColor : statusColor,
+                      backgroundColor: active
+                        ? `${timerColor}12`
+                        : colors.card,
+                    },
+                  ]}
+                >
                   <Pressable
                     style={styles.exerciseHeader}
                     onPress={() => setOpenExerciseId(open ? null : exercise.id)}
@@ -893,7 +1207,20 @@ export default function GymScreen() {
                         <View style={styles.closeSpace} />
                       </View>
                       {exercise.sets.map((set, setIndex) => (
-                        <View key={set.id} style={styles.setBlock}>
+                        <View
+                          key={set.id}
+                          style={[
+                            styles.setBlock,
+                            workoutTimer?.phase === "work" &&
+                              workoutTimer.setId === set.id &&
+                              styles.activeSet,
+                          ]}
+                          onLayout={(event) => {
+                            targetOffsets.current[`set:${set.id}`] =
+                              targetOffsets.current[`exercise:${exercise.id}`] +
+                              event.nativeEvent.layout.y;
+                          }}
+                        >
                           <View style={styles.setRow}>
                             <Pressable onPress={() => toggleSet(exercise.id, set)}>
                               <Ionicons
@@ -942,32 +1269,18 @@ export default function GymScreen() {
                               </Text>
                             </View>
                           ) : null}
+                          {set.workSeconds ? (
+                            <Text
+                              style={[
+                                styles.setTimeText,
+                                { color: colors.muted },
+                              ]}
+                            >
+                              Active set · {formatGymDuration(set.workSeconds)}
+                            </Text>
+                          ) : null}
                         </View>
                       ))}
-                      {exercise.restAfterSeconds ? (
-                        <View
-                          style={[
-                            styles.restNote,
-                            styles.exerciseRestNote,
-                            { backgroundColor: colors.primarySoft },
-                          ]}
-                        >
-                          <Ionicons
-                            name="walk-outline"
-                            size={13}
-                            color={accent}
-                          />
-                          <Text
-                            style={[
-                              styles.restNoteText,
-                              { color: colors.ink },
-                            ]}
-                          >
-                            Rest between exercises ·{" "}
-                            {formatGymDuration(exercise.restAfterSeconds)}
-                          </Text>
-                        </View>
-                      ) : null}
                       <TextInput
                         value={exercise.notes ?? ""}
                         onChangeText={(notes) => patchExercise(exercise.id, { notes })}
@@ -1001,6 +1314,37 @@ export default function GymScreen() {
                     </View>
                   ) : null}
                 </Card>
+                {(exercise.restAfterSeconds || activeExerciseRest) &&
+                exerciseIndex < exercises.length - 1 ? (
+                  <View
+                    style={[
+                      styles.betweenExerciseRest,
+                      {
+                        backgroundColor: `${palette.amber}20`,
+                        borderColor: palette.amber,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="timer-outline"
+                      size={14}
+                      color={palette.amber}
+                    />
+                    <Text
+                      style={[styles.restNoteText, { color: colors.ink }]}
+                    >
+                      Between {exercise.name} and{" "}
+                      {exercises[exerciseIndex + 1]?.name}
+                      {" · "}
+                      {formatGymDuration(
+                        activeExerciseRest
+                          ? timerPhaseSeconds
+                          : exercise.restAfterSeconds ?? 0,
+                      )}
+                    </Text>
+                  </View>
+                ) : null}
+                </View>
               );
             })}
             <Pressable
@@ -1020,13 +1364,42 @@ export default function GymScreen() {
                       color={accent}
                     />
                     <TimeSummaryItem
-                      label="Rest time"
-                      value={formatGymDuration(timeBreakdown.restSeconds)}
+                      label="Set rest"
+                      value={formatGymDuration(timeBreakdown.setRestSeconds)}
+                      color={palette.amber}
+                    />
+                    <TimeSummaryItem
+                      label="Between exercises"
+                      value={formatGymDuration(
+                        timeBreakdown.exerciseRestSeconds,
+                      )}
                       color={palette.amber}
                     />
                     <TimeSummaryItem
                       label="Total"
                       value={formatGymDuration(timeBreakdown.totalSeconds)}
+                      color={colors.ink}
+                    />
+                    <TimeSummaryItem
+                      label="Avg set rest"
+                      value={
+                        timeBreakdown.averageSetRestSeconds
+                          ? formatGymDuration(
+                              timeBreakdown.averageSetRestSeconds,
+                            )
+                          : "—"
+                      }
+                      color={colors.ink}
+                    />
+                    <TimeSummaryItem
+                      label="Avg exercise rest"
+                      value={
+                        timeBreakdown.averageExerciseRestSeconds
+                          ? formatGymDuration(
+                              timeBreakdown.averageExerciseRestSeconds,
+                            )
+                          : "—"
+                      }
                       color={colors.ink}
                     />
                   </Card>
@@ -1070,6 +1443,47 @@ export default function GymScreen() {
                   <Ionicons name="sparkles-outline" size={17} color={accent} />
                 </Pressable>
               </View>
+              {averageTimedWorkoutSeconds ? (
+                <View
+                  style={[
+                    styles.progressTiming,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  <TimeSummaryItem
+                    label="Avg workout"
+                    value={formatGymDuration(averageTimedWorkoutSeconds)}
+                    color={accent}
+                  />
+                  <TimeSummaryItem
+                    label="Avg exercise"
+                    value={formatGymDuration(averageTimedActiveSeconds)}
+                    color={palette.lime}
+                  />
+                  <TimeSummaryItem
+                    label="Avg set rest"
+                    value={
+                      recentRestStats.averageSetRestSeconds
+                        ? formatGymDuration(
+                            recentRestStats.averageSetRestSeconds,
+                          )
+                        : "—"
+                    }
+                    color={palette.amber}
+                  />
+                  <TimeSummaryItem
+                    label="Avg between"
+                    value={
+                      recentRestStats.averageExerciseRestSeconds
+                        ? formatGymDuration(
+                            recentRestStats.averageExerciseRestSeconds,
+                          )
+                        : "—"
+                    }
+                    color={palette.amber}
+                  />
+                </View>
+              ) : null}
               {muscles.length ? muscles.slice(0, 8).map((muscle) => {
                 const max = muscles[0]?.volumeKg || 1;
                 return (
@@ -1080,6 +1494,9 @@ export default function GymScreen() {
                         {Math.round(muscle.sets)} sets · {muscle.sessions} days
                         {muscle.averageRestSeconds
                           ? ` · ${muscle.averageRestSeconds}s avg rest`
+                          : ""}
+                        {muscle.averageWorkSeconds
+                          ? ` · ${formatGymDuration(muscle.averageWorkSeconds)} avg active`
                           : ""}
                       </Text>
                     </View>
@@ -1279,6 +1696,50 @@ function TimeSummaryItem({
 
 const styles = StyleSheet.create({
   page: { paddingBottom: 18 },
+  workoutTimer: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderRadius: 15,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  timerPulse: { width: 8, height: 8, borderRadius: 4 },
+  timerCopy: { flex: 1, minWidth: 0 },
+  timerHeading: { fontSize: 11, fontWeight: "900" },
+  timerMeta: { fontSize: 8, lineHeight: 11, marginTop: 2 },
+  timerControl: {
+    width: 34,
+    height: 34,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  timerNext: {
+    minHeight: 34,
+    maxWidth: 124,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  timerNextText: {
+    color: palette.ink,
+    fontSize: 8,
+    fontWeight: "900",
+    flexShrink: 1,
+  },
+  timerStartRow: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
   roundAction: { width: 37, height: 37, borderRadius: 13, alignItems: "center", justifyContent: "center" },
   modeRow: { flexDirection: "row", gap: 7, marginBottom: 8 },
   dayCard: { gap: 9 },
@@ -1305,6 +1766,7 @@ const styles = StyleSheet.create({
   restStop: { height: 32, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   restStopText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   summary: { fontSize: 9, fontWeight: "900" },
+  exerciseContainer: { width: "100%" },
   exerciseCard: { paddingVertical: 2, paddingHorizontal: 9 },
   exerciseHeader: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8 },
   exerciseDot: { width: 8, height: 8, borderRadius: 4 },
@@ -1319,8 +1781,10 @@ const styles = StyleSheet.create({
   setSmall: { width: 28, textAlign: "center", fontSize: 7 },
   setLabel: { flex: 1, textAlign: "center", fontSize: 7 },
   closeSpace: { width: 19 },
-  setBlock: { gap: 2 },
+  setBlock: { gap: 2, borderRadius: 9, paddingVertical: 2 },
+  activeSet: { paddingHorizontal: 4, backgroundColor: `${palette.lime}16` },
   setRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  setTimeText: { marginLeft: 35, fontSize: 7, fontWeight: "700" },
   restNote: {
     marginLeft: 35,
     flexDirection: "row",
@@ -1335,6 +1799,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   restNoteText: { fontSize: 8, fontWeight: "700" },
+  betweenExerciseRest: {
+    minHeight: 28,
+    marginHorizontal: 13,
+    marginVertical: 4,
+    borderLeftWidth: 2,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
   setInput: { flex: 1, height: 36, borderWidth: 1, borderRadius: 9, textAlign: "center", fontSize: 11, fontWeight: "800" },
   exerciseNotes: { borderWidth: 1, borderRadius: 9, minHeight: 37, paddingHorizontal: 9, fontSize: 9 },
   exerciseActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -1360,6 +1835,12 @@ const styles = StyleSheet.create({
   templateActions: { flexDirection: "row", gap: 9, marginVertical: 2 },
   action: { flex: 1 },
   progressLead: { gap: 11 },
+  progressTiming: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+  },
   progressLeadTop: { flexDirection: "row", alignItems: "center", gap: 8 },
   progressTitle: { fontSize: 15, fontWeight: "900" },
   muscleProgress: { gap: 5 },
