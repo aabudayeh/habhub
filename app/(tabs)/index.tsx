@@ -23,12 +23,13 @@ import { animateReorder } from "@/src/components/reorderAnimation";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
-import { compactDayDate, dateKey, dateWithOffsetFrom, monthDateRange } from "@/src/domain/date";
+import { compactDayDate, dateKey } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
+  isMetricTrackedOnDate,
   metricApplicableOnDate,
   safeMetricValue,
   scheduledGoalReached,
@@ -42,6 +43,8 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 if (
   Platform.OS === "android" &&
@@ -105,20 +108,21 @@ export default function Today() {
         metric.activeFrom <= today,
     )
     .sort((a, b) => a.order - b.order);
-  const weekAll = Array.from(
-    { length: 7 },
-    (_, i) =>
-      trackedGoalSummary(
-        state,
-        state.currentUserId,
-        dateWithOffsetFrom(today, -i),
-      ).allMet,
-  ).every(Boolean);
-  const monthSummaries = monthDateRange(today)
-    .filter((date) => date <= today)
-    .map((date) => trackedGoalSummary(state, state.currentUserId, date))
-    .filter((summary) => summary.total > 0);
-  const monthAll = monthSummaries.length > 0 && monthSummaries.every((summary) => summary.allMet);
+  const heroGold = useRef(new Animated.Value(goals.allMet ? 1 : 0)).current;
+  const heroCompletionColor = heroGold.interpolate({
+    inputRange: [0, 1],
+    outputRange: [palette.lime, "#FFD166"],
+  });
+  useEffect(() => {
+    const animation = Animated.timing(heroGold, {
+      toValue: goals.allMet ? 1 : 0,
+      duration: goals.allMet ? 620 : 260,
+      delay: goals.allMet ? goals.metrics.length * 170 : 0,
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [goals.allMet, goals.metrics.length, heroGold]);
   const celebration = useRef(new Animated.Value(0)).current;
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
@@ -327,11 +331,11 @@ export default function Today() {
                     : "Choose your first goal"}
               </Text>
             </View>
-            <View
+            <Animated.View
               style={[
                 styles.ring,
                 {
-                  borderColor: palette.lime,
+                  borderColor: heroCompletionColor,
                   backgroundColor: "transparent",
                 },
               ]}
@@ -345,14 +349,26 @@ export default function Today() {
               >
                 {goals.total ? Math.round((goals.met / goals.total) * 100) : 0}%
               </Text>
-            </View>
+            </Animated.View>
           </View>
-          <ProgressBar
-            progress={goals.total ? goals.met / goals.total : 0}
-            color={palette.lime}
-          />
+          <View
+            style={[
+              styles.heroProgressTrack,
+              { backgroundColor: "rgba(255,255,255,.22)" },
+            ]}
+          >
+            <Animated.View
+              style={[
+                styles.heroProgressFill,
+                {
+                  backgroundColor: heroCompletionColor,
+                  width: `${goals.total ? (goals.met / goals.total) * 100 : 0}%`,
+                },
+              ]}
+            />
+          </View>
           <View style={styles.goalDots}>
-            {goals.metrics.map((item) => {
+            {goals.metrics.map((item, index) => {
               const unavailable = goals.unavailable.some(
                 (metric) => metric.id === item.id,
               );
@@ -363,44 +379,23 @@ export default function Today() {
                 today,
               );
               return (
-                <View
+                <GoalCompletionDot
                   key={item.id}
-                  style={[
-                    styles.dot,
-                    {
-                      backgroundColor: !unavailable && met
-                        ? palette.lime
-                        : "rgba(255,255,255,.16)",
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={
-                      unavailable
-                        ? "remove"
-                        : met
-                          ? "checkmark"
-                          : (item.icon as keyof typeof Ionicons.glyphMap)
-                    }
-                    size={11}
-                    color={met ? "#214218" : palette.white}
-                  />
-                </View>
+                  icon={item.icon as keyof typeof Ionicons.glyphMap}
+                  index={index}
+                  met={met}
+                  unavailable={unavailable}
+                  allMet={goals.allMet}
+                />
               );
             })}
           </View>
         </View>
         {goals.allMet ? (
           <Celebration
-            title={monthAll ? "Perfect month" : weekAll ? "Perfect week" : "Today complete"}
-            copy={
-              monthAll
-                ? "Every scheduled goal this month is complete. That deserves the rarest badge."
-                : weekAll
-                ? "Seven days of showing up. A special badge is yours."
-                : "Nice work. Your daily completion badge is ready."
-            }
-            special={monthAll || weekAll}
+            title="All goals complete"
+            copy="Perfect Day badge earned for completing every tracked goal today."
+            special
             colors={colors}
             onPress={() =>
               router.push({
@@ -434,6 +429,15 @@ export default function Today() {
               colors={colors}
               accent={accent}
               weekly={weekly}
+              trackedGoal={isMetricTrackedOnDate(
+                state,
+                item,
+                today,
+              )}
+              allGoalsMet={goals.allMet}
+              goalSequenceIndex={goals.metrics.findIndex(
+                (metric) => metric.id === item.id,
+              )}
               celebrating={celebratingGoalIds.includes(item.id)}
               onEdit={() => setEditing(true)}
               onMove={(target) => {
@@ -535,6 +539,16 @@ export default function Today() {
                 <Text style={[styles.sheetName, { color: colors.ink }]}>
                   {item.name}
                 </Text>
+                {isMetricTrackedOnDate(state, item, today) ? (
+                  <View
+                    style={[
+                      styles.trackedMarker,
+                      { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons name="flag" size={9} color={accent} />
+                  </View>
+                ) : null}
                 <Text style={[styles.sheetValue, { color: colors.muted }]}>
                   {displayValue(state, item, today, weekly)}
                 </Text>
@@ -660,6 +674,47 @@ function ConfettiBurst({
   );
 }
 
+function GoalCompletionDot({
+  icon,
+  index,
+  met,
+  unavailable,
+  allMet,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  index: number;
+  met: boolean;
+  unavailable: boolean;
+  allMet: boolean;
+}) {
+  const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
+  useEffect(() => {
+    const animation = Animated.timing(gold, {
+      toValue: allMet && met ? 1 : 0,
+      duration: allMet ? 520 : 220,
+      delay: allMet && met ? index * 170 : 0,
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [allMet, gold, index, met]);
+  const backgroundColor = met
+    ? gold.interpolate({
+        inputRange: [0, 1],
+        outputRange: [palette.lime, "#FFD166"],
+      })
+    : "rgba(255,255,255,.16)";
+  return (
+    <Animated.View style={[styles.dot, { backgroundColor }]}>
+      <Ionicons
+        name={unavailable ? "remove" : met ? "checkmark" : icon}
+        size={11}
+        color={met && allMet ? "#654900" : met ? "#214218" : palette.white}
+      />
+    </Animated.View>
+  );
+}
+
 function HeaderIcon({
   icon,
   label,
@@ -697,6 +752,9 @@ function TrackerRow({
   colors,
   accent,
   weekly,
+  trackedGoal,
+  allGoalsMet,
+  goalSequenceIndex,
   celebrating,
   onEdit,
   onMove,
@@ -713,6 +771,9 @@ function TrackerRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   weekly: ReturnType<typeof weeklyDeficitBalance>;
+  trackedGoal: boolean;
+  allGoalsMet: boolean;
+  goalSequenceIndex: number;
   celebrating: boolean;
   onEdit: () => void;
   onMove: (target: number) => void;
@@ -812,6 +873,31 @@ function TrackerRow({
   const met =
     applicable &&
     scheduledGoalReached(state, item, state.currentUserId, day);
+  const gold = useRef(
+    new Animated.Value(allGoalsMet && trackedGoal && met ? 1 : 0),
+  ).current;
+  useEffect(() => {
+    const becomesGold = allGoalsMet && trackedGoal && met;
+    const animation = Animated.timing(gold, {
+      toValue: becomesGold ? 1 : 0,
+      duration: becomesGold ? 520 : 220,
+      delay: becomesGold ? Math.max(0, goalSequenceIndex) * 170 : 0,
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [allGoalsMet, goalSequenceIndex, gold, met, trackedGoal]);
+  const completedBackground = gold.interpolate({
+    inputRange: [0, 1],
+    outputRange: [
+      colors.isDark ? "#193625" : "#EFF9DE",
+      colors.isDark ? "#3B3218" : "#FFF5D6",
+    ],
+  });
+  const completedBorder = gold.interpolate({
+    inputRange: [0, 1],
+    outputRange: [palette.lime, "#FFD166"],
+  });
   const diastolic =
     item.id === "blood_pressure_systolic" ||
     (item.healthMapping?.dataType === "blood_pressure" && item.healthMapping.field === "systolic")
@@ -858,7 +944,7 @@ function TrackerRow({
       ],
       zIndex: editing ? 4 : 0,
     }}>
-    <Pressable
+    <AnimatedPressable
       onLongPress={onEdit}
       onPress={() =>
         editing
@@ -875,12 +961,10 @@ function TrackerRow({
         {
           height,
           backgroundColor: met
-            ? colors.isDark
-              ? "#193625"
-              : "#EFF9DE"
+            ? completedBackground
             : colors.card,
           borderColor: met
-            ? palette.lime
+            ? completedBorder
             : editing
               ? `${accent}66`
               : colors.border,
@@ -916,8 +1000,34 @@ function TrackerRow({
           >
             {item.name}
           </Text>
+          {trackedGoal ? (
+            <View
+              style={[
+                styles.trackedMarker,
+                { backgroundColor: colors.primarySoft },
+              ]}
+              accessibilityLabel="Tracked goal"
+            >
+              <Ionicons name="flag" size={9} color={accent} />
+            </View>
+          ) : null}
           {met ? (
-            <Ionicons name="checkmark-circle" size={15} color={palette.lime} />
+            <View style={styles.completionCheck}>
+              <Ionicons
+                name="checkmark-circle"
+                size={15}
+                color={palette.lime}
+              />
+              <Animated.View
+                style={[styles.completionCheckGold, { opacity: gold }]}
+              >
+                <Ionicons
+                  name="checkmark-circle"
+                  size={15}
+                  color="#FFD166"
+                />
+              </Animated.View>
+            </View>
           ) : null}
         </View>
         <Text
@@ -948,14 +1058,42 @@ function TrackerRow({
       {item.goalEnabled !== false && applicable ? (
         <View style={diastolic ? styles.bpProgress : styles.progress}>
           {diastolic ? <Text style={[styles.bpLabel, { color: colors.muted }]}>SYS</Text> : null}
-          <ProgressBar progress={todayProgress(state, item, value, target)} color={todayProgressColor(state, item, value, target, met)} />
+          {trackedGoal && met ? (
+            <GoalProgressBar
+              progress={todayProgress(state, item, value, target)}
+              transition={gold}
+              trackColor={colors.border}
+            />
+          ) : (
+            <ProgressBar
+              progress={todayProgress(state, item, value, target)}
+              color={todayProgressColor(state, item, value, target, met)}
+            />
+          )}
           {diastolic ? (
             <>
               <Text style={[styles.bpLabel, { color: colors.muted }]}>DIA</Text>
-              <ProgressBar
-                progress={goalProgress(diastolic, diastolicValue, effectiveGoalTarget(state, diastolic, state.currentUserId, day))}
-                color={diastolic.goalRange && diastolicValue >= diastolic.goalRange.min && diastolicValue <= diastolic.goalRange.max ? palette.lime : palette.red}
-              />
+              {trackedGoal && met ? (
+                <GoalProgressBar
+                  progress={goalProgress(
+                    diastolic,
+                    diastolicValue,
+                    effectiveGoalTarget(
+                      state,
+                      diastolic,
+                      state.currentUserId,
+                      day,
+                    ),
+                  )}
+                  transition={gold}
+                  trackColor={colors.border}
+                />
+              ) : (
+                <ProgressBar
+                  progress={goalProgress(diastolic, diastolicValue, effectiveGoalTarget(state, diastolic, state.currentUserId, day))}
+                  color={diastolic.goalRange && diastolicValue >= diastolic.goalRange.min && diastolicValue <= diastolic.goalRange.max ? palette.lime : palette.red}
+                />
+              )}
             </>
           ) : null}
         </View>
@@ -979,8 +1117,36 @@ function TrackerRow({
       ) : (
         <Ionicons name="chevron-forward" size={16} color={colors.faint} />
       )}
-    </Pressable>
+    </AnimatedPressable>
     </Animated.View>
+  );
+}
+
+function GoalProgressBar({
+  progress,
+  transition,
+  trackColor,
+}: {
+  progress: number;
+  transition: Animated.Value;
+  trackColor: string;
+}) {
+  const color = transition.interpolate({
+    inputRange: [0, 1],
+    outputRange: [palette.lime, "#FFD166"],
+  });
+  return (
+    <View style={[styles.goalProgressTrack, { backgroundColor: trackColor }]}>
+      <Animated.View
+        style={[
+          styles.goalProgressFill,
+          {
+            backgroundColor: color,
+            width: `${Math.min(1, Math.max(0, progress)) * 100}%`,
+          },
+        ]}
+      />
+    </View>
   );
 }
 
@@ -1233,6 +1399,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   ringText: { color: palette.white, fontSize: 12, fontWeight: "900" },
+  heroProgressTrack: {
+    height: 7,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  heroProgressFill: { height: "100%", borderRadius: 999 },
   goalDots: { flexDirection: "row", gap: 4, marginTop: 10, overflow: "hidden" },
   dot: {
     width: 23,
@@ -1287,11 +1459,26 @@ const styles = StyleSheet.create({
   photo: { width: 42, height: 42 },
   rowCopy: { flex: 1, minWidth: 0 },
   nameLine: { flexDirection: "row", alignItems: "center", gap: 5 },
+  completionCheck: { width: 15, height: 15 },
+  completionCheckGold: { position: "absolute", inset: 0 },
+  trackedMarker: {
+    width: 18,
+    height: 18,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   name: { fontSize: 11, fontWeight: "900" },
   completedText: { textDecorationLine: "line-through", opacity: 0.68 },
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
   progress: { width: 48 },
+  goalProgressTrack: {
+    height: 6,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  goalProgressFill: { height: "100%", borderRadius: 999 },
   bpProgress: { width: 55, gap: 2 },
   bpLabel: { fontSize: 6, fontWeight: "900" },
   remove: {

@@ -3,7 +3,7 @@ import { LayoutAnimation } from "react-native";
 /** Keeps neighboring cards visibly gliding into place during live dragging. */
 export function animateReorder() {
   LayoutAnimation.configureNext({
-    duration: 440,
+    duration: 820,
     update: {
       type: LayoutAnimation.Types.easeInEaseOut,
     },
