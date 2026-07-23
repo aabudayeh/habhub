@@ -35,8 +35,11 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
-  goalRemainingLabel,
+  metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
+  metricOverallAverage,
+  metricPeriodStats,
+  metricStreakStats,
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
@@ -585,6 +588,14 @@ function MetricSummary({
   const accent = useGroupAccent();
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
+  const dragOrigin = useRef(index);
+  const liveTarget = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
   useEffect(() => {
     if (!editing) {
       dragY.setValue(0);
@@ -608,15 +619,26 @@ function MetricSummary({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
-        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) => {
-          onMove(
-            Math.max(
-              0,
-              Math.min(count - 1, index + Math.round(gesture.dy / 82)),
+        onPanResponderGrant: () => {
+          dragOrigin.current = indexRef.current;
+          liveTarget.current = indexRef.current;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const target = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              dragOrigin.current + Math.round(gesture.dy / 82),
             ),
           );
+          dragY.setValue(gesture.dy - (target - dragOrigin.current) * 82);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onMoveRef.current(target);
+          }
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: () => {
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
@@ -628,72 +650,30 @@ function MetricSummary({
             useNativeDriver: true,
           }).start(),
       }),
-    [count, dragY, editing, index, onMove],
+    [dragY, editing],
   );
-  const active = dates.filter((date) => metric.activeFrom <= date);
-  const applicable = active.filter((date) =>
-    metricApplicableOnDate(state, metric, state.currentUserId, date),
+  const periodStats = metricPeriodStats(
+    state,
+    metric,
+    state.currentUserId,
+    dates,
   );
-  const measured =
-    metric.dataType === "boolean"
-      ? applicable
-      : applicable.filter((date) =>
-          metric.dataType === "calculated"
-            ? true
-            : state.entries.some(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === metric.id &&
-                  entry.localDate === date,
-              ),
-        );
-  const values = measured.map((date) =>
-    safeMetricValue(state, metric, state.currentUserId, date),
+  const applicable = periodStats.applicableDates;
+  const measured = periodStats.loggedDates;
+  const average = periodStats.average;
+  const reached = periodStats.goalsReached;
+  const streaks = metricStreakStats(
+    state,
+    metric,
+    state.currentUserId,
+    dates[dates.length - 1],
   );
-  const average =
-    values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
-  const reached = applicable.filter((date) =>
-    scheduledGoalReached(state, metric, state.currentUserId, date),
-  ).length;
-  const streak = longestStreakWithRest(state, active, (date) =>
-    metricApplicableOnDate(state, metric, state.currentUserId, date) &&
-    scheduledGoalReached(state, metric, state.currentUserId, date),
+  const overall = metricOverallAverage(
+    state,
+    metric,
+    state.currentUserId,
+    dates[dates.length - 1],
   );
-  const currentStreak = currentStreakWithRest(state, active, (date) =>
-    metricApplicableOnDate(state, metric, state.currentUserId, date) &&
-    scheduledGoalReached(state, metric, state.currentUserId, date),
-  );
-  const days = Math.max(
-    1,
-    Math.floor(
-      (new Date(`${dateKey()}T12:00:00`).getTime() -
-        new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
-        86400000,
-    ) + 1,
-  );
-  const overallDates = dateRangeEnding(dateKey(), Math.min(days, 730));
-  const overallApplicable = overallDates.filter((date) =>
-    metricApplicableOnDate(state, metric, state.currentUserId, date),
-  );
-  const overallMeasured =
-    metric.dataType === "boolean"
-      ? overallApplicable
-      : overallApplicable.filter((date) =>
-          metric.dataType === "calculated"
-            ? true
-            : state.entries.some(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === metric.id &&
-                  entry.localDate === date,
-              ),
-        );
-  const overall =
-    overallMeasured.reduce(
-      (sum, date) =>
-        sum + safeMetricValue(state, metric, state.currentUserId, date),
-      0,
-    ) / Math.max(overallMeasured.length, 1);
   const isBoolean = metric.dataType === "boolean";
   const weightStats =
     metric.id === "weight"
@@ -794,11 +774,10 @@ function MetricSummary({
           </Text>
         ) : !isBoolean ? (
           <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
-            {goalRemainingLabel(
-              state,
+            {metricAverageGoalOffsetLabel(
               metric,
-              state.currentUserId,
-              dates[dates.length - 1],
+              average,
+              periodStats.averageTarget,
             )}
           </Text>
         ) : null}
@@ -809,7 +788,7 @@ function MetricSummary({
           {applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%
         </Text>
         <Text style={[styles.streakLine, { color: colors.muted }]}>
-          Current {currentStreak}d · Best {streak}d
+          Current {streaks.current}d · Best {streaks.best}d
         </Text>
         </View>
         {editing ? (

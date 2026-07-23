@@ -8,12 +8,15 @@ export function DraftNumberInput({
   onCommit,
   minimum = 0,
   maximum = Number.POSITIVE_INFINITY,
+  commitOnChange = false,
   ...props
 }: Omit<TextInputProps, "value" | "onChangeText"> & {
   value: number;
   onCommit: (value: number) => void;
   minimum?: number;
   maximum?: number;
+  /** Refresh dependent calculations while a complete numeric draft is typed. */
+  commitOnChange?: boolean;
 }) {
   const [draft, setDraft] = useState(String(value));
   const focused = useRef(false);
@@ -39,7 +42,17 @@ export function DraftNumberInput({
         focused.current = true;
         props.onFocus?.(event);
       }}
-      onChangeText={setDraft}
+      onChangeText={(nextDraft) => {
+        setDraft(nextDraft);
+        if (!commitOnChange || nextDraft.trim() === "") return;
+        const parsed = Number(nextDraft.replace(",", "."));
+        if (
+          Number.isFinite(parsed) &&
+          parsed >= minimum &&
+          parsed <= maximum
+        )
+          onCommit(parsed);
+      }}
       onBlur={(event) => {
         commit();
         props.onBlur?.(event);

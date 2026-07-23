@@ -34,7 +34,6 @@ export function EnergyProfileEditor() {
   const direction = state.settings.weightDirection ?? "lose";
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
-  const planningFloor = profile.sex === "male" ? 1500 : 1200;
   const weightPlan = weightProgressStats(
     state,
     state.currentUserId,
@@ -191,6 +190,7 @@ export function EnergyProfileEditor() {
                   keyboardType="decimal-pad"
                   minimum={0.05}
                   maximum={2}
+                  commitOnChange
                   onCommit={(desiredWeeklyLossKg) =>
                     updateEnergyProfile({ desiredWeeklyLossKg })
                   }
@@ -260,11 +260,7 @@ export function EnergyProfileEditor() {
             : "Your food target stays fixed even when active energy changes."}
         </Text>
         <Text style={[styles.disclaimer, { color: colors.muted }]}>
-          Planning estimates, not medical advice. Updating this profile
-          automatically refreshes the built-in Deficit, Food, and Weight goals.
-          {intake < planningFloor
-            ? ` This selected pace produces an aggressive ${intake} kcal estimate below the usual ${planningFloor} kcal planning guardrail; consider a slower rate or professional guidance.`
-            : ""}
+          These planning estimates are not medical advice.
         </Text>
       </Card>
     </>

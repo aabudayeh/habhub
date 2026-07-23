@@ -82,6 +82,7 @@ type Action =
       metricId: string;
       value: boolean;
       historyMode: "today" | "history";
+      startDate?: string;
     }
   | {
       type: "configurePersonalMetrics";
@@ -421,6 +422,7 @@ function reducer(state: AppState, action: Action): AppState {
         : nextState;
     }
     case "addMetric": {
+      const { trackGoal = false, ...definition } = action.metric;
       const baseId =
         (action.metric.templateId ?? slugify(action.metric.name)) || "metric";
       let id = baseId;
@@ -432,7 +434,7 @@ function reducer(state: AppState, action: Action): AppState {
         (action.metric.healthMapping?.dataType === "blood_pressure" &&
           action.metric.healthMapping.field === "diastolic");
       const metric: MetricDefinition = {
-        ...action.metric,
+        ...definition,
         id,
         aggregation:
           action.metric.aggregation ??
@@ -445,12 +447,22 @@ function reducer(state: AppState, action: Action): AppState {
         scoreWeight: 0,
         sections: internalCompanion
           ? { today: false, group: false, insights: false }
-          : { today: true, group: true, insights: true },
+          : { today: trackGoal, group: true, insights: true },
         order: state.metrics.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
       };
       delete (metric as MetricDefinition & { templateId?: string }).templateId;
-      return withPersonalMetrics(state, [...state.metrics, metric]);
+      const next = withPersonalMetrics(state, [...state.metrics, metric]);
+      return {
+        ...next,
+        trackedGoalPeriods: {
+          ...state.trackedGoalPeriods,
+          [id]:
+            trackGoal && !internalCompanion
+              ? [{ from: metric.activeFrom }]
+              : [],
+        },
+      };
     }
     case "updateMetric": {
       const next = withPersonalMetrics(
@@ -592,7 +604,9 @@ function reducer(state: AppState, action: Action): AppState {
       if (action.value) {
         const historyStart = goalHistoryStart(state, metric);
         const periods =
-          action.historyMode === "history"
+          action.startDate
+            ? [{ from: action.startDate }]
+            : action.historyMode === "history"
             ? [{ from: historyStart }]
             : [{ from: dateKey() }];
         return {
@@ -602,9 +616,10 @@ function reducer(state: AppState, action: Action): AppState {
                 ? {
                     ...candidate,
                     activeFrom:
-                      action.historyMode === "history"
+                      action.startDate ??
+                      (action.historyMode === "history"
                         ? historyStart
-                        : candidate.activeFrom,
+                        : candidate.activeFrom),
                     goal:
                       candidate.id === "weekly_deficit_balance"
                         ? { kind: "at_least" as const, target: 0 }
@@ -692,6 +707,7 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "addGroupMetric": {
+      const { trackGoal: _trackGoal, ...definition } = action.metric;
       const base =
         slugify(action.metric.templateId ?? action.metric.name) ||
         "group_tracker";
@@ -705,7 +721,7 @@ function reducer(state: AppState, action: Action): AppState {
         (action.metric.healthMapping?.dataType === "blood_pressure" &&
           action.metric.healthMapping.field === "diastolic");
       const metric: MetricDefinition = {
-        ...action.metric,
+        ...definition,
         id,
         order: existing.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
@@ -1241,6 +1257,7 @@ type AppContextValue = {
     metricId: string,
     value: boolean,
     historyMode: "today" | "history",
+    startDate?: string,
   ) => void;
   configurePersonalMetrics: (
     metrics: MetricDefinition[],
@@ -1700,8 +1717,14 @@ export function AppProvider({ children }: PropsWithChildren) {
           value,
           historyMode,
         }),
-      setTrackedGoal: (metricId, value, historyMode) =>
-        dispatch({ type: "setTrackedGoal", metricId, value, historyMode }),
+      setTrackedGoal: (metricId, value, historyMode, startDate) =>
+        dispatch({
+          type: "setTrackedGoal",
+          metricId,
+          value,
+          historyMode,
+          startDate,
+        }),
       configurePersonalMetrics: (metrics, trackedGoalIds) =>
         dispatch({ type: "configurePersonalMetrics", metrics, trackedGoalIds }),
       updateGroupMetric: (metricId, changes) =>

@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
@@ -32,12 +32,21 @@ const filters: { id: Filter; label: string }[] = [
 ];
 
 export default function BadgesScreen() {
+  const params = useLocalSearchParams<{
+    anchor?: string;
+    filter?: Filter;
+    highlight?: string;
+  }>();
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [anchor, setAnchor] = useState(dateKey());
+  const [anchor, setAnchor] = useState(params.anchor ?? dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [filter, setFilter] = useState<Filter>("achievement");
+  const [filter, setFilter] = useState<Filter>(
+    filters.some((item) => item.id === params.filter)
+      ? (params.filter as Filter)
+      : "achievement",
+  );
   const [memberIds, setMemberIds] = useState(
     [state.currentUserId],
   );
@@ -144,7 +153,16 @@ export default function BadgesScreen() {
                     }
                   >
                     <Card
-                      style={[styles.badge, { borderLeftColor: badge.color }]}
+                      style={[
+                        styles.badge,
+                        { borderLeftColor: badge.color },
+                        params.highlight === "today" &&
+                          badge.anchorDate === anchor &&
+                          badge.memberId === state.currentUserId && {
+                            borderColor: `${badge.color}88`,
+                            backgroundColor: `${badge.color}10`,
+                          },
+                      ]}
                     >
                       {member ? (
                         <Avatar

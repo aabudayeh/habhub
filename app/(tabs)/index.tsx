@@ -91,10 +91,10 @@ export default function Today() {
     3,
     Math.min(8, state.settings.todayTileLimit ?? 5),
   );
-  const primary = state.settings.showAllTodayTiles
+  const primary = editing || state.settings.showAllTodayTiles
     ? visible
     : visible.slice(0, tileLimit);
-  const extra = state.settings.showAllTodayTiles
+  const extra = editing || state.settings.showAllTodayTiles
     ? []
     : visible.slice(tileLimit);
   const hiddenTrackers = state.metrics
@@ -143,23 +143,20 @@ export default function Today() {
             .filter(Boolean);
           const newlyCompleted = completed.filter((id) => !previous.has(id));
           if (newlyCompleted.length) {
+            const special = celebrationSnapshot.current.allMet;
+            const duration = special ? 3800 : 2700;
             setCelebratingGoalIds(newlyCompleted);
-            setCelebrationSpecial(celebrationSnapshot.current.allMet);
+            setCelebrationSpecial(special);
             celebration.setValue(0);
-            Animated.sequence([
-              Animated.timing(celebration, {
-                toValue: 1,
-                duration: 650,
-                useNativeDriver: true,
-              }),
-              Animated.delay(900),
-              Animated.timing(celebration, {
-                toValue: 0,
-                duration: 450,
-                useNativeDriver: true,
-              }),
-            ]).start();
-            clearTiles = setTimeout(() => setCelebratingGoalIds([]), 1800);
+            Animated.timing(celebration, {
+              toValue: 1,
+              duration,
+              useNativeDriver: true,
+            }).start();
+            clearTiles = setTimeout(
+              () => setCelebratingGoalIds([]),
+              duration,
+            );
           }
           completed.forEach((id) => previous.add(id));
           AsyncStorage.setItem(
@@ -402,6 +399,16 @@ export default function Today() {
             }
             special={monthAll || weekAll}
             colors={colors}
+            onPress={() =>
+              router.push({
+                pathname: "/badges",
+                params: {
+                  anchor: today,
+                  filter: "all",
+                  highlight: "today",
+                },
+              } as never)
+            }
           />
         ) : null}
         <View style={styles.sectionRow}>
@@ -619,24 +626,29 @@ function ConfettiBurst({
         styles.confetti,
         special && styles.confettiSpecial,
         {
-          opacity: progress,
+          opacity: progress.interpolate({
+            inputRange: [0, 0.06, 0.82, 1],
+            outputRange: [0, 1, 1, 0],
+          }),
           transform: [{
             translateY: progress.interpolate({
               inputRange: [0, 1],
-              outputRange: [-30, special ? 110 : 180],
+              outputRange: [-60, special ? height * 0.82 : height * 0.66],
             }),
           }],
         },
       ]}
     >
-      {Array.from({ length: special ? 80 : 32 }, (_, index) => (
+      {Array.from({ length: special ? 160 : 72 }, (_, index) => (
         <View
           key={index}
           style={[
             styles.confettiPiece,
             {
               left: `${(index * 37) % 96}%`,
-              top: special ? (index * 47) % Math.max(320, height - 120) : (index * 23) % 75,
+              top: special
+                ? (index * 47) % Math.max(420, height - 80)
+                : (index * 23) % 170,
               backgroundColor: colors[index % colors.length],
               transform: [{ rotate: `${index * 29}deg` }],
             },
@@ -706,11 +718,17 @@ function TrackerRow({
   onRemove: () => void;
   onPin: () => void;
 }) {
-  const start = useRef(index);
+  const dragOrigin = useRef(index);
+  const liveTarget = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const arrival = useRef(new Animated.Value(1)).current;
-  start.current = index;
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -747,24 +765,34 @@ function TrackerRow({
           editing && Math.abs(gesture.dy) > 3,
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
-        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) => {
-          onMove(
-            Math.max(
-              0,
-              Math.min(
-                count - 1,
-                start.current + Math.round(gesture.dy / height),
-              ),
+        onPanResponderGrant: () => {
+          dragOrigin.current = indexRef.current;
+          liveTarget.current = indexRef.current;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const target = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              dragOrigin.current + Math.round(gesture.dy / height),
             ),
           );
+          dragY.setValue(
+            gesture.dy - (target - dragOrigin.current) * height,
+          );
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onMoveRef.current(target);
+          }
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: () => {
           Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
         },
         onPanResponderTerminate: () =>
           Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start(),
       }),
-    [count, dragY, editing, height, onMove],
+    [dragY, editing, height],
   );
   const actualValue =
     item.id === "weekly_deficit_balance"
@@ -1079,14 +1107,19 @@ function Celebration({
   copy,
   special = false,
   colors,
+  onPress,
 }: {
   title: string;
   copy: string;
   special?: boolean;
   colors: ReturnType<typeof useAppColors>;
+  onPress: () => void;
 }) {
   return (
-    <View
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open today's badges"
+      onPress={onPress}
       style={[
         styles.celebration,
         {
@@ -1111,7 +1144,8 @@ function Celebration({
           {copy}
         </Text>
       </View>
-    </View>
+      <Ionicons name="chevron-forward" size={18} color={special ? "#806316" : colors.muted} />
+    </Pressable>
   );
 }
 const styles = StyleSheet.create({

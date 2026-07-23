@@ -22,6 +22,7 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
@@ -190,6 +191,8 @@ export default function TrackerEditor() {
     updateGroupMetric,
     deleteGroupMetric,
     updateSettings,
+    setTrackedGoal,
+    setMetricSection,
   } = useApp();
   const sourceMetrics = groupScope
     ? (state.group.metricConfiguration ?? [])
@@ -198,6 +201,9 @@ export default function TrackerEditor() {
     id && id !== "new"
       ? sourceMetrics.find((item) => item.id === id)
       : undefined;
+  const trackerPeriods = tracker
+    ? state.trackedGoalPeriods[tracker.id]
+    : undefined;
   const colors = useAppColors();
   const accent = useGroupAccent();
   const presets = trackerPresets(state).filter(
@@ -264,6 +270,15 @@ export default function TrackerEditor() {
     tracker?.manualEntry !== false,
   );
   const [activeFrom, setActiveFrom] = useState(tracker?.activeFrom ?? dateKey());
+  const initiallyTracked = Boolean(
+    !groupScope &&
+      tracker &&
+      (trackerPeriods
+        ? trackerPeriods.some((period) => !period.to)
+        : tracker.sections.today),
+  );
+  const [trackGoal, setTrackGoal] = useState(initiallyTracked);
+  const [goalCalendarOpen, setGoalCalendarOpen] = useState(false);
   const [scheduleMode, setScheduleMode] = useState(
     tracker?.goalSchedule?.mode ?? "daily",
   );
@@ -311,6 +326,8 @@ export default function TrackerEditor() {
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
     setActiveFrom(dateKey());
+    setTrackGoal(false);
+    setGoalCalendarOpen(false);
     setReminderTimes(
       preset.reminders?.map((item) => item.time) ??
         defaultReminderTimes({ id: preset.templateId, category: preset.category }),
@@ -417,6 +434,7 @@ export default function TrackerEditor() {
       manualEntry:
         healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
       activeFrom,
+      trackGoal: !groupScope && goalEnabled && trackGoal,
       goalSchedule: {
         mode: scheduleMode,
         daysOfWeek: scheduleMode === "selected_days" ? selectedDays : undefined,
@@ -442,11 +460,23 @@ export default function TrackerEditor() {
           : undefined,
       templateId: tracker ? undefined : presetId || undefined,
     };
+    const { trackGoal: shouldTrack, ...definition } = common;
     if (groupScope) {
-      if (tracker) updateGroupMetric(tracker.id, common);
-      else addGroupMetric(common);
-    } else if (tracker) updateMetric(tracker.id, common);
-    else addMetric(common);
+      if (tracker) updateGroupMetric(tracker.id, definition);
+      else addGroupMetric(definition);
+    } else if (tracker) {
+      updateMetric(tracker.id, definition);
+      if (shouldTrack || initiallyTracked) {
+        setTrackedGoal(
+          tracker.id,
+          Boolean(shouldTrack),
+          "today",
+          shouldTrack ? activeFrom : undefined,
+        );
+      }
+      if (initiallyTracked && !shouldTrack)
+        setMetricSection(tracker.id, "today", false, "today");
+    } else addMetric(common);
     if ((presetId || tracker?.id) === "blood_pressure_systolic") {
       const presetsById = new Map(
         trackerPresets(state, true).map((preset) => [preset.templateId, preset]),
@@ -864,16 +894,100 @@ export default function TrackerEditor() {
           >
           <Card>
             <SectionHeader title="How it behaves" />
-            {tracker && state.trackedGoalPeriods[tracker.id]?.length ? (
-              <View>
-                <Field
-                  label="Tracked goal starts (YYYY-MM-DD)"
-                  value={activeFrom}
-                  set={setActiveFrom}
-                  colors={colors}
-                  keyboard={false}
-                />
+            {!groupScope && goalEnabled && dataType !== "text" ? (
+              <View
+                style={[styles.switchRow, { borderColor: colors.border }]}
+              >
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Add to tracked goals and Today
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Include this goal in daily completion from the chosen
+                    start date.
+                  </Text>
+                </View>
+                <Switch value={trackGoal} onValueChange={setTrackGoal} />
               </View>
+            ) : null}
+            {goalEnabled && dataType !== "text" ? (
+                <View style={styles.goalStart}>
+                    <View style={styles.goalStartHeading}>
+                      <Text style={[styles.label, { color: colors.ink }]}>
+                        Goal starts
+                      </Text>
+                      <Pressable
+                        onPress={() => {
+                          setActiveFrom(dateKey());
+                          setGoalCalendarOpen(false);
+                        }}
+                        style={[
+                          styles.todayButton,
+                          {
+                            borderColor: accent,
+                            backgroundColor: colors.primarySoft,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.todayText, { color: accent }]}>
+                          Today
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <Pressable
+                      onPress={() =>
+                        setGoalCalendarOpen((open) => !open)
+                      }
+                      style={[
+                        styles.goalDate,
+                        {
+                          borderColor: colors.border,
+                          backgroundColor: colors.canvas,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={17}
+                        color={accent}
+                      />
+                      <Text style={[styles.goalDateText, { color: colors.ink }]}>
+                        {new Date(
+                          `${activeFrom}T12:00:00`,
+                        ).toLocaleDateString(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </Text>
+                      <Ionicons
+                        name={
+                          goalCalendarOpen
+                            ? "chevron-up"
+                            : "chevron-down"
+                        }
+                        size={16}
+                        color={colors.muted}
+                      />
+                    </Pressable>
+                    {goalCalendarOpen ? (
+                      <View
+                        style={[
+                          styles.goalCalendar,
+                          { borderTopColor: colors.border },
+                        ]}
+                      >
+                        <MonthCalendar
+                          monthDate={activeFrom}
+                          selectedDate={activeFrom}
+                          onSelect={(selectedDate) => {
+                            setActiveFrom(selectedDate);
+                            setGoalCalendarOpen(false);
+                          }}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
             ) : null}
             <Text style={[styles.label, { color: colors.ink }]}>Reminder times</Text>
             {reminderTimes.map((time, index) => (
@@ -1166,7 +1280,7 @@ export default function TrackerEditor() {
         <View style={styles.grow}>
           <Button
             label={
-              tracker ? "Save" : groupScope ? "Add to group" : "Add to Today"
+              tracker ? "Save" : groupScope ? "Add to group" : "Add tracker"
             }
             icon="checkmark"
             onPress={save}
@@ -1238,6 +1352,32 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
   },
+  goalStart: { marginTop: 8 },
+  goalStartHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  todayButton: {
+    minHeight: 30,
+    paddingHorizontal: 11,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  todayText: { fontSize: 9, fontWeight: "900" },
+  goalDate: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  goalDateText: { flex: 1, fontSize: 11, fontWeight: "900" },
+  goalCalendar: { borderTopWidth: 1, marginTop: 9, paddingTop: 9 },
   rowTitle: { fontSize: 12, fontWeight: "900" },
   help: { fontSize: 9, lineHeight: 14, marginTop: 2 },
   advancedButton: {

@@ -1,5 +1,5 @@
 import { AppState, MetricDefinition, MetricEntry } from "@/src/types";
-import { dateKey, dateWithOffsetFrom } from "./date";
+import { dateKey, dateRangeEnding, dateWithOffsetFrom } from "./date";
 import {
   dailyFoodGoal,
   energyFormulaVariables,
@@ -586,6 +586,150 @@ export function metricApplicableOnDate(
   if (metric.id === "weekly_deficit_balance")
     return weeklyDeficitBalance(state, userId, localDate).days > 0;
   return true;
+}
+
+export function hasMetricData(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  if (!metricApplicableOnDate(state, metric, userId, localDate)) return false;
+  if (metric.dataType === "photo")
+    return state.photos.some(
+      (photo) =>
+        photo.userId === userId && photo.localDate === localDate,
+    );
+  if (metric.dataType === "calculated") return true;
+  return state.entries.some(
+    (entry) =>
+      entry.userId === userId &&
+      entry.metricId === metric.id &&
+      entry.localDate === localDate,
+  );
+}
+
+export function metricPeriodStats(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  dates: string[],
+) {
+  const applicableDates = dates.filter((date) =>
+    metricApplicableOnDate(state, metric, userId, date),
+  );
+  const loggedDates = applicableDates.filter((date) =>
+    hasMetricData(state, metric, userId, date),
+  );
+  const values = loggedDates.map((date) =>
+    safeMetricValue(state, metric, userId, date),
+  );
+  const average = values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
+  const goalsReached = loggedDates.filter((date) =>
+    scheduledGoalReached(state, metric, userId, date),
+  ).length;
+  const targets = loggedDates.map((date) =>
+    effectiveGoalTarget(state, metric, userId, date),
+  );
+  const averageTarget = targets.length
+    ? targets.reduce((sum, value) => sum + value, 0) / targets.length
+    : metric.goal.target;
+  return {
+    applicableDates,
+    loggedDates,
+    values,
+    average,
+    averageTarget,
+    goalsReached,
+  };
+}
+
+export function metricStreakStats(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  throughDate: string,
+) {
+  let current = 0;
+  let best = 0;
+  let run = 0;
+  for (let index = 89; index >= 0; index--) {
+    const localDate = dateWithOffsetFrom(throughDate, -index);
+    const met =
+      metric.goalEnabled !== false &&
+      hasMetricData(state, metric, userId, localDate) &&
+      scheduledGoalReached(state, metric, userId, localDate);
+    run = met ? run + 1 : 0;
+    best = Math.max(best, run);
+  }
+  for (let index = 0; index < 90; index++) {
+    const localDate = dateWithOffsetFrom(throughDate, -index);
+    if (
+      metric.goalEnabled !== false &&
+      hasMetricData(state, metric, userId, localDate) &&
+      scheduledGoalReached(state, metric, userId, localDate)
+    )
+      current += 1;
+    else break;
+  }
+  return { current, best };
+}
+
+export function metricOverallAverage(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  throughDate = dateKey(),
+) {
+  if (metric.dataType === "photo" || metric.dataType === "text") return 0;
+  const entryDates = [
+    ...new Set(
+      state.entries
+        .filter(
+          (entry) =>
+            entry.userId === userId &&
+            entry.metricId === metric.id &&
+            entry.localDate <= throughDate,
+        )
+        .map((entry) => entry.localDate),
+    ),
+  ];
+  const dates =
+    metric.dataType === "calculated"
+      ? dateRangeEnding(
+          throughDate,
+          Math.max(
+            1,
+            Math.floor(
+              (new Date(`${throughDate}T12:00:00`).getTime() -
+                new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
+                86400000,
+            ) + 1,
+          ),
+        )
+      : entryDates;
+  return metricPeriodStats(state, metric, userId, dates).average;
+}
+
+export function metricAverageGoalOffsetLabel(
+  metric: MetricDefinition,
+  average: number,
+  averageTarget: number,
+) {
+  const formatDifference = (difference: number) =>
+    `${Math.abs(difference) >= 100 ? Math.round(Math.abs(difference)) : Math.round(Math.abs(difference) * 10) / 10} ${metric.unit}`.trim();
+  if (metric.goalRange) {
+    if (average < metric.goalRange.min)
+      return `${formatDifference(metric.goalRange.min - average)} below range`;
+    if (average > metric.goalRange.max)
+      return `${formatDifference(average - metric.goalRange.max)} above range`;
+    return "Average inside goal range";
+  }
+  const difference = average - averageTarget;
+  if (Math.abs(difference) < 0.05) return "Average on target";
+  return `${formatDifference(difference)} ${difference > 0 ? "above" : "below"} target`;
 }
 
 /**

@@ -1,7 +1,18 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, Switch, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  Animated,
+  LayoutAnimation,
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  UIManager,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import {
@@ -28,9 +39,22 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "social", label: "Social" },
 ];
 
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 export default function Customize() {
   const params = useLocalSearchParams<{ tab?: string }>();
-  const { state, setMetricSection, setTrackedGoal, updateSettings, moveMetric } = useApp();
+  const {
+    state,
+    setMetricSection,
+    setTrackedGoal,
+    updateSettings,
+    reorderMetric,
+  } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const initial = tabs.some((item) => item.id === params.tab)
@@ -83,6 +107,55 @@ export default function Customize() {
         },
       ],
     );
+  }
+
+  function reorderForSection(metricId: string, target: number) {
+    const next = [...ordered];
+    const index = next.findIndex((metric) => metric.id === metricId);
+    if (index < 0) return;
+    const [moved] = next.splice(index, 1);
+    next.splice(Math.max(0, Math.min(target, next.length)), 0, moved);
+    reorderMetric(metricId, target);
+    if (tab === "insights") {
+      const selected = new Set(state.settings.progressMetricIds);
+      updateSettings({
+        progressMetricIds: [
+          ...(selected.has("tracked_goals") ? ["tracked_goals"] : []),
+          ...next
+            .map((metric) => metric.id)
+            .filter((id) => selected.has(id)),
+        ],
+      });
+    }
+  }
+
+  function changeSection(metric: MetricDefinition) {
+    const visible = !metric.sections[tab as DashboardSection];
+    setMetricSection(metric.id, tab as DashboardSection, visible);
+    if (tab === "insights") {
+      const current = state.settings.progressMetricIds.filter(
+        (id) => id !== metric.id,
+      );
+      updateSettings({
+        progressMetricIds: visible ? [...current, metric.id] : current,
+      });
+    }
+  }
+
+  function setAllInSection(visible: boolean) {
+    ordered.forEach((metric) =>
+      setMetricSection(metric.id, tab as DashboardSection, visible),
+    );
+    if (tab === "insights") {
+      const tracked = state.settings.progressMetricIds.includes("tracked_goals")
+        ? ["tracked_goals"]
+        : [];
+      updateSettings({
+        progressMetricIds: visible
+          ? [...tracked, ...ordered.map((metric) => metric.id)]
+          : tracked,
+      });
+    }
   }
 
   return (
@@ -171,7 +244,7 @@ export default function Customize() {
 
       {tab === "goals" ? (
         <>
-          <Card
+          <View
             style={[
               styles.note,
               {
@@ -185,7 +258,7 @@ export default function Customize() {
               These are the goals counted in Today and historical completion.
               Showing a tracker on Today is a separate choice.
             </Text>
-          </Card>
+          </View>
           <SectionHeader
             title="Goals being counted"
             action={
@@ -259,7 +332,7 @@ export default function Customize() {
 
       {tab === "today" || tab === "insights" ? (
         <>
-          <Card
+          <View
             style={[
               styles.note,
               {
@@ -274,21 +347,13 @@ export default function Customize() {
                 ? "Choose the compact tiles visible on Today. Up to five fit before More appears."
                 : "Choose what is available in your personal Progress view."}
             </Text>
-          </Card>
+          </View>
           <SectionHeader
             title={tab === "today" ? "Today tiles" : "Progress items"}
             action={
               <BulkActions
-                onAll={() =>
-                  ordered.forEach((metric) =>
-                    setMetricSection(metric.id, tab, true),
-                  )
-                }
-                onClear={() =>
-                  ordered.forEach((metric) =>
-                    setMetricSection(metric.id, tab, false),
-                  )
-                }
+                onAll={() => setAllInSection(true)}
+                onClear={() => setAllInSection(false)}
               />
             }
           />
@@ -301,11 +366,15 @@ export default function Customize() {
                 last={index === ordered.length - 1}
                 colors={colors}
                 accent={accent}
-                onMoveUp={() => moveMetric(metric.id, -1)}
-                onMoveDown={() => moveMetric(metric.id, 1)}
-                onChange={() =>
-                  setMetricSection(metric.id, tab, !metric.sections[tab])
-                }
+                index={index}
+                count={ordered.length}
+                onMove={(target) => {
+                  LayoutAnimation.configureNext(
+                    LayoutAnimation.Presets.easeInEaseOut,
+                  );
+                  reorderForSection(metric.id, target);
+                }}
+                onChange={() => changeSection(metric)}
               />
             ))}
           </Card>
@@ -412,8 +481,9 @@ function VisibilityRow({
   colors,
   accent,
   onChange,
-  onMoveUp,
-  onMoveDown,
+  index,
+  count,
+  onMove,
 }: {
   metric: MetricDefinition;
   section: DashboardSection;
@@ -421,16 +491,118 @@ function VisibilityRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   onChange: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
+  index: number;
+  count: number;
+  onMove: (target: number) => void;
 }) {
+  const dragY = useRef(new Animated.Value(0)).current;
+  const wiggle = useRef(new Animated.Value(0)).current;
+  const [dragging, setDragging] = useState(false);
+  const dragOrigin = useRef(index);
+  const liveTarget = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
+  useEffect(() => {
+    if (!dragging) {
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wiggle, {
+          toValue: -1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wiggle, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [dragging, wiggle]);
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dy) > 2,
+        onPanResponderGrant: () => {
+          setDragging(true);
+          dragOrigin.current = indexRef.current;
+          liveTarget.current = indexRef.current;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const target = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              dragOrigin.current + Math.round(gesture.dy / 56),
+            ),
+          );
+          dragY.setValue(gesture.dy - (target - dragOrigin.current) * 56);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onMoveRef.current(target);
+          }
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: () => {
+          setDragging(false);
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
+        onPanResponderTerminate: () => {
+          setDragging(false);
+          Animated.spring(dragY, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
+      }),
+    [dragY],
+  );
   return (
-    <View
+    <Animated.View
       style={[
         styles.row,
         !last && { borderBottomColor: colors.border, borderBottomWidth: 1 },
+        {
+          zIndex: dragging ? 4 : 1,
+          transform: [
+            { translateY: dragY },
+            {
+              rotate: wiggle.interpolate({
+                inputRange: [-1, 1],
+                outputRange: ["-0.15deg", "0.15deg"],
+              }),
+            },
+          ],
+        },
       ]}
     >
+      <View
+        {...responder.panHandlers}
+        accessibilityLabel={`Reorder ${metric.name}`}
+        style={styles.dragHandle}
+      >
+        <Ionicons name="reorder-three-outline" size={22} color={accent} />
+      </View>
       <TrackerIcon metric={metric} />
       <View style={styles.copy}>
         <Text style={[styles.name, { color: colors.ink }]}>{metric.name}</Text>
@@ -444,15 +616,7 @@ function VisibilityRow({
         trackColor={{ false: colors.border, true: `${accent}88` }}
         thumbColor={metric.sections[section] ? accent : colors.faint}
       />
-      <View style={styles.orderButtons}>
-        <Pressable accessibilityLabel="Move up" onPress={onMoveUp} hitSlop={8}>
-          <Ionicons name="chevron-up" size={17} color={accent} />
-        </Pressable>
-        <Pressable accessibilityLabel="Move down" onPress={onMoveDown} hitSlop={8}>
-          <Ionicons name="chevron-down" size={17} color={accent} />
-        </Pressable>
-      </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -480,7 +644,20 @@ const styles = StyleSheet.create({
   name: { fontSize: 11, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   link: { fontSize: 11, fontWeight: "900" },
-  note: { flexDirection: "row", alignItems: "flex-start", gap: 8, padding: 11 },
+  note: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 11,
+    borderWidth: 1,
+    borderRadius: 14,
+  },
+  dragHandle: {
+    width: 26,
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   noteText: { flex: 1, fontSize: 9, lineHeight: 14 },
   switchCard: {
     flexDirection: "row",

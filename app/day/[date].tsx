@@ -28,9 +28,11 @@ import {
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
   deficitRealityCheckAtDate,
+  displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
+  hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
   safeMetricValue,
@@ -236,7 +238,6 @@ export default function DayDetail() {
       <PageHeader
         eyebrow="Daily detail"
         title={friendlyDate(day)}
-        subtitle="Only items logged on this day appear by default."
         showMenu={false}
         action={
           <IconButton
@@ -284,10 +285,77 @@ export default function DayDetail() {
             <MonthCalendar
               monthDate={day}
               selectedDate={day}
-              onMonthChange={setDay}
               onSelect={(date) => {
                 changeDay(date);
                 setCalendarOpen(false);
+              }}
+              hasActivity={(localDate) =>
+                selected.some((metric) =>
+                  hasMetricData(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                  ),
+                )
+              }
+              dayVisuals={(localDate) =>
+                selected.flatMap((metric) => {
+                  if (
+                    !hasMetricData(
+                      state,
+                      metric,
+                      state.currentUserId,
+                      localDate,
+                    )
+                  )
+                    return [];
+                  const target = effectiveGoalTarget(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                  );
+                  const value = safeMetricValue(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                  );
+                  return [
+                    {
+                      color: metric.color,
+                      progress: displayGoalProgress(metric, value, target),
+                      goalReached: scheduledGoalReached(
+                        state,
+                        metric,
+                        state.currentUserId,
+                        localDate,
+                      ),
+                    },
+                  ];
+                })
+              }
+              allTrackedGoalsMet={(localDate) => {
+                const logged = selected.filter((metric) =>
+                  hasMetricData(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                  ),
+                );
+                return (
+                  logged.length > 0 &&
+                  logged.every((metric) =>
+                    scheduledGoalReached(
+                      state,
+                      metric,
+                      state.currentUserId,
+                      localDate,
+                    ),
+                  )
+                );
               }}
             />
           </View>

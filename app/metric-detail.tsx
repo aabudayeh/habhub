@@ -5,19 +5,34 @@ import { Alert, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
   Chip,
   IconButton,
   PageHeader,
+  ProgressBar,
   Screen,
 } from "@/src/components/ui";
-import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
+import {
+  dateKey,
+  dateRangeEnding,
+  dateWithOffsetFrom,
+  friendlyDate,
+} from "@/src/domain/date";
 import {
   deficitRealityCheckAtDate,
+  displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
+  goalProgress,
+  goalReached,
+  hasMetricData,
+  metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
+  metricOverallAverage,
+  metricPeriodStats,
+  metricStreakStats,
   safeMetricValue,
   scheduledGoalReached,
   weeklyDeficitBalance,
@@ -43,12 +58,19 @@ export default function TrackerDetail() {
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
-  const dates = useMemo(() => periodDates(period, day), [day, period]);
+  const dates = useMemo(
+    () =>
+      period === "month"
+        ? dateRangeEnding(day, 30)
+        : periodDates(period, day),
+    [day, period],
+  );
   function shiftRange(direction: number) {
     const amount = period === "week" ? 7 : period === "month" ? 30 : 1;
     const next = dateWithOffsetFrom(day, direction * amount);
@@ -147,13 +169,15 @@ export default function TrackerDetail() {
           )
           .sort((a, b) => b.localDate.localeCompare(a.localDate))[0]
       : undefined;
-  const chartDates = dates.filter((date) =>
-    metricApplicableOnDate(state, tracker, state.currentUserId, date),
+  const periodStats = metricPeriodStats(
+    state,
+    tracker,
+    state.currentUserId,
+    dates,
   );
-  const loggedDates = chartDates.filter((date) => hasData(state, tracker, date));
-  const values = loggedDates.map((date) =>
-    safeMetricValue(state, tracker, state.currentUserId, date),
-  );
+  const chartDates = periodStats.applicableDates;
+  const loggedDates = periodStats.loggedDates;
+  const values = periodStats.values;
   const diastolicTracker =
     isBloodPressure
       ? (state.metrics.find(
@@ -188,14 +212,19 @@ export default function TrackerDetail() {
         safeMetricValue(state, diastolicTracker, state.currentUserId, date),
       )
     : undefined;
-  const average = loggedDates.length
-    ? loggedDates.reduce(
-        (sum, date) =>
-          sum + safeMetricValue(state, tracker, state.currentUserId, date),
-        0,
-      ) / loggedDates.length
-    : 0;
-  const streaks = streakStats(state, tracker, day);
+  const average = periodStats.average;
+  const streaks = metricStreakStats(
+    state,
+    tracker,
+    state.currentUserId,
+    day,
+  );
+  const overallAverage = metricOverallAverage(
+    state,
+    tracker,
+    state.currentUserId,
+    day,
+  );
   const applicable = metricApplicableOnDate(
     state,
     tracker,
@@ -220,6 +249,27 @@ export default function TrackerDetail() {
       (dates.length === 1 ? hasData(state, tracker, day) : loggedDates.length > 0));
   const highestEver = highestRecordedValue(state, tracker, day);
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
+  const displayedTarget =
+    dates.length === 1 ? target : periodStats.averageTarget;
+  const displayedValue = dates.length === 1 ? current : average;
+  const dayGoalMet =
+    dates.length === 1 &&
+    displayAvailable &&
+    scheduledGoalReached(state, tracker, state.currentUserId, day);
+  const diastolicTarget = diastolicTracker
+    ? effectiveGoalTarget(
+        state,
+        diastolicTracker,
+        state.currentUserId,
+        day,
+      )
+    : 0;
+  const systolicDayMet =
+    displayAvailable && goalReached(tracker, current, target);
+  const diastolicDayMet =
+    Boolean(diastolicTracker) &&
+    displayAvailable &&
+    goalReached(diastolicTracker!, currentDiastolic, diastolicTarget);
   const latestWeightDate = state.entries
     .filter(
       (entry) =>
@@ -269,30 +319,129 @@ export default function TrackerDetail() {
             onPress={() => setPeriod("week")}
           />
           <Chip
-            label="Month"
+            label="30 days"
             selected={period === "month"}
             onPress={() => setPeriod("month")}
           />
         </View>
         <Card style={styles.navigator}>
-          <IconButton
-            icon="chevron-back"
-            label="Previous"
-            onPress={() => shiftRange(-1)}
-          />
-          <View style={styles.navCopy}>
-            <Text style={[styles.navTitle, { color: colors.ink }]}>
-              {periodTitle(period, day)}
-            </Text>
-            <Text style={[styles.navSub, { color: colors.muted }]}>
-              {dates.length > 1 ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}` : friendlyDate(day)}
-            </Text>
+          <View style={styles.dateNav}>
+            <IconButton
+              icon="chevron-back"
+              label="Previous"
+              onPress={() => shiftRange(-1)}
+            />
+            <Pressable
+              onPress={() => setCalendarOpen((open) => !open)}
+              style={styles.navCopy}
+            >
+              <Text style={[styles.navTitle, { color: colors.ink }]}>
+                {period === "month" ? "Last 30 days" : periodTitle(period, day)}
+              </Text>
+              <View style={styles.navDate}>
+                <Ionicons name="calendar-outline" size={13} color={accent} />
+                <Text style={[styles.navSub, { color: colors.muted }]}>
+                  {dates.length > 1
+                    ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
+                    : friendlyDate(day)}
+                </Text>
+                <Ionicons
+                  name={calendarOpen ? "chevron-up" : "chevron-down"}
+                  size={13}
+                  color={colors.muted}
+                />
+              </View>
+            </Pressable>
+            <IconButton
+              icon="chevron-forward"
+              label="Next"
+              onPress={() => shiftRange(1)}
+            />
           </View>
-          <IconButton
-            icon="chevron-forward"
-            label="Next"
-            onPress={() => shiftRange(1)}
-          />
+          {calendarOpen ? (
+            <View style={[styles.calendar, { borderTopColor: colors.border }]}>
+              <MonthCalendar
+                monthDate={day}
+                selectedDate={day}
+                onSelect={(selectedDay) => {
+                  setDay(selectedDay);
+                  setPeriod("custom");
+                  setCalendarOpen(false);
+                }}
+                hasActivity={(localDate) =>
+                  hasData(state, tracker, localDate)
+                }
+                dayVisuals={(localDate) => {
+                  if (!hasData(state, tracker, localDate)) return [];
+                  const localTarget = effectiveGoalTarget(
+                    state,
+                    tracker,
+                    state.currentUserId,
+                    localDate,
+                  );
+                  const localValue = safeMetricValue(
+                    state,
+                    tracker,
+                    state.currentUserId,
+                    localDate,
+                  );
+                  const visuals = [
+                    {
+                      color: tracker.color,
+                      progress: displayGoalProgress(
+                        tracker,
+                        localValue,
+                        localTarget,
+                      ),
+                      goalReached: scheduledGoalReached(
+                        state,
+                        tracker,
+                        state.currentUserId,
+                        localDate,
+                      ),
+                    },
+                  ];
+                  if (diastolicTracker) {
+                    const localDiastolicTarget = effectiveGoalTarget(
+                      state,
+                      diastolicTracker,
+                      state.currentUserId,
+                      localDate,
+                    );
+                    const localDiastolicValue = safeMetricValue(
+                      state,
+                      diastolicTracker,
+                      state.currentUserId,
+                      localDate,
+                    );
+                    visuals.push({
+                      color: diastolicTracker.color,
+                      progress: displayGoalProgress(
+                        diastolicTracker,
+                        localDiastolicValue,
+                        localDiastolicTarget,
+                      ),
+                      goalReached: goalReached(
+                        diastolicTracker,
+                        localDiastolicValue,
+                        localDiastolicTarget,
+                      ),
+                    });
+                  }
+                  return visuals;
+                }}
+                allTrackedGoalsMet={(localDate) =>
+                  hasData(state, tracker, localDate) &&
+                  scheduledGoalReached(
+                    state,
+                    tracker,
+                    state.currentUserId,
+                    localDate,
+                  )
+                }
+              />
+            </View>
+          ) : null}
         </Card>
       </View>
       {day === dateKey() && tracker.goalEnabled !== false ? (
@@ -338,7 +487,14 @@ export default function TrackerDetail() {
             <Text style={[styles.sub, { color: colors.muted }]}>
               {isBloodPressure && currentPulse > 0
                 ? `Pulse ${Math.round(currentPulse)} bpm`
-                : summaryLine(state, tracker, day, current, target, applicable)}
+                : summaryLine(
+                    state,
+                    tracker,
+                    day,
+                    displayedValue,
+                    displayedTarget,
+                    applicable,
+                  )}
             </Text>
           </View>
           <View
@@ -354,6 +510,69 @@ export default function TrackerDetail() {
             />
           </View>
         </View>
+        {dates.length === 1 &&
+        displayAvailable &&
+        tracker.goalEnabled !== false &&
+        !isPhoto ? (
+          <View style={styles.dayProgress}>
+            <View style={styles.dayProgressHeading}>
+              <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
+                {isBloodPressure ? "Systolic" : "Goal progress"}
+              </Text>
+              <Ionicons
+                name={
+                  (isBloodPressure ? systolicDayMet : dayGoalMet)
+                    ? "checkmark-circle"
+                    : "ellipse-outline"
+                }
+                size={17}
+                color={
+                  (isBloodPressure ? systolicDayMet : dayGoalMet)
+                    ? palette.lime
+                    : colors.faint
+                }
+              />
+            </View>
+            <ProgressBar
+              progress={goalProgress(tracker, current, target)}
+              color={systolicDayMet ? palette.lime : tracker.color}
+            />
+            {diastolicTracker ? (
+              <>
+                <View style={styles.dayProgressHeading}>
+                  <Text
+                    style={[styles.dayProgressLabel, { color: colors.muted }]}
+                  >
+                    Diastolic
+                  </Text>
+                  <Ionicons
+                    name={
+                      diastolicDayMet
+                        ? "checkmark-circle"
+                        : "ellipse-outline"
+                    }
+                    size={17}
+                    color={
+                      diastolicDayMet ? palette.lime : colors.faint
+                    }
+                  />
+                </View>
+                <ProgressBar
+                  progress={goalProgress(
+                    diastolicTracker,
+                    currentDiastolic,
+                    diastolicTarget,
+                  )}
+                  color={
+                    diastolicDayMet
+                      ? palette.lime
+                      : diastolicTracker.color
+                  }
+                />
+              </>
+            ) : null}
+          </View>
+        ) : null}
         {dates.length > 1 && values.length > 0 && !isPhoto ? (
           <Trend
             values={values}
@@ -386,12 +605,28 @@ export default function TrackerDetail() {
                 colors={colors}
               />
             ) : (
-              <Stat
-                label="Goals reached"
-                value={`${chartDates.filter((date) => hasData(state, tracker, date) && scheduledGoalReached(state, tracker, state.currentUserId, date)).length}/${chartDates.length}`}
-                colors={colors}
-              />
+              <>
+                <Stat
+                  label="Goals reached"
+                  value={`${periodStats.goalsReached}/${chartDates.length}`}
+                  colors={colors}
+                />
+                <Stat
+                  label="Average vs goal"
+                  value={metricAverageGoalOffsetLabel(
+                    tracker,
+                    average,
+                    periodStats.averageTarget,
+                  )}
+                  colors={colors}
+                />
+              </>
             )}
+            <Stat
+              label="Overall average"
+              value={formatMetricValue(tracker, overallAverage)}
+              colors={colors}
+            />
           </View>
         ) : null}
         {state.trackedGoalPeriods[tracker.id]?.length ? (
@@ -771,7 +1006,12 @@ function WeeklyDetail({
       </Card>
       <View style={styles.entries}>
         {days.map((date) => {
-          const valid = hasFood(state, date);
+          const valid = state.entries.some(
+            (entry) =>
+              entry.userId === state.currentUserId &&
+              entry.metricId === "food" &&
+              entry.localDate === date,
+          );
           const deficit = state.metrics.find((item) => item.id === "deficit");
           const value =
             valid && deficit
@@ -1028,34 +1268,12 @@ function Stat({
     </View>
   );
 }
-function hasFood(state: ReturnType<typeof useApp>["state"], day: string) {
-  return state.entries.some(
-    (entry) =>
-      entry.userId === state.currentUserId &&
-      entry.metricId === "food" &&
-      entry.localDate === day,
-  );
-}
 function hasData(
   state: ReturnType<typeof useApp>["state"],
   tracker: MetricDefinition,
   day: string,
 ) {
-  if (tracker.dataType === "photo")
-    return state.photos.some(
-      (photo) =>
-        photo.userId === state.currentUserId && photo.localDate === day,
-    );
-  return tracker.dataType === "calculated"
-    ? tracker.id === "deficit"
-      ? hasFood(state, day)
-      : true
-    : state.entries.some(
-        (entry) =>
-          entry.userId === state.currentUserId &&
-          entry.metricId === tracker.id &&
-          entry.localDate === day,
-      );
+  return hasMetricData(state, tracker, state.currentUserId, day);
 }
 function highestRecordedValue(
   state: ReturnType<typeof useApp>["state"],
@@ -1086,35 +1304,6 @@ function highestRecordedValue(
       safeMetricValue(state, tracker, state.currentUserId, date),
     ),
   );
-}
-function streakStats(
-  state: ReturnType<typeof useApp>["state"],
-  tracker: MetricDefinition,
-  day: string,
-) {
-  let current = 0,
-    best = 0,
-    run = 0;
-  for (let i = 89; i >= 0; i--) {
-    const date = dateWithOffsetFrom(day, -i);
-    const met =
-      tracker.goalEnabled !== false &&
-      hasData(state, tracker, date) &&
-      scheduledGoalReached(state, tracker, state.currentUserId, date);
-    run = met ? run + 1 : 0;
-    best = Math.max(best, run);
-  }
-  for (let i = 0; i < 90; i++) {
-    const date = dateWithOffsetFrom(day, -i);
-    if (
-      tracker.goalEnabled !== false &&
-      hasData(state, tracker, date) &&
-      scheduledGoalReached(state, tracker, state.currentUserId, date)
-    )
-      current++;
-    else break;
-  }
-  return { current, best };
 }
 function summaryLine(
   state: ReturnType<typeof useApp>["state"],
@@ -1185,14 +1374,23 @@ const styles = StyleSheet.create({
   },
   periods: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
   navigator: {
+    padding: 8,
+  },
+  dateNav: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: 8,
   },
-  navCopy: { flex: 1, alignItems: "center" },
+  navCopy: {
+    flex: 1,
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navDate: { flexDirection: "row", alignItems: "center", gap: 5 },
   navTitle: { fontSize: 14, fontWeight: "900" },
   navSub: { fontSize: 9, marginTop: 2, textAlign: "center" },
+  calendar: { borderTopWidth: 1, marginTop: 8, paddingTop: 10 },
   summary: { marginBottom: 9 },
   summaryTop: {
     flexDirection: "row",
@@ -1202,6 +1400,13 @@ const styles = StyleSheet.create({
   label: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
   value: { fontSize: 25, fontWeight: "900", marginTop: 4 },
   sub: { fontSize: 9, lineHeight: 14, marginTop: 3 },
+  dayProgress: { gap: 6, marginTop: 12 },
+  dayProgressHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dayProgressLabel: { fontSize: 8, fontWeight: "900" },
   largeIcon: {
     width: 44,
     height: 44,
@@ -1280,11 +1485,13 @@ const styles = StyleSheet.create({
   skipTodayText: { fontSize: 9, fontWeight: "900" },
   stats: {
     flexDirection: "row",
+    flexWrap: "wrap",
+    rowGap: 10,
     borderTopWidth: 1,
     marginTop: 13,
     paddingTop: 11,
   },
-  stat: { flex: 1 },
+  stat: { width: "33.333%", paddingRight: 6 },
   statValue: { fontSize: 12, fontWeight: "900" },
   statLabel: { fontSize: 7, marginTop: 2 },
   logHeader: {

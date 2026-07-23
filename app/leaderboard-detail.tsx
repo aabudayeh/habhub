@@ -71,13 +71,13 @@ export default function LeaderboardDetail() {
       (entry.userId === state.currentUserId || entry.visibility === "group"),
   );
   const loggedIds = [...new Set(visibleEntries.map((entry) => entry.metricId))];
-  const loggedKey = loggedIds.join("|");
   const available = (state.group.metricConfiguration ?? []).filter(
-    (metric) => loggedIds.includes(metric.id) && metric.dataType !== "photo",
+    (metric) => metric.sections.group && metric.dataType !== "photo",
   );
   const requested = (params.metrics || "").split(",").filter(Boolean);
   const requestedAvailable = requested.filter(
-    (id) => id === SCORE_ID || loggedIds.includes(id),
+    (id) =>
+      id === SCORE_ID || available.some((metric) => metric.id === id),
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(
     requestedAvailable.length
@@ -87,19 +87,20 @@ export default function LeaderboardDetail() {
         : [SCORE_ID],
   );
 
+  const availableKey = available.map((metric) => metric.id).join("|");
   useEffect(() => {
-    const currentLogged = loggedKey.split("|").filter(Boolean);
+    const currentAvailable = availableKey.split("|").filter(Boolean);
     setSelectedIds((current) => {
       const valid = current.filter(
-        (id) => id === SCORE_ID || currentLogged.includes(id),
+        (id) => id === SCORE_ID || currentAvailable.includes(id),
       );
       return valid.length
         ? valid
-        : currentLogged.length
-          ? currentLogged
+        : currentAvailable.length
+          ? currentAvailable
           : [SCORE_ID];
     });
-  }, [loggedKey]);
+  }, [availableKey]);
 
   const metrics = available.filter((metric) => selectedIds.includes(metric.id));
   const rankingMetrics = metrics.filter((metric) => metric.dataType !== "text");
@@ -145,7 +146,6 @@ export default function LeaderboardDetail() {
       <PageHeader
         eyebrow="Leaderboard details"
         title={periodTitle(period, anchor)}
-        subtitle="Only shared values and your own private data appear."
         showMenu={false}
         action={
           <IconButton
@@ -176,64 +176,121 @@ export default function LeaderboardDetail() {
           selected={period === "month"}
           onPress={() => setRange("month")}
         />
-        <Chip
-          label="One day"
-          icon="calendar-outline"
-          selected={period === "custom"}
-          onPress={() => setRange("custom")}
-        />
       </View>
       <Card style={styles.navigator}>
-        <IconButton
-          icon="chevron-back"
-          label="Previous"
-          onPress={() => shift(-1)}
-        />
-        <View style={styles.navCopy}>
-          <Text style={[styles.navTitle, { color: colors.ink }]}>
-            {periodTitle(period, anchor)}
-          </Text>
-          <Text style={[styles.navSub, { color: colors.muted }]}>
-            {dates.length > 1
-              ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-              : friendlyDate(anchor)}
-          </Text>
-        </View>
-        <IconButton
-          icon="chevron-forward"
-          label="Next"
-          onPress={() => shift(1)}
-        />
-      </Card>
-      {period === "custom" ? (
-        <Card style={styles.datePicker}>
+        <View style={styles.dateNav}>
+          <IconButton
+            icon="chevron-back"
+            label="Previous"
+            onPress={() => shift(-1)}
+          />
           <Pressable
             onPress={() => setShowCalendar((value) => !value)}
-            style={styles.dateButton}
+            style={styles.navCopy}
           >
-            <Ionicons name="calendar-outline" size={18} color={accent} />
-            <Text style={[styles.dateText, { color: colors.ink }]}>
-              {friendlyDate(anchor)}
+            <Text style={[styles.navTitle, { color: colors.ink }]}>
+              {periodTitle(period, anchor)}
             </Text>
-            <Ionicons
-              name={showCalendar ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={colors.muted}
-            />
+            <View style={styles.navDate}>
+              <Ionicons name="calendar-outline" size={13} color={accent} />
+              <Text style={[styles.navSub, { color: colors.muted }]}>
+                {dates.length > 1
+                  ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
+                  : friendlyDate(anchor)}
+              </Text>
+              <Ionicons
+                name={showCalendar ? "chevron-up" : "chevron-down"}
+                size={13}
+                color={colors.muted}
+              />
+            </View>
           </Pressable>
+          <IconButton
+            icon="chevron-forward"
+            label="Next"
+            onPress={() => shift(1)}
+          />
+        </View>
           {showCalendar ? (
-            <MonthCalendar
-              monthDate={anchor}
-              selectedDate={anchor}
-              onSelect={(date) => {
-                setAnchor(date);
-                setShowCalendar(false);
-              }}
-              onMonthChange={setAnchor}
-            />
+            <View style={[styles.calendar, { borderTopColor: colors.border }]}>
+              <MonthCalendar
+                monthDate={anchor}
+                selectedDate={anchor}
+                onSelect={(date) => {
+                  setAnchor(date);
+                  setPeriod("custom");
+                  setShowCalendar(false);
+                }}
+                dayVisuals={(localDate) => {
+                  if (!rankingMetrics.length) return [];
+                  const dayRows = leaderboardRows(
+                    state,
+                    rankingMetrics,
+                    [localDate],
+                    state.currentUserId,
+                    false,
+                  );
+                  return rankingMetrics.map((metric) => {
+                    const results = dayRows
+                      .map((row) =>
+                        row.metrics.find(
+                          (item) => item.metric.id === metric.id,
+                        )?.result,
+                      )
+                      .filter(
+                        (result): result is PeriodMetricResult =>
+                          Boolean(result && result.mode !== "private"),
+                      );
+                    const progress = results.length
+                      ? results.reduce(
+                          (sum, result) =>
+                            sum +
+                            (result.averageDisplayProgress ??
+                              result.averageGoalProgress ??
+                              0),
+                          0,
+                        ) / results.length
+                      : 0;
+                    return {
+                      color: metric.color,
+                      progress,
+                      goalReached:
+                        results.length > 0 &&
+                        results.every(
+                          (result) =>
+                            result.visibleDays > 0 &&
+                            result.completedDays >= result.visibleDays,
+                        ),
+                    };
+                  });
+                }}
+                allTrackedGoalsMet={(localDate) => {
+                  if (!rankingMetrics.length) return false;
+                  const dayRows = leaderboardRows(
+                    state,
+                    rankingMetrics,
+                    [localDate],
+                    state.currentUserId,
+                    false,
+                  );
+                  const results = dayRows.flatMap((row) =>
+                    row.metrics.map((item) => item.result),
+                  );
+                  return (
+                    results.some((result) => result.mode !== "private") &&
+                    results
+                      .filter((result) => result.mode !== "private")
+                      .every(
+                        (result) =>
+                          result.visibleDays > 0 &&
+                          result.completedDays >= result.visibleDays,
+                      )
+                  );
+                }}
+              />
+            </View>
           ) : null}
-        </Card>
-      ) : null}
+      </Card>
       {false ? (
         <View style={styles.range}>
           <Ionicons name="calendar-outline" size={15} color={accent} />
@@ -789,18 +846,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 11 },
-  navigator: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
-  navCopy: { flex: 1, alignItems: "center" },
+  navigator: { padding: 8, marginBottom: 10 },
+  dateNav: { flexDirection: "row", alignItems: "center" },
+  navCopy: {
+    flex: 1,
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navDate: { flexDirection: "row", alignItems: "center", gap: 5 },
   navTitle: { fontSize: 12, fontWeight: "900" },
   navSub: { fontSize: 9, marginTop: 2 },
-  datePicker: { padding: 10, marginBottom: 10 },
-  dateButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    padding: 4,
-  },
-  dateText: { flex: 1, color: palette.ink, fontSize: 13, fontWeight: "900" },
+  calendar: { borderTopWidth: 1, marginTop: 8, paddingTop: 10 },
   range: {
     flexDirection: "row",
     alignItems: "center",

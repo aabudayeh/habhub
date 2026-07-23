@@ -466,6 +466,8 @@ export type NewMetric = Pick<
 > & {
   formula?: string;
   activeFrom?: string;
+  /** Explicitly add this tracker to Today and tracked-goal history. */
+  trackGoal?: boolean;
   /** Stable id used when adding a built-in preset after it was previously removed. */
   templateId?: string;
 };

@@ -38,7 +38,9 @@ double_confirm_changes = true
 enable_confirmations = false
 
 [functions.delete-account]
-verify_jwt = true
+# The function validates the bearer token with auth.getUser itself. Keeping
+# gateway verification off also supports current publishable-key JWT formats.
+verify_jwt = false
 
 [functions.group-invite]
 verify_jwt = false

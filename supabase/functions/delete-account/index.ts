@@ -38,10 +38,16 @@ Deno.serve(async (request) => {
     if (error || !data.user) return new Response('Unauthorized', { status: 401, headers: corsHeaders });
 
     const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
-    const files = await listFiles(admin, data.user.id);
-    for (let index = 0; index < files.length; index += 100) {
-      const { error: storageError } = await admin.storage.from('paceboard-media').remove(files.slice(index, index + 100));
-      if (storageError) throw storageError;
+    // Media cleanup is best effort here. Database/auth deletion must not be
+    // stranded by a transient object-storage error.
+    try {
+      const files = await listFiles(admin, data.user.id);
+      for (let index = 0; index < files.length; index += 100) {
+        const { error: storageError } = await admin.storage.from('paceboard-media').remove(files.slice(index, index + 100));
+        if (storageError) throw storageError;
+      }
+    } catch (error) {
+      console.error('Media cleanup failed before account deletion', error);
     }
     const { error: deleteError } = await admin.auth.admin.deleteUser(data.user.id);
     if (deleteError) throw deleteError;
@@ -57,4 +63,3 @@ Deno.serve(async (request) => {
     });
   }
 });
-

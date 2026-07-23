@@ -449,6 +449,14 @@ function EditableRankingCard({
 }) {
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
+  const dragOrigin = useRef(index);
+  const liveTarget = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
   useEffect(() => {
     if (!editing) {
       dragY.setValue(0);
@@ -472,15 +480,26 @@ function EditableRankingCard({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
-        onPanResponderMove: (_event, gesture) => dragY.setValue(gesture.dy),
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: (_event, gesture) => {
-          onMove(
-            Math.max(
-              0,
-              Math.min(count - 1, index + Math.round(gesture.dy / 180)),
+        onPanResponderGrant: () => {
+          dragOrigin.current = indexRef.current;
+          liveTarget.current = indexRef.current;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          const target = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              dragOrigin.current + Math.round(gesture.dy / 180),
             ),
           );
+          dragY.setValue(gesture.dy - (target - dragOrigin.current) * 180);
+          if (target !== liveTarget.current) {
+            liveTarget.current = target;
+            onMoveRef.current(target);
+          }
+        },
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: () => {
           Animated.spring(dragY, {
             toValue: 0,
             useNativeDriver: true,
@@ -492,7 +511,7 @@ function EditableRankingCard({
             useNativeDriver: true,
           }).start(),
       }),
-    [count, dragY, editing, index, onMove],
+    [dragY, editing],
   );
   return (
     <Animated.View
