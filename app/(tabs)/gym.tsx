@@ -46,6 +46,7 @@ import {
   consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
   showWorkoutTimerNotification,
+  WORKOUT_TIMER_FINISH,
   WORKOUT_TIMER_NEXT,
   WORKOUT_TIMER_PAUSE,
   WorkoutNotificationStep,
@@ -1193,6 +1194,7 @@ export default function GymScreen() {
       pauseOrResumeWorkout(occurredAt ?? Date.now());
     else if (action === WORKOUT_TIMER_NEXT)
       advanceWorkoutTimer(occurredAt ?? Date.now());
+    else if (action === WORKOUT_TIMER_FINISH) finishTimedWorkout();
   };
   notificationPayloadRef.current = workoutTimer
     ? {

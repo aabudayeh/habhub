@@ -472,7 +472,12 @@ export function sharedMetricResult(
       value: sharedStatus.exactValue,
       label: formatMetricValue(metric, sharedStatus.exactValue),
     };
-  if (subjectUserId !== viewerUserId && !entries.length && sharedStatus)
+  if (
+    subjectUserId !== viewerUserId &&
+    !entries.length &&
+    sharedStatus &&
+    sharedStatus.hasData !== false
+  )
     return {
       mode: "status",
       value: 0,

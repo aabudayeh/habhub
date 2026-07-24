@@ -226,6 +226,8 @@ export type DailyMetricStatus = {
   goalEligible?: boolean;
   /** Exact daily value is populated only when the member shared exact values. */
   exactValue?: number;
+  /** Distinguishes a real status-only measurement from an empty daily snapshot. */
+  hasData?: boolean;
   /** Last cloud update for this member's daily group snapshot. */
   syncedAt?: string;
 };

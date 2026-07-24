@@ -6,6 +6,7 @@ import {
   displayGoalProgress,
   formatMetricValue,
   goalProgress,
+  hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
   rankedMembers,
@@ -308,6 +309,10 @@ export async function loadCloudGroupActivity(
       status.exact_value === null || status.exact_value === undefined
         ? undefined
         : Number(status.exact_value),
+    hasData:
+      status.has_data === null || status.has_data === undefined
+        ? undefined
+        : Boolean(status.has_data),
     syncedAt: status.updated_at ?? undefined,
   }));
   return {
@@ -827,6 +832,10 @@ export async function loadCloudWorkspace(
       status.exact_value === null || status.exact_value === undefined
         ? undefined
         : Number(status.exact_value),
+    hasData:
+      status.has_data === null || status.has_data === undefined
+        ? undefined
+        : Boolean(status.has_data),
     syncedAt: status.updated_at ?? undefined,
   }));
   const remoteMessages: ChatMessage[] = messageRows.map(
@@ -1203,24 +1212,31 @@ export async function pushCloudWorkspace(state: AppState) {
           state.currentUserId,
           localDate,
         );
+        const hasExactSharedEntry = ownedEntries.some(
+          (entry) =>
+            entry.metricId === metric.id &&
+            entry.localDate === localDate &&
+            entry.visibility === "group",
+        );
         const exactShared =
           !isVacationDate(state, state.currentUserId, localDate) &&
-          metric.defaultVisibility === "group" &&
-          (metric.dataType === "calculated" ||
-            (Boolean(metric.gymMapping) &&
-              (state.gymSessions ?? []).some(
-                (session) =>
-                  session.userId === state.currentUserId &&
-                  session.localDate === localDate &&
-                  session.visibility === "group",
-              )) ||
-            metric.stepFallback === true ||
-            ownedEntries.some(
-              (entry) =>
-                entry.metricId === metric.id &&
-                entry.localDate === localDate &&
-                entry.visibility === "group",
-            ));
+          (hasExactSharedEntry ||
+            (metric.defaultVisibility === "group" &&
+              (metric.dataType === "calculated" ||
+                (Boolean(metric.gymMapping) &&
+                  (state.gymSessions ?? []).some(
+                    (session) =>
+                      session.userId === state.currentUserId &&
+                      session.localDate === localDate &&
+                      session.visibility === "group",
+                  )) ||
+                metric.stepFallback === true)));
+        const hasData = hasMetricData(
+          state,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
         return {
           group_id: state.group.id,
           metric_id: idBySlug.get(groupMetric.id),
@@ -1260,6 +1276,7 @@ export async function pushCloudWorkspace(state: AppState) {
           goal_kind: metric.goal.kind,
           goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
           exact_value: exactShared ? value : null,
+          has_data: hasData,
         };
       }),
   );
@@ -1267,7 +1284,7 @@ export async function pushCloudWorkspace(state: AppState) {
     let { error } = await client.from("daily_metric_status").insert(statuses);
     if (
       error &&
-      /goal_progress|goal_kind|goal_eligible|exact_value/i.test(
+      /goal_progress|goal_kind|goal_eligible|exact_value|has_data/i.test(
         `${error.code ?? ""} ${error.message ?? ""}`,
       )
     ) {
@@ -1277,6 +1294,7 @@ export async function pushCloudWorkspace(state: AppState) {
           goal_kind: _kind,
           goal_eligible: _eligible,
           exact_value: _exact,
+          has_data: _hasData,
           ...status
         }) => status,
       );

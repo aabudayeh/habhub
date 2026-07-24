@@ -21,7 +21,10 @@ export type WorkoutNotificationStep = {
 };
 
 export type QueuedWorkoutTimerAction = {
-  action: typeof WORKOUT_TIMER_NEXT | typeof WORKOUT_TIMER_PAUSE;
+  action:
+    | typeof WORKOUT_TIMER_NEXT
+    | typeof WORKOUT_TIMER_PAUSE
+    | typeof WORKOUT_TIMER_FINISH;
   occurredAt: number;
 };
 
@@ -145,6 +148,11 @@ export async function configureWorkoutTimerNotification() {
   await Notifications.setNotificationCategoryAsync(
     WORKOUT_TIMER_LAST_CATEGORY,
     [
+      {
+        identifier: WORKOUT_TIMER_FINISH,
+        buttonTitle: "Finish workout",
+        options: { opensAppToForeground: true },
+      },
       {
         identifier: WORKOUT_TIMER_PAUSE,
         buttonTitle: "Pause / resume",
