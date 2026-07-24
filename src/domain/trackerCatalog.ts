@@ -108,6 +108,7 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         kind: "exercise_one_rep_max",
         exerciseKey: exercise.exerciseKey!,
       },
+      gymMuscleGroups: exercise.muscleGroups,
       description:
         "Gym · shared group exercise using one stable comparison key.",
     }),
@@ -118,12 +119,21 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
 const gymPreset = (
   preset: Pick<
     TrackerPreset,
-    "templateId" | "name" | "unit" | "goal" | "gymMapping" | "description"
+    | "templateId"
+    | "name"
+    | "unit"
+    | "goal"
+    | "gymMapping"
+    | "description"
   > &
     Partial<
       Pick<
         TrackerPreset,
-        "dataType" | "aggregation" | "goalEnabled" | "rankingDirection"
+        | "dataType"
+        | "aggregation"
+        | "goalEnabled"
+        | "rankingDirection"
+        | "gymMuscleGroups"
       >
     >,
 ): TrackerPreset => ({
@@ -186,6 +196,7 @@ const GYM_TRACKER_PRESETS: TrackerPreset[] = [
           kind: "exercise_one_rep_max",
           exerciseKey: exercise.key,
         },
+        gymMuscleGroups: exercise.muscles,
         description:
           "Gym · standardized estimated one-rep max; raw sets and notes stay private.",
       }),
@@ -197,6 +208,7 @@ const GYM_TRACKER_PRESETS: TrackerPreset[] = [
       unit: "kg",
       goal: { kind: "at_least", target: 1000 },
       gymMapping: { kind: "muscle_volume", muscleGroup },
+      gymMuscleGroups: [muscleGroup],
       description:
         "Gym · standardized completed-set volume for this muscle group.",
     }),

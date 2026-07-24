@@ -102,6 +102,8 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     category,
     healthMapping: configuration.healthMapping ?? preset?.healthMapping,
     gymMapping,
+    gymMuscleGroups:
+      configuration.gymMuscleGroups ?? preset?.gymMuscleGroups,
     stepFallback: configuration.stepFallback ?? preset?.stepFallback,
     manualEntry:
       gymMapping
@@ -146,6 +148,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       category: metric.category,
       healthMapping: metric.healthMapping,
       gymMapping: metric.gymMapping,
+      gymMuscleGroups: metric.gymMuscleGroups,
       stepFallback: metric.stepFallback,
       manualEntry: metric.manualEntry,
       sections: metric.sections,
@@ -575,6 +578,8 @@ export async function loadCloudWorkspace(
             defaultVisibility: personal.defaultVisibility,
             healthMapping: personal.healthMapping ?? shared.healthMapping,
             gymMapping: personal.gymMapping ?? shared.gymMapping,
+            gymMuscleGroups:
+              personal.gymMuscleGroups ?? shared.gymMuscleGroups,
             stepFallback: personal.stepFallback ?? shared.stepFallback,
             manualEntry: personal.manualEntry ?? shared.manualEntry,
             sections: {

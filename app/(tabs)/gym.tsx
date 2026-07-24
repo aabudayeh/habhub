@@ -185,7 +185,7 @@ export default function GymScreen() {
     () => [...sharedPlans, ...personalPlans],
     [personalPlans, sharedPlans],
   );
-  const groupExerciseItems = useMemo(() => {
+  const trackerExerciseItems = useMemo(() => {
     const catalogByKey = new Map(
       EXERCISE_CATALOG.map((item) => [item.key, item]),
     );
@@ -194,31 +194,49 @@ export default function GymScreen() {
         .flatMap((plan) => plan.exercises)
         .map((exercise) => [exercise.exerciseKey, exercise]),
     );
-    return (state.group.metricConfiguration ?? []).flatMap((metric) => {
+    const mapped = new Map<
+      string,
+      ExerciseCatalogItem & { groupExercise: boolean }
+    >();
+    const sources = [
+      ...(state.group.metricConfiguration ?? []).map((metric) => ({
+        metric,
+        groupExercise: true,
+      })),
+      ...state.metrics.map((metric) => ({
+        metric,
+        groupExercise: false,
+      })),
+    ];
+    sources.forEach(({ metric, groupExercise }) => {
       const mapping = metric.gymMapping;
       if (
         !mapping ||
         (mapping.kind !== "exercise_one_rep_max" &&
           mapping.kind !== "exercise_volume")
       )
-        return [];
+        return;
+      if (mapped.has(mapping.exerciseKey)) return;
       const catalog = catalogByKey.get(mapping.exerciseKey);
       const shared = sharedExercises.get(mapping.exerciseKey);
-      return [
-        {
+      mapped.set(mapping.exerciseKey, {
           key: mapping.exerciseKey,
           name:
             shared?.name ??
             catalog?.name ??
             metric.name.replace(/\s+(strength|volume)$/i, ""),
           muscles:
-            shared?.muscleGroups ?? catalog?.muscles ?? ["full_body"],
+            metric.gymMuscleGroups ??
+            shared?.muscleGroups ??
+            catalog?.muscles ??
+            ["full_body"],
           equipment: catalog?.equipment ?? ("other" as const),
           met: shared?.customMet ?? catalog?.met ?? 3.5,
-        } satisfies ExerciseCatalogItem,
-      ];
+          groupExercise,
+        });
     });
-  }, [sharedPlans, state.group.metricConfiguration]);
+    return [...mapped.values()];
+  }, [sharedPlans, state.group.metricConfiguration, state.metrics]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -986,12 +1004,19 @@ export default function GymScreen() {
     );
   }
 
-  const groupExerciseKeys = new Set(groupExerciseItems.map((item) => item.key));
+  const trackerExerciseKeys = new Set(
+    trackerExerciseItems.map((item) => item.key),
+  );
+  const groupExerciseKeys = new Set(
+    trackerExerciseItems
+      .filter((item) => item.groupExercise)
+      .map((item) => item.key),
+  );
   const pickerItems = [
-    ...groupExerciseItems,
+    ...trackerExerciseItems,
     ...EXERCISE_CATALOG.filter(
       (item) =>
-        item.key !== "custom" && !groupExerciseKeys.has(item.key),
+        item.key !== "custom" && !trackerExerciseKeys.has(item.key),
     ),
   ].filter((item) => {
     const query = pickerSearch.trim().toLowerCase();

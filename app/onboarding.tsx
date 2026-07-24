@@ -318,6 +318,7 @@ export default function Onboarding() {
         category: item.category,
         healthMapping: item.healthMapping,
         gymMapping: item.gymMapping,
+        gymMuscleGroups: item.gymMuscleGroups,
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
         reminders: item.reminders,

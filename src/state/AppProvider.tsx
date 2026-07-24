@@ -49,6 +49,7 @@ import {
   GymExerciseGoal,
   MetricDefinition,
   MetricEntry,
+  MuscleGroup,
   NewMetric,
   PhotoUpdate,
   Visibility,
@@ -462,9 +463,23 @@ function reducer(state: AppState, action: Action): AppState {
         baseId === "blood_pressure_diastolic" ||
         (action.metric.healthMapping?.dataType === "blood_pressure" &&
           action.metric.healthMapping.field === "diastolic");
+      const gymMapping =
+        definition.gymMapping ??
+        (definition.category === "gym" && definition.dataType === "number"
+          ? {
+              kind: "exercise_one_rep_max" as const,
+              exerciseKey: `personal:${state.currentUserId}:${id}`,
+            }
+          : undefined);
       const metric: MetricDefinition = {
         ...definition,
         id,
+        gymMapping,
+        manualEntry: gymMapping ? false : definition.manualEntry,
+        unit:
+          gymMapping?.kind === "exercise_one_rep_max" && !definition.unit
+            ? "kg e1RM"
+            : definition.unit,
         aggregation:
           action.metric.aggregation ??
           (action.metric.dataType === "boolean"
@@ -498,17 +513,32 @@ function reducer(state: AppState, action: Action): AppState {
         state,
         state.metrics.map((metric) =>
           metric.id === action.metricId
-            ? {
-                ...metric,
-                ...action.changes,
-                activeFrom:
-                  action.changes.activeFrom ??
-                  (action.changes.scoreWeight !== undefined &&
-                  action.changes.scoreWeight > 0 &&
-                  metric.scoreWeight <= 0
-                    ? dateKey()
-                    : metric.activeFrom),
-              }
+            ? (() => {
+                const updated = {
+                  ...metric,
+                  ...action.changes,
+                  activeFrom:
+                    action.changes.activeFrom ??
+                    (action.changes.scoreWeight !== undefined &&
+                    action.changes.scoreWeight > 0 &&
+                    metric.scoreWeight <= 0
+                      ? dateKey()
+                      : metric.activeFrom),
+                };
+                return updated.category === "gym" &&
+                  updated.dataType === "number" &&
+                  !updated.gymMapping
+                  ? {
+                      ...updated,
+                      gymMapping: {
+                        kind: "exercise_one_rep_max" as const,
+                        exerciseKey: `personal:${state.currentUserId}:${metric.id}`,
+                      },
+                      manualEntry: false,
+                      unit: updated.unit || "kg e1RM",
+                    }
+                  : updated;
+              })()
             : metric,
           ),
       );
@@ -745,6 +775,10 @@ function reducer(state: AppState, action: Action): AppState {
                   kind: "exercise_one_rep_max" as const,
                   exerciseKey: `group:${state.group.id}:${metric.id}`,
                 },
+                gymMuscleGroups:
+                  updated.gymMuscleGroups?.length
+                    ? updated.gymMuscleGroups
+                    : ["full_body" as MuscleGroup],
                 manualEntry: false,
                 unit: updated.unit || "kg e1RM",
               }
@@ -752,17 +786,21 @@ function reducer(state: AppState, action: Action): AppState {
         },
       );
       const group = { ...state.group, metricConfiguration: configuration };
+      const normalizedShared = configuration.find(
+        (metric) => metric.id === action.metricId,
+      );
       let metrics = state.metrics.map((personal) =>
-        personal.id === action.metricId
+        personal.id === action.metricId && normalizedShared
           ? {
               ...personal,
-              ...action.changes,
+              ...normalizedShared,
               goal: personal.goal,
               goalRange: personal.goalRange,
               goalEnabled: personal.goalEnabled,
               defaultVisibility: personal.defaultVisibility,
               sections: personal.sections,
               scoreWeight: personal.scoreWeight,
+              order: personal.order,
             }
           : personal,
       );
@@ -818,6 +856,12 @@ function reducer(state: AppState, action: Action): AppState {
         ...definition,
         id,
         gymMapping,
+        gymMuscleGroups:
+          definition.category === "gym"
+            ? definition.gymMuscleGroups?.length
+              ? definition.gymMuscleGroups
+              : ["full_body"]
+            : undefined,
         manualEntry: gymMapping ? false : definition.manualEntry,
         unit:
           gymMapping?.kind === "exercise_one_rep_max" && !definition.unit
@@ -1706,6 +1750,8 @@ export function AppProvider({ children }: PropsWithChildren) {
                       healthMapping:
                         metric.healthMapping ?? preset.healthMapping,
                       gymMapping: metric.gymMapping ?? preset.gymMapping,
+                      gymMuscleGroups:
+                        metric.gymMuscleGroups ?? preset.gymMuscleGroups,
                       stepFallback: metric.stepFallback ?? preset.stepFallback,
                       manualEntry: metric.manualEntry ?? preset.manualEntry,
                       goalEnabled:

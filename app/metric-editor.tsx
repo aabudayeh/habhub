@@ -25,6 +25,7 @@ import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
+import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
 import { defaultReminderTimes } from "@/src/domain/reminders";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
@@ -37,6 +38,7 @@ import {
   HealthMetricField,
   MetricDataType,
   MetricDefinition,
+  MuscleGroup,
   NewMetric,
   RankingDirection,
   TrackerCategory,
@@ -269,6 +271,12 @@ export default function TrackerEditor() {
     tracker?.healthMapping?.dataType ?? "",
   );
   const [gymMapping, setGymMapping] = useState(tracker?.gymMapping);
+  const [gymMuscles, setGymMuscles] = useState<MuscleGroup[]>(
+    tracker?.gymMuscleGroups ??
+      (tracker?.gymMapping?.kind === "muscle_volume"
+        ? [tracker.gymMapping.muscleGroup]
+        : ["full_body"]),
+  );
   const [healthField, setHealthField] = useState<HealthMetricField>(
     tracker?.healthMapping?.field ?? "value",
   );
@@ -330,6 +338,7 @@ export default function TrackerEditor() {
     healthType,
     healthField,
     gymMapping,
+    gymMuscles,
     stepFallback,
     manualEntry,
     activeFrom,
@@ -373,6 +382,12 @@ export default function TrackerEditor() {
     setHealthType(preset.healthMapping?.dataType ?? "");
     setHealthField(preset.healthMapping?.field ?? "value");
     setGymMapping(preset.gymMapping);
+    setGymMuscles(
+      preset.gymMuscleGroups ??
+        (preset.gymMapping?.kind === "muscle_volume"
+          ? [preset.gymMapping.muscleGroup]
+          : ["full_body"]),
+    );
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
     setActiveFrom(dateKey());
@@ -481,6 +496,7 @@ export default function TrackerEditor() {
         ? { dataType: healthType, field: healthField }
         : undefined,
       gymMapping,
+      gymMuscleGroups: category === "gym" ? gymMuscles : undefined,
       stepFallback,
       manualEntry:
         healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
@@ -707,6 +723,67 @@ export default function TrackerEditor() {
             />
           ))}
         </View>
+        {!tracker && !presetId ? (
+          <>
+            <Text style={[styles.label, { color: colors.ink }]}>
+              What will you record?
+            </Text>
+            <View style={styles.wrap}>
+              <Chip
+                label="A number"
+                icon="calculator-outline"
+                selected={dataType === "number"}
+                onPress={() => {
+                  setDataType("number");
+                  setAggregation("sum");
+                  if (goalKind === "complete") setGoalKind("at_least");
+                }}
+              />
+              <Chip
+                label="Yes or no"
+                icon="checkmark-circle-outline"
+                selected={dataType === "boolean"}
+                onPress={() => {
+                  setDataType("boolean");
+                  setAggregation("max");
+                  setGoalKind("complete");
+                  setGoal("1");
+                  setUnit("");
+                }}
+              />
+            </View>
+          </>
+        ) : null}
+        {category === "gym" &&
+        dataType === "number" &&
+        (!gymMapping ||
+          gymMapping.kind === "exercise_one_rep_max" ||
+          gymMapping.kind === "exercise_volume") ? (
+          <MetricSelector
+            title="Body parts"
+            items={(Object.keys(MUSCLE_LABELS) as MuscleGroup[]).map(
+              (muscle) => ({
+                id: muscle,
+                label: MUSCLE_LABELS[muscle],
+                icon: "body-outline",
+                color: accent,
+              }),
+            )}
+            selectedIds={gymMuscles}
+            onChange={(ids) => {
+              const next = ids as MuscleGroup[];
+              if (!next.length) return setGymMuscles(["full_body"]);
+              if (next.length > 1 && next.includes("full_body"))
+                return setGymMuscles(
+                  gymMuscles.includes("full_body")
+                    ? next.filter((item) => item !== "full_body")
+                    : ["full_body"],
+                );
+              setGymMuscles(next);
+            }}
+            emptyLabel="Choose at least one body part"
+          />
+        ) : null}
         {groupScope && category === "gym" && !gymMapping ? (
           <Text style={[styles.help, { color: colors.muted }]}>
             This becomes a standardized group exercise in every member&apos;s
@@ -730,7 +807,13 @@ export default function TrackerEditor() {
             thumbColor={goalEnabled ? accent : colors.faint}
           />
         </View>
-        {goalEnabled && dataType !== "text" ? (
+        {goalEnabled && dataType === "boolean" ? (
+          <Text style={[styles.help, { color: colors.muted }]}>
+            Marking Yes completes this goal for the day.
+          </Text>
+        ) : goalEnabled &&
+          dataType !== "text" &&
+          dataType !== "boolean" ? (
           <>
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
               <Text style={[styles.help, { color: colors.muted }]}>

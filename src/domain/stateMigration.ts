@@ -10,6 +10,8 @@ function upgradeMetric(
         ...metric,
         healthMapping: metric.healthMapping ?? preset.healthMapping,
         gymMapping: metric.gymMapping ?? preset.gymMapping,
+        gymMuscleGroups:
+          metric.gymMuscleGroups ?? preset.gymMuscleGroups,
         stepFallback: metric.stepFallback ?? preset.stepFallback,
         category: metric.category ?? preset.category,
         manualEntry: metric.manualEntry ?? preset.manualEntry,

@@ -116,6 +116,8 @@ export type MetricDefinition = {
   healthMapping?: HealthMetricMapping;
   /** Value is derived from standardized gym logs instead of a manual entry. */
   gymMapping?: GymMetricMapping;
+  /** Primary muscles for a custom exercise-backed Gym tracker. */
+  gymMuscleGroups?: MuscleGroup[];
   /** Estimate uncovered walking activity from steps when no canonical activity calories exist. */
   stepFallback?: boolean;
   /** False for device-owned readings such as steps. */
@@ -504,6 +506,7 @@ export type NewMetric = Pick<
   | "category"
   | "healthMapping"
   | "gymMapping"
+  | "gymMuscleGroups"
   | "stepFallback"
   | "manualEntry"
   | "goalSchedule"
