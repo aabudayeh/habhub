@@ -1246,6 +1246,14 @@ function TrackerRow({
               <Ionicons name="flag" size={9} color={accent} />
             </View>
           ) : null}
+          {item.pinnedTodayAt && !editing ? (
+            <Ionicons
+              name="pin"
+              size={12}
+              color={palette.amber}
+              accessibilityLabel="Pinned"
+            />
+          ) : null}
           {met ? (
             <View style={styles.completionCheck}>
               <Ionicons
@@ -1349,14 +1357,6 @@ function TrackerRow({
         </View>
       ) : (
         <View style={styles.rowEnd}>
-          {item.pinnedTodayAt ? (
-            <Ionicons
-              name="pin"
-              size={13}
-              color={palette.amber}
-              accessibilityLabel="Pinned"
-            />
-          ) : null}
           <Ionicons name="chevron-forward" size={16} color={colors.faint} />
         </View>
       )}
@@ -1598,11 +1598,10 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   rowEnd: {
-    width: 34,
+    width: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 5,
   },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
@@ -1743,14 +1742,14 @@ const styles = StyleSheet.create({
   completedText: { textDecorationLine: "line-through", opacity: 0.68 },
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
-  progress: { width: 92 },
+  progress: { width: 108 },
   goalProgressTrack: {
     height: 6,
     borderRadius: 999,
     overflow: "hidden",
   },
   goalProgressFill: { height: "100%", borderRadius: 999 },
-  bpProgress: { width: 92, gap: 2 },
+  bpProgress: { width: 108, gap: 2 },
   bpLabel: { fontSize: 6, fontWeight: "900" },
   remove: {
     width: 25,
