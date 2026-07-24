@@ -521,7 +521,7 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: 8 },
+              { marginBottom: 14 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
