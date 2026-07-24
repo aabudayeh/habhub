@@ -11,6 +11,7 @@ import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
   InteractionManager,
+  PanResponder,
   Pressable,
   StyleSheet,
   View,
@@ -19,6 +20,12 @@ import { AppText as Text } from "@/src/components/AppText";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import {
+  adjacentPeriod,
+  DateRangeNavigator,
+  PeriodChoiceBar,
+} from "@/src/components/PeriodNavigator";
 import {
   Avatar,
   Button,
@@ -37,16 +44,17 @@ import {
 } from "@/src/domain/comparison";
 import {
   dateKey,
-  dateRangeEnding,
   dateWithOffsetFrom,
   friendlyDate,
 } from "@/src/domain/date";
 import {
+  allTimePeriodDates,
   averageAtDate,
   LeaderboardPeriod,
   periodDates,
   periodMetricResult,
   periodTitle,
+  shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import {
   memberDisplayName,
@@ -117,6 +125,7 @@ export default function MemberProfile() {
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [comparisonReady, setComparisonReady] = useState(false);
   // Keep selector/date presses responsive. The previous comparison remains
   // visible while React prepares the newly requested range at low priority.
@@ -146,45 +155,30 @@ export default function MemberProfile() {
         .filter(Boolean) as typeof groupMembers,
     [deferredSelectedIds, groupMembers],
   );
-  const overallStart = useMemo(() => {
-    const ids = new Set(deferredSelectedIds);
-    const metricSet = new Set(deferredMetricIds);
-    const candidates = [
-      ...metrics.map((metric) => metric.activeFrom),
-      ...state.entries
-        .filter(
-          (entry) => ids.has(entry.userId) && metricSet.has(entry.metricId),
-        )
-        .map((entry) => entry.localDate),
-      ...(state.dailyMetricStatuses ?? [])
-        .filter(
-          (status) =>
-            status.groupId === state.group.id &&
-            ids.has(status.userId) &&
-            metricSet.has(status.metricId),
-        )
-        .map((status) => status.localDate),
-      ...(state.gymSessions ?? [])
-        .filter((session) => ids.has(session.userId))
-        .map((session) => session.localDate),
-    ].filter(Boolean);
-    return candidates.sort()[0] ?? deferredAnchor;
-  }, [
-    deferredAnchor,
-    deferredMetricIds,
-    deferredSelectedIds,
-    metrics,
-    state.dailyMetricStatuses,
-    state.entries,
-    state.group.id,
-    state.gymSessions,
-  ]);
   const dates = useMemo(
     () =>
       deferredPeriod === "overall"
-        ? overallDates(overallStart, deferredAnchor)
+        ? allTimePeriodDates(
+            state,
+            deferredAnchor,
+            deferredMetricIds,
+            deferredSelectedIds,
+          )
         : periodDates(deferredPeriod, deferredAnchor),
-    [deferredAnchor, deferredPeriod, overallStart],
+    [
+      deferredAnchor,
+      deferredMetricIds,
+      deferredPeriod,
+      deferredSelectedIds,
+      state,
+    ],
+  );
+  const navigationDates = useMemo(
+    () =>
+      period === "overall"
+        ? allTimePeriodDates(state, anchor, metricIds, selectedIds)
+        : periodDates(period, anchor),
+    [anchor, metricIds, period, selectedIds, state],
   );
   const comparisonInputs = useMemo(
     () => ({
@@ -265,7 +259,12 @@ export default function MemberProfile() {
                     metric,
                     person.id,
                     calculationState.currentUserId,
-                    overallDates(metric.activeFrom, deferredAnchor),
+                    allTimePeriodDates(
+                      calculationState,
+                      deferredAnchor,
+                      [metric.id],
+                      [person.id],
+                    ),
                   ),
                 ),
         });
@@ -371,7 +370,41 @@ export default function MemberProfile() {
   }
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
+    if (
+      next === "today" ||
+      next === "week" ||
+      next === "month" ||
+      next === "overall"
+    )
+      setAnchor(dateKey());
+    if (next === "yesterday")
+      setAnchor(dateWithOffsetFrom(dateKey(), -1));
+    setCalendarOpen(false);
   }
+  function shiftRange(direction: -1 | 1) {
+    const next = shiftedPeriodAnchor(period, anchor, direction);
+    if (!next) return;
+    if (period === "today" || period === "yesterday") setPeriod("custom");
+    setAnchor(next);
+  }
+  const pageSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !calendarOpen &&
+          Math.abs(gesture.dx) > 22 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 55) return;
+          const next = adjacentPeriod(
+            period,
+            gesture.dx < 0 ? 1 : -1,
+          );
+          if (next) choosePeriod(next);
+        },
+      }),
+    [calendarOpen, period],
+  );
   function chooseMetrics(ids: string[]) {
     setMetricIds(ids);
   }
@@ -453,6 +486,7 @@ export default function MemberProfile() {
           />
         }
       />
+      <View {...pageSwipeResponder.panHandlers}>
       <Card style={styles.profile}>
         <Avatar
           initials={member.initials}
@@ -717,6 +751,17 @@ export default function MemberProfile() {
                             metric.goal.kind === "at_least"
                           }
                         />
+                        {result.label !== "Private" ? (
+                          <Text
+                            style={[
+                              styles.streakMeta,
+                              { color: colors.muted },
+                            ]}
+                          >
+                            Current streak {result.streak ?? 0}d · Best streak{" "}
+                            {result.bestStreak ?? 0}d
+                          </Text>
+                        ) : null}
                       </View>
                     </View>
                     <View style={styles.stats}>
@@ -842,77 +887,26 @@ export default function MemberProfile() {
           ))}
         </Card>
       ) : null}
-      <SectionHeader title="Compare another range" />
-      <View style={styles.chips}>
-        <Chip
-          label="Today"
-          selected={period === "today"}
-          onPress={() => {
-            choosePeriod("today");
-            setAnchor(dateKey());
+      <PeriodChoiceBar period={period} onChange={choosePeriod} />
+      <DateRangeNavigator
+        period={period}
+        anchor={anchor}
+        dates={navigationDates}
+        calendarOpen={calendarOpen}
+        onToggleCalendar={() => setCalendarOpen((open) => !open)}
+        onShift={shiftRange}
+      >
+        <MonthCalendar
+          monthDate={anchor}
+          selectedDate={anchor}
+          onSelect={(date) => {
+            setAnchor(date);
+            setPeriod("custom");
+            setCalendarOpen(false);
           }}
+          onMonthChange={setAnchor}
         />
-        <Chip
-          label="Yesterday"
-          selected={period === "yesterday"}
-          onPress={() => {
-            choosePeriod("yesterday");
-            setAnchor(dateWithOffsetFrom(dateKey(), -1));
-          }}
-        />
-        <Chip
-          label="7 days"
-          selected={period === "week"}
-          onPress={() => choosePeriod("week")}
-        />
-        <Chip
-          label="Month"
-          selected={period === "month"}
-          onPress={() => choosePeriod("month")}
-        />
-        <Chip
-          label="All time"
-          selected={period === "overall"}
-          onPress={() => {
-            choosePeriod("overall");
-            setAnchor(dateKey());
-          }}
-        />
-      </View>
-      <Card style={styles.navigator}>
-        {period === "overall" ? (
-          <View style={styles.navSpacer} />
-        ) : (
-          <IconButton
-            icon="chevron-back"
-            label="Previous"
-            onPress={() =>
-              shift(period === "week" ? -7 : period === "month" ? -30 : -1)
-            }
-          />
-        )}
-        <View style={styles.navCopy}>
-          <Text style={[styles.navTitle, { color: colors.ink }]}>
-            {periodTitle(period, anchor)}
-          </Text>
-          <Text style={[styles.navSub, { color: colors.muted }]}>
-            {dates.length > 1
-              ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-              : friendlyDate(anchor)}
-          </Text>
-        </View>
-        {period === "overall" ? (
-          <View style={styles.navSpacer} />
-        ) : (
-          <IconButton
-            icon="chevron-forward"
-            label="Next"
-            onPress={() =>
-              shift(period === "week" ? 7 : period === "month" ? 30 : 1)
-            }
-          />
-        )}
-      </Card>
+      </DateRangeNavigator>
       <View style={styles.selectors}>
         <MetricSelector
           title="What to show"
@@ -947,19 +941,9 @@ export default function MemberProfile() {
           sharing can show completion without revealing the underlying number.
         </Text>
       </View>
+      </View>
     </Screen>
   );
-}
-function overallDates(activeFrom: string, anchor: string) {
-  const days = Math.max(
-    1,
-    Math.floor(
-      (new Date(`${anchor}T12:00:00`).getTime() -
-        new Date(`${activeFrom}T12:00:00`).getTime()) /
-        86400000,
-    ) + 1,
-  );
-  return dateRangeEnding(anchor, days);
 }
 function statValue(result: ReturnType<typeof periodMetricResult>) {
   if (result.mode === "private") return "Private";
@@ -1305,6 +1289,7 @@ const styles = StyleSheet.create({
   },
   barName: { color: palette.ink, fontSize: 12, fontWeight: "800" },
   barValue: { color: palette.muted, fontSize: 11, fontWeight: "800" },
+  streakMeta: { fontSize: 8, fontWeight: "700", marginTop: 5 },
   private: { color: palette.faint, fontStyle: "italic" },
   stats: { flexDirection: "row", gap: 5, marginLeft: 44 },
   stat: {

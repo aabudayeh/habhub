@@ -2,6 +2,7 @@ import {
   dateKey,
   dateKeyWithOffset,
   dateRangeEnding,
+  dateWithOffsetFrom,
   monthDateRange,
 } from "@/src/domain/date";
 import {
@@ -19,7 +20,10 @@ import {
   scheduledGoalReached,
   sharedMetricResult,
 } from "@/src/domain/metrics";
-import { currentStreakWithRest } from "@/src/domain/streaks";
+import {
+  currentStreakWithRest,
+  longestStreakWithRest,
+} from "@/src/domain/streaks";
 import { AppState, GoalKind, Member, MetricDefinition } from "@/src/types";
 import {
   entriesForDay,
@@ -48,6 +52,55 @@ export function periodDates(
   return [anchorDate];
 }
 
+export function allTimePeriodDates(
+  state: AppState,
+  anchorDate = dateKey(),
+  metricIds?: string[],
+  userIds?: string[],
+) {
+  const metrics = metricIds?.length ? new Set(metricIds) : undefined;
+  const users = userIds?.length ? new Set(userIds) : undefined;
+  const candidates = [
+    ...state.entries
+      .filter(
+        (entry) =>
+          entry.localDate <= anchorDate &&
+          (!metrics || metrics.has(entry.metricId)) &&
+          (!users || users.has(entry.userId)),
+      )
+      .map((entry) => entry.localDate),
+    ...(state.dailyMetricStatuses ?? [])
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.localDate <= anchorDate &&
+          status.hasData !== false &&
+          (!metrics || metrics.has(status.metricId)) &&
+          (!users || users.has(status.userId)),
+      )
+      .map((status) => status.localDate),
+    ...(state.gymSessions ?? [])
+      .filter(
+        (session) =>
+          session.localDate <= anchorDate &&
+          (!users || users.has(session.userId)),
+      )
+      .map((session) => session.localDate),
+  ].sort();
+  const start = candidates[0] ?? anchorDate;
+  return dateRangeEnding(
+    anchorDate,
+    Math.max(
+      1,
+      Math.floor(
+        (new Date(`${anchorDate}T12:00:00`).getTime() -
+          new Date(`${start}T12:00:00`).getTime()) /
+          86400000,
+      ) + 1,
+    ),
+  );
+}
+
 export function periodTitle(
   period: LeaderboardPeriod,
   anchorDate: string,
@@ -68,6 +121,30 @@ export function periodTitle(
   }).format(new Date(`${anchorDate}T12:00:00`));
 }
 
+export function shiftedPeriodAnchor(
+  period: LeaderboardPeriod,
+  anchorDate: string,
+  direction: -1 | 1,
+) {
+  if (period === "overall") return undefined;
+  if (period !== "month") {
+    const amount = period === "week" ? 7 : 1;
+    const next = dateWithOffsetFrom(anchorDate, direction * amount);
+    return next <= dateKey() ? next : undefined;
+  }
+  const target = new Date(`${anchorDate}T12:00:00`);
+  target.setDate(1);
+  target.setMonth(target.getMonth() + direction);
+  const today = dateKey();
+  const targetMonth = dateKey(target).slice(0, 7);
+  const currentMonth = today.slice(0, 7);
+  if (targetMonth > currentMonth) return undefined;
+  if (targetMonth === currentMonth) return today;
+  return dateKey(
+    new Date(target.getFullYear(), target.getMonth() + 1, 0, 12),
+  );
+}
+
 export type PeriodMetricResult = {
   mode: "exact" | "status" | "private";
   total: number;
@@ -82,6 +159,7 @@ export type PeriodMetricResult = {
   averageDisplayProgress?: number;
   personalGoalKind?: GoalKind;
   streak?: number;
+  bestStreak?: number;
   lastRecordedAt?: string;
   lastSyncedAt?: string;
 };
@@ -262,6 +340,15 @@ export function periodMetricResult(
     goalResults
       .map(({ date }) => statusForDate(date)?.goalKind)
       .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
+  const streaks =
+    subjectUserId === state.currentUserId
+      ? metricStreakStats(
+          state,
+          goalMetric,
+          subjectUserId,
+          dateKey(),
+        )
+      : sharedMetricStreakStats(state, metric, subjectUserId);
   if (!exact.length && !statuses.length) {
     const hasUnsharedData = results.some(({ date }) =>
       hasPeriodData(state, goalMetric, subjectUserId, date),
@@ -272,6 +359,8 @@ export function periodMetricResult(
       average: 0,
       completedDays: 0,
       visibleDays: 0,
+      streak: streaks.current,
+      bestStreak: streaks.best,
       label:
         subjectUserId === viewerUserId || !hasUnsharedData
           ? "No data"
@@ -313,19 +402,6 @@ export function periodMetricResult(
           dates,
         ).goalsReached
       : completedDays;
-  const streak =
-    subjectUserId === state.currentUserId
-      ? metricStreakStats(
-          state,
-          goalMetric,
-          subjectUserId,
-          dateKey(),
-        ).current
-      : currentStreakWithRest(
-          state,
-          dateRangeEnding(dateKey(), 90),
-          (date) => metGoalOnDate(state, metric, subjectUserId, date),
-        );
   const matchingEntries = results.flatMap(({ date }) =>
     entriesForDay(state.entries, metric.id, subjectUserId, date),
   );
@@ -344,7 +420,8 @@ export function periodMetricResult(
       average: 0,
       completedDays: resolvedCompletedDays,
       visibleDays: statuses.length,
-      streak,
+      streak: streaks.current,
+      bestStreak: streaks.best,
       lastRecordedAt,
       lastSyncedAt,
       label: `${resolvedCompletedDays}/${goalResults.length} goal days`,
@@ -382,7 +459,8 @@ export function periodMetricResult(
       average: progress,
       completedDays: resolvedCompletedDays,
       visibleDays: ordered.length,
-      streak,
+      streak: streaks.current,
+      bestStreak: streaks.best,
       lastRecordedAt,
       lastSyncedAt,
       averageGoalProgress,
@@ -402,7 +480,8 @@ export function periodMetricResult(
       average: exact.length ? done / exact.length : 0,
       completedDays: resolvedCompletedDays,
       visibleDays: exact.length,
-      streak,
+      streak: streaks.current,
+      bestStreak: streaks.best,
       lastRecordedAt,
       lastSyncedAt,
       averageGoalProgress,
@@ -419,7 +498,8 @@ export function periodMetricResult(
     average,
     completedDays: resolvedCompletedDays,
     visibleDays: exact.length,
-    streak,
+    streak: streaks.current,
+    bestStreak: streaks.best,
     lastRecordedAt,
     lastSyncedAt,
     averageGoalProgress,
@@ -429,6 +509,26 @@ export function periodMetricResult(
     averageLabel: multipleDays
       ? `${resolvedCompletedDays}/${results.length} goal days · ${formatMetricValue(metric, total)} total`
       : undefined,
+  };
+}
+
+function sharedMetricStreakStats(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+) {
+  const throughDate = dateKey();
+  const dates = allTimePeriodDates(
+    state,
+    throughDate,
+    [metric.id],
+    [userId],
+  );
+  const met = (localDate: string) =>
+    metGoalOnDate(state, metric, userId, localDate);
+  return {
+    current: currentStreakWithRest(state, dates, met, userId),
+    best: longestStreakWithRest(state, dates, met, userId),
   };
 }
 

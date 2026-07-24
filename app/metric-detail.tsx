@@ -271,7 +271,7 @@ export default function TrackerDetail() {
     state,
     tracker,
     state.currentUserId,
-    day,
+    dateKey(),
   );
   const overallAverage = metricOverallAverage(
     state,

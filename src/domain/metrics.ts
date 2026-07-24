@@ -14,6 +14,10 @@ import {
   photosForDay,
   statusForDay,
 } from "./dataIndex";
+import {
+  currentStreakWithRest,
+  longestStreakWithRest,
+} from "./streaks";
 
 function aggregate(
   entries: MetricEntry[],
@@ -686,33 +690,105 @@ export function metricStreakStats(
   state: AppState,
   metric: MetricDefinition,
   userId: string,
-  throughDate: string,
+  throughDate = dateKey(),
 ) {
-  let current = 0;
-  let best = 0;
-  let run = 0;
-  for (let index = 89; index >= 0; index--) {
-    const localDate = dateWithOffsetFrom(throughDate, -index);
-    const met =
+  const periods = state.trackedGoalPeriods?.[metric.id] ?? [];
+  const candidates = [
+    metric.activeFrom,
+    ...periods.map((period) => period.from),
+    ...state.entries
+      .filter(
+        (entry) =>
+          entry.userId === userId &&
+          entry.metricId === metric.id &&
+          entry.localDate <= throughDate,
+      )
+      .map((entry) => entry.localDate),
+    ...(state.dailyMetricStatuses ?? [])
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.userId === userId &&
+          status.metricId === metric.id &&
+          status.localDate <= throughDate &&
+          status.goalEligible !== false,
+      )
+      .map((status) => status.localDate),
+    ...(metric.gymMapping
+      ? (state.gymSessions ?? [])
+          .filter(
+            (session) =>
+              session.userId === userId &&
+              session.localDate <= throughDate,
+          )
+          .map((session) => session.localDate)
+      : []),
+  ]
+    .filter((date) => date <= throughDate)
+    .sort();
+  const start = candidates[0] ?? throughDate;
+  const dates = dateRangeEnding(
+    throughDate,
+    Math.max(
+      1,
+      Math.floor(
+        (new Date(`${throughDate}T12:00:00`).getTime() -
+          new Date(`${start}T12:00:00`).getTime()) /
+          86400000,
+      ) + 1,
+    ),
+  );
+  const met = (localDate: string) =>
+    metric.goalEnabled !== false &&
+    isMetricTrackedOnDate(state, metric, localDate) &&
+    (isVacationDate(state, userId, localDate) ||
+      (hasMetricData(state, metric, userId, localDate) &&
+        scheduledGoalReached(state, metric, userId, localDate)));
+  return {
+    current: currentStreakWithRest(state, dates, met, userId),
+    best: longestStreakWithRest(state, dates, met, userId),
+  };
+}
+
+export function trackedGoalStreakStats(
+  state: AppState,
+  userId: string,
+  throughDate = dateKey(),
+) {
+  const trackedMetrics = state.metrics.filter(
+    (metric) =>
       metric.goalEnabled !== false &&
-      (isVacationDate(state, userId, localDate) ||
-        (hasMetricData(state, metric, userId, localDate) &&
-          scheduledGoalReached(state, metric, userId, localDate)));
-    run = met ? run + 1 : 0;
-    best = Math.max(best, run);
-  }
-  for (let index = 0; index < 90; index++) {
-    const localDate = dateWithOffsetFrom(throughDate, -index);
-    if (
-      metric.goalEnabled !== false &&
-      (isVacationDate(state, userId, localDate) ||
-        (hasMetricData(state, metric, userId, localDate) &&
-          scheduledGoalReached(state, metric, userId, localDate)))
-    )
-      current += 1;
-    else break;
-  }
-  return { current, best };
+      metric.dataType !== "text" &&
+      (state.trackedGoalPeriods?.[metric.id]?.length ||
+        metric.sections.today),
+  );
+  const candidates = trackedMetrics
+    .flatMap((metric) => [
+      metric.activeFrom,
+      ...(state.trackedGoalPeriods?.[metric.id] ?? []).map(
+        (period) => period.from,
+      ),
+    ])
+    .filter((date) => date <= throughDate)
+    .sort();
+  const start = candidates[0] ?? throughDate;
+  const dates = dateRangeEnding(
+    throughDate,
+    Math.max(
+      1,
+      Math.floor(
+        (new Date(`${throughDate}T12:00:00`).getTime() -
+          new Date(`${start}T12:00:00`).getTime()) /
+          86400000,
+      ) + 1,
+    ),
+  );
+  const met = (localDate: string) =>
+    trackedGoalSummary(state, userId, localDate).allMet;
+  return {
+    current: currentStreakWithRest(state, dates, met, userId),
+    best: longestStreakWithRest(state, dates, met, userId),
+  };
 }
 
 export function metricOverallAverage(

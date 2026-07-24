@@ -31,20 +31,31 @@ import {
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
+  adjacentPeriod,
+  DateRangeNavigator,
+  PeriodChoiceBar,
+} from "@/src/components/PeriodNavigator";
+import {
   Avatar,
   Card,
   PageHeader,
   ProgressBar,
   Screen,
 } from "@/src/components/ui";
-import { dateKey, dateKeyWithOffset, relativeTime } from "@/src/domain/date";
+import {
+  dateKey,
+  dateKeyWithOffset,
+  relativeTime,
+} from "@/src/domain/date";
 import { groupInviteMessage } from "@/src/domain/invites";
 import {
   LeaderboardPeriod,
+  allTimePeriodDates,
   leaderboardRows,
   periodAverageGoalReached,
   periodDates,
   periodTitle,
+  shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
@@ -52,14 +63,6 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
 
 const SCORE_ID = "__score";
-const PERIODS: { id: LeaderboardPeriod; label: string }[] = [
-  { id: "today", label: "Today" },
-  { id: "yesterday", label: "Yesterday" },
-  { id: "week", label: "7 days" },
-  { id: "month", label: "Month" },
-  { id: "custom", label: "Pick day" },
-];
-
 if (
   Platform.OS === "android" &&
   UIManager.setLayoutAnimationEnabledExperimental
@@ -121,7 +124,19 @@ export default function LeaderboardScreen() {
     () => (selectedIds.length ? selectedIds : [SCORE_ID]),
     [selectedIds],
   );
-  const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
+  const dates = useMemo(
+    () =>
+      period === "overall"
+        ? allTimePeriodDates(
+            state,
+            anchor,
+            selected.includes(SCORE_ID)
+              ? tracked.map((metric) => metric.id)
+              : selected,
+          )
+        : periodDates(period, anchor),
+    [anchor, period, selected, state, tracked],
+  );
   const rankingInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -173,27 +188,38 @@ export default function LeaderboardScreen() {
   ]);
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
-    if (next === "today" || next === "week" || next === "month")
+    if (
+      next === "today" ||
+      next === "week" ||
+      next === "month" ||
+      next === "overall"
+    )
       setAnchor(dateKey());
     if (next === "yesterday") setAnchor(dateKeyWithOffset(-1));
-    setCalendarOpen(next === "custom");
+    setCalendarOpen(false);
+  }
+  function shiftRange(direction: -1 | 1) {
+    const next = shiftedPeriodAnchor(period, anchor, direction);
+    if (!next) return;
+    if (period === "today" || period === "yesterday") setPeriod("custom");
+    setAnchor(next);
   }
   const pageSwipeResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           !editing &&
+          !calendarOpen &&
           Math.abs(gesture.dx) > 22 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
         onPanResponderRelease: (_event, gesture) => {
           if (Math.abs(gesture.dx) < 55) return;
-          const index = PERIODS.findIndex((item) => item.id === period);
           const direction = gesture.dx < 0 ? 1 : -1;
-          const next = PERIODS[index + direction];
-          if (next) choosePeriod(next.id);
+          const next = adjacentPeriod(period, direction);
+          if (next) choosePeriod(next);
         },
       }),
-    [editing, period],
+    [calendarOpen, editing, period],
   );
   async function invite() {
     await Share.share({
@@ -298,73 +324,26 @@ export default function LeaderboardScreen() {
         subtitle={`${state.group.name} · ${state.group.members.length} friends`}
       />
       <View {...pageSwipeResponder.panHandlers}>
-      <Card style={styles.periodCard}>
-        <View style={styles.periodBar}>
-          {PERIODS.map((item) => {
-            const selectedPeriod = period === item.id;
-            return (
-              <Pressable
-                key={item.id}
-                onPress={() => choosePeriod(item.id)}
-                style={[
-                  styles.periodChoice,
-                  {
-                    backgroundColor: selectedPeriod
-                      ? colors.primarySoft
-                      : "transparent",
-                    borderColor: selectedPeriod ? accent : "transparent",
-                  },
-                ]}
-              >
-                <Text
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.72}
-                  style={[
-                    styles.periodText,
-                    { color: selectedPeriod ? accent : colors.muted },
-                  ]}
-                >
-                  {item.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        {period === "custom" ? (
-          <View style={[styles.calendar, { borderTopColor: colors.border }]}>
-            <Pressable
-              onPress={() => setCalendarOpen((value) => !value)}
-              style={styles.dateButton}
-            >
-              <Ionicons name="calendar-outline" size={17} color={accent} />
-              <Text style={[styles.dateText, { color: colors.ink }]}>
-                {periodTitle("custom", anchor)}
-              </Text>
-              <Ionicons
-                name={calendarOpen ? "chevron-up" : "chevron-down"}
-                size={17}
-                color={colors.muted}
-              />
-            </Pressable>
-            {calendarOpen ? (
-              <View
-                style={[styles.calendarBody, { borderTopColor: colors.border }]}
-              >
-                <MonthCalendar
-                  monthDate={anchor}
-                  selectedDate={anchor}
-                  onSelect={(date) => {
-                    setAnchor(date);
-                    setCalendarOpen(false);
-                  }}
-                  onMonthChange={setAnchor}
-                />
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-      </Card>
+      <PeriodChoiceBar period={period} onChange={choosePeriod} />
+      <DateRangeNavigator
+        period={period}
+        anchor={anchor}
+        dates={dates}
+        calendarOpen={calendarOpen}
+        onToggleCalendar={() => setCalendarOpen((value) => !value)}
+        onShift={shiftRange}
+      >
+        <MonthCalendar
+          monthDate={anchor}
+          selectedDate={anchor}
+          onSelect={(date) => {
+            setAnchor(date);
+            setPeriod("custom");
+            setCalendarOpen(false);
+          }}
+          onMonthChange={setAnchor}
+        />
+      </DateRangeNavigator>
       {selected.map((id, cardIndex) => {
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
@@ -474,8 +453,8 @@ export default function LeaderboardScreen() {
                 (result.averageDisplayProgress ?? 0) > 1
                   ? `${Math.round(((result.averageDisplayProgress ?? 1) - 1) * 100)}% above personal goal`
                   : undefined,
-                result && result.mode !== "private"
-                  ? `${result.streak ?? 0}d streak`
+                result && result.label !== "Private"
+                  ? `Current ${result.streak ?? 0}d · Best ${result.bestStreak ?? 0}d`
                   : undefined,
                 result?.lastSyncedAt || result?.lastRecordedAt
                   ? `Synced ${relativeTime(

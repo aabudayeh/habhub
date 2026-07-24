@@ -47,13 +47,10 @@ import {
   metricStreakStats,
   safeMetricValue,
   scheduledGoalReached,
+  trackedGoalStreakStats,
   trackedGoalSummary,
   weightProgressStats,
 } from "@/src/domain/metrics";
-import {
-  currentStreakWithRest,
-  longestStreakWithRest,
-} from "@/src/domain/streaks";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
@@ -598,16 +595,7 @@ function TrackedSummary({
   const met = totals.reduce((sum, item) => sum + item.met, 0);
   const possible = totals.reduce((sum, item) => sum + item.total, 0);
   const perfect = eligible.filter((item) => item.allMet).length;
-  const streak = longestStreakWithRest(
-    state,
-    dates,
-    (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
-  );
-  const currentStreak = currentStreakWithRest(
-    state,
-    dates,
-    (date) => trackedGoalSummary(state, state.currentUserId, date).allMet,
-  );
+  const streaks = trackedGoalStreakStats(state, state.currentUserId);
   const completion = possible ? Math.round((met / possible) * 100) : 0;
   return (
     <Animated.View
@@ -660,9 +648,9 @@ function TrackedSummary({
       </View>
       <View style={styles.summaryGoal}>
         <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-          Current streak {currentStreak}d
+          Current streak {streaks.current}d
         </Text>
-        <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streak}d</Text>
+        <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streaks.best}d</Text>
       </View>
       {editing ? (
         <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>

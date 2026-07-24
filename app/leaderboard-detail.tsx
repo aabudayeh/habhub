@@ -6,6 +6,7 @@ import ViewShot from "react-native-view-shot";
 import {
   Alert,
   InteractionManager,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,10 +18,14 @@ import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
+  adjacentPeriod,
+  DateRangeNavigator,
+  PeriodChoiceBar,
+} from "@/src/components/PeriodNavigator";
+import {
   Avatar,
   Button,
   Card,
-  Chip,
   IconButton,
   PageHeader,
   ProgressBar,
@@ -28,12 +33,14 @@ import {
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
+  allTimePeriodDates,
   leaderboardRows,
   LeaderboardPeriod,
   periodAverageGoalReached,
   PeriodMetricResult,
   periodDates,
   periodTitle,
+  shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import {
   memberDisplayName,
@@ -81,7 +88,13 @@ export default function LeaderboardDetail() {
       task.cancel();
     };
   }, []);
-  const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
+  const dates = useMemo(
+    () =>
+      period === "overall"
+        ? allTimePeriodDates(state, anchor)
+        : periodDates(period, anchor),
+    [anchor, period, state],
+  );
   const visibleEntries = useMemo(() => {
     if (!detailsReady) return [];
     const shared = state.entries.filter(
@@ -251,17 +264,41 @@ export default function LeaderboardDetail() {
 
   function setRange(next: LeaderboardPeriod) {
     setPeriod(next);
-    if (next === "today") setAnchor(dateKey());
-    setShowCalendar(next === "custom");
+    if (
+      next === "today" ||
+      next === "week" ||
+      next === "month" ||
+      next === "overall"
+    )
+      setAnchor(dateKey());
+    if (next === "yesterday")
+      setAnchor(dateWithOffsetFrom(dateKey(), -1));
+    setShowCalendar(false);
   }
   function shift(direction: -1 | 1) {
-    const amount = period === "week" ? 7 : period === "month" ? 30 : 1;
-    const next = dateWithOffsetFrom(anchor, direction * amount);
-    if (next <= dateKey()) {
-      if (period === "today" || period === "yesterday") setPeriod("custom");
-      setAnchor(next);
-    }
+    const next = shiftedPeriodAnchor(period, anchor, direction);
+    if (!next) return;
+    if (period === "today" || period === "yesterday") setPeriod("custom");
+    setAnchor(next);
   }
+  const pageSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !showCalendar &&
+          Math.abs(gesture.dx) > 22 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 55) return;
+          const next = adjacentPeriod(
+            period,
+            gesture.dx < 0 ? 1 : -1,
+          );
+          if (next) setRange(next);
+        },
+      }),
+    [period, showCalendar],
+  );
 
   return (
     <Screen>
@@ -277,65 +314,17 @@ export default function LeaderboardDetail() {
           />
         }
       />
-      <View style={styles.filters}>
-        <Chip
-          label="Today"
-          selected={period === "today"}
-          onPress={() => setRange("today")}
-        />
-        <Chip
-          label="Yesterday"
-          selected={period === "yesterday"}
-          onPress={() => setRange("yesterday")}
-        />
-        <Chip
-          label="7 days"
-          selected={period === "week"}
-          onPress={() => setRange("week")}
-        />
-        <Chip
-          label="Month"
-          selected={period === "month"}
-          onPress={() => setRange("month")}
-        />
-      </View>
-      <Card style={styles.navigator}>
-        <View style={styles.dateNav}>
-          <IconButton
-            icon="chevron-back"
-            label="Previous"
-            onPress={() => shift(-1)}
-          />
-          <Pressable
-            onPress={() => setShowCalendar((value) => !value)}
-            style={styles.navCopy}
-          >
-            <Text style={[styles.navTitle, { color: colors.ink }]}>
-              {periodTitle(period, anchor)}
-            </Text>
-            <View style={styles.navDate}>
-              <Ionicons name="calendar-outline" size={13} color={accent} />
-              <Text style={[styles.navSub, { color: colors.muted }]}>
-                {dates.length > 1
-                  ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-                  : friendlyDate(anchor)}
-              </Text>
-              <Ionicons
-                name={showCalendar ? "chevron-up" : "chevron-down"}
-                size={13}
-                color={colors.muted}
-              />
-            </View>
-          </Pressable>
-          <IconButton
-            icon="chevron-forward"
-            label="Next"
-            onPress={() => shift(1)}
-          />
-        </View>
-          {showCalendar ? (
-            <View style={[styles.calendar, { borderTopColor: colors.border }]}>
-              <MonthCalendar
+      <View {...pageSwipeResponder.panHandlers}>
+        <PeriodChoiceBar period={period} onChange={setRange} />
+        <DateRangeNavigator
+          period={period}
+          anchor={anchor}
+          dates={dates}
+          calendarOpen={showCalendar}
+          onToggleCalendar={() => setShowCalendar((value) => !value)}
+          onShift={shift}
+        >
+          <MonthCalendar
                 monthDate={anchor}
                 selectedDate={anchor}
                 onSelect={(date) => {
@@ -410,9 +399,7 @@ export default function LeaderboardDetail() {
                   );
                 }}
               />
-            </View>
-          ) : null}
-      </Card>
+        </DateRangeNavigator>
       {false ? (
         <View style={styles.range}>
           <Ionicons name="calendar-outline" size={15} color={accent} />
@@ -555,6 +542,12 @@ export default function LeaderboardDetail() {
                         {result.averageLabel ??
                           `${result.visibleDays} visible day${result.visibleDays === 1 ? "" : "s"}`}
                       </Text>
+                      {result.label !== "Private" ? (
+                        <Text style={[styles.metricSub, { color: colors.muted }]}>
+                          Current streak {result.streak ?? 0}d · Best streak{" "}
+                          {result.bestStreak ?? 0}d
+                        </Text>
+                      ) : null}
                       {progressCopy && progress !== undefined ? (
                         <View style={styles.metricGoal}>
                           <Text
@@ -670,6 +663,7 @@ export default function LeaderboardDetail() {
           onChange={setSelectedIds}
           emptyLabel="No shared logs in this range"
         />
+      </View>
       </View>
     </Screen>
   );
