@@ -77,6 +77,16 @@ function inviteCode() {
 function metricFromRow(row: Record<string, any>): MetricDefinition {
   const configuration = (row.configuration ?? {}) as Partial<MetricDefinition>;
   const preset = DEFAULT_METRICS.find((metric) => metric.id === row.slug);
+  const category = configuration.category ?? preset?.category ?? "other";
+  const gymMapping =
+    configuration.gymMapping ??
+    preset?.gymMapping ??
+    (category === "gym" && row.data_type === "number"
+      ? {
+          kind: "exercise_one_rep_max" as const,
+          exerciseKey: `group:${row.group_id}:${row.slug}`,
+        }
+      : undefined);
   return {
     id: row.slug,
     name: row.slug === "blood_pressure_systolic" ? "Blood pressure" : row.name,
@@ -89,12 +99,14 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     goal: configuration.goal ?? { kind: "at_least", target: 1 },
     goalEnabled: configuration.goalEnabled ?? true,
     goalRange: configuration.goalRange,
-    category: configuration.category ?? preset?.category ?? "other",
+    category,
     healthMapping: configuration.healthMapping ?? preset?.healthMapping,
-    gymMapping: configuration.gymMapping ?? preset?.gymMapping,
+    gymMapping,
     stepFallback: configuration.stepFallback ?? preset?.stepFallback,
     manualEntry:
-      configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
+      gymMapping
+        ? false
+        : configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,

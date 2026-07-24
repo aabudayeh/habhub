@@ -209,7 +209,9 @@ export default function TrackerEditor() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const presets = trackerPresets(state).filter(
-    (preset) => !sourceMetrics.some((item) => item.id === preset.templateId),
+    (preset) =>
+      !sourceMetrics.some((item) => item.id === preset.templateId) &&
+      (preset.category !== "gym" || state.settings.showGym),
   );
   const [presetId, setPresetId] = useState("");
   const [name, setName] = useState(tracker?.name ?? "");
@@ -676,6 +678,7 @@ export default function TrackerEditor() {
             if (preset) applyPreset(preset);
           }}
           multiple={false}
+          collapsibleGroups={state.settings.showGym ? ["Gym"] : []}
           emptyLabel="Or create your own below"
         />
       ) : null}
@@ -704,6 +707,13 @@ export default function TrackerEditor() {
             />
           ))}
         </View>
+        {groupScope && category === "gym" && !gymMapping ? (
+          <Text style={[styles.help, { color: colors.muted }]}>
+            This becomes a standardized group exercise in every member&apos;s
+            Gym picker. Rankings use estimated one-rep max; raw sets and notes
+            stay controlled by each workout&apos;s visibility.
+          </Text>
+        ) : null}
         <View style={[styles.switchRow, { borderColor: colors.border }]}>
           <View style={styles.grow}>
             <Text style={[styles.rowTitle, { color: colors.ink }]}>

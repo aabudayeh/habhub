@@ -119,21 +119,46 @@ const gymPreset = (
   preset: Pick<
     TrackerPreset,
     "templateId" | "name" | "unit" | "goal" | "gymMapping" | "description"
-  >,
+  > &
+    Partial<
+      Pick<
+        TrackerPreset,
+        "dataType" | "aggregation" | "goalEnabled" | "rankingDirection"
+      >
+    >,
 ): TrackerPreset => ({
   ...preset,
   icon: "barbell-outline",
   color: "#8B5CF6",
-  dataType: "number",
-  aggregation: "latest",
-  goalEnabled: false,
+  dataType: preset.dataType ?? "number",
+  aggregation: preset.aggregation ?? "latest",
+  goalEnabled: preset.goalEnabled ?? false,
   category: "gym",
   manualEntry: false,
-  rankingDirection: "higher",
+  rankingDirection: preset.rankingDirection ?? "higher",
   defaultVisibility: "group",
 });
 
 const GYM_TRACKER_PRESETS: TrackerPreset[] = [
+  gymPreset({
+    templateId: "gym_completed",
+    name: "Gym completed",
+    unit: "",
+    dataType: "boolean",
+    goal: { kind: "complete", target: 1 },
+    goalEnabled: true,
+    gymMapping: { kind: "session_completed" },
+    description: "Gym · completed at least one set on this workout day.",
+  }),
+  gymPreset({
+    templateId: "gym_duration",
+    name: "Gym duration",
+    unit: "min",
+    aggregation: "sum",
+    goal: { kind: "at_least", target: 45 },
+    gymMapping: { kind: "session_duration" },
+    description: "Gym · total saved workout duration for the day.",
+  }),
   gymPreset({
     templateId: "gym_total_volume",
     name: "Gym volume",

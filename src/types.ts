@@ -75,6 +75,8 @@ export type MetricGoal = {
 };
 
 export type GymMetricMapping =
+  | { kind: "session_completed" }
+  | { kind: "session_duration" }
   | { kind: "session_volume" }
   | { kind: "completed_sets" }
   | { kind: "exercise_one_rep_max"; exerciseKey: string }

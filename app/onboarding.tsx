@@ -206,11 +206,10 @@ export default function Onboarding() {
       ].forEach((id) => ids.add(id));
     if (goals.includes("gym"))
       [
-        "workout",
-        "workout_duration",
         "exercise",
+        "gym_completed",
+        "gym_duration",
         "gym_total_volume",
-        "gym_completed_sets",
       ].forEach((id) => ids.add(id));
     if (goals.includes("nutrition"))
       ["food", "water"].forEach((id) => ids.add(id));
@@ -318,6 +317,7 @@ export default function Onboarding() {
         goalRange: item.goalRange,
         category: item.category,
         healthMapping: item.healthMapping,
+        gymMapping: item.gymMapping,
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
         reminders: item.reminders,

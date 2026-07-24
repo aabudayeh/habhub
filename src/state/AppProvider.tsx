@@ -733,10 +733,23 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "updateGroupMetric": {
       const configuration = (state.group.metricConfiguration ?? []).map(
-        (metric) =>
-          metric.id === action.metricId
-            ? { ...metric, ...action.changes }
-            : metric,
+        (metric) => {
+          if (metric.id !== action.metricId) return metric;
+          const updated = { ...metric, ...action.changes };
+          return updated.category === "gym" &&
+            updated.dataType === "number" &&
+            !updated.gymMapping
+            ? {
+                ...updated,
+                gymMapping: {
+                  kind: "exercise_one_rep_max" as const,
+                  exerciseKey: `group:${state.group.id}:${metric.id}`,
+                },
+                manualEntry: false,
+                unit: updated.unit || "kg e1RM",
+              }
+            : updated;
+        },
       );
       const group = { ...state.group, metricConfiguration: configuration };
       let metrics = state.metrics.map((personal) =>
@@ -793,9 +806,23 @@ function reducer(state: AppState, action: Action): AppState {
         base === "blood_pressure_diastolic" ||
         (action.metric.healthMapping?.dataType === "blood_pressure" &&
           action.metric.healthMapping.field === "diastolic");
+      const gymMapping =
+        definition.gymMapping ??
+        (definition.category === "gym" && definition.dataType === "number"
+          ? {
+              kind: "exercise_one_rep_max" as const,
+              exerciseKey: `group:${state.group.id}:${id}`,
+            }
+          : undefined);
       const metric: MetricDefinition = {
         ...definition,
         id,
+        gymMapping,
+        manualEntry: gymMapping ? false : definition.manualEntry,
+        unit:
+          gymMapping?.kind === "exercise_one_rep_max" && !definition.unit
+            ? "kg e1RM"
+            : definition.unit,
         defaultVisibility: "group",
         order: existing.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),

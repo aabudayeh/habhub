@@ -21,6 +21,7 @@ export function MetricSelector({
   multiple = true,
   title = "Metrics",
   emptyLabel = "No logged metrics",
+  collapsibleGroups = [],
 }: {
   items: MetricSelectorItem[];
   selectedIds: string[];
@@ -28,10 +29,14 @@ export function MetricSelector({
   multiple?: boolean;
   title?: string;
   emptyLabel?: string;
+  collapsibleGroups?: string[];
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => new Set(collapsibleGroups),
+  );
   const selected = items.filter((item) => selectedIds.includes(item.id));
   function choose(id: string) {
     if (!multiple) {
@@ -102,16 +107,53 @@ export function MetricSelector({
           {items.length ? (
             items.map((item, index) => {
               const checked = selectedIds.includes(item.id);
+              const groupStarts =
+                Boolean(item.group) && item.group !== items[index - 1]?.group;
+              const groupIsCollapsible = Boolean(
+                item.group && collapsibleGroups.includes(item.group),
+              );
+              const groupIsCollapsed = Boolean(
+                item.group && collapsed.has(item.group),
+              );
               return (
                 <React.Fragment key={item.id}>
-                  {item.group &&
-                  item.group !== items[index - 1]?.group ? (
-                    <Text
-                      style={[styles.groupLabel, { color: colors.muted }]}
-                    >
-                      {item.group}
-                    </Text>
+                  {groupStarts ? (
+                    groupIsCollapsible ? (
+                      <Pressable
+                        onPress={() =>
+                          setCollapsed((current) => {
+                            const next = new Set(current);
+                            if (next.has(item.group!)) next.delete(item.group!);
+                            else next.add(item.group!);
+                            return next;
+                          })
+                        }
+                        style={styles.groupToggle}
+                      >
+                        <Text
+                          style={[styles.groupLabel, { color: colors.muted }]}
+                        >
+                          {item.group}
+                        </Text>
+                        <Ionicons
+                          name={
+                            groupIsCollapsed
+                              ? "chevron-down"
+                              : "chevron-up"
+                          }
+                          size={15}
+                          color={colors.muted}
+                        />
+                      </Pressable>
+                    ) : (
+                      <Text
+                        style={[styles.groupLabel, { color: colors.muted }]}
+                      >
+                        {item.group}
+                      </Text>
+                    )
                   ) : null}
+                  {!groupIsCollapsed ? (
                   <Pressable
                     onPress={() => choose(item.id)}
                     style={[
@@ -155,6 +197,7 @@ export function MetricSelector({
                     color={checked ? accent : colors.faint}
                   />
                   </Pressable>
+                  ) : null}
                 </React.Fragment>
               );
             })
@@ -249,5 +292,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingTop: 9,
     paddingBottom: 3,
+  },
+  groupToggle: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingRight: 9,
   },
 });

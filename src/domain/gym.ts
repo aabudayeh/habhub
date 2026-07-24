@@ -30,6 +30,17 @@ export function gymMetricValue(
       session.userId === userId && session.localDate === localDate,
   );
   if (!sessions.length) return 0;
+  if (mapping.kind === "session_completed")
+    return sessions.some(
+      (session) => completedGymSets(session.exercises) > 0,
+    )
+      ? 1
+      : 0;
+  if (mapping.kind === "session_duration")
+    return sessions.reduce(
+      (sum, session) => sum + Math.max(0, session.durationMinutes),
+      0,
+    );
   if (mapping.kind === "session_volume")
     return sessions.reduce(
       (sum, session) => sum + trainingVolumeKg(session.exercises),
@@ -68,6 +79,9 @@ export function hasGymMetricData(
       session.userId === userId && session.localDate === localDate,
   );
   if (!sessions.length) return false;
+  if (mapping.kind === "session_completed") return true;
+  if (mapping.kind === "session_duration")
+    return sessions.some((session) => session.durationMinutes > 0);
   if (
     mapping.kind === "exercise_one_rep_max" ||
     mapping.kind === "exercise_volume"

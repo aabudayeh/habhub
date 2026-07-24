@@ -14,6 +14,7 @@ import {
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { DraftNumberInput } from "@/src/components/DraftNumberInput";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { Button, Card, Chip, PageHeader, ProgressBar, Screen, SectionHeader } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
@@ -160,6 +161,8 @@ export default function GymScreen() {
   const [pickerMuscle, setPickerMuscle] = useState<MuscleGroup | "all">("all");
   const [recapOpen, setRecapOpen] = useState(false);
   const [sessionDetailsOpen, setSessionDetailsOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
   const [timerNow, setTimerNow] = useState(Date.now());
   const restAlerted = useRef(false);
@@ -182,6 +185,40 @@ export default function GymScreen() {
     () => [...sharedPlans, ...personalPlans],
     [personalPlans, sharedPlans],
   );
+  const groupExerciseItems = useMemo(() => {
+    const catalogByKey = new Map(
+      EXERCISE_CATALOG.map((item) => [item.key, item]),
+    );
+    const sharedExercises = new Map(
+      sharedPlans
+        .flatMap((plan) => plan.exercises)
+        .map((exercise) => [exercise.exerciseKey, exercise]),
+    );
+    return (state.group.metricConfiguration ?? []).flatMap((metric) => {
+      const mapping = metric.gymMapping;
+      if (
+        !mapping ||
+        (mapping.kind !== "exercise_one_rep_max" &&
+          mapping.kind !== "exercise_volume")
+      )
+        return [];
+      const catalog = catalogByKey.get(mapping.exerciseKey);
+      const shared = sharedExercises.get(mapping.exerciseKey);
+      return [
+        {
+          key: mapping.exerciseKey,
+          name:
+            shared?.name ??
+            catalog?.name ??
+            metric.name.replace(/\s+(strength|volume)$/i, ""),
+          muscles:
+            shared?.muscleGroups ?? catalog?.muscles ?? ["full_body"],
+          equipment: catalog?.equipment ?? ("other" as const),
+          met: shared?.customMet ?? catalog?.met ?? 3.5,
+        } satisfies ExerciseCatalogItem,
+      ];
+    });
+  }, [sharedPlans, state.group.metricConfiguration]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -200,6 +237,19 @@ export default function GymScreen() {
   );
   const selectedSession = sessions.find(
     (session) => session.localDate === localDate,
+  );
+  const gymDays = useMemo(
+    () => new Set(sessions.map((session) => session.localDate)),
+    [sessions],
+  );
+  const completedGymDays = useMemo(
+    () =>
+      new Set(
+        sessions
+          .filter((session) => completedGymSets(session.exercises) > 0)
+          .map((session) => session.localDate),
+      ),
+    [sessions],
   );
   const completedSets = completedGymSets(exercises);
   const volume = trainingVolumeKg(exercises);
@@ -863,6 +913,18 @@ export default function GymScreen() {
     );
   }
 
+  function chooseDate(nextDate: string) {
+    if (workoutTimer) {
+      Alert.alert(
+        "Workout in progress",
+        "Finish or pause and save this workout before changing days.",
+      );
+      return;
+    }
+    setLocalDate(nextDate);
+    setCalendarOpen(false);
+  }
+
   function finishTimedWorkout() {
     if (!workoutTimer) return;
     const now = Date.now();
@@ -924,7 +986,14 @@ export default function GymScreen() {
     );
   }
 
-  const pickerItems = EXERCISE_CATALOG.filter((item) => item.key !== "custom").filter((item) => {
+  const groupExerciseKeys = new Set(groupExerciseItems.map((item) => item.key));
+  const pickerItems = [
+    ...groupExerciseItems,
+    ...EXERCISE_CATALOG.filter(
+      (item) =>
+        item.key !== "custom" && !groupExerciseKeys.has(item.key),
+    ),
+  ].filter((item) => {
     const query = pickerSearch.trim().toLowerCase();
     return (
       (pickerMuscle === "all" || item.muscles.includes(pickerMuscle)) &&
@@ -1079,18 +1148,41 @@ export default function GymScreen() {
           <>
             <Card style={styles.dayCard}>
               <View style={styles.dateRow}>
-                <Pressable onPress={() => setLocalDate(dateWithOffsetFrom(localDate, -1))}>
+                <Pressable
+                  onPress={() =>
+                    chooseDate(dateWithOffsetFrom(localDate, -1))
+                  }
+                >
                   <Ionicons name="chevron-back" size={25} color={colors.ink} />
                 </Pressable>
-                <View style={styles.center}>
-                  <Text style={[styles.date, { color: colors.ink }]}>{friendlyDate(localDate)}</Text>
+                <Pressable
+                  onPress={() => setCalendarOpen((value) => !value)}
+                  style={styles.center}
+                >
+                  <View style={styles.dateLabel}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={14}
+                      color={accent}
+                    />
+                    <Text style={[styles.date, { color: colors.ink }]}>
+                      {friendlyDate(localDate)}
+                    </Text>
+                    <Ionicons
+                      name={calendarOpen ? "chevron-up" : "chevron-down"}
+                      size={14}
+                      color={colors.muted}
+                    />
+                  </View>
                   <Text style={[styles.meta, { color: colors.muted }]}>
                     {selectedSession ? "Saved day · edits stay on this date" : "New day · seeded from your active template"}
                   </Text>
-                </View>
+                </Pressable>
                 <Pressable
                   disabled={localDate >= dateKey()}
-                  onPress={() => setLocalDate(dateWithOffsetFrom(localDate, 1))}
+                  onPress={() =>
+                    chooseDate(dateWithOffsetFrom(localDate, 1))
+                  }
                 >
                   <Ionicons
                     name="chevron-forward"
@@ -1099,6 +1191,39 @@ export default function GymScreen() {
                   />
                 </Pressable>
               </View>
+              {calendarOpen ? (
+                <View
+                  style={[
+                    styles.calendar,
+                    { borderTopColor: colors.border },
+                  ]}
+                >
+                  <MonthCalendar
+                    selectedDate={localDate}
+                    monthDate={localDate}
+                    onSelect={chooseDate}
+                    hasActivity={(day) => gymDays.has(day)}
+                    dayStatus={(day) =>
+                      completedGymDays.has(day)
+                        ? "met"
+                        : gymDays.has(day)
+                          ? "partial"
+                          : "none"
+                    }
+                  />
+                  <View style={styles.calendarLegend}>
+                    <View
+                      style={[
+                        styles.legendDot,
+                        { backgroundColor: palette.lime },
+                      ]}
+                    />
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      Completed workout
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
               <Pressable
                 onPress={() => setSessionDetailsOpen((value) => !value)}
                 style={[styles.detailsToggle, { borderColor: colors.border }]}
@@ -1120,12 +1245,48 @@ export default function GymScreen() {
               {sessionDetailsOpen ? (
                 <>
               {plans.length ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={styles.planRow}>
+                <View
+                  style={[
+                    styles.templateMenu,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  <Pressable
+                    onPress={() => setTemplatesOpen((value) => !value)}
+                    style={styles.templateToggle}
+                  >
+                    <View style={styles.grow}>
+                      <Text
+                        style={[styles.exerciseName, { color: colors.ink }]}
+                      >
+                        Workout templates
+                      </Text>
+                      <Text style={[styles.meta, { color: colors.muted }]}>
+                        {plans.find((plan) => plan.id === selectedPlanId)?.name ??
+                          `${plans.length} reusable workout${plans.length === 1 ? "" : "s"}`}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={templatesOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={colors.muted}
+                    />
+                  </Pressable>
+                  {templatesOpen ? (
+                    <View
+                      style={[
+                        styles.planRow,
+                        { borderTopColor: colors.border },
+                      ]}
+                    >
                     {plans.map((plan) => (
                       <Pressable
                         key={plan.id}
-                        onPress={() => loadPlan(plan)}
+                        onPress={() => {
+                          loadPlan(plan);
+                          setTemplatesOpen(false);
+                        }}
+                        style={styles.templateChoice}
                         onLongPress={() =>
                           plan.userId === `group:${state.group.id}` &&
                           !canManageGroup
@@ -1149,8 +1310,9 @@ export default function GymScreen() {
                         />
                       </Pressable>
                     ))}
-                  </View>
-                </ScrollView>
+                    </View>
+                  ) : null}
+                </View>
               ) : null}
               <TextInput
                 value={sessionName}
@@ -1562,33 +1724,51 @@ export default function GymScreen() {
                     <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
                   </View>
                 </View>
-                <View style={styles.templateActions}>
-                  <View style={styles.action}>
+                <View style={styles.bottomActions}>
+                  <View style={styles.actionCell}>
                     <Button
                       label={selectedPlanId ? "Update" : "Save template"}
                       variant="secondary"
+                      size="small"
                       onPress={() => savePlan(false)}
                     />
                   </View>
                   {selectedPlanId ? (
-                    <View style={styles.action}>
-                      <Button label="Save copy" variant="secondary" onPress={() => savePlan(true)} />
+                    <View style={styles.actionCell}>
+                      <Button
+                        label="Save copy"
+                        variant="secondary"
+                        size="small"
+                        onPress={() => savePlan(true)}
+                      />
                     </View>
                   ) : null}
+                  {canManageGroup ? (
+                    <View style={styles.actionCell}>
+                      <Button
+                        label={
+                          sharedPlans.some(
+                            (plan) => plan.id === selectedPlanId,
+                          )
+                            ? "Update group"
+                            : "Share with group"
+                        }
+                        icon="people-outline"
+                        variant="secondary"
+                        size="small"
+                        onPress={publishGroupPlan}
+                      />
+                    </View>
+                  ) : null}
+                  <View style={styles.actionCell}>
+                    <Button
+                      label="Save workout"
+                      icon="checkmark"
+                      size="small"
+                      onPress={saveDay}
+                    />
+                  </View>
                 </View>
-                {canManageGroup ? (
-                  <Button
-                    label={
-                      sharedPlans.some((plan) => plan.id === selectedPlanId)
-                        ? "Update group workout"
-                        : "Publish workout to group"
-                    }
-                    icon="people-outline"
-                    variant="secondary"
-                    onPress={publishGroupPlan}
-                  />
-                ) : null}
-                <Button label="Save workout day" icon="checkmark" onPress={saveDay} />
               </>
             ) : null}
           </>
@@ -1790,6 +1970,9 @@ export default function GymScreen() {
                   <View style={styles.grow}>
                     <Text style={[styles.exerciseName, { color: colors.ink }]}>{item.name}</Text>
                     <Text style={[styles.meta, { color: colors.muted }]}>
+                      {groupExerciseKeys.has(item.key)
+                        ? "Group exercise · "
+                        : ""}
                       {item.muscles.map((muscle) => MUSCLE_LABELS[muscle]).join(" · ")}
                     </Text>
                   </View>
@@ -1909,9 +2092,28 @@ const styles = StyleSheet.create({
   detailsToggle: { minHeight: 43, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
   dateRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   center: { flex: 1, alignItems: "center" },
+  dateLabel: { flexDirection: "row", alignItems: "center", gap: 6 },
   date: { fontSize: 13, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
-  planRow: { flexDirection: "row", gap: 6, paddingRight: 8 },
+  calendar: { borderTopWidth: 1, paddingTop: 10 },
+  calendarLegend: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginTop: 5,
+  },
+  legendDot: { width: 7, height: 7, borderRadius: 4 },
+  templateMenu: { borderWidth: 1, borderRadius: 11, overflow: "hidden" },
+  templateToggle: {
+    minHeight: 44,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  planRow: { borderTopWidth: 1, gap: 3, padding: 6 },
+  templateChoice: { width: "100%" },
   nameInput: { borderWidth: 1, borderRadius: 11, minHeight: 41, paddingHorizontal: 11, fontSize: 11, fontWeight: "800" },
   compactRow: { flexDirection: "row", gap: 7 },
   field: { width: 76, gap: 4 },
@@ -1929,7 +2131,7 @@ const styles = StyleSheet.create({
   restStop: { height: 32, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   restStopText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   summary: { fontSize: 9, fontWeight: "900" },
-  exerciseContainer: { width: "100%" },
+  exerciseContainer: { width: "100%", marginBottom: 6 },
   exerciseCard: { paddingVertical: 2, paddingHorizontal: 9 },
   exerciseHeader: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8 },
   exerciseDot: { width: 8, height: 8, borderRadius: 4 },
@@ -1995,8 +2197,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textTransform: "uppercase",
   },
-  templateActions: { flexDirection: "row", gap: 9, marginVertical: 2 },
-  action: { flex: 1 },
+  bottomActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginVertical: 4,
+  },
+  actionCell: { width: "48%", flexGrow: 1 },
   progressLead: { gap: 11 },
   progressTiming: {
     borderWidth: 1,
