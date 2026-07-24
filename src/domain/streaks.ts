@@ -1,4 +1,5 @@
 import { AppState } from "@/src/types";
+import { isVacationDate } from "@/src/domain/vacation";
 
 function weekKey(localDate: string) {
   const date = new Date(`${localDate}T12:00:00`);
@@ -23,7 +24,8 @@ function streaksWithRest(
       week = nextWeek;
       restUsed = 0;
     }
-    if (met(date)) current += 1;
+    if (isVacationDate(state, state.currentUserId, date) || met(date))
+      current += 1;
     else if (current > 0 && restUsed < allowance) {
       restUsed += 1;
       current += 1;

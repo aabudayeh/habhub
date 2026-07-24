@@ -13,6 +13,7 @@ export function MonthCalendar({
   dayStatus,
   dayVisuals,
   allTrackedGoalsMet,
+  vacationDay,
   monthDate,
   onMonthChange,
 }: {
@@ -24,6 +25,7 @@ export function MonthCalendar({
     date: string,
   ) => { color: string; progress: number; goalReached?: boolean }[];
   allTrackedGoalsMet?: (date: string) => boolean;
+  vacationDay?: (date: string) => boolean;
   monthDate?: string;
   onMonthChange?: (date: string) => void;
 }) {
@@ -111,6 +113,7 @@ export function MonthCalendar({
           const status = dayStatus?.(day.key);
           const visuals = dayVisuals?.(day.key) ?? [];
           const allTrackedMet = allTrackedGoalsMet?.(day.key) ?? false;
+          const vacation = vacationDay?.(day.key) ?? false;
           return (
             <Pressable
               key={day.key}
@@ -177,7 +180,14 @@ export function MonthCalendar({
                   ]}
                 />
               ) : null}
-              {allTrackedMet ? (
+              {vacation ? (
+                <Ionicons
+                  name="airplane"
+                  size={12}
+                  color="#E76FA8"
+                  style={styles.goalBadge}
+                />
+              ) : allTrackedMet ? (
                 <Ionicons
                   name="checkmark-circle"
                   size={12}

@@ -13,9 +13,15 @@ Deno.serve(async(req)=>{
     const payload=await req.json() as Payload;
     const {data:membership}=await admin.from('group_members').select('user_id').eq('group_id',payload.groupId).eq('user_id',user.id).maybeSingle();
     if(!membership)return json({error:'Not a group member'},403);
-    const {error:eventError}=await admin.from('push_events').insert({event_key:payload.eventKey,sender_id:user.id});
-    if(eventError?.code==='23505')return json({sent:0,deduplicated:true});
+    const {data:claimed,error:eventError}=await admin
+      .from('push_events')
+      .upsert(
+        {event_key:payload.eventKey,sender_id:user.id},
+        {onConflict:'event_key',ignoreDuplicates:true},
+      )
+      .select('event_key');
     if(eventError)throw eventError;
+    if(!claimed?.length)return json({sent:0,deduplicated:true});
     let members=admin.from('group_members').select('user_id').eq('group_id',payload.groupId).neq('user_id',user.id);
     if(payload.recipientId)members=members.eq('user_id',payload.recipientId);
     const {data:recipients,error:memberError}=await members;if(memberError)throw memberError;

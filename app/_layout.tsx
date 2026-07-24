@@ -236,6 +236,10 @@ function RootNavigator() {
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen
+                name="vacation"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
                 name="group-settings"
                 options={{ presentation: "modal" }}
               />

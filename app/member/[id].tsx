@@ -47,7 +47,11 @@ import {
   memberOriginalLabel,
   memberRoleLabel,
 } from "@/src/domain/members";
-import { formatMetricValue, goalProgress } from "@/src/domain/metrics";
+import {
+  formatMetricValue,
+  goalProgress,
+  metricOverallAverage,
+} from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors } from "@/src/theme";
 
@@ -63,11 +67,16 @@ export default function MemberProfile() {
   const member =
     state.group.members.find((item) => item.id === params.id) ??
     state.group.members[0];
-  const available = (state.group.metricConfiguration ?? []).filter(
-    (metric) =>
-      metric.dataType !== "text" &&
-      metric.dataType !== "photo" &&
-      metric.sections.insights,
+  const groupMetricConfiguration = state.group.metricConfiguration;
+  const available = useMemo(
+    () =>
+      (groupMetricConfiguration ?? []).filter(
+        (metric) =>
+          metric.dataType !== "text" &&
+          metric.dataType !== "photo" &&
+          metric.sections.insights,
+      ),
+    [groupMetricConfiguration],
   );
   const paramIds = (params.metrics ?? "")
     .split(",")
@@ -101,10 +110,74 @@ export default function MemberProfile() {
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
-  const metrics = available.filter((metric) => metricIds.includes(metric.id));
-  const people = selectedIds
-    .map((id) => state.group.members.find((item) => item.id === id))
-    .filter(Boolean) as typeof state.group.members;
+  const metrics = useMemo(
+    () => available.filter((metric) => metricIds.includes(metric.id)),
+    [available, metricIds],
+  );
+  const groupMembers = state.group.members;
+  const people = useMemo(
+    () =>
+      selectedIds
+        .map((id) => groupMembers.find((item) => item.id === id))
+        .filter(Boolean) as typeof groupMembers,
+    [groupMembers, selectedIds],
+  );
+  const resultCache = useMemo(() => {
+    const cache = new Map<
+      string,
+      {
+        range: ReturnType<typeof periodMetricResult>;
+        seven: ReturnType<typeof averageAtDate>;
+        thirty: ReturnType<typeof averageAtDate>;
+        overallLabel: string;
+      }
+    >();
+    for (const metric of metrics)
+      for (const person of people) {
+        const key = `${metric.id}:${person.id}`;
+        cache.set(key, {
+          range: periodMetricResult(
+            state,
+            metric,
+            person.id,
+            state.currentUserId,
+            dates,
+          ),
+          seven: averageAtDate(
+            state,
+            metric,
+            person.id,
+            state.currentUserId,
+            anchor,
+            7,
+          ),
+          thirty: averageAtDate(
+            state,
+            metric,
+            person.id,
+            state.currentUserId,
+            anchor,
+            30,
+          ),
+          overallLabel:
+            person.id === state.currentUserId
+              ? formatMetricValue(
+                  metric,
+                  metricOverallAverage(state, metric, person.id, anchor),
+                )
+              : statValue(
+                  periodMetricResult(
+                    state,
+                    metric,
+                    person.id,
+                    state.currentUserId,
+                    overallDates(metric.activeFrom, anchor),
+                  ),
+                ),
+        });
+      }
+    return cache;
+  }, [anchor, dates, metrics, people, state]);
   const stats = useMemo(
     () =>
       comparisonStats(
@@ -426,13 +499,8 @@ export default function MemberProfile() {
             </View>
             <View style={styles.bars}>
               {people.map((person) => {
-                const result = periodMetricResult(
-                  state,
-                  metric,
-                  person.id,
-                  state.currentUserId,
-                  dates,
-                );
+                const cached = resultCache.get(`${metric.id}:${person.id}`);
+                const result = cached!.range;
                 return (
                   <View key={person.id} style={styles.personBlock}>
                     <View style={styles.barRow}>
@@ -486,41 +554,15 @@ export default function MemberProfile() {
                       />
                       <MiniStat
                         label="7-day avg"
-                        value={statValue(
-                          averageAtDate(
-                            state,
-                            metric,
-                            person.id,
-                            state.currentUserId,
-                            anchor,
-                            7,
-                          ),
-                        )}
+                        value={statValue(cached!.seven)}
                       />
                       <MiniStat
                         label="30-day avg"
-                        value={statValue(
-                          averageAtDate(
-                            state,
-                            metric,
-                            person.id,
-                            state.currentUserId,
-                            anchor,
-                            30,
-                          ),
-                        )}
+                        value={statValue(cached!.thirty)}
                       />
                       <MiniStat
                         label="Overall avg"
-                        value={statValue(
-                          periodMetricResult(
-                            state,
-                            metric,
-                            person.id,
-                            state.currentUserId,
-                            overallDates(metric.activeFrom, anchor),
-                          ),
-                        )}
+                        value={cached!.overallLabel}
                       />
                     </View>
                   </View>

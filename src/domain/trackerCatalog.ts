@@ -1,7 +1,8 @@
 import { DEFAULT_METRICS } from '@/src/data/seed';
 import { recommendedDailyDeficit, recommendedDailyIntakeForDirection } from '@/src/domain/energy';
-import { AppState, NewMetric } from '@/src/types';
+import { AppState, MuscleGroup, NewMetric } from '@/src/types';
 import { defaultReminderTimes } from '@/src/domain/reminders';
+import { EXERCISE_CATALOG, MUSCLE_LABELS } from '@/src/domain/exerciseCatalog';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
@@ -17,7 +18,7 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
   const profile = state.settings.energyProfile;
   const direction = state.settings.weightDirection ?? 'lose';
   const adjustment = recommendedDailyDeficit(profile);
-  return DEFAULT_METRICS
+  const builtIns = DEFAULT_METRICS
     .filter(
       (item) =>
         includeInternal || !isInternalTracker(item),
@@ -85,7 +86,97 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
       }
       return preset;
     });
+  const catalogKeys = new Set(EXERCISE_CATALOG.map((item) => item.key));
+  const groupExercisePresets = [
+    ...new Map(
+      (state.group.gymPlans ?? [])
+        .flatMap((plan) => plan.exercises)
+        .filter(
+          (exercise) =>
+            exercise.exerciseKey &&
+            !catalogKeys.has(exercise.exerciseKey),
+        )
+        .map((exercise) => [exercise.exerciseKey!, exercise]),
+    ).values(),
+  ].map((exercise) =>
+    gymPreset({
+      templateId: `gym_${exercise.exerciseKey!.replace(/[^a-z0-9]+/gi, "_")}_strength`,
+      name: `${exercise.name} strength`,
+      unit: "kg e1RM",
+      goal: { kind: "at_least", target: 1 },
+      gymMapping: {
+        kind: "exercise_one_rep_max",
+        exerciseKey: exercise.exerciseKey!,
+      },
+      description:
+        "Gym · shared group exercise using one stable comparison key.",
+    }),
+  );
+  return [...builtIns, ...GYM_TRACKER_PRESETS, ...groupExercisePresets];
 }
+
+const gymPreset = (
+  preset: Pick<
+    TrackerPreset,
+    "templateId" | "name" | "unit" | "goal" | "gymMapping" | "description"
+  >,
+): TrackerPreset => ({
+  ...preset,
+  icon: "barbell-outline",
+  color: "#8B5CF6",
+  dataType: "number",
+  aggregation: "latest",
+  goalEnabled: false,
+  category: "gym",
+  manualEntry: false,
+  rankingDirection: "higher",
+  defaultVisibility: "group",
+});
+
+const GYM_TRACKER_PRESETS: TrackerPreset[] = [
+  gymPreset({
+    templateId: "gym_total_volume",
+    name: "Gym volume",
+    unit: "kg",
+    goal: { kind: "at_least", target: 5000 },
+    gymMapping: { kind: "session_volume" },
+    description: "Gym · total completed reps × external load for the day.",
+  }),
+  gymPreset({
+    templateId: "gym_completed_sets",
+    name: "Completed gym sets",
+    unit: "sets",
+    goal: { kind: "at_least", target: 12 },
+    gymMapping: { kind: "completed_sets" },
+    description: "Gym · completed sets across all exercises for the day.",
+  }),
+  ...EXERCISE_CATALOG.filter((exercise) => exercise.key !== "custom").map(
+    (exercise) =>
+      gymPreset({
+        templateId: `gym_${exercise.key}_strength`,
+        name: `${exercise.name} strength`,
+        unit: "kg e1RM",
+        goal: { kind: "at_least", target: 1 },
+        gymMapping: {
+          kind: "exercise_one_rep_max",
+          exerciseKey: exercise.key,
+        },
+        description:
+          "Gym · standardized estimated one-rep max; raw sets and notes stay private.",
+      }),
+  ),
+  ...(Object.keys(MUSCLE_LABELS) as MuscleGroup[]).map((muscleGroup) =>
+    gymPreset({
+      templateId: `gym_${muscleGroup}_volume`,
+      name: `${MUSCLE_LABELS[muscleGroup]} volume`,
+      unit: "kg",
+      goal: { kind: "at_least", target: 1000 },
+      gymMapping: { kind: "muscle_volume", muscleGroup },
+      description:
+        "Gym · standardized completed-set volume for this muscle group.",
+    }),
+  ),
+];
 
 function presetDescription(id: string) {
   if (id === 'steps') return 'Automatic daily steps from your connected health source.';

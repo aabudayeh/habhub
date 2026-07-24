@@ -7,6 +7,8 @@ import {
 } from "./energy";
 import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
 import { cycleForecast } from "./cycle";
+import { gymMetricValue, hasGymMetricData } from "./gym";
+import { isVacationDate } from "./vacation";
 
 function aggregate(
   entries: MetricEntry[],
@@ -43,6 +45,13 @@ export function metricValue(
   localDate: string,
   stack: string[] = [],
 ): number {
+  if (metric.gymMapping)
+    return gymMetricValue(
+      state,
+      metric.gymMapping,
+      userId,
+      localDate,
+    );
   if (metric.id === "weight") {
     const latest = state.entries
       .filter(
@@ -331,6 +340,15 @@ export function weightProgressStats(
           Math.ceil((remaining / projectedWeeklyChange) * 7),
         )
       : undefined;
+  const fullJourney = Math.abs(profile.targetWeightKg - Number(startingWeight));
+  const journeyCompleted =
+    direction === "gain"
+      ? current - Number(startingWeight)
+      : direction === "lose"
+        ? Number(startingWeight) - current
+        : Math.abs(current - Number(startingWeight)) <= 0.2
+          ? fullJourney
+          : 0;
   return {
     direction,
     startingWeight: Number(startingWeight),
@@ -345,6 +363,11 @@ export function weightProgressStats(
     remaining,
     expectedGoalDate,
     hasMeasurement: Boolean(currentEntry),
+    /** Progress across the full starting-weight → final-target journey. */
+    progress:
+      fullJourney <= 0.01
+        ? 1
+        : Math.max(0, Math.min(1, journeyCompleted / fullJourney)),
   };
 }
 
@@ -564,8 +587,11 @@ export function metricApplicableOnDate(
   userId: string,
   localDate: string,
 ) {
+  if (isVacationDate(state, userId, localDate)) return true;
   const hasExplicitData =
-    metric.dataType === "photo"
+    metric.gymMapping
+      ? hasGymMetricData(state, metric.gymMapping, userId, localDate)
+      : metric.dataType === "photo"
       ? state.photos.some(
           (photo) =>
             photo.userId === userId && photo.localDate === localDate,
@@ -610,11 +636,16 @@ export function hasMetricData(
   localDate: string,
 ) {
   if (!metricApplicableOnDate(state, metric, userId, localDate)) return false;
+  // Vacation protects completion/streaks but must never fabricate a zero
+  // measurement that changes averages, totals, or calculated energy.
+  if (isVacationDate(state, userId, localDate)) return false;
   if (metric.dataType === "photo")
     return state.photos.some(
       (photo) =>
         photo.userId === userId && photo.localDate === localDate,
     );
+  if (metric.gymMapping)
+    return hasGymMetricData(state, metric.gymMapping, userId, localDate);
   if (metric.dataType === "calculated") return true;
   return state.entries.some(
     (entry) =>
@@ -643,7 +674,12 @@ export function metricPeriodStats(
   const average = values.length
     ? total / values.length
     : 0;
-  const goalsReached = loggedDates.filter((date) =>
+  const goalDates = applicableDates.filter(
+    (date) =>
+      isVacationDate(state, userId, date) ||
+      hasMetricData(state, metric, userId, date),
+  );
+  const goalsReached = goalDates.filter((date) =>
     scheduledGoalReached(state, metric, userId, date),
   ).length;
   const targets = loggedDates.map((date) =>
@@ -676,8 +712,9 @@ export function metricStreakStats(
     const localDate = dateWithOffsetFrom(throughDate, -index);
     const met =
       metric.goalEnabled !== false &&
-      hasMetricData(state, metric, userId, localDate) &&
-      scheduledGoalReached(state, metric, userId, localDate);
+      (isVacationDate(state, userId, localDate) ||
+        (hasMetricData(state, metric, userId, localDate) &&
+          scheduledGoalReached(state, metric, userId, localDate)));
     run = met ? run + 1 : 0;
     best = Math.max(best, run);
   }
@@ -685,8 +722,9 @@ export function metricStreakStats(
     const localDate = dateWithOffsetFrom(throughDate, -index);
     if (
       metric.goalEnabled !== false &&
-      hasMetricData(state, metric, userId, localDate) &&
-      scheduledGoalReached(state, metric, userId, localDate)
+      (isVacationDate(state, userId, localDate) ||
+        (hasMetricData(state, metric, userId, localDate) &&
+          scheduledGoalReached(state, metric, userId, localDate)))
     )
       current += 1;
     else break;
@@ -713,6 +751,25 @@ export function metricOverallAverage(
         .map((entry) => entry.localDate),
     ),
   ];
+  const gymDates = metric.gymMapping
+    ? [
+        ...new Set(
+          (state.gymSessions ?? [])
+            .filter(
+              (session) =>
+                session.userId === userId &&
+                session.localDate <= throughDate &&
+                hasGymMetricData(
+                  state,
+                  metric.gymMapping!,
+                  userId,
+                  session.localDate,
+                ),
+            )
+            .map((session) => session.localDate),
+        ),
+      ]
+    : [];
   const dates =
     metric.dataType === "calculated"
       ? dateRangeEnding(
@@ -726,7 +783,9 @@ export function metricOverallAverage(
             ) + 1,
           ),
         )
-      : entryDates;
+      : metric.gymMapping
+        ? gymDates
+        : entryDates;
   return metricPeriodStats(state, metric, userId, dates).average;
 }
 
@@ -889,6 +948,7 @@ export function scheduledGoalReached(
   userId: string,
   localDate: string,
 ) {
+  if (isVacationDate(state, userId, localDate)) return true;
   if (state.entries.some(
     (entry) =>
       entry.userId === userId &&
@@ -992,6 +1052,15 @@ export function trackedGoalSummary(
   const unavailable = metrics.filter(
     (metric) => !metricApplicableOnDate(state, metric, userId, localDate),
   );
+  if (isVacationDate(state, userId, localDate))
+    return {
+      met: metrics.length,
+      total: metrics.length,
+      applicableTotal: metrics.length,
+      allMet: metrics.length > 0,
+      metrics,
+      unavailable: [] as MetricDefinition[],
+    };
   const applicable = metrics.filter(
     (metric) => !unavailable.some((item) => item.id === metric.id),
   );

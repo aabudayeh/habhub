@@ -46,6 +46,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
+import { isVacationDate } from "@/src/domain/vacation";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -277,15 +278,24 @@ export default function TrackerDetail() {
       diastolicValues.length
     : 0;
   const isPhoto = tracker.dataType === "photo";
+  const weightStats =
+    tracker.id === "weight"
+      ? weightProgressStats(state, state.currentUserId, day)
+      : null;
   const displayAvailable =
-    applicable &&
-    (tracker.dataType === "calculated" ||
-      (dates.length === 1 ? hasData(state, tracker, day) : loggedDates.length > 0));
+    tracker.id === "weight"
+      ? Boolean(weightStats?.hasMeasurement)
+      : applicable &&
+        (tracker.dataType === "calculated" ||
+          (dates.length === 1
+            ? hasData(state, tracker, day)
+            : loggedDates.length > 0));
   const highestEver = highestRecordedValue(state, tracker, day);
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
   const displayedTarget =
     dates.length === 1 ? target : periodStats.averageTarget;
-  const displayedValue = dates.length === 1 ? current : average;
+  const displayedValue =
+    weightStats?.currentWeight ?? (dates.length === 1 ? current : average);
   const dayGoalMet =
     dates.length === 1 &&
     displayAvailable &&
@@ -315,10 +325,6 @@ export default function TrackerDetail() {
   const reality =
     tracker.id === "weight" && latestWeightDate
       ? deficitRealityCheckAtDate(state, state.currentUserId, latestWeightDate)
-      : null;
-  const weightStats =
-    tracker.id === "weight"
-      ? weightProgressStats(state, state.currentUserId, day)
       : null;
   return (
     <Screen>
@@ -483,6 +489,9 @@ export default function TrackerDetail() {
                     localDate,
                   )
                 }
+                vacationDay={(localDate) =>
+                  isVacationDate(state, state.currentUserId, localDate)
+                }
               />
             </View>
           ) : null}
@@ -521,6 +530,8 @@ export default function TrackerDetail() {
                 ? `${dayPhotos.length} photo${dayPhotos.length === 1 ? "" : "s"}`
                 : !displayAvailable
                   ? "Not available"
+                  : weightStats
+                    ? formatMetricValue(tracker, weightStats.currentWeight)
                   : isBloodPressure
                     ? `${Math.round(dates.length === 1 ? current : average)}/${Math.round(dates.length === 1 ? currentDiastolic : averageDiastolic)} mmHg`
                   : formatMetricValue(
@@ -554,10 +565,49 @@ export default function TrackerDetail() {
             />
           </View>
         </View>
+        {weightStats ? (
+          <View style={styles.weightJourney}>
+            <View style={styles.weightJourneyLabels}>
+              <View>
+                <Text style={[styles.weightJourneyLabel, { color: colors.muted }]}>
+                  START
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {weightStats.startingWeight.toFixed(1)} kg
+                </Text>
+              </View>
+              <View style={styles.weightJourneyCurrent}>
+                <Text style={[styles.weightJourneyLabel, { color: tracker.color }]}>
+                  CURRENT
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {weightStats.currentWeight.toFixed(1)} kg
+                </Text>
+              </View>
+              <View style={styles.weightJourneyTarget}>
+                <Text style={[styles.weightJourneyLabel, { color: colors.muted }]}>
+                  TARGET
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {weightStats.finalTarget.toFixed(1)} kg
+                </Text>
+              </View>
+            </View>
+            <ProgressBar
+              progress={weightStats.progress}
+              color={weightStats.progress >= 1 ? palette.lime : tracker.color}
+            />
+            <Text style={[styles.weightJourneyCaption, { color: colors.muted }]}>
+              {Math.round(weightStats.progress * 100)}% of the full weight journey
+              completed
+            </Text>
+          </View>
+        ) : null}
         {dates.length === 1 &&
         displayAvailable &&
         tracker.goalEnabled !== false &&
-        !isPhoto ? (
+        !isPhoto &&
+        !weightStats ? (
           <View style={styles.dayProgress}>
             <View style={styles.dayProgressHeading}>
               <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
@@ -617,7 +667,7 @@ export default function TrackerDetail() {
             ) : null}
           </View>
         ) : null}
-        {dates.length > 1 && values.length > 0 && !isPhoto ? (
+        {dates.length > 1 && values.length > 0 && !isPhoto && !weightStats ? (
           <Trend
             values={values}
             tracker={tracker}
@@ -1480,6 +1530,17 @@ const styles = StyleSheet.create({
   label: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
   value: { fontSize: 25, fontWeight: "900", marginTop: 4 },
   sub: { fontSize: 9, lineHeight: 14, marginTop: 3 },
+  weightJourney: { gap: 8, marginTop: 15 },
+  weightJourneyLabels: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+  },
+  weightJourneyCurrent: { alignItems: "center" },
+  weightJourneyTarget: { alignItems: "flex-end" },
+  weightJourneyLabel: { fontSize: 7, fontWeight: "900", letterSpacing: 0.7 },
+  weightJourneyValue: { fontSize: 10, fontWeight: "900", marginTop: 2 },
+  weightJourneyCaption: { fontSize: 8, textAlign: "center" },
   dayProgress: { gap: 6, marginTop: 12 },
   dayProgressHeading: {
     flexDirection: "row",

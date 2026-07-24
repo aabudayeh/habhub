@@ -9,6 +9,7 @@ function upgradeMetric(
     ? {
         ...metric,
         healthMapping: metric.healthMapping ?? preset.healthMapping,
+        gymMapping: metric.gymMapping ?? preset.gymMapping,
         stepFallback: metric.stepFallback ?? preset.stepFallback,
         category: metric.category ?? preset.category,
         manualEntry: metric.manualEntry ?? preset.manualEntry,

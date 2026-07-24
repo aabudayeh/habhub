@@ -82,6 +82,7 @@ const CATEGORIES: {
   { id: "nutrition", label: "Food", icon: "restaurant-outline" },
   { id: "body", label: "Body", icon: "body-outline" },
   { id: "health", label: "Health", icon: "heart-outline" },
+  { id: "gym", label: "Gym", icon: "barbell-outline" },
   { id: "mind", label: "Mind", icon: "book-outline" },
   { id: "photos", label: "Photos", icon: "camera-outline" },
   { id: "other", label: "Other", icon: "apps-outline" },
@@ -265,6 +266,7 @@ export default function TrackerEditor() {
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
   );
+  const [gymMapping, setGymMapping] = useState(tracker?.gymMapping);
   const [healthField, setHealthField] = useState<HealthMetricField>(
     tracker?.healthMapping?.field ?? "value",
   );
@@ -325,6 +327,7 @@ export default function TrackerEditor() {
     ranking,
     healthType,
     healthField,
+    gymMapping,
     stepFallback,
     manualEntry,
     activeFrom,
@@ -367,6 +370,7 @@ export default function TrackerEditor() {
     setRanking(preset.rankingDirection);
     setHealthType(preset.healthMapping?.dataType ?? "");
     setHealthField(preset.healthMapping?.field ?? "value");
+    setGymMapping(preset.gymMapping);
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
     setActiveFrom(dateKey());
@@ -474,6 +478,7 @@ export default function TrackerEditor() {
       healthMapping: healthType
         ? { dataType: healthType, field: healthField }
         : undefined,
+      gymMapping,
       stepFallback,
       manualEntry:
         healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
@@ -663,6 +668,7 @@ export default function TrackerEditor() {
             icon: preset.icon as keyof typeof Ionicons.glyphMap,
             color: preset.color,
             sublabel: preset.description,
+            group: preset.category === "gym" ? "Gym" : "Ready-made",
           }))}
           selectedIds={presetId ? [presetId] : []}
           onChange={(ids) => {
@@ -878,8 +884,9 @@ export default function TrackerEditor() {
           <Card>
             <SectionHeader title="Health connection" />
             <Text style={[styles.help, { color: colors.muted }]}>
-              Link this tracker to any compatible app that writes this data into
-              Apple Health or Health Connect.
+              {gymMapping
+                ? "This standardized tracker is calculated from Gym sessions. Raw sets and notes remain private."
+                : "Link this tracker to any compatible app that writes this data into Apple Health or Health Connect."}
             </Text>
             <View style={styles.wrap}>
               <Chip
@@ -942,8 +949,18 @@ export default function TrackerEditor() {
                 </Text>
               </View>
               <Switch
-                value={healthType === "steps" || tracker?.id === "steps" ? false : manualEntry}
-                disabled={healthType === "steps" || tracker?.id === "steps"}
+                value={
+                  gymMapping ||
+                  healthType === "steps" ||
+                  tracker?.id === "steps"
+                    ? false
+                    : manualEntry
+                }
+                disabled={
+                  Boolean(gymMapping) ||
+                  healthType === "steps" ||
+                  tracker?.id === "steps"
+                }
                 onValueChange={setManualEntry}
               />
             </View>

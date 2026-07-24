@@ -64,6 +64,7 @@ export type TrackerCategory =
   | "nutrition"
   | "body"
   | "health"
+  | "gym"
   | "mind"
   | "photos"
   | "other";
@@ -72,6 +73,13 @@ export type MetricGoal = {
   kind: GoalKind;
   target: number;
 };
+
+export type GymMetricMapping =
+  | { kind: "session_volume" }
+  | { kind: "completed_sets" }
+  | { kind: "exercise_one_rep_max"; exerciseKey: string }
+  | { kind: "exercise_volume"; exerciseKey: string }
+  | { kind: "muscle_volume"; muscleGroup: MuscleGroup };
 
 export type GoalSchedule = {
   mode:
@@ -104,6 +112,8 @@ export type MetricDefinition = {
   goalRange?: { min: number; max: number };
   category?: TrackerCategory;
   healthMapping?: HealthMetricMapping;
+  /** Value is derived from standardized gym logs instead of a manual entry. */
+  gymMapping?: GymMetricMapping;
   /** Estimate uncovered walking activity from steps when no canonical activity calories exist. */
   stepFallback?: boolean;
   /** False for device-owned readings such as steps. */
@@ -208,6 +218,8 @@ export type DailyMetricStatus = {
   /** Percent of this member's personal target reached/consumed; target stays private. */
   goalProgress?: number;
   goalKind?: GoalKind;
+  /** Whether this goal was part of the member's tracked-goal history that day. */
+  goalEligible?: boolean;
   /** Exact daily value is populated only when the member shared exact values. */
   exactValue?: number;
   /** Last cloud update for this member's daily group snapshot. */
@@ -321,6 +333,12 @@ export type EnergyProfile = {
   desiredWeeklyLossKg: number;
 };
 
+export type VacationPeriod = {
+  from: string;
+  /** Missing while vacation mode is still active. */
+  to?: string;
+};
+
 export type UserSettings = {
   /** Legacy/manual fallback. Formula variable `baseline` now resolves to calculated daily energy. */
   baselineCalories: number;
@@ -357,6 +375,8 @@ export type UserSettings = {
   selectedGoals: string[];
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
+  /** Personal pause periods protect goal streaks without inventing measurements. */
+  vacationPeriods?: VacationPeriod[];
   weightDirection: WeightDirection;
   /** Personal aliases are scoped to the group where they were assigned. */
   memberNicknamesByGroup: Record<string, Record<string, string>>;
@@ -423,6 +443,8 @@ export type Group = {
   pendingMembers?: Member[];
   /** Versioned locally in demo mode; cloud mode stores this as group-owned configuration. */
   metricConfiguration?: MetricDefinition[];
+  /** Admin-published workout templates shared into every member's Gym picker. */
+  gymPlans?: GymPlan[];
 };
 
 export type AppState = {
@@ -479,6 +501,7 @@ export type NewMetric = Pick<
   | "goalRange"
   | "category"
   | "healthMapping"
+  | "gymMapping"
   | "stepFallback"
   | "manualEntry"
   | "goalSchedule"

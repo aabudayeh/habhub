@@ -20,6 +20,7 @@ import {
   joinCloudGroup,
   leaveCloudGroup,
   loadCloudGroupShells,
+  loadCloudMessages,
   loadCloudWorkspace,
   removeCloudGroupMember,
   pushCloudWorkspace,
@@ -1107,6 +1108,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     )
       return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let messageTimer: ReturnType<typeof setTimeout> | null = null;
     const queueRefresh = () => {
       if (Date.now() < suppressGroupRefreshUntilRef.current) return;
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -1114,6 +1116,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         () => refreshGroup().catch(() => undefined),
         500,
       );
+    };
+    const queueMessageRefresh = () => {
+      if (messageTimer) clearTimeout(messageTimer);
+      messageTimer = setTimeout(() => {
+        loadCloudMessages(stateRef.current, state.group.id)
+          .then((messages) => {
+            const next = { ...stateRef.current, messages };
+            stateRef.current = next;
+            hashRef.current = stableHash(next);
+            workspaceHashRef.current = workspaceHash(next);
+            replaceState(next);
+          })
+          .catch(() => undefined);
+      }, 120);
     };
     const channel = supabase
       .channel(`group-workspace:${state.group.id}`)
@@ -1125,17 +1141,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           table: "messages",
           filter: `group_id=eq.${state.group.id}`,
         },
-        queueRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "metric_entries",
-          filter: `group_id=eq.${state.group.id}`,
-        },
-        queueRefresh,
+        queueMessageRefresh,
       )
       .on(
         "postgres_changes",
@@ -1180,9 +1186,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       .subscribe();
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer);
+      if (messageTimer) clearTimeout(messageTimer);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [auth.status, refreshGroup, state.group.id]);
+  }, [auth.status, refreshGroup, replaceState, state.group.id]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener("change", (next) => {

@@ -3,7 +3,6 @@ import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -38,7 +37,6 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const messageScroll = useRef<ScrollView>(null);
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
@@ -93,19 +91,6 @@ export default function ChatScreen() {
     );
     return () => clearTimeout(timer);
   }, [conversationId, messages.length]);
-  useEffect(() => {
-    const shown = Keyboard.addListener("keyboardDidShow", () =>
-      setKeyboardOpen(true),
-    );
-    const hidden = Keyboard.addListener("keyboardDidHide", () =>
-      setKeyboardOpen(false),
-    );
-    return () => {
-      shown.remove();
-      hidden.remove();
-    };
-  }, []);
-
   function submit() {
     if (!draft.trim() && !imageUri) return;
     sendMessage(
@@ -514,7 +499,7 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: keyboardOpen ? 8 : 30 },
+              { marginBottom: 8 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >

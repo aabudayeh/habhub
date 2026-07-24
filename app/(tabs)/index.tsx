@@ -1399,6 +1399,12 @@ function todayProgress(
   value: number,
   target: number,
 ) {
+  if (item.id === "weight")
+    return weightProgressStats(
+      state,
+      state.currentUserId,
+      dateKey(),
+    ).progress;
   const direction = state.settings.weightDirection ?? "lose";
   if (item.goal.kind === "at_most") {
     if (item.id === "food" && direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
@@ -1591,7 +1597,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  rowEnd: { flexDirection: "row", alignItems: "center", gap: 5 },
+  rowEnd: {
+    width: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 5,
+  },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
@@ -1731,14 +1743,14 @@ const styles = StyleSheet.create({
   completedText: { textDecorationLine: "line-through", opacity: 0.68 },
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
-  progress: { width: 48 },
+  progress: { width: 92 },
   goalProgressTrack: {
     height: 6,
     borderRadius: 999,
     overflow: "hidden",
   },
   goalProgressFill: { height: "100%", borderRadius: 999 },
-  bpProgress: { width: 55, gap: 2 },
+  bpProgress: { width: 92, gap: 2 },
   bpLabel: { fontSize: 6, fontWeight: "900" },
   remove: {
     width: 25,

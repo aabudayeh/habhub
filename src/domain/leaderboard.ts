@@ -11,6 +11,8 @@ import {
   formatMetricValue,
   goalProgress,
   goalReached,
+  hasMetricData,
+  isMetricTrackedOnDate,
   metricApplicableOnDate,
   metricPeriodStats,
   metricStreakStats,
@@ -145,7 +147,16 @@ export function periodMetricResult(
       date,
       // Backfilled measurements remain comparable before a goal started, but
       // those dates must not retroactively count as goal days.
-      goalEligible: goalMetric.activeFrom <= date,
+      goalEligible:
+        subjectUserId === state.currentUserId
+          ? isMetricTrackedOnDate(state, goalMetric, date)
+          : (state.dailyMetricStatuses?.find(
+              (status) =>
+                status.groupId === state.group.id &&
+                status.metricId === metric.id &&
+                status.userId === subjectUserId &&
+                status.localDate === date,
+            )?.goalEligible ?? goalMetric.activeFrom <= date),
       result: sharedMetricResult(
         state,
         goalMetric,
@@ -423,6 +434,8 @@ function hasPeriodData(
     return state.photos.some(
       (photo) => photo.userId === userId && photo.localDate === date,
     );
+  if (metric.gymMapping)
+    return hasMetricData(state, metric, userId, date);
   if (metric.dataType === "calculated") {
     return metricApplicableOnDate(state, metric, userId, date);
   }

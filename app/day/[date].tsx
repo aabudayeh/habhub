@@ -40,6 +40,7 @@ import {
   trackedGoalSummary,
 } from "@/src/domain/metrics";
 import { imageSourceUri } from "@/src/domain/media";
+import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -357,10 +358,26 @@ export default function DayDetail() {
                   )
                 );
               }}
+              vacationDay={(localDate) =>
+                isVacationDate(state, state.currentUserId, localDate)
+              }
             />
           </View>
         ) : null}
       </Card>
+      {isVacationDate(state, state.currentUserId, day) ? (
+        <Card style={styles.vacation}>
+          <Ionicons name="airplane" size={18} color={VACATION_COLOR} />
+          <View style={styles.grow}>
+            <Text style={[styles.trackedTitle, { color: colors.ink }]}>
+              Vacation day
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Tracked-goal streaks are protected; measurements remain unchanged.
+            </Text>
+          </View>
+        </Card>
+      ) : null}
       <MetricSelector
         items={available.map((metric) => ({
           id: metric.id,
@@ -866,6 +883,14 @@ function AlignmentCard({
 }
 
 const styles = StyleSheet.create({
+  vacation: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 9,
+    borderLeftWidth: 3,
+    borderLeftColor: "#E76FA8",
+  },
   photoToggle: {
     flexDirection: "row",
     alignItems: "center",

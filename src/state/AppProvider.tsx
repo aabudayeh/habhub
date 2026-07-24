@@ -138,6 +138,8 @@ type Action =
   | { type: "memberRole"; memberId: string; role: "admin" | "member" }
   | { type: "saveGymPlan"; plan: GymPlan }
   | { type: "deleteGymPlan"; planId: string }
+  | { type: "saveGroupGymPlan"; plan: GymPlan }
+  | { type: "deleteGroupGymPlan"; planId: string }
   | { type: "saveGymSession"; session: GymSession }
   | { type: "deleteGymSession"; sessionId: string }
   | { type: "gymExerciseGoal"; exerciseKey: string; goal: GymExerciseGoal }
@@ -887,6 +889,54 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         gymPlans: (state.gymPlans ?? []).filter((item) => item.id !== action.planId),
       };
+    case "saveGroupGymPlan": {
+      const normalizedPlan: GymPlan = {
+        ...action.plan,
+        id: action.plan.id.startsWith(`group-plan:${state.group.id}:`)
+          ? action.plan.id
+          : `group-plan:${state.group.id}:${slugify(action.plan.name)}-${Date.now().toString(36)}`,
+        userId: `group:${state.group.id}`,
+        exercises: action.plan.exercises.map((exercise) => ({
+          ...exercise,
+          exerciseKey:
+            exercise.exerciseKey &&
+            !exercise.exerciseKey.startsWith("custom:")
+              ? exercise.exerciseKey
+              : `group:${state.group.id}:${slugify(exercise.name)}`,
+        })),
+      };
+      const group = {
+        ...state.group,
+        gymPlans: [
+          normalizedPlan,
+          ...(state.group.gymPlans ?? []).filter(
+            (item) => item.id !== normalizedPlan.id,
+          ),
+        ],
+      };
+      return {
+        ...state,
+        group,
+        groups: state.groups.map((item) =>
+          item.id === group.id ? group : item,
+        ),
+      };
+    }
+    case "deleteGroupGymPlan": {
+      const group = {
+        ...state.group,
+        gymPlans: (state.group.gymPlans ?? []).filter(
+          (item) => item.id !== action.planId,
+        ),
+      };
+      return {
+        ...state,
+        group,
+        groups: state.groups.map((item) =>
+          item.id === group.id ? group : item,
+        ),
+      };
+    }
     case "saveGymSession": {
       const session = action.session;
       const completedSets = completedGymSets(session.exercises);
@@ -910,8 +960,10 @@ function reducer(state: AppState, action: Action): AppState {
           localDate: session.localDate,
           recordedAt: session.recordedAt,
           visibility:
-            state.metrics.find((metric) => metric.id === item.metricId)
-              ?.defaultVisibility ?? session.visibility,
+            session.visibility === "private"
+              ? "private"
+              : (state.metrics.find((metric) => metric.id === item.metricId)
+                  ?.defaultVisibility ?? "group"),
           source: "manual",
           label: session.name,
           note: `Gym session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
@@ -1409,6 +1461,8 @@ type AppContextValue = {
   setMemberRole: (memberId: string, role: "admin" | "member") => void;
   saveGymPlan: (plan: GymPlan) => void;
   deleteGymPlan: (planId: string) => void;
+  saveGroupGymPlan: (plan: GymPlan) => void;
+  deleteGroupGymPlan: (planId: string) => void;
   saveGymSession: (session: GymSession) => void;
   deleteGymSession: (sessionId: string) => void;
   setGymExerciseGoal: (exerciseKey: string, goal: GymExerciseGoal) => void;
@@ -1624,6 +1678,7 @@ export function AppProvider({ children }: PropsWithChildren) {
                       category: metric.category ?? preset.category,
                       healthMapping:
                         metric.healthMapping ?? preset.healthMapping,
+                      gymMapping: metric.gymMapping ?? preset.gymMapping,
                       stepFallback: metric.stepFallback ?? preset.stepFallback,
                       manualEntry: metric.manualEntry ?? preset.manualEntry,
                       goalEnabled:
@@ -1853,6 +1908,10 @@ export function AppProvider({ children }: PropsWithChildren) {
         dispatch({ type: "selectGroupMetric", metricId }),
       saveGymPlan: (plan) => dispatch({ type: "saveGymPlan", plan }),
       deleteGymPlan: (planId) => dispatch({ type: "deleteGymPlan", planId }),
+      saveGroupGymPlan: (plan) =>
+        dispatch({ type: "saveGroupGymPlan", plan }),
+      deleteGroupGymPlan: (planId) =>
+        dispatch({ type: "deleteGroupGymPlan", planId }),
       saveGymSession: (session) => dispatch({ type: "saveGymSession", session }),
       deleteGymSession: (sessionId) =>
         dispatch({ type: "deleteGymSession", sessionId }),

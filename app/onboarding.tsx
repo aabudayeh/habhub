@@ -46,6 +46,12 @@ const GOALS = [
     icon: "walk-outline" as const,
   },
   {
+    id: "gym",
+    title: "Track gym progress",
+    copy: "Programs, sets, reps, strength, rest, and workout history.",
+    icon: "barbell-outline" as const,
+  },
+  {
     id: "learning",
     title: "Learn consistently",
     copy: "Reading, studying, practice, or focused time.",
@@ -92,6 +98,7 @@ const GROUP_LABELS: Record<string, string> = {
   nutrition: "Food & hydration",
   health: "Health readings",
   mind: "Learning",
+  gym: "Gym",
   other: "Other",
 };
 const NOT_GOALS = new Set([
@@ -147,6 +154,11 @@ export default function Onboarding() {
   );
   const [advancedTutorial, setAdvancedTutorial] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [trackedSelected, setTrackedSelected] = useState<string[]>([]);
+  const [customPresets, setCustomPresets] = useState<TrackerPreset[]>([]);
+  const [customName, setCustomName] = useState("");
+  const [customUnit, setCustomUnit] = useState("");
+  const [customGoal, setCustomGoal] = useState("1");
   const [expanded, setExpanded] = useState<string[]>([]);
   const [landingPage, setLandingPage] = useState<LandingPage>(
     (state.settings.selectedGoals ?? []).includes("friends")
@@ -192,6 +204,14 @@ export default function Onboarding() {
         "workout_duration",
         "workout_distance",
       ].forEach((id) => ids.add(id));
+    if (goals.includes("gym"))
+      [
+        "workout",
+        "workout_duration",
+        "exercise",
+        "gym_total_volume",
+        "gym_completed_sets",
+      ].forEach((id) => ids.add(id));
     if (goals.includes("nutrition"))
       ["food", "water"].forEach((id) => ids.add(id));
     if (goals.includes("health"))
@@ -233,8 +253,8 @@ export default function Onboarding() {
           },
         ]
       : [];
-    return [...presets, ...reading];
-  }, [state, desired, direction, nextProfile]);
+    return [...presets, ...reading, ...customPresets];
+  }, [state, desired, direction, nextProfile, customPresets]);
   const grouped = useMemo(
     () =>
       Object.entries(
@@ -260,6 +280,14 @@ export default function Onboarding() {
     if (step === 2 && !initialized.current) {
       initialized.current = true;
       setSelected(proposed.map((item) => item.templateId));
+      setTrackedSelected(
+        proposed
+          .filter(
+            (item) =>
+              item.goalEnabled !== false && !NOT_GOALS.has(item.templateId),
+          )
+          .map((item) => item.templateId),
+      );
     }
   }, [step, proposed]);
   useEffect(() => {
@@ -308,7 +336,7 @@ export default function Onboarding() {
     configurePersonalMetrics(
       metrics,
       metrics
-        .filter((item) => item.goalEnabled !== false && !NOT_GOALS.has(item.id))
+        .filter((item) => trackedSelected.includes(item.id))
         .map((item) => item.id),
     );
     updateSettings({
@@ -316,6 +344,7 @@ export default function Onboarding() {
       weightDirection: direction,
       showLeaderboard: goals.includes("friends"),
       showChat: goals.includes("friends"),
+      showGym: goals.includes("gym"),
       defaultLandingPage: landingPage,
     });
     updateEnergyProfile(nextProfile);
@@ -369,6 +398,53 @@ export default function Onboarding() {
         (landingPage === "index" ? "/" : `/${landingPage}`) as never,
       ),
     );
+  }
+  function toggleTracker(id: string) {
+    if (selected.includes(id)) {
+      setSelected((current) => current.filter((item) => item !== id));
+      setTrackedSelected((current) =>
+        current.filter((item) => item !== id),
+      );
+    } else setSelected((current) => [...current, id]);
+  }
+  function addCustomTracker() {
+    const name = customName.trim();
+    const target = Number(customGoal);
+    if (!name || !Number.isFinite(target) || target <= 0) {
+      Alert.alert("Finish the tracker", "Add a name and a goal above zero.");
+      return;
+    }
+    const base =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "custom";
+    const templateId = `${base}_${Date.now().toString(36)}`;
+    const preset: TrackerPreset = {
+      templateId,
+      name,
+      icon: "sparkles-outline",
+      color: "#7756D9",
+      unit: customUnit.trim(),
+      dataType: "number",
+      aggregation: "sum",
+      goal: { kind: "at_least", target },
+      goalEnabled: true,
+      category: "other",
+      manualEntry: true,
+      rankingDirection: "higher",
+      defaultVisibility: "group",
+      description: `Personal daily target: ${target}${customUnit.trim() ? ` ${customUnit.trim()}` : ""}.`,
+    };
+    setCustomPresets((current) => [...current, preset]);
+    setSelected((current) => [...current, templateId]);
+    setTrackedSelected((current) => [...current, templateId]);
+    setExpanded((current) =>
+      current.includes("other") ? current : [...current, "other"],
+    );
+    setCustomName("");
+    setCustomUnit("");
+    setCustomGoal("1");
   }
   async function continueFlow() {
     if (step === 0) await saveDisplayName();
@@ -661,19 +737,108 @@ export default function Onboarding() {
                 ) : null}
                 <View style={styles.selectActions}>
                   <Pressable
-                    onPress={() =>
-                      setSelected(proposed.map((item) => item.templateId))
-                    }
+                    onPress={() => {
+                      setSelected(proposed.map((item) => item.templateId));
+                      setTrackedSelected(
+                        proposed
+                          .filter(
+                            (item) =>
+                              item.goalEnabled !== false &&
+                              !NOT_GOALS.has(item.templateId),
+                          )
+                          .map((item) => item.templateId),
+                      );
+                    }}
                   >
                     <Text style={[styles.action, { color: accent }]}>
                       Select all
                     </Text>
                   </Pressable>
-                  <Pressable onPress={() => setSelected([])}>
+                  <Pressable
+                    onPress={() => {
+                      setSelected([]);
+                      setTrackedSelected([]);
+                    }}
+                  >
                     <Text style={[styles.action, { color: accent }]}>
                       Deselect all
                     </Text>
                   </Pressable>
+                </View>
+                <View
+                  style={[
+                    styles.customTracker,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <View style={styles.customHeading}>
+                    <Ionicons name="sparkles-outline" size={18} color={accent} />
+                    <View style={styles.grow}>
+                      <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                        Create your own tracker
+                      </Text>
+                      <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                        Start simple here; icons, formulas, and schedules remain
+                        available in Advanced settings.
+                      </Text>
+                    </View>
+                  </View>
+                  <TextInput
+                    value={customName}
+                    onChangeText={setCustomName}
+                    placeholder="Tracker name"
+                    placeholderTextColor={colors.faint}
+                    style={[
+                      styles.input,
+                      {
+                        color: colors.ink,
+                        borderColor: colors.border,
+                        backgroundColor: colors.canvas,
+                      },
+                    ]}
+                  />
+                  <View style={styles.fields}>
+                    <TextInput
+                      value={customGoal}
+                      onChangeText={setCustomGoal}
+                      keyboardType="decimal-pad"
+                      placeholder="Daily goal"
+                      placeholderTextColor={colors.faint}
+                      style={[
+                        styles.input,
+                        styles.customField,
+                        {
+                          color: colors.ink,
+                          borderColor: colors.border,
+                          backgroundColor: colors.canvas,
+                        },
+                      ]}
+                    />
+                    <TextInput
+                      value={customUnit}
+                      onChangeText={setCustomUnit}
+                      placeholder="Unit (optional)"
+                      placeholderTextColor={colors.faint}
+                      style={[
+                        styles.input,
+                        styles.customField,
+                        {
+                          color: colors.ink,
+                          borderColor: colors.border,
+                          backgroundColor: colors.canvas,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Button
+                    label="Add custom tracker"
+                    icon="add-circle-outline"
+                    size="small"
+                    onPress={addCustomTracker}
+                  />
                 </View>
                 {grouped.map(([group, items]) => (
                   <View
@@ -715,9 +880,7 @@ export default function Onboarding() {
                       ? items.map((item) => (
                           <Pressable
                             key={item.templateId}
-                            onPress={() =>
-                              toggle(item.templateId, setSelected, selected)
-                            }
+                            onPress={() => toggleTracker(item.templateId)}
                             style={[
                               styles.tracker,
                               { borderTopColor: colors.border },
@@ -755,6 +918,52 @@ export default function Onboarding() {
                                 {item.description}
                               </Text>
                             </View>
+                            {item.goalEnabled !== false &&
+                            !NOT_GOALS.has(item.templateId) ? (
+                              <Pressable
+                                accessibilityLabel={
+                                  trackedSelected.includes(item.templateId)
+                                    ? "Remove from daily tracked goals"
+                                    : "Count as a daily tracked goal"
+                                }
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  if (!selected.includes(item.templateId))
+                                    setSelected((current) => [
+                                      ...current,
+                                      item.templateId,
+                                    ]);
+                                  toggle(
+                                    item.templateId,
+                                    setTrackedSelected,
+                                    trackedSelected,
+                                  );
+                                }}
+                                style={[
+                                  styles.goalFlag,
+                                  {
+                                    backgroundColor:
+                                      trackedSelected.includes(item.templateId)
+                                        ? colors.primarySoft
+                                        : colors.canvas,
+                                  },
+                                ]}
+                              >
+                                <Ionicons
+                                  name={
+                                    trackedSelected.includes(item.templateId)
+                                      ? "flag"
+                                      : "flag-outline"
+                                  }
+                                  size={15}
+                                  color={
+                                    trackedSelected.includes(item.templateId)
+                                      ? accent
+                                      : colors.faint
+                                  }
+                                />
+                              </Pressable>
+                            ) : null}
                             <Ionicons
                               name={
                                 selected.includes(item.templateId)
@@ -1130,6 +1339,19 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     marginVertical: 9,
   },
+  customTracker: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 8,
+  },
+  customHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  customField: { flex: 1 },
   action: { fontSize: 10, fontWeight: "900" },
   group: {
     borderWidth: 1,
@@ -1153,6 +1375,13 @@ const styles = StyleSheet.create({
     gap: 9,
     paddingHorizontal: 10,
     paddingVertical: 7,
+  },
+  goalFlag: {
+    width: 29,
+    height: 29,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
   },
   tinyIcon: {
     width: 32,

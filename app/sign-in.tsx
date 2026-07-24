@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, useLocalSearchParams } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 
@@ -18,6 +18,7 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const lastEmailRequestAt = useRef(0);
 
   useEffect(() => {
     void rememberPendingInvite(params.invite);
@@ -26,10 +27,25 @@ export default function SignInScreen() {
   if (auth.status === 'loading') return <View style={styles.loading}><ActivityIndicator color={palette.primary} /></View>;
   if (auth.status === 'signedIn' || auth.status === 'demo') return <Redirect href={params.invite ? `/join?code=${encodeURIComponent(params.invite)}` : '/'} />;
 
-  const validEmail = email.trim().includes('@');
+  const validEmail =
+    /^[^\s@]+@[^\s@]+\.[a-z]{2,63}$/i.test(email.trim()) &&
+    email.trim().length <= 254;
   async function run(label: string, action: () => Promise<void>) {
+    if (busy) return;
+    if (
+      ["signup", "magic", "reset"].includes(label) &&
+      Date.now() - lastEmailRequestAt.current < 60_000
+    )
+      return Alert.alert(
+        "Email already requested",
+        "Wait one minute before requesting another account email.",
+      );
     setBusy(label);
-    try { await action(); } catch (error) {
+    try {
+      await action();
+      if (["signup", "magic", "reset"].includes(label))
+        lastEmailRequestAt.current = Date.now();
+    } catch (error) {
       Alert.alert('Could not continue', error instanceof Error ? error.message : 'Please try again.');
     } finally { setBusy(null); }
   }
@@ -38,20 +54,20 @@ export default function SignInScreen() {
     if (!validEmail) return Alert.alert('Check your email', 'Enter a valid email address.');
     if (mode !== 'magic' && password.length < 8) return Alert.alert('Password is too short', 'Use at least 8 characters.');
     if (mode === 'magic') {
-      await run('email', async () => {
+      await run('magic', async () => {
         await auth.sendMagicLink(email);
         Alert.alert('Check your inbox', 'Open the secure MetricRally link on this device.');
       });
       return;
     }
     if (mode === 'sign-up') {
-      await run('email', async () => {
+      await run('signup', async () => {
         const result = await auth.signUp(email, password);
         if (result === 'verification-required') Alert.alert('Verify your email', 'Use the link we sent, then return to MetricRally.');
       });
       return;
     }
-    await run('email', () => auth.signInWithPassword(email, password));
+    await run('signin', () => auth.signInWithPassword(email, password));
   }
 
   return <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -68,7 +84,7 @@ export default function SignInScreen() {
         <Text style={styles.label}>Email</Text>
         <TextInput value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" placeholder="you@example.com" placeholderTextColor={palette.faint} style={styles.input} />
         {mode !== 'magic' ? <><Text style={styles.label}>Password</Text><TextInput value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoCorrect={false} spellCheck={false} autoComplete={mode === 'sign-up' ? 'new-password' : 'current-password'} placeholder="At least 8 characters" placeholderTextColor={palette.faint} style={styles.input} /></> : null}
-        <Button label={mode === 'sign-up' ? 'Create account' : mode === 'magic' ? 'Send secure link' : 'Sign in'} icon={mode === 'magic' ? 'mail-outline' : 'log-in-outline'} loading={busy === 'email'} onPress={submit} />
+        <Button label={mode === 'sign-up' ? 'Create account' : mode === 'magic' ? 'Send secure link' : 'Sign in'} icon={mode === 'magic' ? 'mail-outline' : 'log-in-outline'} loading={busy !== null && busy !== 'reset' && busy !== 'google' && busy !== 'apple' && busy !== 'demo'} onPress={submit} />
         {mode === 'sign-in' && validEmail ? <Pressable onPress={() => run('reset', async () => { await auth.requestPasswordReset(email); Alert.alert('Reset link sent', 'Check your inbox to choose a new password.'); })} style={styles.forgot}><Text style={styles.forgotText}>{busy === 'reset' ? 'Sending…' : 'Forgot password?'}</Text></Pressable> : null}
         <View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>OR</Text><View style={styles.line}/></View>
         <View style={styles.providers}><View style={styles.provider}><Button label="Google" variant="ghost" icon="logo-google" loading={busy === 'google'} onPress={() => run('google', () => auth.signInWithProvider('google'))}/></View>{Platform.OS !== 'android' ? <View style={styles.provider}><Button label="Apple" variant="ghost" icon="logo-apple" loading={busy === 'apple'} onPress={() => run('apple', () => auth.signInWithProvider('apple'))}/></View> : null}</View>

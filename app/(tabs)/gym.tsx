@@ -39,6 +39,13 @@ import {
   totalGymSetWorkSeconds,
   trainingVolumeKg,
 } from "@/src/domain/gym";
+import {
+  dismissWorkoutTimerNotification,
+  showWorkoutTimerNotification,
+  WORKOUT_TIMER_FINISH,
+  WORKOUT_TIMER_NEXT,
+  WORKOUT_TIMER_PAUSE,
+} from "@/src/notifications/workoutTimer";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -126,6 +133,8 @@ export default function GymScreen() {
     state,
     saveGymPlan,
     deleteGymPlan,
+    saveGroupGymPlan,
+    deleteGroupGymPlan,
     saveGymSession,
     deleteGymSession,
   } = useApp();
@@ -154,15 +163,30 @@ export default function GymScreen() {
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
   const [timerNow, setTimerNow] = useState(Date.now());
   const restAlerted = useRef(false);
+  const handledTimerResponse = useRef<string | null>(null);
+  const timerActionRef = useRef<(action: string) => void>(() => undefined);
   const initializedDate = useRef<string | null>(null);
 
-  const plans = useMemo(
+  const personalPlans = useMemo(
     () =>
       (state.gymPlans ?? [])
         .filter((plan) => plan.userId === state.currentUserId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [state.currentUserId, state.gymPlans],
   );
+  const sharedPlans = useMemo(
+    () => state.group.gymPlans ?? [],
+    [state.group.gymPlans],
+  );
+  const plans = useMemo(
+    () => [...sharedPlans, ...personalPlans],
+    [personalPlans, sharedPlans],
+  );
+  const currentMember = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  );
+  const canManageGroup =
+    currentMember?.role === "owner" || currentMember?.role === "admin";
   const sessions = useMemo(
     () =>
       (state.gymSessions ?? [])
@@ -386,6 +410,24 @@ export default function GymScreen() {
     timerPhaseSeconds,
     workoutTimer,
   ]);
+
+  useEffect(() => {
+    const handle = (response: Notifications.NotificationResponse) => {
+      if (response.notification.request.content.data?.workoutTimer !== true)
+        return;
+      const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
+      if (handledTimerResponse.current === responseKey) return;
+      handledTimerResponse.current = responseKey;
+      timerActionRef.current(response.actionIdentifier);
+      void Notifications.clearLastNotificationResponseAsync();
+    };
+    const subscription =
+      Notifications.addNotificationResponseReceivedListener(handle);
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) handle(response);
+    });
+    return () => subscription.remove();
+  }, []);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
@@ -792,7 +834,7 @@ export default function GymScreen() {
   function savePlan(asNew: boolean) {
     if (!exercises.length) return;
     const existing = !asNew
-      ? plans.find((plan) => plan.id === selectedPlanId)
+      ? personalPlans.find((plan) => plan.id === selectedPlanId)
       : undefined;
     const now = new Date().toISOString();
     const plan: GymPlan = {
@@ -818,6 +860,67 @@ export default function GymScreen() {
     Alert.alert(
       existing ? "Template updated" : "Workout template saved",
       `${plan.name} will seed new days without changing historical workouts.`,
+    );
+  }
+
+  function finishTimedWorkout() {
+    if (!workoutTimer) return;
+    const now = Date.now();
+    const phaseSeconds =
+      workoutTimer.phase === "paused"
+        ? 0
+        : Math.max(1, timerPhaseElapsed(workoutTimer, now));
+    const nextExercises =
+      phaseSeconds > 0
+        ? recordTimerPhase(exercises, workoutTimer, phaseSeconds)
+        : exercises;
+    persistSession(
+      nextExercises,
+      (workoutTimer.completedElapsedSeconds + phaseSeconds) / 60,
+      {
+        startedAt: new Date(workoutTimer.startedAt).toISOString(),
+        completedAt: new Date(now).toISOString(),
+        pausedSeconds:
+          workoutTimer.pausedSeconds +
+          (workoutTimer.phase === "paused"
+            ? Math.max(
+                0,
+                Math.floor(
+                  (now - (workoutTimer.pauseStartedAt ?? now)) / 1000,
+                ),
+              )
+            : 0),
+      },
+    );
+  }
+
+  function publishGroupPlan() {
+    if (!canManageGroup || !exercises.length) return;
+    const selectedShared = sharedPlans.find(
+      (plan) => plan.id === selectedPlanId,
+    );
+    const now = new Date().toISOString();
+    saveGroupGymPlan({
+      id: selectedShared?.id ?? uniqueId("group-plan"),
+      userId: `group:${state.group.id}`,
+      name: sessionName.trim() || "Group workout",
+      exercises: exercises.map((exercise) => ({
+        id: uniqueId("plan-exercise"),
+        exerciseKey: exerciseIdentity(exercise),
+        name: exercise.name,
+        muscleGroups: exercise.muscleGroups,
+        targetSets: exercise.sets.length,
+        targetReps: exercise.sets[0]?.reps ?? 10,
+        startingWeightKg: exercise.sets[0]?.weightKg || undefined,
+        notes: exercise.notes,
+        customMet: exercise.customMet,
+      })),
+      createdAt: selectedShared?.createdAt ?? now,
+      updatedAt: now,
+    });
+    Alert.alert(
+      selectedShared ? "Group workout updated" : "Shared with the group",
+      "This standardized workout now appears in every active member's Gym templates. Raw completed sets and notes are still shared only through mapped group trackers.",
     );
   }
 
@@ -877,6 +980,34 @@ export default function GymScreen() {
             : firstPendingTarget(exercises, timerExerciseIndex + 1)
               ? "Finish exercise"
               : "Finish workout";
+  timerActionRef.current = (action) => {
+    if (action === WORKOUT_TIMER_PAUSE) pauseOrResumeWorkout();
+    else if (action === WORKOUT_TIMER_FINISH) finishTimedWorkout();
+    else if (action === WORKOUT_TIMER_NEXT) advanceWorkoutTimer();
+  };
+  useEffect(() => {
+    if (!workoutTimer) {
+      void dismissWorkoutTimerNotification();
+      return;
+    }
+    void showWorkoutTimerNotification({
+      title: timerHeading,
+      body: `${timerNextLabel} · open MetricRally to adjust kg or reps`,
+      phase:
+        workoutTimer.phase === "work"
+          ? "work"
+          : workoutTimer.phase === "paused"
+            ? "paused"
+            : "rest",
+    }).catch(() => undefined);
+  }, [
+    timerHeading,
+    timerNextLabel,
+    workoutTimer?.exerciseId,
+    workoutTimer?.phase,
+    workoutTimer?.setId,
+    workoutTimer,
+  ]);
   const workoutTimerBar = workoutTimer ? (
     <View
       style={[
@@ -996,13 +1127,26 @@ export default function GymScreen() {
                         key={plan.id}
                         onPress={() => loadPlan(plan)}
                         onLongPress={() =>
-                          Alert.alert("Delete template?", plan.name, [
+                          plan.userId === `group:${state.group.id}` &&
+                          !canManageGroup
+                            ? undefined
+                            : Alert.alert("Delete template?", plan.name, [
                             { text: "Cancel", style: "cancel" },
-                            { text: "Delete", style: "destructive", onPress: () => deleteGymPlan(plan.id) },
+                            {
+                              text: "Delete",
+                              style: "destructive",
+                              onPress: () =>
+                                plan.userId === `group:${state.group.id}`
+                                  ? deleteGroupGymPlan(plan.id)
+                                  : deleteGymPlan(plan.id),
+                            },
                           ])
                         }
                       >
-                        <Chip label={plan.name} selected={selectedPlanId === plan.id} />
+                        <Chip
+                          label={`${plan.userId === `group:${state.group.id}` ? "Group · " : ""}${plan.name}`}
+                          selected={selectedPlanId === plan.id}
+                        />
                       </Pressable>
                     ))}
                   </View>
@@ -1405,7 +1549,14 @@ export default function GymScreen() {
                   </Card>
                 ) : null}
                 <View style={styles.privacyRow}>
-                  <Text style={[styles.label, { color: colors.muted }]}>Share completed workout</Text>
+                  <View style={styles.grow}>
+                    <Text style={[styles.label, { color: colors.muted }]}>
+                      Share mapped gym results
+                    </Text>
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      Group trackers receive standardized totals; set notes stay private.
+                    </Text>
+                  </View>
                   <View style={styles.privacyChoices}>
                     <Chip label="Group" selected={visibility === "group"} onPress={() => setVisibility("group")} />
                     <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
@@ -1425,6 +1576,18 @@ export default function GymScreen() {
                     </View>
                   ) : null}
                 </View>
+                {canManageGroup ? (
+                  <Button
+                    label={
+                      sharedPlans.some((plan) => plan.id === selectedPlanId)
+                        ? "Update group workout"
+                        : "Publish workout to group"
+                    }
+                    icon="people-outline"
+                    variant="secondary"
+                    onPress={publishGroupPlan}
+                  />
+                ) : null}
                 <Button label="Save workout day" icon="checkmark" onPress={saveDay} />
               </>
             ) : null}

@@ -108,9 +108,16 @@ export default function LeaderboardDetail() {
     state.entries,
     state.group.id,
   ]);
-  const loggedIds = [...new Set(visibleEntries.map((entry) => entry.metricId))];
-  const available = (state.group.metricConfiguration ?? []).filter(
-    (metric) => metric.sections.group && metric.dataType !== "photo",
+  const loggedIds = useMemo(
+    () => [...new Set(visibleEntries.map((entry) => entry.metricId))],
+    [visibleEntries],
+  );
+  const available = useMemo(
+    () =>
+      (state.group.metricConfiguration ?? []).filter(
+        (metric) => metric.sections.group && metric.dataType !== "photo",
+      ),
+    [state.group.metricConfiguration],
   );
   const requested = (params.metrics || "").split(",").filter(Boolean);
   const requestedAvailable = requested.filter(
@@ -140,30 +147,54 @@ export default function LeaderboardDetail() {
     });
   }, [availableKey]);
 
-  const metrics = available.filter((metric) => selectedIds.includes(metric.id));
-  const rankingMetrics = metrics.filter((metric) => metric.dataType !== "text");
-  const includeScore = selectedIds.includes(SCORE_ID);
-  const rows = leaderboardRows(
-    state,
-    rankingMetrics,
-    dates,
-    state.currentUserId,
-    includeScore,
+  const metrics = useMemo(
+    () => available.filter((metric) => selectedIds.includes(metric.id)),
+    [available, selectedIds],
   );
-  const options = [
-    {
-      id: SCORE_ID,
-      label: "Overall score",
-      icon: "speedometer-outline" as const,
-      color: palette.purple,
-    },
-    ...available.map((metric) => ({
-      id: metric.id,
-      label: metric.name,
-      icon: metric.icon as keyof typeof Ionicons.glyphMap,
-      color: metric.color,
-    })),
-  ];
+  const rankingMetrics = useMemo(
+    () => metrics.filter((metric) => metric.dataType !== "text"),
+    [metrics],
+  );
+  const includeScore = selectedIds.includes(SCORE_ID);
+  const rows = useMemo(
+    () =>
+      leaderboardRows(
+        state,
+        rankingMetrics,
+        dates,
+        state.currentUserId,
+        includeScore,
+      ),
+    [dates, includeScore, rankingMetrics, state],
+  );
+  const options = useMemo(
+    () => [
+      {
+        id: SCORE_ID,
+        label: "Overall score",
+        icon: "speedometer-outline" as const,
+        color: palette.purple,
+      },
+      ...available.map((metric) => ({
+        id: metric.id,
+        label: metric.name,
+        icon: metric.icon as keyof typeof Ionicons.glyphMap,
+        color: metric.color,
+      })),
+    ],
+    [available],
+  );
+  const entriesByMember = useMemo(() => {
+    const selected = new Set(metrics.map((metric) => metric.id));
+    const grouped = new Map<string, MetricEntry[]>();
+    visibleEntries.forEach((entry) => {
+      if (!selected.has(entry.metricId)) return;
+      const entries = grouped.get(entry.userId) ?? [];
+      entries.push(entry);
+      grouped.set(entry.userId, entries);
+    });
+    return grouped;
+  }, [metrics, visibleEntries]);
 
   function setRange(next: LeaderboardPeriod) {
     setPeriod(next);
@@ -340,11 +371,7 @@ export default function LeaderboardDetail() {
       ) : null}
       <View style={styles.members}>
         {rows.map((row, index) => {
-          const entries = visibleEntries.filter(
-            (entry) =>
-              entry.userId === row.member.id &&
-              metrics.some((metric) => metric.id === entry.metricId),
-          );
+          const entries = entriesByMember.get(row.member.id) ?? [];
           const expanded = Boolean(openLogs[row.member.id]);
           const weightDay =
             dates.length === 1 &&
@@ -667,13 +694,18 @@ function PhotoCompare({
 }) {
   const accent = useGroupAccent();
   const colors = useAppColors();
-  const visible = state.photos
-    .filter(
-      (photo) =>
-        photo.userId === memberId &&
-        (memberId === state.currentUserId || photo.visibility === "group"),
-    )
-    .sort((a, b) => b.localDate.localeCompare(a.localDate));
+  const visible = useMemo(
+    () =>
+      state.photos
+        .filter(
+          (photo) =>
+            photo.userId === memberId &&
+            (memberId === state.currentUserId ||
+              photo.visibility === "group"),
+        )
+        .sort((a, b) => b.localDate.localeCompare(a.localDate)),
+    [memberId, state.currentUserId, state.photos],
+  );
   const primary = visible.find((photo) => dates.includes(photo.localDate));
   const olderDates = [
     ...new Set(

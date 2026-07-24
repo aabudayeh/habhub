@@ -58,6 +58,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
+import { isVacationDate } from "@/src/domain/vacation";
 
 const TRACKED = "tracked_goals";
 const TRACKED_COLOR = "#9B6BDB";
@@ -322,6 +323,9 @@ export default function Insights() {
             dayVisuals={dayVisuals}
             allTrackedGoalsMet={(day) =>
               trackedGoalSummary(state, state.currentUserId, day).allMet
+            }
+            vacationDay={(day) =>
+              isVacationDate(state, state.currentUserId, day)
             }
           />
           <Text style={[styles.hint, { color: colors.muted }]}>

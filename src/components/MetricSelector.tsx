@@ -11,6 +11,7 @@ export type MetricSelectorItem = {
   icon?: keyof typeof Ionicons.glyphMap;
   color?: string;
   sublabel?: string;
+  group?: string;
 };
 
 export function MetricSelector({
@@ -99,17 +100,25 @@ export function MetricSelector({
             </View>
           ) : null}
           {items.length ? (
-            items.map((item) => {
+            items.map((item, index) => {
               const checked = selectedIds.includes(item.id);
               return (
-                <Pressable
-                  key={item.id}
-                  onPress={() => choose(item.id)}
-                  style={[
-                    styles.row,
-                    checked && { backgroundColor: colors.primarySoft },
-                  ]}
-                >
+                <React.Fragment key={item.id}>
+                  {item.group &&
+                  item.group !== items[index - 1]?.group ? (
+                    <Text
+                      style={[styles.groupLabel, { color: colors.muted }]}
+                    >
+                      {item.group}
+                    </Text>
+                  ) : null}
+                  <Pressable
+                    onPress={() => choose(item.id)}
+                    style={[
+                      styles.row,
+                      checked && { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
                   <View
                     style={[
                       styles.itemIcon,
@@ -145,7 +154,8 @@ export function MetricSelector({
                     size={20}
                     color={checked ? accent : colors.faint}
                   />
-                </Pressable>
+                  </Pressable>
+                </React.Fragment>
               );
             })
           ) : (
@@ -231,4 +241,13 @@ const styles = StyleSheet.create({
   },
   bulkButton: { paddingHorizontal: 9, paddingVertical: 6 },
   bulkText: { fontSize: 9, fontWeight: "900" },
+  groupLabel: {
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    paddingHorizontal: 8,
+    paddingTop: 9,
+    paddingBottom: 3,
+  },
 });

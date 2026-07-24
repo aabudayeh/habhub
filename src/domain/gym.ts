@@ -1,9 +1,11 @@
 import { dateWithOffsetFrom } from "@/src/domain/date";
 import { exerciseKey, MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import {
+  AppState,
   GymExercise,
   GymExerciseGoal,
   GymIntensity,
+  GymMetricMapping,
   GymSession,
   MuscleGroup,
 } from "@/src/types";
@@ -14,6 +16,79 @@ export function completedGymSets(exercises: GymExercise[]) {
       total + exercise.sets.filter((set) => set.completed).length,
     0,
   );
+}
+
+/** Derived gym trackers expose comparable totals without exposing raw set notes. */
+export function gymMetricValue(
+  state: AppState,
+  mapping: GymMetricMapping,
+  userId: string,
+  localDate: string,
+) {
+  const sessions = (state.gymSessions ?? []).filter(
+    (session) =>
+      session.userId === userId && session.localDate === localDate,
+  );
+  if (!sessions.length) return 0;
+  if (mapping.kind === "session_volume")
+    return sessions.reduce(
+      (sum, session) => sum + trainingVolumeKg(session.exercises),
+      0,
+    );
+  if (mapping.kind === "completed_sets")
+    return sessions.reduce(
+      (sum, session) => sum + completedGymSets(session.exercises),
+      0,
+    );
+  if (
+    mapping.kind === "exercise_one_rep_max" ||
+    mapping.kind === "exercise_volume"
+  ) {
+    const observations = exerciseHistory(sessions, userId, mapping.exerciseKey);
+    return mapping.kind === "exercise_one_rep_max"
+      ? Math.max(
+          0,
+          ...observations.map((item) => item.estimatedOneRepMaxKg),
+        )
+      : observations.reduce((sum, item) => sum + item.volumeKg, 0);
+  }
+  return muscleGroupStats(sessions, userId)
+    .filter((item) => item.muscle === mapping.muscleGroup)
+    .reduce((sum, item) => sum + item.volumeKg, 0);
+}
+
+export function hasGymMetricData(
+  state: AppState,
+  mapping: GymMetricMapping,
+  userId: string,
+  localDate: string,
+) {
+  const sessions = (state.gymSessions ?? []).filter(
+    (session) =>
+      session.userId === userId && session.localDate === localDate,
+  );
+  if (!sessions.length) return false;
+  if (
+    mapping.kind === "exercise_one_rep_max" ||
+    mapping.kind === "exercise_volume"
+  )
+    return sessions.some((session) =>
+      session.exercises.some(
+        (exercise) =>
+          exerciseIdentity(exercise) === mapping.exerciseKey &&
+          exercise.sets.some((set) => set.completed),
+      ),
+    );
+  if (mapping.kind === "muscle_volume")
+    return sessions.some((session) =>
+      session.exercises.some(
+        (exercise) =>
+          (exercise.muscleGroups ?? ["full_body"]).includes(
+            mapping.muscleGroup,
+          ) && exercise.sets.some((set) => set.completed),
+      ),
+    );
+  return sessions.some((session) => completedGymSets(session.exercises) > 0);
 }
 
 /** Standard strength-training volume: sum of completed reps × external load. */

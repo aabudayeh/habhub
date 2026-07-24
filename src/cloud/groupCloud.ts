@@ -6,12 +6,17 @@ import {
   displayGoalProgress,
   formatMetricValue,
   goalProgress,
+  isMetricTrackedOnDate,
   metricApplicableOnDate,
   rankedMembers,
   safeMetricValue,
   scheduledGoalReached,
 } from "@/src/domain/metrics";
 import { normalizeEnergyProfile } from "@/src/domain/energy";
+import {
+  isVacationDate,
+  vacationDates,
+} from "@/src/domain/vacation";
 import { supabase } from "@/src/lib/supabase";
 import {
   AppState,
@@ -86,6 +91,7 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     goalRange: configuration.goalRange,
     category: configuration.category ?? preset?.category ?? "other",
     healthMapping: configuration.healthMapping ?? preset?.healthMapping,
+    gymMapping: configuration.gymMapping ?? preset?.gymMapping,
     stepFallback: configuration.stepFallback ?? preset?.stepFallback,
     manualEntry:
       configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
@@ -127,6 +133,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       goalRange: metric.goalRange,
       category: metric.category,
       healthMapping: metric.healthMapping,
+      gymMapping: metric.gymMapping,
       stepFallback: metric.stepFallback,
       manualEntry: metric.manualEntry,
       sections: metric.sections,
@@ -151,6 +158,62 @@ async function signedUrls(paths: string[]) {
   for (const item of data ?? [])
     if (item.path && item.signedUrl) pairs.push([item.path, item.signedUrl]);
   return new Map<string, string>(pairs);
+}
+
+/** Lightweight realtime chat refresh; avoids reloading every group entry. */
+export async function loadCloudMessages(
+  state: AppState,
+  groupId: string,
+): Promise<ChatMessage[]> {
+  const client = requireCloud();
+  const { data, error } = await client
+    .from("messages")
+    .select("*")
+    .eq("group_id", groupId)
+    .order("created_at");
+  if (error) throw error;
+  const rows = data ?? [];
+  const urls = await signedUrls(
+    rows.map((message) => message.image_path).filter(Boolean),
+  );
+  const remote: ChatMessage[] = rows.map((message) => ({
+    id: message.client_generated_id ?? message.id,
+    senderId: message.sender_id ?? "system",
+    text: message.content,
+    createdAt: message.created_at,
+    kind: message.kind,
+    conversationId: message.conversation_id ?? `group:${groupId}`,
+    recipientId: message.recipient_id ?? undefined,
+    imageStoragePath: message.image_path ?? undefined,
+    imageUri: message.image_path
+      ? (urls.get(message.image_path) ?? undefined)
+      : undefined,
+  }));
+  const byId = new Map(remote.map((message) => [message.id, message]));
+  state.messages
+    .filter(
+      (message) =>
+        message.senderId === state.currentUserId &&
+        (message.conversationId === `group:${groupId}` ||
+          Boolean(
+            message.recipientId &&
+              state.group.members.some(
+                (member) => member.id === message.recipientId,
+              ),
+          )),
+    )
+    .forEach((message) => {
+      const matched = remote.some(
+        (candidate) =>
+          candidate.senderId === message.senderId &&
+          candidate.text === message.text &&
+          candidate.createdAt === message.createdAt,
+      );
+      if (!matched && !byId.has(message.id)) byId.set(message.id, message);
+    });
+  return [...byId.values()].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  );
 }
 
 async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
@@ -289,6 +352,11 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
       themeColor: String(
         (row.settings as Record<string, any>)?.themeColor ?? "#176B4D",
       ),
+      gymPlans: Array.isArray(
+        (row.settings as Record<string, any>)?.gymPlans,
+      )
+        ? (row.settings as Record<string, any>).gymPlans
+        : [],
       metricConfiguration: (metrics ?? [])
         .filter((metric) => metric.group_id === row.id)
         .map(metricFromRow)
@@ -494,6 +562,7 @@ export async function loadCloudWorkspace(
             goalEnabled: personal.goalEnabled,
             defaultVisibility: personal.defaultVisibility,
             healthMapping: personal.healthMapping ?? shared.healthMapping,
+            gymMapping: personal.gymMapping ?? shared.gymMapping,
             stepFallback: personal.stepFallback ?? shared.stepFallback,
             manualEntry: personal.manualEntry ?? shared.manualEntry,
             sections: {
@@ -641,11 +710,15 @@ export async function loadCloudWorkspace(
     localDate: status.local_date,
     goalReached: status.goal_reached,
     scoreContribution: Number(status.score_contribution ?? 0),
-    goalProgress:
+  goalProgress:
       status.goal_progress === null || status.goal_progress === undefined
         ? undefined
         : Number(status.goal_progress),
     goalKind: status.goal_kind ?? undefined,
+    goalEligible:
+      status.goal_eligible === null || status.goal_eligible === undefined
+        ? undefined
+        : Boolean(status.goal_eligible),
     exactValue:
       status.exact_value === null || status.exact_value === undefined
         ? undefined
@@ -774,6 +847,7 @@ export async function pushCloudWorkspace(state: AppState) {
           streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
           themeColor: state.group.themeColor ?? "#176B4D",
           requireMemberApproval: state.group.requireMemberApproval ?? false,
+          gymPlans: state.group.gymPlans ?? [],
         },
       })
       .eq("id", state.group.id);
@@ -914,7 +988,13 @@ export async function pushCloudWorkspace(state: AppState) {
   }
 
   const statusDates = [
-    ...new Set(ownedEntries.map((entry) => entry.localDate)),
+    ...new Set([
+      ...ownedEntries.map((entry) => entry.localDate),
+      ...(state.gymSessions ?? [])
+        .filter((session) => session.userId === state.currentUserId)
+        .map((session) => session.localDate),
+      ...vacationDates(state, state.currentUserId),
+    ]),
   ];
   await client
     .from("daily_metric_status")
@@ -949,8 +1029,16 @@ export async function pushCloudWorkspace(state: AppState) {
           localDate,
         );
         const exactShared =
+          !isVacationDate(state, state.currentUserId, localDate) &&
           metric.defaultVisibility === "group" &&
           (metric.dataType === "calculated" ||
+            (Boolean(metric.gymMapping) &&
+              (state.gymSessions ?? []).some(
+                (session) =>
+                  session.userId === state.currentUserId &&
+                  session.localDate === localDate &&
+                  session.visibility === "group",
+              )) ||
             metric.stepFallback === true ||
             ownedEntries.some(
               (entry) =>
@@ -995,6 +1083,7 @@ export async function pushCloudWorkspace(state: AppState) {
               ),
             ) * 100,
           goal_kind: metric.goal.kind,
+          goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
           exact_value: exactShared ? value : null,
         };
       }),
@@ -1003,7 +1092,7 @@ export async function pushCloudWorkspace(state: AppState) {
     let { error } = await client.from("daily_metric_status").insert(statuses);
     if (
       error &&
-      /goal_progress|goal_kind|exact_value/i.test(
+      /goal_progress|goal_kind|goal_eligible|exact_value/i.test(
         `${error.code ?? ""} ${error.message ?? ""}`,
       )
     ) {
@@ -1011,6 +1100,7 @@ export async function pushCloudWorkspace(state: AppState) {
         ({
           goal_progress: _progress,
           goal_kind: _kind,
+          goal_eligible: _eligible,
           exact_value: _exact,
           ...status
         }) => status,
