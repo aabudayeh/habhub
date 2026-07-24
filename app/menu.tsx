@@ -30,12 +30,6 @@ const items = [
     path: "/display-settings" as const,
   },
   {
-    label: "Vacation mode",
-    detail: "Pause goal streaks without changing logged measurements",
-    icon: "airplane-outline" as const,
-    path: "/vacation" as const,
-  },
-  {
     label: "Groups",
     detail: "Switch, invite, join, or manage group scoring",
     icon: "people-outline" as const,
