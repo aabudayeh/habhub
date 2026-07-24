@@ -39,7 +39,11 @@ export function MetricCard({ metric, value, displayText, rankLabel, goalTarget, 
       {rankLabel&&!compact ? <Text style={[styles.rankText,{color:accent}]}>{rankLabel}</Text> : null}
       {metric.dataType !== 'text' ? <View style={[styles.progressRow,compact&&styles.progressRowCompact]}>
         <View style={styles.progressGrow}>
-          <ProgressBar progress={progress} color={metric.color} />
+          <ProgressBar
+            progress={progress}
+            color={metric.color}
+            layered={metric.goal.kind === "at_least"}
+          />
         </View>
         <Text style={styles.percent}>{progressLabel}</Text>
       </View> : null}

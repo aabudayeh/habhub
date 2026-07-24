@@ -1,6 +1,6 @@
 import { friendlyDate } from '@/src/domain/date';
 import { leaderboardRows } from '@/src/domain/leaderboard';
-import { sharedMetricResult } from '@/src/domain/metrics';
+import { hasMetricData, sharedMetricResult } from '@/src/domain/metrics';
 import { AppState, MetricDefinition } from '@/src/types';
 
 export type ComparisonStats={bestDay:string;bestScore:number;daysWon:number;longestWinStreak:number;eligibleDays:number};
@@ -57,9 +57,17 @@ export function metricHeadToHeadStats(
   let eligibleDays = 0;
 
   for (const date of [...dates].sort()) {
-    const subjectHasEntry = state.entries.some((entry) => entry.metricId === metric.id && entry.userId === subjectId && entry.localDate === date);
-    const viewerHasEntry = state.entries.some((entry) => entry.metricId === metric.id && entry.userId === viewerId && entry.localDate === date);
-    if (!subjectHasEntry || !viewerHasEntry) continue;
+    const hasComparableData = (userId: string) =>
+      state.dailyMetricStatuses?.some(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.metricId === metric.id &&
+          status.userId === userId &&
+          status.localDate === date &&
+          status.exactValue !== undefined,
+      ) || hasMetricData(state, metric, userId, date);
+    if (!hasComparableData(subjectId) || !hasComparableData(viewerId))
+      continue;
     const subject = sharedMetricResult(state, metric, subjectId, viewerId, date);
     const viewer = sharedMetricResult(state, metric, viewerId, viewerId, date);
     if (subject.mode !== 'exact' || viewer.mode !== 'exact') continue;

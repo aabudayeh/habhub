@@ -35,6 +35,10 @@ declare module 'expo-background-task' {
 }
 
 declare module 'expo-task-manager' {
-  export function defineTask(name: string, executor: () => Promise<unknown>): void;
+  export function defineTask(
+    name: string,
+    executor: (body: { data?: unknown; error?: unknown; executionInfo?: unknown }) => Promise<unknown> | unknown,
+  ): void;
+  export function isTaskDefined(name: string): boolean;
   export function isTaskRegisteredAsync(name: string): Promise<boolean>;
 }

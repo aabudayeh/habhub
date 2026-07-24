@@ -5,6 +5,7 @@ import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
   Alert,
+  InteractionManager,
   Platform,
   Pressable,
   StyleSheet,
@@ -57,6 +58,8 @@ export default function LeaderboardDetail() {
     metrics?: string;
   }>();
   const { state } = useApp();
+  const calculationStateRef = useRef(state);
+  calculationStateRef.current = state;
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [period, setPeriod] = useState<LeaderboardPeriod>(
@@ -65,8 +68,20 @@ export default function LeaderboardDetail() {
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [showCalendar, setShowCalendar] = useState(false);
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
+  const [detailsReady, setDetailsReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (active) setDetailsReady(true);
+    });
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, []);
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   const visibleEntries = useMemo(() => {
+    if (!detailsReady) return [];
     const shared = state.entries.filter(
       (entry) =>
         dates.includes(entry.localDate) &&
@@ -103,6 +118,7 @@ export default function LeaderboardDetail() {
     return [...shared, ...exactDailySnapshots];
   }, [
     dates,
+    detailsReady,
     state.currentUserId,
     state.dailyMetricStatuses,
     state.entries,
@@ -156,16 +172,51 @@ export default function LeaderboardDetail() {
     [metrics],
   );
   const includeScore = selectedIds.includes(SCORE_ID);
+  const rankingInputs = useMemo(
+    () => ({
+      statuses: state.dailyMetricStatuses,
+      energyProfiles: state.energyProfiles,
+      entries: state.entries,
+      group: state.group,
+      gymSessions: state.gymSessions,
+      metrics: state.metrics,
+      photos: state.photos,
+      settings: state.settings,
+      trackedGoalPeriods: state.trackedGoalPeriods,
+    }),
+    [
+      state.dailyMetricStatuses,
+      state.energyProfiles,
+      state.entries,
+      state.group,
+      state.gymSessions,
+      state.metrics,
+      state.photos,
+      state.settings,
+      state.trackedGoalPeriods,
+    ],
+  );
   const rows = useMemo(
-    () =>
-      leaderboardRows(
-        state,
-        rankingMetrics,
-        dates,
-        state.currentUserId,
-        includeScore,
-      ),
-    [dates, includeScore, rankingMetrics, state],
+    () => {
+      void rankingInputs;
+      const calculationState = calculationStateRef.current;
+      return detailsReady
+        ? leaderboardRows(
+            calculationState,
+            rankingMetrics,
+            dates,
+            calculationState.currentUserId,
+            includeScore,
+          )
+        : [];
+    },
+    [
+      dates,
+      detailsReady,
+      includeScore,
+      rankingMetrics,
+      rankingInputs,
+    ],
   );
   const options = useMemo(
     () => [
@@ -370,6 +421,13 @@ export default function LeaderboardDetail() {
         </View>
       ) : null}
       <View style={styles.members}>
+        {!detailsReady ? (
+          <Card style={styles.loadingCard}>
+            <Text style={[styles.metricSub, { color: colors.muted }]}>
+              Loading saved leaderboard details…
+            </Text>
+          </Card>
+        ) : null}
         {rows.map((row, index) => {
           const entries = entriesByMember.get(row.member.id) ?? [];
           const expanded = Boolean(openLogs[row.member.id]);
@@ -483,8 +541,9 @@ export default function LeaderboardDetail() {
                             {progressCopy}
                           </Text>
                           <ProgressBar
-                            progress={Math.min(progress, 1)}
+                            progress={progress}
                             color={progressColor}
+                            layered={result.personalGoalKind === "at_least"}
                           />
                         </View>
                       ) : null}
@@ -932,6 +991,11 @@ const styles = StyleSheet.create({
   },
   rangeText: { color: palette.muted, fontSize: 10, fontWeight: "700" },
   members: { gap: 11 },
+  loadingCard: {
+    minHeight: 72,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   whatToShow: { marginTop: 15, paddingTop: 2 },
   memberCard: { padding: 13 },
   heading: {

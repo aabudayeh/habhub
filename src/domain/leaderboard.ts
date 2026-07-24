@@ -211,7 +211,7 @@ export function periodMetricResult(
   const displayProgressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
     if (status?.goalProgress !== undefined)
-      return [Math.max(0, Math.min(2, status.goalProgress / 100))];
+      return [Math.max(0, Math.min(3, status.goalProgress / 100))];
     if (
       result.mode !== "exact" ||
       !hasPeriodData(state, goalMetric, subjectUserId, date)

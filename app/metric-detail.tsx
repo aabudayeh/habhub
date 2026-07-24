@@ -630,6 +630,7 @@ export default function TrackerDetail() {
             <ProgressBar
               progress={goalProgress(tracker, current, target)}
               color={systolicDayMet ? palette.lime : tracker.color}
+              layered={tracker.goal.kind === "at_least"}
             />
             {diastolicTracker ? (
               <>
@@ -665,6 +666,34 @@ export default function TrackerDetail() {
                 />
               </>
             ) : null}
+          </View>
+        ) : null}
+        {dates.length > 1 &&
+        displayAvailable &&
+        tracker.goalEnabled !== false &&
+        tracker.goal.kind === "at_least" &&
+        !isPhoto &&
+        !weightStats ? (
+          <View style={styles.dayProgress}>
+            <View style={styles.dayProgressHeading}>
+              <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
+                Average goal progress
+              </Text>
+              <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
+                {displayedValue > displayedTarget
+                  ? `${formatMetricValue(tracker, displayedValue - displayedTarget)} above`
+                  : `${formatMetricValue(tracker, displayedTarget - displayedValue)} left`}
+              </Text>
+            </View>
+            <ProgressBar
+              progress={goalProgress(
+                tracker,
+                displayedValue,
+                displayedTarget,
+              )}
+              color={tracker.color}
+              layered
+            />
           </View>
         ) : null}
         {dates.length > 1 && values.length > 0 && !isPhoto && !weightStats ? (
@@ -1453,6 +1482,8 @@ function summaryLine(
   }
   if (tracker.goalRange)
     return `Preferred range ${tracker.goalRange.min}–${tracker.goalRange.max} ${tracker.unit}`;
+  if (tracker.goal.kind === "at_least" && value > target)
+    return `${formatMetricValue(tracker, value - target)} above goal`;
   return `Target ${formatMetricValue(tracker, target)}`;
 }
 function nutritionLine(

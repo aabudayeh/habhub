@@ -2,6 +2,7 @@ import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Redirect, router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
+import "@/src/notifications/workoutTimer";
 import React, { useEffect, useRef } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";

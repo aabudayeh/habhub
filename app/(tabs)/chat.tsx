@@ -1,7 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -33,6 +39,7 @@ export default function ChatScreen() {
   const accent = useGroupAccent();
   const colors = useAppColors();
   const cloud = useCloudSync();
+  const refreshMessages = cloud.refreshMessages;
   const health = useHealthSync();
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -83,6 +90,18 @@ export default function ChatScreen() {
         return id === conversationId;
       }),
     [conversationId, recipientId, state.group.id, state.messages],
+  );
+  useFocusEffect(
+    useCallback(() => {
+      refreshMessages().catch(() => undefined);
+      // Realtime remains primary; this inexpensive chat-only poll covers
+      // suspended sockets without reloading leaderboard or health data.
+      const timer = setInterval(
+        () => refreshMessages().catch(() => undefined),
+        4000,
+      );
+      return () => clearInterval(timer);
+    }, [refreshMessages]),
   );
   useEffect(() => {
     const timer = setTimeout(
@@ -268,7 +287,7 @@ export default function ChatScreen() {
                 refreshing={cloud.status === "syncing" || health.status === "syncing"}
                 onRefresh={async () => {
                   await cloud.syncNow().catch(() => undefined);
-                  await cloud.refreshGroup().catch(() => undefined);
+                  await cloud.refreshMessages().catch(() => undefined);
                   await health.syncNow("pull").catch(() => undefined);
                 }}
                 tintColor={accent}

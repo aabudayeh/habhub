@@ -78,6 +78,7 @@ type CloudSyncContextValue = {
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   refreshGroup: () => Promise<void>;
+  refreshMessages: () => Promise<void>;
   approveMember: (userId: string) => Promise<void>;
   removeMember: (userId: string) => Promise<void>;
 };
@@ -453,9 +454,14 @@ function snapshotPayload(state: AppState): AppState {
     photos: state.photos.map((photo) =>
       photo.storagePath ? { ...photo, uri: "" } : photo,
     ),
-    messages: state.messages.map((message) =>
-      message.imageStoragePath ? { ...message, imageUri: undefined } : message,
-    ),
+    // Group history is cached locally and reloaded from the relational table.
+    // Keeping only owned messages in the private snapshot makes hashing and
+    // account sync independent of a busy group chat.
+    messages: state.messages
+      .filter((message) => message.senderId === state.currentUserId)
+      .map((message) =>
+        message.imageStoragePath ? { ...message, imageUri: undefined } : message,
+      ),
     lastSavedAt: null,
   };
 }
@@ -1100,6 +1106,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     replaceState(refreshed);
   }, [replaceState]);
 
+  const refreshMessages = useCallback(async () => {
+    if (!isCloudGroupId(stateRef.current.group.id)) return;
+    const messages = await loadCloudMessages(
+      stateRef.current,
+      stateRef.current.group.id,
+    );
+    const next = { ...stateRef.current, messages };
+    stateRef.current = next;
+    // Do not hash or reload the full group workspace for a chat-only update.
+    replaceState(next);
+  }, [replaceState]);
+
   useEffect(() => {
     if (
       !supabase ||
@@ -1120,15 +1138,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     const queueMessageRefresh = () => {
       if (messageTimer) clearTimeout(messageTimer);
       messageTimer = setTimeout(() => {
-        loadCloudMessages(stateRef.current, state.group.id)
-          .then((messages) => {
-            const next = { ...stateRef.current, messages };
-            stateRef.current = next;
-            hashRef.current = stableHash(next);
-            workspaceHashRef.current = workspaceHash(next);
-            replaceState(next);
-          })
-          .catch(() => undefined);
+        refreshMessages().catch(() => undefined);
       }, 120);
     };
     const channel = supabase
@@ -1189,7 +1199,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (messageTimer) clearTimeout(messageTimer);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [auth.status, refreshGroup, replaceState, state.group.id]);
+  }, [auth.status, refreshGroup, refreshMessages, state.group.id]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener("change", (next) => {
@@ -1308,6 +1318,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(true);
       },
       refreshGroup,
+      refreshMessages,
       approveMember: async (userId) => {
         await approveCloudGroupMember(stateRef.current.group.id, userId);
         await refreshGroup();
@@ -1328,6 +1339,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       performSync,
       pullLatest,
       refreshGroup,
+      refreshMessages,
       replaceState,
       status,
     ],

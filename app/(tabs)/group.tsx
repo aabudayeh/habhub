@@ -12,6 +12,7 @@ import {
   Alert,
   Animated,
   BackHandler,
+  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -78,6 +79,9 @@ export default function LeaderboardScreen() {
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const [dragPlacement, setDragPlacement] =
     useState<ReorderDragState | null>(null);
+  const [rankingsReady, setRankingsReady] = useState(false);
+  const rankingStateRef = useRef(state);
+  rankingStateRef.current = state;
   useEffect(() => {
     if (!editing) {
       setDraggingCardId(null);
@@ -89,11 +93,15 @@ export default function LeaderboardScreen() {
   );
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
-  const tracked = (state.group.metricConfiguration ?? []).filter(
-    (metric) =>
-      metric.dataType !== "text" &&
-      metric.dataType !== "photo" &&
-      metric.sections.group,
+  const tracked = useMemo(
+    () =>
+      (state.group.metricConfiguration ?? []).filter(
+        (metric) =>
+          metric.dataType !== "text" &&
+          metric.dataType !== "photo" &&
+          metric.sections.group,
+      ),
+    [state.group.metricConfiguration],
   );
   const saved = state.settings.leaderboardMetricIdsByGroup?.[
     state.group.id
@@ -109,8 +117,60 @@ export default function LeaderboardScreen() {
           tracked.find((metric) => !validSaved.includes(metric.id))?.id,
         ].filter(Boolean) as string[]);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelected);
-  const selected = selectedIds.length ? selectedIds : [SCORE_ID];
+  const selected = useMemo(
+    () => (selectedIds.length ? selectedIds : [SCORE_ID]),
+    [selectedIds],
+  );
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
+  const rankingInputs = useMemo(
+    () => ({
+      statuses: state.dailyMetricStatuses,
+      energyProfiles: state.energyProfiles,
+      entries: state.entries,
+      group: state.group,
+      gymSessions: state.gymSessions,
+      metrics: state.metrics,
+      photos: state.photos,
+      settings: state.settings,
+      trackedGoalPeriods: state.trackedGoalPeriods,
+    }),
+    [
+      state.dailyMetricStatuses,
+      state.energyProfiles,
+      state.entries,
+      state.group,
+      state.gymSessions,
+      state.metrics,
+      state.photos,
+      state.settings,
+      state.trackedGoalPeriods,
+    ],
+  );
+  const rankingRows = useMemo(() => {
+    void rankingInputs;
+    const rows = new Map<string, ReturnType<typeof leaderboardRows>>();
+    if (!rankingsReady) return rows;
+    for (const id of selected) {
+      const metric = tracked.find((item) => item.id === id);
+      rows.set(
+        id,
+        leaderboardRows(
+          rankingStateRef.current,
+          metric ? [metric] : [],
+          dates,
+          rankingStateRef.current.currentUserId,
+          id === SCORE_ID,
+        ),
+      );
+    }
+    return rows;
+  }, [
+    dates,
+    rankingsReady,
+    selected,
+    rankingInputs,
+    tracked,
+  ]);
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
     if (next === "today" || next === "week" || next === "month")
@@ -197,13 +257,22 @@ export default function LeaderboardScreen() {
   const hiddenOptions = options.filter((item) => !selected.includes(item.id));
   useFocusEffect(
     useCallback(() => {
+      setRankingsReady(false);
+      let active = true;
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (active) setRankingsReady(true);
+      });
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         if (!editing) return false;
         setEditing(false);
         setShowPicker(false);
         return true;
       });
-      return () => subscription.remove();
+      return () => {
+        active = false;
+        task.cancel();
+        subscription.remove();
+      };
     }, [editing]),
   );
   return (
@@ -299,13 +368,7 @@ export default function LeaderboardScreen() {
       {selected.map((id, cardIndex) => {
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
-        const rows = leaderboardRows(
-          state,
-          metric ? [metric] : [],
-          dates,
-          state.currentUserId,
-          includeScore,
-        );
+        const rows = rankingRows.get(id) ?? [];
         return (
           <ReorderItem
             key={id}
@@ -383,6 +446,13 @@ export default function LeaderboardScreen() {
                 <Ionicons name="expand-outline" size={20} color={accent} />
               )}
             </Pressable>
+            {!rankingsReady ? (
+              <View style={[styles.loadingRankings, { borderTopColor: colors.border }]}>
+                <Text style={[styles.detail, { color: colors.muted }]}>
+                  Loading saved rankings…
+                </Text>
+              </View>
+            ) : null}
             {rows.slice(0, 4).map((row, index) => {
               const result = row.metrics[0]?.result;
               const value = includeScore
@@ -399,6 +469,11 @@ export default function LeaderboardScreen() {
                   : row.member.color;
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
+                !includeScore &&
+                result?.personalGoalKind === "at_least" &&
+                (result.averageDisplayProgress ?? 0) > 1
+                  ? `${Math.round(((result.averageDisplayProgress ?? 1) - 1) * 100)}% above personal goal`
+                  : undefined,
                 result && result.mode !== "private"
                   ? `${result.streak ?? 0}d streak`
                   : undefined,
@@ -492,13 +567,14 @@ export default function LeaderboardScreen() {
                         progress={
                           includeScore
                             ? row.score / 100
-                            : Math.min(
-                                result?.averageDisplayProgress ??
-                                  row.score / 100,
-                                1,
-                              )
+                            : (result?.averageDisplayProgress ??
+                              row.score / 100)
                         }
                         color={resultColor}
+                        layered={
+                          !includeScore &&
+                          result?.personalGoalKind === "at_least"
+                        }
                       />
                     </View>
                     <Ionicons
@@ -813,6 +889,12 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
   title: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   max: { fontSize: 8, fontWeight: "900", padding: 7, borderRadius: 10 },
+  loadingRankings: {
+    minHeight: 45,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   row: {
     flexDirection: "row",
     alignItems: "center",

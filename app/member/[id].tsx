@@ -63,6 +63,8 @@ export default function MemberProfile() {
     metrics?: string;
   }>();
   const { state, updateSettings } = useApp();
+  const calculationStateRef = useRef(state);
+  calculationStateRef.current = state;
   const colors = useAppColors();
   const member =
     state.group.members.find((item) => item.id === params.id) ??
@@ -109,6 +111,17 @@ export default function MemberProfile() {
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
+  const [comparisonReady, setComparisonReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      if (active) setComparisonReady(true);
+    });
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, []);
   const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   const metrics = useMemo(
     () => available.filter((metric) => metricIds.includes(metric.id)),
@@ -122,7 +135,32 @@ export default function MemberProfile() {
         .filter(Boolean) as typeof groupMembers,
     [groupMembers, selectedIds],
   );
+  const comparisonInputs = useMemo(
+    () => ({
+      statuses: state.dailyMetricStatuses,
+      energyProfiles: state.energyProfiles,
+      entries: state.entries,
+      group: state.group,
+      gymSessions: state.gymSessions,
+      metrics: state.metrics,
+      photos: state.photos,
+      settings: state.settings,
+      trackedGoalPeriods: state.trackedGoalPeriods,
+    }),
+    [
+      state.dailyMetricStatuses,
+      state.energyProfiles,
+      state.entries,
+      state.group,
+      state.gymSessions,
+      state.metrics,
+      state.photos,
+      state.settings,
+      state.trackedGoalPeriods,
+    ],
+  );
   const resultCache = useMemo(() => {
+    void comparisonInputs;
     const cache = new Map<
       string,
       {
@@ -132,83 +170,126 @@ export default function MemberProfile() {
         overallLabel: string;
       }
     >();
+    if (!comparisonReady) return cache;
+    const calculationState = calculationStateRef.current;
     for (const metric of metrics)
       for (const person of people) {
         const key = `${metric.id}:${person.id}`;
         cache.set(key, {
           range: periodMetricResult(
-            state,
+            calculationState,
             metric,
             person.id,
-            state.currentUserId,
+            calculationState.currentUserId,
             dates,
           ),
           seven: averageAtDate(
-            state,
+            calculationState,
             metric,
             person.id,
-            state.currentUserId,
+            calculationState.currentUserId,
             anchor,
             7,
           ),
           thirty: averageAtDate(
-            state,
+            calculationState,
             metric,
             person.id,
-            state.currentUserId,
+            calculationState.currentUserId,
             anchor,
             30,
           ),
           overallLabel:
-            person.id === state.currentUserId
+            person.id === calculationState.currentUserId
               ? formatMetricValue(
                   metric,
-                  metricOverallAverage(state, metric, person.id, anchor),
+                  metricOverallAverage(
+                    calculationState,
+                    metric,
+                    person.id,
+                    anchor,
+                  ),
                 )
               : statValue(
                   periodMetricResult(
-                    state,
+                    calculationState,
                     metric,
                     person.id,
-                    state.currentUserId,
+                    calculationState.currentUserId,
                     overallDates(metric.activeFrom, anchor),
                   ),
                 ),
         });
       }
     return cache;
-  }, [anchor, dates, metrics, people, state]);
+  }, [
+    anchor,
+    comparisonReady,
+    dates,
+    metrics,
+    people,
+    comparisonInputs,
+  ]);
   const stats = useMemo(
-    () =>
-      comparisonStats(
-        state,
-        member.id,
-        state.currentUserId,
-        dates,
-        metrics.slice(0, 1),
-      ),
-    [dates, member.id, metrics, state],
+    () => {
+      void comparisonInputs;
+      const calculationState = calculationStateRef.current;
+      return comparisonReady
+        ? comparisonStats(
+            calculationState,
+            member.id,
+            calculationState.currentUserId,
+            dates,
+            metrics.slice(0, 1),
+          )
+        : {
+            bestDay: "—",
+            bestScore: 0,
+            daysWon: 0,
+            longestWinStreak: 0,
+            eligibleDays: 0,
+          };
+    },
+    [
+      comparisonReady,
+      dates,
+      member.id,
+      metrics,
+      comparisonInputs,
+    ],
   );
   const headToHeads = useMemo(
-    () =>
-      metrics
-        .map((metric) => ({
-          metric,
-          stats: metricHeadToHeadStats(
-            state,
-            metric,
-            member.id,
-            state.currentUserId,
-            dates,
-          ),
-        }))
-        .filter((item) => item.stats),
-    [dates, member.id, metrics, state],
+    () => {
+      void comparisonInputs;
+      const calculationState = calculationStateRef.current;
+      return comparisonReady
+        ? metrics
+            .map((metric) => ({
+              metric,
+              stats: metricHeadToHeadStats(
+                calculationState,
+                metric,
+                member.id,
+                calculationState.currentUserId,
+                dates,
+              ),
+            }))
+            .filter((item) => item.stats)
+        : [];
+    },
+    [
+      comparisonReady,
+      dates,
+      member.id,
+      metrics,
+      comparisonInputs,
+    ],
   );
   const periodBadge =
     period === "week" ? "week" : period === "month" ? "month" : "today";
   const [badges, setBadges] = useState<ReturnType<typeof buildBadges>>([]);
   useEffect(() => {
+    if (!comparisonReady) return;
     let active = true;
     const task = InteractionManager.runAfterInteractions(() => {
       if (!active) return;
@@ -223,7 +304,7 @@ export default function MemberProfile() {
       active = false;
       task.cancel();
     };
-  }, [anchor, member.id, periodBadge, state]);
+  }, [anchor, comparisonReady, member.id, periodBadge, state]);
   const showcase = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
   const displayedBadges = [...badges]
     .sort(
@@ -256,6 +337,34 @@ export default function MemberProfile() {
       },
     });
   }
+  if (!comparisonReady)
+    return (
+      <Screen>
+        <PageHeader
+          eyebrow="Friend comparison"
+          title={
+            member.id === state.currentUserId
+              ? "Your progress"
+              : memberDisplayName(state, member)
+          }
+          subtitle="Opening saved comparison…"
+          showMenu={false}
+          action={
+            <IconButton
+              icon="close"
+              label="Close"
+              onPress={() => router.back()}
+            />
+          }
+        />
+        <Card style={styles.headEmpty}>
+          <Ionicons name="analytics-outline" size={20} color={colors.primary} />
+          <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
+            Loading the latest locally cached stats…
+          </Text>
+        </Card>
+      </Screen>
+    );
   return (
     <Screen>
       <PageHeader
@@ -530,12 +639,14 @@ export default function MemberProfile() {
                           progress={
                             result.mode === "private"
                               ? 0
-                              : Math.min(
-                                  goalProgress(metric, result.average),
-                                  1,
-                                )
+                              : (result.averageDisplayProgress ??
+                                goalProgress(metric, result.average))
                           }
                           color={person.color}
+                          layered={
+                            result.personalGoalKind === "at_least" ||
+                            metric.goal.kind === "at_least"
+                          }
                         />
                       </View>
                     </View>

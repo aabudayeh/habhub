@@ -639,6 +639,7 @@ function DayTracker({
             <ProgressBar
               progress={goalProgress(metric, value, target)}
               color={historicGoal ? statusColor : metric.color}
+              layered={metric.goal.kind === "at_least"}
             />
           ) : null}
           {entries.map((entry) => (

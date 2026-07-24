@@ -547,7 +547,7 @@ export function displayGoalProgress(
   if (metric.goalRange) return goalProgress(metric, value, targetOverride);
   if (metric.goal.kind === "complete") return value > 0 ? 1 : 0;
   const target = Math.max(Math.abs(targetOverride), 0.0001);
-  return Math.max(0, Math.min(2, value / target));
+  return Math.max(0, Math.min(3, value / target));
 }
 
 export function goalReached(

@@ -444,23 +444,56 @@ export function Avatar({
 export function ProgressBar({
   progress,
   color,
+  layered = false,
+  successColor = palette.lime,
 }: {
   progress: number;
   color?: string;
+  /** Keeps a completed "at least" goal full while extra target multiples refill in new shades. */
+  layered?: boolean;
+  successColor?: string;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const safeProgress = Math.max(0, Number.isFinite(progress) ? progress : 0);
+  const completed = layered && safeProgress >= 1;
+  const overflow = completed
+    ? Math.min(1, Math.max(0, safeProgress - 1))
+    : 0;
+  const secondOverflow =
+    completed && safeProgress >= 2
+      ? Math.min(1, Math.max(0, safeProgress - 2))
+      : 0;
   return (
     <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
       <View
         style={[
           styles.progressFill,
           {
-            backgroundColor: color ?? accent,
-            width: `${Math.min(Math.max(progress, 0), 1) * 100}%`,
+            backgroundColor: completed ? successColor : (color ?? accent),
+            width: `${Math.min(safeProgress, 1) * 100}%`,
           },
         ]}
       />
+      {overflow > 0 ? (
+        <View
+          style={[
+            styles.progressLayer,
+            { backgroundColor: "#66C95E", width: `${overflow * 100}%` },
+          ]}
+        />
+      ) : null}
+      {secondOverflow > 0 ? (
+        <View
+          style={[
+            styles.progressLayer,
+            {
+              backgroundColor: "#2F9E62",
+              width: `${secondOverflow * 100}%`,
+            },
+          ]}
+        />
+      ) : null}
     </View>
   );
 }
@@ -600,10 +633,18 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: palette.white, fontWeight: "800" },
   progressTrack: {
+    position: "relative",
     height: 7,
     borderRadius: 4,
     backgroundColor: "#EBEFEB",
     overflow: "hidden",
   },
   progressFill: { height: 7, borderRadius: 4 },
+  progressLayer: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 4,
+  },
 });

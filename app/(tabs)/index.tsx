@@ -1148,15 +1148,23 @@ function TrackerRow({
             entry.userId === state.currentUserId && entry.localDate === day,
         )
       : undefined;
-  const content = trackerCopy(
-    state,
-    item,
-    day,
-    value,
-    target,
-    applicable,
-    weekly,
-  );
+  const content = isBloodPressure
+    ? {
+        primary:
+          value > 0 || diastolicValue > 0
+            ? `${value > 0 ? Math.round(value) : "—"}/${diastolicValue > 0 ? Math.round(diastolicValue) : "—"} mmHg`
+            : "No reading today",
+        secondary: "",
+      }
+    : trackerCopy(
+        state,
+        item,
+        day,
+        value,
+        target,
+        applicable,
+        weekly,
+      );
   return (
     <Animated.View style={{
       transform: [
@@ -1289,12 +1297,14 @@ function TrackerRow({
         >
           {content.primary}
         </Text>
-        <Text
-          style={[styles.secondary, { color: colors.muted }]}
-          numberOfLines={1}
-        >
-          {content.secondary}
-        </Text>
+        {content.secondary ? (
+          <Text
+            style={[styles.secondary, { color: colors.muted }]}
+            numberOfLines={1}
+          >
+            {content.secondary}
+          </Text>
+        ) : null}
       </View>
       {item.goalEnabled !== false && applicable ? (
         <View style={diastolic ? styles.bpProgress : styles.progress}>
@@ -1304,11 +1314,13 @@ function TrackerRow({
               progress={todayProgress(state, item, value, target)}
               transition={gold}
               trackColor={colors.border}
+              layered={item.goal.kind === "at_least"}
             />
           ) : (
             <ProgressBar
               progress={todayProgress(state, item, value, target)}
               color={todayProgressColor(state, item, value, target, met)}
+              layered={item.goal.kind === "at_least"}
             />
           )}
           {diastolic ? (
@@ -1369,15 +1381,33 @@ function GoalProgressBar({
   progress,
   transition,
   trackColor,
+  layered = false,
 }: {
   progress: number;
   transition: Animated.Value;
   trackColor: string;
+  layered?: boolean;
 }) {
   const color = transition.interpolate({
     inputRange: [0, 1],
     outputRange: [palette.lime, "#FFD166"],
   });
+  const secondColor = transition.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#66C95E", "#E2B83F"],
+  });
+  const thirdColor = transition.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["#2F9E62", "#C98E24"],
+  });
+  const safeProgress = Math.max(0, Number.isFinite(progress) ? progress : 0);
+  const overflow = layered
+    ? Math.min(1, Math.max(0, safeProgress - 1))
+    : 0;
+  const secondOverflow =
+    layered && safeProgress >= 2
+      ? Math.min(1, Math.max(0, safeProgress - 2))
+      : 0;
   return (
     <View style={[styles.goalProgressTrack, { backgroundColor: trackColor }]}>
       <Animated.View
@@ -1385,10 +1415,32 @@ function GoalProgressBar({
           styles.goalProgressFill,
           {
             backgroundColor: color,
-            width: `${Math.min(1, Math.max(0, progress)) * 100}%`,
+            width: `${Math.min(1, safeProgress) * 100}%`,
           },
         ]}
       />
+      {overflow > 0 ? (
+        <Animated.View
+          style={[
+            styles.goalProgressLayer,
+            {
+              backgroundColor: secondColor,
+              width: `${overflow * 100}%`,
+            },
+          ]}
+        />
+      ) : null}
+      {secondOverflow > 0 ? (
+        <Animated.View
+          style={[
+            styles.goalProgressLayer,
+            {
+              backgroundColor: thirdColor,
+              width: `${secondOverflow * 100}%`,
+            },
+          ]}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1409,10 +1461,6 @@ function todayProgress(
   if (item.goal.kind === "at_most") {
     if (item.id === "food" && direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
     return Math.min(1, Math.abs(target - value) / Math.max(target, 1));
-  }
-  if (item.id === "deficit") {
-    const ratio = Math.max(0, value) / Math.max(Math.abs(target), 1);
-    return ratio <= 1 ? ratio : Math.min(1, ratio - 1);
   }
   return goalProgress(item, value, target);
 }
@@ -1521,6 +1569,8 @@ function trackerCopy(
         ? "Tracking only"
         : item.goal.kind === "at_most"
           ? `${Math.max(0, target - value).toFixed(item.unit === "L" ? 1 : 0)} ${item.unit} remaining`
+          : item.goal.kind === "at_least" && value > target
+            ? `${formatMetricValue(item, value - target)} above goal`
           : `Goal ${formatMetricValue(item, target)}`,
   };
 }
@@ -1744,11 +1794,19 @@ const styles = StyleSheet.create({
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
   progress: { width: 108 },
   goalProgressTrack: {
+    position: "relative",
     height: 6,
     borderRadius: 999,
     overflow: "hidden",
   },
   goalProgressFill: { height: "100%", borderRadius: 999 },
+  goalProgressLayer: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 999,
+  },
   bpProgress: { width: 108, gap: 2 },
   bpLabel: { fontSize: 6, fontWeight: "900" },
   remove: {

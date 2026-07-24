@@ -4,8 +4,10 @@ import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  AppState as NativeAppState,
   BackHandler,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -41,11 +43,12 @@ import {
   trainingVolumeKg,
 } from "@/src/domain/gym";
 import {
+  consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
   showWorkoutTimerNotification,
-  WORKOUT_TIMER_FINISH,
   WORKOUT_TIMER_NEXT,
   WORKOUT_TIMER_PAUSE,
+  WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -87,6 +90,91 @@ function timerPhaseElapsed(timer: WorkoutTimer, now: number) {
 
 function timerSessionElapsed(timer: WorkoutTimer, now: number) {
   return timer.completedElapsedSeconds + timerPhaseElapsed(timer, now);
+}
+
+function workoutNotificationSteps(
+  exercises: GymExercise[],
+  timer: WorkoutTimer,
+): WorkoutNotificationStep[] {
+  const steps: WorkoutNotificationStep[] = [];
+  const currentExerciseIndex = exercises.findIndex(
+    (exercise) => exercise.id === timer.exerciseId,
+  );
+  if (currentExerciseIndex < 0) return steps;
+  const runningPhase =
+    timer.phase === "paused" ? (timer.resumePhase ?? "work") : timer.phase;
+  const addWork = (exercise: GymExercise, set: GymSet) => {
+    const setIndex = exercise.sets.findIndex((item) => item.id === set.id);
+    steps.push({
+      title: `${exercise.name} · Set ${setIndex + 1}/${exercise.sets.length}`,
+      body: `${set.weightKg || 0} kg × ${set.reps} reps · use Next when the set is done`,
+      phase: "work",
+    });
+  };
+  const appendExercise = (
+    exercise: GymExercise,
+    pendingSets: GymSet[],
+    betweenExercises: boolean,
+  ) => {
+    if (!pendingSets.length) return;
+    if (betweenExercises)
+      steps.push({
+        title: `Between exercises · next ${exercise.name}`,
+        body: "REST · use Next when you are ready to start",
+        phase: "rest",
+      });
+    pendingSets.forEach((set, index) => {
+      if (index > 0)
+        steps.push({
+          title: `${exercise.name} · set rest`,
+          body: `REST · next is set ${exercise.sets.findIndex((item) => item.id === set.id) + 1}`,
+          phase: "rest",
+        });
+      addWork(exercise, set);
+    });
+  };
+
+  const currentExercise = exercises[currentExerciseIndex];
+  const currentSetIndex = timer.setId
+    ? currentExercise.sets.findIndex((set) => set.id === timer.setId)
+    : -1;
+  if (runningPhase === "work" && currentSetIndex >= 0) {
+    addWork(currentExercise, currentExercise.sets[currentSetIndex]);
+    appendExercise(
+      currentExercise,
+      currentExercise.sets
+        .slice(currentSetIndex + 1)
+        .filter((set) => !set.completed),
+      false,
+    );
+  } else if (runningPhase === "set_rest") {
+    const pending = currentExercise.sets
+      .slice(Math.max(0, currentSetIndex + 1))
+      .filter((set) => !set.completed);
+    if (pending.length) {
+      const nextSet = pending[0];
+      steps.push({
+        title: `${currentExercise.name} · set rest`,
+        body: `REST · next is set ${currentExercise.sets.findIndex((item) => item.id === nextSet.id) + 1}`,
+        phase: "rest",
+      });
+      addWork(currentExercise, nextSet);
+      appendExercise(currentExercise, pending.slice(1), false);
+    }
+  }
+  exercises.slice(currentExerciseIndex + 1).forEach((exercise) => {
+    appendExercise(
+      exercise,
+      exercise.sets.filter((set) => !set.completed),
+      true,
+    );
+  });
+  if (steps.length)
+    steps[steps.length - 1] = {
+      ...steps[steps.length - 1],
+      body: `${steps[steps.length - 1].body} · finish the workout in MetricRally`,
+    };
+  return steps;
 }
 
 function blankSet(reps = 10, weightKg = 0): GymSet {
@@ -165,9 +253,20 @@ export default function GymScreen() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
   const [timerNow, setTimerNow] = useState(Date.now());
+  const [appActivity, setAppActivity] = useState(
+    NativeAppState.currentState,
+  );
   const restAlerted = useRef(false);
   const handledTimerResponse = useRef<string | null>(null);
-  const timerActionRef = useRef<(action: string) => void>(() => undefined);
+  const timerActionRef = useRef<
+    (action: string, occurredAt?: number) => void
+  >(() => undefined);
+  const notificationPayloadRef = useRef<{
+    title: string;
+    body: string;
+    phase: "work" | "rest" | "paused";
+    steps: WorkoutNotificationStep[];
+  } | null>(null);
   const initializedDate = useRef<string | null>(null);
 
   const personalPlans = useMemo(
@@ -452,6 +551,7 @@ export default function GymScreen() {
   useEffect(() => {
     if (
       !workoutTimer ||
+      appActivity === "active" ||
       !["set_rest", "exercise_rest"].includes(workoutTimer.phase) ||
       restAlerted.current ||
       timerPhaseSeconds <= recommendedRestSeconds(intensity) + 60 ||
@@ -473,6 +573,7 @@ export default function GymScreen() {
       })
       .catch(() => undefined);
   }, [
+    appActivity,
     intensity,
     state.settings.notifications.gymRestAlerts,
     timerPhaseSeconds,
@@ -482,6 +583,14 @@ export default function GymScreen() {
   useEffect(() => {
     const handle = (response: Notifications.NotificationResponse) => {
       if (response.notification.request.content.data?.workoutTimer !== true)
+        return;
+      // Android notification actions are handled by the headless task and
+      // replayed once on resume; handling them here as well would skip twice.
+      if (
+        Platform.OS === "android" &&
+        (response.actionIdentifier === WORKOUT_TIMER_NEXT ||
+          response.actionIdentifier === WORKOUT_TIMER_PAUSE)
+      )
         return;
       const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
       if (handledTimerResponse.current === responseKey) return;
@@ -559,9 +668,9 @@ export default function GymScreen() {
     scrollToWorkoutTarget(target.exercise.id, target.set.id);
   }
 
-  function pauseOrResumeWorkout() {
+  function pauseOrResumeWorkout(occurredAt = Date.now()) {
     if (!workoutTimer) return;
-    const now = Date.now();
+    const now = occurredAt;
     setTimerNow(now);
     if (workoutTimer.phase === "paused") {
       setWorkoutTimer({
@@ -769,7 +878,7 @@ export default function GymScreen() {
     );
   }
 
-  function advanceWorkoutTimer() {
+  function advanceWorkoutTimer(occurredAt = Date.now()) {
     if (!workoutTimer) return;
     if (workoutTimer.phase === "paused") {
       pauseOrResumeWorkout();
@@ -1074,13 +1183,67 @@ export default function GymScreen() {
             : firstPendingTarget(exercises, timerExerciseIndex + 1)
               ? "Finish exercise"
               : "Finish workout";
-  timerActionRef.current = (action) => {
-    if (action === WORKOUT_TIMER_PAUSE) pauseOrResumeWorkout();
-    else if (action === WORKOUT_TIMER_FINISH) finishTimedWorkout();
-    else if (action === WORKOUT_TIMER_NEXT) advanceWorkoutTimer();
+  const notificationSteps = useMemo(
+    () =>
+      workoutTimer ? workoutNotificationSteps(exercises, workoutTimer) : [],
+    [exercises, workoutTimer],
+  );
+  timerActionRef.current = (action, occurredAt) => {
+    if (action === WORKOUT_TIMER_PAUSE)
+      pauseOrResumeWorkout(occurredAt ?? Date.now());
+    else if (action === WORKOUT_TIMER_NEXT)
+      advanceWorkoutTimer(occurredAt ?? Date.now());
   };
+  notificationPayloadRef.current = workoutTimer
+    ? {
+        title: timerHeading,
+        body: `${formatGymDuration(timerPhaseSeconds)} elapsed · ${timerNextLabel}`,
+        phase:
+          workoutTimer.phase === "work"
+            ? "work"
+            : workoutTimer.phase === "paused"
+              ? "paused"
+              : "rest",
+        steps: notificationSteps,
+      }
+    : null;
+
+  useEffect(() => {
+    const replayQueuedActions = async () => {
+      const actions = await consumeWorkoutTimerActions();
+      actions.forEach((item, index) => {
+        setTimeout(
+          () => timerActionRef.current(item.action, item.occurredAt),
+          index * 220,
+        );
+      });
+    };
+    const handleActivity = (next: typeof appActivity) => {
+      setAppActivity(next);
+      if (next === "active") {
+        void dismissWorkoutTimerNotification();
+        void replayQueuedActions();
+        return;
+      }
+      const payload = notificationPayloadRef.current;
+      if (payload)
+        void showWorkoutTimerNotification(payload).catch(() => undefined);
+    };
+    if (NativeAppState.currentState === "active")
+      void replayQueuedActions();
+    const subscription = NativeAppState.addEventListener(
+      "change",
+      handleActivity,
+    );
+    return () => subscription.remove();
+  }, []);
+
   useEffect(() => {
     if (!workoutTimer) {
+      void dismissWorkoutTimerNotification(true);
+      return;
+    }
+    if (appActivity === "active") {
       void dismissWorkoutTimerNotification();
       return;
     }
@@ -1093,8 +1256,11 @@ export default function GymScreen() {
           : workoutTimer.phase === "paused"
             ? "paused"
             : "rest",
+      steps: notificationSteps,
     }).catch(() => undefined);
   }, [
+    appActivity,
+    notificationSteps,
     timerHeading,
     timerNextLabel,
     workoutTimer?.exerciseId,
@@ -1126,7 +1292,7 @@ export default function GymScreen() {
         accessibilityLabel={
           workoutTimer.phase === "paused" ? "Resume workout" : "Pause workout"
         }
-        onPress={pauseOrResumeWorkout}
+        onPress={() => pauseOrResumeWorkout()}
         style={[styles.timerControl, { borderColor: timerColor }]}
       >
         <Ionicons
@@ -1136,7 +1302,27 @@ export default function GymScreen() {
         />
       </Pressable>
       <Pressable
-        onPress={advanceWorkoutTimer}
+        accessibilityLabel="Finish workout now"
+        onPress={() =>
+          Alert.alert(
+            "Finish workout now?",
+            "Completed sets and timing so far will be saved.",
+            [
+              { text: "Keep training", style: "cancel" },
+              {
+                text: "Finish workout",
+                style: "destructive",
+                onPress: finishTimedWorkout,
+              },
+            ],
+          )
+        }
+        style={[styles.timerControl, { borderColor: palette.red }]}
+      >
+        <Ionicons name="stop" size={16} color={palette.red} />
+      </Pressable>
+      <Pressable
+        onPress={() => advanceWorkoutTimer()}
         style={[styles.timerNext, { backgroundColor: timerColor }]}
       >
         <Text style={styles.timerNextText}>{timerNextLabel}</Text>
