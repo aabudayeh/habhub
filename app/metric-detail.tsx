@@ -47,6 +47,11 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 import { isVacationDate } from "@/src/domain/vacation";
+import {
+  completedGymSets,
+  gymSessionMetricValue,
+  trainingVolumeKg,
+} from "@/src/domain/gym";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -156,6 +161,20 @@ export default function TrackerDetail() {
         b.localDate.localeCompare(a.localDate) ||
         b.recordedAt.localeCompare(a.recordedAt),
     );
+  const gymSourceSessions = tracker.gymMapping
+    ? (state.gymSessions ?? [])
+        .filter(
+          (session) =>
+            session.userId === state.currentUserId &&
+            dates.includes(session.localDate) &&
+            gymSessionMetricValue(session, tracker.gymMapping!) > 0,
+        )
+        .sort(
+          (a, b) =>
+            b.localDate.localeCompare(a.localDate) ||
+            b.recordedAt.localeCompare(a.recordedAt),
+        )
+    : [];
   const pairedBloodPressure = (entry: (typeof entries)[number]) => {
     if (!isBloodPressure) return null;
     const diastolicId = state.metrics.find(
@@ -865,6 +884,41 @@ export default function TrackerDetail() {
         ) : null}
       </View>
       <View style={styles.entries}>
+        {gymSourceSessions.map((session) => {
+          const contribution = gymSessionMetricValue(
+            session,
+            tracker.gymMapping!,
+          );
+          return (
+            <Card key={`gym:${session.id}`} style={styles.entry}>
+              <View style={styles.entryTop}>
+                <View style={styles.grow}>
+                  <Text style={[styles.entryTitle, { color: colors.ink }]}>
+                    {session.name || "Gym workout"}
+                  </Text>
+                  <Text style={[styles.time, { color: colors.faint }]}>
+                    {friendlyDate(session.localDate)} Â·{" "}
+                    {new Date(session.recordedAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </Text>
+                </View>
+                <Text style={[styles.entryValue, { color: tracker.color }]}>
+                  {formatMetricValue(tracker, contribution)}
+                </Text>
+              </View>
+              <Text style={[styles.note, { color: colors.muted }]}>
+                {completedGymSets(session.exercises)} completed sets Â·{" "}
+                {Math.round(trainingVolumeKg(session.exercises)).toLocaleString()}{" "}
+                kg volume Â· {Math.round(session.durationMinutes)} min
+              </Text>
+              <Text style={[styles.note, { color: colors.faint }]}>
+                {session.exercises.map((exercise) => exercise.name).join(", ")}
+              </Text>
+            </Card>
+          );
+        })}
         {entries.map((entry, index) => {
           const firstOnDate =
             index === 0 || entries[index - 1].localDate !== entry.localDate;
@@ -1058,7 +1112,7 @@ export default function TrackerDetail() {
           </Pressable>
         ))}
       </View>
-      {!entries.length && !dayPhotos.length ? (
+      {!entries.length && !dayPhotos.length && !gymSourceSessions.length ? (
         <Card>
           <Text style={[styles.empty, { color: colors.muted }]}>
             {tracker.dataType === "calculated"

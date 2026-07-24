@@ -231,6 +231,93 @@ export async function loadCloudMessages(
   );
 }
 
+/** Refresh leaderboard values without reloading members, chat, or photos. */
+export async function loadCloudGroupActivity(
+  state: AppState,
+  groupId: string,
+): Promise<Pick<AppState, "entries" | "dailyMetricStatuses">> {
+  const client = requireCloud();
+  const { data: metricRows, error: metricError } = await client
+    .from("metric_definitions")
+    .select("id, slug")
+    .eq("group_id", groupId);
+  if (metricError) throw metricError;
+  const metricIds = (metricRows ?? []).map((row) => row.id);
+  const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
+  const [entryResult, statusResult] = await Promise.all([
+    metricIds.length
+      ? client
+          .from("metric_entries")
+          .select("*")
+          .in("metric_id", metricIds)
+          .order("recorded_at")
+      : Promise.resolve({ data: [], error: null }),
+    client.from("daily_metric_status").select("*").eq("group_id", groupId),
+  ]);
+  if (entryResult.error) throw entryResult.error;
+  if (statusResult.error) throw statusResult.error;
+  const urls = await signedUrls(
+    (entryResult.data ?? []).map((entry) => entry.image_path).filter(Boolean),
+  );
+  const remoteEntries: MetricEntry[] = (entryResult.data ?? []).map((entry) => ({
+    id: entry.client_generated_id,
+    metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
+    userId: entry.user_id,
+    value: entry.value as number | boolean | string,
+    localDate: entry.local_date,
+    recordedAt: entry.recorded_at,
+    visibility: entry.visibility,
+    source: entry.source,
+    label: entry.label ?? undefined,
+    note: entry.note ?? undefined,
+    nutrition: entry.nutrition ?? undefined,
+    sourceProvider: entry.source_provider ?? undefined,
+    sourceRecordId: entry.source_record_id ?? undefined,
+    sourceOrigin: entry.source_origin ?? undefined,
+    sourceUpdatedAt: entry.source_updated_at ?? undefined,
+    imageStoragePath: entry.image_path ?? undefined,
+    imageUri: entry.image_path
+      ? (urls.get(entry.image_path) ?? undefined)
+      : undefined,
+  }));
+  const entriesById = new Map(remoteEntries.map((entry) => [entry.id, entry]));
+  state.entries
+    .filter((entry) => entry.userId === state.currentUserId)
+    .forEach((entry) => {
+      if (!entriesById.has(entry.id)) entriesById.set(entry.id, entry);
+    });
+  const dailyMetricStatuses: DailyMetricStatus[] = (
+    statusResult.data ?? []
+  ).map((status) => ({
+    groupId,
+    metricId: slugById.get(status.metric_id) ?? status.metric_id,
+    userId: status.user_id,
+    localDate: status.local_date,
+    goalReached: Boolean(status.goal_reached),
+    scoreContribution: Number(status.score_contribution ?? 0),
+    goalProgress:
+      status.goal_progress === null || status.goal_progress === undefined
+        ? undefined
+        : Number(status.goal_progress),
+    goalKind: status.goal_kind ?? undefined,
+    goalEligible:
+      status.goal_eligible === null || status.goal_eligible === undefined
+        ? undefined
+        : Boolean(status.goal_eligible),
+    exactValue:
+      status.exact_value === null || status.exact_value === undefined
+        ? undefined
+        : Number(status.exact_value),
+    syncedAt: status.updated_at ?? undefined,
+  }));
+  return {
+    entries: [...entriesById.values()].sort((a, b) =>
+      a.recordedAt.localeCompare(b.recordedAt),
+    ),
+    dailyMetricStatuses,
+  };
+}
+
 async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
   const client = requireCloud();
   const { data: existing, error: existingError } = await client
@@ -823,6 +910,77 @@ export async function loadCloudWorkspace(
   };
 }
 
+/** Fast chat-only upload used before the heavier account/workspace backup. */
+export async function pushCloudMessagesNow(state: AppState) {
+  if (!isCloudGroupId(state.group.id)) return;
+  const client = requireCloud();
+  const sender = state.group.members.find(
+    (member) => member.id === state.currentUserId,
+  );
+  if (!sender) return;
+  const owned = state.messages
+    .filter((message) => message.senderId === state.currentUserId)
+    .slice(-30);
+  if (!owned.length) return;
+  const current = await client
+    .from("messages")
+    .select("client_generated_id, push_dispatched_at")
+    .eq("group_id", state.group.id)
+    .eq("sender_id", state.currentUserId)
+    .in(
+      "client_generated_id",
+      owned.map((message) => message.id),
+    );
+  if (current.error) throw current.error;
+  const rows = new Map(
+    (current.data ?? []).map((row) => [row.client_generated_id, row]),
+  );
+  const pending = owned.filter(
+    (message) =>
+      !rows.has(message.id) || !rows.get(message.id)?.push_dispatched_at,
+  );
+  if (!pending.length) return;
+  const upsert = await client.from("messages").upsert(
+    pending.map((message) => ({
+      group_id: state.group.id,
+      sender_id: state.currentUserId,
+      client_generated_id: message.id,
+      kind: message.kind,
+      content: message.text,
+      conversation_id: message.conversationId ?? `group:${state.group.id}`,
+      recipient_id: message.recipientId ?? null,
+      image_path: message.imageStoragePath ?? null,
+      metadata: {},
+      created_at: message.createdAt,
+    })),
+    { onConflict: "sender_id,client_generated_id" },
+  );
+  if (upsert.error) throw upsert.error;
+  await Promise.all(
+    pending.map(async (message) => {
+      const result = await client.functions.invoke("send-push", {
+        body: {
+          eventKey: `message:${state.group.id}:${message.id}`,
+          clientMessageId: message.id,
+          groupId: state.group.id,
+          category: "chat",
+          recipientId: message.recipientId,
+          title: message.recipientId
+            ? `Private message from ${sender.name}`
+            : `${sender.name} in ${state.group.name}`,
+          body: message.text || "Sent an image",
+          data: {
+            route: "/chat",
+            conversationId:
+              message.conversationId ?? `group:${state.group.id}`,
+          },
+        },
+      });
+      if (result.error) throw result.error;
+    }),
+  );
+}
+
 export async function pushCloudWorkspace(state: AppState) {
   if (!isCloudGroupId(state.group.id)) return;
   const client = requireCloud();
@@ -1134,11 +1292,12 @@ export async function pushCloudWorkspace(state: AppState) {
   );
   const currentMessageRows = await client
     .from("messages")
-    .select("client_generated_id")
+    .select("client_generated_id, push_dispatched_at")
     .eq("group_id", state.group.id)
     .eq("sender_id", state.currentUserId);
   let legacyMessageKeys = new Set<string>();
   let oldMessageIds = new Set<string>();
+  let pendingPushIds = new Set<string>();
   let legacyMessages = false;
   if (currentMessageRows.error) {
     if (!/client_generated_id|column|schema cache/i.test(currentMessageRows.error.message))
@@ -1160,6 +1319,11 @@ export async function pushCloudWorkspace(state: AppState) {
       (currentMessageRows.data ?? []).map(
         (message) => message.client_generated_id,
       ),
+    );
+    pendingPushIds = new Set(
+      (currentMessageRows.data ?? [])
+        .filter((message) => !message.push_dispatched_at)
+        .map((message) => message.client_generated_id),
     );
   }
   const newMessages = ownedMessages.filter((message) =>
@@ -1211,11 +1375,19 @@ export async function pushCloudWorkspace(state: AppState) {
       if (legacyInsert.error) throw legacyInsert.error;
     }
   }
-  await Promise.allSettled(
-    newMessages.map((message) =>
-      client.functions.invoke("send-push", {
+  const pushCandidates = legacyMessages
+    ? newMessages
+    : ownedMessages.filter(
+        (message) =>
+          newMessages.some((candidate) => candidate.id === message.id) ||
+          pendingPushIds.has(message.id),
+      );
+  const pushResults = await Promise.all(
+    pushCandidates.map(async (message) => {
+      const result = await client.functions.invoke("send-push", {
         body: {
           eventKey: `message:${state.group.id}:${message.id}`,
+          clientMessageId: message.id,
           groupId: state.group.id,
           category: "chat",
           recipientId: message.recipientId,
@@ -1228,9 +1400,12 @@ export async function pushCloudWorkspace(state: AppState) {
             conversationId: message.conversationId ?? `group:${state.group.id}`,
           },
         },
-      }),
-    ),
+      });
+      if (result.error) throw result.error;
+      return result.data;
+    }),
   );
+  void pushResults;
 
   const ownedPhotos = state.photos.filter(
     (photo) => photo.userId === state.currentUserId && photo.storagePath,

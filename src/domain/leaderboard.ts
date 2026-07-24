@@ -21,12 +21,18 @@ import {
 } from "@/src/domain/metrics";
 import { currentStreakWithRest } from "@/src/domain/streaks";
 import { AppState, GoalKind, Member, MetricDefinition } from "@/src/types";
+import {
+  entriesForDay,
+  photosForDay,
+  statusForDay,
+} from "@/src/domain/dataIndex";
 
 export type LeaderboardPeriod =
   | "today"
   | "yesterday"
   | "week"
   | "month"
+  | "overall"
   | "custom";
 
 export function periodDates(
@@ -38,6 +44,7 @@ export function periodDates(
   if (period === "week") return dateRangeEnding(anchorDate, 7);
   if (period === "month")
     return monthDateRange(anchorDate).filter((date) => date <= anchorDate);
+  if (period === "overall") return dateRangeEnding(anchorDate, 730);
   return [anchorDate];
 }
 
@@ -53,6 +60,7 @@ export function periodTitle(
       month: "long",
       year: "numeric",
     }).format(new Date(`${anchorDate}T12:00:00`));
+  if (period === "overall") return "All time";
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
@@ -104,14 +112,14 @@ function metGoalOnDate(
   const status =
     userId === state.currentUserId
       ? undefined
-      : state.dailyMetricStatuses?.find(
-          (item) =>
-            item.groupId === state.group.id &&
-            item.metricId === metric.id &&
-            item.userId === userId &&
-            item.localDate === date,
+      : statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          metric.id,
+          userId,
+          date,
         );
-  if (status) return status.goalReached;
+  if (status) return sharedStatusGoalReached(status, metric);
   const goalMetric =
     userId === state.currentUserId
       ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
@@ -124,6 +132,27 @@ function metGoalOnDate(
       result.value,
       effectiveGoalTarget(state, goalMetric, userId, date),
     );
+  return false;
+}
+
+function sharedStatusGoalReached(
+  status: NonNullable<AppState["dailyMetricStatuses"]>[number],
+  metric: MetricDefinition,
+) {
+  if (status.goalReached) return true;
+  // Older/stale clients occasionally uploaded `goal_reached=false` while the
+  // exact at-least progress was already complete. The normalized personal
+  // progress lets every viewer recover the correct result without learning
+  // the member's private target.
+  const kind = status.goalKind ?? metric.goal.kind;
+  if (kind === "at_least" && (status.goalProgress ?? 0) >= 100) return true;
+  if (kind === "complete" && (status.exactValue ?? 0) > 0) return true;
+  if (
+    status.goalProgress === undefined &&
+    status.exactValue !== undefined &&
+    kind === "at_least"
+  )
+    return goalReached(metric, status.exactValue, metric.goal.target);
   return false;
 }
 
@@ -150,12 +179,12 @@ export function periodMetricResult(
       goalEligible:
         subjectUserId === state.currentUserId
           ? isMetricTrackedOnDate(state, goalMetric, date)
-          : (state.dailyMetricStatuses?.find(
-              (status) =>
-                status.groupId === state.group.id &&
-                status.metricId === metric.id &&
-                status.userId === subjectUserId &&
-                status.localDate === date,
+          : (statusForDay(
+              state.dailyMetricStatuses,
+              state.group.id,
+              metric.id,
+              subjectUserId,
+              date,
             )?.goalEligible ?? goalMetric.activeFrom <= date),
       result: sharedMetricResult(
         state,
@@ -175,12 +204,12 @@ export function periodMetricResult(
   const statusForDate = (date: string) =>
     subjectUserId === state.currentUserId
       ? undefined
-      : state.dailyMetricStatuses?.find(
-          (status) =>
-            status.groupId === state.group.id &&
-            status.metricId === metric.id &&
-            status.userId === subjectUserId &&
-            status.localDate === date,
+      : statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          metric.id,
+          subjectUserId,
+          date,
         );
   const progressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
@@ -262,7 +291,7 @@ export function periodMetricResult(
         )
       );
     const status = statusForDate(date);
-    if (status) return status.goalReached;
+    if (status) return sharedStatusGoalReached(status, goalMetric);
     return result.mode === "status"
       ? result.label === "Goal met"
       : result.mode === "exact" &&
@@ -297,11 +326,8 @@ export function periodMetricResult(
           dateRangeEnding(dateKey(), 90),
           (date) => metGoalOnDate(state, metric, subjectUserId, date),
         );
-  const matchingEntries = state.entries.filter(
-    (entry) =>
-      entry.userId === subjectUserId &&
-      entry.metricId === metric.id &&
-      results.some((r) => r.date === entry.localDate),
+  const matchingEntries = results.flatMap(({ date }) =>
+    entriesForDay(state.entries, metric.id, subjectUserId, date),
   );
   const latestEntry = matchingEntries.sort((a, b) =>
     b.recordedAt.localeCompare(a.recordedAt),
@@ -413,38 +439,25 @@ function hasPeriodData(
   date: string,
 ) {
   if (
-    state.dailyMetricStatuses?.some(
-      (status) =>
-        status.groupId === state.group.id &&
-        status.metricId === metric.id &&
-        status.userId === userId &&
-        status.localDate === date &&
-        status.exactValue !== undefined,
-    )
+    statusForDay(
+      state.dailyMetricStatuses,
+      state.group.id,
+      metric.id,
+      userId,
+      date,
+    )?.exactValue !== undefined
   )
     return true;
   if (metric.dataType === "boolean")
-    return state.entries.some(
-      (entry) =>
-        entry.userId === userId &&
-        entry.metricId === metric.id &&
-        entry.localDate === date,
-    );
+    return entriesForDay(state.entries, metric.id, userId, date).length > 0;
   if (metric.dataType === "photo")
-    return state.photos.some(
-      (photo) => photo.userId === userId && photo.localDate === date,
-    );
+    return photosForDay(state.photos, userId, date).length > 0;
   if (metric.gymMapping)
     return hasMetricData(state, metric, userId, date);
   if (metric.dataType === "calculated") {
     return metricApplicableOnDate(state, metric, userId, date);
   }
-  return state.entries.some(
-    (entry) =>
-      entry.userId === userId &&
-      entry.metricId === metric.id &&
-      entry.localDate === date,
-  );
+  return entriesForDay(state.entries, metric.id, userId, date).length > 0;
 }
 
 export type LeaderboardRow = {

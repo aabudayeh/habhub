@@ -122,7 +122,6 @@ export default function MemberProfile() {
       task.cancel();
     };
   }, []);
-  const dates = useMemo(() => periodDates(period, anchor), [anchor, period]);
   const metrics = useMemo(
     () => available.filter((metric) => metricIds.includes(metric.id)),
     [available, metricIds],
@@ -135,6 +134,46 @@ export default function MemberProfile() {
         .filter(Boolean) as typeof groupMembers,
     [groupMembers, selectedIds],
   );
+  const overallStart = useMemo(() => {
+    const ids = new Set(selectedIds);
+    const metricSet = new Set(metricIds);
+    const candidates = [
+      ...metrics.map((metric) => metric.activeFrom),
+      ...state.entries
+        .filter(
+          (entry) => ids.has(entry.userId) && metricSet.has(entry.metricId),
+        )
+        .map((entry) => entry.localDate),
+      ...(state.dailyMetricStatuses ?? [])
+        .filter(
+          (status) =>
+            status.groupId === state.group.id &&
+            ids.has(status.userId) &&
+            metricSet.has(status.metricId),
+        )
+        .map((status) => status.localDate),
+      ...(state.gymSessions ?? [])
+        .filter((session) => ids.has(session.userId))
+        .map((session) => session.localDate),
+    ].filter(Boolean);
+    return candidates.sort()[0] ?? anchor;
+  }, [
+    anchor,
+    metricIds,
+    metrics,
+    selectedIds,
+    state.dailyMetricStatuses,
+    state.entries,
+    state.group.id,
+    state.gymSessions,
+  ]);
+  const dates = useMemo(
+    () =>
+      period === "overall"
+        ? overallDates(overallStart, anchor)
+        : periodDates(period, anchor),
+    [anchor, overallStart, period],
+  );
   const comparisonInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -144,7 +183,6 @@ export default function MemberProfile() {
       gymSessions: state.gymSessions,
       metrics: state.metrics,
       photos: state.photos,
-      settings: state.settings,
       trackedGoalPeriods: state.trackedGoalPeriods,
     }),
     [
@@ -155,7 +193,6 @@ export default function MemberProfile() {
       state.gymSessions,
       state.metrics,
       state.photos,
-      state.settings,
       state.trackedGoalPeriods,
     ],
   );
@@ -313,6 +350,7 @@ export default function MemberProfile() {
     )
     .slice(0, 5);
   function shift(days: number) {
+    if (period === "overall") return;
     const next = dateWithOffsetFrom(anchor, days);
     if (next <= dateKey()) {
       if (period === "today" || period === "yesterday") setPeriod("custom");
@@ -321,22 +359,41 @@ export default function MemberProfile() {
   }
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
-    updateSettings({
-      comparisonPeriodByGroup: {
-        ...state.settings.comparisonPeriodByGroup,
-        [state.group.id]: next,
-      },
-    });
   }
   function chooseMetrics(ids: string[]) {
     setMetricIds(ids);
-    updateSettings({
-      comparisonMetricIdsByGroup: {
-        ...state.settings.comparisonMetricIdsByGroup,
-        [state.group.id]: ids,
-      },
-    });
   }
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const savedPeriod =
+        state.settings.comparisonPeriodByGroup?.[state.group.id];
+      const savedMetrics =
+        state.settings.comparisonMetricIdsByGroup?.[state.group.id] ?? [];
+      if (
+        savedPeriod === period &&
+        savedMetrics.join(",") === metricIds.join(",")
+      )
+        return;
+      updateSettings({
+        comparisonPeriodByGroup: {
+          ...state.settings.comparisonPeriodByGroup,
+          [state.group.id]: period,
+        },
+        comparisonMetricIdsByGroup: {
+          ...state.settings.comparisonMetricIdsByGroup,
+          [state.group.id]: metricIds,
+        },
+      });
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [
+    metricIds,
+    period,
+    state.group.id,
+    state.settings.comparisonMetricIdsByGroup,
+    state.settings.comparisonPeriodByGroup,
+    updateSettings,
+  ]);
   if (!comparisonReady)
     return (
       <Screen>
@@ -521,7 +578,7 @@ export default function MemberProfile() {
             />
           </View>
         </>
-      ) : headToHeads.length ? (
+      ) : dates.length > 1 && headToHeads.length ? (
         <>
           <SectionHeader title="Head-to-head vs you" />
           {headToHeads.map(({ metric, stats: duel }) =>
@@ -573,7 +630,7 @@ export default function MemberProfile() {
             ) : null,
           )}
         </>
-      ) : (
+      ) : dates.length > 1 ? (
         <Card style={styles.headEmpty}>
           <Ionicons name="analytics-outline" size={20} color={colors.primary} />
           <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
@@ -582,7 +639,7 @@ export default function MemberProfile() {
             are intentionally excluded.
           </Text>
         </Card>
-      )}
+      ) : null}
       <View style={styles.metricCards}>
         {metrics.map((metric) => (
           <Card key={metric.id} style={styles.chartCard}>
@@ -801,15 +858,27 @@ export default function MemberProfile() {
           selected={period === "month"}
           onPress={() => choosePeriod("month")}
         />
+        <Chip
+          label="All time"
+          selected={period === "overall"}
+          onPress={() => {
+            choosePeriod("overall");
+            setAnchor(dateKey());
+          }}
+        />
       </View>
       <Card style={styles.navigator}>
-        <IconButton
-          icon="chevron-back"
-          label="Previous"
-          onPress={() =>
-            shift(period === "week" ? -7 : period === "month" ? -30 : -1)
-          }
-        />
+        {period === "overall" ? (
+          <View style={styles.navSpacer} />
+        ) : (
+          <IconButton
+            icon="chevron-back"
+            label="Previous"
+            onPress={() =>
+              shift(period === "week" ? -7 : period === "month" ? -30 : -1)
+            }
+          />
+        )}
         <View style={styles.navCopy}>
           <Text style={[styles.navTitle, { color: colors.ink }]}>
             {periodTitle(period, anchor)}
@@ -820,13 +889,17 @@ export default function MemberProfile() {
               : friendlyDate(anchor)}
           </Text>
         </View>
-        <IconButton
-          icon="chevron-forward"
-          label="Next"
-          onPress={() =>
-            shift(period === "week" ? 7 : period === "month" ? 30 : 1)
-          }
-        />
+        {period === "overall" ? (
+          <View style={styles.navSpacer} />
+        ) : (
+          <IconButton
+            icon="chevron-forward"
+            label="Next"
+            onPress={() =>
+              shift(period === "week" ? 7 : period === "month" ? 30 : 1)
+            }
+          />
+        )}
       </Card>
       <View style={styles.selectors}>
         <MetricSelector
@@ -874,7 +947,7 @@ function overallDates(activeFrom: string, anchor: string) {
         86400000,
     ) + 1,
   );
-  return dateRangeEnding(anchor, Math.min(days, 730));
+  return dateRangeEnding(anchor, days);
 }
 function statValue(result: ReturnType<typeof periodMetricResult>) {
   if (result.mode === "private") return "Private";
@@ -1108,6 +1181,7 @@ const styles = StyleSheet.create({
     padding: 8,
     marginTop: 10,
   },
+  navSpacer: { width: 38, height: 38 },
   navCopy: { alignItems: "center", flex: 1 },
   navTitle: { color: palette.ink, fontSize: 14, fontWeight: "900" },
   navSub: { color: palette.muted, fontSize: 9, marginTop: 2 },

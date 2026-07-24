@@ -9,6 +9,7 @@ import {
   GymSession,
   MuscleGroup,
 } from "@/src/types";
+import { gymSessionsForDay } from "@/src/domain/dataIndex";
 
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
@@ -25,47 +26,55 @@ export function gymMetricValue(
   userId: string,
   localDate: string,
 ) {
-  const sessions = (state.gymSessions ?? []).filter(
-    (session) =>
-      session.userId === userId && session.localDate === localDate,
-  );
+  const sessions = gymSessionsForDay(state.gymSessions, userId, localDate);
   if (!sessions.length) return 0;
+  const values = sessions.map((session) =>
+    gymSessionMetricValue(session, mapping),
+  );
+  if (
+    mapping.kind === "session_completed" ||
+    mapping.kind === "exercise_one_rep_max"
+  )
+    return Math.max(0, ...values);
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+/** Contribution of one saved workout to a derived gym tracker. */
+export function gymSessionMetricValue(
+  session: GymSession,
+  mapping: GymMetricMapping,
+) {
   if (mapping.kind === "session_completed")
-    return sessions.some(
-      (session) => completedGymSets(session.exercises) > 0,
-    )
-      ? 1
-      : 0;
+    return completedGymSets(session.exercises) > 0 ? 1 : 0;
   if (mapping.kind === "session_duration")
-    return sessions.reduce(
-      (sum, session) => sum + Math.max(0, session.durationMinutes),
-      0,
-    );
+    return Math.max(0, session.durationMinutes);
   if (mapping.kind === "session_volume")
-    return sessions.reduce(
-      (sum, session) => sum + trainingVolumeKg(session.exercises),
-      0,
-    );
+    return trainingVolumeKg(session.exercises);
   if (mapping.kind === "completed_sets")
-    return sessions.reduce(
-      (sum, session) => sum + completedGymSets(session.exercises),
-      0,
-    );
+    return completedGymSets(session.exercises);
   if (
     mapping.kind === "exercise_one_rep_max" ||
     mapping.kind === "exercise_volume"
   ) {
-    const observations = exerciseHistory(sessions, userId, mapping.exerciseKey);
-    return mapping.kind === "exercise_one_rep_max"
-      ? Math.max(
-          0,
-          ...observations.map((item) => item.estimatedOneRepMaxKg),
-        )
-      : observations.reduce((sum, item) => sum + item.volumeKg, 0);
+    const exercises = session.exercises.filter(
+      (exercise) => exerciseIdentity(exercise) === mapping.exerciseKey,
+    );
+    if (mapping.kind === "exercise_volume")
+      return trainingVolumeKg(exercises);
+    return Math.max(
+      0,
+      ...exercises.flatMap((exercise) =>
+        exercise.sets
+          .filter((set) => set.completed)
+          .map((set) => estimatedOneRepMax(set.weightKg, set.reps)),
+      ),
+    );
   }
-  return muscleGroupStats(sessions, userId)
-    .filter((item) => item.muscle === mapping.muscleGroup)
-    .reduce((sum, item) => sum + item.volumeKg, 0);
+  return trainingVolumeKg(
+    session.exercises.filter((exercise) =>
+      (exercise.muscleGroups ?? ["full_body"]).includes(mapping.muscleGroup),
+    ),
+  );
 }
 
 export function hasGymMetricData(
@@ -74,10 +83,7 @@ export function hasGymMetricData(
   userId: string,
   localDate: string,
 ) {
-  const sessions = (state.gymSessions ?? []).filter(
-    (session) =>
-      session.userId === userId && session.localDate === localDate,
-  );
+  const sessions = gymSessionsForDay(state.gymSessions, userId, localDate);
   if (!sessions.length) return false;
   if (mapping.kind === "session_completed") return true;
   if (mapping.kind === "session_duration")

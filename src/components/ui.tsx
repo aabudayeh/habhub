@@ -86,9 +86,11 @@ export function Screen({
                       cloud.status === "syncing" || health.status === "syncing"
                     }
                     onRefresh={async () => {
-                      await cloud.syncNow().catch(() => undefined);
-                      await cloud.refreshGroup().catch(() => undefined);
-                      await health.syncNow("pull").catch(() => undefined);
+                      await Promise.allSettled([
+                        cloud.syncNow(),
+                        cloud.refreshActivity(),
+                        health.syncNow("pull"),
+                      ]);
                     }}
                     tintColor={accent}
                   />

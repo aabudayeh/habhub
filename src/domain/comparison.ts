@@ -2,13 +2,14 @@ import { friendlyDate } from '@/src/domain/date';
 import { leaderboardRows } from '@/src/domain/leaderboard';
 import { hasMetricData, sharedMetricResult } from '@/src/domain/metrics';
 import { AppState, MetricDefinition } from '@/src/types';
+import { entriesForDay, statusForDay } from '@/src/domain/dataIndex';
 
 export type ComparisonStats={bestDay:string;bestScore:number;daysWon:number;longestWinStreak:number;eligibleDays:number};
 
 export function comparisonStats(state:AppState,subjectId:string,viewerId:string,dates:string[],metrics:MetricDefinition[]):ComparisonStats{
   const ordered=[...dates].sort();let bestDate='';let bestScore=-1;let daysWon=0;let longest=0;let current=0;let eligibleDays=0;
   for(const date of ordered){
-    const hasData=metrics.some((metric)=>metric.dataType==='calculated'||state.entries.some((entry)=>entry.metricId===metric.id&&entry.userId===subjectId&&entry.localDate===date));
+    const hasData=metrics.some((metric)=>metric.dataType==='calculated'||entriesForDay(state.entries,metric.id,subjectId,date).length>0);
     if(!hasData){current=0;continue;}
     eligibleDays+=1;
     const rows=leaderboardRows(state,metrics,[date],viewerId,metrics.length===0);const subject=rows.find((row)=>row.member.id===subjectId);const viewer=rows.find((row)=>row.member.id===viewerId);const score=subject?.score??0;
@@ -58,14 +59,13 @@ export function metricHeadToHeadStats(
 
   for (const date of [...dates].sort()) {
     const hasComparableData = (userId: string) =>
-      state.dailyMetricStatuses?.some(
-        (status) =>
-          status.groupId === state.group.id &&
-          status.metricId === metric.id &&
-          status.userId === userId &&
-          status.localDate === date &&
-          status.exactValue !== undefined,
-      ) || hasMetricData(state, metric, userId, date);
+      statusForDay(
+        state.dailyMetricStatuses,
+        state.group.id,
+        metric.id,
+        userId,
+        date,
+      )?.exactValue !== undefined || hasMetricData(state, metric, userId, date);
     if (!hasComparableData(subjectId) || !hasComparableData(viewerId))
       continue;
     const subject = sharedMetricResult(state, metric, subjectId, viewerId, date);

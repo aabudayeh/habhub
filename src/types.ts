@@ -391,7 +391,7 @@ export type UserSettings = {
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,
-    "today" | "yesterday" | "week" | "month" | "custom"
+    "today" | "yesterday" | "week" | "month" | "overall" | "custom"
   >;
   /** Imported health records the user explicitly hid/deleted. */
   dismissedHealthEntryIds?: string[];

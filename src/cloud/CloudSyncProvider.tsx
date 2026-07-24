@@ -19,11 +19,13 @@ import {
   isCloudGroupId,
   joinCloudGroup,
   leaveCloudGroup,
+  loadCloudGroupActivity,
   loadCloudGroupShells,
   loadCloudMessages,
   loadCloudWorkspace,
   removeCloudGroupMember,
   pushCloudWorkspace,
+  pushCloudMessagesNow,
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
 import { dateKey } from "@/src/domain/date";
@@ -78,7 +80,9 @@ type CloudSyncContextValue = {
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   refreshGroup: () => Promise<void>;
+  refreshActivity: () => Promise<void>;
   refreshMessages: () => Promise<void>;
+  syncMessagesNow: () => Promise<void>;
   approveMember: (userId: string) => Promise<void>;
   removeMember: (userId: string) => Promise<void>;
 };
@@ -448,12 +452,17 @@ function snapshotPayload(state: AppState): AppState {
     ...state,
     group: groups.find((group) => group.id === state.group.id) ?? state.group,
     groups,
-    entries: state.entries.map((entry) =>
-      entry.imageStoragePath ? { ...entry, imageUri: undefined } : entry,
-    ),
-    photos: state.photos.map((photo) =>
-      photo.storagePath ? { ...photo, uri: "" } : photo,
-    ),
+    // Shared group history is an on-device cache backed by relational tables.
+    // Keeping it out of the private snapshot makes hashing/saving proportional
+    // to this user's data rather than the size of every group they joined.
+    entries: state.entries
+      .filter((entry) => entry.userId === state.currentUserId)
+      .map((entry) =>
+        entry.imageStoragePath ? { ...entry, imageUri: undefined } : entry,
+      ),
+    photos: state.photos
+      .filter((photo) => photo.userId === state.currentUserId)
+      .map((photo) => (photo.storagePath ? { ...photo, uri: "" } : photo)),
     // Group history is cached locally and reloaded from the relational table.
     // Keeping only owned messages in the private snapshot makes hashing and
     // account sync independent of a busy group chat.
@@ -462,6 +471,9 @@ function snapshotPayload(state: AppState): AppState {
       .map((message) =>
         message.imageStoragePath ? { ...message, imageUri: undefined } : message,
       ),
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => status.userId === state.currentUserId,
+    ),
     lastSavedAt: null,
   };
 }
@@ -797,11 +809,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       try {
         const deviceId = deviceIdRef.current ?? (await getDeviceId());
         deviceIdRef.current = deviceId;
-        const previousHash = stableHash(stateRef.current);
-        let candidate = bindStateToAccount(stateRef.current, auth.user!);
+        let candidate =
+          stateRef.current.currentUserId === auth.user!.id
+            ? stateRef.current
+            : bindStateToAccount(stateRef.current, auth.user!);
         candidate = await uploadOwnedMedia(candidate);
         const candidateHash = stableHash(candidate);
-        if (candidateHash !== previousHash) {
+        if (candidate !== stateRef.current) {
           replaceState(candidate);
           stateRef.current = candidate;
         }
@@ -838,11 +852,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(!workspaceSynced);
         setStatus("synced");
         setErrorMessage(workspaceWarning);
-        await supabase.rpc("register_account_device", {
-          client_device_id: deviceId,
-          client_platform: Platform.OS,
-          client_label: null,
-        });
+        supabase
+          .rpc("register_account_device", {
+            client_device_id: deviceId,
+            client_platform: Platform.OS,
+            client_label: null,
+          })
+          .then(() => undefined, () => undefined);
         loadDevices().catch(() => undefined);
       } catch (error) {
         if (/snapshot_conflict/i.test(String(error))) {
@@ -996,7 +1012,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (hash === hashRef.current) return;
       setPendingChanges(true);
       performSync().catch(() => undefined);
-    }, 1800);
+    }, 2400);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
@@ -1118,6 +1134,39 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     replaceState(next);
   }, [replaceState]);
 
+  const refreshGroupActivity = useCallback(async () => {
+    if (!isCloudGroupId(stateRef.current.group.id)) return;
+    const groupId = stateRef.current.group.id;
+    const activity = await loadCloudGroupActivity(stateRef.current, groupId);
+    if (stateRef.current.group.id !== groupId) return;
+    const next = { ...stateRef.current, ...activity };
+    stateRef.current = next;
+    replaceState(next);
+  }, [replaceState]);
+
+  const hydrateGroupInBackground = useCallback(
+    (groupId: string) => {
+      const base = stateRef.current;
+      loadCloudWorkspace(base, groupId)
+        .then((next) => {
+          // A slow response for an old group must never pull the user back
+          // after they already switched elsewhere.
+          if (stateRef.current.group.id !== groupId) return;
+          stateRef.current = next;
+          // Persist the active-group selection after the cached shell has been
+          // replaced by the authoritative workspace.
+          hashRef.current = null;
+          workspaceHashRef.current = workspaceHash(next);
+          replaceState(next);
+          setPendingChanges(true);
+        })
+        .catch((error) =>
+          setErrorMessage(`Group refresh will retry: ${errorText(error)}`),
+        );
+    },
+    [replaceState],
+  );
+
   useEffect(() => {
     if (
       !supabase ||
@@ -1127,6 +1176,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let messageTimer: ReturnType<typeof setTimeout> | null = null;
+    let activityTimer: ReturnType<typeof setTimeout> | null = null;
     const queueRefresh = () => {
       if (Date.now() < suppressGroupRefreshUntilRef.current) return;
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -1140,6 +1190,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       messageTimer = setTimeout(() => {
         refreshMessages().catch(() => undefined);
       }, 120);
+    };
+    const queueActivityRefresh = () => {
+      if (Date.now() < suppressGroupRefreshUntilRef.current) return;
+      if (activityTimer) clearTimeout(activityTimer);
+      activityTimer = setTimeout(
+        () => refreshGroupActivity().catch(() => undefined),
+        350,
+      );
     };
     const channel = supabase
       .channel(`group-workspace:${state.group.id}`)
@@ -1191,15 +1249,22 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           table: "daily_metric_status",
           filter: `group_id=eq.${state.group.id}`,
         },
-        queueRefresh,
+        queueActivityRefresh,
       )
       .subscribe();
     return () => {
       if (refreshTimer) clearTimeout(refreshTimer);
       if (messageTimer) clearTimeout(messageTimer);
+      if (activityTimer) clearTimeout(activityTimer);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [auth.status, refreshGroup, refreshMessages, state.group.id]);
+  }, [
+    auth.status,
+    refreshGroup,
+    refreshGroupActivity,
+    refreshMessages,
+    state.group.id,
+  ]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener("change", (next) => {
@@ -1258,11 +1323,41 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           auth.user,
           me?.name,
         );
-        const next = await loadCloudWorkspace(stateRef.current, groupId);
+        const current = me
+          ? { ...me, role: "owner" as const }
+          : {
+              id: auth.user.id,
+              name: accountName(auth.user, "You"),
+              initials: "Y",
+              color: "#176B4D",
+              role: "owner" as const,
+            };
+        const group: Group = {
+          id: groupId,
+          name: name.trim(),
+          inviteCode: "Loading...",
+          templateName: "Custom",
+          members: [current],
+          streakRestDaysPerWeek: 1,
+          themeColor: "#176B4D",
+          metricConfiguration: stateRef.current.metrics.map((metric) => ({
+            ...metric,
+            sections: { ...metric.sections, group: true },
+          })),
+        };
+        const next = {
+          ...stateRef.current,
+          group,
+          groups: [
+            group,
+            ...stateRef.current.groups.filter((item) => item.id !== groupId),
+          ],
+        };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
         setPendingChanges(true);
+        hydrateGroupInBackground(groupId);
       },
       joinGroup: async (code) => {
         const result = await joinCloudGroup(code);
@@ -1279,46 +1374,90 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           return "pending";
         }
         const groupId = result.groupId;
-        const next = await loadCloudWorkspace(stateRef.current, groupId);
+        const existingMember = stateRef.current.group.members.find(
+          (member) => member.id === stateRef.current.currentUserId,
+        );
+        const current = existingMember
+          ? { ...existingMember, role: "member" as const }
+          : {
+            id: stateRef.current.currentUserId,
+            name: accountName(auth.user!, "You"),
+            initials: "Y",
+            color: "#176B4D",
+            role: "member" as const,
+          };
+        const cached = stateRef.current.groups.find(
+          (group) => group.id === groupId,
+        );
+        const group: Group =
+          cached ??
+          ({
+            id: groupId,
+            name: result.groupName || "Joined group",
+            inviteCode: "Loading...",
+            templateName: "Shared",
+            members: [current],
+            streakRestDaysPerWeek: 1,
+            themeColor: "#176B4D",
+            metricConfiguration: [],
+          } satisfies Group);
+        const next = {
+          ...stateRef.current,
+          group,
+          groups: [
+            group,
+            ...stateRef.current.groups.filter((item) => item.id !== groupId),
+          ],
+        };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         setPendingGroup(null);
+        hydrateGroupInBackground(groupId);
         return "active";
       },
       switchGroup: async (groupId) => {
-        const next = await loadCloudWorkspace(stateRef.current, groupId);
+        const group = stateRef.current.groups.find(
+          (candidate) => candidate.id === groupId,
+        );
+        if (!group) throw new Error("That group is not available.");
+        const next = { ...stateRef.current, group };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
-        setPendingChanges(true);
+        if (isCloudGroupId(groupId)) hydrateGroupInBackground(groupId);
       },
       leaveGroup: async (groupId) => {
-        await leaveCloudGroup(groupId);
-        const shells = await loadCloudGroupShells();
-        const localGroups = stateRef.current.groups.filter(
-          (group) => !isCloudGroupId(group.id) && group.id !== groupId,
-        );
-        const remaining = [...shells, ...localGroups];
+        const before = stateRef.current;
+        const remaining = before.groups.filter((group) => group.id !== groupId);
         const nextGroup = remaining[0];
         if (!nextGroup)
           throw new Error(
             "Create another group before leaving your only group.",
           );
-        const next = isCloudGroupId(nextGroup.id)
-          ? await loadCloudWorkspace(
-              { ...stateRef.current, groups: remaining },
-              nextGroup.id,
-            )
-          : { ...stateRef.current, group: nextGroup, groups: remaining };
+        const next = { ...before, group: nextGroup, groups: remaining };
         stateRef.current = next;
+        workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
-        setPendingChanges(true);
+        try {
+          await leaveCloudGroup(groupId);
+          setPendingChanges(true);
+          if (isCloudGroupId(nextGroup.id))
+            hydrateGroupInBackground(nextGroup.id);
+        } catch (error) {
+          stateRef.current = before;
+          replaceState(before);
+          throw error;
+        }
       },
       refreshGroup,
+      refreshActivity: refreshGroupActivity,
       refreshMessages,
+      syncMessagesNow: async () => {
+        await pushCloudMessagesNow(stateRef.current);
+      },
       approveMember: async (userId) => {
         await approveCloudGroupMember(stateRef.current.group.id, userId);
         await refreshGroup();
@@ -1339,7 +1478,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       performSync,
       pullLatest,
       refreshGroup,
+      refreshGroupActivity,
       refreshMessages,
+      hydrateGroupInBackground,
       replaceState,
       status,
     ],

@@ -9,6 +9,11 @@ import { evaluateFormula, formulaIdentifiers, FormulaError } from "./formula";
 import { cycleForecast } from "./cycle";
 import { gymMetricValue, hasGymMetricData } from "./gym";
 import { isVacationDate } from "./vacation";
+import {
+  entriesForDay,
+  photosForDay,
+  statusForDay,
+} from "./dataIndex";
 
 function aggregate(
   entries: MetricEntry[],
@@ -74,18 +79,11 @@ export function metricValue(
   if (metric.id === "days_until_period")
     return Math.max(0, cycleForecast(state, userId, localDate).daysUntilPeriod ?? 0);
   if (metric.dataType === "photo") {
-    return state.photos.filter(
-      (photo) => photo.userId === userId && photo.localDate === localDate,
-    ).length;
+    return photosForDay(state.photos, userId, localDate).length;
   }
   if (metric.dataType !== "calculated") {
-    const sameDay = state.entries
-      .filter(
-        (entry) =>
-          entry.metricId === metric.id &&
-          entry.userId === userId &&
-          entry.localDate === localDate,
-      )
+    const sameDay = entriesForDay(state.entries, metric.id, userId, localDate)
+      .slice()
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
     if (sameDay.length) return aggregate(sameDay, metric.aggregation);
     if (metric.stepFallback) {
@@ -431,35 +429,29 @@ export function sharedMetricResult(
 ): SharedMetricResult {
   const value =
     metric.dataType === "photo" && subjectUserId !== viewerUserId
-      ? state.photos.filter(
-          (photo) =>
-            photo.userId === subjectUserId &&
-            photo.localDate === localDate &&
-            photo.visibility === "group",
+      ? photosForDay(state.photos, subjectUserId, localDate).filter(
+          (photo) => photo.visibility === "group",
         ).length
       : safeMetricValue(state, metric, subjectUserId, localDate);
   if (subjectUserId === viewerUserId)
     return { mode: "exact", value, label: formatMetricValue(metric, value) };
 
-  const entries = state.entries.filter(
-    (entry) =>
-      entry.metricId === metric.id &&
-      entry.userId === subjectUserId &&
-      entry.localDate === localDate,
+  const entries = entriesForDay(
+    state.entries,
+    metric.id,
+    subjectUserId,
+    localDate,
   );
-  const sharedStatus = state.dailyMetricStatuses?.find(
-    (status) =>
-      status.groupId === state.group.id &&
-      status.metricId === metric.id &&
-      status.userId === subjectUserId &&
-      status.localDate === localDate,
+  const sharedStatus = statusForDay(
+    state.dailyMetricStatuses,
+    state.group.id,
+    metric.id,
+    subjectUserId,
+    localDate,
   );
   const photoEntries =
     metric.dataType === "photo"
-      ? state.photos.filter(
-          (photo) =>
-            photo.userId === subjectUserId && photo.localDate === localDate,
-        )
+      ? photosForDay(state.photos, subjectUserId, localDate)
       : [];
   const visibility =
     metric.dataType === "photo"
@@ -592,22 +584,16 @@ export function metricApplicableOnDate(
     metric.gymMapping
       ? hasGymMetricData(state, metric.gymMapping, userId, localDate)
       : metric.dataType === "photo"
-      ? state.photos.some(
-          (photo) =>
-            photo.userId === userId && photo.localDate === localDate,
-        )
-      : state.entries.some(
-          (entry) =>
-            entry.userId === userId &&
-            entry.metricId === metric.id &&
-            entry.localDate === localDate,
-        );
-  const hasSharedDailyStatus = state.dailyMetricStatuses?.some(
-    (status) =>
-      status.groupId === state.group.id &&
-      status.metricId === metric.id &&
-      status.userId === userId &&
-      status.localDate === localDate,
+        ? photosForDay(state.photos, userId, localDate).length > 0
+        : entriesForDay(state.entries, metric.id, userId, localDate).length > 0;
+  const hasSharedDailyStatus = Boolean(
+    statusForDay(
+      state.dailyMetricStatuses,
+      state.group.id,
+      metric.id,
+      userId,
+      localDate,
+    ),
   );
   const hasRecordedData = hasExplicitData || hasSharedDailyStatus;
   // A backdated entry remains viewable even when the tracker itself was added
@@ -640,19 +626,11 @@ export function hasMetricData(
   // measurement that changes averages, totals, or calculated energy.
   if (isVacationDate(state, userId, localDate)) return false;
   if (metric.dataType === "photo")
-    return state.photos.some(
-      (photo) =>
-        photo.userId === userId && photo.localDate === localDate,
-    );
+    return photosForDay(state.photos, userId, localDate).length > 0;
   if (metric.gymMapping)
     return hasGymMetricData(state, metric.gymMapping, userId, localDate);
   if (metric.dataType === "calculated") return true;
-  return state.entries.some(
-    (entry) =>
-      entry.userId === userId &&
-      entry.metricId === metric.id &&
-      entry.localDate === localDate,
-  );
+  return entriesForDay(state.entries, metric.id, userId, localDate).length > 0;
 }
 
 export function metricPeriodStats(

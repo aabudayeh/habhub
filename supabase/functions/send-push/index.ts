@@ -1,10 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-type Payload = { eventKey:string; groupId:string; category:'chat'|'metric'|'lead'; title:string; body:string; recipientId?:string; metricId?:string; data?:Record<string,string> };
+type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'; title:string; body:string; recipientId?:string; metricId?:string; data?:Record<string,string> };
 const cors={ 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type' };
 
 Deno.serve(async(req)=>{
   if(req.method==='OPTIONS')return new Response('ok',{headers:cors});
+  let claimedEvent:string|undefined;
   try{
     const url=Deno.env.get('SUPABASE_URL')!; const service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const auth=req.headers.get('Authorization')??''; const admin=createClient(url,service);
@@ -21,16 +22,43 @@ Deno.serve(async(req)=>{
       )
       .select('event_key');
     if(eventError)throw eventError;
-    if(!claimed?.length)return json({sent:0,deduplicated:true});
+    if(!claimed?.length){
+      if(payload.clientMessageId)await admin.from('messages').update({push_dispatched_at:new Date().toISOString()}).eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId);
+      return json({sent:0,deduplicated:true});
+    }
+    claimedEvent=payload.eventKey;
     let members=admin.from('group_members').select('user_id').eq('group_id',payload.groupId).neq('user_id',user.id);
+    members=members.eq('status','active');
     if(payload.recipientId)members=members.eq('user_id',payload.recipientId);
     const {data:recipients,error:memberError}=await members;if(memberError)throw memberError;
-    const ids=(recipients??[]).map((item)=>item.user_id);if(!ids.length)return json({sent:0});
+    const ids=(recipients??[]).map((item)=>item.user_id);
+    if(!ids.length){
+      if(payload.clientMessageId)await admin.from('messages').update({push_dispatched_at:new Date().toISOString()}).eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId);
+      return json({sent:0});
+    }
     const {data:tokens,error:tokenError}=await admin.from('device_push_tokens').select('token, preferences').in('user_id',ids);if(tokenError)throw tokenError;
-    const messages=(tokens??[]).filter((item)=>allowed(item.preferences??{},payload)).map((item)=>({to:item.token,sound:'default',channelId:'paceboard',title:payload.title,body:payload.body,data:payload.data??{}}));
-    if(messages.length){const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messages)});if(!response.ok)throw new Error(`Expo push failed: ${response.status}`);}
+    const eligible=(tokens??[]).filter((item)=>allowed(item.preferences??{},payload));
+    const messages=eligible.map((item)=>({to:item.token,sound:'default',channelId:'paceboard',title:payload.title,body:payload.body,data:payload.data??{}}));
+    if(messages.length){
+      const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messages)});
+      if(!response.ok)throw new Error(`Expo push failed: ${response.status}`);
+      const ticketPayload=await response.json() as {data?:Array<{status?:string;message?:string;details?:{error?:string}}>;errors?:unknown[]};
+      if(ticketPayload.errors?.length)throw new Error('Expo rejected the push batch');
+      const tickets=ticketPayload.data??[];
+      const transient=tickets.find((ticket)=>ticket.status==='error'&&ticket.details?.error!=='DeviceNotRegistered');
+      if(transient)throw new Error(transient.message||'Expo push delivery failed');
+      const staleTokens=tickets.flatMap((ticket,index)=>ticket.status==='error'&&ticket.details?.error==='DeviceNotRegistered'?[eligible[index]?.token]:[]).filter(Boolean);
+      if(staleTokens.length)await admin.from('device_push_tokens').delete().in('token',staleTokens);
+    }
+    if(payload.clientMessageId)await admin.from('messages').update({push_dispatched_at:new Date().toISOString()}).eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId);
     return json({sent:messages.length});
-  }catch(error){return json({error:error instanceof Error?error.message:String(error)},500);}
+  }catch(error){
+    if(claimedEvent){
+      const url=Deno.env.get('SUPABASE_URL');const service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      if(url&&service)await createClient(url,service).from('push_events').delete().eq('event_key',claimedEvent);
+    }
+    return json({error:error instanceof Error?error.message:String(error)},500);
+  }
 });
 function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
 function inQuietHours(settings:Record<string,unknown>){if(settings.quietHoursEnabled!==true)return false;try{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:String(settings.timezone||'UTC'),hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const now=Number(parts.find((part)=>part.type==='hour')?.value||0)*60+Number(parts.find((part)=>part.type==='minute')?.value||0);const minutes=(value:unknown)=>{const [hour,minute]=String(value||'').split(':').map(Number);return Number.isFinite(hour)&&Number.isFinite(minute)?hour*60+minute:0;};const start=minutes(settings.quietHoursStart),end=minutes(settings.quietHoursEnd);return start===end?false:start<end?now>=start&&now<end:now>=start||now<end;}catch{return false;}}

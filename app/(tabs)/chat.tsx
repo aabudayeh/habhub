@@ -98,7 +98,7 @@ export default function ChatScreen() {
       // suspended sockets without reloading leaderboard or health data.
       const timer = setInterval(
         () => refreshMessages().catch(() => undefined),
-        4000,
+        12000,
       );
       return () => clearInterval(timer);
     }, [refreshMessages]),
@@ -121,8 +121,9 @@ export default function ChatScreen() {
     setDraft("");
     setImageUri(null);
     setTimeout(() => messageScroll.current?.scrollToEnd({ animated: true }), 50);
-    // Chat should feel realtime; do not wait for the normal workspace debounce.
-    setTimeout(() => cloud.syncNow().catch(() => undefined), 120);
+    // Insert the message and dispatch its push before the heavier account
+    // snapshot runs in the background.
+    setTimeout(() => cloud.syncMessagesNow().catch(() => undefined), 40);
   }
   function suggest(kind: MessageCategory) {
     setDraft(randomMessage(kind, state.settings.banterTone));
@@ -146,11 +147,13 @@ export default function ChatScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top", "bottom"]}
+      edges={["top"]}
     >
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // Android already uses adjustResize in app.json. Applying a second
+        // `height` resize leaves the composer offset after the keyboard closes.
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
@@ -286,9 +289,11 @@ export default function ChatScreen() {
               <RefreshControl
                 refreshing={cloud.status === "syncing" || health.status === "syncing"}
                 onRefresh={async () => {
-                  await cloud.syncNow().catch(() => undefined);
-                  await cloud.refreshMessages().catch(() => undefined);
-                  await health.syncNow("pull").catch(() => undefined);
+                  await Promise.allSettled([
+                    cloud.syncNow(),
+                    cloud.refreshMessages(),
+                    health.syncNow("pull"),
+                  ]);
                 }}
                 tintColor={accent}
               />
@@ -518,7 +523,7 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: 8 },
+              { marginBottom: 3 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >

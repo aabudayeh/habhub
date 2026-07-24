@@ -44,3 +44,7 @@ verify_jwt = false
 
 [functions.group-invite]
 verify_jwt = false
+
+[functions.send-push]
+# The function performs membership authorization with auth.getUser.
+verify_jwt = false
