@@ -723,37 +723,6 @@ export default function TrackerEditor() {
             />
           ))}
         </View>
-        {!tracker && !presetId ? (
-          <>
-            <Text style={[styles.label, { color: colors.ink }]}>
-              What will you record?
-            </Text>
-            <View style={styles.wrap}>
-              <Chip
-                label="A number"
-                icon="calculator-outline"
-                selected={dataType === "number"}
-                onPress={() => {
-                  setDataType("number");
-                  setAggregation("sum");
-                  if (goalKind === "complete") setGoalKind("at_least");
-                }}
-              />
-              <Chip
-                label="Yes or no"
-                icon="checkmark-circle-outline"
-                selected={dataType === "boolean"}
-                onPress={() => {
-                  setDataType("boolean");
-                  setAggregation("max");
-                  setGoalKind("complete");
-                  setGoal("1");
-                  setUnit("");
-                }}
-              />
-            </View>
-          </>
-        ) : null}
         {category === "gym" &&
         dataType === "number" &&
         (!gymMapping ||
@@ -807,13 +776,7 @@ export default function TrackerEditor() {
             thumbColor={goalEnabled ? accent : colors.faint}
           />
         </View>
-        {goalEnabled && dataType === "boolean" ? (
-          <Text style={[styles.help, { color: colors.muted }]}>
-            Marking Yes completes this goal for the day.
-          </Text>
-        ) : goalEnabled &&
-          dataType !== "text" &&
-          dataType !== "boolean" ? (
+        {goalEnabled && dataType !== "text" ? (
           <>
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
               <Text style={[styles.help, { color: colors.muted }]}>

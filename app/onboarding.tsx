@@ -159,6 +159,9 @@ export default function Onboarding() {
   const [customName, setCustomName] = useState("");
   const [customUnit, setCustomUnit] = useState("");
   const [customGoal, setCustomGoal] = useState("1");
+  const [customDataType, setCustomDataType] = useState<"number" | "boolean">(
+    "number",
+  );
   const [expanded, setExpanded] = useState<string[]>([]);
   const [landingPage, setLandingPage] = useState<LandingPage>(
     (state.settings.selectedGoals ?? []).includes("friends")
@@ -410,9 +413,18 @@ export default function Onboarding() {
   }
   function addCustomTracker() {
     const name = customName.trim();
-    const target = Number(customGoal);
-    if (!name || !Number.isFinite(target) || target <= 0) {
-      Alert.alert("Finish the tracker", "Add a name and a goal above zero.");
+    const target = customDataType === "boolean" ? 1 : Number(customGoal);
+    if (
+      !name ||
+      (customDataType === "number" &&
+        (!Number.isFinite(target) || target <= 0))
+    ) {
+      Alert.alert(
+        "Finish the tracker",
+        customDataType === "number"
+          ? "Add a name and a goal above zero."
+          : "Add a tracker name.",
+      );
       return;
     }
     const base =
@@ -426,16 +438,22 @@ export default function Onboarding() {
       name,
       icon: "sparkles-outline",
       color: "#7756D9",
-      unit: customUnit.trim(),
-      dataType: "number",
-      aggregation: "sum",
-      goal: { kind: "at_least", target },
+      unit: customDataType === "number" ? customUnit.trim() : "",
+      dataType: customDataType,
+      aggregation: customDataType === "number" ? "sum" : "max",
+      goal:
+        customDataType === "number"
+          ? { kind: "at_least", target }
+          : { kind: "complete", target: 1 },
       goalEnabled: true,
       category: "other",
       manualEntry: true,
       rankingDirection: "higher",
       defaultVisibility: "group",
-      description: `Personal daily target: ${target}${customUnit.trim() ? ` ${customUnit.trim()}` : ""}.`,
+      description:
+        customDataType === "number"
+          ? `Personal daily target: ${target}${customUnit.trim() ? ` ${customUnit.trim()}` : ""}.`
+          : "Mark Yes when this is complete for the day.",
     };
     setCustomPresets((current) => [...current, preset]);
     setSelected((current) => [...current, templateId]);
@@ -446,6 +464,7 @@ export default function Onboarding() {
     setCustomName("");
     setCustomUnit("");
     setCustomGoal("1");
+    setCustomDataType("number");
   }
   async function continueFlow() {
     if (step === 0) await saveDisplayName();
@@ -802,38 +821,58 @@ export default function Onboarding() {
                     ]}
                   />
                   <View style={styles.fields}>
-                    <TextInput
-                      value={customGoal}
-                      onChangeText={setCustomGoal}
-                      keyboardType="decimal-pad"
-                      placeholder="Daily goal"
-                      placeholderTextColor={colors.faint}
-                      style={[
-                        styles.input,
-                        styles.customField,
-                        {
-                          color: colors.ink,
-                          borderColor: colors.border,
-                          backgroundColor: colors.canvas,
-                        },
-                      ]}
+                    <Chip
+                      label="A number"
+                      icon="calculator-outline"
+                      selected={customDataType === "number"}
+                      onPress={() => setCustomDataType("number")}
                     />
-                    <TextInput
-                      value={customUnit}
-                      onChangeText={setCustomUnit}
-                      placeholder="Unit (optional)"
-                      placeholderTextColor={colors.faint}
-                      style={[
-                        styles.input,
-                        styles.customField,
-                        {
-                          color: colors.ink,
-                          borderColor: colors.border,
-                          backgroundColor: colors.canvas,
-                        },
-                      ]}
+                    <Chip
+                      label="Yes or no"
+                      icon="checkmark-circle-outline"
+                      selected={customDataType === "boolean"}
+                      onPress={() => setCustomDataType("boolean")}
                     />
                   </View>
+                  {customDataType === "number" ? (
+                    <View style={styles.fields}>
+                      <TextInput
+                        value={customGoal}
+                        onChangeText={setCustomGoal}
+                        keyboardType="decimal-pad"
+                        placeholder="Daily goal"
+                        placeholderTextColor={colors.faint}
+                        style={[
+                          styles.input,
+                          styles.customField,
+                          {
+                            color: colors.ink,
+                            borderColor: colors.border,
+                            backgroundColor: colors.canvas,
+                          },
+                        ]}
+                      />
+                      <TextInput
+                        value={customUnit}
+                        onChangeText={setCustomUnit}
+                        placeholder="Unit (optional)"
+                        placeholderTextColor={colors.faint}
+                        style={[
+                          styles.input,
+                          styles.customField,
+                          {
+                            color: colors.ink,
+                            borderColor: colors.border,
+                            backgroundColor: colors.canvas,
+                          },
+                        ]}
+                      />
+                    </View>
+                  ) : (
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                      Mark Yes when you complete it for the day.
+                    </Text>
+                  )}
                   <Button
                     label="Add custom tracker"
                     icon="add-circle-outline"
