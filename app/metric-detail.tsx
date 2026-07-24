@@ -897,7 +897,7 @@ export default function TrackerDetail() {
                     {session.name || "Gym workout"}
                   </Text>
                   <Text style={[styles.time, { color: colors.faint }]}>
-                    {friendlyDate(session.localDate)} Â·{" "}
+                    {friendlyDate(session.localDate)} |{" "}
                     {new Date(session.recordedAt).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
@@ -909,9 +909,9 @@ export default function TrackerDetail() {
                 </Text>
               </View>
               <Text style={[styles.note, { color: colors.muted }]}>
-                {completedGymSets(session.exercises)} completed sets Â·{" "}
+                {completedGymSets(session.exercises)} completed sets |{" "}
                 {Math.round(trainingVolumeKg(session.exercises)).toLocaleString()}{" "}
-                kg volume Â· {Math.round(session.durationMinutes)} min
+                kg volume | {Math.round(session.durationMinutes)} min
               </Text>
               <Text style={[styles.note, { color: colors.faint }]}>
                 {session.exercises.map((exercise) => exercise.name).join(", ")}

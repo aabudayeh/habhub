@@ -1,6 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
@@ -112,6 +118,12 @@ export default function MemberProfile() {
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
   const [comparisonReady, setComparisonReady] = useState(false);
+  // Keep selector/date presses responsive. The previous comparison remains
+  // visible while React prepares the newly requested range at low priority.
+  const deferredMetricIds = useDeferredValue(metricIds);
+  const deferredSelectedIds = useDeferredValue(selectedIds);
+  const deferredPeriod = useDeferredValue(period);
+  const deferredAnchor = useDeferredValue(anchor);
   useEffect(() => {
     let active = true;
     const task = InteractionManager.runAfterInteractions(() => {
@@ -123,20 +135,20 @@ export default function MemberProfile() {
     };
   }, []);
   const metrics = useMemo(
-    () => available.filter((metric) => metricIds.includes(metric.id)),
-    [available, metricIds],
+    () => available.filter((metric) => deferredMetricIds.includes(metric.id)),
+    [available, deferredMetricIds],
   );
   const groupMembers = state.group.members;
   const people = useMemo(
     () =>
-      selectedIds
+      deferredSelectedIds
         .map((id) => groupMembers.find((item) => item.id === id))
         .filter(Boolean) as typeof groupMembers,
-    [groupMembers, selectedIds],
+    [deferredSelectedIds, groupMembers],
   );
   const overallStart = useMemo(() => {
-    const ids = new Set(selectedIds);
-    const metricSet = new Set(metricIds);
+    const ids = new Set(deferredSelectedIds);
+    const metricSet = new Set(deferredMetricIds);
     const candidates = [
       ...metrics.map((metric) => metric.activeFrom),
       ...state.entries
@@ -156,12 +168,12 @@ export default function MemberProfile() {
         .filter((session) => ids.has(session.userId))
         .map((session) => session.localDate),
     ].filter(Boolean);
-    return candidates.sort()[0] ?? anchor;
+    return candidates.sort()[0] ?? deferredAnchor;
   }, [
-    anchor,
-    metricIds,
+    deferredAnchor,
+    deferredMetricIds,
+    deferredSelectedIds,
     metrics,
-    selectedIds,
     state.dailyMetricStatuses,
     state.entries,
     state.group.id,
@@ -169,10 +181,10 @@ export default function MemberProfile() {
   ]);
   const dates = useMemo(
     () =>
-      period === "overall"
-        ? overallDates(overallStart, anchor)
-        : periodDates(period, anchor),
-    [anchor, overallStart, period],
+      deferredPeriod === "overall"
+        ? overallDates(overallStart, deferredAnchor)
+        : periodDates(deferredPeriod, deferredAnchor),
+    [deferredAnchor, deferredPeriod, overallStart],
   );
   const comparisonInputs = useMemo(
     () => ({
@@ -225,7 +237,7 @@ export default function MemberProfile() {
             metric,
             person.id,
             calculationState.currentUserId,
-            anchor,
+                  deferredAnchor,
             7,
           ),
           thirty: averageAtDate(
@@ -233,7 +245,7 @@ export default function MemberProfile() {
             metric,
             person.id,
             calculationState.currentUserId,
-            anchor,
+                  deferredAnchor,
             30,
           ),
           overallLabel:
@@ -244,7 +256,7 @@ export default function MemberProfile() {
                     calculationState,
                     metric,
                     person.id,
-                    anchor,
+                    deferredAnchor,
                   ),
                 )
               : statValue(
@@ -253,16 +265,16 @@ export default function MemberProfile() {
                     metric,
                     person.id,
                     calculationState.currentUserId,
-                    overallDates(metric.activeFrom, anchor),
+                    overallDates(metric.activeFrom, deferredAnchor),
                   ),
                 ),
         });
       }
     return cache;
   }, [
-    anchor,
     comparisonReady,
     dates,
+    deferredAnchor,
     metrics,
     people,
     comparisonInputs,

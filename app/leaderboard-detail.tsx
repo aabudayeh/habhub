@@ -43,6 +43,8 @@ import {
 import { imageSourceUri } from "@/src/domain/media";
 import {
   deficitRealityCheckAtDate,
+  displayGoalProgress,
+  effectiveGoalTarget,
   formatMetricValue,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
@@ -500,8 +502,31 @@ export default function LeaderboardDetail() {
               ) : null}
               <View style={styles.metricList}>
                 {row.metrics.map(({ metric, result }) => {
-                  const progress = result.averageDisplayProgress;
-                  const progressCopy = personalGoalProgressCopy(result);
+                  const personalMetric =
+                    row.member.id === state.currentUserId
+                      ? (state.metrics.find((item) => item.id === metric.id) ??
+                        metric)
+                      : metric;
+                  const progress =
+                    result.averageDisplayProgress ??
+                    (row.member.id === state.currentUserId &&
+                    result.mode === "exact" &&
+                    result.visibleDays > 0
+                      ? displayGoalProgress(
+                          personalMetric,
+                          result.average,
+                          effectiveGoalTarget(
+                            state,
+                            personalMetric,
+                            row.member.id,
+                            anchor,
+                          ),
+                        )
+                      : undefined);
+                  const progressCopy = personalGoalProgressCopy(
+                    result,
+                    progress,
+                  );
                   const progressColor = periodAverageGoalReached(result)
                     ? palette.lime
                     : palette.red;
@@ -650,13 +675,13 @@ export default function LeaderboardDetail() {
   );
 }
 
-function personalGoalProgressCopy(result: PeriodMetricResult) {
-  if (
-    result.mode === "private" ||
-    result.averageDisplayProgress === undefined
-  )
+function personalGoalProgressCopy(
+  result: PeriodMetricResult,
+  progress = result.averageDisplayProgress,
+) {
+  if (result.mode === "private" || progress === undefined)
     return undefined;
-  const percent = Math.round(result.averageDisplayProgress * 100);
+  const percent = Math.round(progress * 100);
   if (result.personalGoalKind === "at_most")
     return percent <= 100
       ? `${percent}% allowance used · ${100 - percent}% remaining`

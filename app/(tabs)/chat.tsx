@@ -147,13 +147,11 @@ export default function ChatScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top"]}
+      edges={["top", "bottom"]}
     >
       <KeyboardAvoidingView
         style={styles.flex}
-        // Android already uses adjustResize in app.json. Applying a second
-        // `height` resize leaves the composer offset after the keyboard closes.
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
@@ -523,7 +521,7 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: 3 },
+              { marginBottom: 8 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
