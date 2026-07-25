@@ -42,6 +42,8 @@ export default function LogScreen() {
   const params = useLocalSearchParams<{
     metric?: string;
     date?: string;
+    value?: string;
+    note?: string;
     foodName?: string;
     calories?: string;
     protein?: string;
@@ -157,6 +159,10 @@ export default function LogScreen() {
     if (/^\d{4}-\d{2}-\d{2}$/.test(params.date ?? ""))
       setLogDate(params.date!);
   }, [params.date]);
+  useEffect(() => {
+    if (params.value !== undefined) setValue(params.value);
+    if (params.note !== undefined) setNote(params.note);
+  }, [params.note, params.value]);
   useEffect(() => {
     if (!params.foodName) return;
     setSelectedId("food");
@@ -452,7 +458,20 @@ export default function LogScreen() {
       keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ paddingBottom: 14 }}
     >
-      <PageHeader title="Log" />
+      <PageHeader
+        title="Log"
+        action={
+          <Pressable
+            onPress={() => router.navigate("/timer" as never)}
+            style={[styles.timerShortcut, { borderColor: accent }]}
+          >
+            <Ionicons name="timer-outline" size={17} color={accent} />
+            <Text style={[styles.timerShortcutText, { color: accent }]}>
+              Timer
+            </Text>
+          </Pressable>
+        }
+      />
       <View style={styles.selector}>
         <MetricSelector
           title="What are you adding?"
@@ -1043,6 +1062,16 @@ export default function LogScreen() {
 }
 
 const styles = StyleSheet.create({
+  timerShortcut: {
+    minHeight: 34,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  timerShortcutText: { fontSize: 8, fontWeight: "900" },
   mealTypes: { flexDirection: "row", flexWrap: "wrap", gap: 5, marginBottom: 8 },
   compactHeader: {
     height: 38,

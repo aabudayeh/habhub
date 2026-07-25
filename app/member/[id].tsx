@@ -164,7 +164,11 @@ export default function MemberProfile() {
             deferredMetricIds,
             deferredSelectedIds,
           )
-        : periodDates(deferredPeriod, deferredAnchor),
+        : periodDates(
+            deferredPeriod,
+            deferredAnchor,
+            state.settings.weekStartsOn ?? 1,
+          ),
     [
       deferredAnchor,
       deferredMetricIds,
@@ -177,7 +181,7 @@ export default function MemberProfile() {
     () =>
       period === "overall"
         ? allTimePeriodDates(state, anchor, metricIds, selectedIds)
-        : periodDates(period, anchor),
+        : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
     [anchor, metricIds, period, selectedIds, state],
   );
   const comparisonInputs = useMemo(
@@ -374,6 +378,7 @@ export default function MemberProfile() {
       next === "today" ||
       next === "week" ||
       next === "month" ||
+      next === "year" ||
       next === "overall"
     )
       setAnchor(dateKey());

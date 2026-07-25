@@ -17,8 +17,9 @@ export const PERIOD_CHOICES: {
 }[] = [
   { id: "today", label: "Today" },
   { id: "yesterday", label: "Yesterday" },
-  { id: "week", label: "7 days" },
+  { id: "week", label: "Week" },
   { id: "month", label: "Month" },
+  { id: "year", label: "Year" },
   { id: "overall", label: "All time" },
 ];
 

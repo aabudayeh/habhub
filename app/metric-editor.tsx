@@ -314,6 +314,12 @@ export default function TrackerEditor() {
   const [minimumCompletions, setMinimumCompletions] = useState(
     String(tracker?.goalSchedule?.minimumCompletions ?? 3),
   );
+  const [intervalDays, setIntervalDays] = useState(
+    String(tracker?.goalSchedule?.intervalDays ?? 14),
+  );
+  const [daysOfMonth, setDaysOfMonth] = useState(
+    (tracker?.goalSchedule?.daysOfMonth ?? [10, 14]).join(", "),
+  );
   const [selectedDays, setSelectedDays] = useState<number[]>(
     tracker?.goalSchedule?.daysOfWeek ?? [1, 3, 5],
   );
@@ -357,6 +363,8 @@ export default function TrackerEditor() {
     trackGoal,
     scheduleMode,
     minimumCompletions,
+    intervalDays,
+    daysOfMonth,
     selectedDays,
     reminderEnabled,
     reminderTimes,
@@ -526,7 +534,24 @@ export default function TrackerEditor() {
           scheduleMode === "weekly_min" || scheduleMode === "monthly_min"
             ? Math.max(1, Number(minimumCompletions) || 1)
             : undefined,
-        anchorDate: scheduleMode === "every_other_day" ? activeFrom : undefined,
+        intervalDays:
+          scheduleMode === "interval_days"
+            ? Math.max(1, Math.round(Number(intervalDays) || 1))
+            : undefined,
+        daysOfMonth:
+          scheduleMode === "days_of_month"
+            ? [...new Set(
+                daysOfMonth
+                  .split(/[,\s]+/)
+                  .map(Number)
+                  .filter((day) => Number.isInteger(day) && day >= 1 && day <= 31),
+              )].sort((a, b) => a - b)
+            : undefined,
+        anchorDate:
+          scheduleMode === "every_other_day" ||
+          scheduleMode === "interval_days"
+            ? activeFrom
+            : undefined,
       },
       reminder: {
         enabled: reminderEnabled,
@@ -1304,6 +1329,8 @@ export default function TrackerEditor() {
                   ["daily", "Every day"],
                   ["selected_days", "Chosen days"],
                   ["every_other_day", "Every other day"],
+                  ["interval_days", "Every N days"],
+                  ["days_of_month", "Dates each month"],
                   ["weekly_min", "Times per week"],
                   ["monthly_min", "Times per month"],
                 ] as const
@@ -1341,6 +1368,30 @@ export default function TrackerEditor() {
                 set={setMinimumCompletions}
                 colors={colors}
               />
+            ) : null}
+            {scheduleMode === "interval_days" ? (
+              <Field
+                label="Repeat every how many days?"
+                value={intervalDays}
+                set={setIntervalDays}
+                colors={colors}
+              />
+            ) : null}
+            {scheduleMode === "days_of_month" ? (
+              <Field
+                label="Dates of the month (for example 10, 14)"
+                value={daysOfMonth}
+                set={setDaysOfMonth}
+                colors={colors}
+                keyboard={false}
+              />
+            ) : null}
+            {scheduleMode === "weekly_min" ||
+            scheduleMode === "monthly_min" ? (
+              <Text style={[styles.help, { color: colors.muted }]}>
+                This stays active each day until the minimum is reached, then
+                remains complete for the rest of that week or month.
+              </Text>
             ) : null}
             <View style={[styles.switchRow, { borderColor: colors.border }]}>
               <View style={styles.grow}>

@@ -1,3 +1,5 @@
+import { getLocales } from "expo-localization";
+
 export type FoodProduct = {
   code: string;
   name: string;
@@ -29,7 +31,12 @@ export type FoodProduct = {
 type RawProduct = {
   code?: string;
   product_name?: string;
+  product_name_de?: string;
+  product_name_en?: string;
+  generic_name?: string;
+  categories?: string;
   brands?: string;
+  countries_tags?: string[];
   serving_size?: string;
   image_front_small_url?: string;
   nutriments?: Record<string, unknown>;
@@ -43,8 +50,26 @@ const USDA_API = "https://api.nal.usda.gov/fdc/v1";
 const USDA_KEY = process.env.EXPO_PUBLIC_USDA_FDC_API_KEY?.trim();
 const CACHE_TTL = 15 * 60 * 1000;
 const cache = new Map<string, { at: number; products: FoodProduct[] }>();
+const locale = getLocales()[0];
+const languageCode = (locale?.languageCode ?? "en").toLowerCase();
+const regionCode = (locale?.regionCode ?? "").toLowerCase();
+const REGION_TAGS: Record<string, string> = {
+  de: "en:germany",
+  at: "en:austria",
+  ch: "en:switzerland",
+  gb: "en:united-kingdom",
+  us: "en:united-states",
+  ca: "en:canada",
+  fr: "en:france",
+  es: "en:spain",
+  it: "en:italy",
+  nl: "en:netherlands",
+  be: "en:belgium",
+  au: "en:australia",
+};
 const FIELDS = [
-  "code", "product_name", "brands", "serving_size", "image_front_small_url",
+  "code", "product_name", "product_name_de", "product_name_en", "generic_name",
+  "categories", "brands", "countries_tags", "serving_size", "image_front_small_url",
   "nutriments", "completeness", "popularity_key", "unique_scans_n",
 ].join(",");
 
@@ -73,7 +98,17 @@ function number(value: unknown) {
 }
 
 function parseProduct(product: RawProduct): FoodProduct | null {
-  const name = product.product_name?.trim();
+  const localizedName =
+    languageCode === "de"
+      ? product.product_name_de
+      : languageCode === "en"
+        ? product.product_name_en
+        : undefined;
+  const name = (
+    localizedName ??
+    product.product_name ??
+    product.generic_name
+  )?.trim();
   const code = product.code?.trim();
   if (!name || !code) return null;
   const nutrients = product.nutriments ?? {};
@@ -93,7 +128,14 @@ function parseProduct(product: RawProduct): FoodProduct | null {
     basis: hasServing ? product.serving_size?.trim() || "1 serving" : "100 g",
     calories: Math.round(calories), source: "Open Food Facts",
     verified: completeNutrition, completeNutrition,
-    qualityScore: completeness * 100 + nutrientsPresent * 8 + Math.log10(popularity + 1) * 6,
+    qualityScore:
+      completeness * 100 +
+      nutrientsPresent * 8 +
+      Math.log10(popularity + 1) * 6 +
+      (REGION_TAGS[regionCode] &&
+      product.countries_tags?.includes(REGION_TAGS[regionCode])
+        ? 55
+        : 0),
     proteinG: nutrient("proteins"), fatG: nutrient("fat"), carbsG: nutrient("carbohydrates"), fiberG: nutrient("fiber"),
     sodiumMg: sodiumG === undefined ? undefined : sodiumG * 1000,
     sugarG: nutrient("sugars"), saturatedFatG: nutrient("saturated-fat"),
@@ -136,9 +178,17 @@ export async function foodByBarcode(barcode: string) {
 }
 
 function words(value: string) {
-  return value.toLocaleLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map((word) =>
-    word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word,
-  );
+  return value
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((word) =>
+      word.length > 3 && (word.endsWith("s") || word.endsWith("n"))
+        ? word.slice(0, -1)
+        : word,
+    );
 }
 
 function matchScore(product: FoodProduct, term: string) {
@@ -149,6 +199,7 @@ function matchScore(product: FoodProduct, term: string) {
   const allInName = query.every((word) => name.includes(word));
   const exactName = allInName && name.length === query.length;
   const phraseStart = name.slice(0, query.length).join(" ") === query.join(" ");
+  const containsPhrase = name.join(" ").includes(query.join(" "));
   const relevance = query.reduce((score, word) => {
     if (name.includes(word)) return score + 100;
     if (name.some((candidate) => candidate.startsWith(word) || word.startsWith(candidate)))
@@ -156,11 +207,45 @@ function matchScore(product: FoodProduct, term: string) {
     if (brand.includes(word)) return score + 20;
     return score - 80;
   }, 0);
-  return relevance + (exactName ? 500 : phraseStart ? 260 : allInName ? 180 : 0) - Math.min(80, Math.max(0, name.length - query.length) * 8);
+  const preparationPenalty = [
+    "smoothie",
+    "pudding",
+    "shake",
+    "flavour",
+    "flavored",
+    "dessert",
+    "bar",
+    "drink",
+  ].some((word) => name.includes(word) && !query.includes(word))
+    ? 95
+    : 0;
+  return (
+    relevance +
+    (exactName
+      ? 700
+      : phraseStart
+        ? 340
+        : containsPhrase
+          ? 250
+          : allInName
+            ? 180
+            : 0) -
+    preparationPenalty -
+    Math.min(120, Math.max(0, name.length - query.length) * 9)
+  );
 }
 
-async function openFoodFactsSearch(term: string) {
-  const url = `${API}/cgi/search.pl?search_terms=${encodeURIComponent(term)}&search_simple=1&action=process&json=1&page_size=35&sort_by=unique_scans_n&fields=${FIELDS}`;
+async function openFoodFactsSearch(term: string, localized: boolean) {
+  const host =
+    localized && languageCode !== "en"
+      ? `https://${languageCode}.openfoodfacts.org`
+      : API;
+  const localeParameters = localized
+    ? `&lc=${encodeURIComponent(languageCode)}${
+        regionCode ? `&cc=${encodeURIComponent(regionCode)}` : ""
+      }`
+    : "";
+  const url = `${host}/cgi/search.pl?search_terms=${encodeURIComponent(term)}&search_simple=1&action=process&json=1&page_size=40&sort_by=popularity_key&fields=${FIELDS}${localeParameters}`;
   const data = await request(url);
   return ((data.products as RawProduct[] | undefined) ?? []).map(parseProduct).filter(Boolean) as FoodProduct[];
 }
@@ -191,11 +276,18 @@ async function usdaSearch(term: string): Promise<FoodProduct[]> {
 export async function searchFoods(query: string): Promise<FoodProduct[]> {
   const term = query.trim();
   if (term.length < 2) return [];
-  const key = term.toLocaleLowerCase();
+  const key = `${languageCode}-${regionCode}:${term.toLocaleLowerCase()}`;
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_TTL) return cached.products;
   const offline = OFFLINE.filter((product) => matchScore(product, term) > 0);
-  const settled = await Promise.allSettled([openFoodFactsSearch(term), usdaSearch(term)]);
+  const searches: Promise<FoodProduct[]>[] = [
+    openFoodFactsSearch(term, true),
+    openFoodFactsSearch(term, false),
+  ];
+  // USDA is useful for generic foods, but local Open Food Facts products rank
+  // first outside the US when both are equally relevant.
+  if (regionCode === "us" || USDA_KEY) searches.push(usdaSearch(term));
+  const settled = await Promise.allSettled(searches);
   const remote = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   const merged = new Map<string, FoodProduct>();
   for (const sourceProduct of [...remote, ...offline]) {
@@ -208,7 +300,10 @@ export async function searchFoods(query: string): Promise<FoodProduct[]> {
       qualityScore:
         relevance * 10 +
         Math.min(180, sourceProduct.qualityScore) +
-        (sourceProduct.verified ? 45 : 0),
+        (sourceProduct.verified ? 45 : 0) +
+        (sourceProduct.source === "Open Food Facts" && regionCode !== "us"
+          ? 20
+          : 0),
     };
     const duplicateKey = `${product.name.toLocaleLowerCase()}|${product.brand?.toLocaleLowerCase() ?? ""}`;
     const existing = merged.get(duplicateKey);

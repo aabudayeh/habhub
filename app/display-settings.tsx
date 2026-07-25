@@ -34,6 +34,8 @@ const pages: {
   { id: "insights", label: "Progress", icon: "stats-chart-outline" },
   { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
   { id: "gym", label: "Gym", icon: "barbell-outline" },
+  { id: "calendar", label: "Schedule", icon: "calendar-outline" },
+  { id: "journal", label: "Journal", icon: "book-outline" },
 ];
 export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
@@ -49,7 +51,10 @@ export default function DisplaySettings() {
       (page.id !== "group" || state.settings.showLeaderboard) &&
       (page.id !== "chat" || state.settings.showChat),
   ).filter(
-    (page) => page.id !== "gym" || state.settings.showGym,
+    (page) =>
+      (page.id !== "gym" || state.settings.showGym) &&
+      (page.id !== "calendar" || state.settings.showCalendar) &&
+      (page.id !== "journal" || state.settings.showJournal),
   );
   function toggle(
     key:
@@ -58,7 +63,10 @@ export default function DisplaySettings() {
       | "showLog"
       | "showLeaderboard"
       | "showChat"
-      | "showGym",
+      | "showGym"
+      | "showCalendar"
+      | "showJournal"
+      | "showTodosToday",
     value: boolean,
   ) {
     const changes: Partial<typeof state.settings> = { [key]: value };
@@ -68,7 +76,11 @@ export default function DisplaySettings() {
         (key === "showLeaderboard" &&
           state.settings.defaultLandingPage === "group") ||
         (key === "showChat" && state.settings.defaultLandingPage === "chat") ||
-        (key === "showGym" && state.settings.defaultLandingPage === "gym"))
+        (key === "showGym" && state.settings.defaultLandingPage === "gym") ||
+        (key === "showCalendar" &&
+          state.settings.defaultLandingPage === "calendar") ||
+        (key === "showJournal" &&
+          state.settings.defaultLandingPage === "journal"))
     )
       changes.defaultLandingPage = "index";
     updateSettings(changes);
@@ -223,6 +235,24 @@ export default function DisplaySettings() {
             "Pin strength plans and workout logging",
             "barbell-outline",
           ],
+          [
+            "showTodosToday",
+            "Show to-dos on Today",
+            "Hide tasks without deleting them",
+            "checkbox-outline",
+          ],
+          [
+            "showCalendar",
+            "Show Schedule",
+            "Calendar for reminders, tasks and tracker prompts",
+            "calendar-outline",
+          ],
+          [
+            "showJournal",
+            "Show Journal",
+            "Search notes collected across the app",
+            "book-outline",
+          ],
         ].map(([key, title, copy, icon], index) => (
           <View
             key={key}
@@ -256,7 +286,10 @@ export default function DisplaySettings() {
                     | "showLog"
                     | "showLeaderboard"
                     | "showChat"
-                    | "showGym",
+                    | "showGym"
+                    | "showCalendar"
+                    | "showJournal"
+                    | "showTodosToday",
                   value,
                 )
               }

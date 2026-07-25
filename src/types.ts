@@ -88,11 +88,17 @@ export type GoalSchedule = {
     | "daily"
     | "selected_days"
     | "every_other_day"
+    | "interval_days"
+    | "days_of_month"
     | "weekly_min"
     | "monthly_min";
   /** JavaScript weekday numbers: Sunday 0 through Saturday 6. */
   daysOfWeek?: number[];
   minimumCompletions?: number;
+  /** Repeat from anchorDate every N days. */
+  intervalDays?: number;
+  /** Specific calendar dates (1-31); impossible dates are simply skipped. */
+  daysOfMonth?: number[];
   anchorDate?: string;
 };
 
@@ -236,7 +242,80 @@ export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
 export type BanterTone = "supportive" | "friendly" | "ruthless" | "off";
 export type FoodGoalMode = "activity_adjusted" | "fixed";
 export type WeightDirection = "lose" | "maintain" | "gain";
-export type LandingPage = "index" | "log" | "insights" | "group" | "chat" | "gym";
+export type LandingPage =
+  | "index"
+  | "log"
+  | "insights"
+  | "group"
+  | "chat"
+  | "gym"
+  | "calendar"
+  | "journal";
+export type ProgressViewMode = "overview" | "goal_maps" | "compact";
+export type HistoryRange = "week" | "month" | "year";
+export type TrackerViewFilter = {
+  id: string;
+  name: string;
+  metricIds: string[];
+};
+
+export type TodoPriority = "low" | "normal" | "high" | "urgent";
+export type TodoReminder = {
+  id: string;
+  /** ISO timestamp for a one-off reminder. */
+  at?: string;
+  /** Local HH:mm time combined with recurrence or the due date. */
+  time?: string;
+};
+export type TodoItem = {
+  id: string;
+  title: string;
+  description?: string;
+  createdAt: string;
+  dueAt?: string;
+  priority: TodoPriority;
+  recurrence?: GoalSchedule;
+  reminders: TodoReminder[];
+  /** Recurring tasks complete independently on each local date. */
+  completedDates: string[];
+  completedAt?: string;
+};
+export type JournalNote = {
+  id: string;
+  userId: string;
+  title?: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  localDate: string;
+  metricId?: string;
+  entryId?: string;
+  imageUri?: string;
+};
+export type TimerLap = { id: string; seconds: number; recordedAt: string };
+export type ActivityTimer = {
+  id: string;
+  metricId: string;
+  mode: "stopwatch" | "countdown";
+  targetSeconds?: number;
+  autoLog: boolean;
+  startedAt: string;
+  status: "running" | "paused";
+  accumulatedSeconds: number;
+  pausedAt?: string;
+  laps: TimerLap[];
+  notificationId?: string;
+};
+export type CalendarReminder = {
+  id: string;
+  title: string;
+  kind: "general" | "tracker" | "todo";
+  metricId?: string;
+  todoId?: string;
+  time: string;
+  schedule: GoalSchedule;
+  enabled: boolean;
+};
 
 export type MuscleGroup =
   | "chest"
@@ -375,12 +454,26 @@ export type UserSettings = {
   overrideGroupTheme?: boolean;
   /** Calendar week start used by app-owned week ranges. */
   weekStartsOn?: 0 | 1 | 6;
+  /** Progress supports the original combined chart and two goal-map layouts. */
+  progressViewMode?: ProgressViewMode;
+  progressHistoryRange?: HistoryRange;
+  /** Optional per-tracker history strip on Today. */
+  todayHistoryByMetric?: Record<string, HistoryRange | "off">;
+  /** Saved personal views are never written into group configuration. */
+  trackerViewFilters?: TrackerViewFilter[];
+  activeTrackerViewFilterId?: string;
+  showUntrackedToday?: boolean;
+  showUntrackedProgress?: boolean;
+  showUntrackedLeaderboardByGroup?: Record<string, boolean>;
   /** Optional shortcut tab; logging remains available from tracker details. */
   showLog: boolean;
   showLeaderboard: boolean;
   showChat: boolean;
   /** Optional dedicated strength-training tab. */
   showGym?: boolean;
+  showCalendar?: boolean;
+  showJournal?: boolean;
+  showTodosToday?: boolean;
   onboardingComplete: boolean;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
@@ -399,7 +492,13 @@ export type UserSettings = {
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,
-    "today" | "yesterday" | "week" | "month" | "overall" | "custom"
+    | "today"
+    | "yesterday"
+    | "week"
+    | "month"
+    | "year"
+    | "overall"
+    | "custom"
   >;
   /** Imported health records the user explicitly hid/deleted. */
   dismissedHealthEntryIds?: string[];
@@ -475,6 +574,10 @@ export type AppState = {
   gymPlans?: GymPlan[];
   gymSessions?: GymSession[];
   gymExerciseGoals?: Record<string, GymExerciseGoal>;
+  todos?: TodoItem[];
+  journalNotes?: JournalNote[];
+  calendarReminders?: CalendarReminder[];
+  activeTimer?: ActivityTimer;
   settings: UserSettings;
   /** Preserves which goals counted on each historical date. */
   trackedGoalPeriods: Record<string, TrackedGoalPeriod[]>;

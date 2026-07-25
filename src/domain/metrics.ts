@@ -19,6 +19,7 @@ import {
   longestStreakWithRest,
 } from "./streaks";
 import { unrecordedStepActivity } from "./health";
+import { scheduleAppliesOnDate, todoAppearsOnDate } from "./schedule";
 
 function aggregate(
   entries: MetricEntry[],
@@ -79,6 +80,17 @@ export function metricValue(
   }
   if (metric.id === "overall_score")
     return dailyScore(state, userId, localDate);
+  if (metric.id === "todo_completion") {
+    const todos = (state.todos ?? []).filter((todo) =>
+      todoAppearsOnDate(todo, localDate),
+    );
+    if (!todos.length) return 100;
+    return (
+      (todos.filter((todo) => todo.completedDates.includes(localDate)).length /
+        todos.length) *
+      100
+    );
+  }
   if (metric.id === "cycle_day")
     return cycleForecast(state, userId, localDate).cycleDay;
   if (metric.id === "days_until_period")
@@ -559,6 +571,7 @@ export function metricApplicableOnDate(
   // A weigh-in target is judged only on days with an actual measurement;
   // carrying yesterday's weight forward must not create a false daily win.
   if (metric.id === "weight") return hasRecordedData;
+  if (metric.id === "todo_completion") return true;
   if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
   if (metric.id === "deficit") return hasDeficitInput;
   if (metric.id === "weekly_deficit_balance")
@@ -790,6 +803,170 @@ export function metricOverallAverage(
   return metricPeriodStats(state, metric, userId, dates).average;
 }
 
+export type MetricHistoricalRecords = {
+  highestDay?: { value: number; date: string };
+  highestWeek?: { value: number; from: string; to: string };
+  highestMonth?: { value: number; key: string };
+  highestYear?: { value: number; year: string };
+  bestWeekday?: { value: number; weekday: string };
+  bestWeekOfMonth?: { value: number; week: number };
+  bestMonthOfYear?: { value: number; month: string };
+  bestStreak?: { days: number; from: string; to: string };
+};
+
+/** Expensive, detail-page-only records derived from canonical daily values. */
+export function metricHistoricalRecords(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  throughDate = dateKey(),
+  weekStartsOn: 0 | 1 | 6 = 1,
+): MetricHistoricalRecords {
+  const explicitDates = [
+    ...state.entries
+      .filter(
+        (entry) =>
+          entry.userId === userId &&
+          entry.metricId === metric.id &&
+          entry.localDate <= throughDate,
+      )
+      .map((entry) => entry.localDate),
+    ...(metric.gymMapping
+      ? (state.gymSessions ?? [])
+          .filter(
+            (session) =>
+              session.userId === userId &&
+              session.localDate <= throughDate,
+          )
+          .map((session) => session.localDate)
+      : []),
+  ].sort();
+  const start = explicitDates[0] ?? metric.activeFrom;
+  const length = Math.min(
+    3653,
+    Math.max(
+      1,
+      Math.floor(
+        (new Date(`${throughDate}T12:00:00`).getTime() -
+          new Date(`${start}T12:00:00`).getTime()) /
+          86400000,
+      ) + 1,
+    ),
+  );
+  const allDates = dateRangeEnding(throughDate, length);
+  const recorded = allDates
+    .filter((date) => hasMetricData(state, metric, userId, date))
+    .map((date) => ({
+      date,
+      value: safeMetricValue(state, metric, userId, date),
+    }));
+  if (!recorded.length) return {};
+  const highestDay = recorded.reduce((best, item) =>
+    item.value > best.value ? item : best,
+  );
+  const aggregatePeriod = (items: { value: number }[]) =>
+    metric.aggregation === "sum" || metric.dataType === "boolean"
+      ? items.reduce((sum, item) => sum + item.value, 0)
+      : items.reduce((sum, item) => sum + item.value, 0) / items.length;
+  const selectBest = <T extends { value: number }>(items: T[]) =>
+    items.length
+      ? items.reduce((best, item) => (item.value > best.value ? item : best))
+      : undefined;
+  const grouped = <T>(
+    keyFor: (date: string) => string,
+    project: (key: string, items: typeof recorded) => T,
+  ) => {
+    const groups = new Map<string, typeof recorded>();
+    recorded.forEach((item) => {
+      const key = keyFor(item.date);
+      groups.set(key, [...(groups.get(key) ?? []), item]);
+    });
+    return [...groups.entries()].map(([key, items]) =>
+      project(key, items),
+    );
+  };
+  const weekStart = (date: string) => {
+    const parsed = new Date(`${date}T12:00:00`);
+    const offset = (parsed.getDay() - weekStartsOn + 7) % 7;
+    return dateWithOffsetFrom(date, -offset);
+  };
+  const weeks = grouped(
+    weekStart,
+    (from, items) => ({
+      from,
+      to: dateWithOffsetFrom(from, 6),
+      value: aggregatePeriod(items),
+    }),
+  );
+  const months = grouped(
+    (date) => date.slice(0, 7),
+    (key, items) => ({ key, value: aggregatePeriod(items) }),
+  );
+  const years = grouped(
+    (date) => date.slice(0, 4),
+    (year, items) => ({ year, value: aggregatePeriod(items) }),
+  );
+  const weekdays = grouped(
+    (date) =>
+      new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
+        new Date(`${date}T12:00:00`),
+      ),
+    (weekday, items) => ({
+      weekday,
+      value: items.reduce((sum, item) => sum + item.value, 0) / items.length,
+    }),
+  );
+  const weeksOfMonth = grouped(
+    (date) => String(Math.ceil(Number(date.slice(-2)) / 7)),
+    (week, items) => ({
+      week: Number(week),
+      value: items.reduce((sum, item) => sum + item.value, 0) / items.length,
+    }),
+  );
+  const monthsOfYear = grouped(
+    (date) => date.slice(5, 7),
+    (month, items) => ({
+      month: new Intl.DateTimeFormat(undefined, { month: "long" }).format(
+        new Date(`2024-${month}-01T12:00:00`),
+      ),
+      value: items.reduce((sum, item) => sum + item.value, 0) / items.length,
+    }),
+  );
+  let currentStart = "";
+  let currentDays = 0;
+  let bestStreak: MetricHistoricalRecords["bestStreak"];
+  allDates.forEach((date) => {
+    if (!isMetricTrackedOnDate(state, metric, date)) return;
+    const met =
+      isVacationDate(state, userId, date) ||
+      (hasMetricData(state, metric, userId, date) &&
+        scheduledGoalReached(state, metric, userId, date));
+    if (!met) {
+      currentDays = 0;
+      currentStart = "";
+      return;
+    }
+    if (!currentDays) currentStart = date;
+    currentDays += 1;
+    if (!bestStreak || currentDays > bestStreak.days)
+      bestStreak = {
+        days: currentDays,
+        from: currentStart,
+        to: date,
+      };
+  });
+  return {
+    highestDay,
+    highestWeek: selectBest(weeks),
+    highestMonth: selectBest(months),
+    highestYear: selectBest(years),
+    bestWeekday: selectBest(weekdays),
+    bestWeekOfMonth: selectBest(weeksOfMonth),
+    bestMonthOfYear: selectBest(monthsOfYear),
+    bestStreak,
+  };
+}
+
 export function metricAverageGoalOffsetLabel(
   metric: MetricDefinition,
   average: number,
@@ -923,24 +1100,11 @@ export function isMetricTrackedOnDate(
       period.from <= localDate && (!period.to || localDate <= period.to),
   );
   if (!insidePeriod) return false;
-  const schedule = metric.goalSchedule;
-  if (!schedule || schedule.mode === "daily") return true;
-  if (schedule.mode === "selected_days")
-    return (schedule.daysOfWeek ?? []).includes(
-      new Date(`${localDate}T12:00:00`).getDay(),
-    );
-  if (schedule.mode === "every_other_day") {
-    const anchor = schedule.anchorDate ?? metric.activeFrom;
-    const days = Math.round(
-      (new Date(`${localDate}T12:00:00`).getTime() -
-        new Date(`${anchor}T12:00:00`).getTime()) /
-        86400000,
-    );
-    return days >= 0 && days % 2 === 0;
-  }
-  // Weekly/monthly minimum goals remain visible through their current period;
-  // their completion is evaluated across that period below.
-  return true;
+  return scheduleAppliesOnDate(
+    metric.goalSchedule,
+    metric.activeFrom,
+    localDate,
+  );
 }
 
 export function scheduledGoalReached(

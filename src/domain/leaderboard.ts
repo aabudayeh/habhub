@@ -1,9 +1,11 @@
 import {
+  calendarWeekRange,
   dateKey,
   dateKeyWithOffset,
   dateRangeEnding,
   dateWithOffsetFrom,
   monthDateRange,
+  yearDateRange,
 } from "@/src/domain/date";
 import {
   dailyScore,
@@ -36,18 +38,25 @@ export type LeaderboardPeriod =
   | "yesterday"
   | "week"
   | "month"
+  | "year"
   | "overall"
   | "custom";
 
 export function periodDates(
   period: LeaderboardPeriod,
   anchorDate = dateKey(),
+  weekStartsOn: 0 | 1 | 6 = 1,
 ): string[] {
   if (period === "today") return [dateKey()];
   if (period === "yesterday") return [dateKeyWithOffset(-1)];
-  if (period === "week") return dateRangeEnding(anchorDate, 7);
+  if (period === "week")
+    return calendarWeekRange(anchorDate, weekStartsOn).filter(
+      (date) => date <= dateKey(),
+    );
   if (period === "month")
-    return monthDateRange(anchorDate).filter((date) => date <= anchorDate);
+    return monthDateRange(anchorDate).filter((date) => date <= dateKey());
+  if (period === "year")
+    return yearDateRange(anchorDate).filter((date) => date <= dateKey());
   if (period === "overall") return dateRangeEnding(anchorDate, 730);
   return [anchorDate];
 }
@@ -107,10 +116,14 @@ export function periodTitle(
 ): string {
   if (period === "today") return "Today";
   if (period === "yesterday") return "Yesterday";
-  if (period === "week") return "Last 7 days";
+  if (period === "week") return "Week";
   if (period === "month")
     return new Intl.DateTimeFormat(undefined, {
       month: "long",
+      year: "numeric",
+    }).format(new Date(`${anchorDate}T12:00:00`));
+  if (period === "year")
+    return new Intl.DateTimeFormat(undefined, {
       year: "numeric",
     }).format(new Date(`${anchorDate}T12:00:00`));
   if (period === "overall") return "All time";
@@ -127,19 +140,28 @@ export function shiftedPeriodAnchor(
   direction: -1 | 1,
 ) {
   if (period === "overall") return undefined;
-  if (period !== "month") {
+  if (period !== "month" && period !== "year") {
     const amount = period === "week" ? 7 : 1;
     const next = dateWithOffsetFrom(anchorDate, direction * amount);
     return next <= dateKey() ? next : undefined;
   }
   const target = new Date(`${anchorDate}T12:00:00`);
-  target.setDate(1);
-  target.setMonth(target.getMonth() + direction);
+  if (period === "month") {
+    target.setDate(1);
+    target.setMonth(target.getMonth() + direction);
+  } else {
+    target.setMonth(0, 1);
+    target.setFullYear(target.getFullYear() + direction);
+  }
   const today = dateKey();
-  const targetMonth = dateKey(target).slice(0, 7);
-  const currentMonth = today.slice(0, 7);
-  if (targetMonth > currentMonth) return undefined;
-  if (targetMonth === currentMonth) return today;
+  const targetPeriod =
+    period === "month" ? dateKey(target).slice(0, 7) : dateKey(target).slice(0, 4);
+  const currentPeriod =
+    period === "month" ? today.slice(0, 7) : today.slice(0, 4);
+  if (targetPeriod > currentPeriod) return undefined;
+  if (targetPeriod === currentPeriod) return today;
+  if (period === "year")
+    return dateKey(new Date(target.getFullYear(), 11, 31, 12));
   return dateKey(
     new Date(target.getFullYear(), target.getMonth() + 1, 0, 12),
   );

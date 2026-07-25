@@ -263,6 +263,23 @@ function RootNavigator() {
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen
+                name="view-filters"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="todo-editor"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="reminder-editor"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="note-editor"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen name="timer" options={{ presentation: "modal" }} />
+              <Stack.Screen
                 name="profile"
                 options={{ presentation: "modal" }}
               />

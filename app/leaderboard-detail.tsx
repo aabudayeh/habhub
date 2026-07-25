@@ -93,7 +93,7 @@ export default function LeaderboardDetail() {
     () =>
       period === "overall"
         ? allTimePeriodDates(state, anchor)
-        : periodDates(period, anchor),
+        : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
     [anchor, period, state],
   );
   const visibleEntries = useMemo(() => {
@@ -269,6 +269,7 @@ export default function LeaderboardDetail() {
       next === "today" ||
       next === "week" ||
       next === "month" ||
+      next === "year" ||
       next === "overall"
     )
       setAnchor(dateKey());

@@ -149,7 +149,7 @@ export default function LeaderboardScreen() {
               ? tracked.map((metric) => metric.id)
               : selected,
           )
-        : periodDates(period, anchor),
+        : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
     [anchor, period, selected, state, tracked],
   );
   const rankingInputs = useMemo(
@@ -207,6 +207,7 @@ export default function LeaderboardScreen() {
       next === "today" ||
       next === "week" ||
       next === "month" ||
+      next === "year" ||
       next === "overall"
     )
       setAnchor(dateKey());

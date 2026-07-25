@@ -665,6 +665,23 @@ const BASE_METRICS: MetricDefinition[] = [
     order: 35,
     activeFrom: dateKeyWithOffset(-29),
   },
+  {
+    id: "todo_completion",
+    name: "To-dos complete",
+    icon: "checkbox-outline",
+    color: "#5B7FD8",
+    unit: "%",
+    dataType: "calculated",
+    aggregation: "latest",
+    rankingDirection: "higher",
+    goal: { kind: "at_least", target: 100 },
+    goalEnabled: true,
+    scoreWeight: 0,
+    defaultVisibility: "private",
+    sections: { today: false, group: false, insights: false },
+    order: 39,
+    activeFrom: dateKey(),
+  },
 ];
 
 const HEALTH_MAPPINGS: Record<string, MetricDefinition["healthMapping"]> = {
@@ -741,6 +758,7 @@ const CATEGORIES: Record<string, MetricDefinition["category"]> = {
   deficit: "goals",
   weekly_deficit_balance: "goals",
   overall_score: "goals",
+  todo_completion: "goals",
   water: "nutrition",
 };
 export const DEFAULT_METRICS: MetricDefinition[] = BASE_METRICS.map(
@@ -751,7 +769,9 @@ export const DEFAULT_METRICS: MetricDefinition[] = BASE_METRICS.map(
     stepFallback: ["exercise", "workout_duration", "workout_distance"].includes(
       metric.id,
     ),
-    manualEntry: metric.id !== "steps",
+    manualEntry:
+      metric.id !== "steps" &&
+      metric.id !== "todo_completion",
   }),
 );
 
@@ -1117,6 +1137,9 @@ export function createInitialState(): AppState {
       },
     ],
     dailyMetricStatuses: [],
+    todos: [],
+    journalNotes: [],
+    calendarReminders: [],
     settings: {
       baselineCalories: 2250,
       energyProfile: {
@@ -1166,10 +1189,20 @@ export function createInitialState(): AppState {
       personalThemeColor: "#176B4D",
       overrideGroupTheme: false,
       weekStartsOn: 1,
+      progressViewMode: "overview",
+      progressHistoryRange: "week",
+      todayHistoryByMetric: {},
+      trackerViewFilters: [],
+      showUntrackedToday: true,
+      showUntrackedProgress: true,
+      showUntrackedLeaderboardByGroup: {},
       showLog: true,
       showLeaderboard: true,
       showChat: true,
       showGym: false,
+      showCalendar: false,
+      showJournal: false,
+      showTodosToday: true,
       onboardingComplete: false,
       tutorialComplete: false,
       advancedTutorialComplete: false,

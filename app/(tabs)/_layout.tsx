@@ -13,6 +13,8 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   insights: "stats-chart-outline",
   chat: "chatbubbles-outline",
   gym: "barbell-outline",
+  calendar: "calendar-outline",
+  journal: "book-outline",
 };
 
 export default function TabLayout() {
@@ -78,6 +80,20 @@ export default function TabLayout() {
       <Tabs.Screen
         name="gym"
         options={{ title: "Gym", href: state.settings.showGym ? "/gym" : null }}
+      />
+      <Tabs.Screen
+        name="calendar"
+        options={{
+          title: "Schedule",
+          href: state.settings.showCalendar ? "/calendar" : null,
+        }}
+      />
+      <Tabs.Screen
+        name="journal"
+        options={{
+          title: "Journal",
+          href: state.settings.showJournal ? "/journal" : null,
+        }}
       />
     </Tabs>
   );

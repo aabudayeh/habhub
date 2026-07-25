@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
@@ -15,7 +15,6 @@ import {
 } from "@/src/components/ui";
 import {
   dateKey,
-  dateRangeEnding,
   dateWithOffsetFrom,
   friendlyDate,
 } from "@/src/domain/date";
@@ -32,6 +31,7 @@ import {
   metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
   metricOverallAverage,
+  metricHistoricalRecords,
   metricPeriodStats,
   metricStreakStats,
   safeMetricValue,
@@ -43,6 +43,7 @@ import {
   LeaderboardPeriod,
   periodDates,
   periodTitle,
+  shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -58,8 +59,9 @@ import {
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
   { id: "yesterday", label: "Yesterday" },
-  { id: "week", label: "7 days" },
-  { id: "month", label: "30 days" },
+  { id: "week", label: "Week" },
+  { id: "month", label: "Month" },
+  { id: "year", label: "Year" },
 ];
 
 export default function TrackerDetail() {
@@ -74,24 +76,40 @@ export default function TrackerDetail() {
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
+  const [recordsOpen, setRecordsOpen] = useState(false);
   const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
-  const dates = useMemo(
+  const historicalRecords = useMemo(
     () =>
-      period === "month"
-        ? dateRangeEnding(day, 30)
-        : periodDates(period, day),
-    [day, period],
+      tracker
+        ? metricHistoricalRecords(
+            state,
+            tracker,
+            state.currentUserId,
+            day,
+            state.settings.weekStartsOn ?? 1,
+          )
+        : {},
+    [day, state, tracker],
   );
+  const dates = useMemo(
+    () => periodDates(period, day, state.settings.weekStartsOn ?? 1),
+    [day, period, state.settings.weekStartsOn],
+  );
+  useEffect(() => {
+    setCollapsedEntryDates(dates.length > 1 ? dates : []);
+  }, [dates]);
   function shiftRange(direction: number) {
-    const amount = period === "week" ? 7 : period === "month" ? 30 : 1;
-    const next = dateWithOffsetFrom(day, direction * amount);
-    if (next <= dateKey()) {
-      if (period === "today" || period === "yesterday") setPeriod("custom");
-      setDay(next);
-    }
+    const next = shiftedPeriodAnchor(
+      period,
+      day,
+      direction < 0 ? -1 : 1,
+    );
+    if (!next) return;
+    if (period === "today" || period === "yesterday") setPeriod("custom");
+    setDay(next);
   }
   const chooseDetailPeriod = useCallback(
     (next: Exclude<LeaderboardPeriod, "custom">) => {
@@ -424,7 +442,7 @@ export default function TrackerDetail() {
               style={styles.navCopy}
             >
               <Text style={[styles.navTitle, { color: colors.ink }]}>
-                {period === "month" ? "Last 30 days" : periodTitle(period, day)}
+                {periodTitle(period, day)}
               </Text>
               <View style={styles.navDate}>
                 <Ionicons name="calendar-outline" size={13} color={accent} />
@@ -809,6 +827,143 @@ export default function TrackerDetail() {
           </Text>
         ) : null}
       </Card>
+      {!isPhoto ? (
+        <Card style={styles.recordsCard}>
+          <Pressable
+            onPress={() => setRecordsOpen((open) => !open)}
+            style={styles.recordsHeading}
+          >
+            <View style={styles.recordsTitle}>
+              <Ionicons name="trophy-outline" size={17} color={tracker.color} />
+              <View>
+                <Text style={[styles.recordsName, { color: colors.ink }]}>
+                  Records & patterns
+                </Text>
+                <Text style={[styles.recordsHint, { color: colors.muted }]}>
+                  High points, best periods, and streak dates
+                </Text>
+              </View>
+            </View>
+            <Ionicons
+              name={recordsOpen ? "chevron-up" : "chevron-down"}
+              size={17}
+              color={colors.muted}
+            />
+          </Pressable>
+          {recordsOpen ? (
+            <View style={[styles.recordGrid, { borderTopColor: colors.border }]}>
+              <Stat
+                label={`Highest day${
+                  historicalRecords.highestDay
+                    ? ` · ${friendlyDate(historicalRecords.highestDay.date)}`
+                    : ""
+                }`}
+                value={
+                  historicalRecords.highestDay
+                    ? formatMetricValue(
+                        tracker,
+                        historicalRecords.highestDay.value,
+                      )
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label={
+                  historicalRecords.highestWeek
+                    ? `${friendlyDate(historicalRecords.highestWeek.from)} – ${friendlyDate(historicalRecords.highestWeek.to)}`
+                    : "Highest week"
+                }
+                value={
+                  historicalRecords.highestWeek
+                    ? formatMetricValue(
+                        tracker,
+                        historicalRecords.highestWeek.value,
+                      )
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label={
+                  historicalRecords.highestMonth
+                    ? new Intl.DateTimeFormat(undefined, {
+                        month: "long",
+                        year: "numeric",
+                      }).format(
+                        new Date(
+                          `${historicalRecords.highestMonth.key}-01T12:00:00`,
+                        ),
+                      )
+                    : "Highest month"
+                }
+                value={
+                  historicalRecords.highestMonth
+                    ? formatMetricValue(
+                        tracker,
+                        historicalRecords.highestMonth.value,
+                      )
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label={
+                  historicalRecords.highestYear
+                    ? `Highest year · ${historicalRecords.highestYear.year}`
+                    : "Highest year"
+                }
+                value={
+                  historicalRecords.highestYear
+                    ? formatMetricValue(
+                        tracker,
+                        historicalRecords.highestYear.value,
+                      )
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label="Best weekday"
+                value={
+                  historicalRecords.bestWeekday
+                    ? `${historicalRecords.bestWeekday.weekday} · ${formatMetricValue(
+                        tracker,
+                        historicalRecords.bestWeekday.value,
+                      )}`
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label="Best week of month"
+                value={
+                  historicalRecords.bestWeekOfMonth
+                    ? `Week ${historicalRecords.bestWeekOfMonth.week}`
+                    : "—"
+                }
+                colors={colors}
+              />
+              <Stat
+                label="Best month of year"
+                value={historicalRecords.bestMonthOfYear?.month ?? "—"}
+                colors={colors}
+              />
+              <Stat
+                label="Best streak period"
+                value={
+                  historicalRecords.bestStreak
+                    ? `${historicalRecords.bestStreak.days}d · ${friendlyDate(
+                        historicalRecords.bestStreak.from,
+                      )} – ${friendlyDate(historicalRecords.bestStreak.to)}`
+                    : "—"
+                }
+                colors={colors}
+              />
+            </View>
+          ) : null}
+        </Card>
+      ) : null}
       {["menstrual_cycle", "menstrual_flow", "cycle_day", "days_until_period"].includes(tracker.id) ? (
         <Card style={{ gap: 4 }}>
           {(() => {
@@ -1611,6 +1766,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   periodText: { fontSize: 10, fontWeight: "900" },
+  recordsCard: { gap: 0 },
+  recordsHeading: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  recordsTitle: { flexDirection: "row", alignItems: "center", gap: 9 },
+  recordsName: { fontSize: 10, fontWeight: "900" },
+  recordsHint: { fontSize: 7, fontWeight: "700", marginTop: 2 },
+  recordGrid: {
+    borderTopWidth: 1,
+    paddingTop: 9,
+    marginTop: 7,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
   navigator: {
     padding: 8,
   },

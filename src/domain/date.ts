@@ -41,10 +41,44 @@ export function dateRangeEnding(localDate: string, length: number): string[] {
   return Array.from({ length }, (_, index) => dateWithOffsetFrom(localDate, index - length + 1));
 }
 
+export function calendarWeekRange(
+  localDate: string,
+  weekStartsOn: 0 | 1 | 6 = 1,
+): string[] {
+  const anchor = new Date(`${localDate}T12:00:00`);
+  const offset = (anchor.getDay() - weekStartsOn + 7) % 7;
+  const start = dateWithOffsetFrom(localDate, -offset);
+  return Array.from({ length: 7 }, (_, index) =>
+    dateWithOffsetFrom(start, index),
+  );
+}
+
 export function monthDateRange(localDate: string): string[] {
   const date = new Date(`${localDate}T12:00:00`);
   const days = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   return Array.from({ length: days }, (_, index) => dateKey(new Date(date.getFullYear(), date.getMonth(), index + 1, 12)));
+}
+
+export function yearDateRange(localDate: string): string[] {
+  const date = new Date(`${localDate}T12:00:00`);
+  const year = date.getFullYear();
+  const days =
+    (new Date(year + 1, 0, 1, 12).getTime() -
+      new Date(year, 0, 1, 12).getTime()) /
+    86400000;
+  return Array.from({ length: days }, (_, index) =>
+    dateKey(new Date(year, 0, index + 1, 12)),
+  );
+}
+
+export function calendarPeriodRange(
+  localDate: string,
+  period: "week" | "month" | "year",
+  weekStartsOn: 0 | 1 | 6 = 1,
+): string[] {
+  if (period === "week") return calendarWeekRange(localDate, weekStartsOn);
+  if (period === "month") return monthDateRange(localDate);
+  return yearDateRange(localDate);
 }
 
 export function relativeTime(isoString: string): string {

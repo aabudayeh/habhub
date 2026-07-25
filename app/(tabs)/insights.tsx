@@ -19,6 +19,7 @@ import {
 } from "@/src/components/ReorderItem";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
+import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
@@ -29,7 +30,8 @@ import {
 } from "@/src/components/ui";
 import {
   dateKey,
-  dateRangeEnding,
+  calendarPeriodRange,
+  calendarWeekRange,
   dateWithOffsetFrom,
   friendlyDate,
   monthDateRange,
@@ -53,9 +55,18 @@ import {
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { AppState, MetricDefinition } from "@/src/types";
+import {
+  AppState,
+  HistoryRange,
+  MetricDefinition,
+  ProgressViewMode,
+} from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { isVacationDate } from "@/src/domain/vacation";
+import {
+  activeTrackerViewLabel,
+  metricMatchesActiveView,
+} from "@/src/domain/viewFilters";
 
 const TRACKED = "tracked_goals";
 const TRACKED_COLOR = "#9B6BDB";
@@ -78,7 +89,8 @@ export default function Insights() {
     (metric) =>
       !isInternalTracker(metric) &&
       metric.sections.insights &&
-      metric.dataType !== "text",
+      metric.dataType !== "text" &&
+      metricMatchesActiveView(state, metric, today),
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(
     (state.settings.progressMetricIds?.length
@@ -95,6 +107,9 @@ export default function Insights() {
     useState<ReorderDragState | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [view, setView] = useState<ViewMode>("week");
+  const progressMode = state.settings.progressViewMode ?? "overview";
+  const historyRange = state.settings.progressHistoryRange ?? "week";
+  const [historyAnchor, setHistoryAnchor] = useState(today);
   const [month, setMonth] = useState(today);
   const [weekAnchor, setWeekAnchor] = useState(today);
   useEffect(() => {
@@ -109,11 +124,14 @@ export default function Insights() {
   const tracked = selectedIds.includes(TRACKED);
   const dates =
     view === "week"
-      ? dateRangeEnding(weekAnchor, 7)
+      ? calendarWeekRange(
+          weekAnchor,
+          state.settings.weekStartsOn ?? 1,
+        )
       : monthDateRange(month).filter((date) => date <= today);
   // Keep the visual and summaries on the same calendar range. This also makes
   // Month agree with the Leaderboard Month calculation.
-  const summaryDates = dates;
+  const summaryDates = dates.filter((date) => date <= today);
   const selectorItems = [
     {
       id: TRACKED,
@@ -258,6 +276,33 @@ export default function Insights() {
     [editing, shiftVisualPeriod],
   );
 
+  if (progressMode !== "overview")
+    return (
+      <GoalMapProgress
+        state={state}
+        metrics={selectedMetrics}
+        selectedIds={selectedIds}
+        mode={progressMode}
+        range={historyRange}
+        anchor={historyAnchor}
+        onAnchorChange={setHistoryAnchor}
+        onModeChange={(progressViewMode) =>
+          updateSettings({ progressViewMode })
+        }
+        onRangeChange={(progressHistoryRange) =>
+          updateSettings({ progressHistoryRange })
+        }
+        onOpenDay={openDay}
+        onOpenEditor={() => setEditing(true)}
+        onToggleUntracked={() =>
+          updateSettings({
+            showUntrackedProgress:
+              state.settings.showUntrackedProgress === false,
+          })
+        }
+      />
+    );
+
   return (
     <Screen
       contentContainerStyle={{ paddingBottom: 14 }}
@@ -279,6 +324,21 @@ export default function Insights() {
           ) : undefined
         }
       />
+      <ProgressModeBar
+        mode={progressMode}
+        onChange={(progressViewMode) =>
+          updateSettings({ progressViewMode })
+        }
+      />
+      <Pressable
+        onPress={() => router.navigate("/view-filters" as never)}
+        style={styles.activeFilter}
+      >
+        <Ionicons name="funnel-outline" size={12} color={accent} />
+        <Text style={[styles.activeFilterText, { color: accent }]}>
+          {activeTrackerViewLabel(state)}
+        </Text>
+      </Pressable>
       <View style={styles.legendWrap}>
         {legendItems.map((item) => (
           <View
@@ -351,7 +411,7 @@ export default function Insights() {
             </Pressable>
             <View style={styles.navCopy}>
               <Text style={[styles.cardTitle, { color: colors.ink }]}>
-                7-day trend
+                Week
               </Text>
               <Text style={[styles.legend, { color: colors.muted }]}>
                 {friendlyDate(dates[0])} – {friendlyDate(dates[6])}
@@ -440,7 +500,7 @@ export default function Insights() {
       )}
       </View>
       <SectionHeader
-        title={`${view === "week" ? "7-day" : "30-day"} summaries`}
+        title={`${view === "week" ? "Week" : "Month"} summaries`}
       />
       <View style={styles.summaries}>
         {tracked ? (
@@ -553,6 +613,277 @@ export default function Insights() {
           setShowPicker(false);
         }}
       />
+    </Screen>
+  );
+}
+
+function ProgressModeBar({
+  mode,
+  onChange,
+}: {
+  mode: ProgressViewMode;
+  onChange: (mode: ProgressViewMode) => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  return (
+    <View
+      style={[
+        styles.progressModes,
+        { backgroundColor: colors.card, borderColor: colors.border },
+      ]}
+    >
+      {(
+        [
+          ["overview", "Overview", "stats-chart-outline"],
+          ["goal_maps", "Goal maps", "calendar-outline"],
+          ["compact", "Compact", "grid-outline"],
+        ] as const
+      ).map(([value, label, icon]) => {
+        const selected = mode === value;
+        return (
+          <Pressable
+            key={value}
+            onPress={() => onChange(value)}
+            style={[
+              styles.progressMode,
+              selected && { backgroundColor: `${accent}18` },
+            ]}
+          >
+            <Ionicons
+              name={icon}
+              size={14}
+              color={selected ? accent : colors.muted}
+            />
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.progressModeText,
+                { color: selected ? accent : colors.muted },
+              ]}
+            >
+              {label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function GoalMapProgress({
+  state,
+  metrics,
+  mode,
+  range,
+  anchor,
+  onAnchorChange,
+  onModeChange,
+  onRangeChange,
+  onOpenDay,
+  onOpenEditor,
+  onToggleUntracked,
+}: {
+  state: AppState;
+  metrics: MetricDefinition[];
+  selectedIds: string[];
+  mode: ProgressViewMode;
+  range: HistoryRange;
+  anchor: string;
+  onAnchorChange: (date: string) => void;
+  onModeChange: (mode: ProgressViewMode) => void;
+  onRangeChange: (range: HistoryRange) => void;
+  onOpenDay: (date: string) => void;
+  onOpenEditor: () => void;
+  onToggleUntracked: () => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const today = dateKey();
+  const showUntracked = state.settings.showUntrackedProgress !== false;
+  const visibleMetrics = showUntracked
+    ? metrics
+    : metrics.filter((metric) =>
+        isMetricTrackedOnDate(state, metric, today),
+      );
+  const dates = calendarPeriodRange(
+    anchor,
+    range,
+    state.settings.weekStartsOn ?? 1,
+  );
+  const shift = (direction: -1 | 1) => {
+    const date = new Date(`${anchor}T12:00:00`);
+    if (range === "week") date.setDate(date.getDate() + direction * 7);
+    else if (range === "month") date.setMonth(date.getMonth() + direction);
+    else date.setFullYear(date.getFullYear() + direction);
+    const next = dateKey(date);
+    if (next <= today || direction < 0) onAnchorChange(next);
+  };
+  const label =
+    range === "week"
+      ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[6])}`
+      : new Intl.DateTimeFormat(undefined, {
+          month: range === "month" ? "long" : undefined,
+          year: "numeric",
+        }).format(new Date(`${anchor}T12:00:00`));
+  return (
+    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
+      <PageHeader title="Progress" />
+      <ProgressModeBar mode={mode} onChange={onModeChange} />
+      <Card style={styles.mapControls}>
+        <View style={styles.rangeRow}>
+          {(["week", "month", "year"] as HistoryRange[]).map((item) => (
+            <Chip
+              key={item}
+              label={
+                item === "week"
+                  ? "Week"
+                  : item === "month"
+                    ? "Month"
+                    : "Year"
+              }
+              selected={range === item}
+              onPress={() => onRangeChange(item)}
+            />
+          ))}
+        </View>
+        <View style={styles.periodNav}>
+          <Pressable
+            onPress={() => shift(-1)}
+            style={[styles.mapArrow, { backgroundColor: colors.canvas }]}
+          >
+            <Ionicons name="chevron-back" size={18} color={colors.ink} />
+          </Pressable>
+          <Text style={[styles.mapPeriod, { color: colors.ink }]}>{label}</Text>
+          <Pressable
+            onPress={() => shift(1)}
+            style={[styles.mapArrow, { backgroundColor: colors.canvas }]}
+          >
+            <Ionicons name="chevron-forward" size={18} color={colors.ink} />
+          </Pressable>
+        </View>
+        <View style={styles.mapUtilityRow}>
+          <Pressable onPress={onToggleUntracked} style={styles.mapUtility}>
+            <Ionicons
+              name={showUntracked ? "eye-outline" : "eye-off-outline"}
+              size={14}
+              color={accent}
+            />
+            <Text style={[styles.mapUtilityText, { color: accent }]}>
+              {showUntracked ? "Untracked shown" : "Tracked only"}
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              onModeChange("overview");
+              onOpenEditor();
+            }}
+            style={styles.mapUtility}
+          >
+            <Ionicons name="options-outline" size={14} color={accent} />
+            <Text style={[styles.mapUtilityText, { color: accent }]}>
+              Edit view
+            </Text>
+          </Pressable>
+        </View>
+        <Pressable
+          onPress={() => router.navigate("/view-filters" as never)}
+          style={styles.mapFilter}
+        >
+          <Ionicons name="funnel-outline" size={13} color={accent} />
+          <Text style={[styles.mapUtilityText, { color: accent }]}>
+            {activeTrackerViewLabel(state)}
+          </Text>
+          <Ionicons name="chevron-forward" size={13} color={accent} />
+        </Pressable>
+      </Card>
+      <View
+        style={mode === "compact" ? styles.compactMaps : styles.detailedMaps}
+      >
+        {visibleMetrics.map((metric) => {
+          const period = metricPeriodStats(
+            state,
+            metric,
+            state.currentUserId,
+            dates.filter((date) => date <= today),
+          );
+          return (
+            <Pressable
+              key={metric.id}
+              onPress={() =>
+                router.navigate({
+                  pathname: "/metric-detail",
+                  params: { metricId: metric.id },
+                } as never)
+              }
+              style={mode === "compact" ? styles.compactMapWrap : undefined}
+            >
+              <Card
+                style={[
+                  styles.mapCard,
+                  mode === "compact" && styles.compactMapCard,
+                ]}
+              >
+                <View style={styles.mapHeading}>
+                  <View
+                    style={[
+                      styles.mapIcon,
+                      { backgroundColor: `${metric.color}18` },
+                    ]}
+                  >
+                    <Ionicons
+                      name={metric.icon as keyof typeof Ionicons.glyphMap}
+                      size={16}
+                      color={metric.color}
+                    />
+                  </View>
+                  <View style={styles.grow}>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.mapName, { color: colors.ink }]}
+                    >
+                      {metric.name}
+                    </Text>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.mapMeta, { color: colors.muted }]}
+                    >
+                      {period.loggedDates.length} logged ·{" "}
+                      {period.applicableDates.length
+                        ? Math.round(
+                            (period.goalsReached /
+                              period.applicableDates.length) *
+                              100,
+                          )
+                        : 0}
+                      %
+                    </Text>
+                  </View>
+                  {isMetricTrackedOnDate(state, metric, today) ? (
+                    <Ionicons name="flag" size={13} color={accent} />
+                  ) : null}
+                </View>
+                <GoalHeatmap
+                  state={state}
+                  metric={metric}
+                  dates={dates}
+                  range={range}
+                  compact={mode === "compact"}
+                  onSelect={onOpenDay}
+                />
+              </Card>
+            </Pressable>
+          );
+        })}
+      </View>
+      {!visibleMetrics.length ? (
+        <Card>
+          <Text style={[styles.hint, { color: colors.muted }]}>
+            No trackers match this view. Show untracked trackers or edit the
+            Progress selection.
+          </Text>
+        </Card>
+      ) : null}
     </Screen>
   );
 }
@@ -984,6 +1315,109 @@ function MetricSummary({
 }
 
 const styles = StyleSheet.create({
+  grow: { flex: 1, minWidth: 0 },
+  progressModes: {
+    minHeight: 42,
+    flexDirection: "row",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 3,
+    marginTop: -7,
+    marginBottom: 9,
+  },
+  progressMode: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    paddingHorizontal: 4,
+  },
+  progressModeText: { fontSize: 8, fontWeight: "900" },
+  activeFilter: {
+    alignSelf: "flex-end",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 2,
+    marginBottom: 5,
+  },
+  activeFilterText: { fontSize: 8, fontWeight: "900" },
+  mapControls: { gap: 8, marginBottom: 9 },
+  rangeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  periodNav: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  mapArrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mapPeriod: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  mapUtilityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  mapUtility: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingVertical: 4,
+  },
+  mapUtilityText: { fontSize: 8, fontWeight: "900" },
+  mapFilter: {
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  detailedMaps: { gap: 8 },
+  compactMaps: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    alignItems: "flex-start",
+  },
+  compactMapWrap: { width: "48.8%" },
+  mapCard: { gap: 8 },
+  compactMapCard: {
+    minHeight: 82,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    gap: 5,
+  },
+  mapHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  mapIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mapName: { fontSize: 9, fontWeight: "900" },
+  mapMeta: { fontSize: 7, fontWeight: "700", marginTop: 1 },
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },

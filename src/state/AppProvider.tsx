@@ -47,7 +47,9 @@ import {
 } from "@/src/domain/trackerCatalog";
 import { palette } from "@/src/theme";
 import {
+  ActivityTimer,
   AppState,
+  CalendarReminder,
   DashboardSection,
   EnergyProfile,
   EntryDetails,
@@ -56,11 +58,13 @@ import {
   GymPlan,
   GymSession,
   GymExerciseGoal,
+  JournalNote,
   MetricDefinition,
   MetricEntry,
   MuscleGroup,
   NewMetric,
   PhotoUpdate,
+  TodoItem,
   Visibility,
 } from "@/src/types";
 
@@ -131,6 +135,14 @@ type Action =
       recipientId?: string;
       imageUri?: string;
     }
+  | { type: "saveTodo"; todo: TodoItem }
+  | { type: "deleteTodo"; todoId: string }
+  | { type: "toggleTodo"; todoId: string; localDate: string }
+  | { type: "saveJournalNote"; note: JournalNote }
+  | { type: "deleteJournalNote"; noteId: string }
+  | { type: "saveCalendarReminder"; reminder: CalendarReminder }
+  | { type: "deleteCalendarReminder"; reminderId: string }
+  | { type: "activityTimer"; timer?: ActivityTimer }
   | { type: "settings"; changes: Partial<AppState["settings"]> }
   | { type: "energyProfile"; changes: Partial<EnergyProfile> }
   | { type: "createGroup"; name: string; options?: GroupCreationOptions }
@@ -1168,6 +1180,79 @@ function reducer(state: AppState, action: Action): AppState {
           },
         ],
       };
+    case "saveTodo":
+      return {
+        ...state,
+        todos: [
+          ...(state.todos ?? []).filter((todo) => todo.id !== action.todo.id),
+          action.todo,
+        ],
+      };
+    case "deleteTodo":
+      return {
+        ...state,
+        todos: (state.todos ?? []).filter((todo) => todo.id !== action.todoId),
+        calendarReminders: (state.calendarReminders ?? []).filter(
+          (reminder) => reminder.todoId !== action.todoId,
+        ),
+      };
+    case "toggleTodo":
+      return {
+        ...state,
+        todos: (state.todos ?? []).map((todo) => {
+          if (todo.id !== action.todoId) return todo;
+          const completed = todo.completedDates.includes(action.localDate);
+          return {
+            ...todo,
+            completedDates: completed
+              ? todo.completedDates.filter(
+                  (date) => date !== action.localDate,
+                )
+              : [...todo.completedDates, action.localDate].sort(),
+            completedAt: todo.recurrence
+              ? undefined
+              : completed
+                ? undefined
+                : new Date().toISOString(),
+          };
+        }),
+      };
+    case "saveJournalNote":
+      return {
+        ...state,
+        journalNotes: [
+          ...(state.journalNotes ?? []).filter(
+            (note) => note.id !== action.note.id,
+          ),
+          action.note,
+        ],
+      };
+    case "deleteJournalNote":
+      return {
+        ...state,
+        journalNotes: (state.journalNotes ?? []).filter(
+          (note) => note.id !== action.noteId,
+        ),
+      };
+    case "saveCalendarReminder":
+      return {
+        ...state,
+        calendarReminders: [
+          ...(state.calendarReminders ?? []).filter(
+            (reminder) => reminder.id !== action.reminder.id,
+          ),
+          action.reminder,
+        ],
+      };
+    case "deleteCalendarReminder":
+      return {
+        ...state,
+        calendarReminders: (state.calendarReminders ?? []).filter(
+          (reminder) => reminder.id !== action.reminderId,
+        ),
+      };
+    case "activityTimer":
+      return { ...state, activeTimer: action.timer };
     case "settings": {
       const next = { ...state, settings: { ...state.settings, ...action.changes } };
       return action.changes.weightDirection
@@ -1589,6 +1674,14 @@ type AppContextValue = {
     recipientId?: string,
     imageUri?: string,
   ) => void;
+  saveTodo: (todo: TodoItem) => void;
+  deleteTodo: (todoId: string) => void;
+  toggleTodo: (todoId: string, localDate: string) => void;
+  saveJournalNote: (note: JournalNote) => void;
+  deleteJournalNote: (noteId: string) => void;
+  saveCalendarReminder: (reminder: CalendarReminder) => void;
+  deleteCalendarReminder: (reminderId: string) => void;
+  setActivityTimer: (timer?: ActivityTimer) => void;
   updateSettings: (changes: Partial<AppState["settings"]>) => void;
   updateEnergyProfile: (changes: Partial<EnergyProfile>) => void;
   createGroup: (name: string, options?: GroupCreationOptions) => void;
@@ -2083,6 +2176,19 @@ export function AppProvider({ children }: PropsWithChildren) {
           recipientId,
           imageUri,
         }),
+      saveTodo: (todo) => dispatch({ type: "saveTodo", todo }),
+      deleteTodo: (todoId) => dispatch({ type: "deleteTodo", todoId }),
+      toggleTodo: (todoId, localDate) =>
+        dispatch({ type: "toggleTodo", todoId, localDate }),
+      saveJournalNote: (note) =>
+        dispatch({ type: "saveJournalNote", note }),
+      deleteJournalNote: (noteId) =>
+        dispatch({ type: "deleteJournalNote", noteId }),
+      saveCalendarReminder: (reminder) =>
+        dispatch({ type: "saveCalendarReminder", reminder }),
+      deleteCalendarReminder: (reminderId) =>
+        dispatch({ type: "deleteCalendarReminder", reminderId }),
+      setActivityTimer: (timer) => dispatch({ type: "activityTimer", timer }),
       updateSettings: (changes) => dispatch({ type: "settings", changes }),
       updateEnergyProfile: (changes) =>
         dispatch({ type: "energyProfile", changes }),
