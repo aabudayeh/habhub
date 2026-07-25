@@ -51,10 +51,49 @@ const labels: Record<BadgePeriod, string> = {
   achievement: "Achievements",
 };
 
+type BadgeCache = {
+  anchor: string;
+  group: AppState["group"];
+  metrics: AppState["metrics"];
+  entries: AppState["entries"];
+  statuses: AppState["dailyMetricStatuses"];
+  trackedGoals: AppState["trackedGoalPeriods"];
+  energyProfiles: AppState["energyProfiles"];
+  gymSessions: AppState["gymSessions"];
+  photos: AppState["photos"];
+  energyProfile: AppState["settings"]["energyProfile"];
+  weightDirection: AppState["settings"]["weightDirection"];
+  baselineCalories: number;
+  foodGoalMode: AppState["settings"]["foodGoalMode"];
+  vacationPeriods: AppState["settings"]["vacationPeriods"];
+  currentUserId: string;
+  result: EarnedBadge[];
+};
+
+let badgeCache: BadgeCache | undefined;
+
 export function buildBadges(
   state: AppState,
   anchor = dateKey(),
 ): EarnedBadge[] {
+  if (
+    badgeCache?.anchor === anchor &&
+    badgeCache.group === state.group &&
+    badgeCache.metrics === state.metrics &&
+    badgeCache.entries === state.entries &&
+    badgeCache.statuses === state.dailyMetricStatuses &&
+    badgeCache.trackedGoals === state.trackedGoalPeriods &&
+    badgeCache.energyProfiles === state.energyProfiles &&
+    badgeCache.gymSessions === state.gymSessions &&
+    badgeCache.photos === state.photos &&
+    badgeCache.energyProfile === state.settings.energyProfile &&
+    badgeCache.weightDirection === state.settings.weightDirection &&
+    badgeCache.baselineCalories === state.settings.baselineCalories &&
+    badgeCache.foodGoalMode === state.settings.foodGoalMode &&
+    badgeCache.vacationPeriods === state.settings.vacationPeriods &&
+    badgeCache.currentUserId === state.currentUserId
+  )
+    return badgeCache.result;
   const metrics = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
       metric.scoreWeight > 0 &&
@@ -298,7 +337,7 @@ export function buildBadges(
       anchorDate: anchor,
     };
   });
-  return [
+  const result: EarnedBadge[] = [
     overall(
       "live",
       "Live overall leader",
@@ -392,4 +431,23 @@ export function buildBadges(
         "Logged no more than 50g of carbohydrates on all seven days.",
     },
   ];
+  badgeCache = {
+    anchor,
+    group: state.group,
+    metrics: state.metrics,
+    entries: state.entries,
+    statuses: state.dailyMetricStatuses,
+    trackedGoals: state.trackedGoalPeriods,
+    energyProfiles: state.energyProfiles,
+    gymSessions: state.gymSessions,
+    photos: state.photos,
+    energyProfile: state.settings.energyProfile,
+    weightDirection: state.settings.weightDirection,
+    baselineCalories: state.settings.baselineCalories,
+    foodGoalMode: state.settings.foodGoalMode,
+    vacationPeriods: state.settings.vacationPeriods,
+    currentUserId: state.currentUserId,
+    result,
+  };
+  return result;
 }

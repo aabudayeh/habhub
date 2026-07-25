@@ -20,6 +20,8 @@ import {
   friendlyDate,
 } from "@/src/domain/date";
 import {
+  DEFICIT_ALIGNMENT_CLOSE_KCAL,
+  deficitAlignmentBand,
   deficitRealityCheckAtDate,
   displayGoalProgress,
   effectiveGoalTarget,
@@ -279,6 +281,14 @@ export default function TrackerDetail() {
     state.currentUserId,
     day,
   );
+  const overallAverageDiastolic = diastolicTracker
+    ? metricOverallAverage(
+        state,
+        diastolicTracker,
+        state.currentUserId,
+        day,
+      )
+    : 0;
   const applicable = metricApplicableOnDate(
     state,
     tracker,
@@ -345,6 +355,15 @@ export default function TrackerDetail() {
     tracker.id === "weight" && latestWeightDate
       ? deficitRealityCheckAtDate(state, state.currentUserId, latestWeightDate)
       : null;
+  const realityBand = reality ? deficitAlignmentBand(reality) : "neutral";
+  const realityColor =
+    realityBand === "close"
+      ? palette.lime
+      : realityBand === "warning"
+        ? palette.amber
+        : realityBand === "far"
+          ? palette.red
+          : colors.border;
   return (
     <Screen>
       <PageHeader
@@ -775,7 +794,11 @@ export default function TrackerDetail() {
             ) : null}
             <Stat
               label="Overall average"
-              value={formatMetricValue(tracker, overallAverage)}
+              value={
+                isBloodPressure
+                  ? `${Math.round(overallAverage)}/${Math.round(overallAverageDiastolic)} mmHg`
+                  : formatMetricValue(tracker, overallAverage)
+              }
               colors={colors}
             />
           </View>
@@ -835,7 +858,7 @@ export default function TrackerDetail() {
         </Card>
       ) : null}
       {reality ? (
-      <Card>
+      <Card style={{ borderColor: realityColor }}>
           <Text style={[styles.entryTitle, { color: colors.ink }]}>
             Reported vs scale-estimated energy
           </Text>
@@ -843,14 +866,14 @@ export default function TrackerDetail() {
             {reality.status === "insufficient"
               ? "Add at least two weight entries and log food between them to compare reported deficit with scale-estimated change."
               : reality.status === "aligned"
-                ? "Your measured change broadly matches your reported energy balance."
+                ? `The two estimates are within ${DEFICIT_ALIGNMENT_CLOSE_KCAL} kcal/day.`
                 : reality.status === "noise"
                   ? "Normal scale variation is larger than the current signal. Keep logging."
                   : `Measured change and reported energy differ across ${Math.round(reality.days)} days.`}
           </Text>
           {reality.status !== "insufficient" ? (
             <>
-              <Text style={[styles.entryValue, { color: accent }]}>
+              <Text style={[styles.entryValue, { color: realityColor }]}>
                 Logged {state.settings.weightDirection === "gain" ? "surplus" : "deficit"} {Math.round(reality.reportedDailyDeficit)} kcal/day ·
                 scale-implied {state.settings.weightDirection === "gain" ? "surplus" : "deficit"} {Math.round(reality.actualDailyDeficit)} kcal/day ·{" "}
                 {Math.abs(reality.weightChangeKg).toFixed(1)} kg change

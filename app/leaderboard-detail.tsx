@@ -49,6 +49,7 @@ import {
 } from "@/src/domain/members";
 import { imageSourceUri } from "@/src/domain/media";
 import {
+  deficitAlignmentBand,
   deficitRealityCheckAtDate,
   displayGoalProgress,
   effectiveGoalTarget,
@@ -426,6 +427,17 @@ export default function LeaderboardDetail() {
           const alignment = weightDay
             ? deficitRealityCheckAtDate(state, row.member.id, dates[0])
             : undefined;
+          const alignmentBand = alignment
+            ? deficitAlignmentBand(alignment)
+            : "neutral";
+          const alignmentColor =
+            alignmentBand === "close"
+              ? palette.lime
+              : alignmentBand === "warning"
+                ? palette.amber
+                : alignmentBand === "far"
+                  ? palette.red
+                  : accent;
           return (
             <Card key={row.member.id} style={styles.memberCard}>
               <Pressable
@@ -586,7 +598,7 @@ export default function LeaderboardDetail() {
                 <View
                   style={[
                     styles.alignment,
-                    { backgroundColor: colors.primarySoft },
+                    { backgroundColor: `${alignmentColor}18` },
                   ]}
                 >
                   <Ionicons
@@ -596,7 +608,7 @@ export default function LeaderboardDetail() {
                         : "analytics-outline"
                     }
                     size={20}
-                    color={accent}
+                    color={alignmentColor}
                   />
                   <View style={styles.copy}>
                     <Text style={[styles.logValue, { color: colors.ink }]}>Reporting alignment</Text>

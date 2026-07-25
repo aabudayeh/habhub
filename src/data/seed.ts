@@ -259,6 +259,7 @@ const BASE_METRICS: MetricDefinition[] = [
     aggregation: "average",
     rankingDirection: "higher",
     goal: { kind: "at_least", target: 0 },
+    goalEnabled: false,
     scoreWeight: 0,
     defaultVisibility: "group",
     sections: { today: false, group: false, insights: true },
@@ -747,7 +748,9 @@ export const DEFAULT_METRICS: MetricDefinition[] = BASE_METRICS.map(
     ...metric,
     category: CATEGORIES[metric.id] ?? "other",
     healthMapping: HEALTH_MAPPINGS[metric.id],
-    stepFallback: metric.id === "exercise",
+    stepFallback: ["exercise", "workout_duration", "workout_distance"].includes(
+      metric.id,
+    ),
     manualEntry: metric.id !== "steps",
   }),
 );

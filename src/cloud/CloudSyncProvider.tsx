@@ -29,6 +29,10 @@ import {
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
 import { dateKey } from "@/src/domain/date";
+import {
+  DEFAULT_GROUP_THEME,
+  groupMetricDefinitions,
+} from "@/src/domain/groupSetup";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
@@ -36,6 +40,7 @@ import {
   AppState,
   ChatMessage,
   Group,
+  GroupCreationOptions,
   Member,
   MetricEntry,
   PhotoUpdate,
@@ -75,7 +80,10 @@ type CloudSyncContextValue = {
   refreshDevices: () => Promise<void>;
   forgetDevice: (deviceId: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
-  createGroup: (name: string) => Promise<void>;
+  createGroup: (
+    name: string,
+    options?: GroupCreationOptions,
+  ) => Promise<void>;
   joinGroup: (code: string) => Promise<"active" | "pending">;
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
@@ -1302,26 +1310,26 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (error) throw error;
         await supabase.auth.signOut({ scope: "global" });
       },
-      createGroup: async (name) => {
+      createGroup: async (name, options) => {
         if (!auth.user)
           throw new Error("Sign in before creating a cloud group.");
         const me = stateRef.current.group.members.find(
           (member) => member.id === stateRef.current.currentUserId,
         );
+        const metricConfiguration = groupMetricDefinitions(
+          options?.metrics ?? [],
+          dateKey(),
+        );
+        const themeColor = options?.themeColor ?? DEFAULT_GROUP_THEME;
+        const requireMemberApproval =
+          options?.requireMemberApproval ?? false;
         const groupId = await createCloudGroup(
           name,
-          stateRef.current.metrics.map((metric) => ({
-            ...metric,
-            scoreWeight:
-              metric.goalEnabled === false ||
-              metric.dataType === "photo" ||
-              metric.dataType === "text"
-                ? 0
-                : 10,
-            sections: { ...metric.sections, group: true },
-          })),
+          metricConfiguration,
           auth.user,
           me?.name,
+          themeColor,
+          requireMemberApproval,
         );
         const current = me
           ? { ...me, role: "owner" as const }
@@ -1339,11 +1347,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           templateName: "Custom",
           members: [current],
           streakRestDaysPerWeek: 1,
-          themeColor: "#176B4D",
-          metricConfiguration: stateRef.current.metrics.map((metric) => ({
-            ...metric,
-            sections: { ...metric.sections, group: true },
-          })),
+          themeColor,
+          requireMemberApproval,
+          metricConfiguration,
         };
         const next = {
           ...stateRef.current,

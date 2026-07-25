@@ -37,8 +37,13 @@ Deno.serve(async(req)=>{
       return json({sent:0});
     }
     const {data:tokens,error:tokenError}=await admin.from('device_push_tokens').select('token, preferences').in('user_id',ids);if(tokenError)throw tokenError;
+    if(!(tokens??[]).length){
+      await admin.from('push_events').delete().eq('event_key',payload.eventKey);
+      claimedEvent=undefined;
+      return json({sent:0,retryable:true});
+    }
     const eligible=(tokens??[]).filter((item)=>allowed(item.preferences??{},payload));
-    const messages=eligible.map((item)=>({to:item.token,sound:'default',channelId:'paceboard',title:payload.title,body:payload.body,data:payload.data??{}}));
+    const messages=eligible.map((item)=>({to:item.token,sound:'default',channelId:'paceboard',priority:'high',title:payload.title,body:payload.body,data:payload.data??{}}));
     if(messages.length){
       const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messages)});
       if(!response.ok)throw new Error(`Expo push failed: ${response.status}`);

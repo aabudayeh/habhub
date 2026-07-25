@@ -21,7 +21,7 @@ import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
-import { Card, Chip, SectionHeader } from "./ui";
+import { Card, Chip } from "./ui";
 import { DraftNumberInput } from "./DraftNumberInput";
 
 export function EnergyProfileEditor() {
@@ -32,6 +32,7 @@ export function EnergyProfileEditor() {
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
   const direction = state.settings.weightDirection ?? "lose";
+  const [collapsed, setCollapsed] = React.useState(false);
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
   const weightPlan = weightProgressStats(
@@ -63,8 +64,12 @@ export function EnergyProfileEditor() {
   }
   return (
     <>
-      <SectionHeader title="Body & energy profile" />
-      <Card>
+      <CollapsibleSectionHeader
+        title="Body & energy profile"
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((value) => !value)}
+      />
+      {!collapsed ? <Card>
         <Text style={[styles.help, { color: colors.muted }]}>
           Used for your private BMR, recommended deficit, and food-intake goals.
         </Text>
@@ -262,7 +267,7 @@ export function EnergyProfileEditor() {
         <Text style={[styles.disclaimer, { color: colors.muted }]}>
           These planning estimates are not medical advice.
         </Text>
-      </Card>
+      </Card> : null}
     </>
   );
 }
@@ -271,10 +276,12 @@ export function MetricGoalsEditor() {
   const { state, updateMetric } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const [collapsed, setCollapsed] = React.useState(false);
   const metrics = state.metrics
     .filter(
       (metric) =>
         !isInternalTracker(metric) &&
+        metric.goalEnabled !== false &&
         metric.dataType !== "text" &&
         metric.dataType !== "photo" &&
         isMetricTrackedOnDate(state, metric, dateKey()),
@@ -282,15 +289,17 @@ export function MetricGoalsEditor() {
     .sort((a, b) => a.order - b.order);
   return (
     <>
-      <SectionHeader
+      <CollapsibleSectionHeader
         title="Metric goals"
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((value) => !value)}
         action={
           <Pressable onPress={() => router.push("/customize" as never)}>
             <Text style={[styles.link, { color: accent }]}>Full customization</Text>
           </Pressable>
         }
       />
-      <Card style={styles.goalList}>
+      {!collapsed ? <Card style={styles.goalList}>
         {metrics.length ? metrics.map((metric, index, list) => (
             <View
               key={metric.id}
@@ -330,10 +339,44 @@ export function MetricGoalsEditor() {
               </View>
             </View>
           )) : <Text style={[styles.help, { color: colors.muted, marginVertical: 12 }]}>No goals are currently tracked. Add one in customization.</Text>}
-      </Card>
+      </Card> : null}
     </>
   );
 }
+
+function CollapsibleSectionHeader({
+  title,
+  collapsed,
+  onToggle,
+  action,
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  action?: React.ReactNode;
+}) {
+  const colors = useAppColors();
+  return (
+    <View style={styles.sectionHeader}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: !collapsed }}
+        onPress={onToggle}
+        hitSlop={6}
+        style={styles.sectionToggle}
+      >
+        <Text style={[styles.sectionTitle, { color: colors.ink }]}>{title}</Text>
+        <Ionicons
+          name={collapsed ? "chevron-down" : "chevron-up"}
+          size={18}
+          color={colors.muted}
+        />
+      </Pressable>
+      {action}
+    </View>
+  );
+}
+
 function Stat({
   value,
   label,
@@ -353,6 +396,26 @@ function Stat({
   );
 }
 const styles = StyleSheet.create({
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  sectionToggle: {
+    flex: 1,
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  sectionTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
+  },
   help: { color: palette.muted, fontSize: 11, lineHeight: 16, marginBottom: 8 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
   field: { width: "48%", minWidth: 130 },

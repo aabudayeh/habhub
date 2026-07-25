@@ -390,7 +390,10 @@ export default function MemberProfile() {
   const pageSwipeResponder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+        // Do not capture child touches: selectors, date controls, and links
+        // should receive their press immediately. The page only claims a
+        // gesture after a deliberate horizontal drag.
+        onMoveShouldSetPanResponder: (_event, gesture) =>
           !calendarOpen &&
           Math.abs(gesture.dx) > 22 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
@@ -802,7 +805,14 @@ export default function MemberProfile() {
           <SectionHeader
             title={`${memberDisplayName(state, member)}'s badge showcase`}
             action={
-              <Pressable onPress={() => router.navigate("/badges" as never)}>
+              <Pressable
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/badges",
+                    params: { anchor, filter: "achievement" },
+                  } as never)
+                }
+              >
                 <Text style={[styles.badgeLink, { color: colors.primary }]}>All badges</Text>
               </Pressable>
             }

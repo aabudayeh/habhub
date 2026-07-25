@@ -6,11 +6,38 @@ import { EXERCISE_CATALOG, MUSCLE_LABELS } from '@/src/domain/exerciseCatalog';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
-export function isInternalTracker(metric: { id: string; healthMapping?: NewMetric["healthMapping"] }) {
+export function isBloodPressureSystolic(metric: {
+  id?: string;
+  templateId?: string;
+  healthMapping?: NewMetric["healthMapping"];
+}) {
+  return (
+    metric.id === "blood_pressure_systolic" ||
+    metric.templateId === "blood_pressure_systolic" ||
+    (metric.healthMapping?.dataType === "blood_pressure" &&
+      metric.healthMapping.field === "systolic")
+  );
+}
+
+export function isBloodPressureDiastolic(metric: {
+  id?: string;
+  templateId?: string;
+  healthMapping?: NewMetric["healthMapping"];
+}) {
   return (
     metric.id === "blood_pressure_diastolic" ||
+    metric.templateId === "blood_pressure_diastolic" ||
     (metric.healthMapping?.dataType === "blood_pressure" &&
       metric.healthMapping.field === "diastolic")
+  );
+}
+
+export function isInternalTracker(metric: {
+  id: string;
+  healthMapping?: NewMetric["healthMapping"];
+}) {
+  return (
+    isBloodPressureDiastolic(metric)
   );
 }
 

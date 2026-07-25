@@ -15,6 +15,10 @@ import {
 } from "@/src/domain/metrics";
 import { normalizeEnergyProfile } from "@/src/domain/energy";
 import {
+  isBloodPressureDiastolic,
+  isBloodPressureSystolic,
+} from "@/src/domain/trackerCatalog";
+import {
   isVacationDate,
   vacationDates,
 } from "@/src/domain/vacation";
@@ -98,7 +102,10 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     aggregation: row.aggregation_method,
     rankingDirection: row.ranking_direction,
     goal: configuration.goal ?? { kind: "at_least", target: 1 },
-    goalEnabled: configuration.goalEnabled ?? true,
+    goalEnabled:
+      row.slug === "lean_body_mass"
+        ? false
+        : configuration.goalEnabled ?? preset?.goalEnabled ?? true,
     goalRange: configuration.goalRange,
     category,
     healthMapping: configuration.healthMapping ?? preset?.healthMapping,
@@ -477,6 +484,8 @@ export async function createCloudGroup(
   metrics: MetricDefinition[],
   user: User,
   displayName?: string,
+  themeColor = "#176B4D",
+  requireMemberApproval = false,
 ) {
   const client = requireCloud();
   if (displayName?.trim()) {
@@ -491,13 +500,24 @@ export async function createCloudGroup(
     {
       group_name: name.trim(),
       metric_configuration: metrics,
-      group_theme_color: "#176B4D",
+      group_theme_color: themeColor,
     },
   );
   if (!atomicError && atomicGroupId) {
     // The RPC creates membership atomically; this follow-up writes the complete
     // versioned configuration (including schedules, reminders and mappings).
     await upsertMetrics(atomicGroupId as string, metrics);
+    const { error: settingsError } = await client
+      .from("groups")
+      .update({
+        settings: {
+          streakRestDaysPerWeek: 1,
+          themeColor,
+          requireMemberApproval,
+        },
+      })
+      .eq("id", atomicGroupId);
+    if (settingsError) throw settingsError;
     return atomicGroupId as string;
   }
   if (
@@ -517,7 +537,11 @@ export async function createCloudGroup(
         name: name.trim(),
         invite_code: inviteCode(),
         template_name: "Healthy Competition",
-        settings: { streakRestDaysPerWeek: 1, themeColor: "#176B4D" },
+        settings: {
+          streakRestDaysPerWeek: 1,
+          themeColor,
+          requireMemberApproval,
+        },
       })
       .select("id")
       .single();
@@ -652,7 +676,13 @@ export async function loadCloudWorkspace(
   );
   const missingTracked = groupMetrics.filter(
     (metric) =>
-      metric.sections.group &&
+      (metric.sections.group ||
+        (isBloodPressureDiastolic(metric) &&
+          groupMetrics.some(
+            (candidate) =>
+              candidate.sections.group &&
+              isBloodPressureSystolic(candidate),
+          ))) &&
       !state.metrics.some((personal) => personal.id === metric.id),
   );
   const personalMetrics = [
@@ -688,7 +718,11 @@ export async function loadCloudWorkspace(
       ...metric,
       defaultVisibility: "group" as const,
       order: state.metrics.length + index,
-      sections: { ...metric.sections, today: true, insights: true },
+      sections: {
+        ...metric.sections,
+        today: !isBloodPressureDiastolic(metric),
+        insights: !isBloodPressureDiastolic(metric),
+      },
     })),
   ];
   const { data: metricRows, error: metricError } = await client
@@ -980,6 +1014,8 @@ export async function pushCloudMessagesNow(state: AppState) {
           body: message.text || "Sent an image",
           data: {
             route: "/chat",
+            messageId: message.id,
+            senderName: sender.name,
             conversationId:
               message.conversationId ?? `group:${state.group.id}`,
           },
@@ -1415,6 +1451,8 @@ export async function pushCloudWorkspace(state: AppState) {
           body: message.text || "Sent an image",
           data: {
             route: "/chat",
+            messageId: message.id,
+            senderName: current.name,
             conversationId: message.conversationId ?? `group:${state.group.id}`,
           },
         },

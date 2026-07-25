@@ -22,6 +22,18 @@ Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
 });
 
+async function ensureNotificationChannel() {
+  if (Platform.OS !== 'android') return;
+  await Notifications.setNotificationChannelAsync('paceboard', {
+    name: 'MetricRally messages and updates',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 200, 120, 200],
+    sound: 'default',
+    showBadge: true,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+  });
+}
+
 function storedPreferences(preferences: NotificationSettings) {
   return { ...preferences, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
 }
@@ -29,7 +41,7 @@ function storedPreferences(preferences: NotificationSettings) {
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
-  if (Platform.OS === 'android') await Notifications.setNotificationChannelAsync('paceboard', { name: 'MetricRally', importance: Notifications.AndroidImportance.HIGH, vibrationPattern: [0, 200, 120, 200] });
+  await ensureNotificationChannel();
   let permission = await Notifications.getPermissionsAsync();
   const granted = () => permission.granted || permission.status === Notifications.PermissionStatus.GRANTED;
   if (!granted()) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
@@ -46,6 +58,7 @@ export async function enablePushNotifications(userId: string, preferences: Notif
 
 export async function updatePushPreferences(userId: string, preferences: NotificationSettings) {
   if (!supabase || Platform.OS === 'web') return;
+  await ensureNotificationChannel();
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
   const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;

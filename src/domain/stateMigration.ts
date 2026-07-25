@@ -1,4 +1,8 @@
 import { AppState, MetricDefinition } from "@/src/types";
+import {
+  isBloodPressureDiastolic,
+  isBloodPressureSystolic,
+} from "@/src/domain/trackerCatalog";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -52,13 +56,54 @@ function upgradeMetricList(
   ];
 }
 
+function pruneOrphanedInternalMetrics(metrics: MetricDefinition[]) {
+  return metrics.some(isBloodPressureSystolic)
+    ? metrics
+    : metrics.filter((metric) => !isBloodPressureDiastolic(metric));
+}
+
+function repairKnownMetricDefaults(metric: MetricDefinition) {
+  if (metric.id === "lean_body_mass")
+    return { ...metric, goalEnabled: false };
+  if (
+    ["exercise", "workout_duration", "workout_distance"].includes(metric.id)
+  )
+    return { ...metric, stepFallback: true };
+  return metric;
+}
+
+function repairedMetricList(metrics: MetricDefinition[]) {
+  return pruneOrphanedInternalMetrics(metrics).map(repairKnownMetricDefaults);
+}
+
+function repairOrphanedGroupMetrics(state: AppState): AppState {
+  const groups = state.groups.map((group) => ({
+    ...group,
+    metricConfiguration: group.metricConfiguration
+      ? repairedMetricList(group.metricConfiguration)
+      : group.metricConfiguration,
+  }));
+  const group = {
+    ...state.group,
+    metricConfiguration: state.group.metricConfiguration
+      ? repairedMetricList(state.group.metricConfiguration)
+      : state.group.metricConfiguration,
+  };
+  return {
+    ...state,
+    metrics: repairedMetricList(state.metrics),
+    group,
+    groups: groups.map((item) => (item.id === group.id ? group : item)),
+  };
+}
+
 /** One-time local/cloud snapshot repair for the unified activity model. */
 export function upgradeStateV21(
   state: AppState,
   defaults: AppState,
   sourceVersion = Number(state.version ?? 1),
 ): AppState {
-  if (sourceVersion >= 21) return state;
+  if (sourceVersion >= 21) return repairOrphanedGroupMetrics(state);
   const metrics = upgradeMetricList(state.metrics, defaults);
   const groups = state.groups.map((group) => ({
     ...group,
@@ -72,7 +117,7 @@ export function upgradeStateV21(
       ? upgradeMetricList(state.group.metricConfiguration, defaults)
       : state.group.metricConfiguration,
   };
-  return {
+  return repairOrphanedGroupMetrics({
     ...state,
     version: 21,
     metrics,
@@ -83,5 +128,5 @@ export function upgradeStateV21(
       fontScale: 1.12,
       showAllTodayTiles: true,
     },
-  };
+  });
 }

@@ -27,6 +27,7 @@ import {
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
 import {
+  deficitAlignmentBand,
   deficitRealityCheckAtDate,
   displayGoalProgress,
   effectiveGoalTarget,
@@ -839,7 +840,15 @@ function AlignmentCard({
   status: ReturnType<typeof deficitRealityCheckAtDate>;
 }) {
   const colors = useAppColors();
-  const accent = useGroupAccent();
+  const band = deficitAlignmentBand(status);
+  const alignmentColor =
+    band === "close"
+      ? palette.lime
+      : band === "warning"
+        ? palette.amber
+        : band === "far"
+          ? palette.red
+          : colors.border;
   const copy = {
     aligned: "Scale change roughly matches the reported deficit.",
     reported_ahead:
@@ -852,7 +861,7 @@ function AlignmentCard({
   return (
     <>
       <SectionHeader title="Reporting alignment" />
-      <Card style={styles.alignment}>
+      <Card style={[styles.alignment, { borderColor: alignmentColor }]}>
         <Ionicons
           name={
             status.status === "aligned"
@@ -860,7 +869,7 @@ function AlignmentCard({
               : "analytics-outline"
           }
           size={24}
-          color={accent}
+          color={alignmentColor}
         />
         <View style={styles.grow}>
           <Text style={[styles.alignmentTitle, { color: colors.ink }]}>
@@ -872,7 +881,7 @@ function AlignmentCard({
             {copy}
           </Text>
           {status.status !== "insufficient" ? (
-            <Text style={[styles.nutrition, { color: accent }]}>
+            <Text style={[styles.nutrition, { color: alignmentColor }]}>
               Logged planned energy balance {Math.round(status.reportedDailyDeficit)} kcal/day ·
               scale-implied balance {Math.round(status.actualDailyDeficit)} kcal/day
             </Text>

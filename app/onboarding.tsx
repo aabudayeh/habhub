@@ -162,6 +162,7 @@ export default function Onboarding() {
   const [customDataType, setCustomDataType] = useState<"number" | "boolean">(
     "number",
   );
+  const [customTrackerOpen, setCustomTrackerOpen] = useState(false);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [landingPage, setLandingPage] = useState<LandingPage>(
     (state.settings.selectedGoals ?? []).includes("friends")
@@ -794,18 +795,31 @@ export default function Onboarding() {
                     },
                   ]}
                 >
-                  <View style={styles.customHeading}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: customTrackerOpen }}
+                    onPress={() => setCustomTrackerOpen((value) => !value)}
+                    style={styles.customHeading}
+                  >
                     <Ionicons name="sparkles-outline" size={18} color={accent} />
                     <View style={styles.grow}>
                       <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                        Create your own tracker
+                        Add a custom tracker
                       </Text>
                       <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                        Start simple here; icons, formulas, and schedules remain
-                        available in Advanced settings.
+                        {customTrackerOpen
+                          ? "Start simple here; icons, formulas, and schedules remain available in Advanced settings."
+                          : "Optional · expand only if the ready-made trackers do not fit."}
                       </Text>
                     </View>
-                  </View>
+                    <Ionicons
+                      name={customTrackerOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={colors.faint}
+                    />
+                  </Pressable>
+                  {customTrackerOpen ? (
+                    <>
                   <TextInput
                     value={customName}
                     onChangeText={setCustomName}
@@ -820,19 +834,23 @@ export default function Onboarding() {
                       },
                     ]}
                   />
-                  <View style={styles.fields}>
-                    <Chip
-                      label="A number"
-                      icon="calculator-outline"
-                      selected={customDataType === "number"}
-                      onPress={() => setCustomDataType("number")}
-                    />
-                    <Chip
-                      label="Yes or no"
-                      icon="checkmark-circle-outline"
-                      selected={customDataType === "boolean"}
-                      onPress={() => setCustomDataType("boolean")}
-                    />
+                  <View style={styles.customTypeChoices}>
+                    <View style={styles.customTypeChoice}>
+                      <Chip
+                        label="A number"
+                        icon="calculator-outline"
+                        selected={customDataType === "number"}
+                        onPress={() => setCustomDataType("number")}
+                      />
+                    </View>
+                    <View style={styles.customTypeChoice}>
+                      <Chip
+                        label="Yes or no"
+                        icon="checkmark-circle-outline"
+                        selected={customDataType === "boolean"}
+                        onPress={() => setCustomDataType("boolean")}
+                      />
+                    </View>
                   </View>
                   {customDataType === "number" ? (
                     <View style={styles.fields}>
@@ -879,6 +897,8 @@ export default function Onboarding() {
                     size="small"
                     onPress={addCustomTracker}
                   />
+                    </>
+                  ) : null}
                 </View>
                 {grouped.map(([group, items]) => (
                   <View
@@ -1344,6 +1364,13 @@ const styles = StyleSheet.create({
   label: { fontSize: 10, fontWeight: "900", marginTop: 6, marginBottom: 6 },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
   fields: { flexDirection: "row", gap: 8 },
+  customTypeChoices: {
+    flexDirection: "row",
+    gap: 14,
+    marginTop: 2,
+    marginBottom: 14,
+  },
+  customTypeChoice: { flex: 1 },
   fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 },
   nameField: { marginBottom: 10 },
   validation: { fontSize: 9, fontWeight: "800", marginBottom: 8 },

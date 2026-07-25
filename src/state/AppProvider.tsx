@@ -37,6 +37,14 @@ import { defaultReminderTimes } from "@/src/domain/reminders";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { completedGymSets } from "@/src/domain/gym";
+import {
+  DEFAULT_GROUP_THEME,
+  groupMetricDefinitions,
+} from "@/src/domain/groupSetup";
+import {
+  isBloodPressureDiastolic,
+  isBloodPressureSystolic,
+} from "@/src/domain/trackerCatalog";
 import { palette } from "@/src/theme";
 import {
   AppState,
@@ -44,6 +52,7 @@ import {
   EnergyProfile,
   EntryDetails,
   Group,
+  GroupCreationOptions,
   GymPlan,
   GymSession,
   GymExerciseGoal,
@@ -124,7 +133,7 @@ type Action =
     }
   | { type: "settings"; changes: Partial<AppState["settings"]> }
   | { type: "energyProfile"; changes: Partial<EnergyProfile> }
-  | { type: "createGroup"; name: string }
+  | { type: "createGroup"; name: string; options?: GroupCreationOptions }
   | { type: "joinGroup"; code: string }
   | { type: "switchGroup"; groupId: string }
   | { type: "leaveGroup"; groupId: string }
@@ -185,6 +194,44 @@ function slugify(name: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+function linkedBloodPressureIds(
+  metrics: MetricDefinition[],
+  metricId: string,
+) {
+  const target = metrics.find((metric) => metric.id === metricId);
+  const ids = new Set([metricId]);
+  if (target && isBloodPressureSystolic(target))
+    metrics
+      .filter(isBloodPressureDiastolic)
+      .forEach((metric) => ids.add(metric.id));
+  return ids;
+}
+
+function withoutMetricSelections(
+  settings: AppState["settings"],
+  removedIds: Set<string>,
+): AppState["settings"] {
+  const remove = (ids: string[]) => ids.filter((id) => !removedIds.has(id));
+  return {
+    ...settings,
+    progressMetricIds: remove(settings.progressMetricIds),
+    leaderboardMetricIdsByGroup: Object.fromEntries(
+      Object.entries(settings.leaderboardMetricIdsByGroup).map(
+        ([groupId, ids]) => [groupId, remove(ids)],
+      ),
+    ),
+    comparisonMetricIdsByGroup: Object.fromEntries(
+      Object.entries(settings.comparisonMetricIdsByGroup).map(
+        ([groupId, ids]) => [groupId, remove(ids)],
+      ),
+    ),
+    notifications: {
+      ...settings.notifications,
+      metricIds: remove(settings.notifications.metricIds),
+    },
+  };
 }
 
 function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
@@ -574,27 +621,32 @@ function reducer(state: AppState, action: Action): AppState {
         },
       };
     }
-    case "deleteMetric":
+    case "deleteMetric": {
+      const removedIds = linkedBloodPressureIds(
+        state.metrics,
+        action.metricId,
+      );
       return {
         ...withPersonalMetrics(
           state,
           state.metrics
-            .filter((metric) => metric.id !== action.metricId)
+            .filter((metric) => !removedIds.has(metric.id))
             .map((metric, order) => ({ ...metric, order })),
         ),
         entries: state.entries.filter(
-          (entry) => entry.metricId !== action.metricId,
+          (entry) => !removedIds.has(entry.metricId),
         ),
         trackedGoalPeriods: Object.fromEntries(
           Object.entries(state.trackedGoalPeriods).filter(
-            ([metricId]) => metricId !== action.metricId,
+            ([metricId]) => !removedIds.has(metricId),
           ),
         ),
-        selectedGroupMetricId:
-          state.selectedGroupMetricId === action.metricId
+        settings: withoutMetricSelections(state.settings, removedIds),
+        selectedGroupMetricId: removedIds.has(state.selectedGroupMetricId)
             ? "steps"
             : state.selectedGroupMetricId,
       };
+    }
     case "deleteEntry":
       {
         const target = state.entries.find(
@@ -897,14 +949,20 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "deleteGroupMetric": {
+      const existing = state.group.metricConfiguration ?? [];
+      const removedIds = linkedBloodPressureIds(existing, action.metricId);
       const group = {
         ...state.group,
-        metricConfiguration: (state.group.metricConfiguration ?? [])
-          .filter((metric) => metric.id !== action.metricId)
+        metricConfiguration: existing
+          .filter((metric) => !removedIds.has(metric.id))
           .map((metric, order) => ({ ...metric, order })),
       };
       return {
         ...state,
+        settings: withoutMetricSelections(state.settings, removedIds),
+        selectedGroupMetricId: removedIds.has(state.selectedGroupMetricId)
+          ? "__score"
+          : state.selectedGroupMetricId,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
@@ -1152,6 +1210,10 @@ function reducer(state: AppState, action: Action): AppState {
         (member) => member.id === state.currentUserId,
       );
       if (!currentMember || !action.name.trim()) return state;
+      const metricConfiguration = groupMetricDefinitions(
+        action.options?.metrics ?? [],
+        dateKey(),
+      );
       const group: Group = {
         id: uniqueId("group"),
         name: action.name.trim(),
@@ -1159,21 +1221,42 @@ function reducer(state: AppState, action: Action): AppState {
         templateName: "Healthy Competition",
         members: [{ ...currentMember, role: "owner" }],
         streakRestDaysPerWeek: 1,
-        metricConfiguration: state.metrics.map((metric) => ({
-          ...metric,
-          scoreWeight:
-            metric.goalEnabled === false ||
-            metric.dataType === "photo" ||
-            metric.dataType === "text"
-              ? 0
-              : 10,
-          sections: { ...metric.sections, group: true },
-        })),
+        themeColor: action.options?.themeColor ?? DEFAULT_GROUP_THEME,
+        requireMemberApproval:
+          action.options?.requireMemberApproval ?? false,
+        metricConfiguration,
       };
       const groups = state.groups.map((candidate) =>
         candidate.id === state.group.id ? state.group : candidate,
       );
-      return { ...state, group, groups: [...groups, group] };
+      const missingPersonal = metricConfiguration.filter(
+        (metric) =>
+          !state.metrics.some((personal) => personal.id === metric.id),
+      );
+      return {
+        ...state,
+        group,
+        groups: [...groups, group],
+        metrics: [
+          ...state.metrics,
+          ...missingPersonal.map((metric, index) => ({
+            ...metric,
+            sections: {
+              ...metric.sections,
+              today: !isBloodPressureDiastolic(metric),
+              insights: !isBloodPressureDiastolic(metric),
+            },
+            order: state.metrics.length + index,
+          })),
+        ],
+        trackedGoalPeriods: {
+          ...state.trackedGoalPeriods,
+          ...Object.fromEntries(
+            missingPersonal.map((metric) => [metric.id, []]),
+          ),
+        },
+        selectedGroupMetricId: metricConfiguration[0]?.id ?? "__score",
+      };
     }
     case "joinGroup": {
       const normalized = action.code.trim().toUpperCase();
@@ -1193,16 +1276,7 @@ function reducer(state: AppState, action: Action): AppState {
         templateName: "Shared template",
         members: [{ ...currentMember, role: "member" }],
         streakRestDaysPerWeek: 1,
-        metricConfiguration: state.metrics.map((metric) => ({
-          ...metric,
-          scoreWeight:
-            metric.goalEnabled === false ||
-            metric.dataType === "photo" ||
-            metric.dataType === "text"
-              ? 0
-              : 10,
-          sections: { ...metric.sections, group: true },
-        })),
+        metricConfiguration: [],
       };
       const groups = state.groups.map((candidate) =>
         candidate.id === state.group.id ? state.group : candidate,
@@ -1517,7 +1591,7 @@ type AppContextValue = {
   ) => void;
   updateSettings: (changes: Partial<AppState["settings"]>) => void;
   updateEnergyProfile: (changes: Partial<EnergyProfile>) => void;
-  createGroup: (name: string) => void;
+  createGroup: (name: string, options?: GroupCreationOptions) => void;
   joinGroup: (code: string) => void;
   switchGroup: (groupId: string) => void;
   leaveGroup: (groupId: string) => void;
@@ -2012,7 +2086,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       updateSettings: (changes) => dispatch({ type: "settings", changes }),
       updateEnergyProfile: (changes) =>
         dispatch({ type: "energyProfile", changes }),
-      createGroup: (name) => dispatch({ type: "createGroup", name }),
+      createGroup: (name, options) =>
+        dispatch({ type: "createGroup", name, options }),
       joinGroup: (code) => dispatch({ type: "joinGroup", code }),
       switchGroup: (groupId) => dispatch({ type: "switchGroup", groupId }),
       leaveGroup: (groupId) => dispatch({ type: "leaveGroup", groupId }),

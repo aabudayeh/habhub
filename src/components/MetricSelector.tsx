@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 
 import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
@@ -34,10 +34,20 @@ export function MetricSelector({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(
     () => new Set(collapsibleGroups),
   );
   const selected = items.filter((item) => selectedIds.includes(item.id));
+  const visibleItems = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return items;
+    return items.filter((item) =>
+      `${item.label} ${item.sublabel ?? ""} ${item.group ?? ""}`
+        .toLowerCase()
+        .includes(normalized),
+    );
+  }, [items, query]);
   function choose(id: string) {
     if (!multiple) {
       onChange([id]);
@@ -104,11 +114,33 @@ export function MetricSelector({
               </Pressable>
             </View>
           ) : null}
-          {items.length ? (
-            items.map((item, index) => {
+          {items.length > 6 ? (
+            <View style={[styles.search, { borderColor: colors.border }]}>
+              <Ionicons name="search-outline" size={16} color={colors.muted} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search default metrics"
+                placeholderTextColor={colors.faint}
+                style={[styles.searchInput, { color: colors.ink }]}
+              />
+              {query ? (
+                <Pressable onPress={() => setQuery("")}>
+                  <Ionicons
+                    name="close-circle"
+                    size={17}
+                    color={colors.faint}
+                  />
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
+          {visibleItems.length ? (
+            visibleItems.map((item, index) => {
               const checked = selectedIds.includes(item.id);
               const groupStarts =
-                Boolean(item.group) && item.group !== items[index - 1]?.group;
+                Boolean(item.group) &&
+                item.group !== visibleItems[index - 1]?.group;
               const groupIsCollapsible = Boolean(
                 item.group && collapsibleGroups.includes(item.group),
               );
@@ -203,7 +235,7 @@ export function MetricSelector({
             })
           ) : (
             <Text style={[styles.empty, { color: colors.muted }]}>
-              {emptyLabel}
+              {query ? "No matching trackers" : emptyLabel}
             </Text>
           )}
           <Pressable onPress={() => setOpen(false)} style={styles.done}>
@@ -284,6 +316,17 @@ const styles = StyleSheet.create({
   },
   bulkButton: { paddingHorizontal: 9, paddingVertical: 6 },
   bulkText: { fontSize: 9, fontWeight: "900" },
+  search: {
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    margin: 4,
+  },
+  searchInput: { flex: 1, minHeight: 38, fontSize: 11 },
   groupLabel: {
     fontSize: 9,
     fontWeight: "900",

@@ -28,15 +28,14 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function GroupsScreen() {
-  const { state, createGroup, joinGroup, switchGroup, leaveGroup } = useApp();
+  const { state, joinGroup, switchGroup, leaveGroup } = useApp();
   const auth = useAuth();
   const cloud = useCloudSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState<
-    "create" | "join" | "switch" | "leave" | null
+    "join" | "switch" | "leave" | null
   >(null);
   const activeMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
@@ -44,20 +43,6 @@ export default function GroupsScreen() {
   const canManage =
     activeMember?.role === "owner" || activeMember?.role === "admin";
 
-  async function create() {
-    if (!name.trim())
-      return Alert.alert("Name your group", "Enter a group name first.");
-    setBusy("create");
-    try {
-      if (auth.status === "signedIn") await cloud.createGroup(name);
-      else createGroup(name);
-      setName("");
-    } catch (error) {
-      Alert.alert("Could not create group", cloudErrorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  }
   async function join() {
     if (!code.trim())
       return Alert.alert(
@@ -268,25 +253,14 @@ export default function GroupsScreen() {
       </Card>
       <SectionHeader title="Create a group" />
       <Card>
-        <TextInput
-          value={name}
-          onChangeText={setName}
-          placeholder="e.g. Office Step League"
-          placeholderTextColor={colors.faint}
-          style={[
-            styles.input,
-            { color: colors.ink, borderColor: colors.border },
-          ]}
-        />
+        <Text style={[styles.setupCopy, { color: colors.muted }]}>
+          Review suggested trackers, choose a color, and decide how invite
+          requests work before anything is added.
+        </Text>
         <Button
-          label={
-            auth.status === "signedIn"
-              ? "Create cloud group"
-              : "Create and switch"
-          }
-          icon="add"
-          loading={busy === "create"}
-          onPress={create}
+          label="Set up a new group"
+          icon="options-outline"
+          onPress={() => router.navigate("/create-group" as never)}
         />
       </Card>
       <SectionHeader title="Join with a code" />
@@ -346,4 +320,5 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 8,
   },
+  setupCopy: { fontSize: 10, lineHeight: 15, marginBottom: 10 },
 });

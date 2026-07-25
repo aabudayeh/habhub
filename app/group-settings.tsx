@@ -33,22 +33,14 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
-
-const GROUP_COLORS = [
-  "#176B4D",
-  "#3478D4",
-  "#7756D9",
-  "#C45B35",
-  "#9B3F72",
-  "#2A8F86",
-  "#59636E",
-  "#8A6A24",
-];
+import { GROUP_THEME_COLORS } from "@/src/domain/groupSetup";
+import { formulaIdentifiers } from "@/src/domain/formula";
 
 export default function GroupSettings() {
   const {
     state,
     updateGroupMetric,
+    deleteGroupMetric,
     setMemberRole,
     updateNickname,
     setGroupRestDays,
@@ -67,6 +59,10 @@ export default function GroupSettings() {
   const canEdit = me.role === "owner" || me.role === "admin";
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => !isInternalTracker(metric),
+  );
+  const visibleGroupMetrics = groupMetrics.filter(
+    (metric) =>
+      !["weekly_deficit_balance", "overall_score"].includes(metric.id),
   );
   const total = groupMetrics.reduce(
     (sum, metric) =>
@@ -133,6 +129,33 @@ export default function GroupSettings() {
     ]);
   }
 
+  function removeGroupMetric(metricId: string, metricName: string) {
+    const dependencies = groupMetrics.filter(
+      (metric) =>
+        metric.formula &&
+        formulaIdentifiers(metric.formula).includes(metricId),
+    );
+    if (dependencies.length) {
+      Alert.alert(
+        "Used by another tracker",
+        `Remove it from ${dependencies.map((item) => item.name).join(", ")} first.`,
+      );
+      return;
+    }
+    Alert.alert(
+      `Delete ${metricName}?`,
+      "This removes the tracker from this group for every member. Existing shared entries for it are also removed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete tracker",
+          style: "destructive",
+          onPress: () => deleteGroupMetric(metricId),
+        },
+      ],
+    );
+  }
+
   return (
     <Screen>
       <PageHeader
@@ -162,7 +185,7 @@ export default function GroupSettings() {
 
       <SectionHeader title="Group color" />
       <Card style={styles.colors}>
-        {GROUP_COLORS.map((color) => (
+        {GROUP_THEME_COLORS.map((color) => (
           <Pressable
             key={color}
             disabled={!canEdit}
@@ -231,12 +254,13 @@ export default function GroupSettings() {
         }
       />
       <Card style={styles.list}>
-        {groupMetrics
-          .filter(
-            (metric) =>
-              !["weekly_deficit_balance", "overall_score"].includes(metric.id),
-          )
-          .map((metric, index, list) => {
+        {!visibleGroupMetrics.length ? (
+          <Text style={[styles.empty, { color: colors.muted }]}>
+            No group trackers yet. Add a ready-made or custom tracker when this
+            group is ready to compete.
+          </Text>
+        ) : null}
+        {visibleGroupMetrics.map((metric, index, list) => {
             const competitive =
               metric.dataType !== "text" && metric.dataType !== "photo";
             const tracked = competitive
@@ -309,6 +333,24 @@ export default function GroupSettings() {
                       <Ionicons name="add" size={15} color={accent} />
                     </Pressable>
                   </View>
+                ) : null}
+                {canEdit ? (
+                  <Pressable
+                    accessibilityLabel={`Delete ${metric.name}`}
+                    onPress={() =>
+                      removeGroupMetric(metric.id, metric.name)
+                    }
+                    style={[
+                      styles.edit,
+                      { backgroundColor: `${palette.red}12` },
+                    ]}
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={15}
+                      color={palette.red}
+                    />
+                  </Pressable>
                 ) : null}
                 {canEdit ? (
                   <Pressable
@@ -543,4 +585,5 @@ const styles = StyleSheet.create({
   },
   role: { fontSize: 8, fontWeight: "900", maxWidth: 70, textAlign: "right" },
   removeMember: { padding: 5 },
+  empty: { fontSize: 9, lineHeight: 14, paddingVertical: 14 },
 });

@@ -84,6 +84,22 @@ export default function Today() {
   const [showMore, setShowMore] = useState(false);
   const [showAddTiles, setShowAddTiles] = useState(false);
   const [showDayEnd, setShowDayEnd] = useState(false);
+  const todaySwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !editing &&
+          !showMore &&
+          !showAddTiles &&
+          !showDayEnd &&
+          gesture.dx < -22 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dx <= -55) router.navigate("/menu");
+        },
+      }),
+    [editing, showAddTiles, showDayEnd, showMore],
+  );
   useEffect(() => {
     if (!editing) {
       setDraggingMetricId(null);
@@ -301,6 +317,7 @@ export default function Today() {
   }
   return (
     <SafeAreaView
+      {...todaySwipeResponder.panHandlers}
       style={[styles.safe, { backgroundColor: colors.canvas }]}
       edges={["top"]}
     >

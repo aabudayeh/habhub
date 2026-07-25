@@ -113,44 +113,168 @@ export function mapHealthRecordsToEntries(
   return appendStepFallbackEntries(entries,userId,visibility,metrics,weightKg);
 }
 
+export type UnrecordedStepActivity = {
+  coveredSteps: number;
+  uncoveredSteps: number;
+  distanceKm: number;
+  durationMinutes: number;
+  estimatedCalories: number;
+  knownWorkoutCalories: number;
+};
+
+const MOVEMENT_WORKOUT = /(walk|run|hike|treadmill)/i;
+const RUNNING_WORKOUT = /(run|treadmill)/i;
+
+/**
+ * Estimate the walking that remains after Health Connect workout sessions have
+ * explained their share of the daily step total.
+ *
+ * A session may be represented by duration, distance, calories, or the boolean
+ * Workout tracker. Matching every workout-mapped entry is important because a
+ * user can hide/remove the boolean tracker while retaining the other fields.
+ */
+export function unrecordedStepActivity(
+  dayEntries: MetricEntry[],
+  metrics: MetricDefinition[],
+  steps: number,
+  weightKg: number,
+): UnrecordedStepActivity {
+  const workoutMetricIds = new Set(
+    metrics
+      .filter((metric) => metric.healthMapping?.dataType === "workouts")
+      .map((metric) => metric.id),
+  );
+  const distanceIds = new Set(
+    metrics
+      .filter(
+        (metric) =>
+          metric.healthMapping?.dataType === "workouts" &&
+          metric.healthMapping.field === "distance_km",
+      )
+      .map((metric) => metric.id),
+  );
+  const durationIds = new Set(
+    metrics
+      .filter(
+        (metric) =>
+          metric.healthMapping?.dataType === "workouts" &&
+          metric.healthMapping.field === "duration_minutes",
+      )
+      .map((metric) => metric.id),
+  );
+  const calorieIds = new Set(
+    metrics
+      .filter(
+        (metric) =>
+          metric.healthMapping?.dataType === "workouts" &&
+          metric.healthMapping.field === "active_calories",
+      )
+      .map((metric) => metric.id),
+  );
+  const sessions = dayEntries.filter(
+    (entry) =>
+      workoutMetricIds.has(entry.metricId) &&
+      Boolean(entry.sourceRecordId) &&
+      MOVEMENT_WORKOUT.test(entry.label ?? ""),
+  );
+  const sessionKeys = new Map<
+    string,
+    { sourceProvider: MetricEntry["sourceProvider"]; sourceRecordId: string }
+  >();
+  for (const session of sessions) {
+    const sourceRecordId = session.sourceRecordId!;
+    sessionKeys.set(`${session.sourceProvider ?? "health"}\u0000${sourceRecordId}`, {
+      sourceProvider: session.sourceProvider,
+      sourceRecordId,
+    });
+  }
+  const sameSession = (
+    entry: MetricEntry,
+    source: { sourceProvider: MetricEntry["sourceProvider"]; sourceRecordId: string },
+  ) =>
+    entry.sourceRecordId === source.sourceRecordId &&
+    entry.sourceProvider === source.sourceProvider;
+  let coveredSteps = 0;
+  for (const source of sessionKeys.values()) {
+    const matching = dayEntries.filter((entry) => sameSession(entry, source));
+    const label =
+      matching.find((entry) => MOVEMENT_WORKOUT.test(entry.label ?? ""))?.label ??
+      "";
+    const running = RUNNING_WORKOUT.test(label);
+    const distanceKm = Math.max(
+      0,
+      ...matching
+        .filter((entry) => distanceIds.has(entry.metricId))
+        .map((entry) => Number(entry.value || 0)),
+    );
+    const durationMinutes = Math.max(
+      0,
+      ...matching
+        .filter((entry) => durationIds.has(entry.metricId))
+        .map((entry) => Number(entry.value || 0)),
+    );
+    const estimatedDistanceKm =
+      distanceKm || (durationMinutes / 60) * (running ? 9 : 5);
+    coveredSteps += estimatedDistanceKm * (running ? 1000 : 1312);
+  }
+  // Non-movement workouts still contribute their known calories, but must not
+  // subtract steps. Count each native workout once even when custom trackers
+  // map the same calorie field.
+  const knownCaloriesBySource = new Map<string, number>();
+  for (const entry of dayEntries.filter((item) => calorieIds.has(item.metricId))) {
+    const key = entry.sourceRecordId
+      ? `${entry.sourceProvider ?? "health"}\u0000${entry.sourceRecordId}`
+      : entry.id;
+    knownCaloriesBySource.set(
+      key,
+      Math.max(knownCaloriesBySource.get(key) ?? 0, Number(entry.value || 0)),
+    );
+  }
+  const knownWorkoutCalories = [...knownCaloriesBySource.values()].reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+  const uncoveredSteps = Math.max(0, steps - coveredSteps);
+  const distanceKm = uncoveredSteps * 0.000762;
+  const durationMinutes = (distanceKm / 5) * 60;
+  const estimatedCalories =
+    distanceKm * 0.53 * Math.max(35, weightKg);
+  return {
+    coveredSteps,
+    uncoveredSteps,
+    distanceKm,
+    durationMinutes,
+    estimatedCalories,
+    knownWorkoutCalories,
+  };
+}
+
 function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:Visibility,metrics:MetricDefinition[]|undefined,weightKg:number){
   if(!metrics)return entries;
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
   if(!stepIds.length||!fallback.length)return entries;
-  const workoutTypeIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='workouts'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
-  const distanceIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='workouts'&&metric.healthMapping.field==='distance_km').map((metric)=>metric.id);
-  const durationIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='workouts'&&metric.healthMapping.field==='duration_minutes').map((metric)=>metric.id);
-  const calorieIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='workouts'&&metric.healthMapping.field==='active_calories').map((metric)=>metric.id);
   const days=[...new Set(entries.filter((entry)=>stepIds.includes(entry.metricId)).map((entry)=>entry.localDate))];
   const derived:MetricEntry[]=[];
   for(const day of days){
     const dayEntries=entries.filter((entry)=>entry.localDate===day);
     const steps=Math.max(0,...dayEntries.filter((entry)=>stepIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));
     if(steps<=0)continue;
-    const walkingSessions=dayEntries.filter((entry)=>workoutTypeIds.includes(entry.metricId)&&/(walk|run|hike|treadmill)/i.test(entry.label??''));
-    const sourceIds=new Set(walkingSessions.map((entry)=>entry.sourceRecordId).filter(Boolean));
-    let coveredSteps=0;
-    for(const sourceId of sourceIds){
-      const label=walkingSessions.find((entry)=>entry.sourceRecordId===sourceId)?.label??'';const running=/(run|treadmill)/i.test(label);
-      const distance=Math.max(0,...dayEntries.filter((entry)=>entry.sourceRecordId===sourceId&&distanceIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));
-      const duration=Math.max(0,...dayEntries.filter((entry)=>entry.sourceRecordId===sourceId&&durationIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));
-      const estimatedDistance=distance>0?distance:duration/60*(running?9:5);
-      coveredSteps+=estimatedDistance*(running?1000:1312);
-    }
-    const uncoveredSteps=Math.max(0,steps-coveredSteps);const distanceKm=uncoveredSteps*.000762;const durationMinutes=distanceKm/5*60;const estimatedCalories=distanceKm*.53*Math.max(35,weightKg);
-    const knownWorkoutCalories=dayEntries.filter((entry)=>calorieIds.includes(entry.metricId)).reduce((sum,entry)=>sum+Number(entry.value||0),0);
+    const estimate=unrecordedStepActivity(dayEntries,metrics,steps,weightKg);
     const stepEntry=dayEntries.find((entry)=>stepIds.includes(entry.metricId))!;
-    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
+    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
-      const existingActiveCalories=dayEntries.filter((entry)=>entry.metricId===metric.id).reduce((sum,entry)=>sum+Number(entry.value||0),0);
-      // Always add calories for steps not represented by walking/running
-      // workouts. If Health Connect did not expose active-energy rows, retain
-      // known workout calories as the base instead of dropping them.
-      const calories=(existingActiveCalories>0?0:knownWorkoutCalories)+estimatedCalories;
-      if(calories>0)derived.push(make(metric.id,calories,'calories'));
+      const mapping=metric.healthMapping;
+      if(mapping?.dataType==='active_energy'&&mapping.field==='value'){
+        const existing=dayEntries.filter((entry)=>entry.metricId===metric.id).reduce((sum,entry)=>sum+Number(entry.value||0),0);
+        const calories=(existing>0?0:estimate.knownWorkoutCalories)+estimate.estimatedCalories;
+        if(calories>0)derived.push(make(metric.id,calories,'calories'));
+      } else if(mapping?.dataType==='workouts'&&mapping.field==='distance_km'&&estimate.uncoveredSteps>0) {
+        derived.push(make(metric.id,estimate.distanceKm,'distance'));
+      } else if(mapping?.dataType==='workouts'&&mapping.field==='duration_minutes'&&estimate.uncoveredSteps>0) {
+        derived.push(make(metric.id,estimate.durationMinutes,'duration'));
+      }
     }
-    if(uncoveredSteps>0){for(const id of distanceIds)derived.push(make(id,distanceKm,'distance'));for(const id of durationIds)derived.push(make(id,durationMinutes,'duration'));}
   }
   return [...entries,...derived];
 }

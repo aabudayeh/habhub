@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -56,8 +56,20 @@ export default function MenuScreen() {
   const user = state.group.members.find(
     (member) => member.id === state.currentUserId,
   )!;
+  const closeSwipe = React.useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          gesture.dx > 18 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dx >= 55) router.back();
+        },
+      }),
+    [],
+  );
   return (
-    <View style={styles.overlay}>
+    <View style={styles.overlay} {...closeSwipe.panHandlers}>
       <Pressable
         accessibilityLabel="Close menu"
         style={styles.scrim}

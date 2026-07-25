@@ -4,7 +4,12 @@ import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 import "@/src/notifications/workoutTimer";
 import React, { useEffect, useRef } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  AppState as NativeAppState,
+  StyleSheet,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import "react-native-reanimated";
 
@@ -23,6 +28,7 @@ import {
   syncCycleNotifications,
   syncGoalNotifications,
   syncGymNotifications,
+  updatePushPreferences,
 } from "@/src/notifications/push";
 import { dateKey } from "@/src/domain/date";
 
@@ -101,6 +107,31 @@ function RootNavigator() {
   useEffect(() => {
     void syncGymNotifications(cycleStateRef.current).catch(() => undefined);
   }, [gymNotificationKey]);
+  const pushRegistrationKey = JSON.stringify({
+    userId: auth.user?.id,
+    notifications: state.settings.notifications,
+  });
+  useEffect(() => {
+    if (!auth.user || !state.settings.notifications.pushEnabled) return;
+    const userId = auth.user.id;
+    const refresh = () =>
+      updatePushPreferences(
+        userId,
+        cycleStateRef.current.settings.notifications,
+      ).catch(() => undefined);
+    void refresh();
+    const subscription = NativeAppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") void refresh();
+      },
+    );
+    return () => subscription.remove();
+  }, [
+    auth.user,
+    pushRegistrationKey,
+    state.settings.notifications.pushEnabled,
+  ]);
   useEffect(() => {
     const open = (response: Notifications.NotificationResponse) => {
       const route = response.notification.request.content.data?.route;
@@ -258,6 +289,10 @@ function RootNavigator() {
               <Stack.Screen name="day/[date]" />
               <Stack.Screen name="leaderboard-detail" />
               <Stack.Screen name="groups" options={{ presentation: "modal" }} />
+              <Stack.Screen
+                name="create-group"
+                options={{ presentation: "modal" }}
+              />
             </Stack>
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
             </ThemeProvider>

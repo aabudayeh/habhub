@@ -522,3 +522,10 @@ export type NewMetric = Pick<
   /** Stable id used when adding a built-in preset after it was previously removed. */
   templateId?: string;
 };
+
+export type GroupCreationOptions = {
+  /** Only these explicitly reviewed trackers are created for the group. */
+  metrics?: NewMetric[];
+  themeColor?: string;
+  requireMemberApproval?: boolean;
+};

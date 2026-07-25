@@ -18,6 +18,7 @@ import {
   currentStreakWithRest,
   longestStreakWithRest,
 } from "./streaks";
+import { unrecordedStepActivity } from "./health";
 
 function aggregate(
   entries: MetricEntry[],
@@ -103,8 +104,27 @@ export function metricValue(
         state.energyProfiles?.[userId]?.weightKg ??
         state.settings.energyProfile.weightKg ??
         70;
+      const estimate = unrecordedStepActivity(
+        state.entries.filter(
+          (entry) =>
+            entry.userId === userId && entry.localDate === localDate,
+        ),
+        state.metrics,
+        stepCount,
+        weight,
+      );
+      if (
+        metric.healthMapping?.dataType === "workouts" &&
+        metric.healthMapping.field === "distance_km"
+      )
+        return estimate.distanceKm;
+      if (
+        metric.healthMapping?.dataType === "workouts" &&
+        metric.healthMapping.field === "duration_minutes"
+      )
+        return estimate.durationMinutes;
       return Math.round(
-        uncoveredStepActivity(state, userId, localDate, stepCount, weight),
+        estimate.knownWorkoutCalories + estimate.estimatedCalories,
       );
     }
     if (metric.aggregation !== "latest") return 0;
@@ -144,87 +164,6 @@ export function metricValue(
   }
 
   return evaluateFormula(metric.formula, variables);
-}
-
-function uncoveredStepActivity(
-  state: AppState,
-  userId: string,
-  localDate: string,
-  steps: number,
-  weightKg: number,
-) {
-  const day = state.entries.filter(
-    (entry) => entry.userId === userId && entry.localDate === localDate,
-  );
-  const workoutIds = state.metrics
-    .filter(
-      (item) =>
-        item.healthMapping?.dataType === "workouts" &&
-        item.healthMapping.field === "value",
-    )
-    .map((item) => item.id);
-  const distanceIds = state.metrics
-    .filter(
-      (item) =>
-        item.healthMapping?.dataType === "workouts" &&
-        item.healthMapping.field === "distance_km",
-    )
-    .map((item) => item.id);
-  const durationIds = state.metrics
-    .filter(
-      (item) =>
-        item.healthMapping?.dataType === "workouts" &&
-        item.healthMapping.field === "duration_minutes",
-    )
-    .map((item) => item.id);
-  const calorieIds = state.metrics
-    .filter(
-      (item) =>
-        item.healthMapping?.dataType === "workouts" &&
-        item.healthMapping.field === "active_calories",
-    )
-    .map((item) => item.id);
-  const sessions = day.filter(
-    (entry) =>
-      workoutIds.includes(entry.metricId) &&
-      /(walk|run|hike|treadmill)/i.test(entry.label ?? ""),
-  );
-  let covered = 0;
-  for (const sourceId of new Set(
-    sessions.map((entry) => entry.sourceRecordId).filter(Boolean),
-  )) {
-    const label =
-      sessions.find((entry) => entry.sourceRecordId === sourceId)?.label ?? "";
-    const running = /(run|treadmill)/i.test(label);
-    const distance = Math.max(
-      0,
-      ...day
-        .filter(
-          (entry) =>
-            entry.sourceRecordId === sourceId &&
-            distanceIds.includes(entry.metricId),
-        )
-        .map((entry) => Number(entry.value || 0)),
-    );
-    const duration = Math.max(
-      0,
-      ...day
-        .filter(
-          (entry) =>
-            entry.sourceRecordId === sourceId &&
-            durationIds.includes(entry.metricId),
-        )
-        .map((entry) => Number(entry.value || 0)),
-    );
-    covered +=
-      (distance || (duration / 60) * (running ? 9 : 5)) *
-      (running ? 1000 : 1312);
-  }
-  const known = day
-    .filter((entry) => calorieIds.includes(entry.metricId))
-    .reduce((sum, entry) => sum + Number(entry.value || 0), 0);
-  const uncovered = Math.max(0, steps - covered);
-  return known + uncovered * 0.000762 * 0.53 * Math.max(35, weightKg);
 }
 
 export function safeMetricValue(
@@ -604,7 +543,16 @@ export function metricApplicableOnDate(
       localDate,
     ),
   );
-  const hasRecordedData = hasExplicitData || hasSharedDailyStatus;
+  const hasDeficitInput =
+    metric.id === "deficit" &&
+    state.entries.some(
+      (entry) =>
+        entry.userId === userId &&
+        entry.metricId === "food" &&
+        entry.localDate === localDate,
+    );
+  const hasRecordedData =
+    hasExplicitData || hasSharedDailyStatus || hasDeficitInput;
   // A backdated entry remains viewable even when the tracker itself was added
   // later. This does not make the goal retroactively tracked.
   if (metric.activeFrom > localDate && !hasRecordedData) return false;
@@ -612,13 +560,7 @@ export function metricApplicableOnDate(
   // carrying yesterday's weight forward must not create a false daily win.
   if (metric.id === "weight") return hasRecordedData;
   if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
-  if (metric.id === "deficit")
-    return state.entries.some(
-      (entry) =>
-        entry.userId === userId &&
-        entry.metricId === "food" &&
-        entry.localDate === localDate,
-    );
+  if (metric.id === "deficit") return hasDeficitInput;
   if (metric.id === "weekly_deficit_balance")
     return weeklyDeficitBalance(state, userId, localDate).days > 0;
   return true;
@@ -1156,6 +1098,23 @@ export type DeficitRealityCheck = {
   toDate?: string;
 };
 
+/** Close enough for normal food-label, exercise, and scale estimation error. */
+export const DEFICIT_ALIGNMENT_CLOSE_KCAL = 200;
+/** Beyond this daily difference the two estimates are materially far apart. */
+export const DEFICIT_ALIGNMENT_FAR_KCAL = 500;
+
+export function deficitAlignmentBand(
+  result: DeficitRealityCheck,
+): "close" | "warning" | "far" | "neutral" {
+  if (result.status === "insufficient") return "neutral";
+  const difference = Math.abs(
+    result.reportedDailyDeficit - result.actualDailyDeficit,
+  );
+  if (difference <= DEFICIT_ALIGNMENT_CLOSE_KCAL) return "close";
+  if (difference <= DEFICIT_ALIGNMENT_FAR_KCAL) return "warning";
+  return "far";
+}
+
 export function deficitRealityCheck(
   state: AppState,
   userId: string,
@@ -1266,12 +1225,11 @@ export function deficitRealityCheckAtDate(
       fromDate: previous.localDate,
       toDate: current.localDate,
     };
-  const ratio =
-    reportedDailyDeficit > 0 ? actualDailyDeficit / reportedDailyDeficit : 0;
+  const difference = Math.abs(actualDailyDeficit - reportedDailyDeficit);
   const status =
-    ratio >= 0.6 && ratio <= 1.4
+    difference <= DEFICIT_ALIGNMENT_CLOSE_KCAL
       ? "aligned"
-      : ratio < 0.6
+      : actualDailyDeficit < reportedDailyDeficit
         ? "reported_ahead"
         : "scale_ahead";
   return {

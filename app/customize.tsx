@@ -28,6 +28,7 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { formatMetricValue, isMetricTrackedOnDate } from "@/src/domain/metrics";
+import { formulaIdentifiers } from "@/src/domain/formula";
 import { messageLibrary } from "@/src/domain/social";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
@@ -58,6 +59,7 @@ export default function Customize() {
     setTrackedGoal,
     updateSettings,
     reorderMetric,
+    deleteMetric,
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -165,6 +167,33 @@ export default function Customize() {
     }
   }
 
+  function removeTracker(metric: MetricDefinition) {
+    const dependencies = ordered.filter(
+      (item) =>
+        item.formula &&
+        formulaIdentifiers(item.formula).includes(metric.id),
+    );
+    if (dependencies.length) {
+      Alert.alert(
+        "Used by another tracker",
+        `Remove it from ${dependencies.map((item) => item.name).join(", ")} first.`,
+      );
+      return;
+    }
+    Alert.alert(
+      `Delete ${metric.name}?`,
+      "This removes the tracker and its earlier entries. Blood pressure readings remove both linked values together.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete tracker",
+          style: "destructive",
+          onPress: () => deleteMetric(metric.id),
+        },
+      ],
+    );
+  }
+
   return (
     <Screen refreshEnabled={false}>
       <PageHeader
@@ -238,6 +267,20 @@ export default function Customize() {
                         : `Target ${formatMetricValue(metric, metric.goal.target)}`}
                   </Text>
                 </View>
+                <Pressable
+                  accessibilityLabel={`Delete ${metric.name}`}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    removeTracker(metric);
+                  }}
+                  style={styles.deleteTracker}
+                >
+                  <Ionicons
+                    name="trash-outline"
+                    size={17}
+                    color="#C84A45"
+                  />
+                </Pressable>
                 <Ionicons
                   name="chevron-forward"
                   size={17}
@@ -713,6 +756,7 @@ const styles = StyleSheet.create({
   name: { fontSize: 11, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   link: { fontSize: 11, fontWeight: "900" },
+  deleteTracker: { padding: 7 },
   note: {
     flexDirection: "row",
     alignItems: "flex-start",

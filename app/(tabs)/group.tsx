@@ -58,6 +58,8 @@ import {
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
@@ -72,6 +74,8 @@ if (
 
 export default function LeaderboardScreen() {
   const { state, updateMetric, updateSettings } = useApp();
+  const cloud = useCloudSync();
+  const health = useHealthSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
@@ -79,12 +83,17 @@ export default function LeaderboardScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const [dragPlacement, setDragPlacement] =
     useState<ReorderDragState | null>(null);
   const [rankingsReady, setRankingsReady] = useState(false);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
+  useEffect(() => {
+    const timer = setInterval(() => setClockTick((value) => value + 1), 10_000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (!editing) {
       setDraggingCardId(null);
@@ -96,6 +105,12 @@ export default function LeaderboardScreen() {
   );
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
+  const ownLastSyncedAt = [
+    cloud.lastSyncedAt,
+    health.lastSyncedAt,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.localeCompare(a))[0];
   const tracked = useMemo(
     () =>
       (state.group.metricConfiguration ?? []).filter(
@@ -446,6 +461,12 @@ export default function LeaderboardScreen() {
                     ? palette.lime
                     : palette.red
                   : row.member.color;
+              const syncTimestamp =
+                row.member.id === state.currentUserId
+                  ? (ownLastSyncedAt ??
+                    result?.lastSyncedAt ??
+                    result?.lastRecordedAt)
+                  : (result?.lastSyncedAt ?? result?.lastRecordedAt);
               const details = [
                 includeScore ? "Group-weighted score" : result?.averageLabel,
                 !includeScore &&
@@ -456,10 +477,8 @@ export default function LeaderboardScreen() {
                 result && result.label !== "Private"
                   ? `Current ${result.streak ?? 0}d · Best ${result.bestStreak ?? 0}d`
                   : undefined,
-                result?.lastSyncedAt || result?.lastRecordedAt
-                  ? `Synced ${relativeTime(
-                      result.lastSyncedAt ?? result.lastRecordedAt!,
-                    )}`
+                syncTimestamp
+                  ? `Synced ${relativeTime(syncTimestamp)}`
                   : undefined,
               ]
                 .filter(Boolean)
