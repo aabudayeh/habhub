@@ -22,6 +22,11 @@ export function TodoTodayList({ localDate }: { localDate: string }) {
   const accent = useGroupAccent();
   const items = (state.todos ?? [])
     .filter((todo) => todoAppearsOnDate(todo, localDate))
+    .filter(
+      (todo) =>
+        state.settings.completedTodayBehavior !== "hide" ||
+        !todo.completedDates.includes(localDate),
+    )
     .sort(
       (a, b) =>
         Number(a.completedDates.includes(localDate)) -

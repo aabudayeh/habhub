@@ -65,7 +65,15 @@ export function scheduleEventsForDate(
       metricId: reminder.metricId,
       todoId: reminder.todoId,
     }));
-  return [...todos, ...trackers, ...reminders].sort((a, b) =>
-    (a.time ?? "99:99").localeCompare(b.time ?? "99:99"),
-  );
+  const preferred = state.settings.calendarEventOrder ?? [];
+  return [...todos, ...trackers, ...reminders].sort((a, b) => {
+    const aOrder = preferred.indexOf(a.id);
+    const bOrder = preferred.indexOf(b.id);
+    if (aOrder >= 0 || bOrder >= 0)
+      return (
+        (aOrder < 0 ? Number.MAX_SAFE_INTEGER : aOrder) -
+        (bOrder < 0 ? Number.MAX_SAFE_INTEGER : bOrder)
+      );
+    return (a.time ?? "99:99").localeCompare(b.time ?? "99:99");
+  });
 }

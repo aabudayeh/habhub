@@ -312,6 +312,18 @@ export default function Insights() {
         title="Progress"
         action={
           editing ? (
+            <View style={styles.headerEditActions}>
+            <Pressable
+              onPress={() =>
+                router.navigate({
+                  pathname: "/customize",
+                  params: { tab: "progress" },
+                } as never)
+              }
+              style={[styles.headerEditIcon, { borderColor: colors.border }]}
+            >
+              <Ionicons name="settings-outline" size={17} color={accent} />
+            </Pressable>
             <Pressable
               onPress={() => {
                 setEditing(false);
@@ -321,6 +333,7 @@ export default function Insights() {
             >
               <Text style={styles.doneText}>Done</Text>
             </Pressable>
+            </View>
           ) : undefined
         }
       />
@@ -978,9 +991,12 @@ function TrackedSummary({
         </Text>
       </View>
       <View style={styles.summaryGoal}>
-        <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-          Current streak {streaks.current}d
-        </Text>
+        <View style={styles.streakRow}>
+          <Ionicons name="flame" size={12} color={TRACKED_COLOR} />
+          <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
+            Current streak {streaks.current}d
+          </Text>
+        </View>
         <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streaks.best}d</Text>
       </View>
       {editing ? (
@@ -1418,6 +1434,15 @@ const styles = StyleSheet.create({
   },
   mapName: { fontSize: 9, fontWeight: "900" },
   mapMeta: { fontSize: 7, fontWeight: "700", marginTop: 1 },
+  headerEditActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  headerEditIcon: {
+    width: 34,
+    height: 34,
+    borderWidth: 1,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   addExisting: { minHeight: 42, borderWidth: 1, borderStyle: "dashed", borderRadius: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 },
@@ -1648,6 +1673,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "right",
   },
+  streakRow: { flexDirection: "row", alignItems: "center", gap: 3 },
   streakLine: {
     color: palette.muted,
     fontSize: 8,

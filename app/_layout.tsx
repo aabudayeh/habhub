@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { AiAssistantButton } from "@/src/components/AiAssistantButton";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
@@ -28,6 +29,7 @@ import {
   syncCycleNotifications,
   syncGoalNotifications,
   syncGymNotifications,
+  syncProductivityNotifications,
   updatePushPreferences,
 } from "@/src/notifications/push";
 import { dateKey } from "@/src/domain/date";
@@ -107,6 +109,22 @@ function RootNavigator() {
   useEffect(() => {
     void syncGymNotifications(cycleStateRef.current).catch(() => undefined);
   }, [gymNotificationKey]);
+  const productivityNotificationKey = JSON.stringify({
+    user: state.currentUserId,
+    todos: state.todos,
+    reminders: state.calendarReminders,
+    enabled: state.settings.notifications.pushEnabled,
+    quiet: [
+      state.settings.notifications.quietHoursEnabled,
+      state.settings.notifications.quietHoursStart,
+      state.settings.notifications.quietHoursEnd,
+    ],
+  });
+  useEffect(() => {
+    void syncProductivityNotifications(cycleStateRef.current).catch(
+      () => undefined,
+    );
+  }, [productivityNotificationKey]);
   const pushRegistrationKey = JSON.stringify({
     userId: auth.user?.id,
     notifications: state.settings.notifications,
@@ -278,6 +296,10 @@ function RootNavigator() {
                 name="note-editor"
                 options={{ presentation: "modal" }}
               />
+              <Stack.Screen
+                name="metral-ai"
+                options={{ presentation: "modal" }}
+              />
               <Stack.Screen name="timer" options={{ presentation: "modal" }} />
               <Stack.Screen
                 name="profile"
@@ -314,6 +336,9 @@ function RootNavigator() {
                 options={{ presentation: "modal" }}
               />
             </Stack>
+            {state.settings.showAiAssistant && rootSegment === "(tabs)" ? (
+              <AiAssistantButton />
+            ) : null}
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
             </ThemeProvider>
           </CompactModeProvider>

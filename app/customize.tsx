@@ -398,6 +398,79 @@ export default function Customize() {
                 : "Choose what is available in your personal Progress view."}
             </Text>
           </View>
+          <Card style={styles.quickPreferences}>
+            <View style={styles.preferenceCopy}>
+              <Text style={[styles.name, { color: colors.ink }]}>
+                Untracked goals
+              </Text>
+              <Text style={[styles.meta, { color: colors.muted }]}>
+                Keep other trackers available or focus only on tracked goals.
+              </Text>
+            </View>
+            <View style={styles.preferenceChoices}>
+              <Chip
+                label="Show"
+                selected={
+                  tab === "today"
+                    ? state.settings.showUntrackedToday !== false
+                    : state.settings.showUntrackedProgress !== false
+                }
+                onPress={() =>
+                  updateSettings(
+                    tab === "today"
+                      ? { showUntrackedToday: true }
+                      : { showUntrackedProgress: true },
+                  )
+                }
+              />
+              <Chip
+                label="Hide"
+                selected={
+                  tab === "today"
+                    ? state.settings.showUntrackedToday === false
+                    : state.settings.showUntrackedProgress === false
+                }
+                onPress={() =>
+                  updateSettings(
+                    tab === "today"
+                      ? { showUntrackedToday: false }
+                      : { showUntrackedProgress: false },
+                  )
+                }
+              />
+            </View>
+          </Card>
+          {tab === "today" ? (
+            <Card style={styles.quickPreferences}>
+              <View style={styles.preferenceCopy}>
+                <Text style={[styles.name, { color: colors.ink }]}>
+                  Completed goals
+                </Text>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  Move completed goals down or hide them from Today.
+                </Text>
+              </View>
+              <View style={styles.preferenceChoices}>
+                <Chip
+                  label="Move down"
+                  selected={
+                    (state.settings.completedTodayBehavior ?? "bottom") ===
+                    "bottom"
+                  }
+                  onPress={() =>
+                    updateSettings({ completedTodayBehavior: "bottom" })
+                  }
+                />
+                <Chip
+                  label="Hide"
+                  selected={state.settings.completedTodayBehavior === "hide"}
+                  onPress={() =>
+                    updateSettings({ completedTodayBehavior: "hide" })
+                  }
+                />
+              </View>
+            </Card>
+          ) : null}
           <SectionHeader
             title={tab === "today" ? "Today tiles" : "Progress items"}
             action={
@@ -772,6 +845,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   noteText: { flex: 1, fontSize: 9, lineHeight: 14 },
+  quickPreferences: {
+    marginTop: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 9,
+  },
+  preferenceCopy: { flex: 1, minWidth: 0 },
+  preferenceChoices: { flexDirection: "row", gap: 4 },
   switchCard: {
     flexDirection: "row",
     alignItems: "center",

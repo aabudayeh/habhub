@@ -574,6 +574,33 @@ export async function joinCloudGroup(code: string) {
   return result;
 }
 
+export async function sendMembershipPush(input: {
+  groupId: string;
+  eventKey: string;
+  title: string;
+  body: string;
+  audience: "admins" | "user" | "group";
+  recipientId?: string;
+  route?: string;
+}) {
+  const { error } = await requireCloud().functions.invoke("send-push", {
+    body: {
+      eventKey: input.eventKey,
+      groupId: input.groupId,
+      category: "membership",
+      audience: input.audience,
+      recipientId: input.recipientId,
+      title: input.title,
+      body: input.body,
+      data: {
+        route: input.route ?? "/groups",
+        groupId: input.groupId,
+      },
+    },
+  });
+  if (error) throw error;
+}
+
 export async function setCloudGroupApprovalRequired(
   groupId: string,
   required: boolean,

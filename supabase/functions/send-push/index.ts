@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'; title:string; body:string; recipientId?:string; metricId?:string; data?:Record<string,string> };
+type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'|'membership'; audience?:'admins'|'user'|'group'; title:string; body:string; recipientId?:string; metricId?:string; data?:Record<string,string> };
 const cors={ 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type' };
 
 Deno.serve(async(req)=>{
@@ -12,8 +12,10 @@ Deno.serve(async(req)=>{
     const {data:{user},error:userError}=await admin.auth.getUser(auth.replace(/^Bearer\s+/i,''));
     if(userError||!user)return json({error:'Unauthorized'},401);
     const payload=await req.json() as Payload;
-    const {data:membership}=await admin.from('group_members').select('user_id').eq('group_id',payload.groupId).eq('user_id',user.id).maybeSingle();
+    const {data:membership}=await admin.from('group_members').select('user_id, role, status').eq('group_id',payload.groupId).eq('user_id',user.id).maybeSingle();
     if(!membership)return json({error:'Not a group member'},403);
+    if(payload.category!=='membership'&&membership.status!=='active')return json({error:'Membership is pending'},403);
+    if(payload.category==='membership'&&payload.audience==='user'&&!['owner','admin'].includes(membership.role))return json({error:'Admin role required'},403);
     const {data:claimed,error:eventError}=await admin
       .from('push_events')
       .upsert(
@@ -29,6 +31,7 @@ Deno.serve(async(req)=>{
     claimedEvent=payload.eventKey;
     let members=admin.from('group_members').select('user_id').eq('group_id',payload.groupId).neq('user_id',user.id);
     members=members.eq('status','active');
+    if(payload.category==='membership'&&payload.audience==='admins')members=members.in('role',['owner','admin']);
     if(payload.recipientId)members=members.eq('user_id',payload.recipientId);
     const {data:recipients,error:memberError}=await members;if(memberError)throw memberError;
     const ids=(recipients??[]).map((item)=>item.user_id);
@@ -65,6 +68,6 @@ Deno.serve(async(req)=>{
     return json({error:error instanceof Error?error.message:String(error)},500);
   }
 });
-function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
+function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='membership'&&settings.groupMembership===false)return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
 function inQuietHours(settings:Record<string,unknown>){if(settings.quietHoursEnabled!==true)return false;try{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:String(settings.timezone||'UTC'),hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const now=Number(parts.find((part)=>part.type==='hour')?.value||0)*60+Number(parts.find((part)=>part.type==='minute')?.value||0);const minutes=(value:unknown)=>{const [hour,minute]=String(value||'').split(':').map(Number);return Number.isFinite(hour)&&Number.isFinite(minute)?hour*60+minute:0;};const start=minutes(settings.quietHoursStart),end=minutes(settings.quietHoursEnd);return start===end?false:start<end?now>=start&&now<end:now>=start||now<end;}catch{return false;}}
 function json(body:unknown,status=200){return new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});}

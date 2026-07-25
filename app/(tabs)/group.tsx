@@ -38,6 +38,7 @@ import {
 import {
   Avatar,
   Card,
+  IconButton,
   PageHeader,
   ProgressBar,
   Screen,
@@ -326,6 +327,14 @@ export default function LeaderboardScreen() {
         title="Leaderboard"
         action={
           editing ? (
+            <View style={styles.headerActions}>
+            {canManageGroup ? (
+              <IconButton
+                icon="settings-outline"
+                label="Group settings"
+                onPress={() => router.navigate("/group-settings" as never)}
+              />
+            ) : null}
             <Pressable
               onPress={() => {
                 setEditing(false);
@@ -335,7 +344,34 @@ export default function LeaderboardScreen() {
             >
               <Text style={styles.doneText}>Done</Text>
             </Pressable>
-          ) : undefined
+            </View>
+          ) : (
+            <View style={styles.headerActions}>
+              <IconButton
+                icon="sparkles-outline"
+                label="Group recap"
+                onPress={() =>
+                  router.navigate("/recap?scope=group" as never)
+                }
+              />
+              <View>
+                <IconButton
+                  icon="notifications-outline"
+                  label="Group notifications"
+                  onPress={() =>
+                    router.navigate("/alerts?scope=group" as never)
+                  }
+                />
+                {(state.group.pendingMembers?.length ?? 0) > 0 ? (
+                  <View style={styles.pendingDot}>
+                    <Text style={styles.pendingDotText}>
+                      {Math.min(9, state.group.pendingMembers?.length ?? 0)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+          )
         }
         subtitle={`${state.group.name} · ${state.group.members.length} friends`}
       />
@@ -861,6 +897,20 @@ function EditableRankingCard({
   );
 }
 const styles = StyleSheet.create({
+  headerActions: { flexDirection: "row", gap: 5, alignItems: "center" },
+  pendingDot: {
+    position: "absolute",
+    right: -2,
+    top: -3,
+    minWidth: 15,
+    height: 15,
+    borderRadius: 8,
+    backgroundColor: "#F06A45",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  pendingDotText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   rankingWrap: { marginBottom: 6 },

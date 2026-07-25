@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Alert, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -18,17 +18,68 @@ const kindIcons = {
 } as const;
 
 export default function SchedulePage() {
-  const { state, toggleTodo } = useApp();
+  const {
+    state,
+    toggleTodo,
+    deleteTodo,
+    deleteCalendarReminder,
+    updateSettings,
+  } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [selectedDate, setSelectedDate] = useState(dateKey());
+  const [editing, setEditing] = useState(false);
   const events = useMemo(
     () => scheduleEventsForDate(state, selectedDate),
     [selectedDate, state],
   );
+  function moveEvent(index: number, direction: -1 | 1) {
+    const target = Math.max(0, Math.min(events.length - 1, index + direction));
+    if (target === index) return;
+    const order = events.map((event) => event.id);
+    const [moved] = order.splice(index, 1);
+    order.splice(target, 0, moved);
+    updateSettings({ calendarEventOrder: order });
+  }
+  function removeEvent(event: (typeof events)[number]) {
+    Alert.alert("Remove scheduled item?", event.title, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          if (event.kind === "todo" && event.todoId) deleteTodo(event.todoId);
+          if (event.kind === "reminder")
+            deleteCalendarReminder(event.id.replace(/^reminder:/, ""));
+          if (event.kind === "tracker" && event.metricId)
+            router.navigate({
+              pathname: "/metric-editor",
+              params: { id: event.metricId, focus: "notifications" },
+            } as never);
+        },
+      },
+    ]);
+  }
   return (
     <Screen>
-      <PageHeader title="Schedule" />
+      <PageHeader
+        title="Schedule"
+        action={
+          <Pressable
+            onPress={() => setEditing((value) => !value)}
+            style={[styles.editButton, { borderColor: editing ? accent : colors.border }]}
+          >
+            <Ionicons
+              name={editing ? "checkmark" : "create-outline"}
+              size={16}
+              color={accent}
+            />
+            <Text style={[styles.quickText, { color: accent }]}>
+              {editing ? "Done" : "Edit"}
+            </Text>
+          </Pressable>
+        }
+      />
       <Card style={styles.calendar}>
         <MonthCalendar
           monthDate={selectedDate}
@@ -76,7 +127,7 @@ export default function SchedulePage() {
         </View>
       </View>
       <View style={styles.events}>
-        {events.map((event) => (
+        {events.map((event, index) => (
           <Pressable
             key={event.id}
             onPress={() => {
@@ -95,7 +146,34 @@ export default function SchedulePage() {
               styles.event,
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
+            onLongPress={() => setEditing(true)}
           >
+            {editing ? (
+              <View style={styles.moveActions}>
+                <Pressable
+                  onPress={() => moveEvent(index, -1)}
+                  disabled={index === 0}
+                  hitSlop={7}
+                >
+                  <Ionicons
+                    name="chevron-up"
+                    size={17}
+                    color={index === 0 ? colors.faint : accent}
+                  />
+                </Pressable>
+                <Pressable
+                  onPress={() => moveEvent(index, 1)}
+                  disabled={index === events.length - 1}
+                  hitSlop={7}
+                >
+                  <Ionicons
+                    name="chevron-down"
+                    size={17}
+                    color={index === events.length - 1 ? colors.faint : accent}
+                  />
+                </Pressable>
+              </View>
+            ) : null}
             {event.kind === "todo" && event.todoId ? (
               <Pressable
                 onPress={() => toggleTodo(event.todoId!, selectedDate)}
@@ -132,7 +210,13 @@ export default function SchedulePage() {
                 {event.time ?? "Any time"} · {event.kind}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={15} color={colors.faint} />
+            {editing ? (
+              <Pressable onPress={() => removeEvent(event)} hitSlop={8}>
+                <Ionicons name="trash-outline" size={17} color="#EF6A6A" />
+              </Pressable>
+            ) : (
+              <Ionicons name="chevron-forward" size={15} color={colors.faint} />
+            )}
           </Pressable>
         ))}
         {!events.length ? (
@@ -168,6 +252,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   quickText: { fontSize: 8, fontWeight: "900" },
+  editButton: {
+    minHeight: 32,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
   events: { gap: 6 },
   event: {
     minHeight: 56,
@@ -179,6 +272,7 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   copy: { flex: 1 },
+  moveActions: { width: 22, alignItems: "center", gap: 1 },
   eventName: { fontSize: 10, fontWeight: "900" },
   eventMeta: { fontSize: 7, fontWeight: "700", marginTop: 2 },
   complete: { textDecorationLine: "line-through", opacity: 0.58 },

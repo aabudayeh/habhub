@@ -276,8 +276,33 @@ export function buildBadges(
   const milestone = (count: number) =>
     [1, 3, 7, 14, 30, 50, 100, 250, 500, 1000].find((target) => target > count);
   const achievementDates = dateRangeEnding(anchor, 365);
+  const groupMetricIds = new Set(
+    (state.group.metricConfiguration ?? [])
+      .filter((metric) => metric.sections.group)
+      .map((metric) => metric.id),
+  );
+  if (groupMetricIds.has("food")) {
+    [
+      "protein",
+      "fat",
+      "carbs",
+      "fiber",
+      "sodium",
+      "sugar",
+      "saturated_fat",
+      "cholesterol",
+      "potassium",
+      "calcium",
+      "iron",
+      "magnesium",
+      "vitamin_c",
+      "vitamin_d",
+      "vitamin_b12",
+    ].forEach((id) => groupMetricIds.add(id));
+  }
   const goalMetrics = state.metrics.filter(
     (metric) =>
+      groupMetricIds.has(metric.id) &&
       metric.goalEnabled !== false &&
       metric.dataType !== "text" &&
       metric.dataType !== "photo" &&
@@ -337,6 +362,36 @@ export function buildBadges(
       anchorDate: anchor,
     };
   });
+  const checkInBadges = state.group.members.map((member): EarnedBadge => {
+    const count = new Set(
+      state.entries
+        .filter(
+          (entry) =>
+            entry.userId === member.id &&
+            achievementDates.includes(entry.localDate) &&
+            groupMetricIds.has(entry.metricId),
+        )
+        .map((entry) => entry.localDate),
+    ).size;
+    const nextTarget = milestone(count);
+    return {
+      id: `check-ins:${member.id}`,
+      icon: "calendar-clear-outline",
+      title: "Group check-ins",
+      owner: memberDisplayName(state, member),
+      memberId: member.id,
+      caption: `${count} active day${count === 1 ? "" : "s"}`,
+      description: nextTarget
+        ? `Log a group tracker on ${nextTarget - count} more day${nextTarget - count === 1 ? "" : "s"} to reach the ${nextTarget}-day milestone.`
+        : "Top check-in milestone reached.",
+      earnedCount: count,
+      nextTarget,
+      color: "#5A78C9",
+      period: "achievement",
+      periodLabel: labels.achievement,
+      anchorDate: anchor,
+    };
+  });
   const result: EarnedBadge[] = [
     overall(
       "live",
@@ -380,6 +435,7 @@ export function buildBadges(
     ),
     ...metricBadges,
     ...perfectDayBadges,
+    ...checkInBadges,
     ...trackerGoalBadges,
     ...streakBadges,
     {

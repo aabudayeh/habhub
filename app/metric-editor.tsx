@@ -307,6 +307,9 @@ export default function TrackerEditor() {
         : tracker.sections.today),
   );
   const [trackGoal, setTrackGoal] = useState(initiallyTracked);
+  const [addToToday, setAddToToday] = useState(
+    tracker?.sections.today ?? true,
+  );
   const [goalCalendarOpen, setGoalCalendarOpen] = useState(false);
   const [scheduleMode, setScheduleMode] = useState(
     tracker?.goalSchedule?.mode ?? "daily",
@@ -527,6 +530,7 @@ export default function TrackerEditor() {
         healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
       activeFrom,
       trackGoal: !groupScope && goalEnabled && trackGoal,
+      addToToday: !groupScope && addToToday,
       goalSchedule: {
         mode: scheduleMode,
         daysOfWeek: scheduleMode === "selected_days" ? selectedDays : undefined,
@@ -569,7 +573,11 @@ export default function TrackerEditor() {
           : undefined,
       templateId: tracker ? undefined : presetId || undefined,
     };
-    const { trackGoal: shouldTrack, ...definition } = common;
+    const {
+      trackGoal: shouldTrack,
+      addToToday: shouldShowToday,
+      ...definition
+    } = common;
     if (groupScope) {
       if (tracker) updateGroupMetric(tracker.id, definition);
       else addGroupMetric(definition);
@@ -583,8 +591,12 @@ export default function TrackerEditor() {
           shouldTrack ? activeFrom : undefined,
         );
       }
-      if (initiallyTracked && !shouldTrack)
-        setMetricSection(tracker.id, "today", false, "today");
+      setMetricSection(
+        tracker.id,
+        "today",
+        Boolean(shouldTrack || shouldShowToday),
+        "today",
+      );
     } else addMetric(common);
     if ((presetId || tracker?.id) === "blood_pressure_systolic") {
       const presetsById = new Map(
@@ -1170,12 +1182,13 @@ export default function TrackerEditor() {
           <Card>
             <SectionHeader title="How it behaves" />
             {!groupScope && goalEnabled && dataType !== "text" ? (
+              <>
               <View
                 style={[styles.switchRow, { borderColor: colors.border }]}
               >
                 <View style={styles.grow}>
                   <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                    Add to tracked goals and Today
+                    Count in tracked goals
                   </Text>
                   <Text style={[styles.help, { color: colors.muted }]}>
                     Include this goal in daily completion from the chosen
@@ -1184,6 +1197,24 @@ export default function TrackerEditor() {
                 </View>
                 <Switch value={trackGoal} onValueChange={setTrackGoal} />
               </View>
+              <View
+                style={[styles.switchRow, { borderColor: colors.border }]}
+              >
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Show on Today
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Keep it visible without making it a daily goal.
+                  </Text>
+                </View>
+                <Switch
+                  value={trackGoal || addToToday}
+                  disabled={trackGoal}
+                  onValueChange={setAddToToday}
+                />
+              </View>
+              </>
             ) : null}
             {goalEnabled && dataType !== "text" ? (
                 <View style={styles.goalStart}>

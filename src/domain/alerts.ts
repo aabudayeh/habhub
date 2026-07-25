@@ -16,6 +16,7 @@ export type PaceAlert = {
   detail: string;
   createdAt: string;
   memberId?: string;
+  scope: "personal" | "group";
 };
 export function buildAlerts(state: AppState): PaceAlert[] {
   const today = dateKey();
@@ -58,6 +59,7 @@ export function buildAlerts(state: AppState): PaceAlert[] {
           : `Current ${metric.name} leader for ${friendlyDate(today)}.`,
         createdAt: `${today}T12:00:00`,
         memberId: current.member.id,
+        scope: "group",
       },
     ];
   });
@@ -77,6 +79,10 @@ export function buildAlerts(state: AppState): PaceAlert[] {
         (member) => member.id === message.senderId,
       );
       const achievement = message.kind === "achievement";
+      const conversation = message.conversationId ?? "group";
+      const groupConversation =
+        conversation === "group" ||
+        conversation === `group:${state.group.id}`;
       return {
         id: `message-${message.id}`,
         category: achievement ? "achievement" : "message",
@@ -95,6 +101,7 @@ export function buildAlerts(state: AppState): PaceAlert[] {
         detail: message.text || "Sent an image",
         createdAt: message.createdAt,
         memberId: sender?.id,
+        scope: groupConversation || achievement ? "group" : "personal",
       };
     });
   return [...leads, ...messages].sort((a, b) =>

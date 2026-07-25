@@ -210,6 +210,15 @@ export default function NotificationsScreen() {
           onPress={() => patch({ chatMessages: !value.chatMessages })}
         />
         <ToggleRow
+          icon="person-add-outline"
+          title="Group membership"
+          copy="Join requests, approvals, new members, and departures"
+          enabled={value.groupMembership !== false}
+          onPress={() =>
+            patch({ groupMembership: value.groupMembership === false })
+          }
+        />
+        <ToggleRow
           icon="flame-outline"
           title="Streak updates"
           copy="Useful milestones for any active goal"

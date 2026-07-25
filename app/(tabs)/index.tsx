@@ -156,11 +156,40 @@ export default function Today() {
             !isInternalTracker(item) &&
             item.sections.today &&
             item.activeFrom <= today &&
+            (
+              state.settings.showUntrackedToday !== false ||
+              isMetricTrackedOnDate(state, item, today) ||
+              (state.settings.activeTrackerViewFilterId ?? ALL_TRACKERS_FILTER) !==
+                ALL_TRACKERS_FILTER
+            ) &&
             metricMatchesActiveView(state, item, today),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
-    return ordered.sort((a, b) => {
+    const completedBehavior =
+      state.settings.completedTodayBehavior ?? "bottom";
+    const filtered =
+      completedBehavior === "hide"
+        ? ordered.filter(
+            (item) =>
+              !(
+                isMetricTrackedOnDate(state, item, today) &&
+                metricApplicableOnDate(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                ) &&
+                scheduledGoalReached(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                )
+              ),
+          )
+        : ordered;
+    return filtered.sort((a, b) => {
       const pinOrder = Number(Boolean(b.pinnedTodayAt)) - Number(Boolean(a.pinnedTodayAt));
       if (pinOrder) return pinOrder;
       if (a.pinnedTodayAt && b.pinnedTodayAt)
@@ -376,12 +405,23 @@ export default function Today() {
           </View>
           <View style={styles.headerActions}>
             {editing ? (
-              <Pressable
-                onPress={finishEditing}
-                style={[styles.done, { backgroundColor: accent }]}
-              >
-                <Text style={styles.doneText}>Done</Text>
-              </Pressable>
+              <>
+                <HeaderIcon
+                  icon="settings-outline"
+                  label="Customize Today"
+                  onPress={() =>
+                    router.navigate("/customize?tab=today" as never)
+                  }
+                  colors={colors}
+                  accent={accent}
+                />
+                <Pressable
+                  onPress={finishEditing}
+                  style={[styles.done, { backgroundColor: accent }]}
+                >
+                  <Text style={styles.doneText}>Done</Text>
+                </Pressable>
+              </>
             ) : (
               <>
                 <HeaderIcon
@@ -396,7 +436,9 @@ export default function Today() {
                 <HeaderIcon
                   icon="notifications-outline"
                   label="Open notifications"
-                  onPress={() => router.navigate("/alerts" as never)}
+                  onPress={() =>
+                    router.navigate("/alerts?scope=personal" as never)
+                  }
                   colors={colors}
                   accent={accent}
                 />

@@ -4,9 +4,12 @@ import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Animated,
   AppState as NativeAppState,
   BackHandler,
+  LayoutAnimation,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -218,6 +221,110 @@ function cloneExercises(exercises: GymExercise[], preserveCompletion = false) {
   }));
 }
 
+function GymWiggle({
+  active,
+  index,
+  children,
+}: {
+  active: boolean;
+  index: number;
+  children: React.ReactNode;
+}) {
+  const value = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    value.stopAnimation();
+    value.setValue(0);
+    if (!active) return;
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.delay((index % 4) * 35),
+        Animated.timing(value, {
+          toValue: 1,
+          duration: 120,
+          useNativeDriver: true,
+        }),
+        Animated.timing(value, {
+          toValue: -1,
+          duration: 240,
+          useNativeDriver: true,
+        }),
+        Animated.timing(value, {
+          toValue: 0,
+          duration: 120,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [active, index, value]);
+
+  return (
+    <Animated.View
+      style={{
+        transform: [
+          {
+            rotate: value.interpolate({
+              inputRange: [-1, 0, 1],
+              outputRange: ["-0.25deg", "0deg", "0.25deg"],
+            }),
+          },
+        ],
+      }}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+function GymDragHandle({
+  index,
+  count,
+  color,
+  onMove,
+}: {
+  index: number;
+  count: number;
+  color: string;
+  onMove: (target: number) => void;
+}) {
+  const origin = useRef(index);
+  const lastTarget = useRef(index);
+  const pan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          Math.abs(gesture.dy) > 3,
+        onPanResponderGrant: () => {
+          origin.current = index;
+          lastTarget.current = index;
+        },
+        onPanResponderMove: (_, gesture) => {
+          const target = Math.max(
+            0,
+            Math.min(count - 1, origin.current + Math.round(gesture.dy / 64)),
+          );
+          if (target === lastTarget.current) return;
+          lastTarget.current = target;
+          onMove(target);
+        },
+      }),
+    [count, index, onMove],
+  );
+
+  return (
+    <View
+      {...pan.panHandlers}
+      style={styles.exerciseDragHandle}
+      hitSlop={8}
+    >
+      <Ionicons name="reorder-three" size={23} color={color} />
+    </View>
+  );
+}
+
 export default function GymScreen() {
   const {
     state,
@@ -242,6 +349,7 @@ export default function GymScreen() {
   const [sessionNotes, setSessionNotes] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("group");
   const [exercises, setExercises] = useState<GymExercise[]>([]);
+  const [exerciseEditMode, setExerciseEditMode] = useState(false);
   const [openExerciseId, setOpenExerciseId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -269,6 +377,22 @@ export default function GymScreen() {
     steps: WorkoutNotificationStep[];
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
+
+  const moveExercise = useCallback((exerciseId: string, target: number) => {
+    setExercises((current) => {
+      const from = current.findIndex((item) => item.id === exerciseId);
+      const bounded = Math.max(0, Math.min(current.length - 1, target));
+      if (from < 0 || from === bounded) return current;
+      LayoutAnimation.configureNext({
+        duration: 180,
+        update: { type: LayoutAnimation.Types.easeInEaseOut },
+      });
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(bounded, 0, moved);
+      return next;
+    });
+  }, []);
 
   const personalPlans = useMemo(
     () =>
@@ -501,11 +625,15 @@ export default function GymScreen() {
             setRecapOpen(false);
             return true;
           }
+          if (exerciseEditMode) {
+            setExerciseEditMode(false);
+            return true;
+          }
           return false;
         },
       );
       return () => subscription.remove();
-    }, [pickerOpen, recapOpen]),
+    }, [exerciseEditMode, pickerOpen, recapOpen]),
   );
 
   useEffect(() => {
@@ -1614,9 +1742,18 @@ export default function GymScreen() {
             <SectionHeader
               title="Exercises"
               action={
+                exerciseEditMode ? (
+                  <Pressable
+                    onPress={() => setExerciseEditMode(false)}
+                    style={[styles.exerciseDone, { backgroundColor: accent }]}
+                  >
+                    <Text style={styles.exerciseDoneText}>Done</Text>
+                  </Pressable>
+                ) : (
                 <Text style={[styles.summary, { color: accent }]}>
                   {completedSets} sets · {Math.round(volume).toLocaleString()} kg
                 </Text>
+                )
               }
             />
             {exercises.map((exercise, exerciseIndex) => {
@@ -1635,8 +1772,12 @@ export default function GymScreen() {
                       ? palette.red
                       : colors.border;
               return (
-                <View
+                <GymWiggle
                   key={exercise.id}
+                  active={exerciseEditMode}
+                  index={exerciseIndex}
+                >
+                <View
                   style={styles.exerciseContainer}
                   onLayout={(event) => {
                     targetOffsets.current[`exercise:${exercise.id}`] =
@@ -1656,8 +1797,24 @@ export default function GymScreen() {
                 >
                   <Pressable
                     style={styles.exerciseHeader}
-                    onPress={() => setOpenExerciseId(open ? null : exercise.id)}
+                    onPress={() => {
+                      if (!exerciseEditMode) {
+                        setOpenExerciseId(open ? null : exercise.id);
+                      }
+                    }}
+                    onLongPress={() => {
+                      setOpenExerciseId(null);
+                      setExerciseEditMode(true);
+                    }}
                   >
+                    {exerciseEditMode ? (
+                      <GymDragHandle
+                        index={exerciseIndex}
+                        count={exercises.length}
+                        color={accent}
+                        onMove={(target) => moveExercise(exercise.id, target)}
+                      />
+                    ) : null}
                     {exercise.completed ? (
                       <Ionicons
                         name="checkmark-circle"
@@ -1676,7 +1833,7 @@ export default function GymScreen() {
                           : ""}
                       </Text>
                     </View>
-                    <Pressable
+                    {!exerciseEditMode ? <Pressable
                       onPress={() =>
                         router.push({
                           pathname: "/gym-exercise" as never,
@@ -1686,8 +1843,10 @@ export default function GymScreen() {
                       style={[styles.miniAction, { borderColor: colors.border }]}
                     >
                       <Ionicons name="stats-chart-outline" size={16} color={accent} />
-                    </Pressable>
-                    <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+                    </Pressable> : null}
+                    {!exerciseEditMode ? (
+                      <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+                    ) : null}
                   </Pressable>
                   {open ? (
                     <View style={[styles.exerciseBody, { borderTopColor: colors.border }]}>
@@ -1864,6 +2023,7 @@ export default function GymScreen() {
                   </View>
                 ) : null}
                 </View>
+                </GymWiggle>
               );
             })}
             <Pressable
@@ -2344,6 +2504,24 @@ const styles = StyleSheet.create({
   restStop: { height: 32, paddingHorizontal: 10, borderRadius: 9, alignItems: "center", justifyContent: "center" },
   restStopText: { color: palette.white, fontSize: 8, fontWeight: "900" },
   summary: { fontSize: 9, fontWeight: "900" },
+  exerciseDone: {
+    minHeight: 30,
+    borderRadius: 9,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  exerciseDoneText: {
+    color: palette.ink,
+    fontSize: 8,
+    fontWeight: "900",
+  },
+  exerciseDragHandle: {
+    width: 30,
+    minHeight: 42,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   exerciseContainer: { width: "100%", marginBottom: 6 },
   exerciseCard: { paddingVertical: 2, paddingHorizontal: 9 },
   exerciseHeader: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 8 },

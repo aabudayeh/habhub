@@ -66,7 +66,8 @@ export default function DisplaySettings() {
       | "showGym"
       | "showCalendar"
       | "showJournal"
-      | "showTodosToday",
+      | "showTodosToday"
+      | "showAiAssistant",
     value: boolean,
   ) {
     const changes: Partial<typeof state.settings> = { [key]: value };
@@ -253,6 +254,12 @@ export default function DisplaySettings() {
             "Search notes collected across the app",
             "book-outline",
           ],
+          [
+            "showAiAssistant",
+            "Show MetRal AI",
+            "Floating assistant for logging, setup, reminders, and food-photo estimates",
+            "sparkles-outline",
+          ],
         ].map(([key, title, copy, icon], index) => (
           <View
             key={key}
@@ -289,7 +296,8 @@ export default function DisplaySettings() {
                     | "showGym"
                     | "showCalendar"
                     | "showJournal"
-                    | "showTodosToday",
+                    | "showTodosToday"
+                    | "showAiAssistant",
                   value,
                 )
               }
@@ -386,6 +394,31 @@ export default function DisplaySettings() {
             </View>
           </View>
         ) : null}
+        <View style={[styles.tileCount, { borderTopColor: colors.border }]}>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Completed goals
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Keep completed goals at the bottom or hide them from Today.
+            </Text>
+          </View>
+          <View style={styles.countChips}>
+            {(["bottom", "hide"] as const).map((behavior) => (
+              <Chip
+                key={behavior}
+                label={behavior === "bottom" ? "Move down" : "Hide"}
+                selected={
+                  (state.settings.completedTodayBehavior ?? "bottom") ===
+                  behavior
+                }
+                onPress={() =>
+                  updateSettings({ completedTodayBehavior: behavior })
+                }
+              />
+            ))}
+          </View>
+        </View>
       </Card>
       <SectionHeader title="Default landing page" />
       <Card style={styles.pages}>

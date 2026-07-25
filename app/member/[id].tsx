@@ -10,7 +10,6 @@ import React, {
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
-  InteractionManager,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -46,7 +45,10 @@ import {
   dateKey,
   dateWithOffsetFrom,
   friendlyDate,
+  relativeTime,
 } from "@/src/domain/date";
+import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   allTimePeriodDates,
   averageAtDate,
@@ -77,6 +79,8 @@ export default function MemberProfile() {
     metrics?: string;
   }>();
   const { state, updateSettings } = useApp();
+  const cloud = useCloudSync();
+  const health = useHealthSync();
   const calculationStateRef = useRef(state);
   calculationStateRef.current = state;
   const colors = useAppColors();
@@ -126,23 +130,13 @@ export default function MemberProfile() {
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const [comparisonReady, setComparisonReady] = useState(false);
+  const comparisonReady = true;
   // Keep selector/date presses responsive. The previous comparison remains
   // visible while React prepares the newly requested range at low priority.
   const deferredMetricIds = useDeferredValue(metricIds);
   const deferredSelectedIds = useDeferredValue(selectedIds);
   const deferredPeriod = useDeferredValue(period);
   const deferredAnchor = useDeferredValue(anchor);
-  useEffect(() => {
-    let active = true;
-    const task = InteractionManager.runAfterInteractions(() => {
-      if (active) setComparisonReady(true);
-    });
-    return () => {
-      active = false;
-      task.cancel();
-    };
-  }, []);
   const metrics = useMemo(
     () => available.filter((metric) => deferredMetricIds.includes(metric.id)),
     [available, deferredMetricIds],
@@ -339,24 +333,14 @@ export default function MemberProfile() {
   );
   const periodBadge =
     period === "week" ? "week" : period === "month" ? "month" : "today";
-  const [badges, setBadges] = useState<ReturnType<typeof buildBadges>>([]);
-  useEffect(() => {
-    if (!comparisonReady) return;
-    let active = true;
-    const task = InteractionManager.runAfterInteractions(() => {
-      if (!active) return;
-      setBadges(
-        buildBadges(state, anchor).filter(
-          (badge) =>
-            badge.memberId === member.id && badge.period === periodBadge,
-        ),
-      );
-    });
-    return () => {
-      active = false;
-      task.cancel();
-    };
-  }, [anchor, comparisonReady, member.id, periodBadge, state]);
+  const badges = useMemo(
+    () =>
+      buildBadges(state, anchor).filter(
+        (badge) =>
+          badge.memberId === member.id && badge.period === periodBadge,
+      ),
+    [anchor, member.id, periodBadge, state],
+  );
   const showcase = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
   const displayedBadges = [...badges]
     .sort(
@@ -447,7 +431,10 @@ export default function MemberProfile() {
     state.settings.comparisonPeriodByGroup,
     updateSettings,
   ]);
-  if (!comparisonReady)
+  const latestSync = [cloud.lastSyncedAt, health.lastSyncedAt]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.localeCompare(a))[0];
+  if (false)
     return (
       <Screen>
         <PageHeader
@@ -484,7 +471,11 @@ export default function MemberProfile() {
             ? "Your progress"
             : memberDisplayName(state, member)
         }
-        subtitle={`${periodTitle(period, anchor)} · compare shared values side by side`}
+        subtitle={`${periodTitle(period, anchor)} · ${
+          latestSync
+            ? `synced ${relativeTime(latestSync)}`
+            : "cached on this device"
+        }`}
         showMenu={false}
         action={
           <IconButton

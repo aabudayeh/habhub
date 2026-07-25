@@ -465,6 +465,10 @@ export type UserSettings = {
   showUntrackedToday?: boolean;
   showUntrackedProgress?: boolean;
   showUntrackedLeaderboardByGroup?: Record<string, boolean>;
+  /** Choose whether completed Today goals move down or disappear until edit mode. */
+  completedTodayBehavior?: "bottom" | "hide";
+  /** Personal ordering for mixed Schedule-page events. */
+  calendarEventOrder?: string[];
   /** Optional shortcut tab; logging remains available from tracker details. */
   showLog: boolean;
   showLeaderboard: boolean;
@@ -474,6 +478,8 @@ export type UserSettings = {
   showCalendar?: boolean;
   showJournal?: boolean;
   showTodosToday?: boolean;
+  /** Optional assistant entry point; cloud AI is proxied through a server function. */
+  showAiAssistant?: boolean;
   onboardingComplete: boolean;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
@@ -513,6 +519,7 @@ export type NotificationSettings = {
   leadChanges: boolean;
   metricIds: string[];
   chatMessages: boolean;
+  groupMembership?: boolean;
   badgesAndWinners: boolean;
   reminders: boolean;
   quietHoursEnabled: boolean;
@@ -520,6 +527,8 @@ export type NotificationSettings = {
   quietHoursEnd: string;
   mutedGroupIds?: string[];
   mutedConversationIds?: string[];
+  /** Private read cursors used for lightweight unread chat indicators. */
+  chatReadAtByConversation?: Record<string, string>;
   missedGoalNudges?: boolean;
   streakAlerts?: boolean;
   /** Private on-device estimates derived from the user's own period-start history. */
@@ -628,6 +637,8 @@ export type NewMetric = Pick<
   activeFrom?: string;
   /** Explicitly add this tracker to Today and tracked-goal history. */
   trackGoal?: boolean;
+  /** Show on Today without counting it as a tracked goal. */
+  addToToday?: boolean;
   /** Stable id used when adding a built-in preset after it was previously removed. */
   templateId?: string;
 };

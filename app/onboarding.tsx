@@ -264,8 +264,7 @@ export default function Onboarding() {
         proposed
           .filter(
             (item) =>
-              !healthChoices.includes("blood_pressure") ||
-              !["blood_pressure_diastolic", "pulse"].includes(item.templateId),
+              item.category !== "health",
           )
           .reduce<Record<string, typeof proposed>>((all, item) => {
           const key = item.category ?? "other";
@@ -273,7 +272,7 @@ export default function Onboarding() {
           return all;
           }, {}),
       ),
-    [healthChoices, proposed],
+    [proposed],
   );
   const targetIsValid =
     direction === "maintain" ||
@@ -411,6 +410,23 @@ export default function Onboarding() {
         current.filter((item) => item !== id),
       );
     } else setSelected((current) => [...current, id]);
+  }
+  function toggleHealthChoice(choice: (typeof HEALTH)[number]) {
+    const enabling = !healthChoices.includes(choice.id);
+    toggle(choice.id, setHealthChoices, healthChoices);
+    if (enabling) {
+      setSelected((current) => [
+        ...current,
+        ...choice.metrics.filter((id) => !current.includes(id)),
+      ]);
+    } else {
+      setSelected((current) =>
+        current.filter((id) => !choice.metrics.includes(id as never)),
+      );
+      setTrackedSelected((current) =>
+        current.filter((id) => !choice.metrics.includes(id as never)),
+      );
+    }
   }
   function addCustomTracker() {
     const name = customName.trim();
@@ -715,47 +731,6 @@ export default function Onboarding() {
                   copy="Only checked items are added. Other ready-made options stay available under Add."
                   colors={colors}
                 />
-                {goals.includes("health") ? (
-                  <>
-                    <Text style={[styles.label, { color: colors.ink }]}>
-                      Health readings
-                    </Text>
-                    <View style={styles.choiceList}>
-                      {HEALTH.map((choice) => (
-                        <Pressable
-                          key={choice.id}
-                          onPress={() =>
-                            toggle(choice.id, setHealthChoices, healthChoices)
-                          }
-                          style={[
-                            styles.choice,
-                            {
-                              backgroundColor: colors.card,
-                              borderColor: colors.border,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[styles.goalTitle, { color: colors.ink }]}
-                          >
-                            {choice.label}
-                          </Text>
-                          <Ionicons
-                            name={
-                              healthChoices.includes(choice.id)
-                                ? "checkbox"
-                                : "square-outline"
-                            }
-                            size={21}
-                            color={
-                              healthChoices.includes(choice.id) ? accent : colors.faint
-                            }
-                          />
-                        </Pressable>
-                      ))}
-                    </View>
-                  </>
-                ) : null}
                 <View style={styles.selectActions}>
                   <Pressable
                     onPress={() => {
@@ -900,6 +875,55 @@ export default function Onboarding() {
                     </>
                   ) : null}
                 </View>
+                {goals.includes("health") ? (
+                  <View
+                    style={[
+                      styles.group,
+                      {
+                        backgroundColor: colors.card,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                      Health readings
+                    </Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                      Choose only the readings you want on your starting setup.
+                    </Text>
+                    {HEALTH.map((choice) => (
+                      <Pressable
+                        key={choice.id}
+                        onPress={() => toggleHealthChoice(choice)}
+                        style={[
+                          styles.tracker,
+                          { borderTopColor: colors.border },
+                        ]}
+                      >
+                        <View style={styles.grow}>
+                          <Text
+                            style={[styles.goalTitle, { color: colors.ink }]}
+                          >
+                            {choice.label}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={
+                            healthChoices.includes(choice.id)
+                              ? "checkbox"
+                              : "square-outline"
+                          }
+                          size={21}
+                          color={
+                            healthChoices.includes(choice.id)
+                              ? accent
+                              : colors.faint
+                          }
+                        />
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
                 {grouped.map(([group, items]) => (
                   <View
                     key={group}

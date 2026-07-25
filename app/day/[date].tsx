@@ -41,6 +41,7 @@ import {
   trackedGoalSummary,
 } from "@/src/domain/metrics";
 import { imageSourceUri } from "@/src/domain/media";
+import { todoAppearsOnDate } from "@/src/domain/schedule";
 import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -55,7 +56,7 @@ const TRACKED = "tracked_goals";
 
 export default function DayDetail() {
   const params = useLocalSearchParams<{ date: string; metrics?: string }>();
-  const { state } = useApp();
+  const { state, toggleTodo } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(params.date ?? dateKey());
@@ -68,6 +69,9 @@ export default function DayDetail() {
   );
   const dayPhotos = state.photos.filter(
     (photo) => photo.userId === state.currentUserId && photo.localDate === day,
+  );
+  const dayTodos = (state.todos ?? []).filter((todo) =>
+    todoAppearsOnDate(todo, day),
   );
   const loggedIds = [...new Set(dayEntries.map((entry) => entry.metricId))];
   if (dayPhotos.length) loggedIds.push("progress_photo");
@@ -395,6 +399,64 @@ export default function DayDetail() {
         emptyLabel="No logs on this day"
       />
       {showTracked ? <TrackedCard state={state} day={day} /> : null}
+      {dayTodos.length ? (
+        <Card style={styles.todoCard}>
+          <View style={styles.todoHeading}>
+            <Ionicons name="checkbox-outline" size={19} color={accent} />
+            <View style={styles.grow}>
+              <Text style={[styles.trackedTitle, { color: colors.ink }]}>
+                To-dos
+              </Text>
+              <Text style={[styles.meta, { color: colors.muted }]}>
+                {
+                  dayTodos.filter((todo) =>
+                    todo.completedDates.includes(day),
+                  ).length
+                }
+                /{dayTodos.length} completed
+              </Text>
+            </View>
+          </View>
+          {dayTodos.map((todo) => {
+            const completed = todo.completedDates.includes(day);
+            return (
+              <Pressable
+                key={todo.id}
+                onPress={() => toggleTodo(todo.id, day)}
+                onLongPress={() =>
+                  router.navigate({
+                    pathname: "/todo-editor",
+                    params: { id: todo.id },
+                  } as never)
+                }
+                style={[styles.todoRow, { borderTopColor: colors.border }]}
+              >
+                <Ionicons
+                  name={completed ? "checkmark-circle" : "ellipse-outline"}
+                  size={20}
+                  color={completed ? palette.lime : colors.faint}
+                />
+                <View style={styles.grow}>
+                  <Text
+                    style={[
+                      styles.metricName,
+                      { color: colors.ink },
+                      completed && styles.todoComplete,
+                    ]}
+                  >
+                    {todo.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {todo.dueAt?.slice(0, 10) === day
+                      ? `Deadline · ${todo.dueAt.slice(11, 16)}`
+                      : `Priority · ${todo.priority}`}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+        </Card>
+      ) : null}
       <SectionHeader title="Selected logs" />
       <View style={styles.metrics}>
         {selected.map((metric) => {
@@ -933,6 +995,18 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   tracked: { marginTop: 10, borderLeftWidth: 3 },
+  todoCard: { marginTop: 8, paddingVertical: 7 },
+  todoHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
+  todoRow: {
+    minHeight: 48,
+    borderTopWidth: 1,
+    marginTop: 6,
+    paddingTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  todoComplete: { textDecorationLine: "line-through", opacity: 0.58 },
   trackedTop: { flexDirection: "row", alignItems: "center", gap: 10 },
   grow: { flex: 1 },
   trackedTitle: { color: palette.ink, fontSize: 14, fontWeight: "900" },

@@ -55,6 +55,20 @@ export default function ChatScreen() {
     ? directConversationId(state.currentUserId, recipientId)
     : groupConversationId;
   const notifications = state.settings.notifications;
+  const readAt = useMemo(
+    () => notifications.chatReadAtByConversation ?? {},
+    [notifications.chatReadAtByConversation],
+  );
+  const conversationUnread = useCallback(
+    (id: string) =>
+      state.messages.some(
+        (message) =>
+          (message.conversationId ?? "group") === id &&
+          message.senderId !== state.currentUserId &&
+          message.createdAt > (readAt[id] ?? ""),
+      ),
+    [readAt, state.currentUserId, state.messages],
+  );
   const muted = recipientId
     ? (notifications.mutedConversationIds ?? []).includes(conversationId)
     : (notifications.mutedGroupIds ?? []).includes(state.group.id);
@@ -112,6 +126,29 @@ export default function ChatScreen() {
     );
     return () => clearTimeout(timer);
   }, [conversationId, messages.length]);
+  useEffect(() => {
+    const latestIncoming = messages
+      .filter((message) => message.senderId !== state.currentUserId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.createdAt;
+    if (!latestIncoming || latestIncoming <= (readAt[conversationId] ?? ""))
+      return;
+    updateSettings({
+      notifications: {
+        ...notifications,
+        chatReadAtByConversation: {
+          ...readAt,
+          [conversationId]: latestIncoming,
+        },
+      },
+    });
+  }, [
+    conversationId,
+    messages,
+    notifications,
+    readAt,
+    state.currentUserId,
+    updateSettings,
+  ]);
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () =>
       setKeyboardVisible(true),
@@ -183,6 +220,7 @@ export default function ChatScreen() {
                   label="Group"
                   icon="people"
                   selected={!recipientId}
+                  unread={conversationUnread(groupConversationId)}
                   onPress={() => setRecipientId(null)}
                 />
                 {state.group.members
@@ -198,6 +236,11 @@ export default function ChatScreen() {
                           styles.personButtonSelected,
                       ]}
                     >
+                      {conversationUnread(
+                        directConversationId(state.currentUserId, member.id),
+                      ) ? (
+                        <View style={styles.unreadDot} />
+                      ) : null}
                       <Avatar
                         initials={member.initials}
                         color={member.color}
@@ -586,11 +629,13 @@ function ConversationButton({
   label,
   icon,
   selected,
+  unread,
   onPress,
 }: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
   selected: boolean;
+  unread?: boolean;
   onPress: () => void;
 }) {
   const accent = useGroupAccent();
@@ -604,6 +649,7 @@ function ConversationButton({
         selected && { backgroundColor: colors.card },
       ]}
     >
+      {unread ? <View style={styles.unreadDot} /> : null}
       <View
         style={[
           styles.conversationIcon,
@@ -686,6 +732,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   conversationButton: {
+    position: "relative",
     alignItems: "center",
     paddingVertical: 8,
     borderRadius: 13,
@@ -708,12 +755,25 @@ const styles = StyleSheet.create({
     marginVertical: 8,
   },
   personButton: {
+    position: "relative",
     alignItems: "center",
     paddingVertical: 7,
     borderRadius: 13,
     gap: 3,
   },
   personButtonSelected: { backgroundColor: palette.card },
+  unreadDot: {
+    position: "absolute",
+    right: 5,
+    top: 4,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#F06A45",
+    borderWidth: 1.5,
+    borderColor: palette.white,
+    zIndex: 2,
+  },
   personName: {
     color: palette.muted,
     fontSize: 9,

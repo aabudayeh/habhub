@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { AppText as Text } from "@/src/components/AppText";
@@ -14,15 +14,32 @@ import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 type Filter = 'all' | AlertCategory | 'badges';
 
 export default function Alerts() {
+  const { scope } = useLocalSearchParams<{ scope?: string }>();
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [filter, setFilter] = useState<Filter>('all');
-  const alerts = useMemo(() => buildAlerts(state), [state]).filter((alert) => filter === 'all' || (filter !== 'badges' && alert.category === filter));
-  const badges = useMemo(() => buildBadges(state).slice(0, 20), [state]);
+  const alertScope = scope === 'group' ? 'group' : 'personal';
+  const alerts = useMemo(() => buildAlerts(state), [state]).filter(
+    (alert) =>
+      alert.scope === alertScope &&
+      (filter === 'all' || (filter !== 'badges' && alert.category === filter)),
+  );
+  const badges = useMemo(
+    () =>
+      buildBadges(state)
+        .filter((badge) =>
+          alertScope === 'personal'
+            ? !badge.memberId || badge.memberId === state.currentUserId
+            : Boolean(badge.memberId),
+        )
+        .slice(0, 20),
+    [alertScope, state],
+  );
   const showBadges = filter === 'badges';
   return <Screen>
-    <PageHeader eyebrow={state.group.name} title="Alerts" subtitle="Lead changes, messages, and the latest 20 badges." showMenu={false} action={<View style={styles.headerActions}><IconButton icon="settings-outline" label="Notification settings" onPress={() => router.push('/notifications' as never)} /><IconButton icon="close" label="Close" onPress={() => router.back()} /></View>} />
+    <PageHeader eyebrow={state.group.name} title={scope === 'group' ? "Group updates" : "Your updates"} subtitle={scope === 'group' ? "Membership, rankings, group messages, and awards." : "Your reminders, messages, and achievements."} showMenu={false} action={<View style={styles.headerActions}><IconButton icon="settings-outline" label="Notification settings" onPress={() => router.push('/notifications' as never)} /><IconButton icon="close" label="Close" onPress={() => router.back()} /></View>} />
+    {scope === 'group' && (state.group.pendingMembers?.length ?? 0) > 0 ? <Pressable onPress={() => router.navigate('/group-settings' as never)}><Card style={[styles.alert, { borderLeftColor: '#F06A45' }]}><View style={[styles.icon, { backgroundColor: '#F06A4520' }]}><Ionicons name="person-add-outline" size={20} color="#F06A45" /></View><View style={styles.copy}><Text style={[styles.title, { color: colors.ink }]}>{state.group.pendingMembers!.length} join request{state.group.pendingMembers!.length === 1 ? '' : 's'}</Text><Text style={[styles.detail, { color: colors.muted }]}>Tap to review and approve or remove pending members.</Text></View><Ionicons name="chevron-forward" size={17} color={colors.faint} /></Card></Pressable> : null}
     <View style={styles.filters}><Chip label="All" selected={filter === 'all'} onPress={() => setFilter('all')} /><Chip label="Leaderboard" selected={filter === 'lead'} onPress={() => setFilter('lead')} /><Chip label="Messages" selected={filter === 'message'} onPress={() => setFilter('message')} /><Chip label="Badge cabinet" icon="ribbon-outline" selected={filter === 'badges'} onPress={() => setFilter('badges')} /></View>
     {showBadges ? <><SectionHeader title={`Badge cabinet · ${badges.length}`} action={<Pressable onPress={() => router.push('/badges' as never)}><Text style={styles.link}>See all</Text></Pressable>} /><View style={styles.badges}>{badges.map((badge) => <Pressable key={badge.id} onPress={() => badge.memberId ? router.push(`/member/${badge.memberId}` as never) : undefined} style={[styles.badge, { borderColor: `${badge.color}55` }]}><View style={[styles.badgeIcon, { backgroundColor: `${badge.color}20` }]}><Ionicons name={badge.icon} size={18} color={badge.color} /></View><View style={styles.copy}><Text style={styles.badgeTitle}>{badge.title}</Text><Text style={styles.badgeOwner}>{badge.owner} · {badge.periodLabel}</Text><Text style={styles.badgeCaption}>{badge.caption}</Text></View></Pressable>)}</View></> : null}
     {filter !== 'badges' ? <><SectionHeader title="Activity" />

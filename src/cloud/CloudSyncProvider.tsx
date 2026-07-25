@@ -24,6 +24,7 @@ import {
   loadCloudMessages,
   loadCloudWorkspace,
   removeCloudGroupMember,
+  sendMembershipPush,
   pushCloudWorkspace,
   pushCloudMessagesNow,
 } from "@/src/cloud/groupCloud";
@@ -780,7 +781,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (!remote) return;
       revisionRef.current = remote.revision;
       const bound = bindStateToAccount(remote.payload, auth.user);
-      let resolved = await resolvePrivateMedia(bound);
+      const resolvedRemote = await resolvePrivateMedia(bound);
+      const remoteHash = stableHash(resolvedRemote);
+      // Pulling group/chat updates can race with a just-finished Health Connect
+      // import. Merge by stable client ids so the UI never flashes back to the
+      // older cloud snapshot while the local import is still uploading.
+      let resolved = mergeStates(resolvedRemote, stateRef.current);
       if (isCloudGroupId(resolved.group.id)) {
         try {
           resolved = await loadCloudWorkspace(resolved, resolved.group.id);
@@ -790,11 +796,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           );
         }
       }
-      hashRef.current = stableHash(resolved);
-      workspaceHashRef.current = workspaceHash(resolved);
+      const resolvedHash = stableHash(resolved);
+      hashRef.current = remoteHash;
+      workspaceHashRef.current =
+        resolvedHash === remoteHash ? workspaceHash(resolved) : null;
       replaceState(resolved);
+      stateRef.current = resolved;
       setLastSyncedAt(remote.updated_at);
-      setPendingChanges(false);
+      setPendingChanges(resolvedHash !== remoteHash);
       setStatus("synced");
     } catch (error) {
       setStatus(
@@ -1367,6 +1376,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       joinGroup: async (code) => {
         const result = await joinCloudGroup(code);
+        const joiningName = accountName(auth.user!, "A new member");
         if (result.status === "pending") {
           const request = {
             groupId: result.groupId,
@@ -1377,6 +1387,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             JSON.stringify(request),
           );
           setPendingGroup(request);
+          sendMembershipPush({
+            groupId: result.groupId,
+            eventKey: `membership-request:${result.groupId}:${auth.user!.id}:${dateKey()}`,
+            audience: "admins",
+            title: `${joiningName} wants to join`,
+            body: `Review the request for ${result.groupName ?? "your group"}.`,
+            route: "/group-settings",
+          }).catch(() => undefined);
           return "pending";
         }
         const groupId = result.groupId;
@@ -1422,6 +1440,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         setPendingGroup(null);
         hydrateGroupInBackground(groupId);
+        sendMembershipPush({
+          groupId,
+          eventKey: `membership-joined:${groupId}:${auth.user!.id}:${dateKey()}`,
+          audience: "admins",
+          title: `${joiningName} joined`,
+          body: `${joiningName} is now in ${result.groupName ?? "your group"}.`,
+          route: "/group-settings",
+        }).catch(() => undefined);
         return "active";
       },
       switchGroup: async (groupId) => {
@@ -1437,6 +1463,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       leaveGroup: async (groupId) => {
         const before = stateRef.current;
+        const leavingMember = before.group.members.find(
+          (member) => member.id === before.currentUserId,
+        );
         const remaining = before.groups.filter((group) => group.id !== groupId);
         const nextGroup = remaining[0];
         if (!nextGroup)
@@ -1448,6 +1477,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         workspaceHashRef.current = workspaceHash(next);
         replaceState(next);
         try {
+          await sendMembershipPush({
+            groupId,
+            eventKey: `membership-left:${groupId}:${before.currentUserId}:${Date.now()}`,
+            audience: "admins",
+            title: `${leavingMember?.name ?? "A member"} left`,
+            body: `${leavingMember?.name ?? "A member"} left ${before.group.name}.`,
+            route: "/group-settings",
+          }).catch(() => undefined);
           await leaveCloudGroup(groupId);
           setPendingChanges(true);
           if (isCloudGroupId(nextGroup.id))
@@ -1466,9 +1503,27 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       approveMember: async (userId) => {
         await approveCloudGroupMember(stateRef.current.group.id, userId);
+        await sendMembershipPush({
+          groupId: stateRef.current.group.id,
+          eventKey: `membership-approved:${stateRef.current.group.id}:${userId}`,
+          audience: "user",
+          recipientId: userId,
+          title: `Welcome to ${stateRef.current.group.name}`,
+          body: `Your request was approved. Tap to open the group.`,
+          route: "/group",
+        }).catch(() => undefined);
         await refreshGroup();
       },
       removeMember: async (userId) => {
+        await sendMembershipPush({
+          groupId: stateRef.current.group.id,
+          eventKey: `membership-removed:${stateRef.current.group.id}:${userId}:${Date.now()}`,
+          audience: "user",
+          recipientId: userId,
+          title: `Group membership updated`,
+          body: `You were removed from ${stateRef.current.group.name}.`,
+          route: "/groups",
+        }).catch(() => undefined);
         await removeCloudGroupMember(stateRef.current.group.id, userId);
         await refreshGroup();
       },

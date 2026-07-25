@@ -17,6 +17,10 @@ import {
   exerciseIdentity,
   trainingVolumeKg,
 } from '@/src/domain/gym';
+import {
+  scheduleAppliesOnDate,
+  todoAppearsOnDate,
+} from '@/src/domain/schedule';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -78,6 +82,7 @@ const CYCLE_IDS = 'north-cycle-notification-ids-v1';
 const GOAL_IDS = 'metric-rally-goal-reminder-ids-v1';
 const GYM_IDS = 'metric-rally-gym-notification-ids-v1';
 const GYM_ACHIEVEMENT = 'metric-rally-gym-achievement-v1';
+const PRODUCTIVITY_IDS = 'metric-rally-productivity-notification-ids-v1';
 
 function reminderTime(state: AppState, configured: string) {
   if (!state.settings.notifications.quietHoursEnabled) return configured;
@@ -217,6 +222,92 @@ export async function syncCycleNotifications(state: AppState) {
     ids.push(await Notifications.scheduleNotificationAsync({ content: { title: item.title, body: item.body, data: { route: '/metric-detail', metric: 'menstrual_cycle' } }, trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger } }));
   }
   await AsyncStorage.setItem(CYCLE_IDS, JSON.stringify(ids));
+}
+
+export async function syncProductivityNotifications(state: AppState) {
+  if (Platform.OS === 'web') return;
+  const previous = JSON.parse(
+    (await AsyncStorage.getItem(PRODUCTIVITY_IDS)) ?? '[]',
+  ) as string[];
+  await Promise.all(
+    previous.map((id) =>
+      Notifications.cancelScheduledNotificationAsync(id).catch(
+        () => undefined,
+      ),
+    ),
+  );
+  if (!state.settings.notifications.pushEnabled) {
+    await AsyncStorage.setItem(PRODUCTIVITY_IDS, '[]');
+    return;
+  }
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) return;
+  const now = new Date();
+  const today = dateKey(now);
+  const ids: string[] = [];
+  const schedule = async (
+    localDate: string,
+    time: string,
+    title: string,
+    body: string,
+    route: string,
+  ) => {
+    if (ids.length >= 64 || !/^\d{2}:\d{2}$/.test(time)) return;
+    const trigger = new Date(
+      `${localDate}T${reminderTime(state, time)}:00`,
+    );
+    if (trigger <= now) return;
+    ids.push(
+      await Notifications.scheduleNotificationAsync({
+        content: { title, body, data: { route } },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: trigger,
+        },
+      }),
+    );
+  };
+  for (let offset = 0; offset < 31 && ids.length < 64; offset += 1) {
+    const localDate = dateWithOffsetFrom(today, offset);
+    for (const todo of state.todos ?? []) {
+      if (
+        !todoAppearsOnDate(todo, localDate) ||
+        todo.completedDates.includes(localDate) ||
+        (!todo.recurrence && Boolean(todo.completedAt))
+      )
+        continue;
+      for (const reminder of todo.reminders) {
+        await schedule(
+          reminder.at?.slice(0, 10) ?? localDate,
+          reminder.time ?? todo.dueAt?.slice(11, 16) ?? '09:00',
+          todo.dueAt?.slice(0, 10) === localDate
+            ? 'To-do deadline'
+            : 'To-do reminder',
+          todo.title,
+          `/todo-editor?id=${todo.id}`,
+        );
+      }
+    }
+    for (const reminder of state.calendarReminders ?? []) {
+      if (
+        !reminder.enabled ||
+        !scheduleAppliesOnDate(reminder.schedule, today, localDate)
+      )
+        continue;
+      await schedule(
+        localDate,
+        reminder.time,
+        reminder.title,
+        reminder.kind === 'tracker'
+          ? 'A scheduled tracker reminder is ready.'
+          : reminder.kind === 'todo'
+            ? 'A scheduled to-do reminder is ready.'
+            : 'Scheduled reminder',
+        '/calendar',
+      );
+    }
+  }
+  await AsyncStorage.setItem(PRODUCTIVITY_IDS, JSON.stringify(ids));
 }
 
 /**

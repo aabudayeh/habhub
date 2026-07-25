@@ -511,7 +511,11 @@ function reducer(state: AppState, action: Action): AppState {
         : nextState;
     }
     case "addMetric": {
-      const { trackGoal = false, ...definition } = action.metric;
+      const {
+        trackGoal = false,
+        addToToday = true,
+        ...definition
+      } = action.metric;
       const baseId =
         (action.metric.templateId ?? slugify(action.metric.name)) || "metric";
       let id = baseId;
@@ -550,7 +554,11 @@ function reducer(state: AppState, action: Action): AppState {
         scoreWeight: 0,
         sections: internalCompanion
           ? { today: false, group: false, insights: false }
-          : { today: trackGoal, group: true, insights: true },
+          : {
+              today: trackGoal || addToToday,
+              group: true,
+              insights: true,
+            },
         order: state.metrics.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
       };
