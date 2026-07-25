@@ -18,7 +18,11 @@ import { useAuth } from "@/src/auth/AuthProvider";
 import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
-import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
+import {
+  isInternalTracker,
+  trackerPresets,
+  TrackerPreset,
+} from "@/src/domain/trackerCatalog";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import { enablePushNotifications } from "@/src/notifications/push";
 import { useApp } from "@/src/state/AppProvider";
@@ -132,7 +136,6 @@ export default function Onboarding() {
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );
-  const [healthChoices, setHealthChoices] = useState<string[]>(["sleep"]);
   const [direction, setDirection] = useState<WeightDirection>(
     state.settings.weightDirection ?? "lose",
   );
@@ -218,12 +221,12 @@ export default function Onboarding() {
     if (goals.includes("nutrition"))
       ["food", "water"].forEach((id) => ids.add(id));
     if (goals.includes("health"))
-      HEALTH.filter((choice) => healthChoices.includes(choice.id)).forEach(
-        (choice) => choice.metrics.forEach((id) => ids.add(id)),
+      HEALTH.forEach((choice) =>
+        choice.metrics.forEach((id) => ids.add(id)),
       );
     if (goals.includes("learning")) ids.add("reading");
     return ids;
-  }, [goals, healthChoices]);
+  }, [goals]);
   const proposed = useMemo(() => {
     const adjusted = {
       ...state,
@@ -233,7 +236,7 @@ export default function Onboarding() {
         weightDirection: direction,
       },
     } as AppState;
-    const presets = trackerPresets(adjusted).filter((item) =>
+    const presets = trackerPresets(adjusted, true).filter((item) =>
       desired.has(item.templateId),
     );
     const reading: TrackerPreset[] = desired.has("reading")
@@ -262,10 +265,7 @@ export default function Onboarding() {
     () =>
       Object.entries(
         proposed
-          .filter(
-            (item) =>
-              item.category !== "health",
-          )
+          .filter((item) => !isInternalTracker({ id: item.templateId, healthMapping: item.healthMapping }))
           .reduce<Record<string, typeof proposed>>((all, item) => {
           const key = item.category ?? "other";
           (all[key] ??= []).push(item);
@@ -404,29 +404,22 @@ export default function Onboarding() {
     );
   }
   function toggleTracker(id: string) {
+    const linkedIds =
+      id === "blood_pressure_systolic"
+        ? ["blood_pressure_systolic", "blood_pressure_diastolic"]
+        : [id];
     if (selected.includes(id)) {
-      setSelected((current) => current.filter((item) => item !== id));
-      setTrackedSelected((current) =>
-        current.filter((item) => item !== id),
+      setSelected((current) =>
+        current.filter((item) => !linkedIds.includes(item)),
       );
-    } else setSelected((current) => [...current, id]);
-  }
-  function toggleHealthChoice(choice: (typeof HEALTH)[number]) {
-    const enabling = !healthChoices.includes(choice.id);
-    toggle(choice.id, setHealthChoices, healthChoices);
-    if (enabling) {
+      setTrackedSelected((current) =>
+        current.filter((item) => !linkedIds.includes(item)),
+      );
+    } else
       setSelected((current) => [
         ...current,
-        ...choice.metrics.filter((id) => !current.includes(id)),
+        ...linkedIds.filter((item) => !current.includes(item)),
       ]);
-    } else {
-      setSelected((current) =>
-        current.filter((id) => !choice.metrics.includes(id as never)),
-      );
-      setTrackedSelected((current) =>
-        current.filter((id) => !choice.metrics.includes(id as never)),
-      );
-    }
   }
   function addCustomTracker() {
     const name = customName.trim();
@@ -875,55 +868,6 @@ export default function Onboarding() {
                     </>
                   ) : null}
                 </View>
-                {goals.includes("health") ? (
-                  <View
-                    style={[
-                      styles.group,
-                      {
-                        backgroundColor: colors.card,
-                        borderColor: colors.border,
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                      Health readings
-                    </Text>
-                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                      Choose only the readings you want on your starting setup.
-                    </Text>
-                    {HEALTH.map((choice) => (
-                      <Pressable
-                        key={choice.id}
-                        onPress={() => toggleHealthChoice(choice)}
-                        style={[
-                          styles.tracker,
-                          { borderTopColor: colors.border },
-                        ]}
-                      >
-                        <View style={styles.grow}>
-                          <Text
-                            style={[styles.goalTitle, { color: colors.ink }]}
-                          >
-                            {choice.label}
-                          </Text>
-                        </View>
-                        <Ionicons
-                          name={
-                            healthChoices.includes(choice.id)
-                              ? "checkbox"
-                              : "square-outline"
-                          }
-                          size={21}
-                          color={
-                            healthChoices.includes(choice.id)
-                              ? accent
-                              : colors.faint
-                          }
-                        />
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
                 {grouped.map(([group, items]) => (
                   <View
                     key={group}

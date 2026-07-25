@@ -1298,9 +1298,12 @@ function MetricSummary({
           {reached}/{applicable.length} goal days ·{" "}
           {applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%
         </Text>
-        <Text style={[styles.streakLine, { color: colors.muted }]}>
-          Current {streaks.current}d · Best {streaks.best}d
-        </Text>
+        <View style={styles.streakRow}>
+          <Ionicons name="flame" size={12} color={metric.color} />
+          <Text style={[styles.streakLine, { color: colors.muted }]}>
+            Current {streaks.current}d · Best {streaks.best}d
+          </Text>
+        </View>
         </View>
         {editing ? (
           <View style={styles.cardEditActions}>

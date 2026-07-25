@@ -114,6 +114,7 @@ function RootNavigator() {
     todos: state.todos,
     reminders: state.calendarReminders,
     enabled: state.settings.notifications.pushEnabled,
+    todoReminders: state.settings.notifications.todoReminders,
     quiet: [
       state.settings.notifications.quietHoursEnabled,
       state.settings.notifications.quietHoursStart,

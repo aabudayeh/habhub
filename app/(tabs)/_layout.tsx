@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs } from "expo-router";
+import { Href, Tabs } from "expo-router";
 import React from "react";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { useApp } from "@/src/state/AppProvider";
+import { LandingPage } from "@/src/types";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -21,6 +22,46 @@ export default function TabLayout() {
   const accent = useGroupAccent();
   const { state } = useApp();
   const colors = useAppColors();
+  const defaultOrder: LandingPage[] = [
+    "index",
+    "log",
+    "group",
+    "insights",
+    "chat",
+    "gym",
+    "calendar",
+    "journal",
+  ];
+  const savedOrder = state.settings.tabOrder ?? [];
+  const tabOrder = [
+    ...savedOrder.filter(
+      (id, index) =>
+        defaultOrder.includes(id) && savedOrder.indexOf(id) === index,
+    ),
+    ...defaultOrder.filter((id) => !savedOrder.includes(id)),
+  ];
+  const tabOptions: Record<
+    LandingPage,
+    { title: string; href?: Href | null }
+  > = {
+    index: { title: "Today" },
+    log: { title: "Log", href: state.settings.showLog ? "/log" : null },
+    group: {
+      title: "Leaderboard",
+      href: state.settings.showLeaderboard ? "/group" : null,
+    },
+    insights: { title: "Progress" },
+    chat: { title: "Chat", href: state.settings.showChat ? "/chat" : null },
+    gym: { title: "Gym", href: state.settings.showGym ? "/gym" : null },
+    calendar: {
+      title: "Schedule",
+      href: state.settings.showCalendar ? "/calendar" : null,
+    },
+    journal: {
+      title: "Journal",
+      href: state.settings.showJournal ? "/journal" : null,
+    },
+  };
   return (
     <Tabs
       initialRouteName={state.settings.defaultLandingPage ?? "index"}
@@ -57,44 +98,9 @@ export default function TabLayout() {
         ),
       })}
     >
-      <Tabs.Screen name="index" options={{ title: "Today" }} />
-      <Tabs.Screen
-        name="log"
-        options={{ title: "Log", href: state.settings.showLog ? "/log" : null }}
-      />
-      <Tabs.Screen
-        name="group"
-        options={{
-          title: "Leaderboard",
-          href: state.settings.showLeaderboard ? "/group" : null,
-        }}
-      />
-      <Tabs.Screen name="insights" options={{ title: "Progress" }} />
-      <Tabs.Screen
-        name="chat"
-        options={{
-          title: "Chat",
-          href: state.settings.showChat ? "/chat" : null,
-        }}
-      />
-      <Tabs.Screen
-        name="gym"
-        options={{ title: "Gym", href: state.settings.showGym ? "/gym" : null }}
-      />
-      <Tabs.Screen
-        name="calendar"
-        options={{
-          title: "Schedule",
-          href: state.settings.showCalendar ? "/calendar" : null,
-        }}
-      />
-      <Tabs.Screen
-        name="journal"
-        options={{
-          title: "Journal",
-          href: state.settings.showJournal ? "/journal" : null,
-        }}
-      />
+      {tabOrder.map((name) => (
+        <Tabs.Screen key={name} name={name} options={tabOptions[name]} />
+      ))}
     </Tabs>
   );
 }

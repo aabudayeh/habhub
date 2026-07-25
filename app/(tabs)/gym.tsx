@@ -291,6 +291,7 @@ function GymDragHandle({
 }) {
   const origin = useRef(index);
   const lastTarget = useRef(index);
+  const dragY = useRef(new Animated.Value(0)).current;
   const pan = useMemo(
     () =>
       PanResponder.create({
@@ -302,26 +303,46 @@ function GymDragHandle({
           lastTarget.current = index;
         },
         onPanResponderMove: (_, gesture) => {
+          dragY.setValue(gesture.dy);
           const target = Math.max(
             0,
             Math.min(count - 1, origin.current + Math.round(gesture.dy / 64)),
           );
-          if (target === lastTarget.current) return;
           lastTarget.current = target;
-          onMove(target);
+        },
+        onPanResponderRelease: () => {
+          const target = lastTarget.current;
+          Animated.spring(dragY, {
+            toValue: 0,
+            damping: 24,
+            stiffness: 220,
+            useNativeDriver: true,
+          }).start();
+          if (target !== origin.current) onMove(target);
+        },
+        onPanResponderTerminate: () => {
+          Animated.spring(dragY, {
+            toValue: 0,
+            damping: 24,
+            stiffness: 220,
+            useNativeDriver: true,
+          }).start();
         },
       }),
-    [count, index, onMove],
+    [count, dragY, index, onMove],
   );
 
   return (
-    <View
+    <Animated.View
       {...pan.panHandlers}
-      style={styles.exerciseDragHandle}
+      style={[
+        styles.exerciseDragHandle,
+        { transform: [{ translateY: dragY }], zIndex: 5 },
+      ]}
       hitSlop={8}
     >
       <Ionicons name="reorder-three" size={23} color={color} />
-    </View>
+    </Animated.View>
   );
 }
 
@@ -1468,6 +1489,7 @@ export default function GymScreen() {
         fixedTop={workoutTimerBar}
         contentContainerStyle={styles.page}
         keyboardShouldPersistTaps="handled"
+        refreshEnabled={!exerciseEditMode}
       >
         <PageHeader
           title="Gym"
@@ -1833,6 +1855,20 @@ export default function GymScreen() {
                           : ""}
                       </Text>
                     </View>
+                    {exerciseEditMode ? (
+                      <Pressable
+                        accessibilityLabel={`Remove ${exercise.name}`}
+                        onPress={() =>
+                          setExercises((current) =>
+                            current.filter((item) => item.id !== exercise.id),
+                          )
+                        }
+                        style={styles.editRemoveExercise}
+                        hitSlop={7}
+                      >
+                        <Ionicons name="remove" size={15} color={palette.white} />
+                      </Pressable>
+                    ) : null}
                     {!exerciseEditMode ? <Pressable
                       onPress={() =>
                         router.push({
@@ -2570,6 +2606,14 @@ const styles = StyleSheet.create({
   exerciseNotes: { borderWidth: 1, borderRadius: 9, minHeight: 37, paddingHorizontal: 9, fontSize: 9 },
   exerciseActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   removeExercise: { flexDirection: "row", gap: 4, alignItems: "center", padding: 8 },
+  editRemoveExercise: {
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    backgroundColor: palette.red,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   removeText: { color: palette.red, fontSize: 8, fontWeight: "900" },
   addExercise: { minHeight: 46, marginTop: 4, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   addText: { fontSize: 9, fontWeight: "900" },

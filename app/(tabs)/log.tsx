@@ -66,35 +66,14 @@ export default function LogScreen() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const metrics = useMemo(() => {
-    const secondary = new Set([
-      "protein",
-      "fat",
-      "carbs",
-      "fiber",
-      "sodium",
-      "sugar",
-      "saturated_fat",
-      "cholesterol",
-      "potassium",
-      "calcium",
-      "iron",
-      "magnesium",
-      "vitamin_c",
-      "vitamin_d",
-      "vitamin_b12",
-      "workout_duration",
-      "workout_calories",
-      "workout_distance",
-      "blood_pressure_diastolic",
-    ]);
     return [...state.metrics]
       .filter(
         (metric) =>
           metric.dataType !== "calculated" &&
           metric.id !== "steps" &&
+          metric.id !== "blood_pressure_diastolic" &&
           !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
-          metric.manualEntry !== false &&
-          !secondary.has(metric.id),
+          metric.manualEntry !== false,
       )
       .sort((a, b) => a.order - b.order);
   }, [state.metrics]);

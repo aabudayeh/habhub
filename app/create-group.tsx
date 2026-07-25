@@ -52,6 +52,8 @@ export default function CreateGroup() {
   const [customType, setCustomType] = useState<"number" | "boolean">("number");
   const [customGoal, setCustomGoal] = useState("1");
   const [customUnit, setCustomUnit] = useState("");
+  const [readyMadeOpen, setReadyMadeOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const suggestions = useMemo(
@@ -230,136 +232,178 @@ export default function CreateGroup() {
         )}
       </Card>
 
-      <SectionHeader title="More ready-made trackers" />
       <Card>
-        <View style={[styles.search, { borderColor: colors.border }]}>
-          <Ionicons name="search-outline" size={17} color={colors.muted} />
-          <TextInput
-            value={metricSearch}
-            onChangeText={setMetricSearch}
-            placeholder="Search default trackers"
-            placeholderTextColor={colors.faint}
-            style={[styles.searchInput, { color: colors.ink }]}
+        <Pressable
+          onPress={() => setReadyMadeOpen((open) => !open)}
+          style={styles.collapseHeader}
+        >
+          <View style={styles.copy}>
+            <Text style={[styles.choiceName, { color: colors.ink }]}>
+              More ready-made trackers
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Browse the complete tracker library.
+            </Text>
+          </View>
+          <Ionicons
+            name={readyMadeOpen ? "chevron-up" : "chevron-down"}
+            size={19}
+            color={colors.faint}
           />
-          {metricSearch ? (
-            <Pressable onPress={() => setMetricSearch("")}>
-              <Ionicons name="close-circle" size={18} color={colors.faint} />
-            </Pressable>
-          ) : null}
-        </View>
-        {visiblePresets.map((preset, index) => (
-          <MetricChoice
-            key={preset.templateId}
-            name={preset.name}
-            icon={preset.icon as keyof typeof Ionicons.glyphMap}
-            color={preset.color}
-            selected={selectedPresets.includes(preset.templateId)}
-            last={index === visiblePresets.length - 1}
-            onPress={() =>
-              toggle(
-                preset.templateId,
-                selectedPresets,
-                setSelectedPresets,
-              )
-            }
-            colors={colors}
-            accent={accent}
-          />
-        ))}
-        {!metricSearch && presets.length > visiblePresets.length ? (
-          <Text style={[styles.searchHint, { color: colors.muted }]}>
-            Search to browse all {presets.length} ready-made trackers.
-          </Text>
+        </Pressable>
+        {readyMadeOpen ? (
+          <>
+            <View style={[styles.search, { borderColor: colors.border }]}>
+              <Ionicons name="search-outline" size={17} color={colors.muted} />
+              <TextInput
+                value={metricSearch}
+                onChangeText={setMetricSearch}
+                placeholder="Search default trackers"
+                placeholderTextColor={colors.faint}
+                style={[styles.searchInput, { color: colors.ink }]}
+              />
+              {metricSearch ? (
+                <Pressable onPress={() => setMetricSearch("")}>
+                  <Ionicons name="close-circle" size={18} color={colors.faint} />
+                </Pressable>
+              ) : null}
+            </View>
+            {visiblePresets.map((preset, index) => (
+              <MetricChoice
+                key={preset.templateId}
+                name={preset.name}
+                icon={preset.icon as keyof typeof Ionicons.glyphMap}
+                color={preset.color}
+                selected={selectedPresets.includes(preset.templateId)}
+                last={index === visiblePresets.length - 1}
+                onPress={() =>
+                  toggle(
+                    preset.templateId,
+                    selectedPresets,
+                    setSelectedPresets,
+                  )
+                }
+                colors={colors}
+                accent={accent}
+              />
+            ))}
+            {!metricSearch && presets.length > visiblePresets.length ? (
+              <Text style={[styles.searchHint, { color: colors.muted }]}>
+                Search to browse all {presets.length} ready-made trackers.
+              </Text>
+            ) : null}
+          </>
         ) : null}
       </Card>
 
-      <SectionHeader title="Create a custom tracker" />
       <Card>
-        <TextInput
-          value={customName}
-          onChangeText={setCustomName}
-          placeholder="Tracker name"
-          placeholderTextColor={colors.faint}
-          style={[
-            styles.input,
-            { color: colors.ink, borderColor: colors.border },
-          ]}
-        />
-        <View style={styles.typeChoices}>
-          <View style={styles.typeChoice}>
-            <Chip
-              label="A number"
-              icon="calculator-outline"
-              selected={customType === "number"}
-              onPress={() => setCustomType("number")}
-            />
-          </View>
-          <View style={styles.typeChoice}>
-            <Chip
-              label="Yes or no"
-              icon="checkmark-circle-outline"
-              selected={customType === "boolean"}
-              onPress={() => setCustomType("boolean")}
-            />
-          </View>
-        </View>
-        {customType === "number" ? (
-          <View style={styles.customFields}>
-            <TextInput
-              value={customGoal}
-              onChangeText={setCustomGoal}
-              keyboardType="decimal-pad"
-              placeholder="Daily goal"
-              placeholderTextColor={colors.faint}
-              style={[
-                styles.input,
-                styles.flexInput,
-                { color: colors.ink, borderColor: colors.border },
-              ]}
-            />
-            <TextInput
-              value={customUnit}
-              onChangeText={setCustomUnit}
-              placeholder="Unit (optional)"
-              placeholderTextColor={colors.faint}
-              style={[
-                styles.input,
-                styles.flexInput,
-                { color: colors.ink, borderColor: colors.border },
-              ]}
-            />
-          </View>
-        ) : null}
-        <Button
-          label="Add custom tracker"
-          icon="add-circle-outline"
-          size="small"
-          variant="secondary"
-          onPress={addCustomMetric}
-        />
-        {customMetrics.map((metric) => (
-          <View
-            key={metric.templateId}
-            style={[styles.customAdded, { borderColor: colors.border }]}
-          >
-            <Ionicons name="sparkles-outline" size={17} color={metric.color} />
-            <Text style={[styles.choiceName, styles.copy, { color: colors.ink }]}>
-              {metric.name}
+        <Pressable
+          onPress={() => setCustomOpen((open) => !open)}
+          style={styles.collapseHeader}
+        >
+          <View style={styles.copy}>
+            <Text style={[styles.choiceName, { color: colors.ink }]}>
+              Create a custom tracker
             </Text>
-            <Pressable
-              accessibilityLabel={`Remove ${metric.name}`}
-              onPress={() =>
-                setCustomMetrics((current) =>
-                  current.filter(
-                    (item) => item.templateId !== metric.templateId,
-                  ),
-                )
-              }
-            >
-              <Ionicons name="trash-outline" size={18} color={palette.red} />
-            </Pressable>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Add a simple number or yes/no tracker.
+            </Text>
           </View>
-        ))}
+          <Ionicons
+            name={customOpen ? "chevron-up" : "chevron-down"}
+            size={19}
+            color={colors.faint}
+          />
+        </Pressable>
+        {customOpen ? (
+          <>
+            <TextInput
+              value={customName}
+              onChangeText={setCustomName}
+              placeholder="Tracker name"
+              placeholderTextColor={colors.faint}
+              style={[
+                styles.input,
+                { color: colors.ink, borderColor: colors.border },
+              ]}
+            />
+            <View style={styles.typeChoices}>
+              <View style={styles.typeChoice}>
+                <Chip
+                  label="A number"
+                  icon="calculator-outline"
+                  selected={customType === "number"}
+                  onPress={() => setCustomType("number")}
+                />
+              </View>
+              <View style={styles.typeChoice}>
+                <Chip
+                  label="Yes or no"
+                  icon="checkmark-circle-outline"
+                  selected={customType === "boolean"}
+                  onPress={() => setCustomType("boolean")}
+                />
+              </View>
+            </View>
+            {customType === "number" ? (
+              <View style={styles.customFields}>
+                <TextInput
+                  value={customGoal}
+                  onChangeText={setCustomGoal}
+                  keyboardType="decimal-pad"
+                  placeholder="Daily goal"
+                  placeholderTextColor={colors.faint}
+                  style={[
+                    styles.input,
+                    styles.flexInput,
+                    { color: colors.ink, borderColor: colors.border },
+                  ]}
+                />
+                <TextInput
+                  value={customUnit}
+                  onChangeText={setCustomUnit}
+                  placeholder="Unit (optional)"
+                  placeholderTextColor={colors.faint}
+                  style={[
+                    styles.input,
+                    styles.flexInput,
+                    { color: colors.ink, borderColor: colors.border },
+                  ]}
+                />
+              </View>
+            ) : null}
+            <Button
+              label="Add custom tracker"
+              icon="add-circle-outline"
+              size="small"
+              variant="secondary"
+              onPress={addCustomMetric}
+            />
+            {customMetrics.map((metric) => (
+              <View
+                key={metric.templateId}
+                style={[styles.customAdded, { borderColor: colors.border }]}
+              >
+                <Ionicons name="sparkles-outline" size={17} color={metric.color} />
+                <Text style={[styles.choiceName, styles.copy, { color: colors.ink }]}>
+                  {metric.name}
+                </Text>
+                <Pressable
+                  accessibilityLabel={`Remove ${metric.name}`}
+                  onPress={() =>
+                    setCustomMetrics((current) =>
+                      current.filter(
+                        (item) => item.templateId !== metric.templateId,
+                      ),
+                    )
+                  }
+                >
+                  <Ionicons name="trash-outline" size={18} color={palette.red} />
+                </Pressable>
+              </View>
+            ))}
+          </>
+        ) : null}
       </Card>
 
       <SectionHeader title="Group color" />
@@ -486,6 +530,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   choiceName: { fontSize: 11, fontWeight: "900" },
+  collapseHeader: {
+    minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   copy: { flex: 1 },
   meta: { fontSize: 9, lineHeight: 13, marginTop: 3 },
   empty: { fontSize: 10, lineHeight: 15, paddingVertical: 14 },

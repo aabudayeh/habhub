@@ -88,11 +88,11 @@ export default function TrackerDetail() {
             state,
             tracker,
             state.currentUserId,
-            day,
+            dateKey(),
             state.settings.weekStartsOn ?? 1,
           )
         : {},
-    [day, state, tracker],
+    [state, tracker],
   );
   const dates = useMemo(
     () => periodDates(period, day, state.settings.weekStartsOn ?? 1),
@@ -337,7 +337,6 @@ export default function TrackerDetail() {
           (dates.length === 1
             ? hasData(state, tracker, day)
             : loggedDates.length > 0));
-  const highestEver = highestRecordedValue(state, tracker, day);
   const target = effectiveGoalTarget(state, tracker, state.currentUserId, day);
   const displayedTarget =
     dates.length === 1 ? target : periodStats.averageTarget;
@@ -777,13 +776,7 @@ export default function TrackerDetail() {
               value={`${streaks.best} days`}
               colors={colors}
             />
-            {dates.length === 1 ? (
-              <Stat
-                label={isBloodPressure ? "Highest systolic" : "Highest day"}
-                value={highestEver === null ? "—" : formatMetricValue(tracker, highestEver)}
-                colors={colors}
-              />
-            ) : (
+            {dates.length > 1 ? (
               <>
                 <Stat
                   label="Goals reached"
@@ -800,7 +793,7 @@ export default function TrackerDetail() {
                   colors={colors}
                 />
               </>
-            )}
+            ) : null}
             {dates.length > 1 &&
             tracker.aggregation === "sum" &&
             tracker.dataType !== "boolean" ? (
@@ -871,7 +864,7 @@ export default function TrackerDetail() {
               <Stat
                 label={
                   historicalRecords.highestWeek
-                    ? `${friendlyDate(historicalRecords.highestWeek.from)} – ${friendlyDate(historicalRecords.highestWeek.to)}`
+                    ? `Highest week · ${friendlyDate(historicalRecords.highestWeek.from)} – ${friendlyDate(historicalRecords.highestWeek.to)}`
                     : "Highest week"
                 }
                 value={
@@ -887,14 +880,14 @@ export default function TrackerDetail() {
               <Stat
                 label={
                   historicalRecords.highestMonth
-                    ? new Intl.DateTimeFormat(undefined, {
+                    ? `Highest month · ${new Intl.DateTimeFormat(undefined, {
                         month: "long",
                         year: "numeric",
                       }).format(
                         new Date(
                           `${historicalRecords.highestMonth.key}-01T12:00:00`,
                         ),
-                      )
+                      )}`
                     : "Highest month"
                 }
                 value={
@@ -1639,36 +1632,6 @@ function hasData(
   day: string,
 ) {
   return hasMetricData(state, tracker, state.currentUserId, day);
-}
-function highestRecordedValue(
-  state: ReturnType<typeof useApp>["state"],
-  tracker: MetricDefinition,
-  throughDate: string,
-) {
-  if (tracker.dataType === "photo" || tracker.dataType === "text") return null;
-  const dates =
-    tracker.dataType === "calculated"
-      ? Array.from({ length: 365 }, (_, index) =>
-          dateWithOffsetFrom(throughDate, -index),
-        ).filter((date) => hasData(state, tracker, date))
-      : Array.from(
-          new Set(
-            state.entries
-              .filter(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === tracker.id &&
-                  entry.localDate <= throughDate,
-              )
-              .map((entry) => entry.localDate),
-          ),
-        );
-  if (!dates.length) return null;
-  return Math.max(
-    ...dates.map((date) =>
-      safeMetricValue(state, tracker, state.currentUserId, date),
-    ),
-  );
 }
 function summaryLine(
   state: ReturnType<typeof useApp>["state"],

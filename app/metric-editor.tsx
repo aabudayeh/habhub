@@ -272,6 +272,11 @@ export default function TrackerEditor() {
   const [advanced, setAdvanced] = useState(
     focus === "goal-start" || focus === "notifications",
   );
+  const [healthOpen, setHealthOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [remindersOpen, setRemindersOpen] = useState(
+    focus === "notifications",
+  );
   const scrollRef = useRef<ScrollView>(null);
   const scrolledToGoalStart = useRef(false);
   const scrolledToNotifications = useRef(false);
@@ -1076,13 +1081,34 @@ export default function TrackerEditor() {
       {advanced ? (
         <>
           <Card>
-            <SectionHeader title="Health connection" />
-            <Text style={[styles.help, { color: colors.muted }]}>
-              {gymMapping
-                ? "This standardized tracker is calculated from Gym sessions. Raw sets and notes remain private."
-                : "Link this tracker to any compatible app that writes this data into Apple Health or Health Connect."}
-            </Text>
-            <View style={styles.wrap}>
+            <Pressable
+              onPress={() => setHealthOpen((open) => !open)}
+              style={styles.collapseHeading}
+            >
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                  Health connection
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  {healthType
+                    ? `Connected to ${SOURCES.find((item) => item.id === healthType)?.label ?? healthType}`
+                    : "No health source connected"}
+                </Text>
+              </View>
+              <Ionicons
+                name={healthOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={colors.faint}
+              />
+            </Pressable>
+            {healthOpen ? (
+              <>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  {gymMapping
+                    ? "This standardized tracker is calculated from Gym sessions. Raw sets and notes remain private."
+                    : "Link this tracker to compatible data from Apple Health or Health Connect."}
+                </Text>
+                <View style={styles.wrap}>
               <Chip
                 label="No connection"
                 selected={!healthType}
@@ -1100,7 +1126,7 @@ export default function TrackerEditor() {
                   }}
                 />
               ))}
-            </View>
+                </View>
             {source ? (
               <>
                 <Text style={[styles.label, { color: colors.ink }]}>
@@ -1158,6 +1184,8 @@ export default function TrackerEditor() {
                 onValueChange={setManualEntry}
               />
             </View>
+              </>
+            ) : null}
           </Card>
           <View
             onLayout={(event) => {
@@ -1315,122 +1343,207 @@ export default function TrackerEditor() {
                 );
               }}
             >
-            <Text style={[styles.label, { color: colors.ink }]}>Reminder times</Text>
-            {reminderTimes.map((time, index) => (
-              <View key={index} style={styles.reminderRow}>
-                <View style={styles.grow}>
-                  <Field
-                    label={`Reminder ${index + 1}`}
-                    value={time}
-                    set={(value) =>
-                      setReminderTimes((current) =>
-                        current.map((item, itemIndex) =>
-                          itemIndex === index ? value : item,
-                        ),
-                      )
-                    }
-                    colors={colors}
-                    keyboard={false}
+              <View
+                style={[styles.collapsibleGroup, { borderColor: colors.border }]}
+              >
+                <Pressable
+                  onPress={() => setRemindersOpen((open) => !open)}
+                  style={styles.collapseHeading}
+                >
+                  <View style={styles.grow}>
+                    <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                      Reminders
+                    </Text>
+                    <Text style={[styles.help, { color: colors.muted }]}>
+                      {reminderEnabled
+                        ? `${reminderTimes.length} reminder${reminderTimes.length === 1 ? "" : "s"} enabled`
+                        : "Off"}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={remindersOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={colors.faint}
                   />
-                </View>
-                {reminderTimes.length > 1 ? (
-                  <IconButton
-                    icon="trash-outline"
-                    label="Remove reminder"
-                    onPress={() =>
-                      setReminderTimes((current) =>
-                        current.filter((_, itemIndex) => itemIndex !== index),
-                      )
-                    }
-                  />
+                </Pressable>
+                {remindersOpen ? (
+                  <>
+                    <View
+                      style={[
+                        styles.switchRow,
+                        { borderColor: colors.border },
+                      ]}
+                    >
+                      <View style={styles.grow}>
+                        <Text
+                          style={[styles.rowTitle, { color: colors.ink }]}
+                        >
+                          Remind me
+                        </Text>
+                        <Text style={[styles.help, { color: colors.muted }]}>
+                          Uses the times below and respects quiet hours.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={reminderEnabled}
+                        onValueChange={setReminderEnabled}
+                      />
+                    </View>
+                    {reminderTimes.map((time, index) => (
+                      <View key={index} style={styles.reminderRow}>
+                        <View style={styles.grow}>
+                          <Field
+                            label={`Time ${index + 1}`}
+                            value={time}
+                            set={(value) =>
+                              setReminderTimes((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? value : item,
+                                ),
+                              )
+                            }
+                            colors={colors}
+                            keyboard={false}
+                          />
+                        </View>
+                        {reminderTimes.length > 1 ? (
+                          <IconButton
+                            icon="trash-outline"
+                            label="Remove reminder"
+                            onPress={() =>
+                              setReminderTimes((current) =>
+                                current.filter(
+                                  (_, itemIndex) => itemIndex !== index,
+                                ),
+                              )
+                            }
+                          />
+                        ) : null}
+                      </View>
+                    ))}
+                    <Pressable
+                      onPress={() =>
+                        setReminderTimes((current) => [...current, "19:00"])
+                      }
+                      style={[styles.addReminder, { borderColor: accent }]}
+                    >
+                      <Ionicons name="add" size={16} color={accent} />
+                      <Text style={[styles.help, { color: accent }]}>
+                        Add time
+                      </Text>
+                    </Pressable>
+                  </>
                 ) : null}
               </View>
-            ))}
-            <Pressable
-              onPress={() => setReminderTimes((current) => [...current, "19:00"])}
-              style={[styles.addReminder, { borderColor: accent }]}
-            >
-              <Ionicons name="add" size={16} color={accent} />
-              <Text style={[styles.help, { color: accent }]}>Add reminder</Text>
-            </Pressable>
-            <Text style={[styles.label, { color: colors.ink }]}>How often?</Text>
-            <View style={styles.wrap}>
-              {(
-                [
-                  ["daily", "Every day"],
-                  ["selected_days", "Chosen days"],
-                  ["every_other_day", "Every other day"],
-                  ["interval_days", "Every N days"],
-                  ["days_of_month", "Dates each month"],
-                  ["weekly_min", "Times per week"],
-                  ["monthly_min", "Times per month"],
-                ] as const
-              ).map(([value, label]) => (
-                <Chip
-                  key={value}
-                  label={label}
-                  selected={scheduleMode === value}
-                  onPress={() => setScheduleMode(value)}
-                />
-              ))}
-            </View>
-            {scheduleMode === "selected_days" ? (
-              <View style={styles.wrap}>
-                {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((label, day) => (
-                  <Chip
-                    key={label}
-                    label={label}
-                    selected={selectedDays.includes(day)}
-                    onPress={() =>
-                      setSelectedDays((current) =>
-                        current.includes(day)
-                          ? current.filter((item) => item !== day)
-                          : [...current, day],
-                      )
-                    }
+              <View
+                style={[styles.collapsibleGroup, { borderColor: colors.border }]}
+              >
+                <Pressable
+                  onPress={() => setScheduleOpen((open) => !open)}
+                  style={styles.collapseHeading}
+                >
+                  <View style={styles.grow}>
+                    <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                      Goal schedule
+                    </Text>
+                    <Text style={[styles.help, { color: colors.muted }]}>
+                      {
+                        {
+                          daily: "Every day",
+                          selected_days: "Selected weekdays",
+                          every_other_day: "Every other day",
+                          interval_days: `Every ${intervalDays || "N"} days`,
+                          days_of_month: "Specific dates each month",
+                          weekly_min: `${minimumCompletions || "N"} times per week`,
+                          monthly_min: `${minimumCompletions || "N"} times per month`,
+                        }[scheduleMode]
+                      }
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={scheduleOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={colors.faint}
                   />
-                ))}
+                </Pressable>
+                {scheduleOpen ? (
+                  <>
+                    <View style={styles.wrap}>
+                      {(
+                        [
+                          ["daily", "Every day"],
+                          ["selected_days", "Selected weekdays"],
+                          ["every_other_day", "Every other day"],
+                          ["interval_days", "Custom interval"],
+                          ["days_of_month", "Dates each month"],
+                          ["weekly_min", "Minimum per week"],
+                          ["monthly_min", "Minimum per month"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <Chip
+                          key={value}
+                          label={label}
+                          selected={scheduleMode === value}
+                          onPress={() => setScheduleMode(value)}
+                        />
+                      ))}
+                    </View>
+                    {scheduleMode === "selected_days" ? (
+                      <View style={styles.wrap}>
+                        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+                          (label, day) => (
+                            <Chip
+                              key={label}
+                              label={label}
+                              selected={selectedDays.includes(day)}
+                              onPress={() =>
+                                setSelectedDays((current) =>
+                                  current.includes(day)
+                                    ? current.filter((item) => item !== day)
+                                    : [...current, day],
+                                )
+                              }
+                            />
+                          ),
+                        )}
+                      </View>
+                    ) : null}
+                    {scheduleMode === "weekly_min" ||
+                    scheduleMode === "monthly_min" ? (
+                      <Field
+                        label="Required completions"
+                        value={minimumCompletions}
+                        set={setMinimumCompletions}
+                        colors={colors}
+                      />
+                    ) : null}
+                    {scheduleMode === "interval_days" ? (
+                      <Field
+                        label="Days between goals"
+                        value={intervalDays}
+                        set={setIntervalDays}
+                        colors={colors}
+                      />
+                    ) : null}
+                    {scheduleMode === "days_of_month" ? (
+                      <Field
+                        label="Month dates (for example: 10, 14)"
+                        value={daysOfMonth}
+                        set={setDaysOfMonth}
+                        colors={colors}
+                        keyboard={false}
+                      />
+                    ) : null}
+                    {scheduleMode === "weekly_min" ||
+                    scheduleMode === "monthly_min" ? (
+                      <Text style={[styles.help, { color: colors.muted }]}>
+                        The goal remains due until the required total is reached
+                        for that week or month.
+                      </Text>
+                    ) : null}
+                  </>
+                ) : null}
               </View>
-            ) : null}
-            {scheduleMode === "weekly_min" || scheduleMode === "monthly_min" ? (
-              <Field
-                label="Minimum completions"
-                value={minimumCompletions}
-                set={setMinimumCompletions}
-                colors={colors}
-              />
-            ) : null}
-            {scheduleMode === "interval_days" ? (
-              <Field
-                label="Repeat every how many days?"
-                value={intervalDays}
-                set={setIntervalDays}
-                colors={colors}
-              />
-            ) : null}
-            {scheduleMode === "days_of_month" ? (
-              <Field
-                label="Dates of the month (for example 10, 14)"
-                value={daysOfMonth}
-                set={setDaysOfMonth}
-                colors={colors}
-                keyboard={false}
-              />
-            ) : null}
-            {scheduleMode === "weekly_min" ||
-            scheduleMode === "monthly_min" ? (
-              <Text style={[styles.help, { color: colors.muted }]}>
-                This stays active each day until the minimum is reached, then
-                remains complete for the rest of that week or month.
-              </Text>
-            ) : null}
-            <View style={[styles.switchRow, { borderColor: colors.border }]}>
-              <View style={styles.grow}>
-                <Text style={[styles.rowTitle, { color: colors.ink }]}>Reminder for this goal</Text>
-                <Text style={[styles.help, { color: colors.muted }]}>Uses every time above and respects global quiet hours.</Text>
-              </View>
-              <Switch value={reminderEnabled} onValueChange={setReminderEnabled} />
-            </View>
             </View>
             <Text style={[styles.label, { color: colors.ink }]}>
               Entry type
@@ -1733,6 +1846,17 @@ const styles = StyleSheet.create({
   goalCalendar: { borderTopWidth: 1, marginTop: 9, paddingTop: 9 },
   rowTitle: { fontSize: 12, fontWeight: "900" },
   help: { fontSize: 9, lineHeight: 14, marginTop: 2 },
+  collapseHeading: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  collapsibleGroup: {
+    borderTopWidth: 1,
+    marginTop: 8,
+    paddingTop: 4,
+  },
   advancedButton: {
     minHeight: 64,
     borderWidth: 1,

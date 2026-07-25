@@ -573,15 +573,28 @@ export default function LeaderboardScreen() {
                         {memberOriginalLabel(state, row.member)}
                       </Text>
                     ) : null}
-                    <Text
-                      style={[
-                        styles.detail,
-                        { color: colors.muted },
-                        result?.mode === "private" && styles.private,
-                      ]}
-                    >
-                      {details}
-                    </Text>
+                    <View style={styles.detailLine}>
+                      {!includeScore &&
+                      result &&
+                      result.mode !== "private" &&
+                      result.visibleDays > 0 ? (
+                        <Ionicons
+                          name="flame"
+                          size={11}
+                          color={metric?.color ?? accent}
+                        />
+                      ) : null}
+                      <Text
+                        style={[
+                          styles.detail,
+                          styles.detailCopy,
+                          { color: colors.muted },
+                          result?.mode === "private" && styles.private,
+                        ]}
+                      >
+                        {details}
+                      </Text>
+                    </View>
                   </View>
                   </Pressable>
                   <Pressable
@@ -967,6 +980,12 @@ const styles = StyleSheet.create({
   name: { fontSize: 12, fontWeight: "900" },
   original: { fontSize: 8, marginTop: 1 },
   detail: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  detailLine: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 3,
+  },
+  detailCopy: { flex: 1 },
   private: { fontStyle: "italic" },
   bar: { width: 68, gap: 4 },
   score: { fontSize: 12, fontWeight: "900", textAlign: "right" },

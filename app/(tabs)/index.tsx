@@ -27,6 +27,7 @@ import {
 import { AppText as Text } from "@/src/components/AppText";
 import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
+import { todoAppearsOnDate } from "@/src/domain/schedule";
 import {
   ReorderDragState,
   ReorderItem,
@@ -48,6 +49,7 @@ import {
   goalProgress,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
+  metricStreakStats,
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
@@ -254,9 +256,18 @@ export default function Today() {
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
   const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
-  const goalCelebrationKey = goals.metrics
+  const completedGoalIds = goals.metrics
     .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
     .map((item) => item.id)
+    .sort();
+  const completedTodoIds = (state.todos ?? [])
+    .filter(
+      (todo) =>
+        todoAppearsOnDate(todo, today) &&
+        todo.completedDates.includes(today),
+    )
+    .map((todo) => `todo:${todo.id}`);
+  const goalCelebrationKey = [...completedGoalIds, ...completedTodoIds]
     .sort()
     .join("|");
   const celebrationSnapshot = useRef({ goalCelebrationKey, allMet: goals.allMet });
@@ -275,10 +286,14 @@ export default function Today() {
             .filter(Boolean);
           const newlyCompleted = completed.filter((id) => !previous.has(id));
           if (newlyCompleted.length) {
-            const special = celebrationSnapshot.current.allMet;
+            const newGoalIds = newlyCompleted.filter(
+              (id) => !id.startsWith("todo:"),
+            );
+            const special =
+              newGoalIds.length > 0 && celebrationSnapshot.current.allMet;
             const duration = special ? 3800 : 2700;
             if (special) setGoldSequenceRun((value) => value + 1);
-            setCelebratingGoalIds(newlyCompleted);
+            setCelebratingGoalIds(newGoalIds);
             setCelebrationSpecial(special);
             setConfettiVisible(true);
             celebration.stopAnimation();
@@ -320,6 +335,39 @@ export default function Today() {
         setConfettiVisible(false);
       };
     }, [celebration, celebrationStorageKey]),
+  );
+  const celebrateTodo = useCallback(
+    (todoId: string) => {
+      const duration = 2700;
+      setCelebrationSpecial(false);
+      setConfettiVisible(true);
+      celebration.stopAnimation();
+      celebration.setValue(0);
+      Animated.timing(celebration, {
+        toValue: 1,
+        duration,
+        useNativeDriver: true,
+      }).start(() => {
+        setConfettiVisible(false);
+        celebration.setValue(0);
+      });
+      setTimeout(() => {
+        celebration.stopAnimation();
+        celebration.setValue(0);
+        setConfettiVisible(false);
+      }, duration + 500);
+      AsyncStorage.getItem(celebrationStorageKey)
+        .then((saved) => {
+          const completed = new Set((saved ?? "").split("|").filter(Boolean));
+          completed.add(`todo:${todoId}`);
+          return AsyncStorage.setItem(
+            celebrationStorageKey,
+            [...completed].sort().join("|"),
+          );
+        })
+        .catch(() => undefined);
+    },
+    [celebration, celebrationStorageKey],
   );
   const tileHeight = Math.max(
     52,
@@ -574,7 +622,7 @@ export default function Today() {
             }
           />
         ) : null}
-        <TodoTodayList localDate={today} />
+        <TodoTodayList localDate={today} onComplete={celebrateTodo} />
         <View style={styles.sectionRow}>
           <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
           <Pressable
@@ -1284,6 +1332,11 @@ function TrackerRow({
   const met =
     applicable &&
     scheduledGoalReached(state, item, state.currentUserId, day);
+  const currentStreak = useMemo(
+    () =>
+      metricStreakStats(state, item, state.currentUserId, dateKey()).current,
+    [item, state],
+  );
   const cardComplete =
     item.id === "weekly_deficit_balance" ? weeklyBalanceAhead : met;
   const gold = useRef(
@@ -1470,6 +1523,14 @@ function TrackerRow({
               color={palette.amber}
               accessibilityLabel="Pinned"
             />
+          ) : null}
+          {!editing && currentStreak > 0 ? (
+            <View style={styles.streakBadge} accessibilityLabel={`${currentStreak} day streak`}>
+              <Ionicons name="flame" size={11} color={item.color} />
+              <Text style={[styles.streakBadgeText, { color: item.color }]}>
+                {currentStreak}
+              </Text>
+            </View>
           ) : null}
           {met ? (
             <View style={styles.completionCheck}>
@@ -2085,6 +2146,12 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: "hidden",
   },
+  streakBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 1,
+  },
+  streakBadgeText: { fontSize: 8, fontWeight: "900" },
   goalProgressFill: { height: "100%", borderRadius: 999 },
   goalProgressLayer: {
     position: "absolute",

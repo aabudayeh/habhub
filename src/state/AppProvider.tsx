@@ -1541,17 +1541,10 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "importHealth": {
-      const replaceIds = new Set(action.metricIds);
-      const preserved = state.entries.filter(
-        (entry) =>
-          !(
-            entry.userId === state.currentUserId &&
-            entry.sourceProvider === action.provider &&
-            replaceIds.has(entry.metricId) &&
-            entry.localDate >= action.fromDate
-          ),
-      );
-      const byId = new Map(preserved.map((entry) => [entry.id, entry]));
+      // Health Connect/HealthKit can briefly return an incomplete page while
+      // another writer is updating. Upsert stable source ids without clearing
+      // the overlap first, so a routine refresh never makes readings flash out.
+      const byId = new Map(state.entries.map((entry) => [entry.id, entry]));
       const dismissed = new Set(state.settings.dismissedHealthEntryIds ?? []);
       for (const entry of action.entries)
         if (!dismissed.has(entry.id)) byId.set(entry.id, entry);

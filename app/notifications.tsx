@@ -27,7 +27,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { NotificationSettings } from "@/src/types";
 
 export default function NotificationsScreen() {
-  const { state, updateSettings } = useApp();
+  const { state, updateSettings, updateMetric } = useApp();
   const auth = useAuth();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -53,6 +53,18 @@ export default function NotificationsScreen() {
         ? value.metricIds.filter((item) => item !== id)
         : [...value.metricIds, id],
     });
+  }
+  function toggleTrackerReminder(metricId: string) {
+    const metric = state.metrics.find((item) => item.id === metricId);
+    if (!metric) return;
+    const reminders = metric.reminders?.length
+      ? metric.reminders
+      : metric.reminder
+        ? [metric.reminder]
+        : [{ enabled: false, time: "19:00" }];
+    const enabled = reminders.some((item) => item.enabled);
+    const next = reminders.map((item) => ({ ...item, enabled: !enabled }));
+    updateMetric(metricId, { reminders: next, reminder: next[0] });
   }
   useEffect(() => {
     if (!auth.user || !value.pushEnabled) return;
@@ -135,6 +147,26 @@ export default function NotificationsScreen() {
           </Text>
         ) : null}
       </Card>
+      <Pressable
+        onPress={() => router.navigate("/calendar" as never)}
+        style={[
+          styles.scheduleLink,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
+        <View style={[styles.rowIcon, { backgroundColor: colors.primarySoft }]}>
+          <Ionicons name="calendar-outline" size={20} color={accent} />
+        </View>
+        <View style={styles.copy}>
+          <Text style={[styles.title, { color: colors.ink }]}>
+            View reminder schedule
+          </Text>
+          <Text style={[styles.copyText, { color: colors.muted }]}>
+            Open the full Schedule even when its navigation tab is hidden.
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+      </Pressable>
       <CollapsibleTitle
         title="Group activity"
         open={groupOpen}
@@ -249,6 +281,15 @@ export default function NotificationsScreen() {
           onPress={() => patch({ reminders: !value.reminders })}
         />
         <ToggleRow
+          icon="checkbox-outline"
+          title="To-do reminders"
+          copy="Due dates and reminder times configured on your to-dos"
+          enabled={value.todoReminders !== false}
+          onPress={() =>
+            patch({ todoReminders: value.todoReminders === false })
+          }
+        />
+        <ToggleRow
           icon="barbell-outline"
           title="Gym reminders"
           copy={`Private prompt after ${value.gymReminderDays ?? 3} days without a completed workout`}
@@ -338,40 +379,59 @@ export default function NotificationsScreen() {
                 : [];
             const active = reminders.filter((item) => item.enabled);
             return (
-              <Pressable
+              <View
                 key={metric.id}
-                onPress={() =>
-                  router.navigate({
-                    pathname: "/metric-editor",
-                    params: { id: metric.id, focus: "notifications" },
-                  } as never)
-                }
                 style={[styles.metric, { borderBottomColor: colors.border }]}
               >
-                <View
-                  style={[
-                    styles.metricIcon,
-                    { backgroundColor: `${metric.color}18` },
-                  ]}
+                <Pressable
+                  onPress={() =>
+                    router.navigate({
+                      pathname: "/metric-editor",
+                      params: { id: metric.id, focus: "notifications" },
+                    } as never)
+                  }
+                  style={styles.metricEditorLink}
+                >
+                  <View
+                    style={[
+                      styles.metricIcon,
+                      { backgroundColor: `${metric.color}18` },
+                    ]}
+                  >
+                    <Ionicons
+                      name={metric.icon as keyof typeof Ionicons.glyphMap}
+                      size={18}
+                      color={metric.color}
+                    />
+                  </View>
+                  <View style={styles.copy}>
+                    <Text style={[styles.metricName, { color: colors.ink }]}>
+                      {metric.name}
+                    </Text>
+                    <Text style={[styles.copyText, { color: colors.muted }]}>
+                      {active.length
+                        ? active.map((item) => item.time).join(" · ")
+                        : "Reminders off"}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="settings-outline"
+                    size={17}
+                    color={colors.faint}
+                  />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`${active.length ? "Disable" : "Enable"} ${metric.name} reminders`}
+                  onPress={() => toggleTrackerReminder(metric.id)}
+                  style={styles.reminderToggle}
                 >
                   <Ionicons
-                    name={metric.icon as keyof typeof Ionicons.glyphMap}
-                    size={18}
-                    color={metric.color}
+                    name={active.length ? "toggle" : "toggle-outline"}
+                    size={29}
+                    color={active.length ? accent : colors.faint}
                   />
-                </View>
-                <View style={styles.copy}>
-                  <Text style={[styles.metricName, { color: colors.ink }]}>
-                    {metric.name}
-                  </Text>
-                  <Text style={[styles.copyText, { color: colors.muted }]}>
-                    {active.length
-                      ? active.map((item) => item.time).join(" · ")
-                      : "Reminders off"}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.faint} />
-              </Pressable>
+                </Pressable>
+              </View>
             );
           })}
         </Card>
@@ -556,6 +616,29 @@ const styles = StyleSheet.create({
     gap: 9,
     paddingHorizontal: 4,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  metricEditorLink: {
+    flex: 1,
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  reminderToggle: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scheduleLink: {
+    minHeight: 62,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
   },
   metricIcon: {
     width: 34,

@@ -269,7 +269,10 @@ export async function syncProductivityNotifications(state: AppState) {
   };
   for (let offset = 0; offset < 31 && ids.length < 64; offset += 1) {
     const localDate = dateWithOffsetFrom(today, offset);
-    for (const todo of state.todos ?? []) {
+    for (const todo of
+      state.settings.notifications.todoReminders === false
+        ? []
+        : state.todos ?? []) {
       if (
         !todoAppearsOnDate(todo, localDate) ||
         todo.completedDates.includes(localDate) ||

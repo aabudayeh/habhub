@@ -438,6 +438,8 @@ export type UserSettings = {
   /** Legacy v15 setting retained while old snapshots migrate. */
   featuredTodayCard: "score" | string;
   defaultLandingPage: LandingPage;
+  /** Personal navigation-tab order; hidden tabs retain their place for later. */
+  tabOrder?: LandingPage[];
   /** Local clock time after which accumulating daily goals become final. */
   dayEndTime?: string;
   compactMode: boolean;
@@ -522,6 +524,8 @@ export type NotificationSettings = {
   groupMembership?: boolean;
   badgesAndWinners: boolean;
   reminders: boolean;
+  /** Schedule local notifications for dated and recurring to-dos. */
+  todoReminders?: boolean;
   quietHoursEnabled: boolean;
   quietHoursStart: string;
   quietHoursEnd: string;

@@ -19,21 +19,29 @@ function streaksWithRest(
   let current = 0;
   let restUsed = 0;
   let week = "";
+  let currentStart = "";
+  let best: { days: number; from: string; to: string } | undefined;
   for (const date of [...dates].sort()) {
     const nextWeek = weekKey(date);
     if (nextWeek !== week) {
       week = nextWeek;
       restUsed = 0;
     }
-    if (isVacationDate(state, userId, date) || met(date))
+    if (isVacationDate(state, userId, date) || met(date)) {
+      if (!current) currentStart = date;
       current += 1;
-    else if (current > 0 && restUsed < allowance) {
+    } else if (current > 0 && restUsed < allowance) {
       restUsed += 1;
       current += 1;
-    } else current = 0;
+    } else {
+      current = 0;
+      currentStart = "";
+    }
     longest = Math.max(longest, current);
+    if (current && (!best || current > best.days))
+      best = { days: current, from: currentStart, to: date };
   }
-  return { current, longest };
+  return { current, longest, best };
 }
 
 export function longestStreakWithRest(
@@ -52,4 +60,13 @@ export function currentStreakWithRest(
   userId?: string,
 ) {
   return streaksWithRest(state, dates, met, userId).current;
+}
+
+export function bestStreakPeriodWithRest(
+  state: AppState,
+  dates: string[],
+  met: (date: string) => boolean,
+  userId?: string,
+) {
+  return streaksWithRest(state, dates, met, userId).best;
 }

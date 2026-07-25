@@ -16,7 +16,13 @@ const priorityColors = {
   urgent: "#D24B4B",
 };
 
-export function TodoTodayList({ localDate }: { localDate: string }) {
+export function TodoTodayList({
+  localDate,
+  onComplete,
+}: {
+  localDate: string;
+  onComplete?: (todoId: string) => void;
+}) {
   const { state, toggleTodo } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -51,7 +57,11 @@ export function TodoTodayList({ localDate }: { localDate: string }) {
           key={todo.id}
           todo={todo}
           localDate={localDate}
-          onToggle={() => toggleTodo(todo.id, localDate)}
+          onToggle={() => {
+            const completing = !todo.completedDates.includes(localDate);
+            toggleTodo(todo.id, localDate);
+            if (completing) onComplete?.(todo.id);
+          }}
         />
       ))}
       {!items.length ? (

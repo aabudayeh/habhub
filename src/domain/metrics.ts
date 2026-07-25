@@ -15,6 +15,7 @@ import {
   statusForDay,
 } from "./dataIndex";
 import {
+  bestStreakPeriodWithRest,
   currentStreakWithRest,
   longestStreakWithRest,
 } from "./streaks";
@@ -902,10 +903,32 @@ export function metricHistoricalRecords(
     (date) => date.slice(0, 7),
     (key, items) => ({ key, value: aggregatePeriod(items) }),
   );
-  const years = grouped(
-    (date) => date.slice(0, 4),
-    (year, items) => ({ year, value: aggregatePeriod(items) }),
-  );
+  const years = [...new Set(recorded.map((item) => item.date.slice(0, 4)))]
+    .map((year) => {
+      const from = `${year}-01-01`;
+      const to =
+        year === throughDate.slice(0, 4) ? throughDate : `${year}-12-31`;
+      const length =
+        Math.floor(
+          (new Date(`${to}T12:00:00`).getTime() -
+            new Date(`${from}T12:00:00`).getTime()) /
+            86400000,
+        ) + 1;
+      const stats = metricPeriodStats(
+        state,
+        metric,
+        userId,
+        dateRangeEnding(to, length),
+      );
+      return {
+        year,
+        value:
+          metric.aggregation === "sum" || metric.dataType === "boolean"
+            ? stats.total
+            : stats.average,
+      };
+    })
+    .filter((item) => Number.isFinite(item.value));
   const weekdays = grouped(
     (date) =>
       new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
@@ -932,29 +955,17 @@ export function metricHistoricalRecords(
       value: items.reduce((sum, item) => sum + item.value, 0) / items.length,
     }),
   );
-  let currentStart = "";
-  let currentDays = 0;
-  let bestStreak: MetricHistoricalRecords["bestStreak"];
-  allDates.forEach((date) => {
-    if (!isMetricTrackedOnDate(state, metric, date)) return;
-    const met =
-      isVacationDate(state, userId, date) ||
-      (hasMetricData(state, metric, userId, date) &&
-        scheduledGoalReached(state, metric, userId, date));
-    if (!met) {
-      currentDays = 0;
-      currentStart = "";
-      return;
-    }
-    if (!currentDays) currentStart = date;
-    currentDays += 1;
-    if (!bestStreak || currentDays > bestStreak.days)
-      bestStreak = {
-        days: currentDays,
-        from: currentStart,
-        to: date,
-      };
-  });
+  const bestStreak = bestStreakPeriodWithRest(
+    state,
+    allDates,
+    (date) =>
+      metric.goalEnabled !== false &&
+      isMetricTrackedOnDate(state, metric, date) &&
+      (isVacationDate(state, userId, date) ||
+        (hasMetricData(state, metric, userId, date) &&
+          scheduledGoalReached(state, metric, userId, date))),
+    userId,
+  );
   return {
     highestDay,
     highestWeek: selectBest(weeks),

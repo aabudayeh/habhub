@@ -933,6 +933,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             isDemoBoundState(remote.payload);
           const bound = bindStateToAccount(remote.payload, user);
           let resolved = await resolvePrivateMedia(bound);
+          // The cached device state is rendered first. Preserve its stable-id
+          // local writes while the older cloud snapshot and group tables load
+          // in the background; the next normal sync uploads the merged result.
+          if (
+            stateRef.current.currentUserId === user.id &&
+            !isDemoBoundState(stateRef.current)
+          )
+            resolved = mergeStates(resolved, stateRef.current);
           let existingGroups: Group[] = [];
           try {
             existingGroups = await loadCloudGroupShells();

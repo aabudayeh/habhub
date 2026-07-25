@@ -44,6 +44,7 @@ export default function DisplaySettings() {
   const [customColor, setCustomColor] = React.useState(
     state.settings.personalThemeColor ?? accent,
   );
+  const [navigationOpen, setNavigationOpen] = React.useState(false);
   const normalizedCustomColor = normalizeHexColor(customColor);
   const visible = pages.filter(
     (page) =>
@@ -56,6 +57,32 @@ export default function DisplaySettings() {
       (page.id !== "calendar" || state.settings.showCalendar) &&
       (page.id !== "journal" || state.settings.showJournal),
   );
+  const navigationOrder = React.useMemo(() => {
+    const saved = state.settings.tabOrder ?? [];
+    const valid = saved.filter(
+      (id, index) =>
+        pages.some((page) => page.id === id) && saved.indexOf(id) === index,
+    );
+    return [...valid, ...pages.map((page) => page.id).filter((id) => !valid.includes(id))];
+  }, [state.settings.tabOrder]);
+  const visibleNavigationOrder = navigationOrder.filter((id) =>
+    visible.some((page) => page.id === id),
+  );
+  function moveNavigationItem(id: LandingPage, direction: -1 | 1) {
+    const current = [...navigationOrder];
+    const visibleFrom = visibleNavigationOrder.indexOf(id);
+    const visibleTo = visibleFrom + direction;
+    if (
+      visibleFrom < 0 ||
+      visibleTo < 0 ||
+      visibleTo >= visibleNavigationOrder.length
+    )
+      return;
+    const from = current.indexOf(id);
+    const to = current.indexOf(visibleNavigationOrder[visibleTo]);
+    [current[from], current[to]] = [current[to], current[from]];
+    updateSettings({ tabOrder: current });
+  }
   function toggle(
     key:
       | "compactMode"
@@ -468,6 +495,77 @@ export default function DisplaySettings() {
           </Pressable>
         ))}
       </Card>
+      <SectionHeader title="Navigation" />
+      <Card style={styles.list}>
+        <Pressable
+          onPress={() => setNavigationOpen((open) => !open)}
+          style={styles.row}
+        >
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="reorder-three-outline" size={20} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Navigation order
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Choose how enabled tabs appear along the bottom.
+            </Text>
+          </View>
+          <Ionicons
+            name={navigationOpen ? "chevron-up" : "chevron-down"}
+            size={19}
+            color={colors.faint}
+          />
+        </Pressable>
+        {navigationOpen
+          ? visibleNavigationOrder.map((id, index) => {
+              const page = pages.find((item) => item.id === id)!;
+              return (
+                <View
+                  key={id}
+                  style={[
+                    styles.navigationRow,
+                    { borderTopColor: colors.border },
+                  ]}
+                >
+                  <Ionicons name={page.icon} size={18} color={accent} />
+                  <Text style={[styles.pageText, { color: colors.ink }]}>
+                    {page.label}
+                  </Text>
+                  <Pressable
+                    accessibilityLabel={`Move ${page.label} left`}
+                    disabled={index === 0}
+                    onPress={() => moveNavigationItem(id, -1)}
+                    style={styles.orderButton}
+                  >
+                    <Ionicons
+                      name="arrow-up"
+                      size={17}
+                      color={index === 0 ? colors.faint : colors.ink}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel={`Move ${page.label} right`}
+                    disabled={index === visibleNavigationOrder.length - 1}
+                    onPress={() => moveNavigationItem(id, 1)}
+                    style={styles.orderButton}
+                  >
+                    <Ionicons
+                      name="arrow-down"
+                      size={17}
+                      color={
+                        index === visibleNavigationOrder.length - 1
+                          ? colors.faint
+                          : colors.ink
+                      }
+                    />
+                  </Pressable>
+                </View>
+              );
+            })
+          : null}
+      </Card>
     </Screen>
   );
 }
@@ -495,6 +593,19 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   pageText: { flex: 1, fontSize: 11, fontWeight: "900" },
+  navigationRow: {
+    minHeight: 46,
+    borderTopWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  orderButton: {
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   tileCount: { borderTopWidth: 1, paddingVertical: 10, gap: 8 },
   countChips: { flexDirection: "row", gap: 6 },
   fontCard: { gap: 9 },
