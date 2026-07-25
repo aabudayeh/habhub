@@ -2,7 +2,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, Switch, View } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
 
 import {
   Card,
@@ -13,6 +16,10 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { useApp } from "@/src/state/AppProvider";
+import {
+  normalizeHexColor,
+  THEME_COLOR_CHOICES,
+} from "@/src/domain/colors";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { LandingPage } from "@/src/types";
 
@@ -32,6 +39,10 @@ export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const [customColor, setCustomColor] = React.useState(
+    state.settings.personalThemeColor ?? accent,
+  );
+  const normalizedCustomColor = normalizeHexColor(customColor);
   const visible = pages.filter(
     (page) =>
       (page.id !== "log" || state.settings.showLog) &&
@@ -76,6 +87,103 @@ export default function DisplaySettings() {
           />
         }
       />
+      <SectionHeader title="Colors" />
+      <Card style={styles.themeCard}>
+        <View style={styles.themeHeading}>
+          <View style={[styles.themePreview, { backgroundColor: accent }]} />
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Personal theme
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Stored in your account only. It never changes the group&apos;s
+              color for anyone else.
+            </Text>
+          </View>
+          <Switch
+            value={state.settings.overrideGroupTheme === true}
+            onValueChange={(overrideGroupTheme) =>
+              updateSettings({ overrideGroupTheme })
+            }
+            trackColor={{ false: colors.border, true: `${accent}88` }}
+            thumbColor={
+              state.settings.overrideGroupTheme ? accent : colors.faint
+            }
+          />
+        </View>
+        <View style={styles.swatches}>
+          {THEME_COLOR_CHOICES.map((color) => {
+            const selected =
+              (state.settings.personalThemeColor ?? "") === color;
+            return (
+              <Pressable
+                key={color}
+                accessibilityLabel={`Choose theme color ${color}`}
+                onPress={() => {
+                  setCustomColor(color);
+                  updateSettings({
+                    personalThemeColor: color,
+                    overrideGroupTheme: true,
+                  });
+                }}
+                style={[
+                  styles.swatch,
+                  { backgroundColor: color },
+                  selected && {
+                    borderColor: colors.ink,
+                    transform: [{ scale: 1.08 }],
+                  },
+                ]}
+              >
+                {selected ? (
+                  <Ionicons
+                    name="checkmark"
+                    size={16}
+                    color="#FFFFFF"
+                  />
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+        <View style={styles.customColor}>
+          <TextInput
+            value={customColor}
+            onChangeText={setCustomColor}
+            autoCapitalize="characters"
+            maxLength={7}
+            placeholder="#2F6FED"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.colorInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+          <Pressable
+            disabled={!normalizedCustomColor}
+            onPress={() =>
+              normalizedCustomColor &&
+              updateSettings({
+                personalThemeColor: normalizedCustomColor,
+                overrideGroupTheme: true,
+              })
+            }
+            style={[
+              styles.applyColor,
+              {
+                backgroundColor: normalizedCustomColor ?? colors.border,
+                opacity: normalizedCustomColor ? 1 : 0.55,
+              },
+            ]}
+          >
+            <Text style={styles.applyColorText}>Apply</Text>
+          </Pressable>
+        </View>
+        <Text style={[styles.meta, { color: colors.muted }]}>
+          Turn the switch off at any time to follow each group&apos;s color
+          again.
+        </Text>
+      </Card>
       <SectionHeader title="Layout" />
       <Card style={styles.list}>
         {[
@@ -161,6 +269,29 @@ export default function DisplaySettings() {
             />
           </View>
         ))}
+      </Card>
+      <SectionHeader title="Calendar" />
+      <Card style={styles.fontCard}>
+        <Text style={[styles.title, { color: colors.ink }]}>Week starts on</Text>
+        <Text style={[styles.meta, { color: colors.muted }]}>
+          Used consistently by weekly charts, summaries, and navigation.
+        </Text>
+        <View style={styles.countChips}>
+          {[
+            ["Monday", 1],
+            ["Sunday", 0],
+            ["Saturday", 6],
+          ].map(([label, day]) => (
+            <Chip
+              key={String(day)}
+              label={String(label)}
+              selected={(state.settings.weekStartsOn ?? 1) === Number(day)}
+              onPress={() =>
+                updateSettings({ weekStartsOn: Number(day) as 0 | 1 | 6 })
+              }
+            />
+          ))}
+        </View>
       </Card>
       <SectionHeader title="Text size" />
       <Card style={styles.fontCard}>
@@ -301,4 +432,39 @@ const styles = StyleSheet.create({
   tileCount: { borderTopWidth: 1, paddingVertical: 10, gap: 8 },
   countChips: { flexDirection: "row", gap: 6 },
   fontCard: { gap: 9 },
+  themeCard: { gap: 12 },
+  themeHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  themePreview: { width: 38, height: 38, borderRadius: 14 },
+  swatches: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  swatch: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  customColor: { flexDirection: "row", gap: 8 },
+  colorInput: {
+    flex: 1,
+    height: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  applyColor: {
+    minWidth: 82,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  applyColorText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
 });

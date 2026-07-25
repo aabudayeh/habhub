@@ -32,7 +32,7 @@ export function EnergyProfileEditor() {
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
   const direction = state.settings.weightDirection ?? "lose";
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(true);
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
   const weightPlan = weightProgressStats(
@@ -276,7 +276,7 @@ export function MetricGoalsEditor() {
   const { state, updateMetric } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [collapsed, setCollapsed] = React.useState(true);
   const metrics = state.metrics
     .filter(
       (metric) =>

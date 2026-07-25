@@ -369,6 +369,12 @@ export type UserSettings = {
   /** Maximum main-screen tiles before More appears when showAllTodayTiles is off. */
   todayTileLimit: number;
   darkMode: boolean;
+  /** User-owned accent. It never mutates group configuration. */
+  personalThemeColor?: string;
+  /** Prefer personalThemeColor over the active group's accent on this device/account. */
+  overrideGroupTheme?: boolean;
+  /** Calendar week start used by app-owned week ranges. */
+  weekStartsOn?: 0 | 1 | 6;
   /** Optional shortcut tab; logging remains available from tracker details. */
   showLog: boolean;
   showLeaderboard: boolean;

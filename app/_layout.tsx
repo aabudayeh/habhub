@@ -190,7 +190,10 @@ function RootNavigator() {
   )
     return <Redirect href={"/onboarding" as never} />;
 
-  const accent = state.group.themeColor ?? palette.primary;
+  const accent =
+    state.settings.overrideGroupTheme && state.settings.personalThemeColor
+      ? state.settings.personalThemeColor
+      : (state.group.themeColor ?? palette.primary);
   const activeTheme = {
     ...theme,
     dark: state.settings.darkMode,

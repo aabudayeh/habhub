@@ -23,6 +23,12 @@ import {
 } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import {
+  isAllowedTrackerColor,
+  isReservedGoalColor,
+  normalizeHexColor,
+  TRACKER_COLOR_CHOICES,
+} from "@/src/domain/colors";
 import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
@@ -217,7 +223,11 @@ export default function TrackerEditor() {
   );
   const [presetId, setPresetId] = useState("");
   const [name, setName] = useState(tracker?.name ?? "");
-  const [color, setColor] = useState(tracker?.color ?? accent);
+  const [color, setColor] = useState(
+    isAllowedTrackerColor(tracker?.color ?? accent)
+      ? (tracker?.color ?? accent)
+      : TRACKER_COLOR_CHOICES[0],
+  );
   const [category, setCategory] = useState<TrackerCategory>(
     tracker?.category ?? "other",
   );
@@ -267,6 +277,8 @@ export default function TrackerEditor() {
   const scrolledToNotifications = useRef(false);
   const behaviorSectionY = useRef(0);
   const [showIcons, setShowIcons] = useState(false);
+  const [showColors, setShowColors] = useState(false);
+  const [customColor, setCustomColor] = useState(color);
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
   );
@@ -442,6 +454,11 @@ export default function TrackerEditor() {
     const diastolicMinimum = Number(diastolicMin.replace(",", "."));
     if (!name.trim())
       return Alert.alert("Add a name", "Use a short, clear name.");
+    if (!isAllowedTrackerColor(color))
+      return Alert.alert(
+        "Choose another color",
+        "Lime and gold are reserved for goal-completion feedback.",
+      );
     if (goalEnabled && dataType !== "text" && !Number.isFinite(target))
       return Alert.alert("Check your target", "Enter a valid number.");
     if (
@@ -712,6 +729,90 @@ export default function TrackerEditor() {
             { color: colors.ink, borderColor: colors.border },
           ]}
         />
+        <Pressable
+          onPress={() => setShowColors((value) => !value)}
+          style={[styles.choiceRow, { borderColor: colors.border }]}
+        >
+          <View style={[styles.colorDot, { backgroundColor: color }]} />
+          <View style={styles.grow}>
+            <Text style={[styles.rowTitle, { color: colors.ink }]}>
+              Tracker color
+            </Text>
+            <Text style={[styles.help, { color: colors.muted }]}>
+              Lime and gold stay reserved for completed goals.
+            </Text>
+          </View>
+          <Ionicons
+            name={showColors ? "chevron-up" : "chevron-down"}
+            size={18}
+            color={colors.faint}
+          />
+        </Pressable>
+        {showColors ? (
+          <View style={styles.colorPanel}>
+            <View style={styles.swatches}>
+              {TRACKER_COLOR_CHOICES.map((item) => (
+                <Pressable
+                  key={item}
+                  accessibilityLabel={`Choose tracker color ${item}`}
+                  onPress={() => {
+                    setColor(item);
+                    setCustomColor(item);
+                  }}
+                  style={[
+                    styles.swatch,
+                    { backgroundColor: item },
+                    color === item && { borderColor: colors.ink },
+                  ]}
+                >
+                  {color === item ? (
+                    <Ionicons
+                      name="checkmark"
+                      size={15}
+                      color={palette.white}
+                    />
+                  ) : null}
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.customColor}>
+              <TextInput
+                value={customColor}
+                onChangeText={setCustomColor}
+                autoCapitalize="characters"
+                maxLength={7}
+                placeholder="#2F6FED"
+                placeholderTextColor={colors.faint}
+                style={[
+                  styles.colorInput,
+                  { color: colors.ink, borderColor: colors.border },
+                ]}
+              />
+              <Pressable
+                disabled={!isAllowedTrackerColor(customColor)}
+                onPress={() => {
+                  const next = normalizeHexColor(customColor);
+                  if (next) setColor(next);
+                }}
+                style={[
+                  styles.colorApply,
+                  {
+                    backgroundColor: isAllowedTrackerColor(customColor)
+                      ? (normalizeHexColor(customColor) ?? accent)
+                      : colors.border,
+                  },
+                ]}
+              >
+                <Text style={styles.colorApplyText}>Apply</Text>
+              </Pressable>
+            </View>
+            {isReservedGoalColor(customColor) ? (
+              <Text style={[styles.help, { color: palette.amber }]}>
+                That color is reserved for goal completion.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.wrap}>
           {CATEGORIES.map((item) => (
             <Chip
@@ -1399,13 +1500,13 @@ export default function TrackerEditor() {
               <View
                 style={[
                   styles.icon,
-                  { backgroundColor: `${tracker?.color ?? accent}18` },
+                  { backgroundColor: `${color}18` },
                 ]}
               >
                 <Ionicons
                   name={icon as keyof typeof Ionicons.glyphMap}
                   size={20}
-                  color={tracker?.color ?? accent}
+                  color={color}
                 />
               </View>
               <Text style={[styles.rowTitle, { color: colors.ink }]}>
@@ -1574,6 +1675,46 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 10,
   },
+  choiceRow: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 9,
+  },
+  colorDot: { width: 34, height: 34, borderRadius: 12 },
+  colorPanel: { marginBottom: 10, gap: 9 },
+  swatches: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
+  swatch: {
+    width: 33,
+    height: 33,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: "transparent",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  customColor: { flexDirection: "row", gap: 8 },
+  colorInput: {
+    flex: 1,
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  colorApply: {
+    width: 76,
+    height: 40,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  colorApplyText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   icons: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 9 },
   icon: {
     width: 38,
