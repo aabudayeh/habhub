@@ -90,6 +90,7 @@ const GOLD_HERO_FADE_MS = 1300;
 const GOLD_TILE_FADE_MS = 950;
 const GOLD_TILE_START_DELAY_MS = 1450;
 const GOLD_TILE_STAGGER_MS = 1050;
+const COMPLETION_INDICATOR_SIZE = 60;
 
 if (
   Platform.OS === "android" &&
@@ -2188,9 +2189,12 @@ function CompletionShapeIndicator({
     >
       <Ionicons
         name={icon}
-        size={54}
+        size={COMPLETION_INDICATOR_SIZE}
         color="rgba(255,255,255,.28)"
-        style={styles.completionShapeIcon}
+        style={[
+          styles.completionShapeIcon,
+          styles.completionShapeTrackIcon,
+        ]}
       />
       <View
         pointerEvents="none"
@@ -2201,9 +2205,16 @@ function CompletionShapeIndicator({
       >
         <Ionicons
           name={icon}
-          size={54}
+          size={COMPLETION_INDICATOR_SIZE}
           color={color}
-          style={styles.completionShapeIcon}
+          style={[
+            styles.completionShapeIcon,
+            {
+              textShadowColor: color,
+              textShadowOffset: { width: 0, height: 0 },
+              textShadowRadius: 1.15,
+            },
+          ]}
         />
       </View>
       <Text preserveColor style={styles.completionShapeLabel}>
@@ -2309,23 +2320,29 @@ const styles = StyleSheet.create({
   },
   heroTitle: { color: palette.white, fontSize: 11, fontWeight: "800" },
   completionShape: {
-    width: 54,
-    height: 54,
+    width: COMPLETION_INDICATOR_SIZE,
+    height: COMPLETION_INDICATOR_SIZE,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
   },
   completionShapeIcon: { position: "absolute", left: 0, top: 0 },
+  completionShapeTrackIcon: {
+    textShadowColor: "rgba(255,255,255,.28)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 1.15,
+  },
   completionReveal: {
     position: "absolute",
     left: 0,
     top: 0,
-    height: 54,
+    height: COMPLETION_INDICATOR_SIZE,
     overflow: "hidden",
   },
   completionShapeLabel: {
     color: palette.white,
-    fontSize: 10,
+    fontSize: 12,
+    lineHeight: 15,
     fontWeight: "900",
     textShadowColor: "rgba(0,0,0,.45)",
     textShadowOffset: { width: 0, height: 1 },
