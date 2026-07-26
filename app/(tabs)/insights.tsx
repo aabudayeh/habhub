@@ -13,7 +13,6 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { ReorderItem } from "@/src/components/ReorderItem";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -117,7 +116,6 @@ export default function Insights() {
     ),
   );
   const [editing, setEditing] = useState(false);
-  const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
   const overviewScrollRef = useRef<ScrollView>(null);
@@ -165,11 +163,6 @@ export default function Insights() {
     [updateSettings],
   );
   useEffect(() => {
-    if (!editing) {
-      setDraggingMetricId(null);
-    }
-  }, [editing]);
-  useEffect(() => {
     setCloudSyncPaused("progress-edit", editing);
     return () => setCloudSyncPaused("progress-edit", false);
   }, [editing]);
@@ -182,14 +175,20 @@ export default function Insights() {
     return () => clearTimeout(timer);
   }, [editing, progressMode]);
   const activeProgressFilter = activeTrackerViewId(state, "progress");
-  const configuredOrder = (
+  const savedOrder = (
     state.settings.progressMetricOrderIds?.length
       ? state.settings.progressMetricOrderIds
       : [
-          ...selectedIds.filter((id) => id !== TRACKED),
+          ...selectedIds,
           ...state.metrics.map((metric) => metric.id),
         ]
   ).filter((id, index, all) => all.indexOf(id) === index);
+  const configuredOrder =
+    (selectedIds.includes(TRACKED) ||
+      activeProgressFilter === TRACKED_ONLY_FILTER) &&
+    !savedOrder.includes(TRACKED)
+      ? [TRACKED, ...savedOrder]
+      : savedOrder;
   const orderIndex = new Map(
     configuredOrder.map((metricId, index) => [metricId, index]),
   );
@@ -210,6 +209,18 @@ export default function Insights() {
   const tracked =
     selectedIds.includes(TRACKED) ||
     activeProgressFilter === TRACKED_ONLY_FILTER;
+  const progressCardIds = [
+    ...(tracked ? [TRACKED] : []),
+    ...selectedMetrics.map((metric) => metric.id),
+  ].sort(
+    (left, right) =>
+      (orderIndex.get(left) ??
+        configuredOrder.length +
+          (left === TRACKED ? -1 : (fallbackOrder.get(left) ?? 0))) -
+      (orderIndex.get(right) ??
+        configuredOrder.length +
+          (right === TRACKED ? -1 : (fallbackOrder.get(right) ?? 0))),
+  );
   const dates =
     view === "week"
       ? calendarWeekRange(
@@ -253,10 +264,11 @@ export default function Insights() {
     setSelectedIds(ids);
     const orderedIds = [
       ...configuredOrder,
+      ...(ids.includes(TRACKED) ? [TRACKED] : []),
       ...state.metrics.map((metric) => metric.id),
-      ...ids.filter((id) => id !== TRACKED),
+      ...ids,
     ].filter(
-      (id, index, all) => id !== TRACKED && all.indexOf(id) === index,
+      (id, index, all) => all.indexOf(id) === index,
     );
     updateSettings({
       progressMetricIds: ids,
@@ -264,7 +276,7 @@ export default function Insights() {
     });
   }
   function move(metricId: string, targetIndex: number) {
-    const current = selectedMetrics.map((metric) => metric.id);
+    const current = [...progressCardIds];
     const index = current.indexOf(metricId);
     if (index < 0) return;
     const [item] = current.splice(index, 1);
@@ -272,6 +284,7 @@ export default function Insights() {
     const visibleIds = new Set(current);
     const universe = [
       ...configuredOrder,
+      TRACKED,
       ...state.metrics.map((metric) => metric.id),
     ].filter((id, position, all) => all.indexOf(id) === position);
     let visibleIndex = 0;
@@ -419,6 +432,7 @@ export default function Insights() {
         onMove={move}
         onAddExisting={() => setShowPicker(true)}
         onOpenFilters={() => setShowViewFilters(true)}
+        orderedIds={progressCardIds}
       />
       <AddTrackerModal
         visible={showPicker}
@@ -670,41 +684,38 @@ export default function Insights() {
         }
       />
       <View style={styles.summaries}>
-        {tracked ? (
-          <TrackedSummary
-            state={state}
-            dates={summaryDates}
-            editing={editing}
-            onEdit={() => setEditing(true)}
-            onRemove={() => select(selectedIds.filter((id) => id !== TRACKED))}
-          />
-        ) : null}
-        {selectedMetrics.map((metric, index) => (
-          <ReorderItem
-            key={metric.id}
-            active={draggingMetricId === metric.id}
-          >
-            <MetricSummary
+        {progressCardIds.map((itemId, index) =>
+          itemId === TRACKED ? (
+            <TrackedSummary
+              key={TRACKED}
               state={state}
-              metric={metric}
               dates={summaryDates}
               editing={editing}
               index={index}
-              count={selectedMetrics.length}
+              count={progressCardIds.length}
               onEdit={() => setEditing(true)}
-              onMove={(target) => move(metric.id, target)}
-              onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
-              onDragStart={(step) => {
-                setDraggingMetricId(metric.id);
-              }}
-              onDragHover={() => {}}
-              onDragCancel={() => setDraggingMetricId(null)}
-              onDragEnd={() => {
-                setDraggingMetricId(null);
-              }}
+              onMove={(target) => move(TRACKED, target)}
+              onRemove={() =>
+                select(selectedIds.filter((id) => id !== TRACKED))
+              }
             />
-          </ReorderItem>
-        ))}
+          ) : (
+            <MetricSummary
+              key={itemId}
+              state={state}
+              metric={selectedMetrics.find((metric) => metric.id === itemId)!}
+              dates={summaryDates}
+              editing={editing}
+              index={index}
+              count={progressCardIds.length}
+              onEdit={() => setEditing(true)}
+              onMove={(target) => move(itemId, target)}
+              onRemove={() =>
+                select(selectedIds.filter((id) => id !== itemId))
+              }
+            />
+          ),
+        )}
       </View>
       {editing ? (
         <View style={styles.editActions}>
@@ -875,6 +886,7 @@ function GoalMapProgress({
   onMove,
   onAddExisting,
   onOpenFilters,
+  orderedIds,
 }: {
   state: AppState;
   metrics: MetricDefinition[];
@@ -893,6 +905,7 @@ function GoalMapProgress({
   onMove: (id: string, target: number) => void;
   onAddExisting: () => void;
   onOpenFilters: () => void;
+  orderedIds: string[];
 }) {
   const { updateSettings } = useApp();
   const colors = useAppColors();
@@ -901,6 +914,11 @@ function GoalMapProgress({
   const compact = state.settings.compactProgressGrid === true;
   const visibleMetrics = metrics;
   const trackedSelected = selectedIds.includes(TRACKED);
+  const gridItemIds = orderedIds.filter(
+    (id) =>
+      (id === TRACKED && trackedSelected) ||
+      visibleMetrics.some((metric) => metric.id === id),
+  );
   const dates = calendarPeriodRange(
     anchor,
     range,
@@ -1054,11 +1072,17 @@ function GoalMapProgress({
       <View
         style={compact ? styles.compactMaps : styles.detailedMaps}
       >
-        {trackedSelected ? (
-          <Pressable
+        {gridItemIds.map((itemId, index) =>
+          itemId === TRACKED ? (
+          <MapReorderCard
+            key={TRACKED}
+            editing={editing}
+            index={index}
+            count={gridItemIds.length}
+            onMove={(target) => onMove(TRACKED, target)}
             onPress={() => onOpenDay(anchor)}
             onLongPress={onOpenEditor}
-            style={
+            wrapStyle={
               compact
                 ? range === "month" && !editing
                   ? styles.compactMapWrap
@@ -1071,6 +1095,7 @@ function GoalMapProgress({
                 styles.mapCard,
                 compact && styles.compactMapCard,
                 compact && range === "year" && styles.compactYearMapCard,
+                editing && styles.mapEditingCard,
               ]}
             >
               <View
@@ -1171,9 +1196,12 @@ function GoalMapProgress({
                 onSelect={onOpenDay}
               />
             </Card>
-          </Pressable>
-        ) : null}
-        {visibleMetrics.map((metric, index) => {
+          </MapReorderCard>
+        ) : (() => {
+          const metric = visibleMetrics.find(
+            (candidate) => candidate.id === itemId,
+          );
+          if (!metric) return null;
           const period = metricPeriodStats(
             state,
             metric,
@@ -1196,7 +1224,7 @@ function GoalMapProgress({
               key={metric.id}
               editing={editing}
               index={index}
-              count={visibleMetrics.length}
+              count={gridItemIds.length}
               onLongPress={onOpenEditor}
               onPress={() =>
                 router.navigate({
@@ -1220,6 +1248,7 @@ function GoalMapProgress({
                   styles.mapCard,
                   compact && styles.compactMapCard,
                   compact && range === "year" && styles.compactYearMapCard,
+                  editing && styles.mapEditingCard,
                 ]}
               >
                 <View
@@ -1380,7 +1409,8 @@ function GoalMapProgress({
               </Card>
             </MapReorderCard>
           );
-        })}
+        })(),
+        )}
       </View>
       {editing ? (
         <View style={styles.editActions}>
@@ -1493,11 +1523,8 @@ function MapReorderCard({
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 4,
-        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 4,
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: () => editing,
         onPanResponderGrant: () => {
           origin.current = indexRef.current;
           target.current = indexRef.current;
@@ -1514,25 +1541,16 @@ function MapReorderCard({
           );
         },
         onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
         onPanResponderRelease: () => {
           const next = target.current;
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 230,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => setDragging(false));
+          dragY.setValue(0);
+          setDragging(false);
           if (next !== origin.current) onMoveRef.current(next);
         },
         onPanResponderTerminate: () => {
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 230,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => setDragging(false));
+          dragY.setValue(0);
+          setDragging(false);
         },
       }),
     [dragY, editing],
@@ -1563,11 +1581,30 @@ function MapReorderCard({
       <Pressable
         onPress={editing ? undefined : onPress}
         onLongPress={onLongPress}
-        {...(editing ? responder.panHandlers : {})}
         style={editing ? { borderColor: colors.border } : undefined}
       >
         {children}
       </Pressable>
+      {editing ? (
+        <View
+          accessibilityLabel="Drag to reorder"
+          collapsable={false}
+          style={[
+            styles.mapDragHandle,
+            {
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+            },
+          ]}
+          {...responder.panHandlers}
+        >
+          <Ionicons
+            name="reorder-three-outline"
+            size={22}
+            color={colors.muted}
+          />
+        </View>
+      ) : null}
     </Animated.View>
   );
 }
@@ -1576,17 +1613,34 @@ function TrackedSummary({
   state,
   dates,
   editing,
+  index,
+  count,
   onEdit,
+  onMove,
   onRemove,
 }: {
   state: AppState;
   dates: string[];
   editing: boolean;
+  index: number;
+  count: number;
   onEdit: () => void;
+  onMove: (target: number) => void;
   onRemove: () => void;
 }) {
   const colors = useAppColors();
+  const [dragging, setDragging] = useState(false);
+  const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
+  const step = useRef(93);
+  const origin = useRef(index);
+  const target = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
   useEffect(() => {
     if (!editing) {
       wiggle.stopAnimation();
@@ -1603,6 +1657,41 @@ function TrackedSummary({
     animation.start();
     return () => animation.stop();
   }, [editing, wiggle]);
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: () => editing,
+        onPanResponderGrant: () => {
+          origin.current = indexRef.current;
+          target.current = indexRef.current;
+          setDragging(true);
+        },
+        onPanResponderMove: (_event, gesture) => {
+          dragY.setValue(gesture.dy);
+          target.current = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              origin.current + Math.round(gesture.dy / step.current),
+            ),
+          );
+        },
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderRelease: () => {
+          const next = target.current;
+          dragY.setValue(0);
+          setDragging(false);
+          if (next !== origin.current) onMoveRef.current(next);
+        },
+        onPanResponderTerminate: () => {
+          dragY.setValue(0);
+          setDragging(false);
+        },
+      }),
+    [dragY, editing],
+  );
   const totals = dates.map((date) =>
     trackedGoalSummary(state, state.currentUserId, date),
   );
@@ -1614,10 +1703,14 @@ function TrackedSummary({
   const completion = possible ? Math.round((met / possible) * 100) : 0;
   return (
     <Animated.View
+      onLayout={(event) => {
+        step.current = event.nativeEvent.layout.height + 9;
+      }}
       style={[
         styles.animatedSummary,
         {
           transform: [
+          { translateY: dragY },
           {
             rotate: wiggle.interpolate({
               inputRange: [-1, 1],
@@ -1625,11 +1718,26 @@ function TrackedSummary({
             }),
           },
           ],
+          zIndex: dragging ? 30 : editing ? 3 : 0,
+          elevation: dragging ? 14 : 0,
         },
       ]}
     >
     <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
     <Card style={styles.summary}>
+      {editing ? (
+        <View
+          collapsable={false}
+          style={styles.drag}
+          {...responder.panHandlers}
+        >
+          <Ionicons
+            name="reorder-three-outline"
+            size={23}
+            color={colors.faint}
+          />
+        </View>
+      ) : null}
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
@@ -1691,10 +1799,6 @@ function MetricSummary({
   onEdit,
   onMove,
   onRemove,
-  onDragStart,
-  onDragHover,
-  onDragCancel,
-  onDragEnd,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -1705,10 +1809,6 @@ function MetricSummary({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
-  onDragStart: (step: number) => void;
-  onDragHover: (target: number) => void;
-  onDragCancel: () => void;
-  onDragEnd: () => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -1720,19 +1820,10 @@ function MetricSummary({
   const indexRef = useRef(index);
   const countRef = useRef(count);
   const onMoveRef = useRef(onMove);
-  const onDragStartRef = useRef(onDragStart);
-  const onDragHoverRef = useRef(onDragHover);
-  const onDragCancelRef = useRef(onDragCancel);
-  const onDragEndRef = useRef(onDragEnd);
-  const lastDragY = useRef(0);
   const dragStep = useRef(93);
   indexRef.current = index;
   countRef.current = count;
   onMoveRef.current = onMove;
-  onDragStartRef.current = onDragStart;
-  onDragHoverRef.current = onDragHover;
-  onDragCancelRef.current = onDragCancel;
-  onDragEndRef.current = onDragEnd;
   useEffect(() => {
     if (!editing) {
       dragY.setValue(0);
@@ -1753,20 +1844,14 @@ function MetricSummary({
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 3,
-        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 3,
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: () => editing,
         onPanResponderGrant: () => {
-          onDragStartRef.current(dragStep.current);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
-          lastDragY.current = 0;
           setDragging(true);
         },
         onPanResponderMove: (_event, gesture) => {
-          lastDragY.current = gesture.dy;
           const target = Math.max(
             0,
             Math.min(
@@ -1777,37 +1862,19 @@ function MetricSummary({
           dragY.setValue(gesture.dy);
           if (target !== liveTarget.current) {
             liveTarget.current = target;
-            onDragHoverRef.current(target);
           }
         },
         onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
         onPanResponderRelease: () => {
           const target = liveTarget.current;
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 24,
-            stiffness: 220,
-            mass: 0.72,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start();
+          dragY.setValue(0);
           if (target !== dragOrigin.current) onMoveRef.current(target);
-          onDragEndRef.current();
           setDragging(false);
         },
         onPanResponderTerminate: () => {
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 240,
-            mass: 0.75,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => {
-            onDragCancelRef.current();
-            onDragEndRef.current();
-            setDragging(false);
-          });
+          dragY.setValue(0);
+          setDragging(false);
         },
       }),
     [dragY, editing],
@@ -1894,7 +1961,6 @@ function MetricSummary({
     <Pressable
       style={styles.summaryWrap}
       onLongPress={onEdit}
-      {...(editing ? responder.panHandlers : {})}
       onPress={() =>
         editing ? undefined : router.navigate({
           pathname: "/metric-detail" as never,
@@ -1904,7 +1970,11 @@ function MetricSummary({
     >
       <Card style={styles.summary}>
         {editing ? (
-          <View style={styles.drag}>
+          <View
+            collapsable={false}
+            style={styles.drag}
+            {...responder.panHandlers}
+          >
             <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
           </View>
         ) : null}
@@ -2151,6 +2221,20 @@ const styles = StyleSheet.create({
   compactMapWrap: { width: "48.8%" },
   fullMapWrap: { width: "100%" },
   mapCard: { gap: 8 },
+  mapEditingCard: { paddingLeft: 46 },
+  mapDragHandle: {
+    position: "absolute",
+    left: 9,
+    top: 12,
+    width: 30,
+    height: 30,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 40,
+    elevation: 16,
+  },
   compactMapCard: {
     minHeight: 0,
     paddingHorizontal: 7,
