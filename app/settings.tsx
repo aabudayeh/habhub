@@ -236,6 +236,7 @@ export default function SettingsScreen() {
   return (
     <Screen>
       <PageHeader
+        tutorialId="settings-header"
         eyebrow="MetricRally"
         title="Cloud & health sync"
         subtitle="Account, device, backup, and health import preferences."

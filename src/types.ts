@@ -575,6 +575,10 @@ export type UserSettings = {
   onboardingComplete: boolean;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
+  /** Active replay selected from Quick Guide; absent uses the onboarding tour. */
+  tutorialGuideId?: string;
+  /** Changes for every replay so the overlay reliably returns to step one. */
+  tutorialGuideRunId?: number;
   selectedGoals: string[];
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;

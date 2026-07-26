@@ -493,6 +493,7 @@ export default function LogScreen() {
     >
       <PageHeader
         title="Log"
+        tutorialId="log-header"
         action={
           <Pressable
             onPress={() => router.navigate("/timer" as never)}

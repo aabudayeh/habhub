@@ -201,6 +201,7 @@ export default function JournalPage() {
     <Screen>
       <PageHeader
         title="Journal"
+        tutorialId="journal-header"
         action={
           <View style={styles.headerActions}>
             <InfoPopover

@@ -519,9 +519,6 @@ function workspaceHash(state: AppState) {
     photos: payload.photos.filter(
       (photo) => photo.userId === payload.currentUserId,
     ),
-    messages: payload.messages.filter(
-      (message) => message.senderId === payload.currentUserId,
-    ),
     dailyMetricStatuses: payload.dailyMetricStatuses.filter(
       (status) => status.userId === payload.currentUserId,
     ),
@@ -843,6 +840,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const hashRef = useRef<string | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
+  const deviceHeartbeatAtRef = useRef(0);
   const initializedUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -978,14 +976,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(!workspaceSynced);
         setStatus("synced");
         setErrorMessage(workspaceWarning);
-        supabase
-          .rpc("register_account_device", {
-            client_device_id: deviceId,
-            client_platform: Platform.OS,
-            client_label: null,
-          })
-          .then(() => undefined, () => undefined);
-        loadDevices().catch(() => undefined);
+        // Device presence is a low-frequency heartbeat, not part of every
+        // autosave. This avoids a second query after routine local edits.
+        if (Date.now() - deviceHeartbeatAtRef.current >= 15 * 60 * 1000) {
+          deviceHeartbeatAtRef.current = Date.now();
+          supabase
+            .rpc("register_account_device", {
+              client_device_id: deviceId,
+              client_platform: Platform.OS,
+              client_label: null,
+            })
+            .then(() => undefined, () => undefined);
+        }
       } catch (error) {
         if (/snapshot_conflict/i.test(String(error))) {
           setStatus("conflict");
@@ -1015,7 +1017,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     })();
     syncPromiseRef.current = operation;
     return operation;
-  }, [auth.user, loadDevices, replaceState]);
+  }, [auth.user, replaceState]);
 
   useEffect(() => {
     if (!hydrated || auth.status !== "signedIn" || !auth.user || !supabase) {
@@ -1114,6 +1116,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           client_platform: Platform.OS,
           client_label: null,
         });
+        deviceHeartbeatAtRef.current = Date.now();
         if (!remote || correctedAccountState) await performSync();
         else setStatus("synced");
         loadDevices().catch(() => undefined);
@@ -1386,7 +1389,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (activityTimer) clearTimeout(activityTimer);
       activityTimer = setTimeout(
         () => refreshGroupActivity().catch(() => undefined),
-        350,
+        700,
       );
     };
     const channel = supabase
@@ -1430,6 +1433,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           filter: `group_id=eq.${state.group.id}`,
         },
         queueRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "metric_entries",
+        },
+        queueActivityRefresh,
       )
       .on(
         "postgres_changes",

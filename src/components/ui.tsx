@@ -87,11 +87,12 @@ export function Screen({
                       cloud.status === "syncing" || health.status === "syncing"
                     }
                     onRefresh={async () => {
-                      await Promise.allSettled([
-                        cloud.syncNow(),
-                        cloud.refreshActivity(),
-                        health.syncNow("pull"),
-                      ]);
+                      // Serialize local push, group refresh, then native health.
+                      // Running all three against the same entries array caused
+                      // transient disappear/reappear states on Android.
+                      await cloud.syncNow().catch(() => undefined);
+                      await cloud.refreshActivity().catch(() => undefined);
+                      await health.syncNow("pull").catch(() => undefined);
                     }}
                     tintColor={accent}
                   />
@@ -135,17 +136,19 @@ export function PageHeader({
   subtitle,
   action,
   showMenu = true,
+  tutorialId,
 }: {
   eyebrow?: string;
   title: string;
   subtitle?: string;
   action?: ReactNode;
   showMenu?: boolean;
+  tutorialId?: string;
 }) {
   const accent = useGroupAccent();
   const colors = useAppColors();
   const compact = useCompactMode();
-  return (
+  const header = (
     <View style={[styles.header, compact && styles.headerCompact]}>
       <View style={styles.headerCopy}>
         {eyebrow ? (
@@ -189,6 +192,11 @@ export function PageHeader({
         ) : null}
       </View>
     </View>
+  );
+  return tutorialId ? (
+    <TutorialTarget id={tutorialId}>{header}</TutorialTarget>
+  ) : (
+    header
   );
 }
 

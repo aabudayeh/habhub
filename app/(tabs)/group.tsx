@@ -87,7 +87,7 @@ export default function LeaderboardScreen() {
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
   useEffect(() => {
-    const timer = setInterval(() => setClockTick((value) => value + 1), 10_000);
+    const timer = setInterval(() => setClockTick((value) => value + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
@@ -323,6 +323,7 @@ export default function LeaderboardScreen() {
     >
       <PageHeader
         title="Leaderboard"
+        tutorialId="leaderboard-header"
         action={
           editing ? (
             <View style={styles.headerActions}>

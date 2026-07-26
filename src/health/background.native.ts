@@ -5,7 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { dateKey } from '@/src/domain/date';
 import { enabledHealthDataTypes, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import { nativeHealthAdapter } from '@/src/health/adapter';
-import { HEALTH_HISTORY_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
+import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
 import { PersistedHealthStatus } from '@/src/health/types';
 import { APP_STORAGE_KEY } from '@/src/state/AppProvider';
 import { AppState, HealthSyncSettings, SyncMode } from '@/src/types';
@@ -17,7 +17,7 @@ function startDate(lastSyncedAt: string | null) {
   if (Number.isNaN(date.getTime())) date = new Date();
   date.setHours(0, 0, 0, 0);
   date.setDate(
-    date.getDate() - (lastSyncedAt ? 2 : HEALTH_HISTORY_DAYS),
+    date.getDate() - (lastSyncedAt ? 2 : HEALTH_INITIAL_DAYS),
   );
   return date;
 }

@@ -592,6 +592,7 @@ export default function PerformancePage() {
     <Screen refreshEnabled={!editing}>
       <PageHeader
         title="Performance"
+        tutorialId="performance-header"
         subtitle="Compare momentum, consistency, and goal progress."
         action={
           <View style={styles.headerActions}>

@@ -1500,6 +1500,7 @@ export default function GymScreen() {
       >
         <PageHeader
           title="Gym"
+          tutorialId="gym-header"
           action={
             <Pressable
               onPress={() => setRecapOpen(true)}

@@ -29,6 +29,41 @@ import {
   todoResolvedOnDate,
 } from "./schedule";
 
+type MetricDateCache<T> = WeakMap<
+  AppState,
+  WeakMap<MetricDefinition, Map<string, T>>
+>;
+
+const metricValueCache: MetricDateCache<number> = new WeakMap();
+const goalTargetCache: MetricDateCache<number> = new WeakMap();
+const applicabilityCache: MetricDateCache<boolean> = new WeakMap();
+const metricDataCache: MetricDateCache<boolean> = new WeakMap();
+
+function cachedMetricDateValue<T>(
+  cache: MetricDateCache<T>,
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+  calculate: () => T,
+): T {
+  let metrics = cache.get(state);
+  if (!metrics) {
+    metrics = new WeakMap();
+    cache.set(state, metrics);
+  }
+  let values = metrics.get(metric);
+  if (!values) {
+    values = new Map();
+    metrics.set(metric, values);
+  }
+  const key = `${userId}\u0000${localDate}`;
+  if (values.has(key)) return values.get(key)!;
+  const value = calculate();
+  values.set(key, value);
+  return value;
+}
+
 function aggregate(
   entries: MetricEntry[],
   method: MetricDefinition["aggregation"],
@@ -184,11 +219,20 @@ export function safeMetricValue(
   userId: string,
   localDate: string,
 ): number {
-  try {
-    return metricValue(state, metric, userId, localDate);
-  } catch {
-    return 0;
-  }
+  return cachedMetricDateValue(
+    metricValueCache,
+    state,
+    metric,
+    userId,
+    localDate,
+    () => {
+      try {
+        return metricValue(state, metric, userId, localDate);
+      } catch {
+        return 0;
+      }
+    },
+  );
 }
 
 export function effectiveGoalTarget(
@@ -197,47 +241,56 @@ export function effectiveGoalTarget(
   userId: string,
   localDate: string,
 ): number {
-  if (userId !== state.currentUserId) {
-    const sharedTarget = statusForDay(
-      state.dailyMetricStatuses,
-      state.group.id,
-      metric.id,
-      userId,
-      localDate,
-    )?.goalTarget;
-    if (sharedTarget !== undefined && Number.isFinite(sharedTarget))
-      return sharedTarget;
-  }
-  if (metric.id === "weight") {
-    const profile =
-      state.energyProfiles?.[userId] ?? state.settings.energyProfile;
-    const direction = weightDirectionFromProfile(profile);
-    if (direction === "maintain") return profile.weightKg;
-    const startingWeight = profile.startingWeightKg ?? profile.weightKg;
-    const elapsedDays = Math.max(
-      0,
-      Math.floor(
-        (new Date(`${localDate}T12:00:00`).getTime() -
-          new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
-          86400000,
-      ),
-    );
-    const planned = (profile.desiredWeeklyLossKg * elapsedDays) / 7;
-    return direction === "gain"
-      ? Math.min(profile.targetWeightKg, startingWeight + planned)
-      : Math.max(profile.targetWeightKg, startingWeight - planned);
-  }
-  if (metric.id !== "food") return metric.goal.target;
-  const exercise = state.metrics.find(
-    (candidate) => candidate.id === "exercise",
-  );
-  const activeEnergy = exercise
-    ? safeMetricValue(state, exercise, userId, localDate)
-    : 0;
-  return dailyFoodGoal(
-    metric.goal.target,
-    activeEnergy,
-    state.settings.foodGoalMode ?? "activity_adjusted",
+  return cachedMetricDateValue(
+    goalTargetCache,
+    state,
+    metric,
+    userId,
+    localDate,
+    () => {
+      if (userId !== state.currentUserId) {
+        const sharedTarget = statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          metric.id,
+          userId,
+          localDate,
+        )?.goalTarget;
+        if (sharedTarget !== undefined && Number.isFinite(sharedTarget))
+          return sharedTarget;
+      }
+      if (metric.id === "weight") {
+        const profile =
+          state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+        const direction = weightDirectionFromProfile(profile);
+        if (direction === "maintain") return profile.weightKg;
+        const startingWeight = profile.startingWeightKg ?? profile.weightKg;
+        const elapsedDays = Math.max(
+          0,
+          Math.floor(
+            (new Date(`${localDate}T12:00:00`).getTime() -
+              new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
+              86400000,
+          ),
+        );
+        const planned = (profile.desiredWeeklyLossKg * elapsedDays) / 7;
+        return direction === "gain"
+          ? Math.min(profile.targetWeightKg, startingWeight + planned)
+          : Math.max(profile.targetWeightKg, startingWeight - planned);
+      }
+      if (metric.id !== "food") return metric.goal.target;
+      const exercise = state.metrics.find(
+        (candidate) => candidate.id === "exercise",
+      );
+      const activeEnergy = exercise
+        ? safeMetricValue(state, exercise, userId, localDate)
+        : 0;
+      return dailyFoodGoal(
+        metric.goal.target,
+        activeEnergy,
+        state.settings.foodGoalMode ?? "activity_adjusted",
+      );
+    },
   );
 }
 
@@ -618,48 +671,53 @@ export function metricApplicableOnDate(
   userId: string,
   localDate: string,
 ) {
-  if (isVacationDate(state, userId, localDate)) return true;
-  const hasExplicitData =
-    metric.gymMapping
-      ? hasGymMetricData(state, metric.gymMapping, userId, localDate)
-      : metric.dataType === "photo"
-        ? photosForDay(state.photos, userId, localDate).length > 0
-        : entriesForDay(state.entries, metric.id, userId, localDate).length > 0;
-  const hasSharedDailyStatus = Boolean(
-    statusForDay(
-      state.dailyMetricStatuses,
-      state.group.id,
-      metric.id,
-      userId,
-      localDate,
-    ),
+  return cachedMetricDateValue(
+    applicabilityCache,
+    state,
+    metric,
+    userId,
+    localDate,
+    () => {
+      if (isVacationDate(state, userId, localDate)) return true;
+      const hasExplicitData =
+        metric.gymMapping
+          ? hasGymMetricData(state, metric.gymMapping, userId, localDate)
+          : metric.dataType === "photo"
+            ? photosForDay(state.photos, userId, localDate).length > 0
+            : entriesForDay(state.entries, metric.id, userId, localDate)
+                .length > 0;
+      const hasSharedDailyStatus = Boolean(
+        statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          metric.id,
+          userId,
+          localDate,
+        ),
+      );
+      const hasDeficitInput =
+        metric.id === "deficit" &&
+        entriesForDay(state.entries, "food", userId, localDate).length > 0;
+      const hasRecordedData =
+        hasExplicitData || hasSharedDailyStatus || hasDeficitInput;
+      // A backdated entry remains viewable even when the tracker itself was added
+      // later. This does not make the goal retroactively tracked.
+      if (metric.activeFrom > localDate && !hasRecordedData) return false;
+      // A weigh-in target is judged only on days with an actual measurement;
+      // carrying yesterday's weight forward must not create a false daily win.
+      if (metric.id === "weight" || metric.goalProgressMode === "journey")
+        return hasRecordedData;
+      if (metric.id === "todo_completion")
+        return (state.todos ?? []).some((todo) =>
+          todoAppearsOnDate(todo, localDate),
+        );
+      if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
+      if (metric.id === "deficit") return hasDeficitInput;
+      if (metric.id === "weekly_deficit_balance")
+        return weeklyDeficitBalance(state, userId, localDate).days > 0;
+      return true;
+    },
   );
-  const hasDeficitInput =
-    metric.id === "deficit" &&
-    state.entries.some(
-      (entry) =>
-        entry.userId === userId &&
-        entry.metricId === "food" &&
-        entry.localDate === localDate,
-    );
-  const hasRecordedData =
-    hasExplicitData || hasSharedDailyStatus || hasDeficitInput;
-  // A backdated entry remains viewable even when the tracker itself was added
-  // later. This does not make the goal retroactively tracked.
-  if (metric.activeFrom > localDate && !hasRecordedData) return false;
-  // A weigh-in target is judged only on days with an actual measurement;
-  // carrying yesterday's weight forward must not create a false daily win.
-  if (metric.id === "weight" || metric.goalProgressMode === "journey")
-    return hasRecordedData;
-  if (metric.id === "todo_completion")
-    return (state.todos ?? []).some((todo) =>
-      todoAppearsOnDate(todo, localDate),
-    );
-  if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
-  if (metric.id === "deficit") return hasDeficitInput;
-  if (metric.id === "weekly_deficit_balance")
-    return weeklyDeficitBalance(state, userId, localDate).days > 0;
-  return true;
 }
 
 export function hasMetricData(
@@ -668,20 +726,32 @@ export function hasMetricData(
   userId: string,
   localDate: string,
 ) {
-  if (!metricApplicableOnDate(state, metric, userId, localDate)) return false;
-  // Vacation protects completion/streaks but must never fabricate a zero
-  // measurement that changes averages, totals, or calculated energy.
-  if (isVacationDate(state, userId, localDate)) return false;
-  if (metric.dataType === "photo")
-    return photosForDay(state.photos, userId, localDate).length > 0;
-  if (metric.gymMapping)
-    return hasGymMetricData(state, metric.gymMapping, userId, localDate);
-  if (metric.id === "todo_completion")
-    return (state.todos ?? []).some((todo) =>
-      todoAppearsOnDate(todo, localDate),
-    );
-  if (metric.dataType === "calculated") return true;
-  return entriesForDay(state.entries, metric.id, userId, localDate).length > 0;
+  return cachedMetricDateValue(
+    metricDataCache,
+    state,
+    metric,
+    userId,
+    localDate,
+    () => {
+      if (!metricApplicableOnDate(state, metric, userId, localDate))
+        return false;
+      // Vacation protects completion/streaks but must never fabricate a zero
+      // measurement that changes averages, totals, or calculated energy.
+      if (isVacationDate(state, userId, localDate)) return false;
+      if (metric.dataType === "photo")
+        return photosForDay(state.photos, userId, localDate).length > 0;
+      if (metric.gymMapping)
+        return hasGymMetricData(state, metric.gymMapping, userId, localDate);
+      if (metric.id === "todo_completion")
+        return (state.todos ?? []).some((todo) =>
+          todoAppearsOnDate(todo, localDate),
+        );
+      if (metric.dataType === "calculated") return true;
+      return (
+        entriesForDay(state.entries, metric.id, userId, localDate).length > 0
+      );
+    },
+  );
 }
 
 export function metricPeriodStats(
@@ -1136,22 +1206,17 @@ export function dailyScore(
       metric.dataType !== "text" &&
       metric.activeFrom <= localDate &&
       (metric.id !== "deficit" ||
-        state.entries.some(
-          (entry) =>
-            entry.userId === userId &&
-            entry.metricId === "food" &&
-            entry.localDate === localDate,
-        )),
+        entriesForDay(state.entries, "food", userId, localDate).length > 0),
   );
   const totalWeight =
     enabled.reduce((sum, metric) => sum + metric.scoreWeight, 0) || 1;
   return enabled.reduce((score, metric) => {
-    const status = state.dailyMetricStatuses?.find(
-      (item) =>
-        item.groupId === state.group.id &&
-        item.metricId === metric.id &&
-        item.userId === userId &&
-        item.localDate === localDate,
+    const status = statusForDay(
+      state.dailyMetricStatuses,
+      state.group.id,
+      metric.id,
+      userId,
+      localDate,
     );
     if (status && userId !== state.currentUserId) {
       return (
@@ -1167,22 +1232,13 @@ export function dailyScore(
           ? 0
           : safeMetricValue(state, metric, userId, localDate);
     } else if (metric.dataType === "photo") {
-      value = state.photos.filter(
-        (photo) =>
-          photo.userId === userId &&
-          photo.localDate === localDate &&
-          photo.visibility === "group",
+      value = photosForDay(state.photos, userId, localDate).filter(
+        (photo) => photo.visibility === "group",
       ).length;
     } else {
       value = aggregate(
-        state.entries
-          .filter(
-            (entry) =>
-              entry.metricId === metric.id &&
-              entry.userId === userId &&
-              entry.localDate === localDate &&
-              entry.visibility !== "private",
-          )
+        entriesForDay(state.entries, metric.id, userId, localDate)
+          .filter((entry) => entry.visibility !== "private")
           .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)),
         metric.aggregation,
       );
@@ -1230,13 +1286,12 @@ export function scheduledGoalReached(
   localDate: string,
 ) {
   if (isVacationDate(state, userId, localDate)) return true;
-  if (state.entries.some(
-    (entry) =>
-      entry.userId === userId &&
-      entry.metricId === metric.id &&
-      entry.localDate === localDate &&
-      entry.value === "skipped",
-  )) return true;
+  if (
+    entriesForDay(state.entries, metric.id, userId, localDate).some(
+      (entry) => entry.value === "skipped",
+    )
+  )
+    return true;
   if (
     goalCelebrationTiming(metric) === "end_of_day" &&
     !isGoalFinalForDate(state, localDate)
@@ -1253,13 +1308,13 @@ export function scheduledGoalReached(
         submetric.showProgressBar && submetric.goalEnabled !== false,
     );
     if (progressSubmetrics.length) {
-      const latestParentEntry = state.entries
-        .filter(
-          (entry) =>
-            entry.metricId === metric.id &&
-            entry.userId === userId &&
-            entry.localDate === date,
-        )
+      const latestParentEntry = entriesForDay(
+        state.entries,
+        metric.id,
+        userId,
+        date,
+      )
+        .slice()
         .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
       const submetricsReached = progressSubmetrics.every((submetric) => {
         const captured = Number(

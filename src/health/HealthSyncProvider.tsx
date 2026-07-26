@@ -125,12 +125,58 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         }
         const historyDays = current.settings.healthHistoryDays ?? 90;
         const from = syncStart(previous.lastSyncedAt, fullRefresh, historyDays);
-        const records = fullRefresh
-          ? await readHealthInChunks(from, new Date(), dataTypes)
-          : await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
-        const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group',current.metrics,current.settings.energyProfile.weightKg);
-        importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes,current.metrics), dateKey(from));
-        await saveStatus({ lastSyncedAt: new Date().toISOString(), lastReason: reason, importedCount: entries.length, error: null });
+        const metricIds = metricIdsForHealthDataTypes(
+          dataTypes,
+          current.metrics,
+        );
+        let importedCount = 0;
+        if (fullRefresh) {
+          // Import historical repair data one month at a time. Keeping two
+          // years of raw Health Connect rows in one array could freeze Android
+          // and forced React to render a very large update in one frame.
+          importedCount = await importHealthInChunks(
+            from,
+            new Date(),
+            dataTypes,
+            (records, chunkStart) => {
+              const entries = mapHealthRecordsToEntries(
+                records,
+                current.currentUserId,
+                'group',
+                current.metrics,
+                current.settings.energyProfile.weightKg,
+              );
+              importHealthEntries(
+                entries,
+                nativeHealthAdapter.provider!,
+                metricIds,
+                dateKey(chunkStart),
+              );
+              return entries.length;
+            },
+          );
+        } else {
+          const records = await nativeHealthAdapter.read({
+            from,
+            to: new Date(),
+            dataTypes,
+          });
+          const entries = mapHealthRecordsToEntries(
+            records,
+            current.currentUserId,
+            'group',
+            current.metrics,
+            current.settings.energyProfile.weightKg,
+          );
+          importedCount = entries.length;
+          importHealthEntries(
+            entries,
+            nativeHealthAdapter.provider!,
+            metricIds,
+            dateKey(from),
+          );
+        }
+        await saveStatus({ lastSyncedAt: new Date().toISOString(), lastReason: reason, importedCount, error: null });
         setStatus('ready');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Health sync failed.';
@@ -233,30 +279,36 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }
 
-async function readHealthInChunks(
+async function importHealthInChunks(
   from: Date,
   to: Date,
   dataTypes: ReturnType<typeof enabledHealthDataTypes>,
+  importChunk: (
+    records: Awaited<ReturnType<typeof nativeHealthAdapter.read>>,
+    chunkStart: Date,
+  ) => number,
 ) {
-  const records = [];
+  let importedCount = 0;
   let cursor = new Date(from);
   while (cursor < to) {
+    const chunkStart = new Date(cursor);
     const end = new Date(
       Math.min(
         to.getTime(),
         cursor.getTime() + 30 * 24 * 60 * 60 * 1000,
       ),
     );
-    records.push(
-      ...(await nativeHealthAdapter.read({
-        from: cursor,
-        to: end,
-        dataTypes,
-      })),
-    );
+    const records = await nativeHealthAdapter.read({
+      from: cursor,
+      to: end,
+      dataTypes,
+    });
+    importedCount += importChunk(records, chunkStart);
+    // Give navigation and animations a frame between large historical chunks.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     cursor = new Date(end.getTime() + 1);
   }
-  return records;
+  return importedCount;
 }
 
 export function useHealthSync() {

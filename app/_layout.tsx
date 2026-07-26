@@ -93,12 +93,27 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [cycleNotificationKey]);
-  const goalReminderKey = JSON.stringify({
-    user: state.currentUserId,
-    periods: state.trackedGoalPeriods,
-    reminders: state.metrics.map((metric) => [metric.id, metric.activeFrom, metric.goalSchedule, metric.reminder, metric.reminders]),
-    notifications: state.settings.notifications,
-  });
+  const goalReminderKey = useMemo(
+    () =>
+      JSON.stringify({
+        user: state.currentUserId,
+        periods: state.trackedGoalPeriods,
+        reminders: state.metrics.map((metric) => [
+          metric.id,
+          metric.activeFrom,
+          metric.goalSchedule,
+          metric.reminder,
+          metric.reminders,
+        ]),
+        notifications: state.settings.notifications,
+      }),
+    [
+      state.currentUserId,
+      state.metrics,
+      state.settings.notifications,
+      state.trackedGoalPeriods,
+    ],
+  );
   useEffect(() => {
     const timer = setTimeout(
       () =>
@@ -109,26 +124,39 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [goalReminderKey]);
-  const gymNotificationKey = JSON.stringify({
-    user: state.currentUserId,
-    gym: (state.gymSessions ?? []).map((session) => [
-      session.id,
-      session.recordedAt,
-      session.exercises.flatMap((exercise) =>
-        exercise.sets.map((set) => [set.weightKg, set.reps, set.completed]),
-      ),
-    ]),
-    enabled: state.settings.showGym,
-    notifications: [
-      state.settings.notifications.pushEnabled,
-      state.settings.notifications.quietHoursEnabled,
-      state.settings.notifications.quietHoursStart,
-      state.settings.notifications.quietHoursEnd,
-      state.settings.notifications.gymReminders,
-      state.settings.notifications.gymAchievements,
-      state.settings.notifications.gymReminderDays,
+  const gymNotificationKey = useMemo(
+    () =>
+      JSON.stringify({
+        user: state.currentUserId,
+        gym: (state.gymSessions ?? []).map((session) => [
+          session.id,
+          session.recordedAt,
+          session.exercises.flatMap((exercise) =>
+            exercise.sets.map((set) => [
+              set.weightKg,
+              set.reps,
+              set.completed,
+            ]),
+          ),
+        ]),
+        enabled: state.settings.showGym,
+        notifications: [
+          state.settings.notifications.pushEnabled,
+          state.settings.notifications.quietHoursEnabled,
+          state.settings.notifications.quietHoursStart,
+          state.settings.notifications.quietHoursEnd,
+          state.settings.notifications.gymReminders,
+          state.settings.notifications.gymAchievements,
+          state.settings.notifications.gymReminderDays,
+        ],
+      }),
+    [
+      state.currentUserId,
+      state.gymSessions,
+      state.settings.notifications,
+      state.settings.showGym,
     ],
-  });
+  );
   useEffect(() => {
     const timer = setTimeout(
       () =>
@@ -139,18 +167,27 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [gymNotificationKey]);
-  const productivityNotificationKey = JSON.stringify({
-    user: state.currentUserId,
-    todos: state.todos,
-    reminders: state.calendarReminders,
-    enabled: state.settings.notifications.pushEnabled,
-    todoReminders: state.settings.notifications.todoReminders,
-    quiet: [
-      state.settings.notifications.quietHoursEnabled,
-      state.settings.notifications.quietHoursStart,
-      state.settings.notifications.quietHoursEnd,
+  const productivityNotificationKey = useMemo(
+    () =>
+      JSON.stringify({
+        user: state.currentUserId,
+        todos: state.todos,
+        reminders: state.calendarReminders,
+        enabled: state.settings.notifications.pushEnabled,
+        todoReminders: state.settings.notifications.todoReminders,
+        quiet: [
+          state.settings.notifications.quietHoursEnabled,
+          state.settings.notifications.quietHoursStart,
+          state.settings.notifications.quietHoursEnd,
+        ],
+      }),
+    [
+      state.calendarReminders,
+      state.currentUserId,
+      state.settings.notifications,
+      state.todos,
     ],
-  });
+  );
   useEffect(() => {
     const timer = setTimeout(
       () =>
@@ -161,10 +198,14 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [productivityNotificationKey]);
-  const pushRegistrationKey = JSON.stringify({
-    userId: auth.user?.id,
-    notifications: state.settings.notifications,
-  });
+  const pushRegistrationKey = useMemo(
+    () =>
+      JSON.stringify({
+        userId: auth.user?.id,
+        notifications: state.settings.notifications,
+      }),
+    [auth.user?.id, state.settings.notifications],
+  );
   useEffect(() => {
     if (
       Platform.OS === "web" ||
@@ -318,6 +359,10 @@ function RootNavigator() {
               />
               <Stack.Screen
                 name="display-settings"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
+                name="quick-guide"
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen

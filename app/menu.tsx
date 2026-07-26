@@ -38,9 +38,9 @@ const items = [
   },
   {
     label: "Quick guide",
-    detail: "Replay the interactive app walkthrough",
+    detail: "Interactive guides for every page and settings",
     icon: "help-circle-outline" as const,
-    path: "/onboarding" as const,
+    path: "/quick-guide" as const,
   },
   {
     label: "Advanced settings",
@@ -51,7 +51,7 @@ const items = [
 ];
 
 export default function MenuScreen() {
-  const { state, updateSettings } = useApp();
+  const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const user = state.group.members.find(
@@ -119,12 +119,7 @@ export default function MenuScreen() {
             const row = (
               <Pressable
                 onPress={() => {
-                  if (item.label === "Quick guide") {
-                    updateSettings({ tutorialComplete: false });
-                    router.replace("/" as never);
-                  } else {
-                    router.replace(item.path as never);
-                  }
+                  router.replace(item.path as never);
                 }}
                 style={({ pressed }) => [
                   styles.item,

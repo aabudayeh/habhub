@@ -23,6 +23,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Avatar } from "@/src/components/ui";
 import { memberDisplayName } from "@/src/domain/members";
 import { formatClockTime } from "@/src/domain/date";
@@ -127,7 +128,7 @@ export default function ChatScreen() {
       // suspended sockets without reloading leaderboard or health data.
       const timer = setInterval(
         () => refreshMessages().catch(() => undefined),
-        12000,
+        45000,
       );
       return () => clearInterval(timer);
     }, [refreshMessages]),
@@ -219,6 +220,7 @@ export default function ChatScreen() {
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
+          <TutorialTarget id="chat-header">
           <View
             style={[styles.pageHeader, { borderBottomColor: colors.border }]}
           >
@@ -276,6 +278,7 @@ export default function ChatScreen() {
               </ScrollView>
             </View>
           </View>
+          </TutorialTarget>
 
           <View
             style={[styles.threadHeader, { borderBottomColor: colors.border }]}
@@ -357,11 +360,9 @@ export default function ChatScreen() {
               <RefreshControl
                 refreshing={cloud.status === "syncing" || health.status === "syncing"}
                 onRefresh={async () => {
-                  await Promise.allSettled([
-                    cloud.syncNow(),
-                    cloud.refreshMessages(),
-                    health.syncNow("pull"),
-                  ]);
+                  await cloud.syncNow().catch(() => undefined);
+                  await cloud.refreshMessages().catch(() => undefined);
+                  await health.syncNow("pull").catch(() => undefined);
                 }}
                 tintColor={accent}
               />

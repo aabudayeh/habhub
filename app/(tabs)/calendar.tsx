@@ -147,6 +147,7 @@ export default function SchedulePage() {
     <Screen contentContainerStyle={styles.page}>
       <PageHeader
         title="Schedule"
+        tutorialId="schedule-header"
         action={
           <View style={styles.headerActions}>
             <InfoPopover

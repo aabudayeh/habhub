@@ -182,6 +182,145 @@ const STEPS: readonly TutorialStep[] = [
   },
 ];
 
+export const TUTORIAL_GUIDES = [
+  { id: "full", title: "Essential tour", detail: "Today, Progress, navigation, and settings", icon: "compass-outline", path: "/" },
+  { id: "today", title: "Today", detail: "Goals, tiles, logs, filters, and edit mode", icon: "today-outline", path: "/" },
+  { id: "log", title: "Log", detail: "Tracker, date, privacy, food, and timer logging", icon: "add-circle-outline", path: "/log" },
+  { id: "progress", title: "Progress", detail: "Ranges, layouts, day details, and performance", icon: "stats-chart-outline", path: "/insights" },
+  { id: "leaderboard", title: "Leaderboard", detail: "Rankings, dates, profiles, and group controls", icon: "people-outline", path: "/group" },
+  { id: "chat", title: "Chat", detail: "Group and private conversations, media, and alerts", icon: "chatbubbles-outline", path: "/chat" },
+  { id: "gym", title: "Gym", detail: "Plans, sets, timers, rest, and exercise history", icon: "barbell-outline", path: "/gym" },
+  { id: "schedule", title: "Schedule", detail: "To-dos, reminders, weeks, and edit gestures", icon: "calendar-outline", path: "/calendar" },
+  { id: "journal", title: "Journal", detail: "Search, labels, tracker notes, and formatting", icon: "book-outline", path: "/journal" },
+  { id: "performance", title: "Performance", detail: "Momentum, strengths, focus areas, and saved views", icon: "speedometer-outline", path: "/performance" },
+  { id: "settings", title: "Settings & menu", detail: "Profile, sync, notifications, display, and groups", icon: "settings-outline", path: "/menu" },
+] as const;
+
+const pageGuide = (
+  path: string,
+  target: string,
+  tab: string,
+  title: string,
+  overview: string,
+  detail: string,
+): readonly TutorialStep[] => [
+  { target, path, title, copy: overview, button: "Next" },
+  { target, path, title: `${title} shortcuts`, copy: detail, button: "Next" },
+  {
+    target: `tab-${tab}`,
+    path,
+    title: "Return anytime",
+    copy: "This navigation item opens the page. Optional pages can be hidden or reordered from Display settings.",
+    button: "Finish",
+  },
+];
+
+const GUIDES: Record<string, readonly TutorialStep[]> = {
+  full: STEPS,
+  today: pageGuide(
+    "/",
+    "today-hero",
+    "index",
+    "Today",
+    "Your completion indicator, tracked goals, optional history strips, and to-dos live here.",
+    "Tap a tile to review entries. Hold the page for edit mode, where you can pin, reorder, hide, or add existing trackers.",
+  ),
+  log: pageGuide(
+    "/log",
+    "log-header",
+    "log",
+    "Log",
+    "Choose any manual tracker, then set its date, time, value, note, image, and visibility in one flow.",
+    "Food supports search and nutrition details; timed activities launch the timer. Synced or calculated trackers open history instead.",
+  ),
+  progress: pageGuide(
+    "/insights",
+    "progress-visual",
+    "insights",
+    "Progress",
+    "Switch between overview and goal maps, then choose a calendar week, month, or year.",
+    "Tap a day for its detail. Hold cards to reorder them, and use Performance for goal-aware period comparisons.",
+  ),
+  leaderboard: pageGuide(
+    "/group",
+    "leaderboard-header",
+    "group",
+    "Leaderboard",
+    "Rankings use shared values and each member’s personal target while the group competition rule decides order.",
+    "Swipe date ranges, tap an avatar for head-to-head comparison, or tap a value for shared entries and goal detail.",
+  ),
+  chat: pageGuide(
+    "/chat",
+    "chat-header",
+    "chat",
+    "Chat",
+    "Switch between the group conversation and private friends from the conversation header.",
+    "Messages update through realtime, support images and timestamps, and respect per-chat mute and notification preferences.",
+  ),
+  gym: pageGuide(
+    "/gym",
+    "gym-header",
+    "gym",
+    "Gym",
+    "Build reusable workout days, log sets, weights, reps, notes, and optional timed rests.",
+    "The workout timer follows sets and exercises; history feeds gym trackers, active energy, recaps, and group rankings.",
+  ),
+  schedule: pageGuide(
+    "/calendar",
+    "schedule-header",
+    "calendar",
+    "Schedule",
+    "The week grid combines tracker reminders, to-do reminders, and deadlines using your chosen week and time format.",
+    "Tap an item to edit it; double-tap or hold a slot to add one. Edit mode reorders and removes scheduled items.",
+  ),
+  journal: pageGuide(
+    "/journal",
+    "journal-header",
+    "journal",
+    "Journal",
+    "Journal gathers authored notes plus notes attached to tracker, gym, and exercise entries.",
+    "Search all text, select multiple labels, and create formatted notes with images, links, and checklists.",
+  ),
+  performance: pageGuide(
+    "/performance",
+    "performance-header",
+    "performance",
+    "Performance",
+    "Compare the current day, week, or month with the preceding matching period using goal-aware direction.",
+    "Prioritize gainers, steady items, or focus areas; pin important trackers and hold cards to edit the view.",
+  ),
+  settings: [
+    {
+      target: "menu-display",
+      path: "/menu",
+      title: "The settings hub",
+      copy: "Profile, cloud and health, notifications, display, groups, and advanced tracker tools are organized here.",
+      button: "Next",
+    },
+    {
+      target: "settings-header",
+      path: "/settings",
+      title: "Cloud and health sync",
+      copy: "Inspect sync health, choose a battery schedule, manage devices, and request older health history here.",
+      button: "Next",
+    },
+    {
+      target: "personal-theme",
+      path: "/display-settings",
+      title: "A theme just for you",
+      copy: "Your personal theme can override a group color without changing what friends see.",
+      button: "Next",
+    },
+    {
+      target: "display-layout",
+      path: "/display-settings",
+      title: "Keep MetricRally focused",
+      copy: "Disable pages you do not use and reorder the rest. Every page guide remains available from Quick Guide.",
+      button: "Finish",
+    },
+  ],
+};
+
 export function TutorialSpotlight() {
   const { state, updateSettings } = useApp();
   const registry = useContext(TutorialContext);
@@ -193,6 +332,8 @@ export function TutorialSpotlight() {
   const [index, setIndex] = useState(0);
   const overlayRef = useRef<View>(null);
   const [overlayOrigin, setOverlayOrigin] = useState({ x: 0, y: 0 });
+  const guideId = state.settings.tutorialGuideId ?? "full";
+  const steps = GUIDES[guideId] ?? GUIDES.full;
   const authRoute = [
     "/sign-in",
     "/onboarding",
@@ -202,9 +343,10 @@ export function TutorialSpotlight() {
   ].some((route) => pathname.startsWith(route));
   const active =
     state.settings.onboardingComplete &&
-    !state.settings.tutorialComplete &&
+    (!state.settings.tutorialComplete ||
+      Boolean(state.settings.tutorialGuideId)) &&
     !authRoute;
-  const step = STEPS[index];
+  const step = steps[index];
   const raw = registry?.targets[step?.target];
   const relative = raw
     ? {
@@ -253,6 +395,10 @@ export function TutorialSpotlight() {
   }, []);
 
   useEffect(() => {
+    setIndex(0);
+  }, [guideId, state.settings.tutorialGuideRunId]);
+
+  useEffect(() => {
     if (!active || !step || pathname === step.path) return;
     const timer = setTimeout(() => router.replace(step.path as never), 0);
     return () => clearTimeout(timer);
@@ -264,13 +410,11 @@ export function TutorialSpotlight() {
       measureOverlay();
       requestTargetMeasure?.(step.target);
     };
-    const timers = [0, 80, 220, 500].map((delay) =>
+    const timers = [0, 80, 220, 500, 1000].map((delay) =>
       setTimeout(refresh, delay),
     );
-    const interval = setInterval(refresh, 500);
     return () => {
       timers.forEach(clearTimeout);
-      clearInterval(interval);
     };
   }, [
     active,
@@ -286,12 +430,15 @@ export function TutorialSpotlight() {
   if (!active || !step) return null;
 
   function finish() {
-    updateSettings({ tutorialComplete: true });
-    router.replace("/" as never);
+    updateSettings({
+      tutorialComplete: true,
+      tutorialGuideId: undefined,
+      tutorialGuideRunId: undefined,
+    });
   }
 
   function advance() {
-    if (index >= STEPS.length - 1) {
+    if (index >= steps.length - 1) {
       finish();
       return;
     }
@@ -366,7 +513,7 @@ export function TutorialSpotlight() {
             <Ionicons name="navigate" size={17} color={accent} />
           </View>
           <Text style={[styles.counter, { color: colors.muted }]}>
-            {index + 1}/{STEPS.length}
+            {index + 1}/{steps.length}
           </Text>
           <Pressable onPress={finish} hitSlop={10}>
             <Text style={[styles.skip, { color: colors.muted }]}>Skip</Text>
@@ -380,7 +527,7 @@ export function TutorialSpotlight() {
         >
           <Text preserveColor style={styles.buttonText}>{step.button}</Text>
           <Ionicons
-            name={index === STEPS.length - 1 ? "checkmark" : "arrow-forward"}
+            name={index === steps.length - 1 ? "checkmark" : "arrow-forward"}
             size={16}
             color={palette.white}
           />
