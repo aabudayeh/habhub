@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { Redirect } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -115,6 +115,7 @@ const NOT_GOALS = new Set([
   "blood_pressure_diastolic",
   "body_fat",
   "lean_body_mass",
+  "todo_completion",
 ]);
 
 export default function Onboarding() {
@@ -130,6 +131,8 @@ export default function Onboarding() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [step, setStep] = useState(0);
+  const [finishing, setFinishing] = useState(false);
+  const [completionRoute, setCompletionRoute] = useState<string | null>(null);
   // Every unfinished account chooses its own name. Prefilling from the initial
   // demo snapshot could briefly show "Ahmad" before cloud account binding.
   const [displayName, setDisplayName] = useState("");
@@ -195,6 +198,9 @@ export default function Onboarding() {
   );
   const desired = useMemo(() => {
     const ids = new Set<string>();
+    // To-Dos are available to every new account without becoming a tracked
+    // daily goal or taking space on Today until the user chooses that.
+    ids.add("todo_completion");
     if (goals.includes("weight"))
       [
         "weight",
@@ -330,7 +336,10 @@ export default function Onboarding() {
         formula: item.formula,
         formulaVersion: 1,
         scoreWeight: 0,
-        sections: { today: true, insights: true, group: false },
+        sections:
+          item.templateId === "todo_completion"
+            ? { today: false, insights: false, group: false }
+            : { today: true, insights: true, group: false },
         order,
         activeFrom: today,
       }));
@@ -390,6 +399,8 @@ export default function Onboarding() {
       await auth.updateDisplayName(name).catch(() => undefined);
   }
   async function finish() {
+    if (finishing) return;
+    setFinishing(true);
     await saveDisplayName();
     updateSettings({
       onboardingComplete: true,
@@ -397,11 +408,7 @@ export default function Onboarding() {
       advancedTutorialComplete: advancedTutorial,
       defaultLandingPage: landingPage,
     });
-    requestAnimationFrame(() =>
-      router.replace(
-        (landingPage === "index" ? "/" : `/${landingPage}`) as never,
-      ),
-    );
+    setCompletionRoute(landingPage === "index" ? "/" : `/${landingPage}`);
   }
   function toggleTracker(id: string) {
     const linkedIds =
@@ -483,17 +490,20 @@ export default function Onboarding() {
     else setStep((value) => value + 1);
   }
   async function skipSetup() {
+    if (finishing) return;
     if (!displayName.trim()) {
       Alert.alert("Add your name", "Enter the name you want friends to see.");
       return;
     }
+    setFinishing(true);
     await saveDisplayName();
     updateSettings({
       onboardingComplete: true,
       tutorialComplete: false,
     });
-    requestAnimationFrame(() => router.replace("/(tabs)" as never));
+    setCompletionRoute("/");
   }
+  if (completionRoute) return <Redirect href={completionRoute as never} />;
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
       <KeyboardAvoidingView
@@ -1123,6 +1133,7 @@ export default function Onboarding() {
           <View style={styles.footer}>
             {step > 0 ? (
               <Pressable
+                disabled={finishing}
                 onPress={() => setStep((value) => value - 1)}
                 style={styles.back}
               >
@@ -1132,6 +1143,7 @@ export default function Onboarding() {
               </Pressable>
             ) : (
               <Pressable
+                disabled={finishing}
                 onPress={skipSetup}
                 style={styles.back}
               >
@@ -1144,10 +1156,12 @@ export default function Onboarding() {
               <Button
                 label={step === 4 ? "Start using MetricRally" : "Continue"}
                 disabled={
+                  finishing ||
                   (step === 0 && (!displayName.trim() || !goals.length)) ||
                   (step === 1 && goals.includes("weight") && !targetIsValid) ||
                   (step === 2 && !selected.length)
                 }
+                loading={finishing}
                 onPress={continueFlow}
               />
             </View>

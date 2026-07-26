@@ -11,6 +11,7 @@ import React, {
   useState,
 } from "react";
 import {
+  BackHandler,
   LayoutChangeEvent,
   Pressable,
   StyleSheet,
@@ -330,6 +331,7 @@ export function TutorialSpotlight() {
   const accent = useGroupAccent();
   const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
   const overlayRef = useRef<View>(null);
   const [overlayOrigin, setOverlayOrigin] = useState({ x: 0, y: 0 });
   const guideId = state.settings.tutorialGuideId ?? "full";
@@ -342,6 +344,7 @@ export function TutorialSpotlight() {
     "/join",
   ].some((route) => pathname.startsWith(route));
   const active =
+    !dismissed &&
     state.settings.onboardingComplete &&
     (!state.settings.tutorialComplete ||
       Boolean(state.settings.tutorialGuideId)) &&
@@ -394,9 +397,33 @@ export function TutorialSpotlight() {
     });
   }, []);
 
+  const finish = useCallback(() => {
+    // Hide the overlay immediately. Persisting/cloud-syncing the preference can
+    // then finish without leaving a touch-blocking layer over the last page.
+    setDismissed(true);
+    updateSettings({
+      tutorialComplete: true,
+      tutorialGuideId: undefined,
+      tutorialGuideRunId: undefined,
+    });
+  }, [updateSettings]);
+
   useEffect(() => {
     setIndex(0);
+    setDismissed(false);
   }, [guideId, state.settings.tutorialGuideRunId]);
+
+  useEffect(() => {
+    if (!active) return;
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        finish();
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, [active, finish]);
 
   useEffect(() => {
     if (!active || !step || pathname === step.path) return;
@@ -428,14 +455,6 @@ export function TutorialSpotlight() {
   ]);
 
   if (!active || !step) return null;
-
-  function finish() {
-    updateSettings({
-      tutorialComplete: true,
-      tutorialGuideId: undefined,
-      tutorialGuideRunId: undefined,
-    });
-  }
 
   function advance() {
     if (index >= steps.length - 1) {

@@ -55,6 +55,23 @@ async function registerPushToken(
   if (error) throw error;
 }
 
+function notificationErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const value = error as Record<string, unknown>;
+    const parts = [value.message, value.details, value.hint, value.code]
+      .filter((part): part is string => typeof part === 'string' && part.length > 0);
+    if (parts.length) return [...new Set(parts)].join(' · ');
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return 'Unknown cloud registration error.';
+    }
+  }
+  return 'Unknown cloud registration error.';
+}
+
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
@@ -71,9 +88,7 @@ export async function enablePushNotifications(userId: string, preferences: Notif
       await registerPushToken(token, preferences);
     } catch (error) {
       throw new Error(
-        `Permission is enabled, but cloud registration failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Permission is enabled, but cloud registration failed: ${notificationErrorMessage(error)}`,
       );
     }
   }
