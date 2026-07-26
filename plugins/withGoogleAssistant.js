@@ -4,7 +4,7 @@ const {
   AndroidConfig,
   withAndroidManifest,
   withDangerousMod,
-} = require("@expo/config-plugins");
+} = require("expo/config-plugins");
 
 function shortcutsXml(scheme) {
   return `<?xml version="1.0" encoding="utf-8"?>

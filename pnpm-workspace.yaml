@@ -2,6 +2,13 @@ allowBuilds:
   '@firebase/util': true
   protobufjs: true
   unrs-resolver: false
+packageExtensions:
+  '@kingstinct/react-native-healthkit@*':
+    dependencies:
+      '@expo/config-plugins': 54.0.5
+  'expo-health-connect@*':
+    dependencies:
+      '@expo/config-plugins': 54.0.5
 minimumReleaseAgeExclude:
   - '@supabase/auth-js@2.110.6'
   - '@supabase/functions-js@2.110.6'
