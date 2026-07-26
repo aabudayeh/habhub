@@ -981,7 +981,10 @@ function GoalMapProgress({
     ? Math.round((trackedMet / trackedPossible) * 100)
     : 0;
   return (
-    <Screen contentContainerStyle={{ paddingBottom: 14 }}>
+    <Screen
+      contentContainerStyle={{ paddingBottom: 14 }}
+      refreshEnabled={!editing}
+    >
       <PageHeader
         title="Progress"
         action={
