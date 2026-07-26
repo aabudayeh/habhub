@@ -19,6 +19,7 @@ import {
   formatClockTime,
   friendlyDate,
   monthDateRange,
+  yearDateRange,
 } from "@/src/domain/date";
 import {
   DEFICIT_ALIGNMENT_CLOSE_KCAL,
@@ -301,59 +302,35 @@ export default function TrackerDetail() {
       )
     : undefined;
   const trendDates =
-    period === "month" ? monthDateRange(day) : dates;
-  const trendValues: (number | null)[] =
     period === "year"
-      ? Array.from({ length: 12 }, (_, month) => {
-          const monthAnchor = `${day.slice(0, 4)}-${String(month + 1).padStart(
-            2,
-            "0",
-          )}-01`;
-          const stats = metricPeriodStats(
-            state,
-            tracker,
-            state.currentUserId,
-            monthDateRange(monthAnchor).filter((date) => date <= dateKey()),
-          );
-          return stats.loggedDates.length ? stats.average : null;
-        })
-      : trendDates.map((date) =>
-          hasMetricData(state, tracker, state.currentUserId, date)
-            ? safeMetricValue(state, tracker, state.currentUserId, date)
-            : null,
-        );
+      ? yearDateRange(day)
+      : period === "month"
+        ? monthDateRange(day)
+        : dates;
+  const trendValues: (number | null)[] = trendDates.map((date) =>
+    date <= dateKey() &&
+    hasMetricData(state, tracker, state.currentUserId, date)
+      ? safeMetricValue(state, tracker, state.currentUserId, date)
+      : null,
+  );
   const trendDiastolicValues: (number | null)[] | undefined =
     diastolicTracker
-      ? period === "year"
-        ? Array.from({ length: 12 }, (_, month) => {
-            const monthAnchor = `${day.slice(0, 4)}-${String(
-              month + 1,
-            ).padStart(2, "0")}-01`;
-            const stats = metricPeriodStats(
-              state,
-              diastolicTracker,
-              state.currentUserId,
-              monthDateRange(monthAnchor).filter(
-                (date) => date <= dateKey(),
-              ),
-            );
-            return stats.loggedDates.length ? stats.average : null;
-          })
-        : trendDates.map((date) =>
-            hasMetricData(
-              state,
-              diastolicTracker,
-              state.currentUserId,
-              date,
-            )
-              ? safeMetricValue(
-                  state,
-                  diastolicTracker,
-                  state.currentUserId,
-                  date,
-                )
-              : null,
+      ? trendDates.map((date) =>
+          date <= dateKey() &&
+          hasMetricData(
+            state,
+            diastolicTracker,
+            state.currentUserId,
+            date,
           )
+            ? safeMetricValue(
+                state,
+                diastolicTracker,
+                state.currentUserId,
+                date,
+              )
+            : null,
+        )
       : undefined;
   const average = periodStats.average;
   const streaks = metricStreakStats(
@@ -964,6 +941,7 @@ export default function TrackerDetail() {
             secondaryTarget={diastolicTracker?.goal.target}
             primaryRange={tracker.goalRange}
             secondaryRange={diastolicTracker?.goalRange}
+            dense={period === "year"}
           />
         ) : null}
         {!isPhoto ? (
@@ -1837,6 +1815,7 @@ function Trend({
   secondaryTarget,
   primaryRange,
   secondaryRange,
+  dense = false,
 }: {
   values: (number | null)[];
   tracker: MetricDefinition;
@@ -1847,6 +1826,7 @@ function Trend({
   secondaryTarget?: number;
   primaryRange?: { min: number; max: number };
   secondaryRange?: { min: number; max: number };
+  dense?: boolean;
 }) {
   if (secondaryValues)
     return (
@@ -1869,7 +1849,7 @@ function Trend({
     1,
   );
   return (
-    <View style={styles.chart}>
+    <View style={[styles.chart, dense && styles.denseChart]}>
       <View
         style={[
           styles.goalLine,
@@ -1905,11 +1885,15 @@ function Trend({
         </View>
       ) : null}
       {values.map((value, index) => (
-        <View key={index} style={styles.barSlot}>
+        <View
+          key={index}
+          style={[styles.barSlot, dense && styles.denseBarSlot]}
+        >
           {value !== null ? (
             <View
               style={[
                 styles.bar,
+                dense && styles.denseBar,
                 {
                   height: `${Math.max(3, (value / max) * 100)}%`,
                   backgroundColor: tracker.color,
@@ -1920,6 +1904,7 @@ function Trend({
             <View
               style={[
                 styles.missingBar,
+                dense && styles.denseMissingBar,
                 { backgroundColor: colors.border },
               ]}
             />
@@ -2263,6 +2248,11 @@ const styles = StyleSheet.create({
     gap: 3,
     position: "relative",
   },
+  denseChart: {
+    height: 104,
+    gap: 0,
+    paddingHorizontal: 1,
+  },
   bpLegend: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -2298,6 +2288,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: 1,
   },
+  denseBarSlot: { gap: 0 },
   bar: {
     flex: 1,
     minHeight: 3,
@@ -2305,12 +2296,17 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 3,
     opacity: 0.8,
   },
+  denseBar: {
+    borderTopLeftRadius: 0.5,
+    borderTopRightRadius: 0.5,
+  },
   missingBar: {
     flex: 1,
     height: 2,
     borderRadius: 2,
     opacity: 0.55,
   },
+  denseMissingBar: { height: 1 },
   goalLine: {
     position: "absolute",
     left: 0,

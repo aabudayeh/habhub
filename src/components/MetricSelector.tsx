@@ -19,6 +19,7 @@ export function MetricSelector({
   selectedIds,
   onChange,
   multiple = true,
+  allowClear = false,
   title = "Metrics",
   emptyLabel = "No logged metrics",
   collapsibleGroups = [],
@@ -27,6 +28,7 @@ export function MetricSelector({
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   multiple?: boolean;
+  allowClear?: boolean;
   title?: string;
   emptyLabel?: string;
   collapsibleGroups?: string[];
@@ -50,7 +52,7 @@ export function MetricSelector({
   }, [items, query]);
   function choose(id: string) {
     if (!multiple) {
-      onChange([id]);
+      onChange(allowClear && selectedIds.includes(id) ? [] : [id]);
       setOpen(false);
       return;
     }

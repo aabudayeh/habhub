@@ -19,7 +19,6 @@ import {
   IconButton,
   PageHeader,
   Screen,
-  SectionHeader,
 } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -318,6 +317,9 @@ export default function TrackerEditor() {
   const [advanced, setAdvanced] = useState(
     focus === "goal-start" || focus === "notifications",
   );
+  const [behaviorOpen, setBehaviorOpen] = useState(
+    focus === "goal-start" || focus === "notifications",
+  );
   const [healthOpen, setHealthOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(
@@ -330,6 +332,9 @@ export default function TrackerEditor() {
   const [showIcons, setShowIcons] = useState(false);
   const [showColors, setShowColors] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
+  const [customTypeOpen, setCustomTypeOpen] = useState(
+    Boolean(tracker?.grouping),
+  );
   const [goalKindOpen, setGoalKindOpen] = useState(false);
   const [visibilityOpen, setVisibilityOpen] = useState(false);
   const [healthSourceChoiceOpen, setHealthSourceChoiceOpen] = useState(false);
@@ -488,6 +493,7 @@ export default function TrackerEditor() {
     name,
     color,
     category,
+    grouping,
     unit,
     dataType,
     goalEnabled,
@@ -518,6 +524,7 @@ export default function TrackerEditor() {
     submetricsLabel,
     activeFrom,
     trackGoal,
+    addToToday,
     scheduleMode,
     minimumCompletions,
     intervalDays,
@@ -534,11 +541,65 @@ export default function TrackerEditor() {
   );
   dirtyRef.current = draftSignature !== initialDraftSignature.current;
   const source = SOURCES.find((item) => item.id === healthType);
+  const reusableGroupings = [
+    ...new Set(
+      [
+        ...state.metrics,
+        ...(state.group.metricConfiguration ?? []),
+      ]
+        .map((item) => item.grouping?.trim())
+        .filter((item): item is string => Boolean(item)),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+  const typeValue = grouping.trim()
+    ? `grouping:${grouping.trim()}`
+    : customTypeOpen
+      ? "__custom_grouping__"
+      : category;
+  function clearPreset() {
+    setPresetId("");
+    setName("");
+    const nextColor =
+      TRACKER_COLOR_CHOICES[
+        Math.floor(Math.random() * TRACKER_COLOR_CHOICES.length)
+      ];
+    setColor(nextColor);
+    setCustomColor(nextColor);
+    setCategory("other");
+    setGrouping("");
+    setCustomTypeOpen(false);
+    setUnit("");
+    setDataType("number");
+    setGoalEnabled(true);
+    setGoalKind("at_least");
+    setGoal("");
+    setGoalProgressMode("daily");
+    setRangeGoal(false);
+    setRangeMin("");
+    setRangeMax("");
+    setFormula("");
+    setIcon(ICONS[0]);
+    setAggregation("sum");
+    setRanking("higher");
+    setHealthType("");
+    setGymMapping(undefined);
+    setGymMuscles(["full_body"]);
+    setStepFallback(false);
+    setManualEntry(true);
+    setTimerEnabled(false);
+    setSubmetrics([]);
+    setTrackGoal(false);
+    setAddToToday(true);
+    setReminderEnabled(false);
+    setAdvanced(false);
+  }
   function applyPreset(preset: TrackerPreset) {
     setPresetId(preset.templateId);
     setName(preset.name);
     setColor(preset.color);
     setCategory(preset.category ?? "other");
+    setGrouping(preset.grouping ?? "");
+    setCustomTypeOpen(Boolean(preset.grouping));
     setUnit(preset.unit);
     setDataType(preset.dataType);
     setGoalEnabled(preset.goalEnabled !== false);
@@ -981,10 +1042,15 @@ export default function TrackerEditor() {
           }))}
           selectedIds={presetId ? [presetId] : []}
           onChange={(ids) => {
+            if (!ids.length) {
+              clearPreset();
+              return;
+            }
             const preset = presets.find((item) => item.templateId === ids[0]);
             if (preset) applyPreset(preset);
           }}
           multiple={false}
+          allowClear
           collapsibleGroups={state.settings.showGym ? ["Gym"] : []}
           emptyLabel="Or create your own below"
         />
@@ -1087,67 +1153,114 @@ export default function TrackerEditor() {
             ) : null}
           </View>
         ) : null}
+        <Pressable
+          onPress={() => setShowIcons((value) => !value)}
+          style={[styles.choiceRow, { borderColor: colors.border }]}
+        >
+          <View style={[styles.icon, { backgroundColor: `${color}18` }]}>
+            <Ionicons
+              name={icon as keyof typeof Ionicons.glyphMap}
+              size={20}
+              color={color}
+            />
+          </View>
+          <View style={styles.grow}>
+            <Text style={[styles.rowTitle, { color: colors.ink }]}>
+              Change icon
+            </Text>
+            <Text style={[styles.help, { color: colors.muted }]}>
+              Choose the symbol shown across the app.
+            </Text>
+          </View>
+          <Ionicons
+            name={showIcons ? "chevron-up" : "chevron-down"}
+            size={18}
+            color={colors.faint}
+          />
+        </Pressable>
+        {showIcons ? (
+          <View style={styles.icons}>
+            {ICONS.map((item) => (
+              <Pressable
+                key={item}
+                onPress={() => setIcon(item)}
+                style={[
+                  styles.icon,
+                  { borderColor: icon === item ? accent : colors.border },
+                ]}
+              >
+                <Ionicons
+                  name={item}
+                  size={19}
+                  color={icon === item ? accent : colors.muted}
+                />
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         <ChoicePicker
           label="Type"
-          value={category}
+          value={typeValue}
           open={categoryOpen}
           setOpen={setCategoryOpen}
-          options={CATEGORIES.map((item) => ({
-            id: item.id,
-            label: item.label,
-            icon: item.icon,
-          }))}
-          onChange={(value) => setCategory(value as TrackerCategory)}
+          options={[
+            ...CATEGORIES.map((item) => ({
+              id: item.id,
+              label: item.label,
+              icon: item.icon,
+            })),
+            ...reusableGroupings.map((item) => ({
+              id: `grouping:${item}`,
+              label: item,
+              icon: "albums-outline" as const,
+            })),
+            {
+              id: "__custom_grouping__",
+              label: "Create custom type",
+              icon: "add-circle-outline" as const,
+            },
+          ]}
+          onChange={(value) => {
+            if (value === "__custom_grouping__") {
+              setGrouping("");
+              setCategory("other");
+              setCustomTypeOpen(true);
+              return;
+            }
+            if (value.startsWith("grouping:")) {
+              setGrouping(value.slice("grouping:".length));
+              setCategory("other");
+              setCustomTypeOpen(false);
+              return;
+            }
+            setGrouping("");
+            setCategory(value as TrackerCategory);
+            setCustomTypeOpen(false);
+          }}
           colors={colors}
           accent={accent}
         />
-        <View style={styles.fieldGroup}>
+        {customTypeOpen ? <View style={styles.fieldGroup}>
           <View style={styles.labelLine}>
-            <Text style={[styles.label, { color: colors.ink }]}>Grouping</Text>
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Custom type
+            </Text>
             <InfoPopover
               label="Explain tracker grouping"
-              message="Optional. Group related trackers under a name such as Activity, Heart health, or Morning routine. Group-created names become available to every member."
+              message="Create a reusable section such as Heart health or Morning routine. Group-created types become available to every member."
             />
           </View>
           <TextInput
             value={grouping}
             onChangeText={setGrouping}
-            placeholder="Optional group name"
+            placeholder="Type name"
             placeholderTextColor={colors.faint}
             style={[
               styles.input,
               { color: colors.ink, borderColor: colors.border },
             ]}
           />
-          {[
-            ...new Set(
-              sourceMetrics
-                .map((item) => item.grouping?.trim())
-                .filter((item): item is string => Boolean(item)),
-            ),
-          ].length ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.inlineChoices}
-            >
-              {[
-                ...new Set(
-                  sourceMetrics
-                    .map((item) => item.grouping?.trim())
-                    .filter((item): item is string => Boolean(item)),
-                ),
-              ].map((item) => (
-                <Chip
-                  key={item}
-                  label={item}
-                  selected={grouping === item}
-                  onPress={() => setGrouping(item)}
-                />
-              ))}
-            </ScrollView>
-          ) : null}
-        </View>
+        </View> : null}
         {category === "gym" &&
         dataType === "number" &&
         (!gymMapping ||
@@ -1184,19 +1297,6 @@ export default function TrackerEditor() {
             Gym picker. Rankings use estimated one-rep max; raw sets and notes
             stay controlled by each workout&apos;s visibility.
           </Text>
-        ) : null}
-        {dataType === "number" ? (
-          <View style={[styles.switchRow, { borderColor: colors.border }]}>
-            <View style={styles.grow}>
-              <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                Timed activity
-              </Text>
-              <Text style={[styles.help, { color: colors.muted }]}>
-                Use this tracker with the stopwatch or countdown.
-              </Text>
-            </View>
-            <Switch value={timerEnabled} onValueChange={setTimerEnabled} />
-          </View>
         ) : null}
         <ChoicePicker
           label="Entry type"
@@ -1411,8 +1511,50 @@ export default function TrackerEditor() {
         />
       </Pressable>
       {advanced ? (
-        <>
-          <Card>
+        <Card style={styles.advancedPanel}>
+          {!groupScope && goalEnabled && dataType !== "text" ? (
+            <>
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Count in tracked goals
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Include this goal in daily completion from its start date.
+                  </Text>
+                </View>
+                <Switch value={trackGoal} onValueChange={setTrackGoal} />
+              </View>
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Show on Today
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Keep it visible without making it a daily goal.
+                  </Text>
+                </View>
+                <Switch
+                  value={trackGoal || addToToday}
+                  disabled={trackGoal}
+                  onValueChange={setAddToToday}
+                />
+              </View>
+            </>
+          ) : null}
+          {dataType === "number" ? (
+            <View style={[styles.switchRow, { borderColor: colors.border }]}>
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                  Timed activity
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Use this tracker with the stopwatch or countdown.
+                </Text>
+              </View>
+              <Switch value={timerEnabled} onValueChange={setTimerEnabled} />
+            </View>
+          ) : null}
             <ChoicePicker
               label={groupScope ? "Default visibility" : "Visibility"}
               value={visibility}
@@ -1436,11 +1578,10 @@ export default function TrackerEditor() {
                   : "Controls what group members can see for this tracker."
               }
             />
-          </Card>
           {dataType === "number" &&
           !rangeGoal &&
           (presetId || tracker?.id) !== "blood_pressure_systolic" ? (
-            <Card>
+            <View style={[styles.advancedSection, { borderColor: colors.border }]}>
               <ChoicePicker
                 label="Progress bar"
                 value={goalProgressMode}
@@ -1450,20 +1591,16 @@ export default function TrackerEditor() {
                   { id: "daily", label: "Daily target" },
                   {
                     id: "journey",
-                    label: "First reading to long-term target",
+                    label: "Journey",
                   },
                 ]}
                 onChange={setGoalProgressMode}
                 colors={colors}
                 accent={accent}
               />
-              <Text style={[styles.help, { color: colors.muted }]}>
-                Long-term progress starts at the first logged reading and
-                reaches 100% at the target.
-              </Text>
-            </Card>
+            </View>
           ) : null}
-          <Card>
+          <View style={[styles.advancedSection, { borderColor: colors.border }]}>
             <Pressable
               onPress={() => setSubmetricsOpen((open) => !open)}
               style={styles.collapseHeading}
@@ -1823,8 +1960,8 @@ export default function TrackerEditor() {
                 ) : null}
               </View>
             ) : null}
-          </Card>
-          <Card>
+          </View>
+          <View style={[styles.advancedSection, { borderColor: colors.border }]}>
             <Pressable
               onPress={() => setHealthOpen((open) => !open)}
               style={styles.collapseHeading}
@@ -1936,7 +2073,7 @@ export default function TrackerEditor() {
             </View>
               </>
             ) : null}
-          </Card>
+          </View>
           <View
             onLayout={(event) => {
               behaviorSectionY.current = event.nativeEvent.layout.y;
@@ -1957,43 +2094,27 @@ export default function TrackerEditor() {
               );
             }}
           >
-          <Card>
-            <SectionHeader title="How it behaves" />
-            {!groupScope && goalEnabled && dataType !== "text" ? (
+          <View style={[styles.advancedSection, { borderColor: colors.border }]}>
+            <Pressable
+              onPress={() => setBehaviorOpen((open) => !open)}
+              style={styles.collapseHeading}
+            >
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                  Goal behavior &amp; reminders
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Start date, schedule and reminder times
+                </Text>
+              </View>
+              <Ionicons
+                name={behaviorOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={colors.faint}
+              />
+            </Pressable>
+            {behaviorOpen ? (
               <>
-              <View
-                style={[styles.switchRow, { borderColor: colors.border }]}
-              >
-                <View style={styles.grow}>
-                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                    Count in tracked goals
-                  </Text>
-                  <Text style={[styles.help, { color: colors.muted }]}>
-                    Include this goal in daily completion from the chosen
-                    start date.
-                  </Text>
-                </View>
-                <Switch value={trackGoal} onValueChange={setTrackGoal} />
-              </View>
-              <View
-                style={[styles.switchRow, { borderColor: colors.border }]}
-              >
-                <View style={styles.grow}>
-                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                    Show on Today
-                  </Text>
-                  <Text style={[styles.help, { color: colors.muted }]}>
-                    Keep it visible without making it a daily goal.
-                  </Text>
-                </View>
-                <Switch
-                  value={trackGoal || addToToday}
-                  disabled={trackGoal}
-                  onValueChange={setAddToToday}
-                />
-              </View>
-              </>
-            ) : null}
             {!groupScope && goalEnabled && dataType !== "text" ? (
                 <View style={styles.goalStart}>
                     <View style={styles.goalStartHeading}>
@@ -2437,6 +2558,8 @@ export default function TrackerEditor() {
                 ) : null}
               </>
             ) : null}
+              </>
+            ) : null}
             {false ? <>
             <Text style={[styles.label, { color: colors.ink }]}>
               Competition order
@@ -2459,54 +2582,9 @@ export default function TrackerEditor() {
               />
             </View>
             </> : null}
-            <Pressable
-              onPress={() => setShowIcons((value) => !value)}
-              style={styles.iconChoice}
-            >
-              <View
-                style={[
-                  styles.icon,
-                  { backgroundColor: `${color}18` },
-                ]}
-              >
-                <Ionicons
-                  name={icon as keyof typeof Ionicons.glyphMap}
-                  size={20}
-                  color={color}
-                />
-              </View>
-              <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                Change icon
-              </Text>
-              <Ionicons
-                name={showIcons ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={colors.faint}
-              />
-            </Pressable>
-            {showIcons ? (
-              <View style={styles.icons}>
-                {ICONS.map((item) => (
-                  <Pressable
-                    key={item}
-                    onPress={() => setIcon(item)}
-                    style={[
-                      styles.icon,
-                      { borderColor: icon === item ? accent : colors.border },
-                    ]}
-                  >
-                    <Ionicons
-                      name={item}
-                      size={19}
-                      color={icon === item ? accent : colors.muted}
-                    />
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-          </Card>
           </View>
-        </>
+          </View>
+        </Card>
       ) : null}
       <View style={styles.actions}>
         {tracker ? (
@@ -2565,7 +2643,7 @@ function ChoicePicker<T extends string>({
       Success: "Defines when this target counts as completed.",
       Visibility: "Controls what group members can see.",
       "Default visibility": "New members inherit this choice but may make their own data more private.",
-      "Progress bar": "Daily compares each day with its target. Journey measures from the first reading to a long-term target.",
+      "Progress bar": "Daily evaluates each day. Journey shows progress from the starting measurement to a long-term target.",
     } as Record<string, string>)[label];
   return (
     <View style={[styles.choicePicker, { borderColor: colors.border }]}>
@@ -2734,7 +2812,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 9,
   },
-  choicePickerLabel: { fontSize: 7, fontWeight: "900", marginBottom: 2 },
+  choicePickerLabel: { fontSize: 11, fontWeight: "900", marginBottom: 3 },
   choiceHelp: {
     marginHorizontal: 8,
     marginBottom: 7,
@@ -2811,6 +2889,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginVertical: 10,
+  },
+  advancedPanel: { gap: 0 },
+  advancedSection: {
+    borderTopWidth: 1,
+    marginTop: 8,
+    paddingTop: 6,
   },
   formula: { minHeight: 76, textAlignVertical: "top" },
   mini: { fontSize: 8, fontWeight: "900", letterSpacing: 0.8, marginBottom: 7 },
