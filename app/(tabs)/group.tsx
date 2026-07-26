@@ -489,22 +489,16 @@ export default function LeaderboardScreen() {
                     result?.lastSyncedAt ??
                     result?.lastRecordedAt)
                   : (result?.lastSyncedAt ?? result?.lastRecordedAt);
-              const details = [
-                includeScore ? "Group-weighted score" : result?.averageLabel,
+              const canShowStreak =
                 !includeScore &&
-                result?.personalGoalKind === "at_least" &&
-                (result.averageDisplayProgress ?? 0) > 1
-                  ? `${Math.round(((result.averageDisplayProgress ?? 1) - 1) * 100)}% above personal goal`
-                  : undefined,
-                result && result.label !== "Private"
-                  ? `${result.streak ?? 0}d · Best ${result.bestStreak ?? 0}d`
-                  : undefined,
-                syncTimestamp
-                  ? `Synced ${relativeTime(syncTimestamp)}`
-                  : undefined,
-              ]
-                .filter(Boolean)
-                .join(" · ");
+                result &&
+                result.label !== "Private" &&
+                result.mode !== "private" &&
+                result.visibleDays > 0;
+              const rangeSummary =
+                !includeScore && dates.length > 1
+                  ? result?.averageLabel
+                  : undefined;
               return (
                 <View
                   key={row.member.id}
@@ -558,28 +552,40 @@ export default function LeaderboardScreen() {
                         {memberOriginalLabel(state, row.member)}
                       </Text>
                     ) : null}
-                    <View style={styles.detailLine}>
-                      {!includeScore &&
-                      result &&
-                      result.mode !== "private" &&
-                      result.visibleDays > 0 ? (
+                    {includeScore ? (
+                      <Text style={[styles.detail, { color: colors.muted }]}>
+                        Group-weighted score
+                      </Text>
+                    ) : canShowStreak ? (
+                      <View style={styles.detailLine}>
                         <Ionicons
                           name="flame"
-                          size={11}
+                          size={12}
                           color={metric?.color ?? accent}
                         />
-                      ) : null}
+                        <Text style={[styles.detail, { color: colors.muted }]}>
+                          {result.streak ?? 0}d current · Best{" "}
+                          {result.bestStreak ?? 0}d
+                          {syncTimestamp
+                            ? ` · Synced ${relativeTime(syncTimestamp)}`
+                            : ""}
+                        </Text>
+                      </View>
+                    ) : (
                       <Text
                         style={[
                           styles.detail,
-                          styles.detailCopy,
                           { color: colors.muted },
                           result?.mode === "private" && styles.private,
                         ]}
                       >
-                        {details}
+                        {syncTimestamp
+                          ? `Synced ${relativeTime(syncTimestamp)}`
+                          : result?.label === "Private"
+                            ? "Private"
+                            : "No data"}
                       </Text>
-                    </View>
+                    )}
                   </View>
                   </Pressable>
                   <Pressable
@@ -609,6 +615,11 @@ export default function LeaderboardScreen() {
                           result?.personalGoalKind === "at_least"
                         }
                       />
+                      {rangeSummary ? (
+                        <Text style={[styles.rangeSummary, { color: colors.muted }]}>
+                          {rangeSummary}
+                        </Text>
+                      ) : null}
                     </View>
                     <Ionicons
                       name="chevron-forward"
@@ -965,13 +976,19 @@ const styles = StyleSheet.create({
   detail: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   detailLine: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 3,
   },
   detailCopy: { flex: 1 },
   private: { fontStyle: "italic" },
-  bar: { width: 68, gap: 4 },
+  bar: { width: 96, gap: 3 },
   score: { fontSize: 12, fontWeight: "900", textAlign: "right" },
+  rangeSummary: {
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: "700",
+    textAlign: "right",
+  },
   periodCard: { padding: 5, marginBottom: 7 },
   periodBar: { flexDirection: "row", alignItems: "center", gap: 3 },
   periodChoice: {

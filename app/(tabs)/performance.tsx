@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { Card, Chip, PageHeader, Screen } from "@/src/components/ui";
+import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { formatMetricValue } from "@/src/domain/metrics";
 import { performanceOverview } from "@/src/domain/performance";
 import { useApp } from "@/src/state/AppProvider";
@@ -24,13 +24,21 @@ export default function PerformancePage() {
       <PageHeader
         title="Performance"
         subtitle="What improved, what held steady, and where your next win is."
+        showMenu={false}
         action={
-          <Pressable
-            onPress={() => router.push("/customize?tab=insights" as never)}
-            style={styles.headerButton}
-          >
-            <Ionicons name="settings-outline" size={18} color={accent} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <IconButton
+              icon="arrow-back"
+              label="Back to Progress"
+              onPress={() => router.navigate("/insights" as never)}
+            />
+            <Pressable
+              onPress={() => router.push("/customize?tab=insights" as never)}
+              style={styles.headerButton}
+            >
+              <Ionicons name="settings-outline" size={18} color={accent} />
+            </Pressable>
+          </View>
         }
       />
       <View style={styles.range}>
@@ -139,6 +147,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 5 },
   range: { flexDirection: "row", gap: 6, marginBottom: 5 },
   rows: { gap: 7 },
   row: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 9 },
