@@ -1,170 +1,800 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
+import {
+  AddTrackerItem,
+  AddTrackerModal,
+} from "@/src/components/AddTrackerModal";
 import { AppText as Text } from "@/src/components/AppText";
+import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
-import { formatMetricValue } from "@/src/domain/metrics";
-import { performanceOverview } from "@/src/domain/performance";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { dateKey } from "@/src/domain/date";
+import {
+  formatMetricValue,
+  isMetricTrackedOnDate,
+} from "@/src/domain/metrics";
+import {
+  PerformanceRange,
+  performanceOverview,
+  TrackerPerformance,
+} from "@/src/domain/performance";
+import {
+  activeTrackerViewId,
+  activeTrackerViewLabel,
+  ALL_AVAILABLE_TRACKERS_FILTER,
+  ALL_TRACKERS_FILTER,
+  TRACKED_ONLY_FILTER,
+} from "@/src/domain/viewFilters";
+import {
+  isInternalTracker,
+  trackerGroupLabel,
+} from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
-export default function PerformancePage() {
-  const { state } = useApp();
+const RANGES: { id: PerformanceRange; label: string }[] = [
+  { id: "day", label: "Daily" },
+  { id: "week", label: "Weekly" },
+  { id: "month", label: "Monthly" },
+];
+
+function moveItem(ids: string[], from: number, to: number) {
+  const next = [...ids];
+  const [item] = next.splice(from, 1);
+  next.splice(Math.max(0, Math.min(to, next.length)), 0, item);
+  return next;
+}
+
+function metricDisplay(row: TrackerPerformance, range: PerformanceRange) {
+  if (!row.currentLoggedDays) return "No data this period";
+  if (row.metric.dataType === "boolean") {
+    const denominator = Math.max(row.currentLoggedDays, row.currentGoalDays);
+    return denominator
+      ? `${row.currentGoalDays}/${denominator} completed`
+      : "No entries";
+  }
+  const value = formatMetricValue(row.metric, row.current);
+  return range === "day" ? value : `${value} avg`;
+}
+
+function comparisonText(row: TrackerPerformance) {
+  if (!row.currentLoggedDays) return "No data this period";
+  if (!row.previousLoggedDays) return "First comparable period";
+  if (row.direction === "steady") return "Holding steady";
+  const change = Math.min(999, Math.round(Math.abs(row.changePercent)));
+  return row.improving
+    ? `${change}% better vs previous`
+    : `${change}% further from goal`;
+}
+
+function ComparisonBars({ row }: { row: TrackerPerformance }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [days, setDays] = useState<7 | 30>(7);
-  const overview = useMemo(
-    () => performanceOverview(state, days),
-    [days, state],
-  );
+  const goalAware = row.metric.goalEnabled !== false;
+  const max = goalAware
+    ? Math.max(1, row.currentScore, row.previousScore)
+    : Math.max(1, Math.abs(row.current), Math.abs(row.previous));
+  const current = goalAware
+    ? Math.max(0, row.currentScore / max)
+    : Math.abs(row.current) / max;
+  const previous = goalAware
+    ? Math.max(0, row.previousScore / max)
+    : Math.abs(row.previous) / max;
   return (
-    <Screen>
+    <View style={styles.bars}>
+      <View style={[styles.barTrack, { backgroundColor: colors.border }]}>
+        <View
+          style={[
+            styles.barFill,
+            {
+              backgroundColor: row.improving ? palette.lime : accent,
+              width: `${Math.min(100, current * 100)}%`,
+            },
+          ]}
+        />
+      </View>
+      <View style={[styles.barTrack, { backgroundColor: colors.border }]}>
+        <View
+          style={[
+            styles.barFill,
+            {
+              backgroundColor: colors.faint,
+              width: `${Math.min(100, previous * 100)}%`,
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+}
+
+function PerformanceTile({
+  row,
+  range,
+  editing,
+  index,
+  count,
+  onEdit,
+  onMove,
+  onRemove,
+}: {
+  row: TrackerPerformance;
+  range: PerformanceRange;
+  editing: boolean;
+  index: number;
+  count: number;
+  onEdit: () => void;
+  onMove: (target: number) => void;
+  onRemove: () => void;
+}) {
+  const colors = useAppColors();
+  const [dragging, setDragging] = useState(false);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const step = useRef(113);
+  const origin = useRef(index);
+  const target = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: () => editing,
+        onPanResponderGrant: () => {
+          origin.current = indexRef.current;
+          target.current = indexRef.current;
+          setDragging(true);
+        },
+        onPanResponderMove: (_event, gesture) => {
+          dragY.setValue(gesture.dy);
+          target.current = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              origin.current + Math.round(gesture.dy / step.current),
+            ),
+          );
+        },
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderRelease: () => {
+          dragY.setValue(0);
+          setDragging(false);
+          if (target.current !== origin.current)
+            onMoveRef.current(target.current);
+        },
+        onPanResponderTerminate: () => {
+          dragY.setValue(0);
+          setDragging(false);
+        },
+      }),
+    [dragY, editing],
+  );
+  const statusColor =
+    row.direction === "missing"
+      ? palette.amber
+      : row.direction === "steady"
+      ? colors.muted
+      : row.improving
+        ? palette.lime
+        : palette.red;
+  return (
+    <Animated.View
+      onLayout={(event) => {
+        step.current = event.nativeEvent.layout.height + 8;
+      }}
+      style={{
+        zIndex: dragging ? 30 : 0,
+        elevation: dragging ? 12 : 0,
+        transform: [{ translateY: dragY }, { scale: dragging ? 1.015 : 1 }],
+      }}
+    >
+      <Pressable
+        onLongPress={onEdit}
+        onPress={
+          editing
+            ? undefined
+            : () =>
+                router.push({
+                  pathname: "/metric-detail",
+                  params: {
+                    metric: row.metric.id,
+                    period:
+                      range === "day"
+                        ? "today"
+                        : range === "week"
+                          ? "week"
+                          : "month",
+                  },
+                } as never)
+        }
+      >
+        <Card style={[styles.tile, editing && { borderColor: row.metric.color }]}>
+          {editing ? (
+            <Pressable
+              accessibilityLabel={`Hide ${row.metric.name}`}
+              onPress={onRemove}
+              style={[styles.remove, { backgroundColor: palette.red }]}
+            >
+              <Ionicons name="remove" size={15} color="#FFFFFF" />
+            </Pressable>
+          ) : null}
+          <View
+            style={[
+              styles.metricIcon,
+              { backgroundColor: `${row.metric.color}1F` },
+            ]}
+          >
+            <Ionicons
+              name={row.metric.icon as keyof typeof Ionicons.glyphMap}
+              size={19}
+              color={row.metric.color}
+            />
+          </View>
+          <View style={styles.tileBody}>
+            <View style={styles.tileTop}>
+              <View style={styles.tileTitle}>
+                <Text numberOfLines={1} style={[styles.name, { color: colors.ink }]}>
+                  {row.metric.name}
+                </Text>
+                <Text style={[styles.value, { color: colors.ink }]}>
+                  {metricDisplay(row, range)}
+                </Text>
+              </View>
+              <View style={styles.change}>
+                <Ionicons
+                  name={
+                    row.direction === "missing"
+                      ? "alert-circle-outline"
+                      : row.direction === "steady"
+                      ? "remove"
+                      : row.direction === "new"
+                        ? "sparkles"
+                        : row.improving
+                          ? "trending-up"
+                          : "trending-down"
+                  }
+                  size={16}
+                  color={statusColor}
+                />
+                <Text style={[styles.changeText, { color: statusColor }]}>
+                  {comparisonText(row)}
+                </Text>
+              </View>
+            </View>
+            <ComparisonBars row={row} />
+            <View style={styles.stats}>
+              {!row.currentLoggedDays ? (
+                <Text style={[styles.stat, { color: colors.muted }]}>
+                  {row.previousLoggedDays
+                    ? `Previous ${formatMetricValue(row.metric, row.previous)} avg`
+                    : "No entries in either period"}
+                </Text>
+              ) : row.metric.goalEnabled !== false ? (
+                <>
+                  <Text style={[styles.stat, { color: colors.muted }]}>
+                    Goal {Math.round(row.currentGoalRate * 100)}%
+                  </Text>
+                  <Text style={[styles.stat, { color: colors.muted }]}>
+                    {row.currentGoalDays}/
+                    {Math.max(row.currentLoggedDays, row.currentGoalDays)} days
+                  </Text>
+                </>
+              ) : (
+                <Text style={[styles.stat, { color: colors.muted }]}>
+                  No goal set
+                </Text>
+              )}
+              <Text style={[styles.stat, { color: colors.muted }]}>
+                🔥 {row.currentStreak} · best {row.bestStreak}
+              </Text>
+              {row.currentLoggedDays && range !== "day" ? (
+                <Text style={[styles.stat, { color: colors.muted }]}>
+                  Total {formatMetricValue(row.metric, row.currentTotal)}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+          {editing ? (
+            <View
+              accessibilityLabel={`Reorder ${row.metric.name}`}
+              style={[
+                styles.drag,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+              {...responder.panHandlers}
+            >
+              <Ionicons
+                name="reorder-three-outline"
+                size={23}
+                color={colors.muted}
+              />
+            </View>
+          ) : (
+            <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+          )}
+        </Card>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+export default function PerformancePage() {
+  const { state, updateSettings } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const range = state.settings.performanceRange ?? "week";
+  const [editing, setEditing] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const compatible = useMemo(
+    () =>
+      state.metrics
+        .filter(
+          (metric) =>
+            !isInternalTracker(metric) &&
+            metric.dataType !== "text" &&
+            metric.dataType !== "photo" &&
+            metric.id !== "tracked_goals",
+        )
+        .sort((a, b) => a.order - b.order),
+    [state.metrics],
+  );
+  const configuredIds = useMemo(() => {
+    if (state.settings.performanceMetricIds)
+      return state.settings.performanceMetricIds;
+    const compatibleIds = new Set(compatible.map((metric) => metric.id));
+    const progressDefaults = state.settings.progressMetricIds.filter((id) =>
+      compatibleIds.has(id),
+    );
+    return progressDefaults.length
+      ? progressDefaults
+      : compatible.map((metric) => metric.id);
+  }, [
+    compatible,
+    state.settings.performanceMetricIds,
+    state.settings.progressMetricIds,
+  ]);
+  const [draftIds, setDraftIds] = useState(configuredIds);
+  const order = state.settings.performanceMetricOrderIds ?? configuredIds;
+  const orderedCompatible = useMemo(() => {
+    const positions = new Map(order.map((id, index) => [id, index]));
+    return [...compatible].sort(
+      (a, b) =>
+        (positions.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (positions.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+        a.order - b.order,
+    );
+  }, [compatible, order]);
+  const activeFilter = activeTrackerViewId(state, "performance");
+  const visibleIds = useMemo(() => {
+    const base = editing ? draftIds : configuredIds;
+    if (editing || activeFilter === ALL_TRACKERS_FILTER) return base;
+    if (activeFilter === ALL_AVAILABLE_TRACKERS_FILTER)
+      return orderedCompatible.map((metric) => metric.id);
+    if (activeFilter === TRACKED_ONLY_FILTER)
+      return orderedCompatible
+        .filter((metric) =>
+          isMetricTrackedOnDate(state, metric, dateKey()),
+        )
+        .map((metric) => metric.id);
+    const saved = state.settings.trackerViewFilters?.find(
+      (filter) => filter.id === activeFilter,
+    );
+    return saved?.metricIds ?? base;
+  }, [
+    activeFilter,
+    configuredIds,
+    draftIds,
+    editing,
+    orderedCompatible,
+    state,
+  ]);
+  const visibleOrder = useMemo(() => {
+    if (editing) return draftIds;
+    const visible = new Set(visibleIds);
+    return [
+      ...order.filter((id) => visible.has(id)),
+      ...visibleIds.filter((id) => !order.includes(id)),
+    ];
+  }, [draftIds, editing, order, visibleIds]);
+  const overview = useMemo(
+    () => performanceOverview(state, range, visibleOrder),
+    [range, state, visibleOrder],
+  );
+  const rows = useMemo(() => {
+    const byId = new Map(overview.rows.map((row) => [row.metric.id, row]));
+    return visibleOrder
+      .map((id) => byId.get(id))
+      .filter((row): row is TrackerPerformance => Boolean(row));
+  }, [overview.rows, visibleOrder]);
+  const hiddenItems: AddTrackerItem[] = compatible
+    .filter((metric) => !draftIds.includes(metric.id))
+    .map((metric) => ({
+      id: metric.id,
+      label: metric.name,
+      icon: metric.icon as keyof typeof Ionicons.glyphMap,
+      color: metric.color,
+      sublabel: trackerGroupLabel(metric),
+    }));
+
+  useEffect(() => {
+    setCloudSyncPaused("performance-edit", editing);
+    return () => setCloudSyncPaused("performance-edit", false);
+  }, [editing]);
+
+  function beginEditing() {
+    const next = [...configuredIds];
+    setDraftIds(next);
+    setEditing(true);
+  }
+
+  function finishEditing() {
+    const finalOrder = [
+      ...visibleOrder.filter((id) => draftIds.includes(id)),
+      ...draftIds.filter((id) => !visibleOrder.includes(id)),
+    ];
+    updateSettings({
+      performanceMetricIds: draftIds,
+      performanceMetricOrderIds: finalOrder,
+    });
+    setEditing(false);
+  }
+
+  function reorder(metricId: string, target: number) {
+    const currentOrder = rows.map((row) => row.metric.id);
+    const from = currentOrder.indexOf(metricId);
+    if (from < 0 || from === target) return;
+    const nextVisible = moveItem(currentOrder, from, target);
+    setDraftIds((current) => [
+      ...nextVisible,
+      ...current.filter((id) => !nextVisible.includes(id)),
+    ]);
+  }
+
+  const improvingCount = rows.filter(
+    (row) => row.direction === "up" || row.direction === "new",
+  ).length;
+  const focusCount = rows.filter((row) => row.direction === "down").length;
+  const missingCount = rows.filter(
+    (row) => row.direction === "missing",
+  ).length;
+  const steadyCount =
+    rows.length - improvingCount - focusCount - missingCount;
+  const strongest = overview.strengths[0];
+  const opportunity = overview.opportunities.find(
+    (row) => row.metric.id !== strongest?.metric.id,
+  );
+
+  return (
+    <Screen refreshEnabled={!editing}>
       <PageHeader
         title="Performance"
-        subtitle="What improved, what held steady, and where your next win is."
-        showMenu={false}
+        subtitle="Compare momentum, consistency, and goal progress."
         action={
           <View style={styles.headerActions}>
-            <IconButton
-              icon="arrow-back"
-              label="Back to Progress"
-              onPress={() => router.navigate("/insights" as never)}
-            />
-            <Pressable
-              onPress={() => router.push("/customize?tab=insights" as never)}
-              style={styles.headerButton}
-            >
-              <Ionicons name="settings-outline" size={18} color={accent} />
-            </Pressable>
+            {editing ? (
+              <Pressable onPress={finishEditing} style={styles.doneEdit}>
+                <Text style={[styles.doneEditText, { color: accent }]}>Done</Text>
+              </Pressable>
+            ) : (
+              <>
+                <IconButton
+                  icon="funnel-outline"
+                  label="Choose a saved view"
+                  onPress={() => setShowFilters(true)}
+                />
+                <IconButton
+                  icon="create-outline"
+                  label="Edit Performance"
+                  onPress={beginEditing}
+                />
+              </>
+            )}
           </View>
         }
       />
-      <View style={styles.range}>
-        <Chip label="This week vs last" selected={days === 7} onPress={() => setDays(7)} />
-        <Chip label="30 days vs prior" selected={days === 30} onPress={() => setDays(30)} />
+
+      <View style={[styles.rangeBar, { backgroundColor: colors.card }]}>
+        {RANGES.map((item) => (
+          <Chip
+            key={item.id}
+            label={item.label}
+            selected={range === item.id}
+            onPress={() => updateSettings({ performanceRange: item.id })}
+          />
+        ))}
       </View>
-      {overview.strengths.length ? (
-        <Card style={styles.callout}>
-          <Ionicons name="sparkles" size={22} color={palette.lime} />
-          <View style={styles.copy}>
-            <Text style={[styles.calloutTitle, { color: colors.ink }]}>
-              Strongest right now
-            </Text>
-            <Text style={[styles.calloutBody, { color: colors.muted }]}>
-              {overview.strengths.map((row) => row.metric.name).join(", ")}
-            </Text>
+      <View style={styles.periodLine}>
+        <Text style={[styles.period, { color: colors.muted }]}>
+          {overview.period.currentLabel} vs {overview.period.previousLabel}
+        </Text>
+        <Pressable onPress={() => setShowFilters(true)} style={styles.filterLabel}>
+          <Ionicons name="funnel-outline" size={13} color={accent} />
+          <Text style={[styles.filterText, { color: accent }]}>
+            {activeTrackerViewLabel(state, "performance")}
+          </Text>
+        </Pressable>
+      </View>
+
+      {rows.length ? (
+        <>
+          <Card style={styles.momentum}>
+            <View style={styles.momentumTop}>
+              <View>
+                <Text style={[styles.sectionTitle, { color: colors.ink }]}>
+                  Momentum
+                </Text>
+                <Text style={[styles.sectionMeta, { color: colors.muted }]}>
+                  Direction is goal-aware, so lower can be better.
+                </Text>
+              </View>
+              <View style={[styles.scorePill, { backgroundColor: colors.primarySoft }]}>
+                <Text style={[styles.scoreText, { color: accent }]}>
+                  {improvingCount}/{rows.length} improving
+                </Text>
+              </View>
+            </View>
+            <View style={styles.momentumStats}>
+              <View style={styles.momentumStat}>
+                <Text style={[styles.momentumNumber, { color: palette.lime }]}>
+                  {improvingCount}
+                </Text>
+                <Text style={[styles.momentumLabel, { color: colors.muted }]}>
+                  gaining
+                </Text>
+              </View>
+              <View style={styles.momentumStat}>
+                <Text style={[styles.momentumNumber, { color: colors.ink }]}>
+                  {steadyCount}
+                </Text>
+                <Text style={[styles.momentumLabel, { color: colors.muted }]}>
+                  steady
+                </Text>
+              </View>
+              <View style={styles.momentumStat}>
+                <Text style={[styles.momentumNumber, { color: palette.amber }]}>
+                  {focusCount}
+                </Text>
+                <Text style={[styles.momentumLabel, { color: colors.muted }]}>
+                  need focus
+                </Text>
+              </View>
+              <View style={styles.momentumStat}>
+                <Text style={[styles.momentumNumber, { color: colors.muted }]}>
+                  {missingCount}
+                </Text>
+                <Text style={[styles.momentumLabel, { color: colors.muted }]}>
+                  no data
+                </Text>
+              </View>
+            </View>
+          </Card>
+
+          <View style={styles.insightGrid}>
+            <Card style={styles.insight}>
+              <Ionicons name="sparkles" size={19} color={palette.lime} />
+              <Text style={[styles.insightEyebrow, { color: palette.lime }]}>
+                Strongest
+              </Text>
+              <Text numberOfLines={1} style={[styles.insightTitle, { color: colors.ink }]}>
+                {strongest?.metric.name ?? "More data needed"}
+              </Text>
+              <Text numberOfLines={2} style={[styles.insightMeta, { color: colors.muted }]}>
+                {strongest
+                  ? `${Math.round(strongest.currentGoalRate * 100)}% goal rate · ${comparisonText(strongest)}`
+                  : "Keep logging to reveal a pattern."}
+              </Text>
+            </Card>
+            <Card style={styles.insight}>
+              <Ionicons name="compass-outline" size={19} color={palette.amber} />
+              <Text style={[styles.insightEyebrow, { color: palette.amber }]}>
+                Focus next
+              </Text>
+              <Text numberOfLines={1} style={[styles.insightTitle, { color: colors.ink }]}>
+                {opportunity?.metric.name ?? "Keep the momentum"}
+              </Text>
+              <Text numberOfLines={2} style={[styles.insightMeta, { color: colors.muted }]}>
+                {opportunity
+                  ? `${Math.round(opportunity.currentGoalRate * 100)}% goal rate · ${comparisonText(opportunity)}`
+                  : "No weaker area is clear yet."}
+              </Text>
+            </Card>
           </View>
-        </Card>
+        </>
       ) : null}
+
+      <View style={styles.sectionHeading}>
+        <Text style={[styles.sectionTitle, { color: colors.ink }]}>
+          Tracker performance
+        </Text>
+        <Text style={[styles.sectionMeta, { color: colors.muted }]}>
+          Hold a tile to organize this page.
+        </Text>
+      </View>
       <View style={styles.rows}>
-        {overview.rows.map((row) => {
-          const change = Math.round(Math.abs(row.changePercent));
-          const color =
-            row.direction === "steady"
-              ? colors.muted
-              : row.improving
-                ? palette.lime
-                : palette.red;
-          return (
-            <Pressable
-              key={row.metric.id}
-              onPress={() =>
-                router.push({
-                  pathname: "/metric-detail",
-                  params: { metric: row.metric.id, period: days === 7 ? "week" : "month" },
-                } as never)
-              }
-              onLongPress={() => router.push("/customize?tab=insights" as never)}
-            >
-              <Card style={styles.row}>
-                <View style={[styles.icon, { backgroundColor: `${row.metric.color}1F` }]}>
-                  <Ionicons
-                    name={row.metric.icon as keyof typeof Ionicons.glyphMap}
-                    size={20}
-                    color={row.metric.color}
-                  />
-                </View>
-                <View style={styles.copy}>
-                  <Text style={[styles.name, { color: colors.ink }]}>
-                    {row.metric.name}
-                  </Text>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {formatMetricValue(row.metric, row.current)} avg ·{" "}
-                    {Math.round(row.currentGoalRate * 100)}% goal rate
-                  </Text>
-                </View>
-                <View style={styles.change}>
-                  <Ionicons
-                    name={
-                      row.direction === "steady"
-                        ? "remove"
-                        : row.improving
-                          ? "arrow-up"
-                          : "arrow-down"
-                    }
-                    size={17}
-                    color={color}
-                  />
-                  <Text style={[styles.changeText, { color }]}>
-                    {row.direction === "steady" ? "Steady" : `${change}%`}
-                  </Text>
-                </View>
-              </Card>
-            </Pressable>
-          );
-        })}
+        {rows.map((row, index) => (
+          <PerformanceTile
+            key={row.metric.id}
+            row={row}
+            range={range}
+            editing={editing}
+            index={index}
+            count={rows.length}
+            onEdit={beginEditing}
+            onMove={(target) => reorder(row.metric.id, target)}
+            onRemove={() =>
+              setDraftIds((current) =>
+                current.filter((id) => id !== row.metric.id),
+              )
+            }
+          />
+        ))}
       </View>
-      {overview.opportunities.length ? (
-        <Card style={styles.callout}>
-          <Ionicons name="trail-sign-outline" size={22} color={palette.amber} />
-          <View style={styles.copy}>
-            <Text style={[styles.calloutTitle, { color: colors.ink }]}>
-              Best areas to improve
-            </Text>
-            <Text style={[styles.calloutBody, { color: colors.muted }]}>
-              {overview.opportunities.map((row) => row.metric.name).join(", ")}
-            </Text>
-          </View>
-        </Card>
+
+      {editing ? (
+        <Pressable
+          onPress={() => setShowAdd(true)}
+          style={[styles.add, { borderColor: accent }]}
+        >
+          <Ionicons name="add-circle-outline" size={18} color={accent} />
+          <Text style={[styles.addText, { color: accent }]}>
+            Add existing tracker
+          </Text>
+        </Pressable>
       ) : null}
-      {!overview.rows.length ? (
+
+      {!rows.length ? (
         <Card>
           <Text style={[styles.empty, { color: colors.muted }]}>
-            Log a few days to unlock meaningful comparisons.
+            No comparable data in this view yet. Choose another filter or log a
+            tracker in both periods.
           </Text>
         </Card>
       ) : null}
+
+      <TrackerViewFilterSheet
+        visible={showFilters}
+        scope="performance"
+        onClose={() => setShowFilters(false)}
+      />
+      <AddTrackerModal
+        visible={showAdd}
+        items={hiddenItems}
+        onClose={() => setShowAdd(false)}
+        onAdd={(id) => {
+          setDraftIds((current) =>
+            current.includes(id) ? current : [...current, id],
+          );
+          setShowAdd(false);
+        }}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  headerButton: {
-    width: 36,
-    height: 36,
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
+  doneEdit: { minHeight: 36, justifyContent: "center", paddingHorizontal: 8 },
+  doneEditText: { fontSize: 9, fontWeight: "900" },
+  rangeBar: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 5,
+    borderRadius: 15,
+    padding: 5,
   },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 5 },
-  range: { flexDirection: "row", gap: 6, marginBottom: 5 },
+  periodLine: {
+    minHeight: 31,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  period: { fontSize: 8, fontWeight: "700" },
+  filterLabel: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "55%" },
+  filterText: { fontSize: 8, fontWeight: "900" },
+  momentum: { gap: 9 },
+  momentumTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  sectionTitle: { fontSize: 11, fontWeight: "900" },
+  sectionMeta: { fontSize: 7, lineHeight: 10, marginTop: 2 },
+  scorePill: { borderRadius: 99, paddingHorizontal: 9, paddingVertical: 5 },
+  scoreText: { fontSize: 8, fontWeight: "900" },
+  momentumStats: { flexDirection: "row", gap: 6 },
+  momentumStat: { flex: 1, alignItems: "center" },
+  momentumNumber: { fontSize: 17, fontWeight: "900" },
+  momentumLabel: { fontSize: 7, fontWeight: "800", marginTop: 1 },
+  insightGrid: { flexDirection: "row", gap: 7 },
+  insight: { flex: 1, minWidth: 0, gap: 3 },
+  insightEyebrow: { fontSize: 7, fontWeight: "900", textTransform: "uppercase" },
+  insightTitle: { fontSize: 10, fontWeight: "900" },
+  insightMeta: { fontSize: 7, lineHeight: 10 },
+  sectionHeading: { marginTop: 3, marginBottom: 1 },
   rows: { gap: 7 },
-  row: { minHeight: 66, flexDirection: "row", alignItems: "center", gap: 9 },
-  icon: {
-    width: 39,
-    height: 39,
-    borderRadius: 13,
+  tile: {
+    minHeight: 102,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    position: "relative",
+  },
+  metricIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  copy: { flex: 1, minWidth: 0 },
+  tileBody: { flex: 1, minWidth: 0, gap: 6 },
+  tileTop: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 7,
+  },
+  tileTitle: { flex: 1, minWidth: 0 },
   name: { fontSize: 10, fontWeight: "900" },
-  meta: { fontSize: 8, lineHeight: 12, marginTop: 3 },
-  change: { alignItems: "center", minWidth: 45 },
-  changeText: { fontSize: 8, fontWeight: "900", marginTop: 1 },
-  callout: { flexDirection: "row", alignItems: "center", gap: 10 },
-  calloutTitle: { fontSize: 10, fontWeight: "900" },
-  calloutBody: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  value: { fontSize: 9, fontWeight: "800", marginTop: 2 },
+  change: {
+    maxWidth: "46%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 3,
+  },
+  changeText: { fontSize: 7, fontWeight: "900", textAlign: "right" },
+  bars: { gap: 3 },
+  barTrack: { height: 4, borderRadius: 3, overflow: "hidden" },
+  barFill: { height: "100%", borderRadius: 3 },
+  stats: { flexDirection: "row", flexWrap: "wrap", columnGap: 9, rowGap: 2 },
+  stat: { fontSize: 7, fontWeight: "700" },
+  remove: {
+    position: "absolute",
+    top: -5,
+    left: -5,
+    width: 23,
+    height: 23,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 5,
+  },
+  drag: {
+    width: 31,
+    minHeight: 62,
+    borderWidth: 1,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  add: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  addText: { fontSize: 9, fontWeight: "900" },
   empty: { fontSize: 9, lineHeight: 14, textAlign: "center" },
 });

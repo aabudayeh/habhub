@@ -17,19 +17,32 @@ import {
   ALL_AVAILABLE_TRACKERS_FILTER,
   ALL_TRACKERS_FILTER,
   TRACKED_ONLY_FILTER,
+  TrackerViewScope,
+  trackerViewSetting,
 } from "@/src/domain/viewFilters";
 
 export default function ViewFilters() {
   const { scope: rawScope } = useLocalSearchParams<{
-    scope?: "today" | "progress";
+    scope?: TrackerViewScope;
   }>();
-  const scope = rawScope === "progress" ? "progress" : "today";
+  const scope: TrackerViewScope =
+    rawScope === "progress" || rawScope === "performance"
+      ? rawScope
+      : "today";
+  const activeSetting = trackerViewSetting(scope);
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const filters = state.settings.trackerViewFilters ?? [];
   const trackers = state.metrics
-    .filter((metric) => !isInternalTracker(metric))
+    .filter(
+      (metric) =>
+        !isInternalTracker(metric) &&
+        (scope !== "performance" ||
+          (metric.dataType !== "text" &&
+            metric.dataType !== "photo" &&
+            metric.id !== "tracked_goals")),
+    )
     .sort((a, b) => a.order - b.order);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -66,9 +79,7 @@ export default function ViewFilters() {
     ];
     updateSettings({
       trackerViewFilters: next,
-      [scope === "today"
-        ? "activeTodayTrackerViewFilterId"
-        : "activeProgressTrackerViewFilterId"]: id,
+      [activeSetting]: id,
     });
     close();
   };
@@ -76,7 +87,13 @@ export default function ViewFilters() {
     <Screen>
       <PageHeader
         title="Custom views"
-        subtitle={`Reusable tracker lists · editing ${scope === "today" ? "Today" : "Progress"}.`}
+        subtitle={`Reusable tracker lists · editing ${
+          scope === "today"
+            ? "Today"
+            : scope === "progress"
+              ? "Progress"
+              : "Performance"
+        }.`}
         showMenu={false}
         action={
           <IconButton icon="close" label="Close" onPress={() => router.back()} />
@@ -185,9 +202,7 @@ export default function ViewFilters() {
               <Pressable
                 onPress={() =>
                   updateSettings({
-                    [scope === "today"
-                      ? "activeTodayTrackerViewFilterId"
-                      : "activeProgressTrackerViewFilterId"]: id,
+                    [activeSetting]: id,
                   })
                 }
                 style={styles.filterMain}
@@ -216,9 +231,7 @@ export default function ViewFilters() {
               <Pressable
                 onPress={() =>
                   updateSettings({
-                    [scope === "today"
-                      ? "activeTodayTrackerViewFilterId"
-                      : "activeProgressTrackerViewFilterId"]: filter.id,
+                    [activeSetting]: filter.id,
                   })
                 }
                 style={styles.filterMain}
@@ -232,10 +245,7 @@ export default function ViewFilters() {
                     {filter.metricIds.length} trackers
                   </Text>
                 </View>
-                {(scope === "today"
-                  ? state.settings.activeTodayTrackerViewFilterId
-                  : state.settings.activeProgressTrackerViewFilterId) ===
-                filter.id ? (
+                {state.settings[activeSetting] === filter.id ? (
                   <Ionicons name="checkmark-circle" size={18} color={accent} />
                 ) : null}
               </Pressable>
@@ -265,17 +275,10 @@ export default function ViewFilters() {
                     trackerViewFilters: filters.filter(
                       (candidate) => candidate.id !== filter.id,
                     ),
-                    [scope === "today"
-                      ? "activeTodayTrackerViewFilterId"
-                      : "activeProgressTrackerViewFilterId"]:
-                      (scope === "today"
-                        ? state.settings.activeTodayTrackerViewFilterId
-                        : state.settings.activeProgressTrackerViewFilterId) ===
-                      filter.id
+                    [activeSetting]:
+                      state.settings[activeSetting] === filter.id
                         ? "all"
-                        : scope === "today"
-                          ? state.settings.activeTodayTrackerViewFilterId
-                          : state.settings.activeProgressTrackerViewFilterId,
+                        : state.settings[activeSetting],
                   })
                 }
               />

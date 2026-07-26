@@ -10,6 +10,7 @@ import {
   ALL_TRACKERS_FILTER,
   TRACKED_ONLY_FILTER,
   TrackerViewScope,
+  trackerViewSetting,
 } from "@/src/domain/viewFilters";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -26,10 +27,7 @@ export function TrackerViewFilterSheet({
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const setting =
-    scope === "today"
-      ? "activeTodayTrackerViewFilterId"
-      : "activeProgressTrackerViewFilterId";
+  const setting = trackerViewSetting(scope);
   const choices = [
     [TRACKED_ONLY_FILTER, "Tracked goals only", "flag-outline"],
     [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "apps-outline"],
@@ -52,7 +50,11 @@ export function TrackerViewFilterSheet({
         >
           <View style={[styles.handle, { backgroundColor: colors.border }]} />
           <Text style={[styles.title, { color: colors.ink }]}>
-            {scope === "today" ? "Today view" : "Progress view"}
+            {scope === "today"
+              ? "Today view"
+              : scope === "progress"
+                ? "Progress view"
+                : "Performance view"}
           </Text>
           {choices.map(([id, label, icon]) => (
             <Pressable

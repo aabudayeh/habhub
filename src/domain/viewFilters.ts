@@ -5,7 +5,7 @@ export const ALL_TRACKERS_FILTER = "all";
 export const ALL_AVAILABLE_TRACKERS_FILTER = "all_available";
 export const TRACKED_ONLY_FILTER = "tracked";
 export const UNTRACKED_ONLY_FILTER = "untracked";
-export type TrackerViewScope = "today" | "progress";
+export type TrackerViewScope = "today" | "progress" | "performance";
 
 export function activeTrackerViewId(
   state: AppState,
@@ -14,7 +14,9 @@ export function activeTrackerViewId(
   const selected =
     (scope === "today"
       ? state.settings.activeTodayTrackerViewFilterId
-      : state.settings.activeProgressTrackerViewFilterId) ??
+      : scope === "progress"
+        ? state.settings.activeProgressTrackerViewFilterId
+        : state.settings.activePerformanceTrackerViewFilterId) ??
     state.settings.activeTrackerViewFilterId ??
     ALL_TRACKERS_FILTER;
   // "Other trackers" was removed from the UI. Treat any saved legacy
@@ -55,4 +57,10 @@ export function activeTrackerViewLabel(
     state.settings.trackerViewFilters?.find((filter) => filter.id === id)
       ?.name ?? "None"
   );
+}
+
+export function trackerViewSetting(scope: TrackerViewScope) {
+  if (scope === "today") return "activeTodayTrackerViewFilterId" as const;
+  if (scope === "progress") return "activeProgressTrackerViewFilterId" as const;
+  return "activePerformanceTrackerViewFilterId" as const;
 }

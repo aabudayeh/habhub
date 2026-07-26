@@ -232,6 +232,12 @@ function withoutMetricSelections(
     ...settings,
     progressMetricIds: remove(settings.progressMetricIds),
     progressMetricOrderIds: remove(settings.progressMetricOrderIds ?? []),
+    performanceMetricIds: settings.performanceMetricIds
+      ? remove(settings.performanceMetricIds)
+      : undefined,
+    performanceMetricOrderIds: remove(
+      settings.performanceMetricOrderIds ?? [],
+    ),
     leaderboardMetricIdsByGroup: Object.fromEntries(
       Object.entries(settings.leaderboardMetricIdsByGroup).map(
         ([groupId, ids]) => [groupId, remove(ids)],

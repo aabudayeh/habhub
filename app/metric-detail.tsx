@@ -81,15 +81,18 @@ const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string 
 ];
 
 export default function TrackerDetail() {
-  const { metric: trackerId, date } = useLocalSearchParams<{
+  const { metric: trackerId, date, period: requestedPeriod } = useLocalSearchParams<{
     metric: string;
     date?: string;
+    period?: Exclude<LeaderboardPeriod, "custom" | "overall">;
   }>();
   const { state, deleteEntry, deletePhoto, skipGoal } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
-  const [period, setPeriod] = useState<LeaderboardPeriod>("today");
+  const [period, setPeriod] = useState<LeaderboardPeriod>(
+    requestedPeriod ?? "today",
+  );
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const [recordsOpen, setRecordsOpen] = useState(false);

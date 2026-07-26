@@ -542,6 +542,7 @@ export type UserSettings = {
   activeTrackerViewFilterId?: string;
   activeTodayTrackerViewFilterId?: string;
   activeProgressTrackerViewFilterId?: string;
+  activePerformanceTrackerViewFilterId?: string;
   showUntrackedToday?: boolean;
   showUntrackedProgress?: boolean;
   showUntrackedLeaderboardByGroup?: Record<string, boolean>;
@@ -589,6 +590,11 @@ export type UserSettings = {
   progressMetricIds: string[];
   /** Personal Progress card order, independent from filters and visibility. */
   progressMetricOrderIds?: string[];
+  /** Personal Performance tiles; omitted means every compatible tracker. */
+  performanceMetricIds?: string[];
+  /** Personal Performance order, independent from Progress and groups. */
+  performanceMetricOrderIds?: string[];
+  performanceRange?: "day" | "week" | "month";
   leaderboardMetricIdsByGroup: Record<string, string[]>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
