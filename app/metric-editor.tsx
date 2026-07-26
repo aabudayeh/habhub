@@ -336,6 +336,7 @@ export default function TrackerEditor() {
   const scrollRef = useRef<ScrollView>(null);
   const scrolledToGoalStart = useRef(false);
   const scrolledToNotifications = useRef(false);
+  const advancedPanelY = useRef(0);
   const behaviorSectionY = useRef(0);
   const remindersSectionY = useRef(0);
   const [showIcons, setShowIcons] = useState(false);
@@ -1026,21 +1027,31 @@ export default function TrackerEditor() {
     setBehaviorOpen(true);
     setRemindersOpen(true);
     scrolledToNotifications.current = false;
-    const scrollToReminders = () =>
+    const scrollToReminders = () => {
+      if (
+        advancedPanelY.current <= 0 ||
+        behaviorSectionY.current <= 0 ||
+        remindersSectionY.current <= 0
+      )
+        return;
       scrollRef.current?.scrollTo({
         y: Math.max(
           0,
-          behaviorSectionY.current + remindersSectionY.current - 65,
+          advancedPanelY.current +
+            behaviorSectionY.current +
+            remindersSectionY.current -
+            65,
         ),
         animated: true,
       });
+      scrolledToNotifications.current = true;
+    };
     // Native layout can settle in more than one pass as Advanced and
     // Reminders expand. Retry briefly so a Schedule deep-link always lands on
     // the actual reminder controls rather than merely opening Advanced.
-    const timers = [180, 420, 760].map((delay) =>
+    const timers = [120, 280, 520, 900].map((delay) =>
       setTimeout(scrollToReminders, delay),
     );
-    scrolledToNotifications.current = true;
     return () => timers.forEach(clearTimeout);
   }, [focus, groupScope, id]);
   function remove() {
@@ -1598,6 +1609,34 @@ export default function TrackerEditor() {
         />
       </Pressable>
       {advanced ? (
+        <View
+          onLayout={(event) => {
+            advancedPanelY.current = event.nativeEvent.layout.y;
+            if (
+              focus !== "notifications" ||
+              scrolledToNotifications.current
+            )
+              return;
+            setTimeout(() => {
+              if (
+                behaviorSectionY.current <= 0 ||
+                remindersSectionY.current <= 0
+              )
+                return;
+              scrollRef.current?.scrollTo({
+                y: Math.max(
+                  0,
+                  advancedPanelY.current +
+                    behaviorSectionY.current +
+                    remindersSectionY.current -
+                    65,
+                ),
+                animated: true,
+              });
+              scrolledToNotifications.current = true;
+            }, 80);
+          }}
+        >
         <Card style={styles.advancedPanel}>
           {!groupScope && goalEnabled && dataType !== "text" ? (
             <>
@@ -2325,7 +2364,9 @@ export default function TrackerEditor() {
                   return;
                 scrolledToNotifications.current = true;
                 const y =
-                  behaviorSectionY.current + event.nativeEvent.layout.y;
+                  advancedPanelY.current +
+                  behaviorSectionY.current +
+                  event.nativeEvent.layout.y;
                 setTimeout(
                   () =>
                     scrollRef.current?.scrollTo({
@@ -2737,6 +2778,7 @@ export default function TrackerEditor() {
           ) : null}
           {deferredSubmetrics}
         </Card>
+        </View>
       ) : null}
       <View style={styles.actions}>
         {tracker ? (
