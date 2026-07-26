@@ -75,6 +75,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { HistoryRange, MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
+import { orderTodayMetrics } from "@/src/domain/todayOrdering";
 import {
   activeTrackerViewLabel,
   activeTrackerViewId,
@@ -184,36 +185,17 @@ export default function Today() {
     if (editing || !completionSortEnabled) return ordered;
     const completedBehavior =
       state.settings.completedTodayBehavior ?? "bottom";
-    const filtered =
-      completedBehavior === "hide"
-        ? ordered.filter(
-            (item) =>
-              !(
-                isMetricTrackedOnDate(state, item, today) &&
-                metricApplicableOnDate(
-                  state,
-                  item,
-                  state.currentUserId,
-                  today,
-                ) &&
-                scheduledGoalReached(
-                  state,
-                  item,
-                  state.currentUserId,
-                  today,
-                )
-              ),
-          )
-        : ordered;
-    return filtered.sort((a, b) => {
-      const pinOrder = Number(Boolean(b.pinnedTodayAt)) - Number(Boolean(a.pinnedTodayAt));
-      if (pinOrder) return pinOrder;
-      if (a.pinnedTodayAt && b.pinnedTodayAt)
-        return a.pinnedTodayAt.localeCompare(b.pinnedTodayAt);
-      if (completedBehavior === "stay") return a.order - b.order;
-      const aMet = metricApplicableOnDate(state, a, state.currentUserId, today) && scheduledGoalReached(state, a, state.currentUserId, today);
-      const bMet = metricApplicableOnDate(state, b, state.currentUserId, today) && scheduledGoalReached(state, b, state.currentUserId, today);
-      return Number(aMet) - Number(bMet) || a.order - b.order;
+    return orderTodayMetrics(ordered, completedBehavior, (item) => {
+      if (!isMetricTrackedOnDate(state, item, today)) return false;
+      return (
+        metricApplicableOnDate(
+          state,
+          item,
+          state.currentUserId,
+          today,
+        ) &&
+        scheduledGoalReached(state, item, state.currentUserId, today)
+      );
     });
   }, [completionSortEnabled, editing, state, today]);
   const tileLimit = Math.max(
