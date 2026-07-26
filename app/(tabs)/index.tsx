@@ -27,6 +27,7 @@ import {
 import { AppText as Text } from "@/src/components/AppText";
 import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   todoAppearsOnDate,
   todoResolvedOnDate,
@@ -519,6 +520,7 @@ export default function Today() {
             </Pressable>
           </View>
         </View>
+        <TutorialTarget id="today-hero">
         <Animated.View
           style={[
             styles.hero,
@@ -637,6 +639,7 @@ export default function Today() {
             })}
           </View>
         </Animated.View>
+        </TutorialTarget>
         {goals.allMet ? (
           <Celebration
             title="All goals complete"

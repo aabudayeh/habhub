@@ -6,12 +6,17 @@ import "@/src/notifications/workoutTimer";
 import React, { useEffect, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
+  Platform,
   StyleSheet,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { AiAssistantButton } from "@/src/components/AiAssistantButton";
 import { ActiveTimerOverlay } from "@/src/components/ActiveTimerOverlay";
+import {
+  TutorialProvider,
+  TutorialSpotlight,
+} from "@/src/components/TutorialSpotlight";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
@@ -161,7 +166,12 @@ function RootNavigator() {
     notifications: state.settings.notifications,
   });
   useEffect(() => {
-    if (!auth.user || !state.settings.notifications.pushEnabled) return;
+    if (
+      Platform.OS === "web" ||
+      !auth.user ||
+      !state.settings.notifications.pushEnabled
+    )
+      return;
     const userId = auth.user.id;
     const refresh = () =>
       updatePushPreferences(
@@ -179,6 +189,7 @@ function RootNavigator() {
     state.settings.notifications.pushEnabled,
   ]);
   useEffect(() => {
+    if (Platform.OS === "web") return;
     const open = (response: Notifications.NotificationResponse) => {
       const route = response.notification.request.content.data?.route;
       if (typeof route === "string" && route.startsWith("/"))
@@ -258,6 +269,7 @@ function RootNavigator() {
         <FontScaleProvider scale={state.settings.fontScale ?? 1}>
           <CompactModeProvider compact={state.settings.compactMode}>
             <ThemeProvider value={activeTheme}>
+            <TutorialProvider>
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -368,7 +380,9 @@ function RootNavigator() {
               <AiAssistantButton />
             ) : null}
             <ActiveTimerOverlay hidden={rootSegment === "timer"} />
+            <TutorialSpotlight />
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
+            </TutorialProvider>
             </ThemeProvider>
           </CompactModeProvider>
         </FontScaleProvider>

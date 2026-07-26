@@ -29,6 +29,7 @@ import {
   useCompactMode,
   useGroupAccent,
 } from "@/src/theme";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 export function Screen({
   children,
@@ -178,11 +179,13 @@ export function PageHeader({
       <View style={styles.headerActions}>
         {action}
         {showMenu ? (
+          <TutorialTarget id="menu-button">
           <IconButton
             icon="menu-outline"
             label="Open menu"
             onPress={() => router.navigate("/menu" as never)}
           />
+          </TutorialTarget>
         ) : null}
       </View>
     </View>

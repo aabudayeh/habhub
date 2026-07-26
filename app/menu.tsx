@@ -6,6 +6,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar } from "@/src/components/ui";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
@@ -37,7 +38,7 @@ const items = [
   },
   {
     label: "Quick guide",
-    detail: "Replay the short setup and tutorial",
+    detail: "Replay the interactive app walkthrough",
     icon: "help-circle-outline" as const,
     path: "/onboarding" as const,
   },
@@ -50,7 +51,7 @@ const items = [
 ];
 
 export default function MenuScreen() {
-  const { state } = useApp();
+  const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const user = state.group.members.find(
@@ -114,28 +115,50 @@ export default function MenuScreen() {
           <Ionicons name="chevron-forward" size={19} color={colors.faint} />
         </Pressable>
         <View style={styles.list}>
-          {items.map((item) => (
-            <Pressable
-              key={item.label}
-              onPress={() => router.replace(item.path as never)}
-              style={({ pressed }) => [styles.item, pressed && styles.pressed]}
-            >
-              <View
-                style={[styles.icon, { backgroundColor: colors.primarySoft }]}
+          {items.map((item) => {
+            const row = (
+              <Pressable
+                onPress={() => {
+                  if (item.label === "Quick guide") {
+                    updateSettings({ tutorialComplete: false });
+                    router.replace("/" as never);
+                  } else {
+                    router.replace(item.path as never);
+                  }
+                }}
+                style={({ pressed }) => [
+                  styles.item,
+                  pressed && styles.pressed,
+                ]}
               >
-                <Ionicons name={item.icon} size={21} color={accent} />
-              </View>
-              <View style={styles.copy}>
-                <Text style={[styles.label, { color: colors.ink }]}>
-                  {item.label}
-                </Text>
-                <Text style={[styles.detail, { color: colors.muted }]}>
-                  {item.detail}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.faint} />
-            </Pressable>
-          ))}
+                <View
+                  style={[styles.icon, { backgroundColor: colors.primarySoft }]}
+                >
+                  <Ionicons name={item.icon} size={21} color={accent} />
+                </View>
+                <View style={styles.copy}>
+                  <Text style={[styles.label, { color: colors.ink }]}>
+                    {item.label}
+                  </Text>
+                  <Text style={[styles.detail, { color: colors.muted }]}>
+                    {item.detail}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={colors.faint}
+                />
+              </Pressable>
+            );
+            return item.label === "Display" ? (
+              <TutorialTarget key={item.label} id="menu-display">
+                {row}
+              </TutorialTarget>
+            ) : (
+              <React.Fragment key={item.label}>{row}</React.Fragment>
+            );
+          })}
         </View>
       </SafeAreaView>
     </View>

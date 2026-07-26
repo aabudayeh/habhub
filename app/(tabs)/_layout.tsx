@@ -76,7 +76,9 @@ export default function TabLayout() {
         lazy: true,
         // Health/chat updates should not recalculate every inactive chart tab.
         freezeOnBlur: true,
-        tabBarButton: HapticTab,
+        tabBarButton: (props) => (
+          <HapticTab {...props} tutorialId={`tab-${route.name}`} />
+        ),
         tabBarActiveTintColor: accent,
         tabBarInactiveTintColor: colors.faint,
         tabBarHideOnKeyboard: true,

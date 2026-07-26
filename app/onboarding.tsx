@@ -393,7 +393,7 @@ export default function Onboarding() {
     await saveDisplayName();
     updateSettings({
       onboardingComplete: true,
-      tutorialComplete: true,
+      tutorialComplete: false,
       advancedTutorialComplete: advancedTutorial,
       defaultLandingPage: landingPage,
     });

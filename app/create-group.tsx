@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
 import {
@@ -24,7 +25,6 @@ import {
 } from "@/src/components/ui";
 import {
   DEFAULT_GROUP_THEME,
-  GROUP_THEME_COLORS,
   newMetricFromDefinition,
 } from "@/src/domain/groupSetup";
 import {
@@ -407,26 +407,12 @@ export default function CreateGroup() {
       </Card>
 
       <SectionHeader title="Group color" />
-      <Card style={styles.colors}>
-        {GROUP_THEME_COLORS.map((color) => (
-          <Pressable
-            key={color}
-            accessibilityLabel={`Use group color ${color}`}
-            onPress={() => setThemeColor(color)}
-            style={[
-              styles.swatch,
-              { backgroundColor: color },
-              themeColor === color && {
-                borderColor: colors.ink,
-                borderWidth: 3,
-              },
-            ]}
-          >
-            {themeColor === color ? (
-              <Ionicons name="checkmark" size={18} color={palette.white} />
-            ) : null}
-          </Pressable>
-        ))}
+      <Card style={styles.colorPicker}>
+        <ColorSpectrumPicker value={themeColor} onChange={setThemeColor} />
+        <Text style={[styles.meta, { color: colors.muted }]}>
+          Members can follow this group color or override it personally.
+          Completion lime and gold are reserved.
+        </Text>
       </Card>
 
       <SectionHeader title="Invites" />
@@ -569,6 +555,7 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   colors: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  colorPicker: { gap: 9 },
   swatch: {
     width: 40,
     height: 40,

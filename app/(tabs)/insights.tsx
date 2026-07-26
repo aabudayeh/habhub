@@ -18,6 +18,7 @@ import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
 import { InfoPopover } from "@/src/components/InfoPopover";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   GoalHeatmap,
   TrackedGoalsHeatmap,
@@ -433,6 +434,7 @@ export default function Insights() {
         mode={progressMode}
         onChange={setProgressMode}
       />
+      <TutorialTarget id="progress-visual">
       <View {...visualSwipeResponder.panHandlers}>
       {view === "month" ? (
         <Card style={styles.visualCard}>
@@ -589,6 +591,7 @@ export default function Insights() {
         </Card>
       )}
       </View>
+      </TutorialTarget>
       <SectionHeader
         title={`${view === "week" ? "Week" : "Month"} summaries`}
         action={

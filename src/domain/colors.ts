@@ -57,3 +57,30 @@ export function isReservedGoalColor(value: string) {
 export function isAllowedTrackerColor(value: string) {
   return Boolean(normalizeHexColor(value)) && !isReservedGoalColor(value);
 }
+
+function rgb(value: string) {
+  const normalized = normalizeHexColor(value);
+  if (!normalized) return;
+  return [
+    Number.parseInt(normalized.slice(1, 3), 16),
+    Number.parseInt(normalized.slice(3, 5), 16),
+    Number.parseInt(normalized.slice(5, 7), 16),
+  ] as const;
+}
+
+/** Keep theme accents visually distinct from goal and perfect-day feedback. */
+export function isAllowedThemeColor(value: string) {
+  const candidate = rgb(value);
+  if (!candidate) return false;
+  return [GOAL_COMPLETE_COLOR, ALL_GOALS_COMPLETE_COLOR].every((reserved) => {
+    const target = rgb(reserved)!;
+    const distance = Math.sqrt(
+      candidate.reduce(
+        (sum, channel, index) =>
+          sum + Math.pow(channel - target[index], 2),
+        0,
+      ),
+    );
+    return distance >= 58;
+  });
+}

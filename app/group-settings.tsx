@@ -25,6 +25,7 @@ import {
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
+import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import {
   memberDisplayName,
   memberOriginalLabel,
@@ -33,7 +34,6 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
-import { GROUP_THEME_COLORS } from "@/src/domain/groupSetup";
 import { formulaIdentifiers } from "@/src/domain/formula";
 
 export default function GroupSettings() {
@@ -184,26 +184,17 @@ export default function GroupSettings() {
       </Card>
 
       <SectionHeader title="Group color" />
-      <Card style={styles.colors}>
-        {GROUP_THEME_COLORS.map((color) => (
-          <Pressable
-            key={color}
-            disabled={!canEdit}
-            onPress={() => setGroupTheme(color)}
-            style={[
-              styles.swatch,
-              { backgroundColor: color },
-              (state.group.themeColor ?? palette.primary) === color && {
-                borderColor: colors.ink,
-                borderWidth: 3,
-              },
-            ]}
-          >
-            {(state.group.themeColor ?? palette.primary) === color ? (
-              <Ionicons name="checkmark" size={17} color={palette.white} />
-            ) : null}
-          </Pressable>
-        ))}
+      <Card style={styles.colorPicker}>
+        <ColorSpectrumPicker
+          value={state.group.themeColor ?? palette.primary}
+          disabled={!canEdit}
+          onChange={setGroupTheme}
+        />
+        <Text style={[styles.meta, { color: colors.muted }]}>
+          {canEdit
+            ? "This becomes the shared group accent. Members can still choose a personal override."
+            : "Only a group admin can change the shared accent."}
+        </Text>
       </Card>
 
       <SectionHeader
@@ -539,6 +530,7 @@ const styles = StyleSheet.create({
   name: { fontSize: 11, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   link: { fontSize: 10, fontWeight: "900" },
+  colorPicker: { gap: 9 },
   colors: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   swatch: {
     width: 36,

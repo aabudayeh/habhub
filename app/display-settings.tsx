@@ -15,10 +15,12 @@ import {
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
+import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useApp } from "@/src/state/AppProvider";
 import {
+  isAllowedThemeColor,
   normalizeHexColor,
-  THEME_COLOR_CHOICES,
 } from "@/src/domain/colors";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { LandingPage } from "@/src/types";
@@ -49,6 +51,10 @@ export default function DisplaySettings() {
   const [indicatorOpen, setIndicatorOpen] = React.useState(false);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const normalizedCustomColor = normalizeHexColor(customColor);
+  const allowedCustomColor =
+    normalizedCustomColor && isAllowedThemeColor(normalizedCustomColor)
+      ? normalizedCustomColor
+      : undefined;
   const visible = pages.filter(
     (page) =>
       (page.id !== "log" || state.settings.showLog) &&
@@ -136,6 +142,7 @@ export default function DisplaySettings() {
         }
       />
       <SectionHeader title="Colors" />
+      <TutorialTarget id="personal-theme">
       <Card style={styles.themeCard}>
         <View style={styles.themeHeading}>
           <View style={[styles.themePreview, { backgroundColor: accent }]} />
@@ -159,41 +166,16 @@ export default function DisplaySettings() {
             }
           />
         </View>
-        <View style={styles.swatches}>
-          {THEME_COLOR_CHOICES.map((color) => {
-            const selected =
-              (state.settings.personalThemeColor ?? "") === color;
-            return (
-              <Pressable
-                key={color}
-                accessibilityLabel={`Choose theme color ${color}`}
-                onPress={() => {
-                  setCustomColor(color);
-                  updateSettings({
-                    personalThemeColor: color,
-                    overrideGroupTheme: true,
-                  });
-                }}
-                style={[
-                  styles.swatch,
-                  { backgroundColor: color },
-                  selected && {
-                    borderColor: colors.ink,
-                    transform: [{ scale: 1.08 }],
-                  },
-                ]}
-              >
-                {selected ? (
-                  <Ionicons
-                    name="checkmark"
-                    size={16}
-                    color="#FFFFFF"
-                  />
-                ) : null}
-              </Pressable>
-            );
-          })}
-        </View>
+        <ColorSpectrumPicker
+          value={state.settings.personalThemeColor ?? accent}
+          onChange={(personalThemeColor) => {
+            setCustomColor(personalThemeColor);
+            updateSettings({
+              personalThemeColor,
+              overrideGroupTheme: true,
+            });
+          }}
+        />
         <View style={styles.customColor}>
           <TextInput
             value={customColor}
@@ -208,31 +190,38 @@ export default function DisplaySettings() {
             ]}
           />
           <Pressable
-            disabled={!normalizedCustomColor}
+            disabled={!allowedCustomColor}
             onPress={() =>
-              normalizedCustomColor &&
+              allowedCustomColor &&
               updateSettings({
-                personalThemeColor: normalizedCustomColor,
+                personalThemeColor: allowedCustomColor,
                 overrideGroupTheme: true,
               })
             }
             style={[
               styles.applyColor,
               {
-                backgroundColor: normalizedCustomColor ?? colors.border,
-                opacity: normalizedCustomColor ? 1 : 0.55,
+                backgroundColor: allowedCustomColor ?? colors.border,
+                opacity: allowedCustomColor ? 1 : 0.55,
               },
             ]}
           >
             <Text style={styles.applyColorText}>Apply</Text>
           </Pressable>
         </View>
+        {normalizedCustomColor && !allowedCustomColor ? (
+          <Text style={[styles.meta, { color: "#D24B4B" }]}>
+            That color is reserved for goal-completion feedback.
+          </Text>
+        ) : null}
         <Text style={[styles.meta, { color: colors.muted }]}>
           Turn the switch off at any time to follow each group&apos;s color
-          again.
+          again. Lime and gold stay reserved for completion feedback.
         </Text>
       </Card>
+      </TutorialTarget>
       <SectionHeader title="Layout" />
+      <TutorialTarget id="display-layout">
       <Card style={styles.list}>
         {[
           [
@@ -353,6 +342,7 @@ export default function DisplaySettings() {
           </View>
         ))}
       </Card>
+      </TutorialTarget>
       <Pressable
         onPress={() => setAdvancedOpen((open) => !open)}
         style={[
