@@ -1341,7 +1341,7 @@ function GoalMapProgress({
       {!visibleMetrics.length ? (
         <Card>
           <Text style={[styles.hint, { color: colors.muted }]}>
-            No trackers match this view. Show untracked trackers or edit the
+            No trackers match this view. Choose All trackers or edit the
             Progress selection.
           </Text>
         </Card>
@@ -1370,11 +1370,18 @@ function MapReorderCard({
   children: React.ReactNode;
 }) {
   const colors = useAppColors();
+  const [dragging, setDragging] = useState(false);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const step = useRef(112);
   const origin = useRef(index);
   const target = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
   useEffect(() => {
     if (!editing) {
       wiggle.stopAnimation();
@@ -1407,42 +1414,49 @@ function MapReorderCard({
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
+        onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 4,
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 4,
         onPanResponderGrant: () => {
-          origin.current = index;
-          target.current = index;
+          origin.current = indexRef.current;
+          target.current = indexRef.current;
+          setDragging(true);
         },
         onPanResponderMove: (_event, gesture) => {
           dragY.setValue(gesture.dy);
           target.current = Math.max(
             0,
             Math.min(
-              count - 1,
+              countRef.current - 1,
               origin.current + Math.round(gesture.dy / step.current),
             ),
           );
         },
+        onPanResponderTerminationRequest: () => false,
         onPanResponderRelease: () => {
           const next = target.current;
           Animated.spring(dragY, {
             toValue: 0,
             damping: 22,
             stiffness: 230,
+            overshootClamping: true,
             useNativeDriver: true,
-          }).start();
-          if (next !== origin.current) onMove(next);
+          }).start(() => setDragging(false));
+          if (next !== origin.current) onMoveRef.current(next);
         },
-        onPanResponderTerminate: () =>
+        onPanResponderTerminate: () => {
           Animated.spring(dragY, {
             toValue: 0,
             damping: 22,
             stiffness: 230,
+            overshootClamping: true,
             useNativeDriver: true,
-          }).start(),
+          }).start(() => setDragging(false));
+        },
       }),
-    [count, dragY, editing, index, onMove],
+    [dragY, editing],
   );
   return (
     <Animated.View
@@ -1452,9 +1466,11 @@ function MapReorderCard({
       style={[
         wrapStyle,
         {
-          zIndex: editing ? 3 : 0,
+          zIndex: dragging ? 20 : editing ? 3 : 0,
+          elevation: dragging ? 12 : 0,
           transform: [
             { translateY: dragY },
+            { scale: dragging ? 1.01 : 1 },
             {
               rotate: wiggle.interpolate({
                 inputRange: [-1, 1],
@@ -1617,6 +1633,7 @@ function MetricSummary({
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const [dragging, setDragging] = useState(false);
   const dragY = useRef(new Animated.Value(0)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
   const dragOrigin = useRef(index);
@@ -1657,14 +1674,17 @@ function MetricSummary({
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
+        onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 3,
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
           editing && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
           onDragStartRef.current(dragStep.current);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
           lastDragY.current = 0;
+          setDragging(true);
         },
         onPanResponderMove: (_event, gesture) => {
           lastDragY.current = gesture.dy;
@@ -1694,6 +1714,7 @@ function MetricSummary({
           }).start();
           if (target !== dragOrigin.current) onMoveRef.current(target);
           onDragEndRef.current();
+          setDragging(false);
         },
         onPanResponderTerminate: () => {
           Animated.spring(dragY, {
@@ -1706,6 +1727,7 @@ function MetricSummary({
           }).start(() => {
             onDragCancelRef.current();
             onDragEndRef.current();
+            setDragging(false);
           });
         },
       }),
@@ -1785,13 +1807,15 @@ function MetricSummary({
             }),
           },
           ],
-          zIndex: editing ? 3 : 0,
+          zIndex: dragging ? 20 : editing ? 3 : 0,
+          elevation: dragging ? 12 : 0,
         },
       ]}
     >
     <Pressable
       style={styles.summaryWrap}
       onLongPress={onEdit}
+      {...(editing ? responder.panHandlers : {})}
       onPress={() =>
         editing ? undefined : router.navigate({
           pathname: "/metric-detail" as never,
@@ -1801,7 +1825,7 @@ function MetricSummary({
     >
       <Card style={styles.summary}>
         {editing ? (
-          <View {...responder.panHandlers} style={styles.drag}>
+          <View style={styles.drag}>
             <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
           </View>
         ) : null}
