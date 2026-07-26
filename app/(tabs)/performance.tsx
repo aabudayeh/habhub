@@ -1,8 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
+  BackHandler,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -236,6 +243,22 @@ function PerformanceTile({
       >
         <Card style={[styles.tile, editing && { borderColor: row.metric.color }]}>
           {editing ? (
+            <View
+              accessibilityLabel={`Reorder ${row.metric.name}`}
+              style={[
+                styles.drag,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+              {...responder.panHandlers}
+            >
+              <Ionicons
+                name="reorder-three-outline"
+                size={23}
+                color={colors.muted}
+              />
+            </View>
+          ) : null}
+          {editing ? (
             <View style={styles.editActions}>
               <Pressable
                 accessibilityLabel={`Hide ${row.metric.name}`}
@@ -347,29 +370,14 @@ function PerformanceTile({
               ) : null}
             </View>
           </View>
-          {editing ? (
-            <View
-              accessibilityLabel={`Reorder ${row.metric.name}`}
-              style={[
-                styles.drag,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-              {...responder.panHandlers}
-            >
-              <Ionicons
-                name="reorder-three-outline"
-                size={23}
-                color={colors.muted}
-              />
-            </View>
-          ) : (
+          {!editing ? (
             <View style={styles.trailing}>
               {pinned ? (
                 <Ionicons name="pin" size={13} color={palette.amber} />
               ) : null}
               <Ionicons name="chevron-forward" size={16} color={colors.faint} />
             </View>
-          )}
+          ) : null}
         </Card>
       </Pressable>
     </Animated.View>
@@ -481,13 +489,13 @@ export default function PerformancePage() {
     return () => setCloudSyncPaused("performance-edit", false);
   }, [editing]);
 
-  function beginEditing() {
+  const beginEditing = useCallback(() => {
     const next = [...configuredIds];
     setDraftIds(next);
     setEditing(true);
-  }
+  }, [configuredIds]);
 
-  function finishEditing() {
+  const finishEditing = useCallback(() => {
     const finalOrder = [
       ...visibleOrder.filter((id) => draftIds.includes(id)),
       ...draftIds.filter((id) => !visibleOrder.includes(id)),
@@ -497,7 +505,21 @@ export default function PerformancePage() {
       performanceMetricOrderIds: finalOrder,
     });
     setEditing(false);
-  }
+  }, [draftIds, updateSettings, visibleOrder]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (!editing) return false;
+          finishEditing();
+          return true;
+        },
+      );
+      return () => subscription.remove();
+    }, [editing, finishEditing]),
+  );
 
   function reorder(metricId: string, target: number) {
     const currentOrder = rows.map((row) => row.metric.id);
@@ -975,7 +997,7 @@ const styles = StyleSheet.create({
   editActions: {
     position: "absolute",
     top: -7,
-    left: -7,
+    right: -7,
     flexDirection: "row",
     gap: 5,
     zIndex: 5,

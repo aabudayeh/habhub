@@ -1076,34 +1076,10 @@ export function metricHistoricalRecords(
     (date) => date.slice(0, 7),
     (key, items) => ({ key, value: aggregatePeriod(items) }),
   );
-  const years = [...new Set(recorded.map((item) => item.date.slice(0, 4)))]
-    .map((year) => {
-      const from = `${year}-01-01`;
-      const to =
-        year === throughDate.slice(0, 4) ? throughDate : `${year}-12-31`;
-      const length =
-        Math.floor(
-          (new Date(`${to}T12:00:00`).getTime() -
-            new Date(`${from}T12:00:00`).getTime()) /
-            86400000,
-        ) + 1;
-      const stats = metricPeriodStats(
-        state,
-        metric,
-        userId,
-        dateRangeEnding(to, length),
-      );
-      return {
-        year,
-        value:
-          metric.id === "todo_completion" ||
-          metric.aggregation === "sum" ||
-          metric.dataType === "boolean"
-            ? stats.total
-            : stats.average,
-      };
-    })
-    .filter((item) => Number.isFinite(item.value));
+  const years = grouped(
+    (date) => date.slice(0, 4),
+    (year, items) => ({ year, value: aggregatePeriod(items) }),
+  ).filter((item) => Number.isFinite(item.value));
   const weekdays = grouped(
     (date) =>
       new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(

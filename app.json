@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "MetricRally",
-    "slug": "paceboard",
+    "slug": "metrally",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -103,13 +103,13 @@
       "reactCompiler": true
     },
     "updates": {
-      "url": "https://u.expo.dev/86572f88-3935-494f-b653-ecaf2e9712d1"
+      "url": "https://u.expo.dev/f7411fe5-5319-4476-b70b-d7e3a4252a5c"
     },
-    "owner": "sethanolics",
+    "owner": "sethynos",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "86572f88-3935-494f-b653-ecaf2e9712d1"
+        "projectId": "f7411fe5-5319-4476-b70b-d7e3a4252a5c"
       }
     }
   }
