@@ -96,7 +96,13 @@
           }
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      [
+        "./plugins/withGoogleAssistant",
+        {
+          "scheme": "paceboard"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

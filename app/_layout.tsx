@@ -385,6 +385,10 @@ function RootNavigator() {
                 name="metral-ai"
                 options={{ presentation: "modal" }}
               />
+              <Stack.Screen
+                name="assistant-log"
+                options={{ presentation: "modal" }}
+              />
               <Stack.Screen name="timer" options={{ presentation: "modal" }} />
               <Stack.Screen
                 name="profile"
