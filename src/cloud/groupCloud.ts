@@ -36,6 +36,12 @@ import {
 } from "@/src/types";
 
 const MEDIA_BUCKET = "paceboard-media";
+// Live screens only need a bounded shared cache. The signed-in member's full
+// history remains in their private snapshot, while older shared rows already
+// on this device are preserved below.
+const SHARED_ACTIVITY_CACHE_DAYS = 120;
+const SHARED_MESSAGE_CACHE_LIMIT = 200;
+const SHARED_PHOTO_CACHE_LIMIT = 120;
 const COLORS = [
   "#176B4D",
   "#3478D4",
@@ -226,14 +232,14 @@ export async function loadCloudMessages(
   groupId: string,
 ): Promise<ChatMessage[]> {
   const client = requireCloud();
-  const rows = await loadAllPages((from, to) =>
-    client
-      .from("messages")
-      .select("*")
-      .eq("group_id", groupId)
-      .order("created_at")
-      .range(from, to),
-  );
+  const { data, error } = await client
+    .from("messages")
+    .select("*")
+    .eq("group_id", groupId)
+    .order("created_at", { ascending: false })
+    .limit(SHARED_MESSAGE_CACHE_LIMIT);
+  if (error) throw error;
+  const rows = data ?? [];
   const urls = await signedUrls(
     rows.map((message) => message.image_path).filter(Boolean),
   );
@@ -250,7 +256,8 @@ export async function loadCloudMessages(
       ? (urls.get(message.image_path) ?? undefined)
       : undefined,
   }));
-  const byId = new Map(remote.map((message) => [message.id, message]));
+  const byId = new Map(state.messages.map((message) => [message.id, message]));
+  remote.forEach((message) => byId.set(message.id, message));
   state.messages
     .filter(
       (message) =>
@@ -281,6 +288,7 @@ export async function loadCloudMessages(
 export async function loadCloudGroupActivity(
   state: AppState,
   groupId: string,
+  sinceDate?: string,
 ): Promise<Pick<AppState, "entries" | "dailyMetricStatuses">> {
   const client = requireCloud();
   const { data: metricRows, error: metricError } = await client
@@ -293,21 +301,27 @@ export async function loadCloudGroupActivity(
   const [entryRows, statusRows] = await Promise.all([
     metricIds.length
       ? loadAllPages((from, to) =>
-          client
+          {
+            let query = client
             .from("metric_entries")
             .select("*")
             .in("metric_id", metricIds)
-            .order("recorded_at")
-            .range(from, to),
+            .order("recorded_at");
+            if (sinceDate) query = query.gte("local_date", sinceDate);
+            return query.range(from, to);
+          },
         )
       : Promise.resolve([]),
     loadAllPages((from, to) =>
-      client
+      {
+        let query = client
         .from("daily_metric_status")
         .select("*")
         .eq("group_id", groupId)
-        .order("local_date")
-        .range(from, to),
+        .order("local_date");
+        if (sinceDate) query = query.gte("local_date", sinceDate);
+        return query.range(from, to);
+      },
     ),
   ]);
   const urls = await signedUrls(
@@ -337,7 +351,11 @@ export async function loadCloudGroupActivity(
   }));
   const entriesById = new Map(remoteEntries.map((entry) => [entry.id, entry]));
   state.entries
-    .filter((entry) => entry.userId === state.currentUserId)
+    .filter(
+      (entry) =>
+        entry.userId === state.currentUserId &&
+        (!sinceDate || entry.localDate >= sinceDate),
+    )
     .forEach((entry) => {
       if (!entriesById.has(entry.id)) entriesById.set(entry.id, entry);
     });
@@ -812,6 +830,12 @@ export async function loadCloudWorkspace(
   if (metricError) throw metricError;
   const metricIds = (metricRows ?? []).map((row) => row.id);
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
+  const activityStart = new Date();
+  activityStart.setHours(12, 0, 0, 0);
+  activityStart.setDate(
+    activityStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS,
+  );
+  const activitySinceDate = dateKey(activityStart);
   const [entryRows, statusRows, messageRows, photoRows] =
     await Promise.all([
       metricIds.length
@@ -820,6 +844,7 @@ export async function loadCloudWorkspace(
               .from("metric_entries")
               .select("*")
               .in("metric_id", metricIds)
+              .gte("local_date", activitySinceDate)
               .order("recorded_at")
               .range(from, to),
           )
@@ -829,25 +854,30 @@ export async function loadCloudWorkspace(
           .from("daily_metric_status")
           .select("*")
           .eq("group_id", groupId)
+          .gte("local_date", activitySinceDate)
           .order("local_date")
           .range(from, to),
       ),
-      loadAllPages((from, to) =>
-        client
+      (async () => {
+        const { data, error } = await client
           .from("messages")
           .select("*")
           .eq("group_id", groupId)
-          .order("created_at")
-          .range(from, to),
-      ).catch(() => []),
-      loadAllPages((from, to) =>
-        client
+          .order("created_at", { ascending: false })
+          .limit(SHARED_MESSAGE_CACHE_LIMIT);
+          if (error) throw error;
+          return data ?? [];
+      })().catch(() => []),
+      (async () => {
+        const { data, error } = await client
           .from("photo_updates")
           .select("*")
           .eq("group_id", groupId)
           .order("created_at", { ascending: false })
-          .range(from, to),
-      ),
+          .limit(SHARED_PHOTO_CACHE_LIMIT);
+          if (error) throw error;
+          return data ?? [];
+      })(),
     ]);
   const mediaIds = photoRows.map(
     (photo) => photo.media_asset_id,
@@ -900,7 +930,12 @@ export async function loadCloudWorkspace(
   );
   const cloudMetricSlugs = new Set(slugById.values());
   state.entries
-    .filter((entry) => entry.userId === state.currentUserId)
+    .filter(
+      (entry) =>
+        entry.userId === state.currentUserId ||
+        (cloudMetricSlugs.has(entry.metricId) &&
+          entry.localDate < activitySinceDate),
+    )
     .forEach((local) => {
       const remote = entriesById.get(local.id);
       const healthPayloadChanged =
@@ -937,9 +972,7 @@ export async function loadCloudWorkspace(
   const entries = [...entriesById.values()].sort((a, b) =>
     a.recordedAt.localeCompare(b.recordedAt),
   );
-  const dailyMetricStatuses: DailyMetricStatus[] = (
-    statusRows
-  ).map((status) => ({
+  const remoteStatuses: DailyMetricStatus[] = statusRows.map((status) => ({
     groupId,
     metricId: slugById.get(status.metric_id) ?? status.metric_id,
     userId: status.user_id,
@@ -970,6 +1003,25 @@ export async function loadCloudWorkspace(
         : Boolean(status.has_data),
     syncedAt: status.updated_at ?? undefined,
   }));
+  const statusMap = new Map(
+    state.dailyMetricStatuses
+      .filter(
+        (status) =>
+          status.groupId !== groupId ||
+          status.localDate < activitySinceDate,
+      )
+      .map((status) => [
+        `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`,
+        status,
+      ]),
+  );
+  remoteStatuses.forEach((status) =>
+    statusMap.set(
+      `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`,
+      status,
+    ),
+  );
+  const dailyMetricStatuses = [...statusMap.values()];
   const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({
       id: message.client_generated_id ?? message.id,
@@ -988,8 +1040,9 @@ export async function loadCloudWorkspace(
   // Keep locally-created messages until their cloud upsert is visible. A realtime
   // refresh must never make a just-sent message (or offline history) disappear.
   const messagesById = new Map(
-    remoteMessages.map((message) => [message.id, message]),
+    state.messages.map((message) => [message.id, message]),
   );
+  remoteMessages.forEach((message) => messagesById.set(message.id, message));
   state.messages
     .filter(
       (message) =>
@@ -1013,7 +1066,7 @@ export async function loadCloudWorkspace(
   const messages = [...messagesById.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
-  const photos: PhotoUpdate[] = photoRows.map((photo) => {
+  const remotePhotos: PhotoUpdate[] = photoRows.map((photo) => {
     const asset = mediaById.get(photo.media_asset_id);
     const path = asset?.storage_path;
     return {
@@ -1028,6 +1081,9 @@ export async function loadCloudWorkspace(
       visibility: photo.visibility,
     };
   });
+  const photosById = new Map(state.photos.map((photo) => [photo.id, photo]));
+  remotePhotos.forEach((photo) => photosById.set(photo.id, photo));
+  const photos = [...photosById.values()];
   return {
     ...state,
     group,
@@ -1124,7 +1180,10 @@ export async function pushCloudMessagesNow(state: AppState) {
   );
 }
 
-export async function pushCloudWorkspace(state: AppState) {
+export async function pushCloudWorkspace(
+  state: AppState,
+  pushGroupConfiguration = true,
+) {
   if (!isCloudGroupId(state.group.id)) return;
   const client = requireCloud();
   const current = state.group.members.find(
@@ -1155,7 +1214,7 @@ export async function pushCloudWorkspace(state: AppState) {
     desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
   });
   if (energyError) throw energyError;
-  if (canManage) {
+  if (canManage && pushGroupConfiguration) {
     const { error: groupError } = await client
       .from("groups")
       .update({
@@ -1196,15 +1255,28 @@ export async function pushCloudWorkspace(state: AppState) {
   );
   const { data: oldEntries, error: oldEntryError } = await client
     .from("metric_entries")
-    .select("client_generated_id")
+    .select("client_generated_id, source_updated_at, image_path")
     .eq("user_id", state.currentUserId)
     .in("metric_id", [...idBySlug.values()]);
   if (oldEntryError) throw oldEntryError;
-  const oldEntryIds = new Set(
-    (oldEntries ?? []).map((entry) => entry.client_generated_id),
+  const oldEntriesById = new Map(
+    (oldEntries ?? []).map((entry) => [entry.client_generated_id, entry]),
   );
-  const newSharedEntries = ownedEntries.filter(
-    (entry) => !oldEntryIds.has(entry.id) && entry.visibility !== "private",
+  const entriesToUpsert = ownedEntries.filter((entry) => {
+    const remote = oldEntriesById.get(entry.id);
+    return (
+      !remote ||
+      Boolean(
+        entry.sourceUpdatedAt &&
+          (!remote.source_updated_at ||
+            entry.sourceUpdatedAt > remote.source_updated_at),
+      ) ||
+      Boolean(entry.imageStoragePath && !remote.image_path)
+    );
+  });
+  const newSharedEntries = entriesToUpsert.filter(
+    (entry) =>
+      !oldEntriesById.has(entry.id) && entry.visibility !== "private",
   );
   const currentEntryIds = new Set(ownedEntries.map((entry) => entry.id));
   const deletedEntryIds = (oldEntries ?? [])
@@ -1280,8 +1352,8 @@ export async function pushCloudWorkspace(state: AppState) {
       });
     }),
   );
-  if (ownedEntries.length) {
-    const rows = ownedEntries.map((entry) => ({
+  if (entriesToUpsert.length) {
+    const rows = entriesToUpsert.map((entry) => ({
         client_generated_id: entry.id,
         metric_id: idBySlug.get(entry.metricId),
         user_id: state.currentUserId,
@@ -1308,20 +1380,34 @@ export async function pushCloudWorkspace(state: AppState) {
     }
   }
 
+  const statusStart = new Date();
+  statusStart.setHours(12, 0, 0, 0);
+  statusStart.setDate(statusStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS);
+  const statusSinceDate = dateKey(statusStart);
   const statusDates = [
     ...new Set([
-      ...ownedEntries.map((entry) => entry.localDate),
+      ...ownedEntries
+        .filter((entry) => entry.localDate >= statusSinceDate)
+        .map((entry) => entry.localDate),
+      ...entriesToUpsert.map((entry) => entry.localDate),
       ...(state.gymSessions ?? [])
-        .filter((session) => session.userId === state.currentUserId)
+        .filter(
+          (session) =>
+            session.userId === state.currentUserId &&
+            session.localDate >= statusSinceDate,
+        )
         .map((session) => session.localDate),
       ...state.dailyMetricStatuses
         .filter(
           (status) =>
             status.groupId === state.group.id &&
-            status.userId === state.currentUserId,
+            status.userId === state.currentUserId &&
+            status.localDate >= statusSinceDate,
         )
         .map((status) => status.localDate),
-      ...vacationDates(state, state.currentUserId),
+      ...vacationDates(state, state.currentUserId).filter(
+        (localDate) => localDate >= statusSinceDate,
+      ),
       dateKey(),
     ]),
   ];

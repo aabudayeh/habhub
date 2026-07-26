@@ -113,7 +113,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     const dataTypes = enabledHealthDataTypes(current.settings.healthSync.dataTypes);
     if (!dataTypes.length) throw new Error('Choose at least one health data category.');
     const operation = (async () => {
-      setStatus('syncing');
+      // Automatic foreground refreshes should not turn every screen into a
+      // loading state. Manual/pull/connect actions still provide feedback.
+      const showBusy = reason !== 'open';
+      if (showBusy) setStatus('syncing');
       try {
         const previous = persistedRef.current;
         const fullRefresh = reason === 'history';

@@ -12,7 +12,6 @@ import {
   Alert,
   Animated,
   BackHandler,
-  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -83,7 +82,6 @@ export default function LeaderboardScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
-  const [rankingsReady, setRankingsReady] = useState(false);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
   useEffect(() => {
@@ -178,7 +176,6 @@ export default function LeaderboardScreen() {
   const rankingRows = useMemo(() => {
     void rankingInputs;
     const rows = new Map<string, ReturnType<typeof leaderboardRows>>();
-    if (!rankingsReady) return rows;
     for (const id of selected) {
       const metric = tracked.find((item) => item.id === id);
       rows.set(
@@ -195,7 +192,6 @@ export default function LeaderboardScreen() {
     return rows;
   }, [
     dates,
-    rankingsReady,
     selected,
     rankingInputs,
     tracked,
@@ -298,11 +294,6 @@ export default function LeaderboardScreen() {
   const hiddenOptions = options.filter((item) => !selected.includes(item.id));
   useFocusEffect(
     useCallback(() => {
-      setRankingsReady(false);
-      let active = true;
-      const task = InteractionManager.runAfterInteractions(() => {
-        if (active) setRankingsReady(true);
-      });
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         if (!editing) return false;
         setEditing(false);
@@ -310,8 +301,6 @@ export default function LeaderboardScreen() {
         return true;
       });
       return () => {
-        active = false;
-        task.cancel();
         subscription.remove();
       };
     }, [editing]),
@@ -463,7 +452,7 @@ export default function LeaderboardScreen() {
                 <Ionicons name="expand-outline" size={20} color={accent} />
               )}
             </Pressable>
-            {!rankingsReady ? (
+            {false ? (
               <View style={[styles.loadingRankings, { borderTopColor: colors.border }]}>
                 <Text style={[styles.detail, { color: colors.muted }]}>
                   Loading saved rankings…

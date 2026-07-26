@@ -7,6 +7,7 @@ import React, {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from "react";
 import {
@@ -1782,6 +1783,14 @@ const AppContext = createContext<AppContextValue | null>(null);
 export function AppProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
   const [hydrated, setHydrated] = useState(false);
+  const persistenceStateRef = useRef(state);
+  const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const persistenceTaskRef = useRef<
+    ReturnType<typeof InteractionManager.runAfterInteractions> | null
+  >(null);
+  persistenceStateRef.current = state;
 
   useEffect(() => {
     AsyncStorage.getItem(APP_STORAGE_KEY)
@@ -2139,21 +2148,36 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!hydrated) return;
-    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
-      null;
-    const timeout = setTimeout(() => {
-      task = InteractionManager.runAfterInteractions(() => {
+    // Persist the newest state at most once per short burst. The old effect
+    // repeatedly cancelled/recreated timers and serialized the full offline
+    // cache after nearly every cloud/health update.
+    if (persistenceTimerRef.current || persistenceTaskRef.current) return;
+    persistenceTimerRef.current = setTimeout(() => {
+      persistenceTimerRef.current = null;
+      persistenceTaskRef.current = InteractionManager.runAfterInteractions(
+        () => {
+          persistenceTaskRef.current = null;
+          const latest = persistenceStateRef.current;
         AsyncStorage.setItem(
           APP_STORAGE_KEY,
-          JSON.stringify({ ...state, lastSavedAt: new Date().toISOString() }),
+            JSON.stringify({
+              ...latest,
+              lastSavedAt: new Date().toISOString(),
+            }),
         ).catch(() => undefined);
-      });
-    }, 700);
-    return () => {
-      clearTimeout(timeout);
-      task?.cancel();
-    };
+        },
+      );
+    }, 1800);
   }, [hydrated, state]);
+
+  useEffect(
+    () => () => {
+      if (persistenceTimerRef.current)
+        clearTimeout(persistenceTimerRef.current);
+      persistenceTaskRef.current?.cancel();
+    },
+    [],
+  );
 
   const replaceState = useCallback(
     (nextState: AppState) => dispatch({ type: "hydrate", state: nextState }),

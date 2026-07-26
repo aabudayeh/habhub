@@ -42,6 +42,8 @@ export type LeaderboardPeriod =
   | "overall"
   | "custom";
 
+const allTimeDatesCache = new WeakMap<AppState, Map<string, string[]>>();
+
 export function periodDates(
   period: LeaderboardPeriod,
   anchorDate = dateKey(),
@@ -67,6 +69,18 @@ export function allTimePeriodDates(
   metricIds?: string[],
   userIds?: string[],
 ) {
+  let stateCache = allTimeDatesCache.get(state);
+  if (!stateCache) {
+    stateCache = new Map();
+    allTimeDatesCache.set(state, stateCache);
+  }
+  const cacheKey = [
+    anchorDate,
+    [...(metricIds ?? [])].sort().join(","),
+    [...(userIds ?? [])].sort().join(","),
+  ].join("|");
+  const cached = stateCache.get(cacheKey);
+  if (cached) return cached;
   const metrics = metricIds?.length ? new Set(metricIds) : undefined;
   const users = userIds?.length ? new Set(userIds) : undefined;
   const candidates = [
@@ -97,7 +111,7 @@ export function allTimePeriodDates(
       .map((session) => session.localDate),
   ].sort();
   const start = candidates[0] ?? anchorDate;
-  return dateRangeEnding(
+  const dates = dateRangeEnding(
     anchorDate,
     Math.max(
       1,
@@ -108,6 +122,8 @@ export function allTimePeriodDates(
       ) + 1,
     ),
   );
+  stateCache.set(cacheKey, dates);
+  return dates;
 }
 
 export function periodTitle(
@@ -186,6 +202,11 @@ export type PeriodMetricResult = {
   lastSyncedAt?: string;
 };
 
+const periodResultCache = new WeakMap<
+  AppState,
+  WeakMap<MetricDefinition, Map<string, PeriodMetricResult>>
+>();
+
 /** Whether the member's period average satisfies their own goal. */
 export function periodAverageGoalReached(result: PeriodMetricResult): boolean {
   if (result.mode === "private" || result.visibleDays < 1) return false;
@@ -257,6 +278,37 @@ function sharedStatusGoalReached(
 }
 
 export function periodMetricResult(
+  state: AppState,
+  metric: MetricDefinition,
+  subjectUserId: string,
+  viewerUserId: string,
+  dates: string[],
+): PeriodMetricResult {
+  let metricCaches = periodResultCache.get(state);
+  if (!metricCaches) {
+    metricCaches = new WeakMap();
+    periodResultCache.set(state, metricCaches);
+  }
+  let results = metricCaches.get(metric);
+  if (!results) {
+    results = new Map();
+    metricCaches.set(metric, results);
+  }
+  const key = `${subjectUserId}|${viewerUserId}|${dates.join(",")}`;
+  const cached = results.get(key);
+  if (cached) return cached;
+  const result = calculatePeriodMetricResult(
+    state,
+    metric,
+    subjectUserId,
+    viewerUserId,
+    dates,
+  );
+  results.set(key, result);
+  return result;
+}
+
+function calculatePeriodMetricResult(
   state: AppState,
   metric: MetricDefinition,
   subjectUserId: string,

@@ -10,7 +10,11 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AppState as NativeAppState, Platform } from "react-native";
+import {
+  AppState as NativeAppState,
+  InteractionManager,
+  Platform,
+} from "react-native";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
@@ -498,14 +502,23 @@ function valueHash(value: unknown) {
   return (hash >>> 0).toString(16);
 }
 
+const stableHashCache = new WeakMap<AppState, string>();
+const workspaceHashCache = new WeakMap<AppState, string>();
+
 function stableHash(state: AppState) {
-  return valueHash(snapshotPayload(state));
+  const cached = stableHashCache.get(state);
+  if (cached) return cached;
+  const hash = valueHash(snapshotPayload(state));
+  stableHashCache.set(state, hash);
+  return hash;
 }
 
 /** Only data represented by relational group tables belongs in a group push. */
 function workspaceHash(state: AppState) {
+  const cached = workspaceHashCache.get(state);
+  if (cached) return cached;
   const payload = snapshotPayload(state);
-  return valueHash({
+  const hash = valueHash({
     currentUserId: payload.currentUserId,
     group: payload.group,
     groupMetrics: payload.group.metricConfiguration ?? [],
@@ -523,6 +536,8 @@ function workspaceHash(state: AppState) {
       (status) => status.userId === payload.currentUserId,
     ),
   });
+  workspaceHashCache.set(state, hash);
+  return hash;
 }
 
 async function resolvePrivateMedia(state: AppState): Promise<AppState> {
@@ -603,6 +618,20 @@ function mergeStates(remote: AppState, local: AppState): AppState {
     messages: mergeById(remote.messages, local.messages),
     lastSavedAt: null,
   };
+}
+
+function groupConfigurationHash(state: AppState) {
+  return valueHash({
+    id: state.group.id,
+    name: state.group.name,
+    templateName: state.group.templateName,
+    streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
+    themeColor: state.group.themeColor,
+    requireMemberApproval: state.group.requireMemberApproval,
+    gymPlans: state.group.gymPlans,
+    metrics: state.group.metricConfiguration,
+    roles: state.group.members.map((member) => [member.id, member.role]),
+  });
 }
 
 function dailyStatusKey(
@@ -839,11 +868,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const revisionRef = useRef(0);
   const hashRef = useRef<string | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
+  const groupConfigurationHashRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const deviceHeartbeatAtRef = useRef(0);
   const initializedUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idleSyncRef = useRef<
+    ReturnType<typeof InteractionManager.runAfterInteractions> | null
+  >(null);
   const suppressGroupRefreshUntilRef = useRef(0);
   const groupLoadSequenceRef = useRef(0);
   stateRef.current = state;
@@ -874,7 +907,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
   const pullLatest = useCallback(async () => {
     if (!auth.user || !supabase) return;
-    setStatus("syncing");
+    // Realtime account updates hydrate behind the currently rendered cache.
+    // A global loading state here made every tab appear to reload.
     setErrorMessage(null);
     try {
       const remote = await fetchSnapshot(auth.user.id);
@@ -907,6 +941,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       hashRef.current = remoteHash;
       workspaceHashRef.current =
         resolvedHash === remoteHash ? workspaceHash(resolved) : null;
+      groupConfigurationHashRef.current = groupConfigurationHash(resolved);
       replaceState(resolved);
       stateRef.current = resolved;
       setLastSyncedAt(remote.updated_at);
@@ -922,7 +957,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
   }, [auth.user, replaceState]);
 
-  const performSync = useCallback(async () => {
+  const performSync = useCallback(async (forceWorkspace = false) => {
     if (!auth.user || !supabase || initializedUserRef.current !== auth.user.id)
       return;
     if (syncPromiseRef.current) return syncPromiseRef.current;
@@ -944,15 +979,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = candidate;
         }
         const nextWorkspaceHash = workspaceHash(candidate);
+        const nextGroupConfigurationHash = groupConfigurationHash(candidate);
         let workspaceSynced = true;
         let workspaceWarning: string | null = null;
         if (
           isCloudGroupId(candidate.group.id) &&
-          nextWorkspaceHash !== workspaceHashRef.current
+          (forceWorkspace ||
+            nextWorkspaceHash !== workspaceHashRef.current)
         ) {
           suppressGroupRefreshUntilRef.current = Date.now() + 3000;
           try {
-            await pushCloudWorkspace(candidate);
+            await pushCloudWorkspace(
+              candidate,
+              nextGroupConfigurationHash !==
+                groupConfigurationHashRef.current,
+            );
           } catch (error) {
             // Group tables and the private account snapshot are independent.
             // Preserve settings and imported health data even when one shared
@@ -971,7 +1012,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         revisionRef.current = result.revision;
         const syncedAt = result.updatedAt;
         hashRef.current = candidateHash;
-        if (workspaceSynced) workspaceHashRef.current = nextWorkspaceHash;
+        if (workspaceSynced) {
+          workspaceHashRef.current = nextWorkspaceHash;
+          groupConfigurationHashRef.current = nextGroupConfigurationHash;
+        }
         setLastSyncedAt(syncedAt);
         setPendingChanges(!workspaceSynced);
         setStatus("synced");
@@ -1082,6 +1126,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               ? null
               : stableHash(resolved);
             workspaceHashRef.current = workspaceHash(resolved);
+            groupConfigurationHashRef.current =
+              groupConfigurationHash(resolved);
             replaceState(resolved);
             stateRef.current = resolved;
             setLastSyncedAt(remote.updated_at);
@@ -1107,6 +1153,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           hashRef.current = null;
           workspaceHashRef.current = existingGroups.length
             ? workspaceHash(bound)
+            : null;
+          groupConfigurationHashRef.current = existingGroups.length
+            ? groupConfigurationHash(bound)
             : null;
         }
         if (cancelled) return;
@@ -1151,6 +1200,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     )
       return;
     if (timerRef.current) clearTimeout(timerRef.current);
+    idleSyncRef.current?.cancel();
     // Coalesce and defer full-snapshot hashing. Serializing the whole offline
     // state synchronously on every tap or keystroke caused phone UI stutter.
     const saveWhenReady = () => {
@@ -1158,14 +1208,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         timerRef.current = setTimeout(saveWhenReady, 1200);
         return;
       }
-      const hash = stableHash(stateRef.current);
-      if (hash === hashRef.current) return;
-      setPendingChanges(true);
-      performSync().catch(() => undefined);
+      idleSyncRef.current = InteractionManager.runAfterInteractions(() => {
+        const hash = stableHash(stateRef.current);
+        if (hash === hashRef.current) return;
+        setPendingChanges(true);
+        performSync().catch(() => undefined);
+      });
     };
     timerRef.current = setTimeout(saveWhenReady, 2400);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      idleSyncRef.current?.cancel();
     };
   }, [auth.status, auth.user?.id, performSync, state]);
 
@@ -1211,6 +1264,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       stateRef.current = next;
       hashRef.current = stableHash(next);
       workspaceHashRef.current = workspaceHash(next);
+      groupConfigurationHashRef.current = groupConfigurationHash(next);
       replaceState(next);
       await AsyncStorage.removeItem(PENDING_GROUP_KEY);
       setPendingGroup(null);
@@ -1281,6 +1335,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     stateRef.current = refreshed;
     hashRef.current = stableHash(refreshed);
     workspaceHashRef.current = workspaceHash(refreshed);
+    groupConfigurationHashRef.current = groupConfigurationHash(refreshed);
     replaceState(refreshed);
   }, [replaceState]);
 
@@ -1296,27 +1351,43 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     replaceState(next);
   }, [replaceState]);
 
-  const refreshGroupActivity = useCallback(async () => {
+  const refreshGroupActivity = useCallback(async (sinceDate?: string) => {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
     const groupId = stateRef.current.group.id;
-    const activity = await loadCloudGroupActivity(stateRef.current, groupId);
+    const activity = await loadCloudGroupActivity(
+      stateRef.current,
+      groupId,
+      sinceDate,
+    );
     if (stateRef.current.group.id !== groupId) return;
     const live = stateRef.current;
+    const groupMetricIds = new Set(
+      (live.group.metricConfiguration ?? []).map((metric) => metric.id),
+    );
     const entries = new Map(
-      activity.entries.map((entry) => [entry.id, entry]),
+      live.entries
+        .filter(
+          (entry) =>
+            !sinceDate ||
+            entry.localDate < sinceDate ||
+            !groupMetricIds.has(entry.metricId),
+        )
+        .map((entry) => [entry.id, entry]),
     );
-    live.entries
-      .filter((entry) => entry.userId === live.currentUserId)
-      .forEach((entry) => entries.set(entry.id, entry));
+    activity.entries.forEach((entry) => entries.set(entry.id, entry));
     const statuses = new Map(
-      activity.dailyMetricStatuses.map((status) => [
-        dailyStatusKey(status),
-        status,
-      ]),
+      live.dailyMetricStatuses
+        .filter(
+          (status) =>
+            status.groupId !== groupId ||
+            !sinceDate ||
+            status.localDate < sinceDate,
+        )
+        .map((status) => [dailyStatusKey(status), status]),
     );
-    live.dailyMetricStatuses
-      .filter((status) => status.userId === live.currentUserId)
-      .forEach((status) => statuses.set(dailyStatusKey(status), status));
+    activity.dailyMetricStatuses.forEach((status) =>
+      statuses.set(dailyStatusKey(status), status),
+    );
     const next = {
       ...live,
       entries: [...entries.values()].sort((a, b) =>
@@ -1350,6 +1421,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // replaced by the authoritative workspace.
           hashRef.current = null;
           workspaceHashRef.current = workspaceHash(next);
+          groupConfigurationHashRef.current = groupConfigurationHash(next);
           replaceState(next);
           setPendingChanges(true);
         })
@@ -1370,6 +1442,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let messageTimer: ReturnType<typeof setTimeout> | null = null;
     let activityTimer: ReturnType<typeof setTimeout> | null = null;
+    let activitySinceDate: string | undefined;
     const queueRefresh = () => {
       if (Date.now() < suppressGroupRefreshUntilRef.current) return;
       if (refreshTimer) clearTimeout(refreshTimer);
@@ -1384,11 +1457,30 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         refreshMessages().catch(() => undefined);
       }, 120);
     };
-    const queueActivityRefresh = () => {
+    const queueActivityRefresh = (event?: {
+      new?: Record<string, unknown>;
+      old?: Record<string, unknown>;
+    }) => {
       if (Date.now() < suppressGroupRefreshUntilRef.current) return;
+      const changedDate = String(
+        event?.new?.local_date ?? event?.old?.local_date ?? "",
+      );
+      const fallback = new Date();
+      fallback.setDate(fallback.getDate() - 2);
+      const nextSince = /^\d{4}-\d{2}-\d{2}$/.test(changedDate)
+        ? changedDate
+        : dateKey(fallback);
+      activitySinceDate =
+        !activitySinceDate || nextSince < activitySinceDate
+          ? nextSince
+          : activitySinceDate;
       if (activityTimer) clearTimeout(activityTimer);
       activityTimer = setTimeout(
-        () => refreshGroupActivity().catch(() => undefined),
+        () => {
+          const since = activitySinceDate;
+          activitySinceDate = undefined;
+          refreshGroupActivity(since).catch(() => undefined);
+        },
         700,
       );
     };
@@ -1486,7 +1578,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       pendingChanges,
       pendingGroup,
       devices,
-      syncNow: performSync,
+      // A user-requested refresh also repairs relational group rows that may
+      // be absent even when the private account snapshot is already current.
+      syncNow: () => performSync(true),
       pullLatest,
       refreshDevices: loadDevices,
       forgetDevice: async (deviceId) => {
@@ -1555,6 +1649,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
+        groupConfigurationHashRef.current = groupConfigurationHash(next);
         replaceState(next);
         setPendingChanges(true);
         hydrateGroupInBackground(groupId);
@@ -1620,6 +1715,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
+        groupConfigurationHashRef.current = groupConfigurationHash(next);
         replaceState(next);
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
@@ -1643,6 +1739,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const next = { ...stateRef.current, group };
         stateRef.current = next;
         workspaceHashRef.current = workspaceHash(next);
+        groupConfigurationHashRef.current = groupConfigurationHash(next);
         replaceState(next);
         if (isCloudGroupId(groupId)) hydrateGroupInBackground(groupId);
       },
@@ -1681,7 +1778,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
       },
       refreshGroup,
-      refreshActivity: refreshGroupActivity,
+      refreshActivity: () => {
+        const recent = new Date();
+        recent.setDate(recent.getDate() - 120);
+        return refreshGroupActivity(dateKey(recent));
+      },
       refreshMessages,
       syncMessagesNow: async () => {
         await pushCloudMessagesNow(stateRef.current);
