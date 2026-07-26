@@ -59,12 +59,15 @@ export function TrackedGoalsHeatmap({
   const gap = range === "year" ? 1 : compact ? 4 : 5;
   const yearColumns = Math.ceil(cells.length / 7);
   const layoutWidth = availableWidth || 300;
+  const yearCellWidth = Math.max(
+    2,
+    Math.floor(
+      ((layoutWidth - yearColumns * gap) / Math.max(1, yearColumns)) * 100,
+    ) / 100,
+  );
   const cellWidth =
     range === "year"
-      ? Math.max(
-          3.5,
-          (layoutWidth - yearColumns * gap) / yearColumns,
-        )
+      ? yearCellWidth
       : range === "week"
         ? Math.max(
             28,
@@ -232,12 +235,15 @@ export function GoalHeatmap({
   const gap = range === "year" ? 1 : compact ? 4 : 5;
   const yearColumns = Math.ceil(cells.length / 7);
   const layoutWidth = availableWidth || 300;
+  const yearCellWidth = Math.max(
+    2,
+    Math.floor(
+      ((layoutWidth - yearColumns * gap) / Math.max(1, yearColumns)) * 100,
+    ) / 100,
+  );
   const cellWidth =
     range === "year"
-      ? Math.max(
-          3.5,
-          (layoutWidth - yearColumns * gap) / yearColumns,
-        )
+      ? yearCellWidth
       : range === "week"
         ? Math.max(
             28,
@@ -391,7 +397,12 @@ export function GoalHeatmap({
 }
 
 const styles = StyleSheet.create({
-  root: { gap: 5 },
+  root: {
+    width: "100%",
+    maxWidth: "100%",
+    gap: 5,
+    overflow: "hidden",
+  },
   grid: {
     width: "100%",
     flexDirection: "row",

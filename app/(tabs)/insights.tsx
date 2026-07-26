@@ -464,7 +464,13 @@ export default function Insights() {
             {legendItems.map((item) => (
               <View
                 key={item.id}
-                style={[styles.legendItem, { borderColor: colors.border }]}
+                style={[
+                  styles.legendItem,
+                  {
+                    borderColor: colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
               >
                 <View style={[styles.legendDot, { backgroundColor: item.color }]} />
                 <Text style={[styles.legendName, { color: colors.muted }]}>
@@ -570,7 +576,13 @@ export default function Insights() {
             {legendItems.map((item) => (
               <View
                 key={item.id}
-                style={[styles.legendItem, { borderColor: colors.border }]}
+                style={[
+                  styles.legendItem,
+                  {
+                    borderColor: colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
               >
                 <View style={[styles.legendDot, { backgroundColor: item.color }]} />
                 <Text style={[styles.legendName, { color: colors.muted }]}>
@@ -2154,7 +2166,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   legend: { color: palette.muted, fontSize: 9 },
-  legendWrap: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: -5 },
+  legendWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    marginTop: 8,
+  },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
