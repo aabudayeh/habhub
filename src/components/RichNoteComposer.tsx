@@ -136,8 +136,15 @@ function runWidth(text: string, block: Block) {
 
 export const RichNoteComposer = forwardRef<
   RichNoteComposerHandle,
-  { value: string; onChange: (value: string) => void }
->(function RichNoteComposer({ value, onChange }, ref) {
+  {
+    value: string;
+    onChange: (value: string) => void;
+    onEditingChange?: (editing: boolean) => void;
+  }
+>(function RichNoteComposer(
+  { value, onChange, onEditingChange },
+  ref,
+) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [active, setActive] = useState({ line: 0, run: 0 });
@@ -302,7 +309,10 @@ export const RichNoteComposer = forwardRef<
                   inputs.current[`${lineIndex}:${runIndex}`] = input;
                 }}
                 value={run.text}
-                onFocus={() => setActive({ line: lineIndex, run: runIndex })}
+                onFocus={() => {
+                  setActive({ line: lineIndex, run: runIndex });
+                  onEditingChange?.(true);
+                }}
                 onChangeText={(text) => {
                   const runs = [...line.runs];
                   runs[runIndex] = { ...run, text };

@@ -42,6 +42,7 @@ export default function NoteEditor() {
   );
   const [labels, setLabels] = useState(existing?.labels ?? []);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("https://");
@@ -53,9 +54,10 @@ export default function NoteEditor() {
     const show = Keyboard.addListener("keyboardDidShow", () =>
       setKeyboardVisible(true),
     );
-    const hide = Keyboard.addListener("keyboardDidHide", () =>
-      setKeyboardVisible(false),
-    );
+    const hide = Keyboard.addListener("keyboardDidHide", () => {
+      setKeyboardVisible(false);
+      setComposerFocused(false);
+    });
     return () => {
       show.remove();
       hide.remove();
@@ -225,7 +227,12 @@ export default function NoteEditor() {
           placeholderTextColor={colors.faint}
           style={[styles.title, { color: colors.ink, borderColor: colors.border }]}
         />
-        <RichNoteComposer ref={composer} value={body} onChange={change} />
+        <RichNoteComposer
+          ref={composer}
+          value={body}
+          onChange={change}
+          onEditingChange={setComposerFocused}
+        />
         {imageUri ? <Image source={imageUri} style={styles.image} /> : null}
         <Pressable onPress={pickImage} style={styles.imageButton}>
           <Ionicons name="image-outline" size={17} color={accent} />
@@ -261,7 +268,9 @@ export default function NoteEditor() {
         </Pressable>
       ) : null}
     </Screen>
-    {keyboardVisible ? <View style={styles.floatingToolbar}>{toolbar}</View> : null}
+    {keyboardVisible || composerFocused ? (
+      <View style={styles.floatingToolbar}>{toolbar}</View>
+    ) : null}
     <Modal
       transparent
       visible={linkOpen}
