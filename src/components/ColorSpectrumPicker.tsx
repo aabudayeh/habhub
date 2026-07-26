@@ -10,8 +10,10 @@ import {
 
 import { AppText as Text } from "@/src/components/AppText";
 import {
+  isAllowedTrackerColor,
   isAllowedThemeColor,
   THEME_COLOR_CHOICES,
+  TRACKER_COLOR_CHOICES,
 } from "@/src/domain/colors";
 import { useAppColors } from "@/src/theme";
 
@@ -78,10 +80,12 @@ export function ColorSpectrumPicker({
   value,
   onChange,
   disabled = false,
+  variant = "theme",
 }: {
   value: string;
   onChange: (color: string) => void;
   disabled?: boolean;
+  variant?: "theme" | "tracker";
 }) {
   const colors = useAppColors();
   const [size, setSize] = useState({ width: 1, height: 1 });
@@ -108,7 +112,10 @@ export function ColorSpectrumPicker({
       clamped.y / size.height,
     );
     setCursor(clamped);
-    const unavailable = !isAllowedThemeColor(next);
+    const unavailable =
+      variant === "tracker"
+        ? !isAllowedTrackerColor(next)
+        : !isAllowedThemeColor(next);
     setBlocked(unavailable);
     if (!unavailable) onChange(next);
   }
@@ -116,7 +123,10 @@ export function ColorSpectrumPicker({
   return (
     <View style={styles.wrap}>
       <View style={styles.swatches}>
-        {THEME_COLOR_CHOICES.map((color) => (
+        {(variant === "tracker"
+          ? TRACKER_COLOR_CHOICES
+          : THEME_COLOR_CHOICES
+        ).map((color) => (
           <Pressable
             key={color}
             disabled={disabled}

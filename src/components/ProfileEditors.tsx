@@ -273,10 +273,12 @@ export function EnergyProfileEditor() {
 }
 
 export function MetricGoalsEditor() {
-  const { state, updateMetric } = useApp();
+  const { state, updateMetric, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [collapsed, setCollapsed] = React.useState(true);
+  const [restDaysOpen, setRestDaysOpen] = React.useState(false);
+  const restDays = state.settings.streakRestDaysPerWeek ?? 1;
   const metrics = state.metrics
     .filter(
       (metric) =>
@@ -339,6 +341,54 @@ export function MetricGoalsEditor() {
               </View>
             </View>
           )) : <Text style={[styles.help, { color: colors.muted, marginVertical: 12 }]}>No goals are currently tracked. Add one in customization.</Text>}
+        <View style={[styles.restDays, { borderTopColor: colors.border }]}>
+          <Pressable
+            accessibilityState={{ expanded: restDaysOpen }}
+            onPress={() => setRestDaysOpen((value) => !value)}
+            style={styles.restDaysHeading}
+          >
+            <View style={styles.grow}>
+              <Text style={[styles.goalName, { color: colors.ink }]}>
+                Weekly streak rest days
+              </Text>
+              <Text style={[styles.goalMeta, { color: colors.muted }]}>
+                {restDays === 0 ? "No rest days" : `${restDays} per week`} · personal streaks only
+              </Text>
+            </View>
+            <Ionicons
+              name={restDaysOpen ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={colors.muted}
+            />
+          </Pressable>
+          {restDaysOpen ? (
+            <View style={[styles.restDaysList, { borderTopColor: colors.border }]}>
+              {[0, 1, 2, 3].map((count) => {
+                const selected = restDays === count;
+                return (
+                  <Pressable
+                    key={count}
+                    onPress={() => {
+                      updateSettings({ streakRestDaysPerWeek: count });
+                      setRestDaysOpen(false);
+                    }}
+                    style={[
+                      styles.restDaysOption,
+                      selected && { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Text style={[styles.goalName, { color: selected ? accent : colors.ink }]}>
+                      {count === 0
+                        ? "No rest days"
+                        : `${count} rest day${count === 1 ? "" : "s"} per week`}
+                    </Text>
+                    {selected ? <Ionicons name="checkmark" size={17} color={accent} /> : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
       </Card> : null}
     </>
   );
@@ -546,4 +596,20 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   goalUnit: { color: palette.muted, fontSize: 7 },
+  restDays: { borderTopWidth: 1, marginTop: 4 },
+  restDaysHeading: {
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  restDaysList: { borderTopWidth: 1, paddingVertical: 4 },
+  restDaysOption: {
+    minHeight: 40,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
 });

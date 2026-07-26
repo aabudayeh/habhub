@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 
 import {
   Button,
@@ -25,8 +26,6 @@ import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import {
   isAllowedTrackerColor,
-  isReservedGoalColor,
-  normalizeHexColor,
   TRACKER_COLOR_CHOICES,
 } from "@/src/domain/colors";
 import { energyFormulaVariables } from "@/src/domain/energy";
@@ -344,7 +343,6 @@ export default function TrackerEditor() {
   const [aggregationOpen, setAggregationOpen] = useState(false);
   const [rankingOpen, setRankingOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
-  const [customColor, setCustomColor] = useState(color);
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
   );
@@ -450,6 +448,12 @@ export default function TrackerEditor() {
     tracker?.submetricDisplay?.collapsibleLabel ??
       (tracker?.id === "food" ? "Add vitamins, minerals and more" : "More fields"),
   );
+  const [visibleSubmetricCount, setVisibleSubmetricCount] = useState(
+    String(
+      tracker?.submetricDisplay?.visibleInputCount ??
+        Math.min(4, Math.max(1, tracker?.submetrics?.length ?? 1)),
+    ),
+  );
   const [activeFrom, setActiveFrom] = useState(tracker?.activeFrom ?? dateKey());
   const initiallyTracked = Boolean(
     !groupScope &&
@@ -522,6 +526,7 @@ export default function TrackerEditor() {
     submetricTemplate,
     submetricsCollapsible,
     submetricsLabel,
+    visibleSubmetricCount,
     activeFrom,
     trackGoal,
     addToToday,
@@ -564,7 +569,6 @@ export default function TrackerEditor() {
         Math.floor(Math.random() * TRACKER_COLOR_CHOICES.length)
       ];
     setColor(nextColor);
-    setCustomColor(nextColor);
     setCategory("other");
     setGrouping("");
     setCustomTypeOpen(false);
@@ -588,6 +592,7 @@ export default function TrackerEditor() {
     setManualEntry(true);
     setTimerEnabled(false);
     setSubmetrics([]);
+    setVisibleSubmetricCount("1");
     setTrackGoal(false);
     setAddToToday(true);
     setReminderEnabled(false);
@@ -640,6 +645,12 @@ export default function TrackerEditor() {
     setSubmetricsCollapsible(preset.submetricDisplay?.collapsible ?? false);
     setSubmetricsLabel(
       preset.submetricDisplay?.collapsibleLabel ?? "More fields",
+    );
+    setVisibleSubmetricCount(
+      String(
+        preset.submetricDisplay?.visibleInputCount ??
+          Math.min(4, Math.max(1, preset.submetrics?.length ?? 1)),
+      ),
     );
     setActiveFrom(dateKey());
     setTrackGoal(false);
@@ -721,6 +732,15 @@ export default function TrackerEditor() {
       );
     if (submetrics.some((item) => !item.name.trim()))
       return Alert.alert("Check submetrics", "Every submetric needs a name.");
+    if (
+      submetricsCollapsible &&
+      (!Number.isFinite(Number(visibleSubmetricCount)) ||
+        Number(visibleSubmetricCount) < 1)
+    )
+      return Alert.alert(
+        "Check visible inputs",
+        "Keep at least one submetric visible before the extra inputs.",
+      );
     const builtInCalculation = [
       "weekly_deficit_balance",
       "overall_score",
@@ -815,6 +835,12 @@ export default function TrackerEditor() {
             collapsible: submetricsCollapsible,
             collapsibleLabel: submetricsCollapsible
               ? submetricsLabel.trim() || "More fields"
+              : undefined,
+            visibleInputCount: submetricsCollapsible
+              ? Math.min(
+                  submetrics.length,
+                  Math.max(1, Math.round(Number(visibleSubmetricCount) || 1)),
+                )
               : undefined,
           }
         : undefined,
@@ -1001,6 +1027,7 @@ export default function TrackerEditor() {
       ],
     );
   }
+  let deferredSubmetrics: React.ReactNode = null;
   return (
     <Screen
       scrollRef={scrollRef}
@@ -1090,67 +1117,11 @@ export default function TrackerEditor() {
         </Pressable>
         {showColors ? (
           <View style={styles.colorPanel}>
-            <View style={styles.swatches}>
-              {TRACKER_COLOR_CHOICES.map((item) => (
-                <Pressable
-                  key={item}
-                  accessibilityLabel={`Choose tracker color ${item}`}
-                  onPress={() => {
-                    setColor(item);
-                    setCustomColor(item);
-                  }}
-                  style={[
-                    styles.swatch,
-                    { backgroundColor: item },
-                    color === item && { borderColor: colors.ink },
-                  ]}
-                >
-                  {color === item ? (
-                    <Ionicons
-                      name="checkmark"
-                      size={15}
-                      color={palette.white}
-                    />
-                  ) : null}
-                </Pressable>
-              ))}
-            </View>
-            <View style={styles.customColor}>
-              <TextInput
-                value={customColor}
-                onChangeText={setCustomColor}
-                autoCapitalize="characters"
-                maxLength={7}
-                placeholder="#2F6FED"
-                placeholderTextColor={colors.faint}
-                style={[
-                  styles.colorInput,
-                  { color: colors.ink, borderColor: colors.border },
-                ]}
-              />
-              <Pressable
-                disabled={!isAllowedTrackerColor(customColor)}
-                onPress={() => {
-                  const next = normalizeHexColor(customColor);
-                  if (next) setColor(next);
-                }}
-                style={[
-                  styles.colorApply,
-                  {
-                    backgroundColor: isAllowedTrackerColor(customColor)
-                      ? (normalizeHexColor(customColor) ?? accent)
-                      : colors.border,
-                  },
-                ]}
-              >
-                <Text style={styles.colorApplyText}>Apply</Text>
-              </Pressable>
-            </View>
-            {isReservedGoalColor(customColor) ? (
-              <Text style={[styles.help, { color: palette.amber }]}>
-                That color is reserved for goal completion.
-              </Text>
-            ) : null}
+            <ColorSpectrumPicker
+              value={color}
+              onChange={setColor}
+              variant="tracker"
+            />
           </View>
         ) : null}
         <Pressable
@@ -1600,15 +1571,23 @@ export default function TrackerEditor() {
               />
             </View>
           ) : null}
+          {(() => {
+            deferredSubmetrics = (
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
             <Pressable
               onPress={() => setSubmetricsOpen((open) => !open)}
               style={styles.collapseHeading}
             >
               <View style={styles.grow}>
-                <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                  Submetrics
-                </Text>
+                <View style={styles.submetricTitleRow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Submetrics
+                  </Text>
+                  <InfoPopover
+                    label="How submetrics work"
+                    message="Submetrics store related inputs together in one tracker. For example, blood pressure can collect systolic, diastolic and pulse, while selected fields can also update linked trackers."
+                  />
+                </View>
                 <Text style={[styles.help, { color: colors.muted }]}>
                   {submetrics.length
                     ? `${submetrics.length} linked field${submetrics.length === 1 ? "" : "s"}`
@@ -1936,6 +1915,8 @@ export default function TrackerEditor() {
                         set={setSubmetricTemplate}
                         colors={colors}
                         keyboard={false}
+                        info="Use a submetric ID inside braces. Add .unit when its unit should appear. Text and separators are kept exactly as entered."
+                        example="Example: {systolic}/{diastolic} {systolic.unit} becomes 120/80 mmHg."
                       />
                     ) : null}
                     <View style={styles.switchRow}>
@@ -1948,19 +1929,31 @@ export default function TrackerEditor() {
                       />
                     </View>
                     {submetricsCollapsible ? (
-                      <Field
-                        label="Collapsed label"
-                        value={submetricsLabel}
-                        set={setSubmetricsLabel}
-                        colors={colors}
-                        keyboard={false}
-                      />
+                      <>
+                        <Field
+                          label="Visible inputs"
+                          value={visibleSubmetricCount}
+                          set={setVisibleSubmetricCount}
+                          colors={colors}
+                          info="Submetrics follow the order they were created. The first number you choose stays visible in the log form; all later inputs appear under the collapsed section."
+                        />
+                        <Field
+                          label="Collapsed label"
+                          value={submetricsLabel}
+                          set={setSubmetricsLabel}
+                          colors={colors}
+                          keyboard={false}
+                        />
+                      </>
                     ) : null}
                   </>
                 ) : null}
               </View>
             ) : null}
           </View>
+            );
+            return null;
+          })()}
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
             <Pressable
               onPress={() => setHealthOpen((open) => !open)}
@@ -2584,6 +2577,7 @@ export default function TrackerEditor() {
             </> : null}
           </View>
           </View>
+          {deferredSubmetrics}
         </Card>
       ) : null}
       <View style={styles.actions}>
@@ -2740,16 +2734,23 @@ function Field({
   set,
   colors,
   keyboard = true,
+  info,
+  example,
 }: {
   label: string;
   value: string;
   set: (value: string) => void;
   colors: ReturnType<typeof useAppColors>;
   keyboard?: boolean;
+  info?: string;
+  example?: string;
 }) {
   return (
     <View style={styles.grow}>
-      <Text style={[styles.label, { color: colors.ink }]}>{label}</Text>
+      <View style={styles.labelLine}>
+        <Text style={[styles.label, { color: colors.ink }]}>{label}</Text>
+        {info ? <InfoPopover label={`About ${label}`} message={info} /> : null}
+      </View>
       <TextInput
         value={value}
         onChangeText={set}
@@ -2759,6 +2760,11 @@ function Field({
           { color: colors.ink, borderColor: colors.border },
         ]}
       />
+      {example ? (
+        <Text style={[styles.fieldExample, { color: colors.muted }]}>
+          {example}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -2766,6 +2772,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 },
   fieldGroup: { gap: 6 },
   labelLine: { flexDirection: "row", alignItems: "center", gap: 4 },
+  fieldExample: { fontSize: 8, lineHeight: 12, marginTop: -4, marginBottom: 8 },
   inlineChoices: { gap: 5, paddingRight: 8 },
   input: {
     minHeight: 44,
@@ -2786,6 +2793,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  submetricTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   reminderRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   addReminder: {
     minHeight: 36,

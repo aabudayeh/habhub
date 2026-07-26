@@ -96,6 +96,8 @@ export type MetricSubmetricDisplay = {
   template?: string;
   collapsible?: boolean;
   collapsibleLabel?: string;
+  /** First N submetrics stay visible; later fields follow creation order under the disclosure. */
+  visibleInputCount?: number;
 };
 
 export type GymMetricMapping =

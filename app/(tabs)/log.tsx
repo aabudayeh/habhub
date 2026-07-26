@@ -88,6 +88,21 @@ export default function LogScreen() {
   const [selectedId, setSelectedId] = useState(metrics[0]?.id ?? "");
   const selected =
     state.metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
+  const submetricVisibleCount = selected?.submetricDisplay?.collapsible
+    ? Math.min(
+        selected.submetrics?.length ?? 0,
+        Math.max(
+          1,
+          selected.submetricDisplay.visibleInputCount ??
+            selected.submetrics?.filter((item) => item.showProgressBar).length ??
+            1,
+        ),
+      )
+    : (selected?.submetrics?.length ?? 0);
+  const visibleSubmetrics =
+    selected?.submetrics?.slice(0, submetricVisibleCount) ?? [];
+  const collapsedSubmetrics =
+    selected?.submetrics?.slice(submetricVisibleCount) ?? [];
   const [value, setValue] = useState("");
   const [label, setLabel] = useState("");
   const [note, setNote] = useState("");
@@ -792,10 +807,7 @@ export default function LogScreen() {
           selected.id !== "food" &&
           selected.id !== "blood_pressure_systolic" ? (
             <>
-              {(selected.submetricDisplay?.collapsible
-                ? selected.submetrics.filter((item) => item.showProgressBar)
-                : selected.submetrics
-              ).map((submetric) => (
+              {visibleSubmetrics.map((submetric) => (
                 <View key={submetric.id} style={styles.nutritionField}>
                   <Text style={[styles.nutritionLabel, { color: colors.muted }]}>
                     {submetric.name}
@@ -826,7 +838,7 @@ export default function LogScreen() {
                 </View>
               ))}
               {selected.submetricDisplay?.collapsible &&
-              selected.submetrics.some((item) => !item.showProgressBar) ? (
+              collapsedSubmetrics.length ? (
                 <>
                   <Pressable
                     onPress={() => setExtraSubmetricsOpen((open) => !open)}
@@ -846,9 +858,7 @@ export default function LogScreen() {
                   </Pressable>
                   {extraSubmetricsOpen ? (
                     <View style={styles.nutritionGrid}>
-                      {selected.submetrics
-                        .filter((item) => !item.showProgressBar)
-                        .map((submetric) => (
+                      {collapsedSubmetrics.map((submetric) => (
                           <View
                             key={submetric.id}
                             style={styles.nutritionField}
