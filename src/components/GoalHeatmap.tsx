@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
+import { entriesForDay } from "@/src/domain/dataIndex";
 import {
   effectiveGoalTarget,
   hasMetricData,
@@ -30,18 +31,245 @@ function alpha(color: string, opacity: number) {
     .padStart(2, "0")}`;
 }
 
+type HeatmapCellModel = {
+  date: string;
+  future: boolean;
+  backgroundColor?: string;
+  reached?: boolean;
+  tracked?: boolean;
+};
+
+export type GoalHeatmapModel = {
+  period: ReturnType<typeof metricPeriodStats>;
+  cells: HeatmapCellModel[];
+};
+
+export type TrackedGoalsHeatmapModel = {
+  met: number;
+  possible: number;
+  cells: HeatmapCellModel[];
+};
+
+type CacheInputs = {
+  metrics: AppState["metrics"];
+  photos: AppState["photos"];
+  statuses: AppState["dailyMetricStatuses"];
+  gymSessions: AppState["gymSessions"];
+  todos: AppState["todos"];
+  trackedPeriods: AppState["trackedGoalPeriods"];
+  energyProfiles: AppState["energyProfiles"];
+  energyProfile: AppState["settings"]["energyProfile"];
+  vacationPeriods: AppState["settings"]["vacationPeriods"];
+  foodGoalMode: AppState["settings"]["foodGoalMode"];
+  baselineCalories: number;
+  dayEndTime?: string;
+};
+
+type Cached<T> = CacheInputs & {
+  metric?: MetricDefinition;
+  model: T;
+};
+
+const goalModelCache = new WeakMap<
+  AppState["entries"],
+  Map<string, Cached<GoalHeatmapModel>>
+>();
+const trackedModelCache = new WeakMap<
+  AppState["entries"],
+  Map<string, Cached<TrackedGoalsHeatmapModel>>
+>();
+
+function cacheInputs(state: AppState): CacheInputs {
+  return {
+    metrics: state.metrics,
+    photos: state.photos,
+    statuses: state.dailyMetricStatuses,
+    gymSessions: state.gymSessions,
+    todos: state.todos,
+    trackedPeriods: state.trackedGoalPeriods,
+    energyProfiles: state.energyProfiles,
+    energyProfile: state.settings.energyProfile,
+    vacationPeriods: state.settings.vacationPeriods,
+    foodGoalMode: state.settings.foodGoalMode,
+    baselineCalories: state.settings.baselineCalories,
+    dayEndTime: state.settings.dayEndTime,
+  };
+}
+
+function sameInputs(left: Cached<unknown>, right: CacheInputs) {
+  return (
+    left.metrics === right.metrics &&
+    left.photos === right.photos &&
+    left.statuses === right.statuses &&
+    left.gymSessions === right.gymSessions &&
+    left.todos === right.todos &&
+    left.trackedPeriods === right.trackedPeriods &&
+    left.energyProfiles === right.energyProfiles &&
+    left.energyProfile === right.energyProfile &&
+    left.vacationPeriods === right.vacationPeriods &&
+    left.foodGoalMode === right.foodGoalMode &&
+    left.baselineCalories === right.baselineCalories &&
+    left.dayEndTime === right.dayEndTime
+  );
+}
+
+function cacheKey(
+  userId: string,
+  itemId: string,
+  dates: string[],
+  today: string,
+) {
+  return `${userId}\u0000${itemId}\u0000${dates[0] ?? ""}\u0000${
+    dates.at(-1) ?? ""
+  }\u0000${dates.length}\u0000${today}`;
+}
+
+function remember<T>(
+  bucket: Map<string, Cached<T>>,
+  key: string,
+  value: Cached<T>,
+) {
+  if (bucket.size >= 80) {
+    const oldest = bucket.keys().next().value;
+    if (oldest) bucket.delete(oldest);
+  }
+  bucket.set(key, value);
+  return value.model;
+}
+
+export function cachedGoalHeatmapModel(
+  state: AppState,
+  metric: MetricDefinition,
+  dates: string[],
+  today: string,
+): GoalHeatmapModel {
+  let bucket = goalModelCache.get(state.entries);
+  if (!bucket) {
+    bucket = new Map();
+    goalModelCache.set(state.entries, bucket);
+  }
+  const key = cacheKey(state.currentUserId, metric.id, dates, today);
+  const inputs = cacheInputs(state);
+  const cached = bucket.get(key);
+  if (cached && cached.metric === metric && sameInputs(cached, inputs))
+    return cached.model;
+  const period = metricPeriodStats(
+    state,
+    metric,
+    state.currentUserId,
+    dates.filter((date) => date <= today),
+  );
+  const cells = dates.map((date) => {
+    const future = date > today;
+    const logged =
+      !future && hasMetricData(state, metric, state.currentUserId, date);
+    const tracked =
+      !future && isMetricTrackedOnDate(state, metric, date);
+    const skipped =
+      !future &&
+      (isVacationDate(state, state.currentUserId, date) ||
+        entriesForDay(state.entries, metric.id, state.currentUserId, date).some(
+          (entry) => entry.value === "skipped",
+        ));
+    const reached =
+      logged &&
+      scheduledGoalReached(state, metric, state.currentUserId, date);
+    const value = logged
+      ? safeMetricValue(state, metric, state.currentUserId, date)
+      : 0;
+    const progress = logged
+      ? metricVisualProgress(
+          state,
+          metric,
+          state.currentUserId,
+          date,
+          value,
+          effectiveGoalTarget(state, metric, state.currentUserId, date),
+        )
+      : 0;
+    const backgroundColor = skipped
+      ? VACATION_COLOR
+      : !logged
+        ? alpha(NOT_LOGGED, tracked ? 0.72 : 0.46)
+        : metric.goalEnabled === false
+          ? LOGGED_NO_GOAL
+          : reached
+            ? progress > 1.75
+              ? "#5D9C22"
+              : progress > 1.15
+                ? "#86C53E"
+                : GOAL_COMPLETE_COLOR
+            : progress >= 0.7
+              ? GOAL_MISSED_NEAR
+              : progress >= 0.35
+                ? "#B93838"
+                : GOAL_MISSED_FAR;
+    return { date, future, backgroundColor, reached, tracked };
+  });
+  const model = { period, cells };
+  return remember(bucket, key, { ...inputs, metric, model });
+}
+
+export function cachedTrackedGoalsHeatmapModel(
+  state: AppState,
+  dates: string[],
+  today: string,
+): TrackedGoalsHeatmapModel {
+  let bucket = trackedModelCache.get(state.entries);
+  if (!bucket) {
+    bucket = new Map();
+    trackedModelCache.set(state.entries, bucket);
+  }
+  const key = cacheKey(state.currentUserId, "tracked-goals", dates, today);
+  const inputs = cacheInputs(state);
+  const cached = bucket.get(key);
+  if (cached && sameInputs(cached, inputs)) return cached.model;
+  let met = 0;
+  let possible = 0;
+  const cells = dates.map((date) => {
+    const future = date > today;
+    if (future) return { date, future };
+    const vacation = isVacationDate(state, state.currentUserId, date);
+    const summary = trackedGoalSummary(state, state.currentUserId, date);
+    const anyLogged = state.metrics.some(
+      (metric) =>
+        isMetricTrackedOnDate(state, metric, date) &&
+        hasMetricData(state, metric, state.currentUserId, date),
+    );
+    met += summary.met;
+    possible += summary.total;
+    const completion = summary.total ? summary.met / summary.total : 0;
+    const backgroundColor = vacation
+      ? VACATION_COLOR
+      : !summary.total || !anyLogged
+        ? alpha(NOT_LOGGED, 0.46)
+        : summary.allMet
+          ? GOAL_COMPLETE_COLOR
+          : completion >= 0.7
+            ? GOAL_MISSED_NEAR
+            : completion >= 0.35
+              ? "#B93838"
+              : GOAL_MISSED_FAR;
+    return { date, future, backgroundColor };
+  });
+  const model = { met, possible, cells };
+  return remember(bucket, key, { ...inputs, model });
+}
+
 export function TrackedGoalsHeatmap({
   state,
   dates,
   range,
   compact = false,
   onSelect,
+  model,
 }: {
   state: AppState;
   dates: string[];
   range: HistoryRange;
   compact?: boolean;
   onSelect?: (date: string) => void;
+  model?: TrackedGoalsHeatmapModel;
 }) {
   const colors = useAppColors();
   const today = new Date().toISOString().slice(0, 10);
@@ -79,11 +307,11 @@ export function TrackedGoalsHeatmap({
           : 20;
   const cellHeight =
     range === "week" ? (compact ? 11 : 16) : cellWidth;
-  const summaries = dates
-    .filter((date) => date <= today)
-    .map((date) => trackedGoalSummary(state, state.currentUserId, date));
-  const met = summaries.reduce((sum, item) => sum + item.met, 0);
-  const possible = summaries.reduce((sum, item) => sum + item.total, 0);
+  const heatmap = model ?? cachedTrackedGoalsHeatmapModel(state, dates, today);
+  const cellsByDate = useMemo(
+    () => new Map(heatmap.cells.map((cell) => [cell.date, cell])),
+    [heatmap],
+  );
   return (
     <View
       onLayout={(event) => setAvailableWidth(event.nativeEvent.layout.width)}
@@ -130,47 +358,26 @@ export function TrackedGoalsHeatmap({
                 }}
               />
             );
-          const future = date > today;
-          const vacation =
-            !future && isVacationDate(state, state.currentUserId, date);
-          const summary = trackedGoalSummary(
-            state,
-            state.currentUserId,
-            date,
-          );
-          const anyLogged = state.metrics.some(
-            (metric) =>
-              isMetricTrackedOnDate(state, metric, date) &&
-              hasMetricData(state, metric, state.currentUserId, date),
-          );
-          const completion = summary.total ? summary.met / summary.total : 0;
-          const backgroundColor = future
-            ? colors.canvas
-            : vacation
-              ? VACATION_COLOR
-              : !summary.total || !anyLogged
-                ? alpha(NOT_LOGGED, 0.46)
-                : summary.allMet
-                  ? GOAL_COMPLETE_COLOR
-                  : completion >= 0.7
-                    ? GOAL_MISSED_NEAR
-                    : completion >= 0.35
-                      ? "#B93838"
-                      : GOAL_MISSED_FAR;
-          return (
+          const cell = cellsByDate.get(date);
+          const cellStyle = {
+            width: cellWidth,
+            height: cellHeight,
+            margin: gap / 2,
+            borderRadius: range === "year" ? 1.5 : 4,
+            backgroundColor: cell?.future
+              ? colors.canvas
+              : cell?.backgroundColor,
+            borderWidth: date === today ? 1 : 0,
+            borderColor: colors.ink,
+          };
+          return range === "year" ? (
+            <View key={date} style={cellStyle} />
+          ) : (
             <Pressable
               key={date}
               disabled={!onSelect}
               onPress={() => onSelect?.(date)}
-              style={{
-                width: cellWidth,
-                height: cellHeight,
-                margin: gap / 2,
-                borderRadius: range === "year" ? 1.5 : 4,
-                backgroundColor,
-                borderWidth: date === today ? 1 : 0,
-                borderColor: colors.ink,
-              }}
+              style={cellStyle}
             />
           );
         })}
@@ -178,10 +385,13 @@ export function TrackedGoalsHeatmap({
       {!compact ? (
         <View style={styles.caption}>
           <Text style={[styles.captionText, { color: colors.muted }]}>
-            {met}/{possible} goals
+            {heatmap.met}/{heatmap.possible} goals
           </Text>
           <Text style={[styles.captionText, { color: colors.ink }]}>
-            {possible ? Math.round((met / possible) * 100) : 0}% complete
+            {heatmap.possible
+              ? Math.round((heatmap.met / heatmap.possible) * 100)
+              : 0}
+            % complete
           </Text>
         </View>
       ) : null}
@@ -196,6 +406,7 @@ export function GoalHeatmap({
   range,
   compact = false,
   onSelect,
+  model,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -203,6 +414,7 @@ export function GoalHeatmap({
   range: HistoryRange;
   compact?: boolean;
   onSelect?: (date: string) => void;
+  model?: GoalHeatmapModel;
 }) {
   const colors = useAppColors();
   const today = new Date().toISOString().slice(0, 10);
@@ -220,11 +432,11 @@ export function GoalHeatmap({
     ],
     [dates, leading],
   );
-  const period = metricPeriodStats(
-    state,
-    metric,
-    state.currentUserId,
-    dates.filter((date) => date <= today),
+  const heatmap = model ?? cachedGoalHeatmapModel(state, metric, dates, today);
+  const period = heatmap.period;
+  const cellsByDate = useMemo(
+    () => new Map(heatmap.cells.map((cell) => [cell.date, cell])),
+    [heatmap],
   );
   const completion = period.applicableDates.length
     ? Math.round(
@@ -302,82 +514,33 @@ export function GoalHeatmap({
                 }}
               />
             );
-          const future = date > today;
-          const logged =
-            !future && hasMetricData(state, metric, state.currentUserId, date);
-          const tracked =
-            !future && isMetricTrackedOnDate(state, metric, date);
-          const skipped =
-            !future &&
-            (isVacationDate(state, state.currentUserId, date) ||
-              state.entries.some(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === metric.id &&
-                  entry.localDate === date &&
-                  entry.value === "skipped",
-              ));
-          const reached =
-            logged &&
-            scheduledGoalReached(state, metric, state.currentUserId, date);
-          const value = logged
-            ? safeMetricValue(state, metric, state.currentUserId, date)
-            : 0;
-          const progress = logged
-            ? metricVisualProgress(
-                state,
-                metric,
-                state.currentUserId,
-                date,
-                value,
-                effectiveGoalTarget(
-                  state,
-                  metric,
-                  state.currentUserId,
-                  date,
-                ),
-              )
-            : 0;
-          const backgroundColor = future
-            ? colors.canvas
-            : skipped
-              ? VACATION_COLOR
-            : !logged
-              ? alpha(NOT_LOGGED, tracked ? 0.72 : 0.46)
-            : metric.goalEnabled === false
-              ? LOGGED_NO_GOAL
-            : reached
-              ? progress > 1.75
-                ? "#5D9C22"
-                : progress > 1.15
-                  ? "#86C53E"
-                  : GOAL_COMPLETE_COLOR
-              : progress >= 0.7
-                ? GOAL_MISSED_NEAR
-                : progress >= 0.35
-                  ? "#B93838"
-                  : GOAL_MISSED_FAR;
-          return (
+          const cell = cellsByDate.get(date);
+          const cellStyle = {
+            width: cellWidth,
+            height: cellHeight,
+            margin: gap / 2,
+            borderRadius: range === "year" ? 1.5 : 4,
+            backgroundColor: cell?.future
+              ? colors.canvas
+              : cell?.backgroundColor,
+            borderWidth: date === today ? 1 : 0,
+            borderColor: colors.ink,
+          };
+          return range === "year" ? (
+            <View key={date} style={cellStyle} />
+          ) : (
             <Pressable
               key={date}
               accessibilityLabel={`${metric.name}, ${date}${
-                reached
+                cell?.reached
                   ? ", goal met"
-                  : tracked && !logged
+                  : cell?.tracked
                     ? ", not logged"
                     : ""
               }`}
               disabled={!onSelect}
               onPress={() => onSelect?.(date)}
-              style={{
-                width: cellWidth,
-                height: cellHeight,
-                margin: gap / 2,
-                borderRadius: range === "year" ? 1.5 : 4,
-                backgroundColor,
-                borderWidth: date === today ? 1 : 0,
-                borderColor: colors.ink,
-              }}
+              style={cellStyle}
             />
           );
         })}

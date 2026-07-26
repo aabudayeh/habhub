@@ -27,12 +27,15 @@ type TutorialRegistry = {
   targets: Record<string, TargetRect>;
   register: (id: string, rect: TargetRect) => void;
   unregister: (id: string) => void;
+  setMeasurer: (id: string, measure?: () => void) => void;
+  requestMeasure: (id: string) => void;
 };
 
 const TutorialContext = createContext<TutorialRegistry | null>(null);
 
 export function TutorialProvider({ children }: PropsWithChildren) {
   const [targets, setTargets] = useState<Record<string, TargetRect>>({});
+  const measurers = useRef<Record<string, () => void>>({});
   const register = useCallback((id: string, rect: TargetRect) => {
     setTargets((current) => {
       const before = current[id];
@@ -55,13 +58,22 @@ export function TutorialProvider({ children }: PropsWithChildren) {
       return next;
     });
   }, []);
+  const setMeasurer = useCallback((id: string, measure?: () => void) => {
+    if (measure) measurers.current[id] = measure;
+    else delete measurers.current[id];
+  }, []);
+  const requestMeasure = useCallback((id: string) => {
+    measurers.current[id]?.();
+  }, []);
   const value = useMemo<TutorialRegistry>(
     () => ({
       targets,
       register,
       unregister,
+      setMeasurer,
+      requestMeasure,
     }),
-    [register, targets, unregister],
+    [register, requestMeasure, setMeasurer, targets, unregister],
   );
   return (
     <TutorialContext.Provider value={value}>
@@ -79,6 +91,7 @@ export function TutorialTarget({
   const ref = useRef<View>(null);
   const register = registry?.register;
   const unregister = registry?.unregister;
+  const setMeasurer = registry?.setMeasurer;
   const measure = useCallback((_event?: LayoutChangeEvent) => {
     requestAnimationFrame(() =>
       ref.current?.measureInWindow((x, y, width, height) => {
@@ -89,12 +102,14 @@ export function TutorialTarget({
   }, [id, register]);
 
   useEffect(() => {
-    const timer = setTimeout(measure, 80);
+    setMeasurer?.(id, measure);
+    const timers = [0, 80, 240].map((delay) => setTimeout(measure, delay));
     return () => {
-      clearTimeout(timer);
+      timers.forEach(clearTimeout);
+      setMeasurer?.(id);
       unregister?.(id);
     };
-  }, [id, measure, unregister]);
+  }, [id, measure, setMeasurer, unregister]);
 
   return (
     <View ref={ref} collapsable={false} onLayout={measure} style={style}>
@@ -170,11 +185,14 @@ const STEPS: readonly TutorialStep[] = [
 export function TutorialSpotlight() {
   const { state, updateSettings } = useApp();
   const registry = useContext(TutorialContext);
+  const requestTargetMeasure = registry?.requestMeasure;
   const pathname = usePathname();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { width, height } = useWindowDimensions();
   const [index, setIndex] = useState(0);
+  const overlayRef = useRef<View>(null);
+  const [overlayOrigin, setOverlayOrigin] = useState({ x: 0, y: 0 });
   const authRoute = [
     "/sign-in",
     "/onboarding",
@@ -188,20 +206,82 @@ export function TutorialSpotlight() {
     !authRoute;
   const step = STEPS[index];
   const raw = registry?.targets[step?.target];
-  const rect = raw
+  const relative = raw
     ? {
-        x: Math.max(8, raw.x - 6),
-        y: Math.max(8, raw.y - 6),
-        width: Math.min(width - 16, raw.width + 12),
-        height: raw.height + 12,
+        x: raw.x - overlayOrigin.x,
+        y: raw.y - overlayOrigin.y,
+        width: raw.width,
+        height: raw.height,
       }
     : undefined;
+  const visible =
+    relative &&
+    relative.x < width &&
+    relative.y < height &&
+    relative.x + relative.width > 0 &&
+    relative.y + relative.height > 0;
+  const targetWidth = relative
+    ? Math.min(width - 16, relative.width + 12)
+    : 0;
+  const targetHeight = relative
+    ? Math.min(height - 16, relative.height + 12)
+    : 0;
+  const rect =
+    relative && visible
+      ? {
+          x: Math.max(
+            8,
+            Math.min(width - targetWidth - 8, relative.x - 6),
+          ),
+          y: Math.max(
+            8,
+            Math.min(height - targetHeight - 8, relative.y - 6),
+          ),
+          width: targetWidth,
+          height: targetHeight,
+        }
+      : undefined;
+
+  const measureOverlay = useCallback(() => {
+    overlayRef.current?.measureInWindow((x, y) => {
+      setOverlayOrigin((current) =>
+        Math.abs(current.x - x) < 1 && Math.abs(current.y - y) < 1
+          ? current
+          : { x, y },
+      );
+    });
+  }, []);
 
   useEffect(() => {
     if (!active || !step || pathname === step.path) return;
     const timer = setTimeout(() => router.replace(step.path as never), 0);
     return () => clearTimeout(timer);
   }, [active, pathname, step]);
+
+  useEffect(() => {
+    if (!active || !step) return;
+    const refresh = () => {
+      measureOverlay();
+      requestTargetMeasure?.(step.target);
+    };
+    const timers = [0, 80, 220, 500].map((delay) =>
+      setTimeout(refresh, delay),
+    );
+    const interval = setInterval(refresh, 500);
+    return () => {
+      timers.forEach(clearTimeout);
+      clearInterval(interval);
+    };
+  }, [
+    active,
+    height,
+    index,
+    measureOverlay,
+    pathname,
+    requestTargetMeasure,
+    step,
+    width,
+  ]);
 
   if (!active || !step) return null;
 
@@ -228,7 +308,13 @@ export function TutorialSpotlight() {
     : { top: height * 0.34 };
 
   return (
-    <View style={styles.overlay} pointerEvents="box-none">
+    <View
+      ref={overlayRef}
+      collapsable={false}
+      onLayout={measureOverlay}
+      style={styles.overlay}
+      pointerEvents="box-none"
+    >
       {rect ? (
         <>
           <View style={[styles.shade, { left: 0, top: 0, right: 0, height: rect.y }]} />

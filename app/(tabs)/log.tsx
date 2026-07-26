@@ -579,7 +579,7 @@ export default function LogScreen() {
             </View>
           </View>
           <View style={styles.dateCard}>
-            <View style={styles.dateRow}>
+            <View style={styles.dateTopRow}>
               <Pressable
                 onPress={() => setLogCalendarOpen((open) => !open)}
                 style={styles.calendarButton}
@@ -603,15 +603,6 @@ export default function LogScreen() {
                   color={colors.muted}
                 />
               </Pressable>
-              <View style={styles.timeField}>
-                <Text style={[styles.fieldLabel, { color: colors.muted }]}>
-                  Time
-                </Text>
-                <TimeInput
-                  value={logTime}
-                  onChange={setLogTime}
-                />
-              </View>
               <Pressable
                 onPress={() => {
                   const current = new Date();
@@ -633,6 +624,12 @@ export default function LogScreen() {
                 />
                 <Text style={styles.nowText}>Now</Text>
               </Pressable>
+            </View>
+            <View style={styles.timeField}>
+              <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+                Time
+              </Text>
+              <TimeInput value={logTime} onChange={setLogTime} />
             </View>
             {logCalendarOpen ? (
               <View style={styles.miniCalendar}>
@@ -1246,9 +1243,9 @@ const styles = StyleSheet.create({
   compactTitle: { fontSize: 13, fontWeight: "900", color: palette.ink },
   selector: { marginBottom: 8 },
   dateCard: { marginBottom: 8 },
-  dateRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  dateTopRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   calendarButton: {
-    flex: 1.4,
+    flex: 1,
     minHeight: 40,
     flexDirection: "row",
     alignItems: "center",
@@ -1270,7 +1267,7 @@ const styles = StyleSheet.create({
     paddingTop: 11,
     marginTop: 10,
   },
-  timeField: { flex: 1 },
+  timeField: { width: "100%", marginTop: 7 },
   dateInput: {
     borderWidth: 1,
     borderColor: palette.border,

@@ -20,6 +20,8 @@ import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet"
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
+  cachedGoalHeatmapModel,
+  cachedTrackedGoalsHeatmapModel,
   GoalHeatmap,
   TrackedGoalsHeatmap,
 } from "@/src/components/GoalHeatmap";
@@ -121,6 +123,7 @@ export default function Insights() {
   const [showPicker, setShowPicker] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
   const overviewScrollRef = useRef<ScrollView>(null);
+  const summarySectionY = useRef(0);
   const progressMode =
     state.settings.progressViewMode === "compact"
       ? "goal_maps"
@@ -171,7 +174,11 @@ export default function Insights() {
   useEffect(() => {
     if (!editing || progressMode !== "overview") return;
     const timer = setTimeout(
-      () => overviewScrollRef.current?.scrollToEnd({ animated: true }),
+      () =>
+        overviewScrollRef.current?.scrollTo({
+          y: Math.max(0, summarySectionY.current - 4),
+          animated: true,
+        }),
       120,
     );
     return () => clearTimeout(timer);
@@ -681,6 +688,11 @@ export default function Insights() {
       )}
       </View>
       </TutorialTarget>
+      <View
+        onLayout={(event) => {
+          summarySectionY.current = event.nativeEvent.layout.y;
+        }}
+      >
       <SectionHeader
         title={`${view === "week" ? "Week" : "Month"} summaries`}
         action={
@@ -695,6 +707,7 @@ export default function Insights() {
           </Pressable>
         }
       />
+      </View>
       <View style={styles.summaries}>
         {progressCardIds.map((itemId, index) =>
           itemId === TRACKED ? (
@@ -931,10 +944,14 @@ function GoalMapProgress({
       (id === TRACKED && trackedSelected) ||
       visibleMetrics.some((metric) => metric.id === id),
   );
-  const dates = calendarPeriodRange(
-    anchor,
-    range,
-    state.settings.weekStartsOn ?? 1,
+  const dates = useMemo(
+    () =>
+      calendarPeriodRange(
+        anchor,
+        range,
+        state.settings.weekStartsOn ?? 1,
+      ),
+    [anchor, range, state.settings.weekStartsOn],
   );
   const shift = (direction: -1 | 1) => {
     const date = new Date(`${anchor}T12:00:00`);
@@ -951,14 +968,9 @@ function GoalMapProgress({
           month: range === "month" ? "long" : undefined,
           year: "numeric",
         }).format(new Date(`${anchor}T12:00:00`));
-  const trackedTotals = dates
-    .filter((date) => date <= today)
-    .map((date) => trackedGoalSummary(state, state.currentUserId, date));
-  const trackedMet = trackedTotals.reduce((sum, item) => sum + item.met, 0);
-  const trackedPossible = trackedTotals.reduce(
-    (sum, item) => sum + item.total,
-    0,
-  );
+  const trackedModel = cachedTrackedGoalsHeatmapModel(state, dates, today);
+  const trackedMet = trackedModel.met;
+  const trackedPossible = trackedModel.possible;
   const trackedCompletion = trackedPossible
     ? Math.round((trackedMet / trackedPossible) * 100)
     : 0;
@@ -1206,6 +1218,7 @@ function GoalMapProgress({
                 range={range}
                 compact={compact}
                 onSelect={onOpenDay}
+                model={trackedModel}
               />
             </Card>
           </MapReorderCard>
@@ -1214,12 +1227,13 @@ function GoalMapProgress({
             (candidate) => candidate.id === itemId,
           );
           if (!metric) return null;
-          const period = metricPeriodStats(
+          const heatmapModel = cachedGoalHeatmapModel(
             state,
             metric,
-            state.currentUserId,
-            dates.filter((date) => date <= today),
+            dates,
+            today,
           );
+          const period = heatmapModel.period;
           const completionDenominator = metric.goalEnabled
             ? period.applicableDates.length
             : dates.filter((date) => date <= today).length;
@@ -1417,6 +1431,7 @@ function GoalMapProgress({
                   range={range}
                   compact={compact}
                   onSelect={onOpenDay}
+                  model={heatmapModel}
                 />
               </Card>
             </MapReorderCard>

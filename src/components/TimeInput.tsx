@@ -102,29 +102,19 @@ export function TimeInput({
             style={[styles.partInput, { color: colors.ink }]}
           />
         </View>
-        {(["AM", "PM"] as const).map((item) => (
-          <Pressable
-            key={item}
-            onPress={() => setPeriod(item)}
-            style={[
-              styles.period,
-              {
-                borderColor: item === period ? accent : colors.border,
-                backgroundColor:
-                  item === period ? colors.primarySoft : colors.card,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.periodText,
-                { color: item === period ? accent : colors.muted },
-              ]}
-            >
-              {item}
-            </Text>
-          </Pressable>
-        ))}
+        <Pressable
+          accessibilityLabel={`Switch to ${period === "AM" ? "PM" : "AM"}`}
+          onPress={() => setPeriod(period === "AM" ? "PM" : "AM")}
+          style={[
+            styles.period,
+            {
+              borderColor: accent,
+              backgroundColor: colors.primarySoft,
+            },
+          ]}
+        >
+          <Text style={[styles.periodText, { color: accent }]}>{period}</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -162,7 +152,7 @@ const styles = StyleSheet.create({
   },
   colon: { fontSize: 11, fontWeight: "900" },
   period: {
-    width: 32,
+    width: 43,
     minHeight: 42,
     borderWidth: 1,
     borderRadius: 10,
