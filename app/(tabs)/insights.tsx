@@ -1339,11 +1339,8 @@ function GoalMapProgress({
                       style={[styles.mapMeta, { color: colors.muted }]}
                     >
                       {metric.dataType === "boolean"
-                        ? `${period.goalsReached}/${period.applicableDates.length} complete`
+                        ? `${completion}% completion avg`
                         : `${formatMetricValue(metric, period.average)} avg`}
-                      {" · "}
-                      {period.goalsReached}/{period.applicableDates.length} goal
-                      days
                       {metric.dataType !== "boolean"
                         ? ` · ${period.loggedDates.length} logged · ${metricAverageGoalOffsetLabel(
                             metric,
@@ -1800,21 +1797,20 @@ function TrackedSummary({
         >
           {met}/{possible} individual goals completed
         </Text>
+      </View>
+      <View style={styles.summaryGoal}>
         <Text
           numberOfLines={2}
-          style={[styles.remaining, { color: colors.ink }]}
+          style={[styles.goalLine, { color: TRACKED_COLOR }]}
         >
           {perfect}/{eligible.length} all-goal days
         </Text>
-      </View>
-      <View style={styles.summaryGoal}>
         <View style={styles.streakRow}>
           <Ionicons name="flame" size={12} color={TRACKED_COLOR} />
-          <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-            {streaks.current}d
+          <Text style={[styles.streakLine, { color: colors.muted }]}>
+            {streaks.current}d · Best {streaks.best}d
           </Text>
         </View>
-        <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streaks.best}d</Text>
       </View>
       {editing ? (
         <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>

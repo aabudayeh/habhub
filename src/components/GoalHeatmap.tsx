@@ -47,6 +47,8 @@ export type GoalHeatmapModel = {
 export type TrackedGoalsHeatmapModel = {
   met: number;
   possible: number;
+  allGoalDays: number;
+  eligibleDays: number;
   cells: HeatmapCellModel[];
 };
 
@@ -226,6 +228,8 @@ export function cachedTrackedGoalsHeatmapModel(
   if (cached && sameInputs(cached, inputs)) return cached.model;
   let met = 0;
   let possible = 0;
+  let allGoalDays = 0;
+  let eligibleDays = 0;
   const cells = dates.map((date) => {
     const future = date > today;
     if (future) return { date, future };
@@ -238,6 +242,10 @@ export function cachedTrackedGoalsHeatmapModel(
     );
     met += summary.met;
     possible += summary.total;
+    if (summary.total > 0) {
+      eligibleDays += 1;
+      if (summary.allMet) allGoalDays += 1;
+    }
     const completion = summary.total ? summary.met / summary.total : 0;
     const backgroundColor = vacation
       ? VACATION_COLOR
@@ -252,7 +260,7 @@ export function cachedTrackedGoalsHeatmapModel(
               : GOAL_MISSED_FAR;
     return { date, future, backgroundColor };
   });
-  const model = { met, possible, cells };
+  const model = { met, possible, allGoalDays, eligibleDays, cells };
   return remember(bucket, key, { ...inputs, model });
 }
 
@@ -385,7 +393,7 @@ export function TrackedGoalsHeatmap({
       {!compact ? (
         <View style={styles.caption}>
           <Text style={[styles.captionText, { color: colors.muted }]}>
-            {heatmap.met}/{heatmap.possible} goals
+            {heatmap.allGoalDays}/{heatmap.eligibleDays} all-goal days
           </Text>
           <Text style={[styles.captionText, { color: colors.ink }]}>
             {heatmap.possible
@@ -548,7 +556,7 @@ export function GoalHeatmap({
       {!compact ? (
         <View style={styles.caption}>
           <Text style={[styles.captionText, { color: colors.muted }]}>
-            {period.loggedDates.length} logged
+            {period.goalsReached}/{period.applicableDates.length} goal days
           </Text>
           <Text style={[styles.captionText, { color: colors.ink }]}>
             {completion}% complete
