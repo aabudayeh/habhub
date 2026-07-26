@@ -557,19 +557,27 @@ export default function LeaderboardScreen() {
                         Group-weighted score
                       </Text>
                     ) : canShowStreak ? (
-                      <View style={styles.detailLine}>
-                        <Ionicons
-                          name="flame"
-                          size={12}
-                          color={metric?.color ?? accent}
-                        />
-                        <Text style={[styles.detail, { color: colors.muted }]}>
-                          {result.streak ?? 0}d current · Best{" "}
-                          {result.bestStreak ?? 0}d
-                          {syncTimestamp
-                            ? ` · Synced ${relativeTime(syncTimestamp)}`
-                            : ""}
-                        </Text>
+                      <View style={styles.streakBlock}>
+                        <View style={styles.detailLine}>
+                          <Ionicons
+                            name="flame"
+                            size={12}
+                            color={metric?.color ?? accent}
+                          />
+                          <Text
+                            style={[styles.streakText, { color: colors.muted }]}
+                          >
+                            {result.streak ?? 0}d · Best{" "}
+                            {result.bestStreak ?? 0}d
+                          </Text>
+                        </View>
+                        {syncTimestamp ? (
+                          <Text
+                            style={[styles.syncDetail, { color: colors.muted }]}
+                          >
+                            Synced {relativeTime(syncTimestamp)}
+                          </Text>
+                        ) : null}
                       </View>
                     ) : (
                       <Text
@@ -979,6 +987,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 3,
   },
+  streakBlock: { marginTop: 2 },
+  streakText: { fontSize: 8, lineHeight: 12 },
+  syncDetail: { fontSize: 7, lineHeight: 10, marginLeft: 15 },
   detailCopy: { flex: 1 },
   private: { fontStyle: "italic" },
   bar: { width: 96, gap: 3 },
