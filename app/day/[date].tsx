@@ -38,7 +38,6 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   hasMetricData,
-  isMetricTrackedOnDate,
   metricApplicableOnDate,
   metricVisualProgress,
   safeMetricValue,
@@ -46,7 +45,10 @@ import {
   trackedGoalSummary,
 } from "@/src/domain/metrics";
 import { imageSourceUri } from "@/src/domain/media";
-import { todoAppearsOnDate } from "@/src/domain/schedule";
+import {
+  scheduleAppliesOnDate,
+  todoAppearsOnDate,
+} from "@/src/domain/schedule";
 import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -100,13 +102,26 @@ export default function DayDetail() {
           )
         );
       })
-    : loggedIds;
+    : [
+        ...new Set([
+          ...loggedIds,
+          ...state.metrics
+            .filter(
+              (metric) =>
+                metric.dataType === "calculated" &&
+                metric.sections.insights &&
+                hasMetricData(state, metric, state.currentUserId, day),
+            )
+            .map((metric) => metric.id),
+        ]),
+      ];
   const [selectedIds, setSelectedIds] = useState<string[]>(initialIds);
   const available = state.metrics.filter(
     (metric) =>
-      loggedIds.includes(metric.id) ||
-      (expandedRequested.includes(metric.id) &&
-        hasMetricData(state, metric, state.currentUserId, day)),
+      (loggedIds.includes(metric.id) ||
+        expandedRequested.includes(metric.id) ||
+        (metric.dataType === "calculated" && metric.sections.insights)) &&
+      hasMetricData(state, metric, state.currentUserId, day),
   );
   const selected = state.metrics
     .filter(
@@ -175,7 +190,40 @@ export default function DayDetail() {
       )
     )
       ids.push("progress_photo");
-    setSelectedIds(ids);
+    const nextTracked = requested.includes(TRACKED)
+      ? trackedGoalSummary(state, state.currentUserId, next).metrics.map(
+          (metric) => metric.id,
+        )
+      : [];
+    const defaultCalculated = explicit
+      ? []
+      : state.metrics
+          .filter(
+            (metric) =>
+              metric.dataType === "calculated" &&
+              metric.sections.insights,
+          )
+          .map((metric) => metric.id);
+    setSelectedIds((current) =>
+      [
+        ...new Set([
+          ...current,
+          ...ids,
+          ...requested.filter((id) => id !== TRACKED),
+          ...nextTracked,
+          ...defaultCalculated,
+        ]),
+      ].filter((id) => {
+        const metric = state.metrics.find((item) => item.id === id);
+        return (
+          id === "progress_photo" ||
+          Boolean(
+            metric &&
+              hasMetricData(state, metric, state.currentUserId, next),
+          )
+        );
+      }),
+    );
   }
 
   function nearestWeight(photoDate: string) {
@@ -420,7 +468,9 @@ export default function DayDetail() {
           color: metric.color,
           sublabel: dayEntries.some((entry) => entry.metricId === metric.id)
             ? "Logged on this day"
-            : "Selected goal",
+            : metric.dataType === "calculated"
+              ? "Calculated for this day"
+              : "Selected goal",
         }))}
         selectedIds={selectedIds}
         onChange={setSelectedIds}
@@ -502,7 +552,12 @@ export default function DayDetail() {
             day,
           );
           const applicable =
-            isMetricTrackedOnDate(state, metric, day) &&
+            metric.goalEnabled !== false &&
+            scheduleAppliesOnDate(
+              metric.goalSchedule,
+              metric.activeFrom,
+              day,
+            ) &&
             metricApplicableOnDate(
               state,
               metric,

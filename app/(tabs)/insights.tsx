@@ -115,7 +115,6 @@ export default function Insights() {
       (id) => id === TRACKED || metrics.some((metric) => metric.id === id),
     ),
   );
-  const [filterTouched, setFilterTouched] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
@@ -224,7 +223,6 @@ export default function Insights() {
   function select(ids: string[]) {
     setSelectedIds(ids);
     updateSettings({ progressMetricIds: ids });
-    setFilterTouched(true);
   }
   function move(metricId: string, targetIndex: number) {
     const current = selectedIds.filter((id) => id !== TRACKED);
@@ -240,7 +238,10 @@ export default function Insights() {
       pathname: "/day/[date]" as never,
       params: {
         date: day,
-        ...(filterTouched ? { metrics: selectedIds.join(",") } : {}),
+        // Pass the visible Progress selection even when it came from saved
+        // settings. Calculated trackers have a daily value but no raw entry,
+        // so the day view cannot infer them from entry IDs alone.
+        metrics: selectedIds.join(","),
       },
     });
   }
