@@ -13,11 +13,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  ReorderDragState,
-  ReorderItem,
-  reorderShift,
-} from "@/src/components/ReorderItem";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import {
   Card,
@@ -68,8 +65,10 @@ export default function Customize() {
     : "trackers";
   const [tab, setTab] = useState<Tab>(initial);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
-  const [dragPlacement, setDragPlacement] =
-    useState<ReorderDragState | null>(null);
+  useEffect(() => {
+    setCloudSyncPaused("customize-reorder", Boolean(draggingMetricId));
+    return () => setCloudSyncPaused("customize-reorder", false);
+  }, [draggingMetricId]);
   const ordered = state.metrics
     .filter((metric) => !isInternalTracker(metric))
     .sort((a, b) => a.order - b.order);
@@ -294,21 +293,6 @@ export default function Customize() {
 
       {tab === "goals" ? (
         <>
-          <View
-            style={[
-              styles.note,
-              {
-                backgroundColor: colors.primarySoft,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Ionicons name="checkmark-done-outline" size={19} color={accent} />
-            <Text style={[styles.noteText, { color: colors.muted }]}>
-              These are the goals counted in Today and historical completion.
-              Showing a tracker on Today is a separate choice.
-            </Text>
-          </View>
           <SectionHeader
             title="Goals being counted"
             action={
@@ -382,23 +366,7 @@ export default function Customize() {
 
       {tab === "today" || tab === "insights" ? (
         <>
-          <View
-            style={[
-              styles.note,
-              {
-                backgroundColor: colors.primarySoft,
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <Ionicons name="eye-outline" size={19} color={accent} />
-            <Text style={[styles.noteText, { color: colors.muted }]}>
-              {tab === "today"
-                ? "Choose the compact tiles visible on Today. Up to five fit before More appears."
-                : "Choose what is available in your personal Progress view."}
-            </Text>
-          </View>
-          <Card style={styles.quickPreferences}>
+          {false ? <Card style={styles.quickPreferences}>
             <View style={styles.preferenceCopy}>
               <Text style={[styles.name, { color: colors.ink }]}>
                 Untracked goals
@@ -439,8 +407,8 @@ export default function Customize() {
                 }
               />
             </View>
-          </Card>
-          {tab === "today" ? (
+          </Card> : null}
+          {false && tab === "today" ? (
             <Card style={styles.quickPreferences}>
               <View style={styles.preferenceCopy}>
                 <Text style={[styles.name, { color: colors.ink }]}>
@@ -471,6 +439,20 @@ export default function Customize() {
               </View>
             </Card>
           ) : null}
+          <Pressable
+            onPress={() =>
+              router.navigate({
+                pathname: "/view-filters",
+                params: { scope: tab === "today" ? "today" : "progress" },
+              } as never)
+            }
+            style={[styles.filterManager, { borderColor: accent }]}
+          >
+            <Ionicons name="funnel-outline" size={16} color={accent} />
+            <Text style={[styles.filterManagerText, { color: accent }]}>
+              Manage saved views
+            </Text>
+          </Pressable>
           <SectionHeader
             title={tab === "today" ? "Today tiles" : "Progress items"}
             action={
@@ -485,8 +467,6 @@ export default function Customize() {
               <ReorderItem
                 key={metric.id}
                 active={draggingMetricId === metric.id}
-                shift={reorderShift(index, dragPlacement)}
-                settling={Boolean(dragPlacement?.settling)}
               >
                 <VisibilityRow
                   metric={metric}
@@ -500,23 +480,10 @@ export default function Customize() {
                   onChange={() => changeSection(metric)}
                   onDragStart={(step) => {
                     setDraggingMetricId(metric.id);
-                    setDragPlacement({
-                      id: metric.id,
-                      origin: index,
-                      target: index,
-                      step,
-                    });
                   }}
-                  onDragHover={(target) =>
-                    setDragPlacement((current) =>
-                      current?.id === metric.id
-                        ? { ...current, target }
-                        : current,
-                    )
-                  }
-                  onDragCancel={() => setDragPlacement(null)}
+                  onDragHover={() => {}}
+                  onDragCancel={() => setDraggingMetricId(null)}
                   onDragEnd={() => {
-                    setDragPlacement(null);
                     setDraggingMetricId(null);
                   }}
                 />
@@ -729,18 +696,16 @@ function VisibilityRow({
         onPanResponderRelease: () => {
           const target = liveTarget.current;
           Animated.spring(dragY, {
-            toValue: (target - dragOrigin.current) * dragStep.current,
+            toValue: 0,
             damping: 24,
             stiffness: 220,
             mass: 0.72,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(() => {
-            if (target !== dragOrigin.current) onMoveRef.current(target);
-            dragY.setValue(0);
-            setDragging(false);
-            onDragEndRef.current();
-          });
+          }).start();
+          if (target !== dragOrigin.current) onMoveRef.current(target);
+          setDragging(false);
+          onDragEndRef.current();
         },
         onPanResponderTerminate: () => {
           Animated.spring(dragY, {
@@ -854,6 +819,18 @@ const styles = StyleSheet.create({
   },
   preferenceCopy: { flex: 1, minWidth: 0 },
   preferenceChoices: { flexDirection: "row", gap: 4 },
+  filterManager: {
+    minHeight: 40,
+    marginTop: 7,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  filterManagerText: { fontSize: 9, fontWeight: "900" },
   switchCard: {
     flexDirection: "row",
     alignItems: "center",

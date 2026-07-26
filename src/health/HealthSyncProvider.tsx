@@ -6,7 +6,10 @@ import { dateKey } from '@/src/domain/date';
 import { enabledHealthDataTypes, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
-import { HEALTH_HISTORY_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
+import {
+  HEALTH_INITIAL_DAYS,
+  HEALTH_STATUS_STORAGE_KEY,
+} from '@/src/health/constants';
 import { HealthAdapterAvailability, PersistedHealthStatus } from '@/src/health/types';
 import { useApp } from '@/src/state/AppProvider';
 
@@ -28,14 +31,23 @@ type HealthSyncContextValue = {
 
 const HealthSyncContext = createContext<HealthSyncContextValue | null>(null);
 
-function syncStart(lastSyncedAt: string | null, fullRefresh = false) {
+function syncStart(
+  lastSyncedAt: string | null,
+  fullRefresh = false,
+  historyDays = 90,
+) {
   let from = lastSyncedAt ? new Date(lastSyncedAt) : new Date();
   if (Number.isNaN(from.getTime())) from = new Date();
   from.setHours(0, 0, 0, 0);
-  // First setup and explicit history repair import two years. Every routine
-  // sync overlaps two days so late provider edits are corrected cheaply.
+  // First setup imports a lightweight month. Explicit history repair imports
+  // two years; routine syncs overlap two days so provider edits are corrected.
   from.setDate(
-    from.getDate() - (lastSyncedAt && !fullRefresh ? 2 : HEALTH_HISTORY_DAYS),
+    from.getDate() -
+      (fullRefresh
+        ? historyDays
+        : lastSyncedAt
+          ? 2
+          : HEALTH_INITIAL_DAYS),
   );
   return from;
 }
@@ -104,17 +116,18 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       setStatus('syncing');
       try {
         const previous = persistedRef.current;
-        const fullRefresh =
-          reason === 'history' ||
-          (reason === 'connect' && !previous.lastSyncedAt);
+        const fullRefresh = reason === 'history';
         if (reason === 'history') {
           await nativeHealthAdapter.requestPermissions(
             dataTypes,
             current.settings.syncMode !== 'manual',
           );
         }
-        const from = syncStart(previous.lastSyncedAt, fullRefresh);
-        const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
+        const historyDays = current.settings.healthHistoryDays ?? 90;
+        const from = syncStart(previous.lastSyncedAt, fullRefresh, historyDays);
+        const records = fullRefresh
+          ? await readHealthInChunks(from, new Date(), dataTypes)
+          : await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
         const entries = mapHealthRecordsToEntries(records, current.currentUserId, 'group',current.metrics,current.settings.energyProfile.weightKg);
         importHealthEntries(entries, nativeHealthAdapter.provider!, metricIdsForHealthDataTypes(dataTypes,current.metrics), dateKey(from));
         await saveStatus({ lastSyncedAt: new Date().toISOString(), lastReason: reason, importedCount: entries.length, error: null });
@@ -188,9 +201,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       if (persistedRef.current.error) return;
       const lastSyncedAt = persistedRef.current.lastSyncedAt;
       const last = lastSyncedAt ? new Date(lastSyncedAt).getTime() : 0;
-      // Refresh whenever the app is reopened, with a short guard against the
-      // duplicate active events Android emits around permission screens.
-      if (Date.now() - last >= 2 * 60 * 1000) runSync('open').catch(() => undefined);
+      // Foreground refresh obeys the selected battery schedule. Pull-to-refresh
+      // remains the explicit immediate path.
+      if (
+        Date.now() - last >=
+        minimumIntervalMs(stateRef.current.settings.syncMode)
+      )
+        runSync('open').catch(() => undefined);
     });
     return () => subscription.remove();
   }, [runSync]);
@@ -214,6 +231,32 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   }), [availability, connect, disconnect, persisted, runSync, sourceOrigins, status]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
+}
+
+async function readHealthInChunks(
+  from: Date,
+  to: Date,
+  dataTypes: ReturnType<typeof enabledHealthDataTypes>,
+) {
+  const records = [];
+  let cursor = new Date(from);
+  while (cursor < to) {
+    const end = new Date(
+      Math.min(
+        to.getTime(),
+        cursor.getTime() + 30 * 24 * 60 * 60 * 1000,
+      ),
+    );
+    records.push(
+      ...(await nativeHealthAdapter.read({
+        from: cursor,
+        to: end,
+        dataTypes,
+      })),
+    );
+    cursor = new Date(end.getTime() + 1);
+  }
+  return records;
 }
 
 export function useHealthSync() {

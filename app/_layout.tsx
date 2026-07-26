@@ -3,15 +3,15 @@ import { Redirect, router, Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 import "@/src/notifications/workoutTimer";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import {
   ActivityIndicator,
-  AppState as NativeAppState,
   StyleSheet,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { AiAssistantButton } from "@/src/components/AiAssistantButton";
+import { ActiveTimerOverlay } from "@/src/components/ActiveTimerOverlay";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
@@ -32,7 +32,6 @@ import {
   syncProductivityNotifications,
   updatePushPreferences,
 } from "@/src/notifications/push";
-import { dateKey } from "@/src/domain/date";
 
 const theme = {
   ...DefaultTheme,
@@ -64,27 +63,46 @@ function RootNavigator() {
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
   const landingApplied = useRef(false);
-  const cycleSignature = state.entries
-    .filter((entry) => entry.userId === state.currentUserId && entry.metricId === "menstrual_cycle")
-    .map((entry) => `${entry.localDate}:${entry.value}`)
-    .join("|");
+  const cycleSignature = useMemo(
+    () =>
+      state.entries
+        .filter(
+          (entry) =>
+            entry.userId === state.currentUserId &&
+            entry.metricId === "menstrual_cycle",
+        )
+        .map((entry) => `${entry.localDate}:${entry.value}`)
+        .join("|"),
+    [state.currentUserId, state.entries],
+  );
   const cycleStateRef = useRef(state);
   cycleStateRef.current = state;
   const cycleNotificationKey = `${cycleSignature}|${state.currentUserId}|${state.settings.notifications.pushEnabled}|${state.settings.notifications.cyclePredictions}|${state.settings.notifications.cyclePhaseUpdates}|${state.settings.notifications.cycleReminderDays}`;
   useEffect(() => {
-    void syncCycleNotifications(cycleStateRef.current).catch(() => undefined);
+    const timer = setTimeout(
+      () =>
+        void syncCycleNotifications(cycleStateRef.current).catch(
+          () => undefined,
+        ),
+      1200,
+    );
+    return () => clearTimeout(timer);
   }, [cycleNotificationKey]);
   const goalReminderKey = JSON.stringify({
     user: state.currentUserId,
     periods: state.trackedGoalPeriods,
     reminders: state.metrics.map((metric) => [metric.id, metric.activeFrom, metric.goalSchedule, metric.reminder, metric.reminders]),
-    entries: state.entries
-      .filter((entry) => entry.userId === state.currentUserId && entry.localDate >= dateKey())
-      .map((entry) => [entry.metricId, entry.localDate, entry.value]),
     notifications: state.settings.notifications,
   });
   useEffect(() => {
-    void syncGoalNotifications(cycleStateRef.current).catch(() => undefined);
+    const timer = setTimeout(
+      () =>
+        void syncGoalNotifications(cycleStateRef.current).catch(
+          () => undefined,
+        ),
+      1800,
+    );
+    return () => clearTimeout(timer);
   }, [goalReminderKey]);
   const gymNotificationKey = JSON.stringify({
     user: state.currentUserId,
@@ -107,7 +125,14 @@ function RootNavigator() {
     ],
   });
   useEffect(() => {
-    void syncGymNotifications(cycleStateRef.current).catch(() => undefined);
+    const timer = setTimeout(
+      () =>
+        void syncGymNotifications(cycleStateRef.current).catch(
+          () => undefined,
+        ),
+      1800,
+    );
+    return () => clearTimeout(timer);
   }, [gymNotificationKey]);
   const productivityNotificationKey = JSON.stringify({
     user: state.currentUserId,
@@ -122,9 +147,14 @@ function RootNavigator() {
     ],
   });
   useEffect(() => {
-    void syncProductivityNotifications(cycleStateRef.current).catch(
-      () => undefined,
+    const timer = setTimeout(
+      () =>
+        void syncProductivityNotifications(cycleStateRef.current).catch(
+          () => undefined,
+        ),
+      1800,
     );
+    return () => clearTimeout(timer);
   }, [productivityNotificationKey]);
   const pushRegistrationKey = JSON.stringify({
     userId: auth.user?.id,
@@ -139,11 +169,8 @@ function RootNavigator() {
         cycleStateRef.current.settings.notifications,
       ).catch(() => undefined);
     void refresh();
-    const subscription = NativeAppState.addEventListener(
-      "change",
-      (nextState) => {
-        if (nextState === "active") void refresh();
-      },
+    const subscription = Notifications.addPushTokenListener(
+      () => void refresh(),
     );
     return () => subscription.remove();
   }, [
@@ -340,6 +367,7 @@ function RootNavigator() {
             {state.settings.showAiAssistant && rootSegment === "(tabs)" ? (
               <AiAssistantButton />
             ) : null}
+            <ActiveTimerOverlay hidden={rootSegment === "timer"} />
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
             </ThemeProvider>
           </CompactModeProvider>

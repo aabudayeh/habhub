@@ -17,6 +17,14 @@ const statusIndexes = new WeakMap<
 >();
 const gymIndexes = new WeakMap<GymSession[], SizedIndex<GymSession>>();
 const photoIndexes = new WeakMap<PhotoUpdate[], SizedIndex<PhotoUpdate>>();
+const metricEntryIndexes = new WeakMap<
+  MetricEntry[],
+  SizedIndex<MetricEntry>
+>();
+const userDayEntryIndexes = new WeakMap<
+  MetricEntry[],
+  SizedIndex<MetricEntry>
+>();
 
 function indexed<T>(
   source: T[],
@@ -51,6 +59,51 @@ export function entriesForDay(
       entryIndexes,
       (entry) => dailyKey(entry.metricId, entry.userId, entry.localDate),
     ).get(dailyKey(metricId, userId, localDate)) ?? []
+  );
+}
+
+export function entriesForMetric(
+  entries: MetricEntry[],
+  metricId: string,
+  userId: string,
+) {
+  const key = `${metricId}\u0000${userId}`;
+  return (
+    indexed(
+      entries,
+      metricEntryIndexes,
+      (entry) => `${entry.metricId}\u0000${entry.userId}`,
+    ).get(key) ?? []
+  );
+}
+
+export function latestEntryOnOrBefore(
+  entries: MetricEntry[],
+  metricId: string,
+  userId: string,
+  localDate: string,
+) {
+  const candidates = entriesForMetric(entries, metricId, userId);
+  let latest: MetricEntry | undefined;
+  for (const entry of candidates) {
+    if (entry.localDate > localDate) continue;
+    if (!latest || entry.recordedAt > latest.recordedAt) latest = entry;
+  }
+  return latest;
+}
+
+export function entriesForUserDay(
+  entries: MetricEntry[],
+  userId: string,
+  localDate: string,
+) {
+  const key = `${userId}\u0000${localDate}`;
+  return (
+    indexed(
+      entries,
+      userDayEntryIndexes,
+      (entry) => `${entry.userId}\u0000${entry.localDate}`,
+    ).get(key) ?? []
   );
 }
 

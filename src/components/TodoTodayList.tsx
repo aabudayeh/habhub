@@ -1,10 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Alert, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { todoAppearsOnDate } from "@/src/domain/schedule";
+import {
+  todoAppearsOnDate,
+  todoCompletedOnDate,
+  todoSkippedOnDate,
+} from "@/src/domain/schedule";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { TodoItem } from "@/src/types";
@@ -19,52 +23,144 @@ const priorityColors = {
 export function TodoTodayList({
   localDate,
   onComplete,
+  editing = false,
 }: {
   localDate: string;
   onComplete?: (todoId: string) => void;
+  editing?: boolean;
 }) {
-  const { state, toggleTodo } = useApp();
+  const {
+    state,
+    toggleTodo,
+    skipTodo,
+    deleteTodo,
+    reorderTodo,
+    updateSettings,
+  } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const visible = state.settings.showTodosToday !== false;
   const items = (state.todos ?? [])
     .filter((todo) => todoAppearsOnDate(todo, localDate))
-    .filter(
-      (todo) =>
-        state.settings.completedTodayBehavior !== "hide" ||
-        !todo.completedDates.includes(localDate),
-    )
     .sort(
       (a, b) =>
-        Number(a.completedDates.includes(localDate)) -
-          Number(b.completedDates.includes(localDate)) ||
+        Number(
+          todoCompletedOnDate(a, localDate) ||
+            todoSkippedOnDate(a, localDate),
+        ) -
+          Number(
+            todoCompletedOnDate(b, localDate) ||
+              todoSkippedOnDate(b, localDate),
+          ) ||
+        (a.order ?? 0) - (b.order ?? 0) ||
         (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"),
     );
-  if (!state.settings.showTodosToday) return null;
+  const shownItems =
+    !editing && state.settings.completedTodayBehavior === "hide"
+      ? items.filter(
+          (todo) =>
+            !todoCompletedOnDate(todo, localDate) &&
+            !todoSkippedOnDate(todo, localDate),
+        )
+      : items;
+  if (!visible && !editing) return null;
+
+  const openActions = (todo: TodoItem) => {
+    const sourceIndex = items.findIndex((item) => item.id === todo.id);
+    Alert.alert(todo.title, "Edit, reorder, skip, or delete this to-do.", [
+      {
+        text: "Edit",
+        onPress: () =>
+          router.navigate({
+            pathname: "/todo-editor",
+            params: { id: todo.id },
+          } as never),
+      },
+      ...(sourceIndex > 0
+        ? [
+            {
+              text: "Move up",
+              onPress: () => reorderTodo(todo.id, sourceIndex - 1),
+            },
+          ]
+        : []),
+      ...(sourceIndex < items.length - 1
+        ? [
+            {
+              text: "Move down",
+              onPress: () => reorderTodo(todo.id, sourceIndex + 1),
+            },
+          ]
+        : []),
+      {
+        text: todoSkippedOnDate(todo, localDate) ? "Undo skip" : "Skip",
+        onPress: () => skipTodo(todo.id, localDate),
+      },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => deleteTodo(todo.id),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  };
+
   return (
     <View style={styles.root}>
       <View style={styles.heading}>
-        <Text style={[styles.title, { color: colors.ink }]}>To-dos</Text>
+        <Pressable
+          onPress={() =>
+            router.navigate({
+              pathname: "/metric-detail",
+              params: { metric: "todo_completion", date: localDate },
+            } as never)
+          }
+          style={styles.titleButton}
+        >
+          <Text style={[styles.title, { color: colors.ink }]}>To-Dos</Text>
+          <Ionicons name="chevron-forward" size={13} color={colors.faint} />
+        </Pressable>
+        {editing ? (
+          <Pressable
+            onPress={() => updateSettings({ showTodosToday: !visible })}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={visible ? "eye-outline" : "eye-off-outline"}
+              size={16}
+              color={visible ? accent : colors.faint}
+            />
+          </Pressable>
+        ) : null}
         <Pressable
           onPress={() => router.navigate("/todo-editor" as never)}
           style={styles.add}
         >
           <Ionicons name="add-circle-outline" size={16} color={accent} />
-          <Text style={[styles.addText, { color: accent }]}>Add</Text>
+          <Text style={[styles.addText, { color: accent }]}>New</Text>
         </Pressable>
       </View>
-      {items.map((todo) => (
-        <TodoRow
-          key={todo.id}
-          todo={todo}
-          localDate={localDate}
-          onToggle={() => {
-            const completing = !todo.completedDates.includes(localDate);
-            toggleTodo(todo.id, localDate);
-            if (completing) onComplete?.(todo.id);
-          }}
-        />
-      ))}
-      {!items.length ? (
+      {!visible && editing ? (
+        <Text style={[styles.hidden, { color: colors.muted }]}>
+          Hidden from Today. Tap the eye to show it.
+        </Text>
+      ) : null}
+      {visible
+        ? shownItems.map((todo) => (
+            <TodoRow
+              key={todo.id}
+              todo={todo}
+              localDate={localDate}
+              onLongPress={() => openActions(todo)}
+              onToggle={() => {
+                const completing = !todoCompletedOnDate(todo, localDate);
+                toggleTodo(todo.id, localDate);
+                if (completing) onComplete?.(todo.id);
+              }}
+            />
+          ))
+        : null}
+      {visible && !items.length ? (
         <Pressable
           onPress={() => router.navigate("/todo-editor" as never)}
           style={[styles.empty, { borderColor: colors.border }]}
@@ -83,14 +179,22 @@ function TodoRow({
   todo,
   localDate,
   onToggle,
+  onLongPress,
 }: {
   todo: TodoItem;
   localDate: string;
   onToggle: () => void;
+  onLongPress: () => void;
 }) {
   const colors = useAppColors();
-  const complete = todo.completedDates.includes(localDate);
-  const deadline = todo.dueAt?.slice(0, 10) === localDate;
+  const complete = todoCompletedOnDate(todo, localDate);
+  const skipped = todoSkippedOnDate(todo, localDate);
+  const deadline = Boolean(
+    todo.dueAt && todo.dueAt.slice(0, 10) <= localDate,
+  );
+  const reminder = todo.reminders.find(
+    (item) => item.at?.slice(0, 10) === localDate,
+  );
   return (
     <Pressable
       onPress={() =>
@@ -99,19 +203,27 @@ function TodoRow({
           params: { id: todo.id },
         } as never)
       }
+      onLongPress={onLongPress}
       style={[
         styles.row,
         {
           backgroundColor: colors.card,
-          borderColor: deadline && !complete ? "#D24B4B66" : colors.border,
+          borderColor:
+            deadline && !complete && !skipped ? "#D24B4B66" : colors.border,
         },
       ]}
     >
       <Pressable onPress={onToggle} hitSlop={8}>
         <Ionicons
-          name={complete ? "checkmark-circle" : "ellipse-outline"}
+          name={
+            skipped
+              ? "play-skip-forward-circle"
+              : complete
+                ? "checkmark-circle"
+                : "ellipse-outline"
+          }
           size={21}
-          color={complete ? "#B8E45C" : colors.faint}
+          color={skipped ? "#E783B5" : complete ? "#B8E45C" : colors.faint}
         />
       </Pressable>
       <View style={styles.copy}>
@@ -120,7 +232,7 @@ function TodoRow({
           style={[
             styles.name,
             { color: colors.ink },
-            complete && styles.complete,
+            (complete || skipped) && styles.complete,
           ]}
         >
           {todo.title}
@@ -131,13 +243,18 @@ function TodoRow({
             size={10}
             color={priorityColors[todo.priority]}
           />
-          {deadline ? (
+          {skipped ? (
+            <Text style={[styles.deadline, { color: "#E783B5" }]}>Skipped</Text>
+          ) : deadline ? (
             <Text style={[styles.deadline, { color: "#D24B4B" }]}>
-              Deadline {todo.dueAt?.slice(11, 16)}
+              {todo.dueAt?.slice(0, 10) === localDate
+                ? "Deadline"
+                : "Overdue"}{" "}
+              {todo.dueAt?.slice(11, 16)}
             </Text>
-          ) : todo.reminders.length ? (
+          ) : reminder ? (
             <Text style={[styles.meta, { color: colors.muted }]}>
-              Reminder {todo.reminders[0].time}
+              Reminder {reminder.time ?? reminder.at?.slice(11, 16)}
             </Text>
           ) : (
             <Text style={[styles.meta, { color: colors.muted }]}>
@@ -146,7 +263,7 @@ function TodoRow({
           )}
         </View>
       </View>
-      <Ionicons name="chevron-forward" size={14} color={colors.faint} />
+      <Ionicons name="ellipsis-horizontal" size={14} color={colors.faint} />
     </Pressable>
   );
 }
@@ -158,10 +275,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 9,
   },
   title: { fontSize: 12, fontWeight: "900" },
+  titleButton: { flex: 1, flexDirection: "row", alignItems: "center", gap: 3 },
   add: { flexDirection: "row", alignItems: "center", gap: 4 },
   addText: { fontSize: 8, fontWeight: "900" },
+  hidden: { fontSize: 8, fontWeight: "800", paddingVertical: 5 },
   row: {
     minHeight: 49,
     borderWidth: 1,

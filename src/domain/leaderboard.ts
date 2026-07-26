@@ -12,13 +12,13 @@ import {
   displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
-  goalProgress,
   goalReached,
   hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
   metricPeriodStats,
   metricStreakStats,
+  metricVisualProgress,
   scheduledGoalReached,
   sharedMetricResult,
 } from "@/src/domain/metrics";
@@ -325,8 +325,11 @@ export function periodMetricResult(
     return [
       Math.min(
         1,
-        goalProgress(
+        metricVisualProgress(
+          state,
           goalMetric,
+          subjectUserId,
+          date,
           result.value,
           effectiveGoalTarget(state, goalMetric, subjectUserId, date),
         ),
@@ -347,11 +350,20 @@ export function periodMetricResult(
     )
       return [];
     return [
-      displayGoalProgress(
-        goalMetric,
-        result.value,
-        effectiveGoalTarget(state, goalMetric, subjectUserId, date),
-      ),
+      goalMetric.goalProgressMode === "journey"
+        ? metricVisualProgress(
+            state,
+            goalMetric,
+            subjectUserId,
+            date,
+            result.value,
+            effectiveGoalTarget(state, goalMetric, subjectUserId, date),
+          )
+        : displayGoalProgress(
+            goalMetric,
+            result.value,
+            effectiveGoalTarget(state, goalMetric, subjectUserId, date),
+          ),
     ];
   });
   const averageDisplayProgress = displayProgressValues.length
@@ -549,8 +561,8 @@ function sharedMetricStreakStats(
   const met = (localDate: string) =>
     metGoalOnDate(state, metric, userId, localDate);
   return {
-    current: currentStreakWithRest(state, dates, met, userId),
-    best: longestStreakWithRest(state, dates, met, userId),
+    current: currentStreakWithRest(state, dates, met, userId, "group"),
+    best: longestStreakWithRest(state, dates, met, userId, "group"),
   };
 }
 
@@ -606,7 +618,13 @@ export function leaderboardRows(
         result.mode === "status"
           ? result.completedDays / Math.max(result.visibleDays, 1)
           : (result.averageGoalProgress ??
-            goalProgress(metric, result.average)),
+            metricVisualProgress(
+              state,
+              metric,
+              member.id,
+              dates[dates.length - 1] ?? dateKey(),
+              result.average,
+            )),
       );
     const configuredScore =
       dates.reduce((sum, date) => sum + dailyScore(state, member.id, date), 0) /

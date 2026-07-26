@@ -62,10 +62,27 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         goal: { ...item.goal },
         goalEnabled: item.goalEnabled,
         goalRange: item.goalRange ? { ...item.goalRange } : undefined,
+        goalProgressMode: item.goalProgressMode,
         category: item.category,
         healthMapping: item.healthMapping ? { ...item.healthMapping } : undefined,
+        gymMapping: item.gymMapping,
+        gymMuscleGroups: item.gymMuscleGroups,
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
+        timerEnabled: item.timerEnabled,
+        submetrics: item.submetrics?.map((submetric) => ({
+          ...submetric,
+          goal: { ...submetric.goal },
+          goalRange: submetric.goalRange
+            ? { ...submetric.goalRange }
+            : undefined,
+          healthMapping: submetric.healthMapping
+            ? { ...submetric.healthMapping }
+            : undefined,
+        })),
+        submetricDisplay: item.submetricDisplay
+          ? { ...item.submetricDisplay }
+          : undefined,
         rankingDirection: item.rankingDirection,
         defaultVisibility: item.defaultVisibility,
         formula: item.formula,

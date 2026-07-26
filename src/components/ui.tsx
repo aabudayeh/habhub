@@ -154,12 +154,23 @@ export function PageHeader({
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.78}
-          style={[styles.title, { color: colors.ink }]}
+          style={[
+            styles.title,
+            compact && styles.titleCompact,
+            { color: colors.ink },
+          ]}
         >
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: colors.muted }]}>
+          <Text
+            numberOfLines={compact ? 1 : undefined}
+            style={[
+              styles.subtitle,
+              compact && styles.subtitleCompact,
+              { color: colors.muted },
+            ]}
+          >
             {subtitle}
           </Text>
         ) : null}
@@ -533,12 +544,14 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: -0.6,
   },
+  titleCompact: { fontSize: 21, lineHeight: 25, letterSpacing: -0.35 },
   subtitle: {
     color: palette.muted,
     fontSize: 13,
     lineHeight: 19,
     marginTop: 5,
   },
+  subtitleCompact: { fontSize: 10, lineHeight: 14, marginTop: 2 },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",

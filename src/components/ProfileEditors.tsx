@@ -363,16 +363,23 @@ function CollapsibleSectionHeader({
         accessibilityState={{ expanded: !collapsed }}
         onPress={onToggle}
         hitSlop={6}
-        style={styles.sectionToggle}
+        style={styles.sectionTitleButton}
       >
         <Text style={[styles.sectionTitle, { color: colors.ink }]}>{title}</Text>
+      </Pressable>
+      {action}
+      <Pressable
+        accessibilityLabel={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+        onPress={onToggle}
+        hitSlop={8}
+        style={styles.sectionChevron}
+      >
         <Ionicons
           name={collapsed ? "chevron-down" : "chevron-up"}
           size={18}
           color={colors.muted}
         />
       </Pressable>
-      {action}
     </View>
   );
 }
@@ -403,12 +410,17 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 12,
   },
-  sectionToggle: {
+  sectionTitleButton: {
     flex: 1,
     minHeight: 34,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+  },
+  sectionChevron: {
+    width: 30,
+    minHeight: 34,
+    alignItems: "flex-end",
+    justifyContent: "center",
   },
   sectionTitle: {
     flex: 1,

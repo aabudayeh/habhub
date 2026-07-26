@@ -23,7 +23,10 @@ export function enabledHealthDataTypes(dataTypes: Record<HealthDataType, boolean
 }
 
 export function metricIdsForHealthDataTypes(dataTypes: HealthDataType[],metrics?:MetricDefinition[]) {
-  if(metrics)return metrics.filter((metric)=>metric.healthMapping&&dataTypes.includes(metric.healthMapping.dataType)).map((metric)=>metric.id);
+  if(metrics)return metrics.filter((metric)=>
+    (metric.healthMapping&&dataTypes.includes(metric.healthMapping.dataType)) ||
+    metric.submetrics?.some((field)=>field.healthMapping&&dataTypes.includes(field.healthMapping.dataType))
+  ).map((metric)=>metric.id);
   return [...new Set(dataTypes.flatMap((type) => METRICS_BY_DATA_TYPE[type]??[]))];
 }
 
@@ -77,6 +80,48 @@ export function mapHealthRecordsToEntries(
       for(const metric of metrics.filter((item)=>item.healthMapping?.dataType===record.type)){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
         entries.push(entryFor(record,userId,metric.id,value,visibility,record.nutrition));
+      }
+      for(const metric of metrics.filter((item)=>
+        item.submetrics?.some((field)=>field.healthMapping?.dataType===record.type)
+      )){
+        const submetricValues=Object.fromEntries(
+          (metric.submetrics??[]).flatMap((field)=>{
+            if(field.healthMapping?.dataType!==record.type)return [];
+            const value=mappedValue(record,{
+              ...metric,
+              dataType:"number",
+              unit:field.unit,
+              healthMapping:field.healthMapping,
+            });
+            return typeof value==="number"&&Number.isFinite(value)&&value>0
+              ? [[field.id,value]]
+              : [];
+          }),
+        );
+        if(!Object.keys(submetricValues).length)continue;
+        const id=importedId(record,metric.id);
+        const existing=entries.find((entry)=>entry.id===id);
+        if(existing){
+          existing.submetricValues={
+            ...(existing.submetricValues??{}),
+            ...submetricValues,
+          };
+          continue;
+        }
+        const primary=
+          (metric.submetrics??[]).find((field)=>field.showProgressBar&&submetricValues[field.id]!==undefined) ??
+          (metric.submetrics??[]).find((field)=>!field.linkedMetricId&&submetricValues[field.id]!==undefined);
+        if(!primary)continue;
+        const entry=entryFor(
+          record,
+          userId,
+          metric.id,
+          submetricValues[primary.id],
+          visibility,
+          record.nutrition,
+        );
+        entry.submetricValues=submetricValues;
+        entries.push(entry);
       }
       continue;
     }

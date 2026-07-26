@@ -46,6 +46,7 @@ import {
   MetricEntry,
   PhotoUpdate,
 } from "@/src/types";
+import { isCloudSyncPaused } from "@/src/cloud/syncGate";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -241,13 +242,13 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,
-      version: 21,
+      version: 23,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
   if (sourceVersion >= 19)
     return upgradeStateV21({
       ...state,
-      version: 21,
+      version: 23,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
@@ -258,7 +259,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return upgradeStateV21({
       ...state,
-      version: 21,
+      version: 23,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -283,7 +284,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return upgradeStateV21({
     ...state,
-    version: 21,
+    version: 23,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -607,6 +608,106 @@ function mergeStates(remote: AppState, local: AppState): AppState {
   };
 }
 
+function dailyStatusKey(
+  status: AppState["dailyMetricStatuses"][number],
+) {
+  return [
+    status.groupId,
+    status.metricId,
+    status.userId,
+    status.localDate,
+  ].join(":");
+}
+
+/**
+ * A workspace request can finish after a local health import, log, setting
+ * change, or message. Keep those live personal writes while accepting the
+ * server-owned group shell and other members' latest shared rows.
+ */
+function mergeWorkspaceWithoutRegression(
+  remote: AppState,
+  live: AppState,
+): AppState {
+  const remoteGroupMetricIds = new Set(
+    (remote.group.metricConfiguration ?? []).map((metric) => metric.id),
+  );
+  const remoteMetrics = new Map(
+    remote.metrics.map((metric) => [metric.id, metric]),
+  );
+  const metrics = mergeById(remote.metrics, live.metrics).map((metric) => {
+    const shared = remoteMetrics.get(metric.id);
+    if (!shared || !remoteGroupMetricIds.has(metric.id)) return metric;
+    return {
+      ...shared,
+      goal: metric.goal,
+      goalRange: metric.goalRange,
+      goalEnabled: metric.goalEnabled,
+      defaultVisibility: metric.defaultVisibility,
+      healthMapping: metric.healthMapping ?? shared.healthMapping,
+      gymMapping: metric.gymMapping ?? shared.gymMapping,
+      gymMuscleGroups:
+        metric.gymMuscleGroups ?? shared.gymMuscleGroups,
+      stepFallback: metric.stepFallback ?? shared.stepFallback,
+      manualEntry: metric.manualEntry ?? shared.manualEntry,
+      sections: {
+        ...shared.sections,
+        today: metric.sections.today,
+        insights: metric.sections.insights,
+      },
+      order: metric.order,
+      activeFrom: metric.activeFrom,
+    };
+  });
+  const entries = new Map(remote.entries.map((entry) => [entry.id, entry]));
+  live.entries
+    .filter((entry) => entry.userId === live.currentUserId)
+    .forEach((entry) => entries.set(entry.id, entry));
+  const photos = new Map(remote.photos.map((photo) => [photo.id, photo]));
+  live.photos
+    .filter((photo) => photo.userId === live.currentUserId)
+    .forEach((photo) => photos.set(photo.id, photo));
+  const messages = new Map(
+    remote.messages.map((message) => [message.id, message]),
+  );
+  live.messages
+    .filter((message) => message.senderId === live.currentUserId)
+    .forEach((message) => messages.set(message.id, message));
+  const statuses = new Map(
+    remote.dailyMetricStatuses.map((status) => [
+      dailyStatusKey(status),
+      status,
+    ]),
+  );
+  live.dailyMetricStatuses
+    .filter((status) => status.userId === live.currentUserId)
+    .forEach((status) => statuses.set(dailyStatusKey(status), status));
+  return {
+    ...remote,
+    ...live,
+    group: remote.group,
+    groups: mergeById(live.groups, remote.groups),
+    metrics,
+    entries: [...entries.values()].sort((a, b) =>
+      a.recordedAt.localeCompare(b.recordedAt),
+    ),
+    photos: [...photos.values()],
+    messages: [...messages.values()].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    ),
+    dailyMetricStatuses: [...statuses.values()],
+    trackedGoalPeriods: {
+      ...remote.trackedGoalPeriods,
+      ...live.trackedGoalPeriods,
+    },
+    selectedGroupMetricId: remote.group.metricConfiguration?.some(
+      (metric) => metric.id === live.selectedGroupMetricId,
+    )
+      ? live.selectedGroupMetricId
+      : remote.selectedGroupMetricId,
+    lastSavedAt: null,
+  };
+}
+
 async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
   if (!supabase) return null;
   const { data, error } = await supabase
@@ -746,6 +847,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const syncPromiseRef = useRef<Promise<void> | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressGroupRefreshUntilRef = useRef(0);
+  const groupLoadSequenceRef = useRef(0);
   stateRef.current = state;
 
   useEffect(() => {
@@ -789,7 +891,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       let resolved = mergeStates(resolvedRemote, stateRef.current);
       if (isCloudGroupId(resolved.group.id)) {
         try {
-          resolved = await loadCloudWorkspace(resolved, resolved.group.id);
+          const loaded = await loadCloudWorkspace(
+            resolved,
+            resolved.group.id,
+          );
+          resolved = mergeWorkspaceWithoutRegression(
+            loaded,
+            stateRef.current,
+          );
         } catch (groupError) {
           setErrorMessage(
             `Account synced; group refresh will retry: ${errorText(groupError)}`,
@@ -952,11 +1061,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           const targetGroup =
             existingGroups.find((group) => group.id === resolved.group.id) ??
             existingGroups[0];
-          if (targetGroup)
-            resolved = await loadCloudWorkspace(
+          if (targetGroup) {
+            const loaded = await loadCloudWorkspace(
               { ...resolved, groups: existingGroups },
               targetGroup.id,
             );
+            resolved =
+              stateRef.current.currentUserId === user.id &&
+              !isDemoBoundState(stateRef.current)
+                ? mergeWorkspaceWithoutRegression(
+                    loaded,
+                    stateRef.current,
+                  )
+                : loaded;
+          }
           if (!cancelled) {
             hashRef.current = correctedAccountState
               ? null
@@ -1032,12 +1150,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     if (timerRef.current) clearTimeout(timerRef.current);
     // Coalesce and defer full-snapshot hashing. Serializing the whole offline
     // state synchronously on every tap or keystroke caused phone UI stutter.
-    timerRef.current = setTimeout(() => {
+    const saveWhenReady = () => {
+      if (isCloudSyncPaused()) {
+        timerRef.current = setTimeout(saveWhenReady, 1200);
+        return;
+      }
       const hash = stableHash(stateRef.current);
       if (hash === hashRef.current) return;
       setPendingChanges(true);
       performSync().catch(() => undefined);
-    }, 2400);
+    };
+    timerRef.current = setTimeout(saveWhenReady, 2400);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
@@ -1137,9 +1260,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
   const refreshGroup = useCallback(async () => {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
-    const refreshed = await loadCloudWorkspace(
+    const groupId = stateRef.current.group.id;
+    const sequence = ++groupLoadSequenceRef.current;
+    const loaded = await loadCloudWorkspace(
       stateRef.current,
-      stateRef.current.group.id,
+      groupId,
+    );
+    if (
+      sequence !== groupLoadSequenceRef.current ||
+      stateRef.current.group.id !== groupId
+    )
+      return;
+    const refreshed = mergeWorkspaceWithoutRegression(
+      loaded,
+      stateRef.current,
     );
     stateRef.current = refreshed;
     hashRef.current = stableHash(refreshed);
@@ -1164,7 +1298,29 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     const groupId = stateRef.current.group.id;
     const activity = await loadCloudGroupActivity(stateRef.current, groupId);
     if (stateRef.current.group.id !== groupId) return;
-    const next = { ...stateRef.current, ...activity };
+    const live = stateRef.current;
+    const entries = new Map(
+      activity.entries.map((entry) => [entry.id, entry]),
+    );
+    live.entries
+      .filter((entry) => entry.userId === live.currentUserId)
+      .forEach((entry) => entries.set(entry.id, entry));
+    const statuses = new Map(
+      activity.dailyMetricStatuses.map((status) => [
+        dailyStatusKey(status),
+        status,
+      ]),
+    );
+    live.dailyMetricStatuses
+      .filter((status) => status.userId === live.currentUserId)
+      .forEach((status) => statuses.set(dailyStatusKey(status), status));
+    const next = {
+      ...live,
+      entries: [...entries.values()].sort((a, b) =>
+        a.recordedAt.localeCompare(b.recordedAt),
+      ),
+      dailyMetricStatuses: [...statuses.values()],
+    };
     stateRef.current = next;
     replaceState(next);
   }, [replaceState]);
@@ -1172,11 +1328,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const hydrateGroupInBackground = useCallback(
     (groupId: string) => {
       const base = stateRef.current;
+      const sequence = ++groupLoadSequenceRef.current;
       loadCloudWorkspace(base, groupId)
-        .then((next) => {
+        .then((loaded) => {
           // A slow response for an old group must never pull the user back
           // after they already switched elsewhere.
-          if (stateRef.current.group.id !== groupId) return;
+          if (
+            sequence !== groupLoadSequenceRef.current ||
+            stateRef.current.group.id !== groupId
+          )
+            return;
+          const next = mergeWorkspaceWithoutRegression(
+            loaded,
+            stateRef.current,
+          );
           stateRef.current = next;
           // Persist the active-group selection after the cached shell has been
           // replaced by the authoritative workspace.

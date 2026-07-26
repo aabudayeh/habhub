@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, View } from "react-native";
 
@@ -12,8 +12,19 @@ import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { TrackerViewFilter } from "@/src/types";
+import {
+  activeTrackerViewId,
+  ALL_AVAILABLE_TRACKERS_FILTER,
+  ALL_TRACKERS_FILTER,
+  TRACKED_ONLY_FILTER,
+  UNTRACKED_ONLY_FILTER,
+} from "@/src/domain/viewFilters";
 
 export default function ViewFilters() {
+  const { scope: rawScope } = useLocalSearchParams<{
+    scope?: "today" | "progress";
+  }>();
+  const scope = rawScope === "progress" ? "progress" : "today";
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -44,13 +55,21 @@ export default function ViewFilters() {
       editingId === "new"
         ? `view-${Date.now().toString(36)}`
         : editingId!;
+    const existing = filters.find((filter) => filter.id === id);
     const next = [
       ...filters.filter((filter) => filter.id !== id),
-      { id, name: name.trim(), metricIds: selected },
+      {
+        id,
+        name: name.trim(),
+        metricIds: selected,
+        visible: existing?.visible ?? true,
+      },
     ];
     updateSettings({
       trackerViewFilters: next,
-      activeTrackerViewFilterId: id,
+      [scope === "today"
+        ? "activeTodayTrackerViewFilterId"
+        : "activeProgressTrackerViewFilterId"]: id,
     });
     close();
   };
@@ -58,7 +77,7 @@ export default function ViewFilters() {
     <Screen>
       <PageHeader
         title="Custom views"
-        subtitle="Reusable tracker lists for Today and Progress."
+        subtitle={`Reusable tracker lists · editing ${scope === "today" ? "Today" : "Progress"}.`}
         showMenu={false}
         action={
           <IconButton icon="close" label="Close" onPress={() => router.back()} />
@@ -158,11 +177,51 @@ export default function ViewFilters() {
         </Card>
       ) : (
         <>
+          {[
+            [TRACKED_ONLY_FILTER, "Tracked goals only", "Updates automatically"],
+            [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "Every available tracker"],
+            [ALL_TRACKERS_FILTER, "None", "Your page customization"],
+            [UNTRACKED_ONLY_FILTER, "Other trackers", "Goals not currently tracked"],
+          ].map(([id, label, meta]) => (
+            <Card key={id} style={styles.filter}>
+              <Pressable
+                onPress={() =>
+                  updateSettings({
+                    [scope === "today"
+                      ? "activeTodayTrackerViewFilterId"
+                      : "activeProgressTrackerViewFilterId"]: id,
+                  })
+                }
+                style={styles.filterMain}
+              >
+                <Ionicons
+                  name={id === TRACKED_ONLY_FILTER ? "flag-outline" : "apps-outline"}
+                  size={18}
+                  color={accent}
+                />
+                <View style={styles.copy}>
+                  <Text style={[styles.filterName, { color: colors.ink }]}>
+                    {label}
+                  </Text>
+                  <Text style={[styles.filterMeta, { color: colors.muted }]}>
+                    {meta}
+                  </Text>
+                </View>
+                {activeTrackerViewId(state, scope) === id ? (
+                  <Ionicons name="checkmark-circle" size={18} color={accent} />
+                ) : null}
+              </Pressable>
+            </Card>
+          ))}
           {filters.map((filter) => (
             <Card key={filter.id} style={styles.filter}>
               <Pressable
                 onPress={() =>
-                  updateSettings({ activeTrackerViewFilterId: filter.id })
+                  updateSettings({
+                    [scope === "today"
+                      ? "activeTodayTrackerViewFilterId"
+                      : "activeProgressTrackerViewFilterId"]: filter.id,
+                  })
                 }
                 style={styles.filterMain}
               >
@@ -175,10 +234,26 @@ export default function ViewFilters() {
                     {filter.metricIds.length} trackers
                   </Text>
                 </View>
-                {state.settings.activeTrackerViewFilterId === filter.id ? (
+                {(scope === "today"
+                  ? state.settings.activeTodayTrackerViewFilterId
+                  : state.settings.activeProgressTrackerViewFilterId) ===
+                filter.id ? (
                   <Ionicons name="checkmark-circle" size={18} color={accent} />
                 ) : null}
               </Pressable>
+              <IconButton
+                icon={filter.visible === false ? "eye-off-outline" : "eye-outline"}
+                label={filter.visible === false ? "Show in quick views" : "Hide from quick views"}
+                onPress={() =>
+                  updateSettings({
+                    trackerViewFilters: filters.map((candidate) =>
+                      candidate.id === filter.id
+                        ? { ...candidate, visible: candidate.visible === false }
+                        : candidate,
+                    ),
+                  })
+                }
+              />
               <IconButton
                 icon="create-outline"
                 label="Edit"
@@ -192,10 +267,17 @@ export default function ViewFilters() {
                     trackerViewFilters: filters.filter(
                       (candidate) => candidate.id !== filter.id,
                     ),
-                    activeTrackerViewFilterId:
-                      state.settings.activeTrackerViewFilterId === filter.id
+                    [scope === "today"
+                      ? "activeTodayTrackerViewFilterId"
+                      : "activeProgressTrackerViewFilterId"]:
+                      (scope === "today"
+                        ? state.settings.activeTodayTrackerViewFilterId
+                        : state.settings.activeProgressTrackerViewFilterId) ===
+                      filter.id
                         ? "all"
-                        : state.settings.activeTrackerViewFilterId,
+                        : scope === "today"
+                          ? state.settings.activeTodayTrackerViewFilterId
+                          : state.settings.activeProgressTrackerViewFilterId,
                   })
                 }
               />

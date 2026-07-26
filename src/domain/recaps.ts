@@ -7,6 +7,7 @@ import {
   safeMetricValue,
   trackedGoalSummary,
 } from "./metrics";
+import { performanceOverview } from "./performance";
 
 export type RecapScope = "personal" | "group";
 
@@ -203,6 +204,29 @@ function personalStories(
     icon: "calendar-outline",
     color: "#E9873F",
   });
+  const performance = performanceOverview(state, 7);
+  if (performance.strengths.length)
+    stories.push({
+      id: "personal-strengths",
+      scope: "personal",
+      eyebrow: "BIGGEST STRENGTH",
+      title: performance.strengths[0].metric.name,
+      stat: `${Math.round(performance.strengths[0].currentGoalRate * 100)}% goal rate`,
+      body: "Your strongest goal-aligned area compared with your other selected trackers.",
+      icon: "trending-up-outline",
+      color: performance.strengths[0].metric.color,
+    });
+  if (performance.opportunities.length)
+    stories.push({
+      id: "personal-opportunity",
+      scope: "personal",
+      eyebrow: "NEXT BEST WIN",
+      title: performance.opportunities[0].metric.name,
+      stat: "Focus here",
+      body: "This has the most room to improve based on your recent goal progress.",
+      icon: "trail-sign-outline",
+      color: performance.opportunities[0].metric.color,
+    });
   return stories;
 }
 

@@ -2,7 +2,7 @@ import { MetricDefinition } from "@/src/types";
 
 export function defaultReminderTimes(metric: Pick<MetricDefinition, "id" | "category">) {
   if (metric.id === "food") return ["08:30", "13:30", "19:30"];
-  if (metric.id === "steps") return ["12:30", "18:30"];
+  if (metric.id === "steps") return ["10:00", "13:00", "17:00", "20:00"];
   if (["exercise", "workout", "workout_duration"].includes(metric.id))
     return ["17:30"];
   if (metric.id === "water") return ["10:00", "14:00", "18:00"];

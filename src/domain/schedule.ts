@@ -36,10 +36,36 @@ export function scheduleAppliesOnDate(
 
 export function todoAppearsOnDate(todo: TodoItem, localDate: string) {
   const createdDate = todo.createdAt.slice(0, 10);
+  const completedDate =
+    todo.completedDates.slice().sort().at(-1) ?? todo.completedAt?.slice(0, 10);
+  const skippedDate = (todo.skippedDates ?? []).slice().sort().at(-1);
+  const resolvedDate = [completedDate, skippedDate]
+    .filter((date): date is string => Boolean(date))
+    .sort()[0];
+  if (
+    todo.reminders.some(
+      (reminder) => reminder.at?.slice(0, 10) === localDate,
+    )
+  )
+    return !resolvedDate || localDate <= resolvedDate;
   if (todo.recurrence)
     return scheduleAppliesOnDate(todo.recurrence, createdDate, localDate);
-  if (todo.dueAt) return todo.dueAt.slice(0, 10) === localDate;
-  return !todo.completedAt && localDate >= createdDate;
+  const begins = todo.dueAt?.slice(0, 10) ?? createdDate;
+  return localDate >= begins && (!resolvedDate || localDate <= resolvedDate);
+}
+
+export function todoCompletedOnDate(todo: TodoItem, localDate: string) {
+  return todo.completedDates.includes(localDate);
+}
+
+export function todoSkippedOnDate(todo: TodoItem, localDate: string) {
+  return (todo.skippedDates ?? []).includes(localDate);
+}
+
+export function todoResolvedOnDate(todo: TodoItem, localDate: string) {
+  return (
+    todoCompletedOnDate(todo, localDate) || todoSkippedOnDate(todo, localDate)
+  );
 }
 
 export function nextScheduledDate(

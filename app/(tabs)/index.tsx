@@ -27,12 +27,12 @@ import {
 import { AppText as Text } from "@/src/components/AppText";
 import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
-import { todoAppearsOnDate } from "@/src/domain/schedule";
 import {
-  ReorderDragState,
-  ReorderItem,
-  reorderShift,
-} from "@/src/components/ReorderItem";
+  todoAppearsOnDate,
+  todoResolvedOnDate,
+} from "@/src/domain/schedule";
+import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
+import { ReorderItem } from "@/src/components/ReorderItem";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -47,23 +47,34 @@ import {
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
+  goalReached,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
+  metricJourneyProgressStats,
   metricStreakStats,
+  metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
   weightProgressStats,
   weeklyDeficitBalance,
 } from "@/src/domain/metrics";
+import {
+  compoundMetricValues,
+  formatCompoundMetricValue,
+  submetricAsMetric,
+} from "@/src/domain/submetrics";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { HistoryRange, MetricDefinition } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
   activeTrackerViewLabel,
+  activeTrackerViewId,
+  ALL_AVAILABLE_TRACKERS_FILTER,
   ALL_TRACKERS_FILTER,
   metricMatchesActiveView,
   TRACKED_ONLY_FILTER,
@@ -94,11 +105,10 @@ export default function Today() {
   const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
   const exitingEditMode = useRef(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
-  const [dragPlacement, setDragPlacement] =
-    useState<ReorderDragState | null>(null);
   const [showMore, setShowMore] = useState(false);
   const [showAddTiles, setShowAddTiles] = useState(false);
   const [showDayEnd, setShowDayEnd] = useState(false);
+  const [showHistoryOptions, setShowHistoryOptions] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
   const todaySwipeResponder = useMemo(
     () =>
@@ -108,18 +118,23 @@ export default function Today() {
           !showMore &&
           !showAddTiles &&
           !showDayEnd &&
+          !showHistoryOptions &&
           gesture.dx < -22 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.4,
         onPanResponderRelease: (_event, gesture) => {
           if (gesture.dx <= -55) router.navigate("/menu");
         },
       }),
-    [editing, showAddTiles, showDayEnd, showMore],
+    [editing, showAddTiles, showDayEnd, showHistoryOptions, showMore],
   );
   useEffect(() => {
     if (!editing) {
       setDraggingMetricId(null);
     }
+  }, [editing]);
+  useEffect(() => {
+    setCloudSyncPaused("today-edit", editing);
+    return () => setCloudSyncPaused("today-edit", false);
   }, [editing]);
   const beginEditing = useCallback(() => {
     exitingEditMode.current = false;
@@ -129,23 +144,17 @@ export default function Today() {
   const finishEditing = useCallback(() => {
     if (exitingEditMode.current) return;
     exitingEditMode.current = true;
-    // First render every card at its resting edit-order position. Applying
-    // completed-goal sorting while drag transforms still exist leaves visual
-    // holes because the transforms are relative to the previous order.
-    setDragPlacement((current) =>
-      current ? { ...current, settling: true } : current,
-    );
     setDraggingMetricId(null);
     requestAnimationFrame(() => {
       setEditing(false);
       requestAnimationFrame(() => {
         setCompletionSortEnabled(true);
-        setDragPlacement(null);
         exitingEditMode.current = false;
       });
     });
   }, []);
   const today = dateKey();
+  const todayHistoryRange = state.settings.todayHistoryRange ?? "week";
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
   )!;
@@ -156,15 +165,16 @@ export default function Today() {
         .filter(
           (item) =>
             !isInternalTracker(item) &&
-            item.sections.today &&
+            (item.sections.today ||
+              activeTrackerViewId(state, "today") !== ALL_TRACKERS_FILTER) &&
             item.activeFrom <= today &&
             (
               state.settings.showUntrackedToday !== false ||
               isMetricTrackedOnDate(state, item, today) ||
-              (state.settings.activeTrackerViewFilterId ?? ALL_TRACKERS_FILTER) !==
+              activeTrackerViewId(state, "today") !==
                 ALL_TRACKERS_FILTER
             ) &&
-            metricMatchesActiveView(state, item, today),
+            metricMatchesActiveView(state, item, today, "today"),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
@@ -267,6 +277,13 @@ export default function Today() {
         todo.completedDates.includes(today),
     )
     .map((todo) => `todo:${todo.id}`);
+  const todayTodos =
+    state.settings.showTodosToday === false
+      ? []
+      : (state.todos ?? []).filter((todo) => todoAppearsOnDate(todo, today));
+  const completedTodayTodos = todayTodos.filter((todo) =>
+    todoResolvedOnDate(todo, today),
+  ).length;
   const goalCelebrationKey = [...completedGoalIds, ...completedTodoIds]
     .sort()
     .join("|");
@@ -520,6 +537,9 @@ export default function Today() {
                 ]}
               >
                 {goals.allMet ? "DAY COMPLETE" : "TODAY'S FOCUS"}
+                {todayTodos.length
+                  ? ` · ${completedTodayTodos}/${todayTodos.length} TO-DOS`
+                  : ""}
               </Text>
               <Text
                 preserveColor
@@ -548,11 +568,24 @@ export default function Today() {
               style={[
                 styles.ring,
                 {
-                  borderColor: heroCompletionColor,
+                  borderColor:
+                    goals.met > 0
+                      ? heroCompletionColor
+                      : "rgba(255,255,255,.28)",
                   backgroundColor: "transparent",
                 },
               ]}
             >
+              <Ionicons
+                name={
+                  (state.settings.completionIndicatorIcon ??
+                    "ellipse-outline") as keyof typeof Ionicons.glyphMap
+                }
+                size={15}
+                color={
+                  goals.met > 0 ? palette.lime : "rgba(255,255,255,.46)"
+                }
+              />
               <Text
                 preserveColor
                 style={[
@@ -622,7 +655,13 @@ export default function Today() {
             }
           />
         ) : null}
-        <TodoTodayList localDate={today} onComplete={celebrateTodo} />
+        {state.settings.todosBelowGoals !== true ? (
+          <TodoTodayList
+            localDate={today}
+            onComplete={celebrateTodo}
+            editing={editing}
+          />
+        ) : null}
         <View style={styles.sectionRow}>
           <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
           <Pressable
@@ -637,7 +676,7 @@ export default function Today() {
               numberOfLines={1}
               style={[styles.filterButtonText, { color: accent }]}
             >
-              {activeTrackerViewLabel(state)}
+              {activeTrackerViewLabel(state, "today")}
             </Text>
           </Pressable>
         </View>
@@ -646,8 +685,6 @@ export default function Today() {
             <ReorderItem
               key={item.id}
               active={draggingMetricId === item.id}
-              shift={reorderShift(index, dragPlacement)}
-              settling={Boolean(dragPlacement?.settling)}
             >
               <TrackerRow
                 item={item}
@@ -670,7 +707,10 @@ export default function Today() {
                 goldSequenceRun={goldSequenceRun}
                 celebrating={celebratingGoalIds.includes(item.id)}
                 historyRange={
-                  state.settings.todayHistoryByMetric?.[item.id] ?? "off"
+                  (state.settings.todayHistoryByMetric?.[item.id] ?? "off") ===
+                  "off"
+                    ? "off"
+                    : todayHistoryRange
                 }
                 onEdit={beginEditing}
                 onMove={(target) =>
@@ -678,31 +718,24 @@ export default function Today() {
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
-                onHistoryChange={(historyRange) =>
+                onHistoryToggle={() =>
                   updateSettings({
                     todayHistoryByMetric: {
                       ...(state.settings.todayHistoryByMetric ?? {}),
-                      [item.id]: historyRange,
+                      [item.id]:
+                        (state.settings.todayHistoryByMetric?.[item.id] ??
+                          "off") === "off"
+                          ? todayHistoryRange
+                          : "off",
                     },
                   })
                 }
                 onDragStart={() => {
                   setDraggingMetricId(item.id);
-                  setDragPlacement({
-                    id: item.id,
-                    origin: index,
-                    target: index,
-                    step: tileHeight + 6,
-                  });
                 }}
-                onDragHover={(target) =>
-                  setDragPlacement((current) =>
-                    current?.id === item.id ? { ...current, target } : current,
-                  )
-                }
-                onDragCancel={() => setDragPlacement(null)}
+                onDragHover={() => {}}
+                onDragCancel={() => setDraggingMetricId(null)}
                 onDragEnd={() => {
-                  setDragPlacement(null);
                   setDraggingMetricId(null);
                 }}
               />
@@ -725,6 +758,13 @@ export default function Today() {
               <Ionicons name="chevron-down" size={17} color={colors.faint} />
             </View>
           </Pressable>
+        ) : null}
+        {state.settings.todosBelowGoals === true ? (
+          <TodoTodayList
+            localDate={today}
+            onComplete={celebrateTodo}
+            editing={editing}
+          />
         ) : null}
         {editing ? (
           <View style={styles.editActions}>
@@ -780,37 +820,7 @@ export default function Today() {
               </Text>
             </Pressable>
             <Pressable
-              onPress={() =>
-                Alert.alert(
-                  "Today history",
-                  "Show a compact goal map below every visible tracker.",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    ...(["week", "month", "year"] as HistoryRange[]).map(
-                      (range) => ({
-                        text:
-                          range === "week"
-                            ? "Week"
-                            : range === "month"
-                              ? "Month"
-                              : "Year",
-                        onPress: () =>
-                          updateSettings({
-                            todayHistoryByMetric: Object.fromEntries(
-                              visible.map((metric) => [metric.id, range]),
-                            ),
-                          }),
-                      }),
-                    ),
-                    {
-                      text: "Hide all",
-                      style: "destructive",
-                      onPress: () =>
-                        updateSettings({ todayHistoryByMetric: {} }),
-                    },
-                  ],
-                )
-              }
+              onPress={() => setShowHistoryOptions(true)}
               style={[styles.add, styles.editActionButton, { borderColor: accent }]}
             >
               <Ionicons name="calendar-outline" size={18} color={accent} />
@@ -856,19 +866,22 @@ export default function Today() {
               Today view
             </Text>
             {[
-              [ALL_TRACKERS_FILTER, "All trackers", "apps-outline"],
-              [TRACKED_ONLY_FILTER, "Tracked goals", "flag-outline"],
+              [TRACKED_ONLY_FILTER, "Tracked goals only", "flag-outline"],
+              [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "apps-outline"],
+              [ALL_TRACKERS_FILTER, "None", "remove-circle-outline"],
               [UNTRACKED_ONLY_FILTER, "Other trackers", "ellipse-outline"],
-              ...(state.settings.trackerViewFilters ?? []).map((filter) => [
-                filter.id,
-                filter.name,
-                "funnel-outline",
-              ]),
+              ...(state.settings.trackerViewFilters ?? [])
+                .filter((filter) => filter.visible !== false)
+                .map((filter) => [
+                  filter.id,
+                  filter.name,
+                  "funnel-outline",
+                ]),
             ].map(([id, label, icon]) => (
               <Pressable
                 key={id}
                 onPress={() => {
-                  updateSettings({ activeTrackerViewFilterId: id });
+                  updateSettings({ activeTodayTrackerViewFilterId: id });
                   setShowViewFilters(false);
                 }}
                 style={[styles.sheetRow, { borderColor: colors.border }]}
@@ -881,8 +894,7 @@ export default function Today() {
                 <Text style={[styles.sheetName, { color: colors.ink }]}>
                   {label}
                 </Text>
-                {(state.settings.activeTrackerViewFilterId ??
-                  ALL_TRACKERS_FILTER) === id ? (
+                {activeTrackerViewId(state, "today") === id ? (
                   <Ionicons name="checkmark" size={17} color={accent} />
                 ) : null}
               </Pressable>
@@ -890,7 +902,10 @@ export default function Today() {
             <Pressable
               onPress={() => {
                 setShowViewFilters(false);
-                router.navigate("/view-filters" as never);
+                router.navigate({
+                  pathname: "/view-filters",
+                  params: { scope: "today" },
+                } as never);
               }}
               style={[styles.manageFilters, { borderColor: accent }]}
             >
@@ -914,7 +929,21 @@ export default function Today() {
             <Text style={[styles.sheetTitle, { color: colors.ink }]}>
               More from today
             </Text>
-            {extra.map((item) => (
+            {extra.map((item) => {
+              const completed =
+                metricApplicableOnDate(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                ) &&
+                scheduledGoalReached(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                );
+              return (
               <Pressable
                 key={item.id}
                 onPress={() => {
@@ -938,7 +967,13 @@ export default function Today() {
                     color={item.color}
                   />
                 </View>
-                <Text style={[styles.sheetName, { color: colors.ink }]}>
+                <Text
+                  style={[
+                    styles.sheetName,
+                    { color: completed ? GOAL_COMPLETE_COLOR : colors.ink },
+                    completed && styles.completedText,
+                  ]}
+                >
                   {item.name}
                 </Text>
                 {isMetricTrackedOnDate(state, item, today) ? (
@@ -954,8 +989,96 @@ export default function Today() {
                 <Text style={[styles.sheetValue, { color: colors.muted }]}>
                   {displayValue(state, item, today, weekly)}
                 </Text>
+                {completed ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={17}
+                    color={GOAL_COMPLETE_COLOR}
+                  />
+                ) : null}
+              </Pressable>
+              );
+            })}
+          </View>
+        </Pressable>
+      </Modal>
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showHistoryOptions}
+        onRequestClose={() => setShowHistoryOptions(false)}
+      >
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => setShowHistoryOptions(false)}
+        >
+          <View style={[styles.sheet, { backgroundColor: colors.card }]}>
+            <View style={styles.sheetHandle} />
+            <Text style={[styles.sheetTitle, { color: colors.ink }]}>
+              History below Today tiles
+            </Text>
+            {(
+              [
+                ["week", "Week", "Seven daily cells"],
+                ["month", "Month", "Every day in the selected month"],
+                ["year", "Year", "A compact full-year grid"],
+              ] as const
+            ).map(([range, label, description]) => (
+              <Pressable
+                key={range}
+                onPress={() => {
+                  updateSettings({ todayHistoryRange: range });
+                }}
+                style={[styles.sheetRow, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={17} color={accent} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.sheetName, { color: colors.ink }]}>
+                    {label}
+                  </Text>
+                  <Text style={[styles.moreCount, { color: colors.muted }]}>
+                    {description}
+                  </Text>
+                </View>
+                {todayHistoryRange === range ? (
+                  <Ionicons name="checkmark" size={17} color={accent} />
+                ) : null}
               </Pressable>
             ))}
+            <Pressable
+              onPress={() =>
+                updateSettings({
+                  todayHistoryByMetric: Object.fromEntries(
+                    state.metrics
+                      .filter((metric) => !isInternalTracker(metric))
+                      .map((metric) => [metric.id, todayHistoryRange]),
+                  ),
+                })
+              }
+              style={[styles.sheetRow, { borderColor: colors.border }]}
+            >
+              <Ionicons name="eye-outline" size={17} color={accent} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sheetName, { color: colors.ink }]}>
+                  Show for all trackers
+                </Text>
+                <Text style={[styles.moreCount, { color: colors.muted }]}>
+                  Includes trackers not currently shown on Today
+                </Text>
+              </View>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                updateSettings({ todayHistoryByMetric: {} });
+                setShowHistoryOptions(false);
+              }}
+              style={[styles.sheetRow, { borderColor: colors.border }]}
+            >
+              <Ionicons name="eye-off-outline" size={17} color={palette.red} />
+              <Text style={[styles.sheetName, { color: palette.red }]}>
+                Hide for all trackers
+              </Text>
+            </Pressable>
           </View>
         </Pressable>
       </Modal>
@@ -1173,7 +1296,7 @@ function TrackerRow({
   onMove,
   onRemove,
   onPin,
-  onHistoryChange,
+  onHistoryToggle,
   onDragStart,
   onDragHover,
   onDragCancel,
@@ -1199,7 +1322,7 @@ function TrackerRow({
   onMove: (target: number) => void;
   onRemove: () => void;
   onPin: () => void;
-  onHistoryChange: (range: HistoryRange | "off") => void;
+  onHistoryToggle: () => void;
   onDragStart: () => void;
   onDragHover: (target: number) => void;
   onDragCancel: () => void;
@@ -1285,17 +1408,15 @@ function TrackerRow({
         onPanResponderRelease: () => {
           const target = liveTarget.current;
           Animated.spring(dragY, {
-            toValue: (target - dragOrigin.current) * dragStep,
+            toValue: 0,
             damping: 24,
             stiffness: 220,
             mass: 0.72,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(() => {
-            if (target !== dragOrigin.current) onMoveRef.current(target);
-            dragY.setValue(0);
-            onDragEndRef.current();
-          });
+          }).start();
+          if (target !== dragOrigin.current) onMoveRef.current(target);
+          onDragEndRef.current();
         },
         onPanResponderTerminate: () => {
           Animated.spring(dragY, {
@@ -1410,7 +1531,22 @@ function TrackerRow({
             entry.userId === state.currentUserId && entry.localDate === day,
         )
       : undefined;
-  const content = isBloodPressure
+  const compoundValues = compoundMetricValues(
+    state,
+    item,
+    state.currentUserId,
+    day,
+  );
+  const mergedCompoundValue = formatCompoundMetricValue(item, compoundValues);
+  const progressSubmetrics = (item.submetrics ?? [])
+    .filter((submetric) => submetric.showProgressBar)
+    .slice(0, 4);
+  const content = mergedCompoundValue
+    ? {
+        primary: mergedCompoundValue,
+        secondary: "",
+      }
+    : isBloodPressure
     ? {
         primary:
           value > 0 || diastolicValue > 0
@@ -1502,6 +1638,8 @@ function TrackerRow({
           <Text
             style={[styles.name, { color: colors.ink }, met && styles.completedText]}
             numberOfLines={1}
+            adjustsFontSizeToFit={editing}
+            minimumFontScale={editing ? 0.72 : 1}
           >
             {item.name}
           </Text>
@@ -1570,14 +1708,54 @@ function TrackerRow({
         {content.secondary ? (
           <Text
             style={[styles.secondary, { color: colors.muted }]}
-            numberOfLines={1}
+            numberOfLines={editing ? 2 : 1}
           >
             {content.secondary}
           </Text>
         ) : null}
       </View>
-      {item.goalEnabled !== false && applicable ? (
-        <View style={diastolic ? styles.bpProgress : styles.progress}>
+      {(item.goalEnabled !== false || progressSubmetrics.length > 0) &&
+      applicable ? (
+        <View
+          style={
+            progressSubmetrics.length > 1 || diastolic
+              ? styles.bpProgress
+              : styles.progress
+          }
+        >
+          {progressSubmetrics.length ? (
+            progressSubmetrics.map((submetric) => {
+              const submetricDefinition = submetricAsMetric(item, submetric);
+              const subValue = compoundValues[submetric.id] ?? 0;
+              const subMet = goalReached(
+                submetricDefinition,
+                subValue,
+                submetric.goal.target,
+              );
+              return (
+                <View key={submetric.id} style={styles.submetricProgressRow}>
+                  <Text
+                    style={[styles.bpLabel, { color: colors.muted }]}
+                    numberOfLines={1}
+                  >
+                    {submetric.name.slice(0, 3).toUpperCase()}
+                  </Text>
+                  <View style={styles.submetricProgressBar}>
+                    <ProgressBar
+                      progress={goalProgress(
+                        submetricDefinition,
+                        subValue,
+                        submetric.goal.target,
+                      )}
+                      color={subMet ? palette.lime : item.color}
+                      layered={submetric.goal.kind === "at_least"}
+                    />
+                  </View>
+                </View>
+              );
+            })
+          ) : (
+            <>
           {diastolic ? <Text style={[styles.bpLabel, { color: colors.muted }]}>SYS</Text> : null}
           {trackedGoal && met ? (
             <GoalProgressBar
@@ -1619,6 +1797,8 @@ function TrackerRow({
               )}
             </>
           ) : null}
+            </>
+          )}
         </View>
       ) : null}
       {editing ? (
@@ -1634,16 +1814,14 @@ function TrackerRow({
             <Ionicons name="create-outline" size={15} color={accent} />
           </Pressable>
           <Pressable
+            accessibilityLabel={
+              historyRange === "off"
+                ? `Show ${item.name} history`
+                : `Hide ${item.name} history`
+            }
             onPress={() => {
-              const ranges: (HistoryRange | "off")[] = [
-                "off",
-                "week",
-                "month",
-                "year",
-              ];
-              onHistoryChange(
-                ranges[(ranges.indexOf(historyRange) + 1) % ranges.length],
-              );
+              onHistoryToggle();
+              if (historyRange !== "off") setHistoryOpen(false);
             }}
             hitSlop={8}
             style={[styles.editTracker, { borderColor: accent }]}
@@ -1660,53 +1838,54 @@ function TrackerRow({
         </View>
       ) : (
         <View style={styles.rowEnd}>
-          <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+          {historyRange !== "off" ? (
+            <Pressable
+              accessibilityLabel={
+                historyOpen ? "Collapse history" : "Expand history"
+              }
+              onPress={(event) => {
+                event.stopPropagation();
+                setHistoryOpen((open) => !open);
+              }}
+              hitSlop={8}
+              style={styles.historyToggle}
+            >
+              <Ionicons
+                name={historyOpen ? "chevron-up" : "chevron-down"}
+                size={16}
+                color={accent}
+              />
+            </Pressable>
+          ) : (
+            <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+          )}
         </View>
       )}
     </AnimatedPressable>
-    {!editing && historyRange !== "off" ? (
+    {!editing && historyRange !== "off" && historyOpen ? (
       <View
         style={[
           styles.todayHistory,
           { backgroundColor: colors.card, borderColor: colors.border },
         ]}
       >
-        <Pressable
-          onPress={() => setHistoryOpen((open) => !open)}
-          style={styles.todayHistoryHeading}
-        >
-          <Text style={[styles.todayHistoryLabel, { color: colors.muted }]}>
-            {historyRange === "week"
-              ? "This week"
-              : historyRange === "month"
-                ? "This month"
-                : "This year"}
-          </Text>
-          <Ionicons
-            name={historyOpen ? "chevron-up" : "chevron-down"}
-            size={14}
-            color={colors.muted}
-          />
-        </Pressable>
-        {historyOpen ? (
-          <GoalHeatmap
-            state={state}
-            metric={item}
-            dates={calendarPeriodRange(
-              day,
-              historyRange,
-              state.settings.weekStartsOn ?? 1,
-            )}
-            range={historyRange}
-            compact
-            onSelect={(selectedDate) =>
-              router.navigate({
-                pathname: "/metric-detail",
-                params: { metric: item.id, date: selectedDate },
-              })
-            }
-          />
-        ) : null}
+        <GoalHeatmap
+          state={state}
+          metric={item}
+          dates={calendarPeriodRange(
+            day,
+            historyRange,
+            state.settings.weekStartsOn ?? 1,
+          )}
+          range={historyRange}
+          compact
+          onSelect={(selectedDate) =>
+            router.navigate({
+              pathname: "/metric-detail",
+              params: { metric: item.id, date: selectedDate },
+            })
+          }
+        />
       </View>
     ) : null}
     </Animated.View>
@@ -1787,12 +1966,15 @@ function todayProgress(
   value: number,
   target: number,
 ) {
-  if (item.id === "weight")
-    return weightProgressStats(
+  if (item.id === "weight" || item.goalProgressMode === "journey")
+    return metricVisualProgress(
       state,
+      item,
       state.currentUserId,
       dateKey(),
-    ).progress;
+      value,
+      target,
+    );
   const direction = state.settings.weightDirection ?? "lose";
   if (item.goal.kind === "at_most") {
     if (item.id === "food" && direction === "gain") return value < target ? value / Math.max(target, 1) : 1;
@@ -1861,11 +2043,17 @@ function trackerCopy(
   applicable: boolean,
   weekly: ReturnType<typeof weeklyDeficitBalance>,
 ) {
-  if (!applicable)
-    return {
-      primary: "Not available yet",
-      secondary: "Log food to calculate today’s energy balance",
-    };
+  if (!applicable) {
+    const secondary =
+      item.id === "deficit" || item.id === "weekly_deficit_balance"
+        ? "Log food to calculate today’s energy balance"
+        : item.id === "todo_completion"
+          ? "No to-dos are scheduled for this day"
+          : item.goalProgressMode === "journey" || item.id === "weight"
+            ? `No ${item.name.toLowerCase()} reading for this day`
+            : `No ${item.name.toLowerCase()} data for this day`;
+    return { primary: "Not available yet", secondary };
+  }
   if (item.id === "weekly_deficit_balance")
     return {
       primary: `${Math.abs(Math.round(weekly.balance)).toLocaleString()} kcal ${weekly.balance >= 0 ? "ahead" : "behind"}`,
@@ -1891,6 +2079,25 @@ function trackerCopy(
       secondary: progress.hasMeasurement
         ? `${Math.abs(progress.totalChange).toFixed(1)} kg ${progress.totalChange >= 0 ? action : "off plan"} · ${Math.abs(progress.averageWeeklyChange).toFixed(1)} kg/week avg · ${Math.abs(progress.lastWeekChange).toFixed(1)} kg last week`
         : `Starting ${progress.startingWeight.toFixed(1)} kg · target ${progress.finalTarget.toFixed(1)} kg`,
+    };
+  }
+  if (item.goalProgressMode === "journey") {
+    const progress = metricJourneyProgressStats(
+      state,
+      item,
+      state.currentUserId,
+      day,
+    );
+    return {
+      primary: progress.hasMeasurement
+        ? formatMetricValue(item, progress.current)
+        : "Add a first reading",
+      secondary: progress.hasMeasurement
+        ? `${Math.round(progress.progress * 100)}% to ${formatMetricValue(
+            item,
+            progress.target,
+          )} · ${formatMetricValue(item, progress.remaining)} remaining`
+        : "Your first reading becomes the starting point",
     };
   }
   if (item.dataType === "photo")
@@ -1984,10 +2191,16 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   rowEnd: {
-    width: 16,
+    width: 22,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
+  },
+  historyToggle: {
+    width: 22,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
   },
   editTracker: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
@@ -2054,7 +2267,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  ringText: { color: palette.white, fontSize: 12, fontWeight: "900" },
+  ringText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   heroProgressTrack: {
     height: 7,
     borderRadius: 999,
@@ -2162,6 +2375,13 @@ const styles = StyleSheet.create({
   },
   bpProgress: { width: 108, gap: 2 },
   bpLabel: { fontSize: 6, fontWeight: "900" },
+  submetricProgressRow: {
+    minHeight: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  submetricProgressBar: { flex: 1 },
   todayHistory: {
     borderWidth: 1,
     borderTopWidth: 0,
@@ -2172,13 +2392,6 @@ const styles = StyleSheet.create({
     marginTop: -8,
     paddingTop: 11,
   },
-  todayHistoryHeading: {
-    minHeight: 24,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  todayHistoryLabel: { fontSize: 8, fontWeight: "900" },
   remove: {
     width: 25,
     height: 25,

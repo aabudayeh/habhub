@@ -6,13 +6,13 @@ import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { EnergyProfileEditor, MetricGoalsEditor } from '@/src/components/ProfileEditors';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
-import { Avatar, Button, Card, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
+import { Avatar, Button, Card, Chip, IconButton, PageHeader, Screen, SectionHeader } from '@/src/components/ui';
 import { memberDisplayName, memberOriginalLabel, memberRoleLabel } from '@/src/domain/members';
 import { useApp } from '@/src/state/AppProvider';
 import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 
 export default function ProfileScreen(){
-  const {state,updateMemberAvatar,updateMemberName}=useApp();
+  const {state,updateMemberAvatar,updateMemberName,updateSettings}=useApp();
   const colors=useAppColors();
   const accent=useGroupAccent();
   const me=state.group.members.find((member)=>member.id===state.currentUserId)!;
@@ -36,9 +36,13 @@ export default function ProfileScreen(){
     <EnergyProfileEditor/>
     <MetricGoalsEditor/>
     <SectionHeader title="More profile details"/>
+    <Card style={styles.restCard}>
+      <View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Weekly streak rest days</Text><Text style={[styles.meta,{color:colors.muted}]}>Personal allowance for Today and Progress. Group rankings use the group rule.</Text></View>
+      <View style={styles.restChoices}>{[0,1,2,3].map((count)=><Chip key={count} label={String(count)} selected={(state.settings.streakRestDaysPerWeek??1)===count} onPress={()=>updateSettings({streakRestDaysPerWeek:count})}/>)}</View>
+    </Card>
     <Pressable onPress={()=>router.push('/vacation')} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:vacationActive?'#E76FA8':colors.border}]}><View style={[styles.linkIcon,{backgroundColor:vacationActive?'#E76FA81C':colors.primarySoft}]}><Ionicons name="airplane-outline" size={21} color={vacationActive?'#E76FA8':accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Vacation mode</Text><Text style={[styles.meta,{color:colors.muted}]}>{vacationActive?'Active · your streaks are protected':'Pause goal streaks without changing logged measurements.'}</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
     <Pressable onPress={()=>router.push(`/member/${me.id}` as never)} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.linkIcon,{backgroundColor:colors.primarySoft}]}><Ionicons name="trophy-outline" size={21} color={accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Public profile & badge showcase</Text><Text style={[styles.meta,{color:colors.muted}]}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
   </Screen>;
 }
 
-const styles=StyleSheet.create({identity:{flexDirection:'row',alignItems:'center',gap:13},nameCard:{flexDirection:'row',alignItems:'flex-end',gap:10,marginTop:10},copy:{flex:1},name:{color:palette.ink,fontSize:19,fontWeight:'900'},original:{color:palette.faint,fontSize:10,marginTop:2},meta:{color:palette.muted,fontSize:10,lineHeight:15,marginTop:3},fieldLabel:{fontSize:9,fontWeight:'900',textTransform:'uppercase',letterSpacing:.5,color:palette.muted,marginBottom:5},input:{borderWidth:1,borderColor:palette.border,borderRadius:12,paddingHorizontal:12,paddingVertical:10,color:palette.ink},camera:{position:'absolute',right:-3,bottom:-3,width:27,height:27,borderRadius:14,backgroundColor:palette.primary,alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:palette.card},remove:{width:40,height:40,borderRadius:13,backgroundColor:'#FFF1F0',alignItems:'center',justifyContent:'center'},note:{color:palette.muted,fontSize:10,lineHeight:15,paddingHorizontal:7,marginTop:8},linkCard:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:palette.card,borderWidth:1,borderColor:palette.border,borderRadius:20,padding:15,marginBottom:8},linkIcon:{width:44,height:44,borderRadius:14,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},linkTitle:{color:palette.ink,fontSize:13,fontWeight:'900'}});
+const styles=StyleSheet.create({identity:{flexDirection:'row',alignItems:'center',gap:13},nameCard:{flexDirection:'row',alignItems:'flex-end',gap:10,marginTop:10},copy:{flex:1},name:{color:palette.ink,fontSize:19,fontWeight:'900'},original:{color:palette.faint,fontSize:10,marginTop:2},meta:{color:palette.muted,fontSize:10,lineHeight:15,marginTop:3},fieldLabel:{fontSize:9,fontWeight:'900',textTransform:'uppercase',letterSpacing:.5,color:palette.muted,marginBottom:5},input:{borderWidth:1,borderColor:palette.border,borderRadius:12,paddingHorizontal:12,paddingVertical:10,color:palette.ink},camera:{position:'absolute',right:-3,bottom:-3,width:27,height:27,borderRadius:14,backgroundColor:palette.primary,alignItems:'center',justifyContent:'center',borderWidth:2,borderColor:palette.card},remove:{width:40,height:40,borderRadius:13,backgroundColor:'#FFF1F0',alignItems:'center',justifyContent:'center'},note:{color:palette.muted,fontSize:10,lineHeight:15,paddingHorizontal:7,marginTop:8},linkCard:{flexDirection:'row',alignItems:'center',gap:12,backgroundColor:palette.card,borderWidth:1,borderColor:palette.border,borderRadius:20,padding:15,marginBottom:8},linkIcon:{width:44,height:44,borderRadius:14,backgroundColor:palette.primarySoft,alignItems:'center',justifyContent:'center'},linkTitle:{color:palette.ink,fontSize:13,fontWeight:'900'},restCard:{gap:9,marginBottom:8},restChoices:{flexDirection:'row',gap:6}});

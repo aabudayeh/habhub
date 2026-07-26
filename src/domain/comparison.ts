@@ -1,6 +1,10 @@
 import { friendlyDate } from '@/src/domain/date';
 import { leaderboardRows } from '@/src/domain/leaderboard';
-import { hasMetricData, sharedMetricResult } from '@/src/domain/metrics';
+import {
+  effectiveGoalTarget,
+  hasMetricData,
+  sharedMetricResult,
+} from '@/src/domain/metrics';
 import { AppState, MetricDefinition } from '@/src/types';
 import { entriesForDay, statusForDay } from '@/src/domain/dataIndex';
 
@@ -32,10 +36,7 @@ export type HeadToHeadStats = {
 };
 
 export function supportsHeadToHead(metric: MetricDefinition): boolean {
-  return metric.dataType === 'number'
-    && metric.rankingDirection === 'higher'
-    && metric.goal.kind === 'at_least'
-    && metric.aggregation !== 'latest';
+  return metric.dataType === 'number';
 }
 
 export function metricHeadToHeadStats(
@@ -46,8 +47,10 @@ export function metricHeadToHeadStats(
   dates: string[],
 ): HeadToHeadStats | undefined {
   if (!supportsHeadToHead(metric) || subjectId === viewerId) return undefined;
-  let subjectBest = { value: Number.NEGATIVE_INFINITY, date: '' };
-  let viewerBest = { value: Number.NEGATIVE_INFINITY, date: '' };
+  let subjectBest = { value: 0, date: '' };
+  let viewerBest = { value: 0, date: '' };
+  let subjectBestScore = Number.NEGATIVE_INFINITY;
+  let viewerBestScore = Number.NEGATIVE_INFINITY;
   let subjectWins = 0;
   let viewerWins = 0;
   let ties = 0;
@@ -72,14 +75,30 @@ export function metricHeadToHeadStats(
     const viewer = sharedMetricResult(state, metric, viewerId, viewerId, date);
     if (subject.mode !== 'exact' || viewer.mode !== 'exact') continue;
     eligibleDays += 1;
-    if (subject.value > subjectBest.value) subjectBest = { value: subject.value, date };
-    if (viewer.value > viewerBest.value) viewerBest = { value: viewer.value, date };
-    if (subject.value > viewer.value) {
+    const competitionScore = (value: number, userId: string) =>
+      metric.rankingDirection === "lower"
+        ? -value
+        : metric.rankingDirection === "closest"
+          ? -Math.abs(
+              value - effectiveGoalTarget(state, metric, userId, date),
+            )
+          : value;
+    const subjectScore = competitionScore(subject.value, subjectId);
+    const viewerScore = competitionScore(viewer.value, viewerId);
+    if (subjectScore > subjectBestScore) {
+      subjectBestScore = subjectScore;
+      subjectBest = { value: subject.value, date };
+    }
+    if (viewerScore > viewerBestScore) {
+      viewerBestScore = viewerScore;
+      viewerBest = { value: viewer.value, date };
+    }
+    if (subjectScore > viewerScore) {
       subjectWins += 1;
       subjectRun += 1;
       viewerRun = 0;
       subjectLongestStreak = Math.max(subjectLongestStreak, subjectRun);
-    } else if (viewer.value > subject.value) {
+    } else if (viewerScore > subjectScore) {
       viewerWins += 1;
       viewerRun += 1;
       subjectRun = 0;

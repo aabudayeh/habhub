@@ -22,11 +22,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  ReorderDragState,
-  ReorderItem,
-  reorderShift,
-} from "@/src/components/ReorderItem";
+import { ReorderItem } from "@/src/components/ReorderItem";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -60,6 +56,7 @@ import {
 } from "@/src/domain/leaderboard";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -86,8 +83,6 @@ export default function LeaderboardScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
-  const [dragPlacement, setDragPlacement] =
-    useState<ReorderDragState | null>(null);
   const [rankingsReady, setRankingsReady] = useState(false);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
@@ -98,8 +93,11 @@ export default function LeaderboardScreen() {
   useEffect(() => {
     if (!editing) {
       setDraggingCardId(null);
-      setDragPlacement(null);
     }
+  }, [editing]);
+  useEffect(() => {
+    setCloudSyncPaused("leaderboard-edit", editing);
+    return () => setCloudSyncPaused("leaderboard-edit", false);
   }, [editing]);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
@@ -404,8 +402,6 @@ export default function LeaderboardScreen() {
           <ReorderItem
             key={id}
             active={draggingCardId === id}
-            shift={reorderShift(cardIndex, dragPlacement)}
-            settling={Boolean(dragPlacement?.settling)}
           >
             <EditableRankingCard
               editing={editing}
@@ -427,21 +423,10 @@ export default function LeaderboardScreen() {
               }
               onDragStart={(step) => {
                 setDraggingCardId(id);
-                setDragPlacement({
-                  id,
-                  origin: cardIndex,
-                  target: cardIndex,
-                  step,
-                });
               }}
-              onDragHover={(target) =>
-                setDragPlacement((current) =>
-                  current?.id === id ? { ...current, target } : current,
-                )
-              }
-              onDragCancel={() => setDragPlacement(null)}
+              onDragHover={() => {}}
+              onDragCancel={() => setDraggingCardId(null)}
               onDragEnd={() => {
-                setDragPlacement(null);
                 setDraggingCardId(null);
               }}
             >
@@ -512,7 +497,7 @@ export default function LeaderboardScreen() {
                   ? `${Math.round(((result.averageDisplayProgress ?? 1) - 1) * 100)}% above personal goal`
                   : undefined,
                 result && result.label !== "Private"
-                  ? `Current ${result.streak ?? 0}d · Best ${result.bestStreak ?? 0}d`
+                  ? `${result.streak ?? 0}d · Best ${result.bestStreak ?? 0}d`
                   : undefined,
                 syncTimestamp
                   ? `Synced ${relativeTime(syncTimestamp)}`
@@ -819,17 +804,15 @@ function EditableRankingCard({
         onPanResponderRelease: () => {
           const target = liveTarget.current;
           Animated.spring(dragY, {
-            toValue: (target - dragOrigin.current) * dragStep.current,
+            toValue: 0,
             damping: 24,
             stiffness: 220,
             mass: 0.72,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(() => {
-            if (target !== dragOrigin.current) onMoveRef.current(target);
-            dragY.setValue(0);
-            onDragEndRef.current();
-          });
+          }).start();
+          if (target !== dragOrigin.current) onMoveRef.current(target);
+          onDragEndRef.current();
         },
         onPanResponderTerminate: () => {
           Animated.spring(dragY, {

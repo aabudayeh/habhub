@@ -17,6 +17,7 @@ import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { dateKey } from "@/src/domain/date";
+import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
   formatMetricValue,
   latestTextValue,
@@ -77,6 +78,13 @@ export default function LogScreen() {
       )
       .sort((a, b) => a.order - b.order);
   }, [state.metrics]);
+  const trackerChoices = useMemo(
+    () =>
+      [...state.metrics]
+        .filter((metric) => !isInternalTracker(metric))
+        .sort((a, b) => a.order - b.order),
+    [state.metrics],
+  );
   const [selectedId, setSelectedId] = useState(metrics[0]?.id ?? "");
   const selected =
     state.metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
@@ -86,6 +94,7 @@ export default function LogScreen() {
   const [visibility, setVisibility] = useState<Visibility>(
     selected?.defaultVisibility ?? "group",
   );
+  const [privacyInfoOpen, setPrivacyInfoOpen] = useState(false);
   const [entryImage, setEntryImage] = useState<string | null>(null);
   const now = new Date();
   const [logDate, setLogDate] = useState(params.date ?? dateKey());
@@ -114,6 +123,10 @@ export default function LogScreen() {
   const [workoutDistance, setWorkoutDistance] = useState("");
   const [bpDiastolic, setBpDiastolic] = useState("");
   const [bpPulse, setBpPulse] = useState("");
+  const [submetricValues, setSubmetricValues] = useState<
+    Record<string, string>
+  >({});
+  const [extraSubmetricsOpen, setExtraSubmetricsOpen] = useState(false);
   const [mealType, setMealType] = useState<MealType>(
     now.getHours() < 11
       ? "breakfast"
@@ -183,6 +196,8 @@ export default function LogScreen() {
   ]);
   useEffect(() => {
     if (selected) setVisibility(selected.defaultVisibility);
+    setSubmetricValues({});
+    setExtraSubmetricsOpen(false);
   }, [selected]);
   const numericToday = selected
     ? safeMetricValue(state, selected, state.currentUserId, logDate)
@@ -240,6 +255,7 @@ export default function LogScreen() {
     setWorkoutDistance("");
     setBpDiastolic("");
     setBpPulse("");
+    setSubmetricValues({});
   }
   function toggleBoolean() {
     if (!selected) return;
@@ -284,6 +300,11 @@ export default function LogScreen() {
       localDate: logDate,
       recordedAt,
       nutrition: selected.id === "food" ? nutrition : undefined,
+      submetricValues: Object.fromEntries(
+        Object.entries(submetricValues)
+          .map(([id, raw]) => [id, Number(raw.replace(",", "."))] as const)
+          .filter(([, amount]) => Number.isFinite(amount)),
+      ),
     };
     if (selected.dataType === "photo") {
       if (!entryImage)
@@ -364,6 +385,23 @@ export default function LogScreen() {
       replaceMode ? "replace" : "add",
       details,
     );
+    if (
+      selected.id !== "food" &&
+      selected.id !== "blood_pressure_systolic"
+    )
+      (selected.submetrics ?? []).forEach((submetric) => {
+        if (!submetric.linkedMetricId) return;
+        const amount = Number(
+          (submetricValues[submetric.id] ?? "").replace(",", "."),
+        );
+        if (!Number.isFinite(amount)) return;
+        logMetric(submetric.linkedMetricId, amount, visibility, "add", {
+          label: `${selected.name} · ${submetric.name}`,
+          note: note.trim() || undefined,
+          localDate: logDate,
+          recordedAt,
+        });
+      });
     if (selected.id === "blood_pressure_systolic") {
       const companionValues = [
         ["blood_pressure_diastolic", bpDiastolic],
@@ -454,14 +492,27 @@ export default function LogScreen() {
       <View style={styles.selector}>
         <MetricSelector
           title="What are you adding?"
-          items={metrics.map((metric) => ({
+          items={trackerChoices.map((metric) => ({
             id: metric.id,
             label: metric.name,
             icon: metric.icon as keyof typeof Ionicons.glyphMap,
             color: metric.color,
+            sublabel: metrics.some((candidate) => candidate.id === metric.id)
+              ? "Ready to log"
+              : "Synced or calculated · view history",
           }))}
           selectedIds={selected ? [selected.id] : []}
-          onChange={(ids) => ids[0] && setSelectedId(ids[0])}
+          onChange={(ids) => {
+            const next = ids[0];
+            if (!next) return;
+            if (metrics.some((metric) => metric.id === next))
+              setSelectedId(next);
+            else
+              router.navigate({
+                pathname: "/metric-detail",
+                params: { metric: next, date: logDate },
+              } as never);
+          }}
           multiple={false}
         />
       </View>
@@ -737,6 +788,118 @@ export default function LogScreen() {
               <Text style={styles.unit}>{selected.unit}</Text>
             </View>
           )}
+          {selected.submetrics?.length &&
+          selected.id !== "food" &&
+          selected.id !== "blood_pressure_systolic" ? (
+            <>
+              {(selected.submetricDisplay?.collapsible
+                ? selected.submetrics.filter((item) => item.showProgressBar)
+                : selected.submetrics
+              ).map((submetric) => (
+                <View key={submetric.id} style={styles.nutritionField}>
+                  <Text style={[styles.nutritionLabel, { color: colors.muted }]}>
+                    {submetric.name}
+                  </Text>
+                  <View
+                    style={[
+                      styles.nutritionInput,
+                      { borderColor: colors.border },
+                    ]}
+                  >
+                    <TextInput
+                      value={submetricValues[submetric.id] ?? ""}
+                      onChangeText={(raw) =>
+                        setSubmetricValues((current) => ({
+                          ...current,
+                          [submetric.id]: raw,
+                        }))
+                      }
+                      keyboardType="decimal-pad"
+                      placeholder="0"
+                      placeholderTextColor={colors.faint}
+                      style={[styles.nutritionText, { color: colors.ink }]}
+                    />
+                    <Text style={[styles.nutritionUnit, { color: colors.muted }]}>
+                      {submetric.unit}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+              {selected.submetricDisplay?.collapsible &&
+              selected.submetrics.some((item) => !item.showProgressBar) ? (
+                <>
+                  <Pressable
+                    onPress={() => setExtraSubmetricsOpen((open) => !open)}
+                    style={styles.moreNutrition}
+                  >
+                    <Text style={[styles.moreNutritionText, { color: accent }]}>
+                      {selected.submetricDisplay.collapsibleLabel ??
+                        "More fields"}
+                    </Text>
+                    <Ionicons
+                      name={
+                        extraSubmetricsOpen ? "chevron-up" : "chevron-down"
+                      }
+                      size={16}
+                      color={accent}
+                    />
+                  </Pressable>
+                  {extraSubmetricsOpen ? (
+                    <View style={styles.nutritionGrid}>
+                      {selected.submetrics
+                        .filter((item) => !item.showProgressBar)
+                        .map((submetric) => (
+                          <View
+                            key={submetric.id}
+                            style={styles.nutritionField}
+                          >
+                            <Text
+                              style={[
+                                styles.nutritionLabel,
+                                { color: colors.muted },
+                              ]}
+                            >
+                              {submetric.name}
+                            </Text>
+                            <View
+                              style={[
+                                styles.nutritionInput,
+                                { borderColor: colors.border },
+                              ]}
+                            >
+                              <TextInput
+                                value={submetricValues[submetric.id] ?? ""}
+                                onChangeText={(raw) =>
+                                  setSubmetricValues((current) => ({
+                                    ...current,
+                                    [submetric.id]: raw,
+                                  }))
+                                }
+                                keyboardType="decimal-pad"
+                                placeholder="0"
+                                placeholderTextColor={colors.faint}
+                                style={[
+                                  styles.nutritionText,
+                                  { color: colors.ink },
+                                ]}
+                              />
+                              <Text
+                                style={[
+                                  styles.nutritionUnit,
+                                  { color: colors.muted },
+                                ]}
+                              >
+                                {submetric.unit}
+                              </Text>
+                            </View>
+                          </View>
+                        ))}
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+            </>
+          ) : null}
           {selected.id === "food" ? (
             <>
               {false ? (
@@ -985,9 +1148,26 @@ export default function LogScreen() {
               {entryImage ? "Change attached image" : "Attach an image"}
             </Text>
           </Pressable>
-          <Text style={[styles.fieldLabel, { color: colors.muted }]}>
-            Who can see it?
-          </Text>
+          <View style={styles.fieldLabelRow}>
+            <Text style={[styles.fieldLabel, { color: colors.muted }]}>
+              Who can see it?
+            </Text>
+            <Pressable
+              accessibilityLabel="Explain sharing options"
+              onPress={() => setPrivacyInfoOpen((open) => !open)}
+              hitSlop={7}
+            >
+              <Ionicons
+                name={
+                  privacyInfoOpen
+                    ? "information-circle"
+                    : "information-circle-outline"
+                }
+                size={16}
+                color={accent}
+              />
+            </Pressable>
+          </View>
           <View style={styles.privacyRow}>
             {privacyOptions.map((option) => (
               <Chip
@@ -999,7 +1179,7 @@ export default function LogScreen() {
               />
             ))}
           </View>
-          <View
+          {privacyInfoOpen ? <View
             style={[
               styles.privacyBox,
               { backgroundColor: colors.primarySoft },
@@ -1019,7 +1199,7 @@ export default function LogScreen() {
             <Text style={[styles.privacyText, { color: colors.muted }]}>
               {privacyCopy}
             </Text>
-          </View>
+          </View> : null}
           <Button
             label={
               replaceMode
@@ -1154,6 +1334,12 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginBottom: 4,
     marginTop: 2,
+  },
+  fieldLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    alignSelf: "flex-start",
   },
   fieldInput: {
     borderWidth: 1,

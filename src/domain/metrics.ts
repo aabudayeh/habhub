@@ -11,6 +11,9 @@ import { gymMetricValue, hasGymMetricData } from "./gym";
 import { isVacationDate } from "./vacation";
 import {
   entriesForDay,
+  entriesForMetric,
+  entriesForUserDay,
+  latestEntryOnOrBefore,
   photosForDay,
   statusForDay,
 } from "./dataIndex";
@@ -20,7 +23,11 @@ import {
   longestStreakWithRest,
 } from "./streaks";
 import { unrecordedStepActivity } from "./health";
-import { scheduleAppliesOnDate, todoAppearsOnDate } from "./schedule";
+import {
+  scheduleAppliesOnDate,
+  todoAppearsOnDate,
+  todoResolvedOnDate,
+} from "./schedule";
 
 function aggregate(
   entries: MetricEntry[],
@@ -65,15 +72,12 @@ export function metricValue(
       localDate,
     );
   if (metric.id === "weight") {
-    const latest = state.entries
-      .filter(
-        (entry) =>
-          entry.metricId === metric.id &&
-          entry.userId === userId &&
-          entry.localDate <= localDate &&
-          Number.isFinite(Number(entry.value)),
-      )
-      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+    const latest = latestEntryOnOrBefore(
+      state.entries,
+      metric.id,
+      userId,
+      localDate,
+    );
     return latest
       ? Number(latest.value)
       : (state.energyProfiles?.[userId]?.weightKg ??
@@ -85,9 +89,9 @@ export function metricValue(
     const todos = (state.todos ?? []).filter((todo) =>
       todoAppearsOnDate(todo, localDate),
     );
-    if (!todos.length) return 100;
+    if (!todos.length) return 0;
     return (
-      (todos.filter((todo) => todo.completedDates.includes(localDate)).length /
+      (todos.filter((todo) => todoResolvedOnDate(todo, localDate)).length /
         todos.length) *
       100
     );
@@ -118,10 +122,7 @@ export function metricValue(
         state.settings.energyProfile.weightKg ??
         70;
       const estimate = unrecordedStepActivity(
-        state.entries.filter(
-          (entry) =>
-            entry.userId === userId && entry.localDate === localDate,
-        ),
+        entriesForUserDay(state.entries, userId, localDate),
         state.metrics,
         stepCount,
         weight,
@@ -141,14 +142,12 @@ export function metricValue(
       );
     }
     if (metric.aggregation !== "latest") return 0;
-    const carried = state.entries
-      .filter(
-        (entry) =>
-          entry.metricId === metric.id &&
-          entry.userId === userId &&
-          entry.localDate <= localDate,
-      )
-      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+    const carried = latestEntryOnOrBefore(
+      state.entries,
+      metric.id,
+      userId,
+      localDate,
+    );
     return carried ? aggregate([carried], "latest") : 0;
   }
 
@@ -198,6 +197,17 @@ export function effectiveGoalTarget(
   userId: string,
   localDate: string,
 ): number {
+  if (userId !== state.currentUserId) {
+    const sharedTarget = statusForDay(
+      state.dailyMetricStatuses,
+      state.group.id,
+      metric.id,
+      userId,
+      localDate,
+    )?.goalTarget;
+    if (sharedTarget !== undefined && Number.isFinite(sharedTarget))
+      return sharedTarget;
+  }
   if (metric.id === "weight") {
     const profile =
       state.energyProfiles?.[userId] ?? state.settings.energyProfile;
@@ -240,13 +250,10 @@ export function weightProgressStats(
     state.energyProfiles?.[userId] ?? state.settings.energyProfile;
   const metric = state.metrics.find((item) => item.id === "weight");
   const direction = weightDirectionFromProfile(profile);
-  const entries = state.entries
+  const entries = entriesForMetric(state.entries, "weight", userId)
     .filter(
       (entry) =>
-        entry.userId === userId &&
-        entry.metricId === "weight" &&
-        entry.localDate <= anchor &&
-        Number.isFinite(Number(entry.value)),
+        entry.localDate <= anchor && Number.isFinite(Number(entry.value)),
     )
     .sort((a, b) => a.localDate.localeCompare(b.localDate));
   const currentEntry = entries.at(-1);
@@ -503,6 +510,77 @@ export function displayGoalProgress(
   return Math.max(0, Math.min(3, value / target));
 }
 
+export function metricJourneyProgressStats(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  const readings = state.entries
+    .filter(
+      (entry) =>
+        entry.metricId === metric.id &&
+        entry.userId === userId &&
+        entry.localDate <= localDate &&
+        Number.isFinite(Number(entry.value)),
+    )
+    .sort(
+      (a, b) =>
+        a.localDate.localeCompare(b.localDate) ||
+        a.recordedAt.localeCompare(b.recordedAt),
+    );
+  const first = readings[0];
+  const latest = readings[readings.length - 1];
+  const starting = first ? Number(first.value) : 0;
+  const current = latest ? Number(latest.value) : 0;
+  const target = effectiveGoalTarget(
+    state,
+    metric,
+    userId,
+    localDate,
+  );
+  const journey = target - starting;
+  const progress =
+    !first || !latest
+      ? 0
+      : Math.abs(journey) < 0.0001
+        ? goalReached(metric, current, target)
+          ? 1
+          : 0
+        : Math.max(0, Math.min(1, (current - starting) / journey));
+  return {
+    starting,
+    current,
+    target,
+    progress,
+    remaining: Math.abs(target - current),
+    hasMeasurement: Boolean(latest),
+    startDate: first?.localDate,
+    currentDate: latest?.localDate,
+  };
+}
+
+/** Progress used by UI bars, including long-term baseline-to-target journeys. */
+export function metricVisualProgress(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+  value = safeMetricValue(state, metric, userId, localDate),
+  target = effectiveGoalTarget(state, metric, userId, localDate),
+) {
+  if (metric.id === "weight")
+    return weightProgressStats(state, userId, localDate).progress;
+  if (metric.goalProgressMode === "journey")
+    return metricJourneyProgressStats(
+      state,
+      metric,
+      userId,
+      localDate,
+    ).progress;
+  return goalProgress(metric, value, target);
+}
+
 export function goalReached(
   metric: MetricDefinition,
   value: number,
@@ -571,8 +649,12 @@ export function metricApplicableOnDate(
   if (metric.activeFrom > localDate && !hasRecordedData) return false;
   // A weigh-in target is judged only on days with an actual measurement;
   // carrying yesterday's weight forward must not create a false daily win.
-  if (metric.id === "weight") return hasRecordedData;
-  if (metric.id === "todo_completion") return true;
+  if (metric.id === "weight" || metric.goalProgressMode === "journey")
+    return hasRecordedData;
+  if (metric.id === "todo_completion")
+    return (state.todos ?? []).some((todo) =>
+      todoAppearsOnDate(todo, localDate),
+    );
   if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
   if (metric.id === "deficit") return hasDeficitInput;
   if (metric.id === "weekly_deficit_balance")
@@ -594,6 +676,10 @@ export function hasMetricData(
     return photosForDay(state.photos, userId, localDate).length > 0;
   if (metric.gymMapping)
     return hasGymMetricData(state, metric.gymMapping, userId, localDate);
+  if (metric.id === "todo_completion")
+    return (state.todos ?? []).some((todo) =>
+      todoAppearsOnDate(todo, localDate),
+    );
   if (metric.dataType === "calculated") return true;
   return entriesForDay(state.entries, metric.id, userId, localDate).length > 0;
 }
@@ -756,13 +842,8 @@ export function metricOverallAverage(
   if (metric.dataType === "photo" || metric.dataType === "text") return 0;
   const entryDates = [
     ...new Set(
-      state.entries
-        .filter(
-          (entry) =>
-            entry.userId === userId &&
-            entry.metricId === metric.id &&
-            entry.localDate <= throughDate,
-        )
+      entriesForMetric(state.entries, metric.id, userId)
+        .filter((entry) => entry.localDate <= throughDate)
         .map((entry) => entry.localDate),
     ),
   ];
@@ -824,6 +905,9 @@ export function metricHistoricalRecords(
   weekStartsOn: 0 | 1 | 6 = 1,
 ): MetricHistoricalRecords {
   const explicitDates = [
+    ...(state.trackedGoalPeriods?.[metric.id] ?? []).map(
+      (period) => period.from,
+    ),
     ...state.entries
       .filter(
         (entry) =>
@@ -832,6 +916,16 @@ export function metricHistoricalRecords(
           entry.localDate <= throughDate,
       )
       .map((entry) => entry.localDate),
+    ...(state.dailyMetricStatuses ?? [])
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.userId === userId &&
+          status.metricId === metric.id &&
+          status.localDate <= throughDate,
+      )
+      .map((status) => status.localDate),
+    ...(state.settings.vacationPeriods ?? []).map((period) => period.from),
     ...(metric.gymMapping
       ? (state.gymSessions ?? [])
           .filter(
@@ -842,7 +936,7 @@ export function metricHistoricalRecords(
           .map((session) => session.localDate)
       : []),
   ].sort();
-  const start = explicitDates[0] ?? metric.activeFrom;
+  const start = [metric.activeFrom, ...explicitDates].sort()[0] ?? metric.activeFrom;
   const length = Math.min(
     3653,
     Math.max(
@@ -859,14 +953,23 @@ export function metricHistoricalRecords(
     .filter((date) => hasMetricData(state, metric, userId, date))
     .map((date) => ({
       date,
-      value: safeMetricValue(state, metric, userId, date),
+      value:
+        metric.id === "todo_completion"
+          ? (state.todos ?? []).filter(
+              (todo) =>
+                todoAppearsOnDate(todo, date) &&
+                todoResolvedOnDate(todo, date),
+            ).length
+          : safeMetricValue(state, metric, userId, date),
     }));
   if (!recorded.length) return {};
   const highestDay = recorded.reduce((best, item) =>
     item.value > best.value ? item : best,
   );
   const aggregatePeriod = (items: { value: number }[]) =>
-    metric.aggregation === "sum" || metric.dataType === "boolean"
+    metric.id === "todo_completion" ||
+    metric.aggregation === "sum" ||
+    metric.dataType === "boolean"
       ? items.reduce((sum, item) => sum + item.value, 0)
       : items.reduce((sum, item) => sum + item.value, 0) / items.length;
   const selectBest = <T extends { value: number }>(items: T[]) =>
@@ -923,7 +1026,9 @@ export function metricHistoricalRecords(
       return {
         year,
         value:
-          metric.aggregation === "sum" || metric.dataType === "boolean"
+          metric.id === "todo_completion" ||
+          metric.aggregation === "sum" ||
+          metric.dataType === "boolean"
             ? stats.total
             : stats.average,
       };
@@ -1143,6 +1248,63 @@ export function scheduledGoalReached(
       safeMetricValue(state, metric, userId, date),
       effectiveGoalTarget(state, metric, userId, date),
     );
+    const progressSubmetrics = (metric.submetrics ?? []).filter(
+      (submetric) =>
+        submetric.showProgressBar && submetric.goalEnabled !== false,
+    );
+    if (progressSubmetrics.length) {
+      const latestParentEntry = state.entries
+        .filter(
+          (entry) =>
+            entry.metricId === metric.id &&
+            entry.userId === userId &&
+            entry.localDate === date,
+        )
+        .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+      const submetricsReached = progressSubmetrics.every((submetric) => {
+        const captured = Number(
+          latestParentEntry?.submetricValues?.[submetric.id],
+        );
+        const linked = submetric.linkedMetricId
+          ? state.metrics.find(
+              (candidate) => candidate.id === submetric.linkedMetricId,
+            )
+          : undefined;
+        const sameAsPrimary =
+          submetric.id === metric.id ||
+          submetric.id === "value" ||
+          (submetric.healthMapping?.dataType ===
+            metric.healthMapping?.dataType &&
+            submetric.healthMapping?.field === metric.healthMapping?.field);
+        const value = Number.isFinite(captured)
+          ? captured
+          : linked
+            ? safeMetricValue(state, linked, userId, date)
+            : sameAsPrimary
+              ? safeMetricValue(state, metric, userId, date)
+              : Number.NaN;
+        if (!Number.isFinite(value)) return false;
+        return goalReached(
+          {
+            ...metric,
+            id: `${metric.id}:${submetric.id}`,
+            name: submetric.name,
+            unit: submetric.unit,
+            goalEnabled: submetric.goalEnabled,
+            goal: submetric.goal,
+            goalRange: submetric.goalRange,
+            submetrics: undefined,
+            submetricDisplay: undefined,
+          },
+          value,
+          submetric.goal.target,
+        );
+      });
+      return (
+        (metric.goalEnabled === false || primaryReached) &&
+        submetricsReached
+      );
+    }
     const isBloodPressure =
       metric.id === "blood_pressure_systolic" ||
       (metric.healthMapping?.dataType === "blood_pressure" &&

@@ -16,6 +16,7 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   gym: "barbell-outline",
   calendar: "calendar-outline",
   journal: "book-outline",
+  performance: "speedometer-outline",
 };
 
 export default function TabLayout() {
@@ -31,6 +32,7 @@ export default function TabLayout() {
     "gym",
     "calendar",
     "journal",
+    "performance",
   ];
   const savedOrder = state.settings.tabOrder ?? [];
   const tabOrder = [
@@ -60,6 +62,10 @@ export default function TabLayout() {
     journal: {
       title: "Journal",
       href: state.settings.showJournal ? "/journal" : null,
+    },
+    performance: {
+      title: "Performance",
+      href: state.settings.showPerformance ? "/performance" : null,
     },
   };
   return (

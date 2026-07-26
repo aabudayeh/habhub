@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
-import React, { useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, StyleSheet, View } from "react-native";
 
 import {
@@ -15,16 +15,27 @@ import {
   PageHeader,
   Screen,
 } from "@/src/components/ui";
-import { dateKey } from "@/src/domain/date";
+import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { GoalSchedule, TodoPriority } from "@/src/types";
 
 type RepeatMode = "none" | GoalSchedule["mode"];
+type ReminderDraft = {
+  id: string;
+  date: string;
+  time: string;
+  daysBeforeDue?: number;
+};
 
 export default function TodoEditor() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { id, date, time } = useLocalSearchParams<{
+    id?: string;
+    date?: string;
+    time?: string;
+  }>();
   const { state, saveTodo, deleteTodo } = useApp();
+  const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const existing = (state.todos ?? []).find((todo) => todo.id === id);
@@ -36,16 +47,20 @@ export default function TodoEditor() {
     existing?.priority ?? "normal",
   );
   const [dueDate, setDueDate] = useState(
-    existing?.dueAt?.slice(0, 10) ?? dateKey(),
+    existing?.dueAt?.slice(0, 10) ?? date ?? dateKey(),
   );
   const [dueTime, setDueTime] = useState(
-    existing?.dueAt?.slice(11, 16) ?? "18:00",
+    existing?.dueAt?.slice(11, 16) ?? time ?? "18:00",
   );
-  const [hasDeadline, setHasDeadline] = useState(Boolean(existing?.dueAt));
+  const [hasDeadline, setHasDeadline] = useState(
+    Boolean(existing?.dueAt || date || time),
+  );
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [repeat, setRepeat] = useState<RepeatMode>(
     existing?.recurrence?.mode ?? "none",
   );
+  const [repeatOpen, setRepeatOpen] = useState(false);
+  const [remindersOpen, setRemindersOpen] = useState(false);
   const [days, setDays] = useState<number[]>(
     existing?.recurrence?.daysOfWeek ?? [1, 2, 3, 4, 5],
   );
@@ -55,10 +70,102 @@ export default function TodoEditor() {
   const [monthDays, setMonthDays] = useState(
     (existing?.recurrence?.daysOfMonth ?? [1]).join(", "),
   );
-  const [reminders, setReminders] = useState<string[]>(
-    existing?.reminders.map((reminder) => reminder.time ?? "09:00") ?? [],
+  const [reminders, setReminders] = useState<ReminderDraft[]>(
+    existing?.reminders.map((reminder, index) => ({
+      id: reminder.id ?? `reminder-${index}`,
+      date:
+        reminder.at?.slice(0, 10) ??
+        (reminder.daysBeforeDue !== undefined && existing.dueAt
+          ? dateWithOffsetFrom(
+              existing.dueAt.slice(0, 10),
+              -reminder.daysBeforeDue,
+            )
+          : existing.dueAt?.slice(0, 10) ?? dateKey()),
+      time:
+        reminder.time ??
+        reminder.at?.slice(11, 16) ??
+        existing.dueAt?.slice(11, 16) ??
+        "09:00",
+      daysBeforeDue: reminder.daysBeforeDue,
+    })) ?? [],
   );
-  const save = () => {
+  const [reminderCalendarIndex, setReminderCalendarIndex] = useState<
+    number | null
+  >(null);
+  const signature = useMemo(
+    () =>
+      JSON.stringify({
+        title,
+        description,
+        priority,
+        dueDate,
+        dueTime,
+        hasDeadline,
+        repeat,
+        days,
+        interval,
+        monthDays,
+        reminders,
+      }),
+    [
+      days,
+      description,
+      dueDate,
+      dueTime,
+      hasDeadline,
+      interval,
+      monthDays,
+      priority,
+      reminders,
+      repeat,
+      title,
+    ],
+  );
+  const initialSignature = useRef(signature);
+  const allowExit = useRef(false);
+  const dirty = signature !== initialSignature.current;
+  const addReminder = (daysBeforeDue?: number) => {
+    const date =
+      daysBeforeDue !== undefined
+        ? dateWithOffsetFrom(dueDate, -daysBeforeDue)
+        : dueDate;
+    if (
+      reminders.some(
+        (item) => item.date === date && item.daysBeforeDue === daysBeforeDue,
+      )
+    )
+      return;
+    setReminders((current) => [
+      ...current,
+      {
+        id: `reminder-${Date.now().toString(36)}`,
+        date,
+        time: daysBeforeDue === 0 ? dueTime : "09:00",
+        daysBeforeDue,
+      },
+    ]);
+  };
+  const addWeeklyBeforeDeadline = () => {
+    const created = existing?.createdAt.slice(0, 10) ?? dateKey();
+    const additions: ReminderDraft[] = [];
+    for (let offset = 7; offset <= 365; offset += 7) {
+      const date = dateWithOffsetFrom(dueDate, -offset);
+      if (date < created) break;
+      additions.push({
+        id: `reminder-weekly-${Date.now()}-${offset}`,
+        date,
+        time: "09:00",
+        daysBeforeDue: offset,
+      });
+    }
+    setReminders((current) => [
+      ...current,
+      ...additions.filter(
+        (next) => !current.some((item) => item.date === next.date),
+      ),
+    ]);
+  };
+  const save = (exit: () => void = () => router.back()) => {
     if (!title.trim())
       return Alert.alert("Add a title", "What needs to be done?");
     const now = new Date().toISOString();
@@ -97,22 +204,57 @@ export default function TodoEditor() {
       dueAt: hasDeadline ? `${dueDate}T${dueTime}:00` : undefined,
       priority,
       recurrence,
-      reminders: reminders.map((time, index) => ({
-        id: existing?.reminders[index]?.id ?? `reminder-${Date.now()}-${index}`,
-        time,
+      reminders: reminders.map((reminder) => ({
+        id: reminder.id,
+        at: `${reminder.date}T${reminder.time}:00`,
+        time: reminder.time,
+        daysBeforeDue: reminder.daysBeforeDue,
       })),
       completedDates: existing?.completedDates ?? [],
+      skippedDates: existing?.skippedDates ?? [],
       completedAt: existing?.completedAt,
+      order: existing?.order,
     });
-    router.back();
+    allowExit.current = true;
+    exit();
   };
+  const requestClose = (exit: () => void = () => router.back()) => {
+    if (!dirty) {
+      allowExit.current = true;
+      exit();
+      return;
+    }
+    Alert.alert("Save your changes?", "This to-do has unsaved changes.", [
+      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Discard",
+        style: "destructive",
+        onPress: () => {
+          allowExit.current = true;
+          exit();
+        },
+      },
+      { text: "Save", onPress: () => save(exit) },
+    ]);
+  };
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", (event) => {
+        if (allowExit.current || !dirty) return;
+        event.preventDefault();
+        requestCloseRef.current(() => navigation.dispatch(event.data.action));
+      }),
+    [dirty, navigation],
+  );
   return (
     <Screen>
       <PageHeader
         title={existing ? "Edit to-do" : "New to-do"}
         subtitle="A task, not a tracker."
         showMenu={false}
-        action={<IconButton icon="close" label="Close" onPress={() => router.back()} />}
+        action={<IconButton icon="close" label="Close" onPress={() => requestClose()} />}
       />
       <Card style={styles.form}>
         <TextInput
@@ -212,7 +354,23 @@ export default function TodoEditor() {
         ) : null}
       </Card>
       <Card style={styles.form}>
-        <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
+        <Pressable
+          onPress={() => setRepeatOpen((open) => !open)}
+          style={styles.collapseHeading}
+        >
+          <View style={styles.copy}>
+            <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
+            <Text style={[styles.help, { color: colors.muted }]}>
+              {repeat === "none" ? "Once" : repeat.replaceAll("_", " ")}
+            </Text>
+          </View>
+          <Ionicons
+            name={repeatOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
+          />
+        </Pressable>
+        {repeatOpen ? <>
         <View style={styles.wrap}>
           {(
             [
@@ -275,31 +433,78 @@ export default function TodoEditor() {
             ]}
           />
         ) : null}
+        </> : null}
       </Card>
       <Card style={styles.form}>
-        <View style={styles.switchLine}>
+        <Pressable
+          onPress={() => setRemindersOpen((open) => !open)}
+          style={styles.switchLine}
+        >
           <View style={styles.copy}>
             <Text style={[styles.label, { color: colors.ink }]}>Reminders</Text>
             <Text style={[styles.help, { color: colors.muted }]}>
-              Add as many local reminder times as needed.
+              {reminders.length
+                ? `${reminders.length} scheduled`
+                : "Optional dates and times"}
             </Text>
           </View>
-          <Pressable
-            onPress={() =>
-              setReminders((current) => [...current, "09:00"])
-            }
-          >
-            <Ionicons name="add-circle" size={23} color={accent} />
-          </Pressable>
-        </View>
-        {reminders.map((time, index) => (
-          <View key={index} style={styles.reminder}>
+          <Ionicons
+            name={remindersOpen ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
+          />
+        </Pressable>
+        {remindersOpen ? <>
+        {hasDeadline ? (
+          <View style={styles.wrap}>
+            {[0, 1, 3, 7].map((offset) => (
+              <Chip
+                key={offset}
+                label={
+                  offset === 0
+                    ? "At deadline"
+                    : offset === 1
+                      ? "1 day before"
+                      : `${offset} days before`
+                }
+                selected={reminders.some(
+                  (item) => item.daysBeforeDue === offset,
+                )}
+                onPress={() => addReminder(offset)}
+              />
+            ))}
+            <Chip
+              label="Weekly before"
+              selected={false}
+              onPress={addWeeklyBeforeDeadline}
+            />
+          </View>
+        ) : null}
+        {reminders.map((reminder, index) => (
+          <View key={reminder.id} style={styles.reminderBlock}>
+            <View style={styles.reminder}>
+            <Pressable
+              onPress={() =>
+                setReminderCalendarIndex(
+                  reminderCalendarIndex === index ? null : index,
+                )
+              }
+              style={[
+                styles.reminderDate,
+                { borderColor: colors.border },
+              ]}
+            >
+              <Ionicons name="calendar-outline" size={15} color={accent} />
+              <Text style={[styles.reminderDateText, { color: colors.ink }]}>
+                {reminder.date}
+              </Text>
+            </Pressable>
             <TextInput
-              value={time}
+              value={reminder.time}
               onChangeText={(value) =>
                 setReminders((current) =>
                   current.map((item, itemIndex) =>
-                    itemIndex === index ? value : item,
+                    itemIndex === index ? { ...item, time: value } : item,
                   ),
                 )
               }
@@ -320,10 +525,37 @@ export default function TodoEditor() {
                 )
               }
             />
+            </View>
+            {reminderCalendarIndex === index ? (
+              <MonthCalendar
+                monthDate={reminder.date}
+                selectedDate={reminder.date}
+                onSelect={(date) => {
+                  setReminders((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? { ...item, date, daysBeforeDue: undefined }
+                        : item,
+                    ),
+                  );
+                  setReminderCalendarIndex(null);
+                }}
+              />
+            ) : null}
           </View>
         ))}
+        <Pressable
+          onPress={() => addReminder()}
+          style={[styles.addReminder, { borderColor: accent }]}
+        >
+          <Ionicons name="add" size={16} color={accent} />
+          <Text style={[styles.addReminderText, { color: accent }]}>
+            Add custom reminder
+          </Text>
+        </Pressable>
+        </> : null}
       </Card>
-      <Pressable onPress={save} style={[styles.save, { backgroundColor: accent }]}>
+      <Pressable onPress={() => save()} style={[styles.save, { backgroundColor: accent }]}>
         <Text style={styles.saveText}>Save to-do</Text>
       </Pressable>
       {existing ? (
@@ -335,6 +567,7 @@ export default function TodoEditor() {
                 text: "Delete",
                 style: "destructive",
                 onPress: () => {
+                  allowExit.current = true;
                   deleteTodo(existing.id);
                   router.back();
                 },
@@ -372,6 +605,12 @@ const styles = StyleSheet.create({
   help: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   switchLine: { flexDirection: "row", alignItems: "center", gap: 8 },
+  collapseHeading: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   copy: { flex: 1 },
   dateButton: {
     minHeight: 42,
@@ -392,7 +631,30 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   reminder: { flexDirection: "row", alignItems: "center", gap: 7 },
+  reminderBlock: { gap: 6 },
+  reminderDate: {
+    flex: 1.35,
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  reminderDateText: { flex: 1, fontSize: 9, fontWeight: "800" },
   reminderInput: { flex: 1 },
+  addReminder: {
+    minHeight: 38,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  addReminderText: { fontSize: 9, fontWeight: "900" },
   save: {
     minHeight: 46,
     borderRadius: 14,

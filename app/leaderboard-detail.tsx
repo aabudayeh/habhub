@@ -54,6 +54,7 @@ import {
   displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
+  metricVisualProgress,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -512,16 +513,24 @@ export default function LeaderboardDetail() {
                     (row.member.id === state.currentUserId &&
                     result.mode === "exact" &&
                     result.visibleDays > 0
-                      ? displayGoalProgress(
-                          personalMetric,
-                          result.average,
-                          effectiveGoalTarget(
+                      ? personalMetric.goalProgressMode === "journey"
+                        ? metricVisualProgress(
                             state,
                             personalMetric,
                             row.member.id,
                             anchor,
-                          ),
-                        )
+                            result.average,
+                          )
+                        : displayGoalProgress(
+                            personalMetric,
+                            result.average,
+                            effectiveGoalTarget(
+                              state,
+                              personalMetric,
+                              row.member.id,
+                              anchor,
+                            ),
+                          )
                       : undefined);
                   const progressCopy = personalGoalProgressCopy(
                     result,
@@ -557,7 +566,7 @@ export default function LeaderboardDetail() {
                       </Text>
                       {result.label !== "Private" ? (
                         <Text style={[styles.metricSub, { color: colors.muted }]}>
-                          Current streak {result.streak ?? 0}d · Best streak{" "}
+                          {result.streak ?? 0}d · Best streak{" "}
                           {result.bestStreak ?? 0}d
                         </Text>
                       ) : null}

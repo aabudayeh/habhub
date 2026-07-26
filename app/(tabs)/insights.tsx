@@ -12,14 +12,16 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import {
-  ReorderDragState,
-  ReorderItem,
-  reorderShift,
-} from "@/src/components/ReorderItem";
+import { ReorderItem } from "@/src/components/ReorderItem";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
-import { GoalHeatmap } from "@/src/components/GoalHeatmap";
+import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
+import { InfoPopover } from "@/src/components/InfoPopover";
+import {
+  GoalHeatmap,
+  TrackedGoalsHeatmap,
+} from "@/src/components/GoalHeatmap";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
@@ -40,13 +42,13 @@ import {
 import {
   effectiveGoalTarget,
   formatMetricValue,
-  goalProgress,
   isMetricTrackedOnDate,
   metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
   metricOverallAverage,
   metricPeriodStats,
   metricStreakStats,
+  metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalStreakStats,
@@ -64,7 +66,14 @@ import {
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { isVacationDate } from "@/src/domain/vacation";
 import {
+  todoAppearsOnDate,
+  todoResolvedOnDate,
+} from "@/src/domain/schedule";
+import {
   activeTrackerViewLabel,
+  activeTrackerViewId,
+  ALL_TRACKERS_FILTER,
+  TRACKED_ONLY_FILTER,
   metricMatchesActiveView,
 } from "@/src/domain/viewFilters";
 
@@ -72,6 +81,10 @@ const TRACKED = "tracked_goals";
 const TRACKED_COLOR = "#9B6BDB";
 const WEEK_CHART_MAX = 1.4;
 type ViewMode = "week" | "month";
+const PROGRESS_MODE_ORDER: ProgressViewMode[] = [
+  "overview",
+  "goal_maps",
+];
 
 if (
   Platform.OS === "android" &&
@@ -88,9 +101,10 @@ export default function Insights() {
   const metrics = state.metrics.filter(
     (metric) =>
       !isInternalTracker(metric) &&
-      metric.sections.insights &&
+      (metric.sections.insights ||
+        activeTrackerViewId(state, "progress") !== "all") &&
       metric.dataType !== "text" &&
-      metricMatchesActiveView(state, metric, today),
+      metricMatchesActiveView(state, metric, today, "progress"),
   );
   const [selectedIds, setSelectedIds] = useState<string[]>(
     (state.settings.progressMetricIds?.length
@@ -103,32 +117,77 @@ export default function Insights() {
   const [filterTouched, setFilterTouched] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
-  const [dragPlacement, setDragPlacement] =
-    useState<ReorderDragState | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  const [view, setView] = useState<ViewMode>("week");
-  const progressMode = state.settings.progressViewMode ?? "overview";
+  const [showViewFilters, setShowViewFilters] = useState(false);
+  const progressMode =
+    state.settings.progressViewMode === "compact"
+      ? "goal_maps"
+      : (state.settings.progressViewMode ?? "overview");
+  const setProgressMode = useCallback(
+    (progressViewMode: ProgressViewMode) =>
+      updateSettings({ progressViewMode }),
+    [updateSettings],
+  );
+  const pageViewSwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          !editing &&
+          Math.abs(gesture.dx) > 24 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.45,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 55) return;
+          const index = PROGRESS_MODE_ORDER.indexOf(progressMode);
+          const offset = gesture.dx < 0 ? 1 : -1;
+          setProgressMode(
+            PROGRESS_MODE_ORDER[
+              (index + offset + PROGRESS_MODE_ORDER.length) %
+                PROGRESS_MODE_ORDER.length
+            ],
+          );
+        },
+      }),
+    [editing, progressMode, setProgressMode],
+  );
   const historyRange = state.settings.progressHistoryRange ?? "week";
-  const [historyAnchor, setHistoryAnchor] = useState(today);
-  const [month, setMonth] = useState(today);
-  const [weekAnchor, setWeekAnchor] = useState(today);
+  const historyAnchor = state.settings.progressHistoryAnchor ?? today;
+  const view: ViewMode = historyRange === "week" ? "week" : "month";
+  const setHistoryAnchor = useCallback(
+    (progressHistoryAnchor: string) =>
+      updateSettings({ progressHistoryAnchor }),
+    [updateSettings],
+  );
+  const setHistoryRange = useCallback(
+    (progressHistoryRange: HistoryRange) =>
+      updateSettings({ progressHistoryRange }),
+    [updateSettings],
+  );
   useEffect(() => {
     if (!editing) {
       setDraggingMetricId(null);
-      setDragPlacement(null);
     }
   }, [editing]);
-  const selectedMetrics = selectedIds
-    .map((id) => metrics.find((metric) => metric.id === id))
-    .filter((metric): metric is MetricDefinition => Boolean(metric));
-  const tracked = selectedIds.includes(TRACKED);
+  useEffect(() => {
+    setCloudSyncPaused("progress-edit", editing);
+    return () => setCloudSyncPaused("progress-edit", false);
+  }, [editing]);
+  const activeProgressFilter = activeTrackerViewId(state, "progress");
+  const selectedMetrics =
+    activeProgressFilter === ALL_TRACKERS_FILTER
+      ? selectedIds
+          .map((id) => metrics.find((metric) => metric.id === id))
+          .filter((metric): metric is MetricDefinition => Boolean(metric))
+      : metrics;
+  const tracked =
+    selectedIds.includes(TRACKED) ||
+    activeProgressFilter === TRACKED_ONLY_FILTER;
   const dates =
     view === "week"
       ? calendarWeekRange(
-          weekAnchor,
+          historyAnchor,
           state.settings.weekStartsOn ?? 1,
         )
-      : monthDateRange(month).filter((date) => date <= today);
+      : monthDateRange(historyAnchor).filter((date) => date <= today);
   // Keep the visual and summaries on the same calendar range. This also makes
   // Month agree with the Leaderboard Month calculation.
   const summaryDates = dates.filter((date) => date <= today);
@@ -201,8 +260,11 @@ export default function Insights() {
       return {
         color: metric.color,
         progress: applicable
-          ? goalProgress(
+          ? metricVisualProgress(
+              state,
               metric,
+              state.currentUserId,
+              day,
               safeMetricValue(state, metric, state.currentUserId, day),
               effectiveGoalTarget(state, metric, state.currentUserId, day),
             )
@@ -248,19 +310,19 @@ export default function Insights() {
       name: metric.name,
       color: metric.color,
     })),
-  ].slice(0, 5);
+  ].slice(0, 6);
   const shiftVisualPeriod = useCallback((direction: -1 | 1) => {
     if (view === "week") {
-      const next = dateWithOffsetFrom(weekAnchor, direction * 7);
-      setWeekAnchor(next > today ? today : next);
+      const next = dateWithOffsetFrom(historyAnchor, direction * 7);
+      setHistoryAnchor(next > today ? today : next);
       return;
     }
-    const current = new Date(`${month}T12:00:00`);
+    const current = new Date(`${historyAnchor}T12:00:00`);
     current.setDate(1);
     current.setMonth(current.getMonth() + direction);
     const next = dateKey(current);
-    if (next.slice(0, 7) <= today.slice(0, 7)) setMonth(next);
-  }, [month, today, view, weekAnchor]);
+    if (next.slice(0, 7) <= today.slice(0, 7)) setHistoryAnchor(next);
+  }, [historyAnchor, setHistoryAnchor, today, view]);
   const visualSwipeResponder = useMemo(
     () =>
       PanResponder.create({
@@ -278,32 +340,54 @@ export default function Insights() {
 
   if (progressMode !== "overview")
     return (
+      <View style={styles.pageSwipe} {...pageViewSwipeResponder.panHandlers}>
       <GoalMapProgress
         state={state}
         metrics={selectedMetrics}
-        selectedIds={selectedIds}
+        selectedIds={
+          tracked && !selectedIds.includes(TRACKED)
+            ? [TRACKED, ...selectedIds]
+            : selectedIds
+        }
         mode={progressMode}
         range={historyRange}
         anchor={historyAnchor}
         onAnchorChange={setHistoryAnchor}
-        onModeChange={(progressViewMode) =>
-          updateSettings({ progressViewMode })
-        }
-        onRangeChange={(progressHistoryRange) =>
-          updateSettings({ progressHistoryRange })
-        }
+        onModeChange={setProgressMode}
+        onRangeChange={setHistoryRange}
         onOpenDay={openDay}
         onOpenEditor={() => setEditing(true)}
-        onToggleUntracked={() =>
-          updateSettings({
-            showUntrackedProgress:
-              state.settings.showUntrackedProgress === false,
-          })
+        editing={editing}
+        onDoneEditing={() => {
+          setEditing(false);
+          setShowPicker(false);
+        }}
+        onRemove={(id) =>
+          select(selectedIds.filter((candidate) => candidate !== id))
         }
+        onMove={move}
+        onAddExisting={() => setShowPicker(true)}
+        onOpenFilters={() => setShowViewFilters(true)}
       />
+      <AddTrackerModal
+        visible={showPicker}
+        items={hiddenItems}
+        onClose={() => setShowPicker(false)}
+        onAdd={(id) => {
+          select([...selectedIds, id]);
+          setShowPicker(false);
+        }}
+      />
+      <TrackerViewFilterSheet
+        visible={showViewFilters}
+        scope="progress"
+        onClose={() => setShowViewFilters(false)}
+      />
+      </View>
     );
 
   return (
+    <View style={styles.pageSwipe} {...pageViewSwipeResponder.panHandlers}>
     <Screen
       contentContainerStyle={{ paddingBottom: 14 }}
       refreshEnabled={!editing}
@@ -317,7 +401,7 @@ export default function Insights() {
               onPress={() =>
                 router.navigate({
                   pathname: "/customize",
-                  params: { tab: "progress" },
+                  params: { tab: "insights" },
                 } as never)
               }
               style={[styles.headerEditIcon, { borderColor: colors.border }]}
@@ -334,60 +418,35 @@ export default function Insights() {
               <Text style={styles.doneText}>Done</Text>
             </Pressable>
             </View>
-          ) : undefined
+          ) : (
+            <Pressable
+              accessibilityLabel="Open performance"
+              onPress={() => router.push("/performance" as never)}
+              style={[styles.headerEditIcon, { borderColor: colors.border }]}
+            >
+              <Ionicons name="speedometer-outline" size={17} color={accent} />
+            </Pressable>
+          )
         }
       />
       <ProgressModeBar
         mode={progressMode}
-        onChange={(progressViewMode) =>
-          updateSettings({ progressViewMode })
-        }
+        onChange={setProgressMode}
       />
-      <Pressable
-        onPress={() => router.navigate("/view-filters" as never)}
-        style={styles.activeFilter}
-      >
-        <Ionicons name="funnel-outline" size={12} color={accent} />
-        <Text style={[styles.activeFilterText, { color: accent }]}>
-          {activeTrackerViewLabel(state)}
-        </Text>
-      </Pressable>
-      <View style={styles.legendWrap}>
-        {legendItems.map((item) => (
-          <View
-            key={item.id}
-            style={[
-              styles.legendItem,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-            <Text style={[styles.legendName, { color: colors.muted }]}>
-              {item.name}
-            </Text>
-          </View>
-        ))}
-      </View>
       <View {...visualSwipeResponder.panHandlers}>
       {view === "month" ? (
         <Card style={styles.visualCard}>
           <View style={styles.cardHeading}>
-            <View>
-              <Text style={[styles.eyebrow, { color: accent }]}>
-                MONTH VIEW
-              </Text>
-              <Text style={[styles.cardTitle, { color: colors.ink }]}>
-                Daily goal progress
-              </Text>
-            </View>
-            <Text style={[styles.legend, { color: colors.muted }]}>
-              Up to 5 bars per day
-            </Text>
+            <Text style={[styles.eyebrow, { color: accent }]}>MONTH VIEW</Text>
+            <InfoPopover
+              label="Explain month view"
+              message="Each color is one selected tracker. Tap a date to open that day's filtered log."
+            />
           </View>
           <MonthCalendar
             selectedDate={today}
-            monthDate={month}
-            onMonthChange={setMonth}
+            monthDate={historyAnchor}
+            onMonthChange={setHistoryAnchor}
             onSelect={openDay}
             dayStatus={status}
             dayVisuals={dayVisuals}
@@ -398,10 +457,19 @@ export default function Insights() {
               isVacationDate(state, state.currentUserId, day)
             }
           />
-          <Text style={[styles.hint, { color: colors.muted }]}>
-            Each colored line is one selected item. Tap a date for its filtered
-            log.
-          </Text>
+          <View style={styles.legendWrap}>
+            {legendItems.map((item) => (
+              <View
+                key={item.id}
+                style={[styles.legendItem, { borderColor: colors.border }]}
+              >
+                <View style={[styles.legendDot, { backgroundColor: item.color }]} />
+                <Text style={[styles.legendName, { color: colors.muted }]}>
+                  {item.name}
+                </Text>
+              </View>
+            ))}
+          </View>
           <View
             style={[
               styles.mode,
@@ -409,15 +477,15 @@ export default function Insights() {
               { borderTopColor: colors.border },
             ]}
           >
-            <Chip label="7 days" selected={false} onPress={() => setView("week")} />
-            <Chip label="Month" selected onPress={() => setView("month")} />
+            <Chip label="Week" selected={false} onPress={() => setHistoryRange("week")} />
+            <Chip label="Month" selected onPress={() => setHistoryRange("month")} />
           </View>
         </Card>
       ) : (
         <Card style={styles.visualCard}>
           <View style={styles.weekNav}>
             <Pressable
-              onPress={() => setWeekAnchor(dateWithOffsetFrom(weekAnchor, -7))}
+              onPress={() => setHistoryAnchor(dateWithOffsetFrom(historyAnchor, -7))}
               style={[styles.arrow, { backgroundColor: colors.canvas }]}
             >
               <Ionicons name="chevron-back" size={24} color={colors.ink} />
@@ -431,12 +499,12 @@ export default function Insights() {
               </Text>
             </View>
             <Pressable
-              disabled={weekAnchor >= today}
+              disabled={historyAnchor >= today}
               onPress={() =>
-                setWeekAnchor(
-                  dateWithOffsetFrom(weekAnchor, 7) > today
+                setHistoryAnchor(
+                  dateWithOffsetFrom(historyAnchor, 7) > today
                     ? today
-                    : dateWithOffsetFrom(weekAnchor, 7),
+                    : dateWithOffsetFrom(historyAnchor, 7),
                 )
               }
               style={[styles.arrow, { backgroundColor: colors.canvas }]}
@@ -444,7 +512,7 @@ export default function Insights() {
               <Ionicons
                 name="chevron-forward"
                 size={24}
-                color={weekAnchor >= today ? colors.faint : colors.ink}
+                color={historyAnchor >= today ? colors.faint : colors.ink}
               />
             </Pressable>
           </View>
@@ -472,7 +540,7 @@ export default function Insights() {
                   style={[styles.bars, { borderBottomColor: colors.border }]}
                 >
                   {rawDayVisuals(day)
-                    .slice(0, 5)
+                    .slice(0, 6)
                     .map((item, index) => (
                       <View
                         key={index}
@@ -495,10 +563,19 @@ export default function Insights() {
               </Pressable>
             ))}
           </View>
-          <Text style={[styles.hint, { color: colors.muted }]}>
-            The dashed line is each item’s own goal. Bars can extend to 140%, so
-            exceeding a goal stays visible across different units.
-          </Text>
+          <View style={styles.legendWrap}>
+            {legendItems.map((item) => (
+              <View
+                key={item.id}
+                style={[styles.legendItem, { borderColor: colors.border }]}
+              >
+                <View style={[styles.legendDot, { backgroundColor: item.color }]} />
+                <Text style={[styles.legendName, { color: colors.muted }]}>
+                  {item.name}
+                </Text>
+              </View>
+            ))}
+          </View>
           <View
             style={[
               styles.mode,
@@ -506,14 +583,25 @@ export default function Insights() {
               { borderTopColor: colors.border },
             ]}
           >
-            <Chip label="7 days" selected onPress={() => setView("week")} />
-            <Chip label="Month" selected={false} onPress={() => setView("month")} />
+            <Chip label="Week" selected onPress={() => setHistoryRange("week")} />
+            <Chip label="Month" selected={false} onPress={() => setHistoryRange("month")} />
           </View>
         </Card>
       )}
       </View>
       <SectionHeader
         title={`${view === "week" ? "Week" : "Month"} summaries`}
+        action={
+          <Pressable
+            onPress={() => setShowViewFilters(true)}
+            style={styles.activeFilter}
+          >
+            <Ionicons name="funnel-outline" size={11} color={accent} />
+            <Text style={[styles.activeFilterText, { color: accent }]}>
+              {activeTrackerViewLabel(state, "progress")}
+            </Text>
+          </Pressable>
+        }
       />
       <View style={styles.summaries}>
         {tracked ? (
@@ -529,8 +617,6 @@ export default function Insights() {
           <ReorderItem
             key={metric.id}
             active={draggingMetricId === metric.id}
-            shift={reorderShift(index, dragPlacement)}
-            settling={Boolean(dragPlacement?.settling)}
           >
             <MetricSummary
               state={state}
@@ -544,21 +630,10 @@ export default function Insights() {
               onRemove={() => select(selectedIds.filter((id) => id !== metric.id))}
               onDragStart={(step) => {
                 setDraggingMetricId(metric.id);
-                setDragPlacement({
-                  id: metric.id,
-                  origin: index,
-                  target: index,
-                  step,
-                });
               }}
-              onDragHover={(target) =>
-                setDragPlacement((current) =>
-                  current?.id === metric.id ? { ...current, target } : current,
-                )
-              }
-              onDragCancel={() => setDragPlacement(null)}
+              onDragHover={() => {}}
+              onDragCancel={() => setDraggingMetricId(null)}
               onDragEnd={() => {
-                setDragPlacement(null);
                 setDraggingMetricId(null);
               }}
             />
@@ -626,7 +701,13 @@ export default function Insights() {
           setShowPicker(false);
         }}
       />
+      <TrackerViewFilterSheet
+        visible={showViewFilters}
+        scope="progress"
+        onClose={() => setShowViewFilters(false)}
+      />
     </Screen>
+    </View>
   );
 }
 
@@ -639,8 +720,29 @@ function ProgressModeBar({
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const swipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) > 18 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.3,
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 45) return;
+          const index = PROGRESS_MODE_ORDER.indexOf(mode);
+          const offset = gesture.dx < 0 ? 1 : -1;
+          onChange(
+            PROGRESS_MODE_ORDER[
+              (index + offset + PROGRESS_MODE_ORDER.length) %
+                PROGRESS_MODE_ORDER.length
+            ],
+          );
+        },
+      }),
+    [mode, onChange],
+  );
   return (
     <View
+      {...swipeResponder.panHandlers}
       style={[
         styles.progressModes,
         { backgroundColor: colors.card, borderColor: colors.border },
@@ -649,8 +751,7 @@ function ProgressModeBar({
       {(
         [
           ["overview", "Overview", "stats-chart-outline"],
-          ["goal_maps", "Goal maps", "calendar-outline"],
-          ["compact", "Compact", "grid-outline"],
+          ["goal_maps", "Grid map", "calendar-outline"],
         ] as const
       ).map(([value, label, icon]) => {
         const selected = mode === value;
@@ -680,6 +781,12 @@ function ProgressModeBar({
           </Pressable>
         );
       })}
+      <View style={styles.modeHelp}>
+        <InfoPopover
+          label="Explain Progress views"
+          message="Overview compares averages and streaks. Grid map shows one color map per tracker; its compact layout is available while editing."
+        />
+      </View>
     </View>
   );
 }
@@ -687,6 +794,7 @@ function ProgressModeBar({
 function GoalMapProgress({
   state,
   metrics,
+  selectedIds,
   mode,
   range,
   anchor,
@@ -695,7 +803,12 @@ function GoalMapProgress({
   onRangeChange,
   onOpenDay,
   onOpenEditor,
-  onToggleUntracked,
+  editing,
+  onDoneEditing,
+  onRemove,
+  onMove,
+  onAddExisting,
+  onOpenFilters,
 }: {
   state: AppState;
   metrics: MetricDefinition[];
@@ -708,17 +821,20 @@ function GoalMapProgress({
   onRangeChange: (range: HistoryRange) => void;
   onOpenDay: (date: string) => void;
   onOpenEditor: () => void;
-  onToggleUntracked: () => void;
+  editing: boolean;
+  onDoneEditing: () => void;
+  onRemove: (id: string) => void;
+  onMove: (id: string, target: number) => void;
+  onAddExisting: () => void;
+  onOpenFilters: () => void;
 }) {
+  const { updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const today = dateKey();
-  const showUntracked = state.settings.showUntrackedProgress !== false;
-  const visibleMetrics = showUntracked
-    ? metrics
-    : metrics.filter((metric) =>
-        isMetricTrackedOnDate(state, metric, today),
-      );
+  const compact = state.settings.compactProgressGrid === true;
+  const visibleMetrics = metrics;
+  const trackedSelected = selectedIds.includes(TRACKED);
   const dates = calendarPeriodRange(
     anchor,
     range,
@@ -739,9 +855,59 @@ function GoalMapProgress({
           month: range === "month" ? "long" : undefined,
           year: "numeric",
         }).format(new Date(`${anchor}T12:00:00`));
+  const trackedTotals = dates
+    .filter((date) => date <= today)
+    .map((date) => trackedGoalSummary(state, state.currentUserId, date));
+  const trackedMet = trackedTotals.reduce((sum, item) => sum + item.met, 0);
+  const trackedPossible = trackedTotals.reduce(
+    (sum, item) => sum + item.total,
+    0,
+  );
+  const trackedCompletion = trackedPossible
+    ? Math.round((trackedMet / trackedPossible) * 100)
+    : 0;
   return (
     <Screen contentContainerStyle={{ paddingBottom: 14 }}>
-      <PageHeader title="Progress" />
+      <PageHeader
+        title="Progress"
+        action={
+          editing ? (
+            <View style={styles.headerEditActions}>
+              <Pressable
+                accessibilityLabel="Customize Progress"
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/customize",
+                    params: { tab: "insights" },
+                  } as never)
+                }
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons name="settings-outline" size={17} color={accent} />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Toggle compact grid"
+                onPress={() =>
+                  updateSettings({ compactProgressGrid: !compact })
+                }
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons
+                  name={compact ? "grid" : "grid-outline"}
+                  size={17}
+                  color={accent}
+                />
+              </Pressable>
+              <Pressable
+                onPress={onDoneEditing}
+                style={[styles.done, { backgroundColor: accent }]}
+              >
+                <Text style={styles.doneText}>Done</Text>
+              </Pressable>
+            </View>
+          ) : undefined
+        }
+      />
       <ProgressModeBar mode={mode} onChange={onModeChange} />
       <Card style={styles.mapControls}>
         <View style={styles.rangeRow}>
@@ -759,6 +925,22 @@ function GoalMapProgress({
               onPress={() => onRangeChange(item)}
             />
           ))}
+          <Pressable
+            onPress={onOpenFilters}
+            style={styles.compactFilter}
+          >
+            <Ionicons name="funnel-outline" size={13} color={accent} />
+            <Text
+              numberOfLines={1}
+              style={[styles.mapUtilityText, { color: accent }]}
+            >
+              {activeTrackerViewLabel(state, "progress")}
+            </Text>
+          </Pressable>
+          <InfoPopover
+            label="Explain grid colors"
+            message="Grey: not logged. Red: goal missed. Pink: skipped or vacation. Lime: goal met. Orange: logged without a goal."
+          />
         </View>
         <View style={styles.periodNav}>
           <Pressable
@@ -775,105 +957,321 @@ function GoalMapProgress({
             <Ionicons name="chevron-forward" size={18} color={colors.ink} />
           </Pressable>
         </View>
-        <View style={styles.mapUtilityRow}>
-          <Pressable onPress={onToggleUntracked} style={styles.mapUtility}>
-            <Ionicons
-              name={showUntracked ? "eye-outline" : "eye-off-outline"}
-              size={14}
-              color={accent}
-            />
-            <Text style={[styles.mapUtilityText, { color: accent }]}>
-              {showUntracked ? "Untracked shown" : "Tracked only"}
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={() => {
-              onModeChange("overview");
-              onOpenEditor();
-            }}
-            style={styles.mapUtility}
-          >
-            <Ionicons name="options-outline" size={14} color={accent} />
-            <Text style={[styles.mapUtilityText, { color: accent }]}>
-              Edit view
-            </Text>
-          </Pressable>
-        </View>
-        <Pressable
-          onPress={() => router.navigate("/view-filters" as never)}
-          style={styles.mapFilter}
-        >
-          <Ionicons name="funnel-outline" size={13} color={accent} />
-          <Text style={[styles.mapUtilityText, { color: accent }]}>
-            {activeTrackerViewLabel(state)}
-          </Text>
-          <Ionicons name="chevron-forward" size={13} color={accent} />
-        </Pressable>
       </Card>
       <View
-        style={mode === "compact" ? styles.compactMaps : styles.detailedMaps}
+        style={compact ? styles.compactMaps : styles.detailedMaps}
       >
-        {visibleMetrics.map((metric) => {
+        {trackedSelected ? (
+          <Pressable
+            onPress={() => onOpenDay(anchor)}
+            onLongPress={onOpenEditor}
+            style={
+              compact
+                ? range === "month" && !editing
+                  ? styles.compactMapWrap
+                  : styles.fullMapWrap
+                : undefined
+            }
+          >
+            <Card
+              style={[
+                styles.mapCard,
+                compact && styles.compactMapCard,
+              ]}
+            >
+              <View
+                style={[
+                  styles.mapHeading,
+                  compact && styles.compactMapHeading,
+                ]}
+              >
+                {compact ? (
+                  <>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.mapName,
+                        styles.compactMapName,
+                        { color: colors.ink },
+                      ]}
+                    >
+                      Tracked goals
+                    </Text>
+                    <Text
+                      style={[
+                        styles.compactPercent,
+                        { color: TRACKED_COLOR },
+                      ]}
+                    >
+                      {trackedCompletion}%
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <View
+                      style={[
+                        styles.mapIcon,
+                        { backgroundColor: `${TRACKED_COLOR}18` },
+                      ]}
+                    >
+                      <Ionicons
+                        name="checkmark-done-outline"
+                        size={16}
+                        color={TRACKED_COLOR}
+                      />
+                    </View>
+                    <View style={styles.grow}>
+                      <Text style={[styles.mapName, { color: colors.ink }]}>
+                        Tracked goals
+                      </Text>
+                      <Text style={[styles.mapMeta, { color: colors.muted }]}>
+                        {trackedCompletion}% · {trackedMet}/{trackedPossible} goals
+                      </Text>
+                      <Text style={[styles.mapMeta, { color: colors.muted }]}>
+                        Best streak{" "}
+                        {
+                          trackedGoalStreakStats(
+                            state,
+                            state.currentUserId,
+                            today,
+                          ).best
+                        }
+                        d
+                      </Text>
+                    </View>
+                    <View style={styles.mapStreak}>
+                      <Ionicons name="flame" size={12} color={TRACKED_COLOR} />
+                      <Text
+                        style={[
+                          styles.mapStreakText,
+                          { color: TRACKED_COLOR },
+                        ]}
+                      >
+                        {
+                          trackedGoalStreakStats(
+                            state,
+                            state.currentUserId,
+                            today,
+                          ).current
+                        }
+                      </Text>
+                    </View>
+                    <Ionicons name="flag" size={13} color={accent} />
+                  </>
+                )}
+                {editing ? (
+                  <Pressable
+                    onPress={() => onRemove(TRACKED)}
+                    style={styles.remove}
+                    hitSlop={7}
+                  >
+                    <Ionicons name="remove" size={15} color={palette.white} />
+                  </Pressable>
+                ) : null}
+              </View>
+              <TrackedGoalsHeatmap
+                state={state}
+                dates={dates}
+                range={range}
+                compact={compact}
+                onSelect={onOpenDay}
+              />
+            </Card>
+          </Pressable>
+        ) : null}
+        {visibleMetrics.map((metric, index) => {
           const period = metricPeriodStats(
             state,
             metric,
             state.currentUserId,
             dates.filter((date) => date <= today),
           );
+          const completionDenominator = metric.goalEnabled
+            ? period.applicableDates.length
+            : dates.filter((date) => date <= today).length;
+          const completionNumerator = metric.goalEnabled
+            ? period.goalsReached
+            : period.loggedDates.length;
+          const completion = completionDenominator
+            ? Math.round(
+                (completionNumerator / completionDenominator) * 100,
+              )
+            : 0;
           return (
-            <Pressable
+            <MapReorderCard
               key={metric.id}
+              editing={editing}
+              index={index}
+              count={visibleMetrics.length}
+              onLongPress={onOpenEditor}
               onPress={() =>
                 router.navigate({
                   pathname: "/metric-detail",
-                  params: { metricId: metric.id },
+                  params: { metric: metric.id, date: anchor },
                 } as never)
               }
-              style={mode === "compact" ? styles.compactMapWrap : undefined}
+              wrapStyle={
+                editing
+                  ? styles.fullMapWrap
+                  : compact
+                  ? range === "month"
+                    ? styles.compactMapWrap
+                    : styles.fullMapWrap
+                  : undefined
+              }
+              onMove={(target) => onMove(metric.id, target)}
             >
               <Card
                 style={[
                   styles.mapCard,
-                  mode === "compact" && styles.compactMapCard,
+                  compact && styles.compactMapCard,
                 ]}
               >
-                <View style={styles.mapHeading}>
-                  <View
-                    style={[
-                      styles.mapIcon,
-                      { backgroundColor: `${metric.color}18` },
-                    ]}
-                  >
-                    <Ionicons
-                      name={metric.icon as keyof typeof Ionicons.glyphMap}
-                      size={16}
-                      color={metric.color}
-                    />
-                  </View>
-                  <View style={styles.grow}>
+                <View
+                  style={[
+                    styles.mapHeading,
+                    compact && styles.compactMapHeading,
+                  ]}
+                >
+                  {compact ? (
+                    <>
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.mapName,
+                          styles.compactMapName,
+                          { color: colors.ink },
+                        ]}
+                      >
+                        {metric.name}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.compactPercent,
+                          { color: metric.color },
+                        ]}
+                      >
+                        {completion}%
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <View
+                        style={[
+                          styles.mapIcon,
+                          { backgroundColor: `${metric.color}18` },
+                        ]}
+                      >
+                        <Ionicons
+                          name={metric.icon as keyof typeof Ionicons.glyphMap}
+                          size={16}
+                          color={metric.color}
+                        />
+                      </View>
+                      <View style={styles.grow}>
+                        <Text
+                          numberOfLines={1}
+                          style={[styles.mapName, { color: colors.ink }]}
+                        >
+                          {metric.name}
+                        </Text>
                     <Text
-                      numberOfLines={1}
-                      style={[styles.mapName, { color: colors.ink }]}
+                      numberOfLines={2}
+                      style={[styles.mapMeta, { color: colors.muted }]}
                     >
-                      {metric.name}
+                      {metric.dataType === "boolean"
+                        ? `${period.goalsReached}/${period.applicableDates.length} complete`
+                        : `${formatMetricValue(metric, period.average)} avg`}
+                      {" · "}
+                      {period.goalsReached}/{period.applicableDates.length} goal
+                      days
+                      {metric.dataType !== "boolean"
+                        ? ` · ${period.loggedDates.length} logged · ${metricAverageGoalOffsetLabel(
+                            metric,
+                            period.average,
+                            period.averageTarget,
+                          )}`
+                        : ""}
                     </Text>
                     <Text
                       numberOfLines={1}
                       style={[styles.mapMeta, { color: colors.muted }]}
                     >
-                      {period.loggedDates.length} logged ·{" "}
-                      {period.applicableDates.length
-                        ? Math.round(
-                            (period.goalsReached /
-                              period.applicableDates.length) *
-                              100,
-                          )
-                        : 0}
-                      %
+                      Overall{" "}
+                      {formatMetricValue(
+                        metric,
+                        metricOverallAverage(
+                          state,
+                          metric,
+                          state.currentUserId,
+                          today,
+                        ),
+                      )}
+                      {" · Best "}
+                      {
+                        metricStreakStats(
+                          state,
+                          metric,
+                          state.currentUserId,
+                          today,
+                        ).best
+                      }
+                      d
                     </Text>
-                  </View>
-                  {isMetricTrackedOnDate(state, metric, today) ? (
-                    <Ionicons name="flag" size={13} color={accent} />
+                      </View>
+                      <View style={styles.mapStreak}>
+                        <Ionicons name="flame" size={12} color={metric.color} />
+                        <Text
+                          style={[
+                            styles.mapStreakText,
+                            { color: metric.color },
+                          ]}
+                        >
+                          {
+                            metricStreakStats(
+                              state,
+                              metric,
+                              state.currentUserId,
+                              today,
+                            ).current
+                          }
+                        </Text>
+                      </View>
+                      {isMetricTrackedOnDate(state, metric, today) ? (
+                        <Ionicons name="flag" size={13} color={accent} />
+                      ) : null}
+                    </>
+                  )}
+                  {editing &&
+                  isMetricTrackedOnDate(state, metric, today) ? (
+                    <Pressable
+                      onPress={() =>
+                        router.navigate({
+                          pathname: "/metric-editor",
+                          params: {
+                            id: metric.id,
+                            focus: "goal-start",
+                          },
+                        } as never)
+                      }
+                      style={[styles.dateEdit, { borderColor: colors.border }]}
+                      hitSlop={7}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={15}
+                        color={accent}
+                      />
+                    </Pressable>
+                  ) : null}
+                  {editing ? (
+                    <Pressable
+                      onPress={() => onRemove(metric.id)}
+                      style={styles.remove}
+                      hitSlop={7}
+                    >
+                      <Ionicons name="remove" size={15} color={palette.white} />
+                    </Pressable>
                   ) : null}
                 </View>
                 <GoalHeatmap
@@ -881,14 +1279,49 @@ function GoalMapProgress({
                   metric={metric}
                   dates={dates}
                   range={range}
-                  compact={mode === "compact"}
+                  compact={compact}
                   onSelect={onOpenDay}
                 />
               </Card>
-            </Pressable>
+            </MapReorderCard>
           );
         })}
       </View>
+      {editing ? (
+        <View style={styles.editActions}>
+        <Pressable
+          onPress={onAddExisting}
+          style={[
+            styles.addExisting,
+            styles.editActionButton,
+            { borderColor: accent },
+          ]}
+        >
+          <Ionicons name="add" size={17} color={accent} />
+          <Text style={[styles.addExistingText, { color: accent }]}>
+            Add existing tracker
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() =>
+            router.navigate({
+              pathname: "/customize",
+              params: { tab: "goals" },
+            } as never)
+          }
+          style={[
+            styles.addExisting,
+            styles.editActionButton,
+            { borderColor: accent },
+          ]}
+        >
+          <Ionicons name="flag-outline" size={17} color={accent} />
+          <Text style={[styles.addExistingText, { color: accent }]}>
+            Tracked goals
+          </Text>
+        </Pressable>
+        </View>
+      ) : null}
       {!visibleMetrics.length ? (
         <Card>
           <Text style={[styles.hint, { color: colors.muted }]}>
@@ -898,6 +1331,133 @@ function GoalMapProgress({
         </Card>
       ) : null}
     </Screen>
+  );
+}
+
+function MapReorderCard({
+  editing,
+  index,
+  count,
+  onMove,
+  onPress,
+  onLongPress,
+  wrapStyle,
+  children,
+}: {
+  editing: boolean;
+  index: number;
+  count: number;
+  onMove: (target: number) => void;
+  onPress: () => void;
+  onLongPress: () => void;
+  wrapStyle?: object | false;
+  children: React.ReactNode;
+}) {
+  const colors = useAppColors();
+  const dragY = useRef(new Animated.Value(0)).current;
+  const wiggle = useRef(new Animated.Value(0)).current;
+  const step = useRef(112);
+  const origin = useRef(index);
+  const target = useRef(index);
+  useEffect(() => {
+    if (!editing) {
+      wiggle.stopAnimation();
+      wiggle.setValue(0);
+      dragY.setValue(0);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wiggle, {
+          toValue: 1,
+          duration: 145,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wiggle, {
+          toValue: -1,
+          duration: 290,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wiggle, {
+          toValue: 0,
+          duration: 145,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [dragY, editing, wiggle]);
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          editing && Math.abs(gesture.dy) > 4,
+        onPanResponderGrant: () => {
+          origin.current = index;
+          target.current = index;
+        },
+        onPanResponderMove: (_event, gesture) => {
+          dragY.setValue(gesture.dy);
+          target.current = Math.max(
+            0,
+            Math.min(
+              count - 1,
+              origin.current + Math.round(gesture.dy / step.current),
+            ),
+          );
+        },
+        onPanResponderRelease: () => {
+          const next = target.current;
+          Animated.spring(dragY, {
+            toValue: 0,
+            damping: 22,
+            stiffness: 230,
+            useNativeDriver: true,
+          }).start();
+          if (next !== origin.current) onMove(next);
+        },
+        onPanResponderTerminate: () =>
+          Animated.spring(dragY, {
+            toValue: 0,
+            damping: 22,
+            stiffness: 230,
+            useNativeDriver: true,
+          }).start(),
+      }),
+    [count, dragY, editing, index, onMove],
+  );
+  return (
+    <Animated.View
+      onLayout={(event) => {
+        step.current = event.nativeEvent.layout.height + 8;
+      }}
+      style={[
+        wrapStyle,
+        {
+          zIndex: editing ? 3 : 0,
+          transform: [
+            { translateY: dragY },
+            {
+              rotate: wiggle.interpolate({
+                inputRange: [-1, 1],
+                outputRange: ["-0.25deg", "0.25deg"],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <Pressable
+        onPress={editing ? undefined : onPress}
+        onLongPress={onLongPress}
+        {...(editing ? responder.panHandlers : {})}
+        style={editing ? { borderColor: colors.border } : undefined}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -994,7 +1554,7 @@ function TrackedSummary({
         <View style={styles.streakRow}>
           <Ionicons name="flame" size={12} color={TRACKED_COLOR} />
           <Text style={[styles.goalLine, { color: TRACKED_COLOR }]}>
-            Current streak {streaks.current}d
+            {streaks.current}d
           </Text>
         </View>
         <Text style={[styles.streakLine, { color: colors.muted }]}>Best streak {streaks.best}d</Text>
@@ -1109,17 +1669,15 @@ function MetricSummary({
         onPanResponderRelease: () => {
           const target = liveTarget.current;
           Animated.spring(dragY, {
-            toValue: (target - dragOrigin.current) * dragStep.current,
+            toValue: 0,
             damping: 24,
             stiffness: 220,
             mass: 0.72,
             overshootClamping: true,
             useNativeDriver: true,
-          }).start(() => {
-            if (target !== dragOrigin.current) onMoveRef.current(target);
-            dragY.setValue(0);
-            onDragEndRef.current();
-          });
+          }).start();
+          if (target !== dragOrigin.current) onMoveRef.current(target);
+          onDragEndRef.current();
         },
         onPanResponderTerminate: () => {
           Animated.spring(dragY, {
@@ -1160,6 +1718,31 @@ function MetricSummary({
     dates[dates.length - 1],
   );
   const isBoolean = metric.dataType === "boolean";
+  const isTodo = metric.id === "todo_completion";
+  const todoPossible = isTodo
+    ? dates.reduce(
+        (sum, date) =>
+          sum +
+          (state.todos ?? []).filter((todo) => todoAppearsOnDate(todo, date))
+            .length,
+        0,
+      )
+    : 0;
+  const todoCompleted = isTodo
+    ? dates.reduce(
+        (sum, date) =>
+          sum +
+          (state.todos ?? []).filter(
+            (todo) =>
+              todoAppearsOnDate(todo, date) &&
+              todoResolvedOnDate(todo, date),
+          ).length,
+        0,
+      )
+    : 0;
+  const todoCompletion = todoPossible
+    ? Math.round((todoCompleted / todoPossible) * 100)
+    : 0;
   const trackedGoal = isMetricTrackedOnDate(
     state,
     metric,
@@ -1248,13 +1831,19 @@ function MetricSummary({
             minimumFontScale={0.72}
             style={[styles.summaryValue, { color: colors.ink }]}
           >
-          {isBoolean
+          {isTodo
+              ? `${todoCompletion}%`
+              : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%`
               : Math.abs(average) >= 100
                 ? Math.round(average).toLocaleString()
                 : (Math.round(average * 10) / 10).toLocaleString()}
           </Text>
-          {isBoolean ? (
+          {isTodo ? (
+            <Text style={[styles.summaryUnit, { color: colors.muted }]}>
+              {todoPossible ? `${todoCompleted}/${todoPossible} completed` : "No to-dos"}
+            </Text>
+          ) : isBoolean ? (
             <Text style={[styles.summaryUnit, { color: colors.muted }]}>
               {dates.length}-day completion avg
             </Text>
@@ -1271,7 +1860,11 @@ function MetricSummary({
           minimumFontScale={0.82}
           style={[styles.summaryLabel, { color: colors.muted }]}
         >
-          {weightStats
+          {isTodo
+            ? todoPossible
+              ? `${todoCompleted}/${todoPossible} to-dos completed in this range`
+              : "No to-dos scheduled in this range"
+            : weightStats
             ? `${dates.length}-day average · ${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week`
             : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
@@ -1301,7 +1894,7 @@ function MetricSummary({
         <View style={styles.streakRow}>
           <Ionicons name="flame" size={12} color={metric.color} />
           <Text style={[styles.streakLine, { color: colors.muted }]}>
-            Current {streaks.current}d · Best {streaks.best}d
+            {streaks.current}d · Best {streaks.best}d
           </Text>
         </View>
         </View>
@@ -1334,6 +1927,7 @@ function MetricSummary({
 }
 
 const styles = StyleSheet.create({
+  pageSwipe: { flex: 1 },
   grow: { flex: 1, minWidth: 0 },
   progressModes: {
     minHeight: 42,
@@ -1355,6 +1949,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   progressModeText: { fontSize: 8, fontWeight: "900" },
+  modeHelp: {
+    width: 26,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   activeFilter: {
     alignSelf: "flex-end",
     flexDirection: "row",
@@ -1368,8 +1968,15 @@ const styles = StyleSheet.create({
   rangeRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
+    gap: 4,
+  },
+  compactFilter: {
+    flex: 1,
+    minWidth: 54,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 3,
   },
   periodNav: {
     flexDirection: "row",
@@ -1402,11 +2009,18 @@ const styles = StyleSheet.create({
   },
   mapUtilityText: { fontSize: 8, fontWeight: "900" },
   mapFilter: {
+    flex: 1,
     minHeight: 30,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
+  },
+  mapFilterRow: {
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
   },
   detailedMaps: { gap: 8 },
   compactMaps: {
@@ -1416,18 +2030,22 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   compactMapWrap: { width: "48.8%" },
+  fullMapWrap: { width: "100%" },
   mapCard: { gap: 8 },
   compactMapCard: {
-    minHeight: 82,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    gap: 5,
+    minHeight: 0,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+    gap: 4,
   },
   mapHeading: {
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
   },
+  compactMapHeading: { gap: 5 },
+  compactMapName: { flex: 1, fontSize: 8 },
+  compactPercent: { fontSize: 9, fontWeight: "900" },
   mapIcon: {
     width: 28,
     height: 28,
@@ -1437,6 +2055,16 @@ const styles = StyleSheet.create({
   },
   mapName: { fontSize: 9, fontWeight: "900" },
   mapMeta: { fontSize: 7, fontWeight: "700", marginTop: 1 },
+  mapStreak: {
+    minWidth: 27,
+    height: 22,
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  mapStreakText: { fontSize: 8, fontWeight: "900" },
   headerEditActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   headerEditIcon: {
     width: 34,
@@ -1455,6 +2083,14 @@ const styles = StyleSheet.create({
   editHint: { alignItems: "center", paddingVertical: 8 },
   drag: { width: 28, alignItems: "center", justifyContent: "center" },
   remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
+  dateEdit: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   cardEditActions: { flexDirection: "row", alignItems: "center", gap: 5 },
   goalDate: { width: 27, height: 27, borderRadius: 9, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   recap: {
@@ -1514,7 +2150,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   legend: { color: palette.muted, fontSize: 9 },
-  legendWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: -8 },
+  legendWrap: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: -5 },
   legendItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -1523,11 +2159,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
     borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
   },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendName: { color: palette.muted, fontSize: 9, fontWeight: "800" },
+  legendName: { color: palette.muted, fontSize: 7, fontWeight: "800" },
   hint: {
     color: palette.muted,
     fontSize: 9,
@@ -1681,7 +2317,7 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontSize: 8,
     fontWeight: "800",
-    marginTop: 3,
+    marginTop: 0,
     textAlign: "right",
   },
 });

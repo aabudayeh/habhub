@@ -23,6 +23,7 @@ import {
 } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { InfoPopover } from "@/src/components/InfoPopover";
 import {
   isAllowedTrackerColor,
   isReservedGoalColor,
@@ -44,6 +45,7 @@ import {
   HealthMetricField,
   MetricDataType,
   MetricDefinition,
+  MetricSubmetric,
   MuscleGroup,
   NewMetric,
   RankingDirection,
@@ -79,6 +81,42 @@ const ICONS = [
   "school-outline",
   "time-outline",
   "trophy-outline",
+  "analytics-outline",
+  "apps-outline",
+  "basket-outline",
+  "bonfire-outline",
+  "cafe-outline",
+  "checkbox-outline",
+  "clipboard-outline",
+  "cloud-outline",
+  "color-palette-outline",
+  "construct-outline",
+  "earth-outline",
+  "eye-outline",
+  "fast-food-outline",
+  "flag-outline",
+  "football-outline",
+  "game-controller-outline",
+  "happy-outline",
+  "headset-outline",
+  "hourglass-outline",
+  "library-outline",
+  "musical-notes-outline",
+  "nutrition-outline",
+  "partly-sunny-outline",
+  "people-outline",
+  "person-outline",
+  "podium-outline",
+  "ribbon-outline",
+  "rocket-outline",
+  "shirt-outline",
+  "sparkles-outline",
+  "stopwatch-outline",
+  "sunny-outline",
+  "sync-outline",
+  "timer-outline",
+  "trail-sign-outline",
+  "videocam-outline",
 ] as const;
 const CATEGORIES: {
   id: TrackerCategory;
@@ -223,13 +261,18 @@ export default function TrackerEditor() {
   );
   const [presetId, setPresetId] = useState("");
   const [name, setName] = useState(tracker?.name ?? "");
-  const [color, setColor] = useState(
-    isAllowedTrackerColor(tracker?.color ?? accent)
-      ? (tracker?.color ?? accent)
-      : TRACKER_COLOR_CHOICES[0],
-  );
+  const [color, setColor] = useState(() => {
+    if (tracker?.color && isAllowedTrackerColor(tracker.color))
+      return tracker.color;
+    return TRACKER_COLOR_CHOICES[
+      Math.floor(Math.random() * TRACKER_COLOR_CHOICES.length)
+    ];
+  });
   const [category, setCategory] = useState<TrackerCategory>(
     tracker?.category ?? "other",
+  );
+  const [grouping, setGrouping] = useState(
+    tracker?.grouping ?? "",
   );
   const [unit, setUnit] = useState(tracker?.unit ?? "");
   const [dataType, setDataType] = useState<MetricDataType>(
@@ -242,6 +285,9 @@ export default function TrackerEditor() {
     tracker?.goal.kind ?? "at_least",
   );
   const [goal, setGoal] = useState(String(tracker?.goal.target ?? ""));
+  const [goalProgressMode, setGoalProgressMode] = useState(
+    tracker?.goalProgressMode ?? "daily",
+  );
   const existingDiastolic = sourceMetrics.find(
     (item) => item.id === "blood_pressure_diastolic",
   );
@@ -283,6 +329,16 @@ export default function TrackerEditor() {
   const behaviorSectionY = useRef(0);
   const [showIcons, setShowIcons] = useState(false);
   const [showColors, setShowColors] = useState(false);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [goalKindOpen, setGoalKindOpen] = useState(false);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const [healthSourceChoiceOpen, setHealthSourceChoiceOpen] = useState(false);
+  const [healthFieldChoiceOpen, setHealthFieldChoiceOpen] = useState(false);
+  const [scheduleChoiceOpen, setScheduleChoiceOpen] = useState(false);
+  const [entryTypeOpen, setEntryTypeOpen] = useState(false);
+  const [aggregationOpen, setAggregationOpen] = useState(false);
+  const [rankingOpen, setRankingOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
   const [customColor, setCustomColor] = useState(color);
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
@@ -302,6 +358,92 @@ export default function TrackerEditor() {
   );
   const [manualEntry, setManualEntry] = useState(
     tracker?.manualEntry !== false,
+  );
+  const [timerEnabled, setTimerEnabled] = useState(
+    tracker?.timerEnabled ??
+      (focus === "timer" ||
+        /min|hour|hr|sec/i.test(tracker?.unit ?? "") ||
+        tracker?.category === "mind"),
+  );
+  const [submetricsOpen, setSubmetricsOpen] = useState(false);
+  const [openSubmetricGoalId, setOpenSubmetricGoalId] = useState<string | null>(
+    null,
+  );
+  const [openSubmetricHealthId, setOpenSubmetricHealthId] = useState<
+    string | null
+  >(null);
+  const [openSubmetricFieldId, setOpenSubmetricFieldId] = useState<
+    string | null
+  >(null);
+  const [submetrics, setSubmetrics] = useState<MetricSubmetric[]>(() => {
+    if (tracker?.submetrics?.length) return tracker.submetrics;
+    if (tracker?.id === "blood_pressure_systolic")
+      return [
+        {
+          id: "systolic",
+          name: "Systolic",
+          unit: "mmHg",
+          goalEnabled: true,
+          goal: tracker.goal,
+          goalRange: tracker.goalRange ?? { min: 90, max: 120 },
+          showProgressBar: true,
+          healthMapping: { dataType: "blood_pressure", field: "systolic" },
+        },
+        {
+          id: "diastolic",
+          name: "Diastolic",
+          unit: "mmHg",
+          goalEnabled: true,
+          goal: existingDiastolic?.goal ?? { kind: "exact", target: 80 },
+          goalRange: existingDiastolic?.goalRange ?? { min: 60, max: 80 },
+          showProgressBar: true,
+          linkedMetricId: "blood_pressure_diastolic",
+          healthMapping: { dataType: "blood_pressure", field: "diastolic" },
+        },
+        {
+          id: "pulse",
+          name: "Pulse",
+          unit: "bpm",
+          goalEnabled: false,
+          goal: { kind: "exact", target: 70 },
+          showProgressBar: false,
+          linkedMetricId: "pulse",
+          healthMapping: { dataType: "heart_rate", field: "value" },
+        },
+      ];
+    if (tracker?.id === "food")
+      return [
+        ["protein", "Protein", "g"],
+        ["fat", "Fat", "g"],
+        ["carbs", "Carbs", "g"],
+        ["fiber", "Fiber", "g"],
+        ["sugar", "Sugar", "g"],
+      ].map(([id, subName, subUnit]) => ({
+        id,
+        name: subName,
+        unit: subUnit,
+        goalEnabled: false,
+        goal: { kind: "at_least" as const, target: 0 },
+        showProgressBar: false,
+        linkedMetricId: id,
+      }));
+    return [];
+  });
+  const [submetricDisplayMode, setSubmetricDisplayMode] = useState<
+    "separate" | "merged"
+  >(tracker?.submetricDisplay?.mode ?? "separate");
+  const [submetricTemplate, setSubmetricTemplate] = useState(
+    tracker?.submetricDisplay?.template ??
+      (tracker?.id === "blood_pressure_systolic"
+        ? "{systolic}/{diastolic} {systolic.unit}"
+        : ""),
+  );
+  const [submetricsCollapsible, setSubmetricsCollapsible] = useState(
+    tracker?.submetricDisplay?.collapsible ?? tracker?.id === "food",
+  );
+  const [submetricsLabel, setSubmetricsLabel] = useState(
+    tracker?.submetricDisplay?.collapsibleLabel ??
+      (tracker?.id === "food" ? "Add vitamins, minerals and more" : "More fields"),
   );
   const [activeFrom, setActiveFrom] = useState(tracker?.activeFrom ?? dateKey());
   const initiallyTracked = Boolean(
@@ -351,6 +493,7 @@ export default function TrackerEditor() {
     goalEnabled,
     goalKind,
     goal,
+    goalProgressMode,
     diastolicGoal,
     diastolicMin,
     rangeMin,
@@ -367,6 +510,12 @@ export default function TrackerEditor() {
     gymMuscles,
     stepFallback,
     manualEntry,
+    timerEnabled,
+    submetrics,
+    submetricDisplayMode,
+    submetricTemplate,
+    submetricsCollapsible,
+    submetricsLabel,
     activeFrom,
     trackGoal,
     scheduleMode,
@@ -395,6 +544,7 @@ export default function TrackerEditor() {
     setGoalEnabled(preset.goalEnabled !== false);
     setGoalKind(preset.goal.kind);
     setGoal(String(preset.goal.target));
+    setGoalProgressMode(preset.goalProgressMode ?? "daily");
     if (preset.templateId === "blood_pressure_systolic") {
       setDiastolicGoal("80");
       setDiastolicMin("60");
@@ -418,6 +568,18 @@ export default function TrackerEditor() {
     );
     setStepFallback(preset.stepFallback ?? false);
     setManualEntry(preset.manualEntry !== false);
+    setTimerEnabled(
+      preset.timerEnabled ??
+        (/min|hour|hr|sec/i.test(preset.unit) ||
+          preset.category === "mind"),
+    );
+    setSubmetrics(preset.submetrics ?? []);
+    setSubmetricDisplayMode(preset.submetricDisplay?.mode ?? "separate");
+    setSubmetricTemplate(preset.submetricDisplay?.template ?? "");
+    setSubmetricsCollapsible(preset.submetricDisplay?.collapsible ?? false);
+    setSubmetricsLabel(
+      preset.submetricDisplay?.collapsibleLabel ?? "More fields",
+    );
     setActiveFrom(dateKey());
     setTrackGoal(false);
     setGoalCalendarOpen(false);
@@ -491,6 +653,13 @@ export default function TrackerEditor() {
       );
     if (!/^\d{4}-\d{2}-\d{2}$/.test(activeFrom))
       return Alert.alert("Check the start date", "Use YYYY-MM-DD.");
+    if (submetrics.filter((item) => item.showProgressBar).length > 4)
+      return Alert.alert(
+        "Too many progress bars",
+        "Choose up to four submetrics to show as progress bars.",
+      );
+    if (submetrics.some((item) => !item.name.trim()))
+      return Alert.alert("Check submetrics", "Every submetric needs a name.");
     const builtInCalculation = [
       "weekly_deficit_balance",
       "overall_score",
@@ -501,6 +670,35 @@ export default function TrackerEditor() {
       (!formula.trim() || !validate())
     )
       return;
+    const primaryId = presetId || tracker?.id;
+    const savedSubmetrics =
+      primaryId === "blood_pressure_systolic"
+        ? submetrics.map((item) =>
+            item.id === "systolic"
+              ? {
+                  ...item,
+                  goalEnabled: true,
+                  goal: { kind: "exact" as const, target },
+                  goalRange: { min: systolicMinimum, max: target },
+                  showProgressBar: true,
+                }
+              : item.id === "diastolic"
+                ? {
+                    ...item,
+                    goalEnabled: true,
+                    goal: {
+                      kind: "exact" as const,
+                      target: diastolicTarget,
+                    },
+                    goalRange: {
+                      min: diastolicMinimum,
+                      max: diastolicTarget,
+                    },
+                    showProgressBar: true,
+                  }
+                : item,
+          )
+        : submetrics;
     const common: NewMetric = {
       name: name.trim(),
       icon,
@@ -518,6 +716,10 @@ export default function TrackerEditor() {
         target: Number.isFinite(target) ? target : 0,
       },
       goalEnabled,
+      goalProgressMode:
+        goalEnabled && dataType === "number" && !rangeGoal
+          ? goalProgressMode
+          : "daily",
       goalRange:
         (presetId || tracker?.id) === "blood_pressure_systolic"
           ? { min: systolicMinimum, max: target }
@@ -525,6 +727,7 @@ export default function TrackerEditor() {
           ? { min: Number(rangeMin), max: Number(rangeMax) }
           : undefined,
       category,
+      grouping: grouping.trim() || undefined,
       healthMapping: healthType
         ? { dataType: healthType, field: healthField }
         : undefined,
@@ -533,6 +736,27 @@ export default function TrackerEditor() {
       stepFallback,
       manualEntry:
         healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
+      timerEnabled: dataType === "number" ? timerEnabled : false,
+      submetrics: savedSubmetrics.length
+        ? savedSubmetrics.map((item) => ({
+            ...item,
+            name: item.name.trim(),
+            unit: item.unit.trim(),
+          }))
+        : undefined,
+      submetricDisplay: submetrics.length
+        ? {
+            mode: submetricDisplayMode,
+            template:
+              submetricDisplayMode === "merged"
+                ? submetricTemplate.trim()
+                : undefined,
+            collapsible: submetricsCollapsible,
+            collapsibleLabel: submetricsCollapsible
+              ? submetricsLabel.trim() || "More fields"
+              : undefined,
+          }
+        : undefined,
       activeFrom,
       trackGoal: !groupScope && goalEnabled && trackGoal,
       addToToday: !groupScope && addToToday,
@@ -584,8 +808,16 @@ export default function TrackerEditor() {
       ...definition
     } = common;
     if (groupScope) {
-      if (tracker) updateGroupMetric(tracker.id, definition);
-      else addGroupMetric(definition);
+      const sharedDefinition = {
+        ...definition,
+        // Scheduling and reminders are personal preferences. Group trackers
+        // only provide the shared shape, default target, and ranking rule.
+        goalSchedule: undefined,
+        reminder: undefined,
+        reminders: undefined,
+      };
+      if (tracker) updateGroupMetric(tracker.id, sharedDefinition);
+      else addGroupMetric(sharedDefinition);
     } else if (tracker) {
       updateMetric(tracker.id, definition);
       if (shouldTrack || initiallyTracked) {
@@ -855,16 +1087,66 @@ export default function TrackerEditor() {
             ) : null}
           </View>
         ) : null}
-        <View style={styles.wrap}>
-          {CATEGORIES.map((item) => (
-            <Chip
-              key={item.id}
-              label={item.label}
-              icon={item.icon}
-              selected={category === item.id}
-              onPress={() => setCategory(item.id)}
+        <ChoicePicker
+          label="Type"
+          value={category}
+          open={categoryOpen}
+          setOpen={setCategoryOpen}
+          options={CATEGORIES.map((item) => ({
+            id: item.id,
+            label: item.label,
+            icon: item.icon,
+          }))}
+          onChange={(value) => setCategory(value as TrackerCategory)}
+          colors={colors}
+          accent={accent}
+        />
+        <View style={styles.fieldGroup}>
+          <View style={styles.labelLine}>
+            <Text style={[styles.label, { color: colors.ink }]}>Grouping</Text>
+            <InfoPopover
+              label="Explain tracker grouping"
+              message="Optional. Group related trackers under a name such as Activity, Heart health, or Morning routine. Group-created names become available to every member."
             />
-          ))}
+          </View>
+          <TextInput
+            value={grouping}
+            onChangeText={setGrouping}
+            placeholder="Optional group name"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.input,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+          {[
+            ...new Set(
+              sourceMetrics
+                .map((item) => item.grouping?.trim())
+                .filter((item): item is string => Boolean(item)),
+            ),
+          ].length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.inlineChoices}
+            >
+              {[
+                ...new Set(
+                  sourceMetrics
+                    .map((item) => item.grouping?.trim())
+                    .filter((item): item is string => Boolean(item)),
+                ),
+              ].map((item) => (
+                <Chip
+                  key={item}
+                  label={item}
+                  selected={grouping === item}
+                  onPress={() => setGrouping(item)}
+                />
+              ))}
+            </ScrollView>
+          ) : null}
         </View>
         {category === "gym" &&
         dataType === "number" &&
@@ -903,6 +1185,69 @@ export default function TrackerEditor() {
             stay controlled by each workout&apos;s visibility.
           </Text>
         ) : null}
+        {dataType === "number" ? (
+          <View style={[styles.switchRow, { borderColor: colors.border }]}>
+            <View style={styles.grow}>
+              <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                Timed activity
+              </Text>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Use this tracker with the stopwatch or countdown.
+              </Text>
+            </View>
+            <Switch value={timerEnabled} onValueChange={setTimerEnabled} />
+          </View>
+        ) : null}
+        <ChoicePicker
+          label="Entry type"
+          value={dataType}
+          open={entryTypeOpen}
+          setOpen={setEntryTypeOpen}
+          options={[
+            { id: "number", label: "Number", icon: "calculator-outline" },
+            { id: "boolean", label: "Done / not done", icon: "checkbox-outline" },
+            { id: "text", label: "Note", icon: "document-text-outline" },
+            { id: "photo", label: "Photo", icon: "camera-outline" },
+            { id: "calculated", label: "Calculated", icon: "code-slash-outline" },
+          ]}
+          onChange={(value) => setDataType(value as MetricDataType)}
+          colors={colors}
+          accent={accent}
+        />
+        {dataType === "number" ? (
+          <ChoicePicker
+            label="Multiple entries"
+            value={aggregation}
+            open={aggregationOpen}
+            setOpen={setAggregationOpen}
+            options={[
+              { id: "sum", label: "Add them" },
+              { id: "average", label: "Average" },
+              { id: "latest", label: "Use latest" },
+              { id: "max", label: "Use highest" },
+              { id: "min", label: "Use lowest" },
+            ]}
+            onChange={(value) => setAggregation(value as Aggregation)}
+            colors={colors}
+            accent={accent}
+          />
+        ) : null}
+        {groupScope ? (
+          <ChoicePicker
+            label="Competition"
+            value={ranking}
+            open={rankingOpen}
+            setOpen={setRankingOpen}
+            options={[
+              { id: "higher", label: "Higher ranks first" },
+              { id: "lower", label: "Lower ranks first" },
+              { id: "closest", label: "Closest to personal target" },
+            ]}
+            onChange={(value) => setRanking(value as RankingDirection)}
+            colors={colors}
+            accent={accent}
+          />
+        ) : null}
         <View style={[styles.switchRow, { borderColor: colors.border }]}>
           <View style={styles.grow}>
             <Text style={[styles.rowTitle, { color: colors.ink }]}>
@@ -927,49 +1272,33 @@ export default function TrackerEditor() {
               </Text>
             ) : (
             <>
-              <Text style={[styles.label, { color: colors.ink }]}>Success means</Text>
-              <View style={styles.wrap}>
-              <Chip
-                label="At least"
-                selected={goalKind === "at_least"}
-                onPress={() => {
-                  setGoalKind("at_least");
-                  setRangeGoal(false);
-                  setRangeMin("");
-                  setRangeMax("");
+              <ChoicePicker
+                label="Success"
+                value={rangeGoal ? "range" : goalKind}
+                open={goalKindOpen}
+                setOpen={setGoalKindOpen}
+                options={[
+                  { id: "at_least", label: "At least the target" },
+                  { id: "at_most", label: "No more than the target" },
+                  { id: "exact", label: "Near the target" },
+                  { id: "range", label: "Inside a range" },
+                ]}
+                onChange={(value) => {
+                  setGoalKind(
+                    value === "range" ? "exact" : (value as GoalKind),
+                  );
+                  setRangeGoal(value === "range");
+                  if (value === "range") {
+                    setRangeMin(rangeMin || "60");
+                    setRangeMax(rangeMax || "100");
+                  } else {
+                    setRangeMin("");
+                    setRangeMax("");
+                  }
                 }}
+                colors={colors}
+                accent={accent}
               />
-              <Chip
-                label="No more than"
-                selected={goalKind === "at_most"}
-                onPress={() => {
-                  setGoalKind("at_most");
-                  setRangeGoal(false);
-                  setRangeMin("");
-                  setRangeMax("");
-                }}
-              />
-              <Chip
-                label="Near target"
-                selected={goalKind === "exact" && !rangeGoal}
-                onPress={() => {
-                  setGoalKind("exact");
-                  setRangeGoal(false);
-                  setRangeMin("");
-                  setRangeMax("");
-                }}
-              />
-              <Chip
-                label="Inside a range"
-                selected={rangeGoal}
-                onPress={() => {
-                  setGoalKind("exact");
-                  setRangeGoal(true);
-                  setRangeMin(rangeMin || "60");
-                  setRangeMax(rangeMax || "100");
-                }}
-              />
-              </View>
             </>
             )}
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
@@ -1017,7 +1346,7 @@ export default function TrackerEditor() {
             ) : (
               <View style={styles.columns}>
                 <Field
-                  label="Target"
+                  label={groupScope ? "Default target" : "Target"}
                   value={goal}
                   set={setGoal}
                   colors={colors}
@@ -1031,31 +1360,34 @@ export default function TrackerEditor() {
                 />
               </View>
             )}
+            {false && dataType === "number" &&
+            !rangeGoal &&
+            (presetId || tracker?.id) !== "blood_pressure_systolic" ? (
+              <>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Progress bar
+                </Text>
+                <View style={styles.wrap}>
+                  <Chip
+                    label="Daily target"
+                    selected={goalProgressMode === "daily"}
+                    onPress={() => setGoalProgressMode("daily")}
+                  />
+                  <Chip
+                    label="First reading → target"
+                    selected={goalProgressMode === "journey"}
+                    onPress={() => setGoalProgressMode("journey")}
+                  />
+                </View>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Long-term progress starts at the first logged reading and
+                  reaches 100% at the target. It is judged only on measurement
+                  days.
+                </Text>
+              </>
+            ) : null}
           </>
         ) : null}
-        <Text style={[styles.label, { color: colors.ink }]}>
-          Who can see new entries?
-        </Text>
-        <View style={styles.wrap}>
-          <Chip
-            label="My group"
-            icon="people-outline"
-            selected={visibility === "group"}
-            onPress={() => setVisibility("group")}
-          />
-          <Chip
-            label="Goal status only"
-            icon="checkmark-circle-outline"
-            selected={visibility === "status"}
-            onPress={() => setVisibility("status")}
-          />
-          <Chip
-            label="Only me"
-            icon="lock-closed-outline"
-            selected={visibility === "private"}
-            onPress={() => setVisibility("private")}
-          />
-        </View>
       </Card>
       <Pressable
         onPress={() => setAdvanced((value) => !value)}
@@ -1080,6 +1412,418 @@ export default function TrackerEditor() {
       </Pressable>
       {advanced ? (
         <>
+          <Card>
+            <ChoicePicker
+              label={groupScope ? "Default visibility" : "Visibility"}
+              value={visibility}
+              open={visibilityOpen}
+              setOpen={setVisibilityOpen}
+              options={[
+                { id: "group", label: "Exact value", icon: "people-outline" },
+                {
+                  id: "status",
+                  label: "Goal status only",
+                  icon: "checkmark-circle-outline",
+                },
+                { id: "private", label: "Only me", icon: "lock-closed-outline" },
+              ]}
+              onChange={(value) => setVisibility(value as Visibility)}
+              colors={colors}
+              accent={accent}
+              help={
+                groupScope
+                  ? "The group default. Each member may choose a stricter personal visibility."
+                  : "Controls what group members can see for this tracker."
+              }
+            />
+          </Card>
+          {dataType === "number" &&
+          !rangeGoal &&
+          (presetId || tracker?.id) !== "blood_pressure_systolic" ? (
+            <Card>
+              <ChoicePicker
+                label="Progress bar"
+                value={goalProgressMode}
+                open={progressOpen}
+                setOpen={setProgressOpen}
+                options={[
+                  { id: "daily", label: "Daily target" },
+                  {
+                    id: "journey",
+                    label: "First reading to long-term target",
+                  },
+                ]}
+                onChange={setGoalProgressMode}
+                colors={colors}
+                accent={accent}
+              />
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Long-term progress starts at the first logged reading and
+                reaches 100% at the target.
+              </Text>
+            </Card>
+          ) : null}
+          <Card>
+            <Pressable
+              onPress={() => setSubmetricsOpen((open) => !open)}
+              style={styles.collapseHeading}
+            >
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                  Submetrics
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  {submetrics.length
+                    ? `${submetrics.length} linked field${submetrics.length === 1 ? "" : "s"}`
+                    : "Optional compound inputs such as blood pressure or nutrition"}
+                </Text>
+              </View>
+              <Ionicons
+                name={submetricsOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={colors.faint}
+              />
+            </Pressable>
+            {submetricsOpen ? (
+              <View style={[styles.submetricList, { borderTopColor: colors.border }]}>
+                {submetrics.map((submetric, index) => (
+                  <View
+                    key={submetric.id}
+                    style={[styles.submetricCard, { borderColor: colors.border }]}
+                  >
+                    <View style={styles.submetricHeading}>
+                      <Text style={[styles.mini, { color: colors.muted }]}>
+                        FIELD {index + 1}
+                      </Text>
+                      <Pressable
+                        accessibilityLabel={`Remove ${submetric.name}`}
+                        onPress={() =>
+                          setSubmetrics((current) =>
+                            current.filter((item) => item.id !== submetric.id),
+                          )
+                        }
+                      >
+                        <Ionicons name="trash-outline" size={16} color={palette.red} />
+                      </Pressable>
+                    </View>
+                    <View style={styles.twoFields}>
+                      <View style={styles.grow}>
+                        <Field
+                          label="Name"
+                          value={submetric.name}
+                          set={(name) =>
+                            setSubmetrics((current) =>
+                              current.map((item) =>
+                                item.id === submetric.id ? { ...item, name } : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                          keyboard={false}
+                        />
+                      </View>
+                      <View style={styles.shortField}>
+                        <Field
+                          label="Unit"
+                          value={submetric.unit}
+                          set={(unit) =>
+                            setSubmetrics((current) =>
+                              current.map((item) =>
+                                item.id === submetric.id ? { ...item, unit } : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                          keyboard={false}
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.switchRow}>
+                      <View style={styles.grow}>
+                        <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                          Show progress bar
+                        </Text>
+                        <Text style={[styles.help, { color: colors.muted }]}>
+                          Up to four compound fields can be shown.
+                        </Text>
+                      </View>
+                      <Switch
+                        value={submetric.showProgressBar === true}
+                        onValueChange={(showProgressBar) =>
+                          setSubmetrics((current) =>
+                            current.map((item) =>
+                              item.id === submetric.id
+                                ? { ...item, showProgressBar }
+                                : item,
+                            ),
+                          )
+                        }
+                      />
+                    </View>
+                    {submetric.showProgressBar ? (
+                      <>
+                        <ChoicePicker
+                          label="Success"
+                          value={submetric.goalRange ? "range" : submetric.goal.kind}
+                          open={openSubmetricGoalId === submetric.id}
+                          setOpen={(open) =>
+                            setOpenSubmetricGoalId(open ? submetric.id : null)
+                          }
+                          options={[
+                            { id: "at_least", label: "At least" },
+                            { id: "at_most", label: "At most" },
+                            { id: "exact", label: "Near target" },
+                            { id: "range", label: "Inside a range" },
+                          ]}
+                          onChange={(value) =>
+                            setSubmetrics((current) =>
+                              current.map((item) =>
+                                item.id === submetric.id
+                                  ? value === "range"
+                                    ? {
+                                        ...item,
+                                        goalEnabled: true,
+                                        goal: { kind: "exact", target: item.goal.target },
+                                        goalRange: item.goalRange ?? {
+                                          min: Math.max(0, item.goal.target * 0.8),
+                                          max: item.goal.target,
+                                        },
+                                      }
+                                    : {
+                                        ...item,
+                                        goalEnabled: true,
+                                        goal: {
+                                          ...item.goal,
+                                          kind: value as GoalKind,
+                                        },
+                                        goalRange: undefined,
+                                      }
+                                  : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                          accent={accent}
+                        />
+                        <View style={styles.twoFields}>
+                          {(submetric.goalRange
+                            ? [
+                                ["From", submetric.goalRange.min, "min"],
+                                ["To", submetric.goalRange.max, "max"],
+                              ]
+                            : [["Target", submetric.goal.target, "target"]]
+                          ).map(([label, amount, key]) => (
+                            <View key={String(key)} style={styles.grow}>
+                              <Field
+                                label={String(label)}
+                                value={String(amount)}
+                                set={(raw) =>
+                                  setSubmetrics((current) =>
+                                    current.map((item) => {
+                                      if (item.id !== submetric.id) return item;
+                                      const next = Number(raw.replace(",", "."));
+                                      if (key === "target")
+                                        return {
+                                          ...item,
+                                          goalEnabled: true,
+                                          goal: {
+                                            ...item.goal,
+                                            target: Number.isFinite(next) ? next : 0,
+                                          },
+                                        };
+                                      const range = item.goalRange ?? {
+                                        min: 0,
+                                        max: item.goal.target,
+                                      };
+                                      const goalRange = {
+                                        ...range,
+                                        [String(key)]: Number.isFinite(next) ? next : 0,
+                                      };
+                                      return {
+                                        ...item,
+                                        goalEnabled: true,
+                                        goalRange,
+                                        goal: {
+                                          kind: "exact",
+                                          target: goalRange.max,
+                                        },
+                                      };
+                                    }),
+                                  )
+                                }
+                                colors={colors}
+                              />
+                            </View>
+                          ))}
+                        </View>
+                      </>
+                    ) : null}
+                    <MetricSelector
+                      title="Connected tracker"
+                      emptyLabel="No linked tracker"
+                      multiple={false}
+                      items={sourceMetrics
+                        .filter((item) => item.id !== tracker?.id)
+                        .map((item) => ({
+                          id: item.id,
+                          label: item.name,
+                          icon: item.icon as keyof typeof Ionicons.glyphMap,
+                          color: item.color,
+                        }))}
+                      selectedIds={
+                        submetric.linkedMetricId ? [submetric.linkedMetricId] : []
+                      }
+                      onChange={(ids) =>
+                        setSubmetrics((current) =>
+                          current.map((item) =>
+                            item.id === submetric.id
+                              ? { ...item, linkedMetricId: ids[0] }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                    <ChoicePicker
+                      label="Health source"
+                      value={submetric.healthMapping?.dataType ?? "none"}
+                      open={openSubmetricHealthId === submetric.id}
+                      setOpen={(open) =>
+                        setOpenSubmetricHealthId(open ? submetric.id : null)
+                      }
+                      options={[
+                        { id: "none", label: "No device connection" },
+                        ...SOURCES.map((source) => ({
+                          id: source.id,
+                          label: source.label,
+                        })),
+                      ]}
+                      onChange={(value) =>
+                        setSubmetrics((current) =>
+                          current.map((item) =>
+                            item.id === submetric.id
+                              ? {
+                                  ...item,
+                                  healthMapping:
+                                    value === "none"
+                                      ? undefined
+                                      : {
+                                          dataType: value as HealthDataType,
+                                          field:
+                                            SOURCES.find(
+                                              (source) => source.id === value,
+                                            )?.fields[0]?.id ?? "value",
+                                        },
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                      colors={colors}
+                      accent={accent}
+                    />
+                    {submetric.healthMapping ? (
+                      <ChoicePicker
+                        label="Imported value"
+                        value={submetric.healthMapping.field}
+                        open={openSubmetricFieldId === submetric.id}
+                        setOpen={(open) =>
+                          setOpenSubmetricFieldId(open ? submetric.id : null)
+                        }
+                        options={(
+                          SOURCES.find(
+                            (source) =>
+                              source.id === submetric.healthMapping?.dataType,
+                          )?.fields ?? []
+                        ).map((field) => ({
+                          id: field.id,
+                          label: field.label,
+                        }))}
+                        onChange={(value) =>
+                          setSubmetrics((current) =>
+                            current.map((item) =>
+                              item.id === submetric.id && item.healthMapping
+                                ? {
+                                    ...item,
+                                    healthMapping: {
+                                      ...item.healthMapping,
+                                      field: value as HealthMetricField,
+                                    },
+                                  }
+                                : item,
+                            ),
+                          )
+                        }
+                        colors={colors}
+                        accent={accent}
+                      />
+                    ) : null}
+                  </View>
+                ))}
+                <Pressable
+                  onPress={() =>
+                    setSubmetrics((current) => [
+                      ...current,
+                      {
+                        id: `field_${Date.now().toString(36)}`,
+                        name: `Field ${current.length + 1}`,
+                        unit: "",
+                        goalEnabled: false,
+                        goal: { kind: "at_least", target: 0 },
+                        showProgressBar: false,
+                      },
+                    ])
+                  }
+                  style={[styles.addReminder, { borderColor: accent }]}
+                >
+                  <Ionicons name="add" size={16} color={accent} />
+                  <Text style={[styles.help, { color: accent }]}>Add submetric</Text>
+                </Pressable>
+                {submetrics.length ? (
+                  <>
+                    <View style={styles.wrap}>
+                      <Chip
+                        label="Separate values"
+                        selected={submetricDisplayMode === "separate"}
+                        onPress={() => setSubmetricDisplayMode("separate")}
+                      />
+                      <Chip
+                        label="Merged value"
+                        selected={submetricDisplayMode === "merged"}
+                        onPress={() => setSubmetricDisplayMode("merged")}
+                      />
+                    </View>
+                    {submetricDisplayMode === "merged" ? (
+                      <Field
+                        label="Merged format"
+                        value={submetricTemplate}
+                        set={setSubmetricTemplate}
+                        colors={colors}
+                        keyboard={false}
+                      />
+                    ) : null}
+                    <View style={styles.switchRow}>
+                      <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                        Collapse extra inputs
+                      </Text>
+                      <Switch
+                        value={submetricsCollapsible}
+                        onValueChange={setSubmetricsCollapsible}
+                      />
+                    </View>
+                    {submetricsCollapsible ? (
+                      <Field
+                        label="Collapsed label"
+                        value={submetricsLabel}
+                        set={setSubmetricsLabel}
+                        colors={colors}
+                        keyboard={false}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+              </View>
+            ) : null}
+          </Card>
           <Card>
             <Pressable
               onPress={() => setHealthOpen((open) => !open)}
@@ -1108,41 +1852,47 @@ export default function TrackerEditor() {
                     ? "This standardized tracker is calculated from Gym sessions. Raw sets and notes remain private."
                     : "Link this tracker to compatible data from Apple Health or Health Connect."}
                 </Text>
-                <View style={styles.wrap}>
-              <Chip
-                label="No connection"
-                selected={!healthType}
-                onPress={() => setHealthType("")}
-              />
-              {SOURCES.map((item) => (
-                <Chip
-                  key={item.id}
-                  label={item.label}
-                  selected={healthType === item.id}
-                  onPress={() => {
-                    setHealthType(item.id);
-                    setHealthField(item.fields[0].id);
-                    if (item.id === "steps") setManualEntry(false);
+                <ChoicePicker
+                  label="Health source"
+                  value={healthType || "none"}
+                  open={healthSourceChoiceOpen}
+                  setOpen={setHealthSourceChoiceOpen}
+                  options={[
+                    { id: "none", label: "No connection" },
+                    ...SOURCES.map((item) => ({
+                      id: item.id,
+                      label: item.label,
+                    })),
+                  ]}
+                  onChange={(value) => {
+                    if (value === "none") {
+                      setHealthType("");
+                      return;
+                    }
+                    const next = SOURCES.find((item) => item.id === value);
+                    setHealthType(value as HealthDataType);
+                    setHealthField(next?.fields[0]?.id ?? "value");
+                    if (value === "steps") setManualEntry(false);
                   }}
+                  colors={colors}
+                  accent={accent}
+                  help="Choose the device reading that should update this tracker."
                 />
-              ))}
-                </View>
             {source ? (
-              <>
-                <Text style={[styles.label, { color: colors.ink }]}>
-                  Use this value
-                </Text>
-                <View style={styles.wrap}>
-                  {source.fields.map((field) => (
-                    <Chip
-                      key={field.id}
-                      label={field.label}
-                      selected={healthField === field.id}
-                      onPress={() => setHealthField(field.id)}
-                    />
-                  ))}
-                </View>
-              </>
+              <ChoicePicker
+                label="Imported value"
+                value={healthField}
+                open={healthFieldChoiceOpen}
+                setOpen={setHealthFieldChoiceOpen}
+                options={source.fields.map((field) => ({
+                  id: field.id,
+                  label: field.label,
+                }))}
+                onChange={setHealthField}
+                colors={colors}
+                accent={accent}
+                help="Select the exact field to import from this health record."
+              />
             ) : null}
             {healthType === "active_energy" ||
             (healthType === "workouts" && healthField === "active_calories") ? (
@@ -1244,7 +1994,7 @@ export default function TrackerEditor() {
               </View>
               </>
             ) : null}
-            {goalEnabled && dataType !== "text" ? (
+            {!groupScope && goalEnabled && dataType !== "text" ? (
                 <View style={styles.goalStart}>
                     <View style={styles.goalStartHeading}>
                       <Text style={[styles.label, { color: colors.ink }]}>
@@ -1323,7 +2073,7 @@ export default function TrackerEditor() {
                     ) : null}
                   </View>
             ) : null}
-            <View
+            {!groupScope ? <View
               onLayout={(event) => {
                 if (
                   focus !== "notifications" ||
@@ -1468,26 +2218,43 @@ export default function TrackerEditor() {
                 </Pressable>
                 {scheduleOpen ? (
                   <>
-                    <View style={styles.wrap}>
-                      {(
-                        [
-                          ["daily", "Every day"],
-                          ["selected_days", "Selected weekdays"],
-                          ["every_other_day", "Every other day"],
-                          ["interval_days", "Custom interval"],
-                          ["days_of_month", "Dates each month"],
-                          ["weekly_min", "Minimum per week"],
-                          ["monthly_min", "Minimum per month"],
-                        ] as const
-                      ).map(([value, label]) => (
-                        <Chip
-                          key={value}
-                          label={label}
-                          selected={scheduleMode === value}
-                          onPress={() => setScheduleMode(value)}
-                        />
-                      ))}
-                    </View>
+                    <ChoicePicker
+                      label="Frequency"
+                      value={scheduleMode}
+                      open={scheduleChoiceOpen}
+                      setOpen={setScheduleChoiceOpen}
+                      options={[
+                        { id: "daily", label: "Every day" },
+                        {
+                          id: "selected_days",
+                          label: "Selected weekdays",
+                        },
+                        {
+                          id: "every_other_day",
+                          label: "Every other day",
+                        },
+                        {
+                          id: "interval_days",
+                          label: "Every few days",
+                        },
+                        {
+                          id: "days_of_month",
+                          label: "Specific dates each month",
+                        },
+                        {
+                          id: "weekly_min",
+                          label: "Minimum completions per week",
+                        },
+                        {
+                          id: "monthly_min",
+                          label: "Minimum completions per month",
+                        },
+                      ]}
+                      onChange={setScheduleMode}
+                      colors={colors}
+                      accent={accent}
+                      help="Choose exactly when this goal counts. Minimum schedules stay due until the required number is reached."
+                    />
                     {scheduleMode === "selected_days" ? (
                       <View style={styles.wrap}>
                         {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
@@ -1544,7 +2311,8 @@ export default function TrackerEditor() {
                   </>
                 ) : null}
               </View>
-            </View>
+            </View> : null}
+            {false ? <>
             <Text style={[styles.label, { color: colors.ink }]}>
               Entry type
             </Text>
@@ -1601,6 +2369,7 @@ export default function TrackerEditor() {
                 </View>
               </>
             ) : null}
+            </> : null}
             {dataType === "calculated" ? (
               <>
                 <TextInput
@@ -1668,6 +2437,7 @@ export default function TrackerEditor() {
                 ) : null}
               </>
             ) : null}
+            {false ? <>
             <Text style={[styles.label, { color: colors.ink }]}>
               Competition order
             </Text>
@@ -1688,6 +2458,7 @@ export default function TrackerEditor() {
                 onPress={() => setRanking("closest")}
               />
             </View>
+            </> : null}
             <Pressable
               onPress={() => setShowIcons((value) => !value)}
               style={styles.iconChoice}
@@ -1756,6 +2527,135 @@ export default function TrackerEditor() {
     </Screen>
   );
 }
+
+function ChoicePicker<T extends string>({
+  label,
+  value,
+  open,
+  setOpen,
+  options,
+  onChange,
+  colors,
+  accent,
+  help,
+}: {
+  label: string;
+  value: T;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  options: {
+    id: T;
+    label: string;
+    icon?: keyof typeof Ionicons.glyphMap;
+  }[];
+  onChange: (value: T) => void;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+  help?: string;
+}) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const selected = options.find((option) => option.id === value) ?? options[0];
+  const helper =
+    help ??
+    ({
+      Type: "Groups related trackers together without changing how values are calculated.",
+      "Entry type": "Choose whether entries are numbers, check-offs, notes, photos, or calculated values.",
+      "Multiple entries": "Choose how several entries on the same day combine into one daily result.",
+      Competition: "Controls how members are ordered on this group's leaderboard.",
+      Success: "Defines when this target counts as completed.",
+      Visibility: "Controls what group members can see.",
+      "Default visibility": "New members inherit this choice but may make their own data more private.",
+      "Progress bar": "Daily compares each day with its target. Journey measures from the first reading to a long-term target.",
+    } as Record<string, string>)[label];
+  return (
+    <View style={[styles.choicePicker, { borderColor: colors.border }]}>
+      <Pressable
+        onPress={() => setOpen(!open)}
+        style={styles.choicePickerHeading}
+      >
+        {selected?.icon ? (
+          <Ionicons name={selected.icon} size={17} color={accent} />
+        ) : null}
+        <View style={styles.grow}>
+          <Text style={[styles.choicePickerLabel, { color: colors.muted }]}>
+            {label}{" "}
+            {helper ? (
+              <Text
+                onPress={(event) => {
+                  event.stopPropagation();
+                  setHelpOpen((current) => !current);
+                }}
+                style={{ color: accent }}
+              >
+                ⓘ
+              </Text>
+            ) : null}
+          </Text>
+          <Text style={[styles.rowTitle, { color: colors.ink }]}>
+            {selected?.label ?? "Choose"}
+          </Text>
+        </View>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={17}
+          color={colors.faint}
+        />
+      </Pressable>
+      {helpOpen && helper ? (
+        <View
+          style={[
+            styles.choiceHelp,
+            { backgroundColor: colors.primarySoft, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.choiceHelpText, { color: colors.ink }]}>
+            {helper}
+          </Text>
+        </View>
+      ) : null}
+      {open ? (
+        <View style={[styles.choicePickerList, { borderTopColor: colors.border }]}>
+          {options.map((option) => {
+            const active = option.id === value;
+            return (
+              <Pressable
+                key={option.id}
+                onPress={() => {
+                  onChange(option.id);
+                  setOpen(false);
+                }}
+                style={[
+                  styles.choicePickerOption,
+                  active && { backgroundColor: colors.primarySoft },
+                ]}
+              >
+                {option.icon ? (
+                  <Ionicons
+                    name={option.icon}
+                    size={16}
+                    color={active ? accent : colors.muted}
+                  />
+                ) : null}
+                <Text
+                  style={[
+                    styles.choicePickerText,
+                    { color: active ? accent : colors.ink },
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                {active ? (
+                  <Ionicons name="checkmark" size={16} color={accent} />
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Field({
   label,
   value,
@@ -1786,6 +2686,9 @@ function Field({
 }
 const styles = StyleSheet.create({
   label: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 },
+  fieldGroup: { gap: 6 },
+  labelLine: { flexDirection: "row", alignItems: "center", gap: 4 },
+  inlineChoices: { gap: 5, paddingRight: 8 },
   input: {
     minHeight: 44,
     borderWidth: 1,
@@ -1796,6 +2699,15 @@ const styles = StyleSheet.create({
   },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 8 },
   columns: { flexDirection: "row", gap: 9 },
+  twoFields: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  shortField: { width: 92 },
+  submetricList: { borderTopWidth: 1, paddingTop: 10, gap: 9 },
+  submetricCard: { borderWidth: 1, borderRadius: 14, padding: 10 },
+  submetricHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   reminderRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   addReminder: {
     minHeight: 36,
@@ -1809,6 +2721,39 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   grow: { flex: 1 },
+  choicePicker: {
+    borderWidth: 1,
+    borderRadius: 13,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  choicePickerHeading: {
+    minHeight: 49,
+    paddingHorizontal: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  choicePickerLabel: { fontSize: 7, fontWeight: "900", marginBottom: 2 },
+  choiceHelp: {
+    marginHorizontal: 8,
+    marginBottom: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderRadius: 9,
+  },
+  choiceHelpText: { fontSize: 8, lineHeight: 12, fontWeight: "700" },
+  choicePickerList: { borderTopWidth: 1, padding: 5 },
+  choicePickerOption: {
+    minHeight: 38,
+    borderRadius: 9,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  choicePickerText: { flex: 1, fontSize: 9, fontWeight: "800" },
   switchRow: {
     minHeight: 62,
     flexDirection: "row",

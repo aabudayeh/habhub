@@ -23,6 +23,20 @@ export const TRACKER_COLOR_CHOICES = [
   "#49616E",
   "#7A5B3A",
   "#527D38",
+  "#0E7490",
+  "#2563EB",
+  "#4F46E5",
+  "#7C3AED",
+  "#9333EA",
+  "#BE185D",
+  "#E11D48",
+  "#C2410C",
+  "#B45309",
+  "#3F7D20",
+  "#15803D",
+  "#0F766E",
+  "#475569",
+  "#6B4F8A",
 ] as const;
 
 export function normalizeHexColor(value: string): string | undefined {

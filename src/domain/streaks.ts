@@ -13,8 +13,14 @@ function streaksWithRest(
   dates: string[],
   met: (date: string) => boolean,
   userId = state.currentUserId,
+  scope: "personal" | "group" = "personal",
 ) {
-  const allowance = Math.max(0, state.group.streakRestDaysPerWeek ?? 0);
+  const allowance = Math.max(
+    0,
+    scope === "group"
+      ? (state.group.streakRestDaysPerWeek ?? 0)
+      : (state.settings.streakRestDaysPerWeek ?? 0),
+  );
   let longest = 0;
   let current = 0;
   let restUsed = 0;
@@ -49,8 +55,9 @@ export function longestStreakWithRest(
   dates: string[],
   met: (date: string) => boolean,
   userId?: string,
+  scope?: "personal" | "group",
 ) {
-  return streaksWithRest(state, dates, met, userId).longest;
+  return streaksWithRest(state, dates, met, userId, scope).longest;
 }
 
 export function currentStreakWithRest(
@@ -58,8 +65,9 @@ export function currentStreakWithRest(
   dates: string[],
   met: (date: string) => boolean,
   userId?: string,
+  scope?: "personal" | "group",
 ) {
-  return streaksWithRest(state, dates, met, userId).current;
+  return streaksWithRest(state, dates, met, userId, scope).current;
 }
 
 export function bestStreakPeriodWithRest(
@@ -67,6 +75,7 @@ export function bestStreakPeriodWithRest(
   dates: string[],
   met: (date: string) => boolean,
   userId?: string,
+  scope?: "personal" | "group",
 ) {
-  return streaksWithRest(state, dates, met, userId).best;
+  return streaksWithRest(state, dates, met, userId, scope).best;
 }

@@ -16,7 +16,9 @@ import {
 import {
   dateKey,
   dateWithOffsetFrom,
+  formatClockTime,
   friendlyDate,
+  monthDateRange,
 } from "@/src/domain/date";
 import {
   DEFICIT_ALIGNMENT_CLOSE_KCAL,
@@ -32,13 +34,20 @@ import {
   metricApplicableOnDate,
   metricOverallAverage,
   metricHistoricalRecords,
+  metricJourneyProgressStats,
   metricPeriodStats,
   metricStreakStats,
+  metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
   weeklyDeficitBalance,
   weightProgressStats,
 } from "@/src/domain/metrics";
+import {
+  compoundMetricValues,
+  formatCompoundMetricValue,
+  submetricAsMetric,
+} from "@/src/domain/submetrics";
 import {
   LeaderboardPeriod,
   periodDates,
@@ -50,6 +59,12 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 import { isVacationDate } from "@/src/domain/vacation";
+import {
+  todoAppearsOnDate,
+  todoCompletedOnDate,
+  todoResolvedOnDate,
+  todoSkippedOnDate,
+} from "@/src/domain/schedule";
 import {
   completedGymSets,
   gymSessionMetricValue,
@@ -83,7 +98,7 @@ export default function TrackerDetail() {
   const tracker = state.metrics.find((item) => item.id === trackerId);
   const historicalRecords = useMemo(
     () =>
-      tracker
+      tracker && recordsOpen
         ? metricHistoricalRecords(
             state,
             tracker,
@@ -92,7 +107,7 @@ export default function TrackerDetail() {
             state.settings.weekStartsOn ?? 1,
           )
         : {},
-    [state, tracker],
+    [recordsOpen, state, tracker],
   );
   const dates = useMemo(
     () => periodDates(period, day, state.settings.weekStartsOn ?? 1),
@@ -251,7 +266,6 @@ export default function TrackerDetail() {
   );
   const chartDates = periodStats.applicableDates;
   const loggedDates = periodStats.loggedDates;
-  const values = periodStats.values;
   const diastolicTracker =
     isBloodPressure
       ? (state.metrics.find(
@@ -286,6 +300,61 @@ export default function TrackerDetail() {
         safeMetricValue(state, diastolicTracker, state.currentUserId, date),
       )
     : undefined;
+  const trendDates =
+    period === "month" ? monthDateRange(day) : dates;
+  const trendValues: (number | null)[] =
+    period === "year"
+      ? Array.from({ length: 12 }, (_, month) => {
+          const monthAnchor = `${day.slice(0, 4)}-${String(month + 1).padStart(
+            2,
+            "0",
+          )}-01`;
+          const stats = metricPeriodStats(
+            state,
+            tracker,
+            state.currentUserId,
+            monthDateRange(monthAnchor).filter((date) => date <= dateKey()),
+          );
+          return stats.loggedDates.length ? stats.average : null;
+        })
+      : trendDates.map((date) =>
+          hasMetricData(state, tracker, state.currentUserId, date)
+            ? safeMetricValue(state, tracker, state.currentUserId, date)
+            : null,
+        );
+  const trendDiastolicValues: (number | null)[] | undefined =
+    diastolicTracker
+      ? period === "year"
+        ? Array.from({ length: 12 }, (_, month) => {
+            const monthAnchor = `${day.slice(0, 4)}-${String(
+              month + 1,
+            ).padStart(2, "0")}-01`;
+            const stats = metricPeriodStats(
+              state,
+              diastolicTracker,
+              state.currentUserId,
+              monthDateRange(monthAnchor).filter(
+                (date) => date <= dateKey(),
+              ),
+            );
+            return stats.loggedDates.length ? stats.average : null;
+          })
+        : trendDates.map((date) =>
+            hasMetricData(
+              state,
+              diastolicTracker,
+              state.currentUserId,
+              date,
+            )
+              ? safeMetricValue(
+                  state,
+                  diastolicTracker,
+                  state.currentUserId,
+                  date,
+                )
+              : null,
+          )
+      : undefined;
   const average = periodStats.average;
   const streaks = metricStreakStats(
     state,
@@ -320,18 +389,46 @@ export default function TrackerDetail() {
   const currentPulse = pulseTracker
     ? safeMetricValue(state, pulseTracker, state.currentUserId, day)
     : 0;
+  const compoundValues = compoundMetricValues(
+    state,
+    tracker,
+    state.currentUserId,
+    day,
+  );
+  const mergedCompoundValue = formatCompoundMetricValue(
+    tracker,
+    compoundValues,
+  );
+  const progressSubmetrics = (tracker.submetrics ?? [])
+    .filter((submetric) => submetric.showProgressBar)
+    .slice(0, 4);
   const averageDiastolic = diastolicValues?.length
     ? diastolicValues.reduce((sum, value) => sum + value, 0) /
       diastolicValues.length
     : 0;
   const isPhoto = tracker.dataType === "photo";
+  const formatRecordValue = (value: number) =>
+    tracker.id === "todo_completion"
+      ? `${Math.round(value)} completed`
+      : formatMetricValue(tracker, value);
   const weightStats =
     tracker.id === "weight"
       ? weightProgressStats(state, state.currentUserId, day)
       : null;
+  const journeyStats =
+    tracker.goalProgressMode === "journey"
+      ? metricJourneyProgressStats(
+          state,
+          tracker,
+          state.currentUserId,
+          day,
+        )
+      : null;
   const displayAvailable =
     tracker.id === "weight"
       ? Boolean(weightStats?.hasMeasurement)
+      : journeyStats
+        ? journeyStats.hasMeasurement
       : applicable &&
         (tracker.dataType === "calculated" ||
           (dates.length === 1
@@ -341,7 +438,9 @@ export default function TrackerDetail() {
   const displayedTarget =
     dates.length === 1 ? target : periodStats.averageTarget;
   const displayedValue =
-    weightStats?.currentWeight ?? (dates.length === 1 ? current : average);
+    weightStats?.currentWeight ??
+    journeyStats?.current ??
+    (dates.length === 1 ? current : average);
   const dayGoalMet =
     dates.length === 1 &&
     displayAvailable &&
@@ -587,6 +686,8 @@ export default function TrackerDetail() {
                   ? "Not available"
                   : weightStats
                     ? formatMetricValue(tracker, weightStats.currentWeight)
+                  : dates.length === 1 && mergedCompoundValue
+                    ? mergedCompoundValue
                   : isBloodPressure
                     ? `${Math.round(dates.length === 1 ? current : average)}/${Math.round(dates.length === 1 ? currentDiastolic : averageDiastolic)} mmHg`
                   : formatMetricValue(
@@ -658,12 +759,100 @@ export default function TrackerDetail() {
             </Text>
           </View>
         ) : null}
+        {journeyStats ? (
+          <View style={styles.weightJourney}>
+            <View style={styles.weightJourneyLabels}>
+              <View>
+                <Text style={[styles.weightJourneyLabel, { color: colors.muted }]}>
+                  START
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {journeyStats.hasMeasurement
+                    ? formatMetricValue(tracker, journeyStats.starting)
+                    : "Not logged"}
+                </Text>
+              </View>
+              <View style={styles.weightJourneyCurrent}>
+                <Text style={[styles.weightJourneyLabel, { color: tracker.color }]}>
+                  CURRENT
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {journeyStats.hasMeasurement
+                    ? formatMetricValue(tracker, journeyStats.current)
+                    : "—"}
+                </Text>
+              </View>
+              <View style={styles.weightJourneyTarget}>
+                <Text style={[styles.weightJourneyLabel, { color: colors.muted }]}>
+                  TARGET
+                </Text>
+                <Text style={[styles.weightJourneyValue, { color: colors.ink }]}>
+                  {formatMetricValue(tracker, journeyStats.target)}
+                </Text>
+              </View>
+            </View>
+            <ProgressBar
+              progress={journeyStats.progress}
+              color={
+                journeyStats.progress >= 1 ? palette.lime : tracker.color
+              }
+            />
+            <Text style={[styles.weightJourneyCaption, { color: colors.muted }]}>
+              {Math.round(journeyStats.progress * 100)}% of the long-term goal
+              completed
+            </Text>
+          </View>
+        ) : null}
         {dates.length === 1 &&
         displayAvailable &&
-        tracker.goalEnabled !== false &&
+        (tracker.goalEnabled !== false || progressSubmetrics.length > 0) &&
         !isPhoto &&
-        !weightStats ? (
+        !weightStats &&
+        !journeyStats ? (
           <View style={styles.dayProgress}>
+            {progressSubmetrics.length ? (
+              progressSubmetrics.map((submetric) => {
+                const definition = submetricAsMetric(tracker, submetric);
+                const subValue = compoundValues[submetric.id] ?? 0;
+                const subMet = goalReached(
+                  definition,
+                  subValue,
+                  submetric.goal.target,
+                );
+                return (
+                  <View key={submetric.id}>
+                    <View style={styles.dayProgressHeading}>
+                      <Text
+                        style={[
+                          styles.dayProgressLabel,
+                          { color: colors.muted },
+                        ]}
+                      >
+                        {submetric.name}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.dayProgressLabel,
+                          { color: subMet ? palette.lime : colors.ink },
+                        ]}
+                      >
+                        {Math.round(subValue * 10) / 10} {submetric.unit}
+                      </Text>
+                    </View>
+                    <ProgressBar
+                      progress={goalProgress(
+                        definition,
+                        subValue,
+                        submetric.goal.target,
+                      )}
+                      color={subMet ? palette.lime : tracker.color}
+                      layered={submetric.goal.kind === "at_least"}
+                    />
+                  </View>
+                );
+              })
+            ) : (
+              <>
             <View style={styles.dayProgressHeading}>
               <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
                 {isBloodPressure ? "Systolic" : "Goal progress"}
@@ -683,7 +872,14 @@ export default function TrackerDetail() {
               />
             </View>
             <ProgressBar
-              progress={goalProgress(tracker, current, target)}
+              progress={metricVisualProgress(
+                state,
+                tracker,
+                state.currentUserId,
+                day,
+                current,
+                target,
+              )}
               color={systolicDayMet ? palette.lime : tracker.color}
               layered={tracker.goal.kind === "at_least"}
             />
@@ -721,6 +917,8 @@ export default function TrackerDetail() {
                 />
               </>
             ) : null}
+              </>
+            )}
           </View>
         ) : null}
         {dates.length > 1 &&
@@ -728,7 +926,8 @@ export default function TrackerDetail() {
         tracker.goalEnabled !== false &&
         tracker.goal.kind === "at_least" &&
         !isPhoto &&
-        !weightStats ? (
+        !weightStats &&
+        !journeyStats ? (
           <View style={styles.dayProgress}>
             <View style={styles.dayProgressHeading}>
               <Text style={[styles.dayProgressLabel, { color: colors.muted }]}>
@@ -751,13 +950,16 @@ export default function TrackerDetail() {
             />
           </View>
         ) : null}
-        {dates.length > 1 && values.length > 0 && !isPhoto && !weightStats ? (
+        {dates.length > 1 &&
+        trendValues.some((value) => value !== null) &&
+        !isPhoto &&
+        !weightStats ? (
           <Trend
-            values={values}
+            values={trendValues}
             tracker={tracker}
             target={target}
             colors={colors}
-            secondaryValues={diastolicValues}
+            secondaryValues={trendDiastolicValues}
             secondaryColor={diastolicTracker?.color}
             secondaryTarget={diastolicTracker?.goal.target}
             primaryRange={tracker.goalRange}
@@ -846,33 +1048,14 @@ export default function TrackerDetail() {
           {recordsOpen ? (
             <View style={[styles.recordGrid, { borderTopColor: colors.border }]}>
               <Stat
-                label={`Highest day${
-                  historicalRecords.highestDay
-                    ? ` · ${friendlyDate(historicalRecords.highestDay.date)}`
-                    : ""
-                }`}
-                value={
-                  historicalRecords.highestDay
-                    ? formatMetricValue(
-                        tracker,
-                        historicalRecords.highestDay.value,
-                      )
-                    : "—"
-                }
-                colors={colors}
-              />
-              <Stat
                 label={
                   historicalRecords.highestWeek
-                    ? `Highest week · ${friendlyDate(historicalRecords.highestWeek.from)} – ${friendlyDate(historicalRecords.highestWeek.to)}`
-                    : "Highest week"
+                    ? `Highest week ${tracker.aggregation === "sum" ? "total" : "average"} · ${friendlyDate(historicalRecords.highestWeek.from)} – ${friendlyDate(historicalRecords.highestWeek.to)}`
+                    : `Highest week ${tracker.aggregation === "sum" ? "total" : "average"}`
                 }
                 value={
                   historicalRecords.highestWeek
-                    ? formatMetricValue(
-                        tracker,
-                        historicalRecords.highestWeek.value,
-                      )
+                    ? formatRecordValue(historicalRecords.highestWeek.value)
                     : "—"
                 }
                 colors={colors}
@@ -880,7 +1063,7 @@ export default function TrackerDetail() {
               <Stat
                 label={
                   historicalRecords.highestMonth
-                    ? `Highest month · ${new Intl.DateTimeFormat(undefined, {
+                    ? `Highest month ${tracker.aggregation === "sum" ? "total" : "average"} · ${new Intl.DateTimeFormat(undefined, {
                         month: "long",
                         year: "numeric",
                       }).format(
@@ -888,14 +1071,11 @@ export default function TrackerDetail() {
                           `${historicalRecords.highestMonth.key}-01T12:00:00`,
                         ),
                       )}`
-                    : "Highest month"
+                    : `Highest month ${tracker.aggregation === "sum" ? "total" : "average"}`
                 }
                 value={
                   historicalRecords.highestMonth
-                    ? formatMetricValue(
-                        tracker,
-                        historicalRecords.highestMonth.value,
-                      )
+                    ? formatRecordValue(historicalRecords.highestMonth.value)
                     : "—"
                 }
                 colors={colors}
@@ -903,21 +1083,18 @@ export default function TrackerDetail() {
               <Stat
                 label={
                   historicalRecords.highestYear
-                    ? `Highest year · ${historicalRecords.highestYear.year}`
-                    : "Highest year"
+                    ? `Highest year ${tracker.aggregation === "sum" ? "total" : "average"} · ${historicalRecords.highestYear.year}`
+                    : `Highest year ${tracker.aggregation === "sum" ? "total" : "average"}`
                 }
                 value={
                   historicalRecords.highestYear
-                    ? formatMetricValue(
-                        tracker,
-                        historicalRecords.highestYear.value,
-                      )
+                    ? formatRecordValue(historicalRecords.highestYear.value)
                     : "—"
                 }
                 colors={colors}
               />
               <Stat
-                label="Best weekday"
+                label="Highest average weekday"
                 value={
                   historicalRecords.bestWeekday
                     ? `${historicalRecords.bestWeekday.weekday} · ${formatMetricValue(
@@ -929,17 +1106,27 @@ export default function TrackerDetail() {
                 colors={colors}
               />
               <Stat
-                label="Best week of month"
+                label="Highest average week of month"
                 value={
                   historicalRecords.bestWeekOfMonth
-                    ? `Week ${historicalRecords.bestWeekOfMonth.week}`
+                    ? `Week ${historicalRecords.bestWeekOfMonth.week} · ${formatMetricValue(
+                        tracker,
+                        historicalRecords.bestWeekOfMonth.value,
+                      )}`
                     : "—"
                 }
                 colors={colors}
               />
               <Stat
-                label="Best month of year"
-                value={historicalRecords.bestMonthOfYear?.month ?? "—"}
+                label="Highest average month of year"
+                value={
+                  historicalRecords.bestMonthOfYear
+                    ? `${historicalRecords.bestMonthOfYear.month} · ${formatMetricValue(
+                        tracker,
+                        historicalRecords.bestMonthOfYear.value,
+                      )}`
+                    : "—"
+                }
                 colors={colors}
               />
               <Stat
@@ -1035,10 +1222,31 @@ export default function TrackerDetail() {
           ) : null}
         </Card>
       ) : null}
-      <View style={styles.logHeader}>
+      {tracker.id === "todo_completion" ? (
+        <TodoTrackerEntries state={state} dates={dates} />
+      ) : null}
+      {tracker.id !== "todo_completion" ? <View style={styles.logHeader}>
         <Text style={[styles.section, { color: colors.ink }]}>
           Entries
         </Text>
+        <View style={styles.logActions}>
+        {tracker.timerEnabled ? (
+          <Pressable
+            onPress={() =>
+              router.navigate({
+                pathname: "/timer",
+                params: { metric: tracker.id },
+              } as never)
+            }
+            style={[
+              styles.logButton,
+              { backgroundColor: colors.primarySoft },
+            ]}
+          >
+            <Ionicons name="timer-outline" size={15} color={accent} />
+            <Text style={[styles.logButtonText, { color: accent }]}>Timer</Text>
+          </Pressable>
+        ) : null}
         {tracker.id !== "steps" && tracker.manualEntry !== false && tracker.dataType !== "calculated" ? (
           <Pressable
             onPress={() =>
@@ -1053,7 +1261,8 @@ export default function TrackerDetail() {
             <Text style={styles.logButtonText}>Add</Text>
           </Pressable>
         ) : null}
-      </View>
+        </View>
+      </View> : null}
       <View style={styles.entries}>
         {gymSourceSessions.map((session) => {
           const contribution = gymSessionMetricValue(
@@ -1069,10 +1278,10 @@ export default function TrackerDetail() {
                   </Text>
                   <Text style={[styles.time, { color: colors.faint }]}>
                     {friendlyDate(session.localDate)} |{" "}
-                    {new Date(session.recordedAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                    {formatClockTime(
+                      session.recordedAt,
+                      state.settings.timeFormat,
+                    )}
                   </Text>
                 </View>
                 <Text style={[styles.entryValue, { color: tracker.color }]}>
@@ -1154,10 +1363,10 @@ export default function TrackerDetail() {
                     : entry.label || tracker.name}
                 </Text>
                 <Text style={[styles.time, { color: colors.faint }]}>
-                  {new Date(entry.recordedAt).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}{" "}
+                  {formatClockTime(
+                    entry.recordedAt,
+                    state.settings.timeFormat,
+                  )}{" "}
                   ·{" "}
                   {entry.source === "imported"
                     ? entry.sourceOrigin || "Health import"
@@ -1183,6 +1392,19 @@ export default function TrackerDetail() {
             {entry.nutrition ? (
               <Text style={[styles.note, { color: colors.muted }]}>
                 {nutritionLine(entry.nutrition)}
+              </Text>
+            ) : null}
+            {entry.submetricValues &&
+            Object.keys(entry.submetricValues).length ? (
+              <Text style={[styles.note, { color: colors.muted }]}>
+                {Object.entries(entry.submetricValues)
+                  .map(([id, amount]) => {
+                    const submetric = tracker.submetrics?.find(
+                      (item) => item.id === id,
+                    );
+                    return `${submetric?.name ?? id}: ${amount}${submetric?.unit ? ` ${submetric.unit}` : ""}`;
+                  })
+                  .join(" · ")}
               </Text>
             ) : null}
             {entry.imageUri ? (
@@ -1283,7 +1505,10 @@ export default function TrackerDetail() {
           </Pressable>
         ))}
       </View>
-      {!entries.length && !dayPhotos.length && !gymSourceSessions.length ? (
+      {tracker.id !== "todo_completion" &&
+      !entries.length &&
+      !dayPhotos.length &&
+      !gymSourceSessions.length ? (
         <Card>
           <Text style={[styles.empty, { color: colors.muted }]}>
             {tracker.dataType === "calculated"
@@ -1296,6 +1521,213 @@ export default function TrackerDetail() {
     </Screen>
   );
 }
+
+function TodoTrackerEntries({
+  state,
+  dates,
+}: {
+  state: ReturnType<typeof useApp>["state"];
+  dates: string[];
+}) {
+  const { toggleTodo, skipTodo, deleteTodo, reorderTodo } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [openIds, setOpenIds] = useState<string[]>([]);
+  const priorities = {
+    low: "#6C8AA6",
+    normal: "#8A8F98",
+    high: "#F59E0B",
+    urgent: "#D24B4B",
+  } as const;
+  const items = (state.todos ?? [])
+    .map((todo) => {
+      const relevantDates = dates.filter((date) =>
+        todoAppearsOnDate(todo, date),
+      );
+      return { todo, relevantDates };
+    })
+    .filter((item) => item.relevantDates.length)
+    .sort((a, b) => (a.todo.dueAt ?? "9999").localeCompare(b.todo.dueAt ?? "9999"));
+  return (
+    <Card style={styles.todoDetailCard}>
+      <View style={styles.logHeader}>
+        <View>
+          <Text style={[styles.section, { color: colors.ink }]}>To-dos</Text>
+          <Text style={[styles.time, { color: colors.muted }]}>
+            {items.filter(({ todo, relevantDates }) =>
+              relevantDates.some((date) => todoResolvedOnDate(todo, date)),
+            ).length}
+            /{items.length} completed in this view
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => router.navigate("/todo-editor" as never)}
+          style={[styles.logButton, { backgroundColor: accent }]}
+        >
+          <Ionicons name="add" size={15} color={palette.white} />
+          <Text style={styles.logButtonText}>New to-do</Text>
+        </Pressable>
+      </View>
+      {items.map(({ todo, relevantDates }) => {
+        const complete = relevantDates.every((date) =>
+          todoCompletedOnDate(todo, date),
+        );
+        const skipped = relevantDates.every((date) =>
+          todoSkippedOnDate(todo, date),
+        );
+        const open = openIds.includes(todo.id);
+        const dueDate = todo.dueAt?.slice(0, 10);
+        const daysToDue = dueDate
+          ? Math.ceil(
+              (new Date(`${dueDate}T12:00:00`).getTime() -
+                new Date(`${dates[dates.length - 1]}T12:00:00`).getTime()) /
+                86400000,
+            )
+          : undefined;
+        const urgency =
+          complete
+            ? "#B8E45C"
+            : daysToDue !== undefined && daysToDue <= 1
+              ? "#D24B4B"
+              : daysToDue !== undefined && daysToDue <= 7
+                ? "#F59E0B"
+                : daysToDue !== undefined
+                  ? "#4F8A3D"
+                  : colors.border;
+        return (
+          <Pressable
+            key={todo.id}
+            onPress={() =>
+              router.navigate({
+                pathname: "/todo-editor",
+                params: { id: todo.id },
+              } as never)
+            }
+            onLongPress={() => {
+              const index = items.findIndex((item) => item.todo.id === todo.id);
+              const actionDate = relevantDates.at(-1)!;
+              Alert.alert(todo.title, "Reorder, skip, or delete this to-do.", [
+                ...(index > 0
+                  ? [
+                      {
+                        text: "Move up",
+                        onPress: () => reorderTodo(todo.id, index - 1),
+                      },
+                    ]
+                  : []),
+                ...(index < items.length - 1
+                  ? [
+                      {
+                        text: "Move down",
+                        onPress: () => reorderTodo(todo.id, index + 1),
+                      },
+                    ]
+                  : []),
+                {
+                  text: skipped ? "Undo skip" : "Skip",
+                  onPress: () => skipTodo(todo.id, actionDate),
+                },
+                {
+                  text: "Delete",
+                  style: "destructive",
+                  onPress: () => deleteTodo(todo.id),
+                },
+                { text: "Cancel", style: "cancel" },
+              ]);
+            }}
+            style={[
+              styles.todoDetailRow,
+              { borderColor: urgency, backgroundColor: colors.canvas },
+            ]}
+          >
+            <Pressable
+              onPress={() => toggleTodo(todo.id, relevantDates.at(-1)!)}
+              hitSlop={8}
+            >
+              <Ionicons
+                name={
+                  skipped
+                    ? "play-skip-forward-circle"
+                    : complete
+                      ? "checkmark-circle"
+                      : "ellipse-outline"
+                }
+                size={18}
+                color={
+                  skipped
+                    ? "#E783B5"
+                    : complete
+                      ? "#B8E45C"
+                      : priorities[todo.priority]
+                }
+              />
+            </Pressable>
+            <View style={styles.grow}>
+              <Text
+                style={[
+                  styles.entryTitle,
+                  { color: colors.ink },
+                  (complete || skipped) && styles.todoComplete,
+                ]}
+              >
+                {todo.title}
+              </Text>
+              <Text style={[styles.time, { color: colors.muted }]}>
+                {dueDate ? `Deadline ${friendlyDate(dueDate)}` : "No deadline"}
+                {" · "}
+                {todo.priority} priority
+              </Text>
+              {open ? (
+                <View style={styles.todoExtra}>
+                  {todo.description ? (
+                    <Text style={[styles.note, { color: colors.muted }]}>
+                      {todo.description}
+                    </Text>
+                  ) : null}
+                  {todo.reminders.map((reminder) => (
+                    <Text
+                      key={reminder.id}
+                      style={[styles.time, { color: colors.muted }]}
+                    >
+                      Reminder {reminder.at?.slice(0, 10) ?? "repeating"} ·{" "}
+                      {formatClockTime(
+                        reminder.time ?? reminder.at?.slice(11, 16) ?? "",
+                        state.settings.timeFormat,
+                      )}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+            <Pressable
+              onPress={(event) => {
+                event.stopPropagation();
+                setOpenIds((current) =>
+                  open
+                    ? current.filter((id) => id !== todo.id)
+                    : [...current, todo.id],
+                );
+              }}
+              hitSlop={8}
+            >
+              <Ionicons
+                name={open ? "chevron-up" : "chevron-down"}
+                size={14}
+                color={colors.faint}
+              />
+            </Pressable>
+          </Pressable>
+        );
+      })}
+      {!items.length ? (
+        <Text style={[styles.empty, { color: colors.muted }]}>
+          No to-dos appear in this period.
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
 function WeeklyDetail({
   state,
   day,
@@ -1406,11 +1838,11 @@ function Trend({
   primaryRange,
   secondaryRange,
 }: {
-  values: number[];
+  values: (number | null)[];
   tracker: MetricDefinition;
   target: number;
   colors: ReturnType<typeof useAppColors>;
-  secondaryValues?: number[];
+  secondaryValues?: (number | null)[];
   secondaryColor?: string;
   secondaryTarget?: number;
   primaryRange?: { min: number; max: number };
@@ -1427,9 +1859,11 @@ function Trend({
         diastolicRange={secondaryRange ?? { min: 60, max: 80 }}
       />
     );
+  const numericValues = values.filter(
+    (value): value is number => value !== null,
+  );
   const max = Math.max(
-    ...values,
-    ...(secondaryValues ?? []),
+    ...numericValues,
     target,
     secondaryTarget ?? 0,
     1,
@@ -1472,25 +1906,40 @@ function Trend({
       ) : null}
       {values.map((value, index) => (
         <View key={index} style={styles.barSlot}>
-          <View
-            style={[
-              styles.bar,
-              {
-                height: `${Math.max(3, (value / max) * 100)}%`,
-                backgroundColor: tracker.color,
-              },
-            ]}
-          />
-          {secondaryValues ? (
+          {value !== null ? (
             <View
               style={[
                 styles.bar,
                 {
-                  height: `${Math.max(3, ((secondaryValues[index] ?? 0) / max) * 100)}%`,
-                  backgroundColor: secondaryColor ?? colors.muted,
+                  height: `${Math.max(3, (value / max) * 100)}%`,
+                  backgroundColor: tracker.color,
                 },
               ]}
             />
+          ) : (
+            <View
+              style={[
+                styles.missingBar,
+                { backgroundColor: colors.border },
+              ]}
+            />
+          )}
+          {secondaryValues ? (
+            secondaryValues[index] !== null &&
+            secondaryValues[index] !== undefined ? (
+              <View
+                style={[
+                  styles.bar,
+                  {
+                    height: `${Math.max(
+                      3,
+                      ((secondaryValues[index] as number) / max) * 100,
+                    )}%`,
+                    backgroundColor: secondaryColor ?? colors.muted,
+                  },
+                ]}
+              />
+            ) : null
           ) : null}
         </View>
       ))}
@@ -1506,8 +1955,8 @@ function BloodPressureTrend({
   systolicRange,
   diastolicRange,
 }: {
-  systolic: number[];
-  diastolic: number[];
+  systolic: (number | null)[];
+  diastolic: (number | null)[];
   systolicColor: string;
   diastolicColor: string;
   systolicRange: { min: number; max: number };
@@ -1515,7 +1964,9 @@ function BloodPressureTrend({
 }) {
   const [width, setWidth] = useState(0);
   const height = 116;
-  const all = [...systolic, ...diastolic, systolicRange.max, diastolicRange.max];
+  const all = [...systolic, ...diastolic].filter(
+    (value): value is number => value !== null,
+  );
   const minValue = Math.max(
     0,
     Math.min(...all, systolicRange.min, diastolicRange.min) - 15,
@@ -1523,20 +1974,21 @@ function BloodPressureTrend({
   const maxValue = Math.max(...all, 1) + 15;
   const y = (value: number) =>
     height - ((value - minValue) / (maxValue - minValue)) * height;
-  const points = (values: number[]) =>
+  const points = (values: (number | null)[]) =>
     values.map((value, index) => ({
       x:
         values.length === 1
           ? width / 2
           : (index / Math.max(1, values.length - 1)) * width,
-      y: y(value),
+      y: value === null ? null : y(value),
     }));
-  const draw = (values: number[], color: string) => {
+  const draw = (values: (number | null)[], color: string) => {
     const series = points(values);
     return (
       <>
         {series.slice(1).map((point, index) => {
           const previous = series[index];
+          if (point.y === null || previous.y === null) return null;
           const dx = point.x - previous.x;
           const dy = point.y - previous.y;
           const length = Math.sqrt(dx * dx + dy * dy);
@@ -1556,7 +2008,8 @@ function BloodPressureTrend({
             />
           );
         })}
-        {series.map((point, index) => (
+        {series.map((point, index) =>
+          point.y === null ? null : (
           <View
             key={`dot-${index}`}
             style={[
@@ -1568,7 +2021,8 @@ function BloodPressureTrend({
               },
             ]}
           />
-        ))}
+          ),
+        )}
       </>
     );
   };
@@ -1642,6 +2096,8 @@ function summaryLine(
   applicable: boolean,
 ) {
   if (!applicable) {
+    if (tracker.id === "todo_completion")
+      return "No to-dos are scheduled for this date.";
     if (
       tracker.id === "daily_deficit" ||
       tracker.id === "weekly_deficit_balance"
@@ -1849,6 +2305,12 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 3,
     opacity: 0.8,
   },
+  missingBar: {
+    flex: 1,
+    height: 2,
+    borderRadius: 2,
+    opacity: 0.55,
+  },
   goalLine: {
     position: "absolute",
     left: 0,
@@ -1885,6 +2347,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  logActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   section: { fontSize: 13, fontWeight: "900" },
   logButton: {
     height: 30,
@@ -1896,6 +2359,19 @@ const styles = StyleSheet.create({
   },
   logButtonText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   entries: { gap: 7 },
+  todoDetailCard: { gap: 7 },
+  todoDetailRow: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 13,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  todoComplete: { textDecorationLine: "line-through", opacity: 0.62 },
+  todoExtra: { gap: 3, marginTop: 5 },
   dateGroupHeader: {
     minHeight: 38,
     borderBottomWidth: 1,

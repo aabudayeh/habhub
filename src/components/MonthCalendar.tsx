@@ -142,7 +142,7 @@ export function MonthCalendar({
               </Text>
               {visuals.length ? (
                 <View style={styles.visuals}>
-                  {visuals.slice(0, 5).map((visual, index) => (
+                  {visuals.slice(0, 6).map((visual, index) => (
                     <View
                       key={index}
                       style={[

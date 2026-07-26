@@ -25,17 +25,22 @@ import {
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
-import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
+import {
+  dateKey,
+  dateWithOffsetFrom,
+  formatClockTime,
+  friendlyDate,
+} from "@/src/domain/date";
 import {
   deficitAlignmentBand,
   deficitRealityCheckAtDate,
   displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
-  goalProgress,
   hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
+  metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
@@ -85,16 +90,30 @@ export default function DayDetail() {
     ]),
   ];
   const initialIds = explicit
-    ? expandedRequested.filter((id) => loggedIds.includes(id))
+    ? expandedRequested.filter((id) => {
+        const metric = state.metrics.find((item) => item.id === id);
+        return (
+          id === "progress_photo" ||
+          Boolean(
+            metric &&
+              hasMetricData(state, metric, state.currentUserId, day),
+          )
+        );
+      })
     : loggedIds;
   const [selectedIds, setSelectedIds] = useState<string[]>(initialIds);
-  const available = state.metrics.filter((metric) =>
-    loggedIds.includes(metric.id),
+  const available = state.metrics.filter(
+    (metric) =>
+      loggedIds.includes(metric.id) ||
+      (expandedRequested.includes(metric.id) &&
+        hasMetricData(state, metric, state.currentUserId, day)),
   );
   const selected = state.metrics
     .filter(
       (metric) =>
-        selectedIds.includes(metric.id) && loggedIds.includes(metric.id),
+        selectedIds.includes(metric.id) &&
+        (loggedIds.includes(metric.id) ||
+          hasMetricData(state, metric, state.currentUserId, day)),
     )
     .sort((a, b) => a.order - b.order);
   const showTracked = trackedSummary.total > 0;
@@ -331,7 +350,17 @@ export default function DayDetail() {
                   return [
                     {
                       color: metric.color,
-                      progress: displayGoalProgress(metric, value, target),
+                      progress:
+                        metric.goalProgressMode === "journey"
+                          ? metricVisualProgress(
+                              state,
+                              metric,
+                              state.currentUserId,
+                              localDate,
+                              value,
+                              target,
+                            )
+                          : displayGoalProgress(metric, value, target),
                       goalReached: scheduledGoalReached(
                         state,
                         metric,
@@ -630,6 +659,7 @@ function DayTracker({
   day: string;
 }) {
   const [open, setOpen] = useState(false);
+  const { state } = useApp();
   const colors = useAppColors();
   const historicGoal =
     day < dateKey() &&
@@ -700,7 +730,14 @@ function DayTracker({
           metric.goalEnabled !== false &&
           applicable ? (
             <ProgressBar
-              progress={goalProgress(metric, value, target)}
+              progress={metricVisualProgress(
+                state,
+                metric,
+                state.currentUserId,
+                day,
+                value,
+                target,
+              )}
               color={historicGoal ? statusColor : metric.color}
               layered={metric.goal.kind === "at_least"}
             />
@@ -817,6 +854,7 @@ function EntryRow({
   entry: MetricEntry;
   metric: MetricDefinition;
 }) {
+  const { state } = useApp();
   const colors = useAppColors();
   const label =
     typeof entry.value === "string"
@@ -852,10 +890,10 @@ function EntryRow({
             {label}
           </Text>
           <Text style={[styles.entryTime, { color: colors.faint }]}>
-            {new Date(entry.recordedAt).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {formatClockTime(
+              entry.recordedAt,
+              state.settings.timeFormat,
+            )}
           </Text>
         </View>
         {entry.label ? (

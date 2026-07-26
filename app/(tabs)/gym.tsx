@@ -54,6 +54,7 @@ import {
   WORKOUT_TIMER_PAUSE,
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -278,16 +279,18 @@ function GymWiggle({
   );
 }
 
-function GymDragHandle({
+function GymDraggableExercise({
+  active,
   index,
   count,
-  color,
   onMove,
+  children,
 }: {
+  active: boolean;
   index: number;
   count: number;
-  color: string;
   onMove: (target: number) => void;
+  children: React.ReactNode;
 }) {
   const origin = useRef(index);
   const lastTarget = useRef(index);
@@ -295,9 +298,11 @@ function GymDragHandle({
   const pan = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (_, gesture) =>
-          Math.abs(gesture.dy) > 3,
+          active && Math.abs(gesture.dy) > 3,
+        onMoveShouldSetPanResponderCapture: (_, gesture) =>
+          active && Math.abs(gesture.dy) > 3,
         onPanResponderGrant: () => {
           origin.current = index;
           lastTarget.current = index;
@@ -329,19 +334,17 @@ function GymDragHandle({
           }).start();
         },
       }),
-    [count, dragY, index, onMove],
+    [active, count, dragY, index, onMove],
   );
 
   return (
     <Animated.View
-      {...pan.panHandlers}
+      {...(active ? pan.panHandlers : {})}
       style={[
-        styles.exerciseDragHandle,
         { transform: [{ translateY: dragY }], zIndex: 5 },
       ]}
-      hitSlop={8}
     >
-      <Ionicons name="reorder-three" size={23} color={color} />
+      {children}
     </Animated.View>
   );
 }
@@ -371,6 +374,10 @@ export default function GymScreen() {
   const [visibility, setVisibility] = useState<Visibility>("group");
   const [exercises, setExercises] = useState<GymExercise[]>([]);
   const [exerciseEditMode, setExerciseEditMode] = useState(false);
+  useEffect(() => {
+    setCloudSyncPaused("gym-edit", exerciseEditMode);
+    return () => setCloudSyncPaused("gym-edit", false);
+  }, [exerciseEditMode]);
   const [openExerciseId, setOpenExerciseId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -1799,6 +1806,12 @@ export default function GymScreen() {
                   active={exerciseEditMode}
                   index={exerciseIndex}
                 >
+                <GymDraggableExercise
+                  active={exerciseEditMode}
+                  index={exerciseIndex}
+                  count={exercises.length}
+                  onMove={(target) => moveExercise(exercise.id, target)}
+                >
                 <View
                   style={styles.exerciseContainer}
                   onLayout={(event) => {
@@ -1830,12 +1843,13 @@ export default function GymScreen() {
                     }}
                   >
                     {exerciseEditMode ? (
-                      <GymDragHandle
-                        index={exerciseIndex}
-                        count={exercises.length}
-                        color={accent}
-                        onMove={(target) => moveExercise(exercise.id, target)}
-                      />
+                      <View style={styles.exerciseDragHandle}>
+                        <Ionicons
+                          name="reorder-three"
+                          size={23}
+                          color={accent}
+                        />
+                      </View>
                     ) : null}
                     {exercise.completed ? (
                       <Ionicons
@@ -2059,6 +2073,7 @@ export default function GymScreen() {
                   </View>
                 ) : null}
                 </View>
+                </GymDraggableExercise>
                 </GymWiggle>
               );
             })}

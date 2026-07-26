@@ -19,6 +19,11 @@ function upgradeMetric(
         stepFallback: metric.stepFallback ?? preset.stepFallback,
         category: metric.category ?? preset.category,
         manualEntry: metric.manualEntry ?? preset.manualEntry,
+        timerEnabled: metric.timerEnabled ?? preset.timerEnabled,
+        submetrics: metric.submetrics ?? preset.submetrics,
+        submetricDisplay: metric.submetricDisplay ?? preset.submetricDisplay,
+        goalProgressMode:
+          metric.goalProgressMode ?? preset.goalProgressMode,
       }
     : metric;
   return next.id === "blood_pressure_systolic"
@@ -63,12 +68,33 @@ function pruneOrphanedInternalMetrics(metrics: MetricDefinition[]) {
 }
 
 function repairKnownMetricDefaults(metric: MetricDefinition) {
-  if (metric.id === "lean_body_mass")
-    return { ...metric, goalEnabled: false };
+  if (metric.id === "todo_completion")
+    return {
+      ...metric,
+      name: "To-Dos",
+      dataType: "number" as const,
+      aggregation: "latest" as const,
+      manualEntry: false,
+      formula: undefined,
+      goalEnabled: true,
+      goal: { kind: "at_least" as const, target: 100 },
+    };
+  if (["body_fat", "lean_body_mass"].includes(metric.id))
+    return {
+      ...metric,
+      goalEnabled: metric.goalEnabled ?? false,
+      goalProgressMode: metric.goalProgressMode ?? "journey",
+    };
   if (
     ["exercise", "workout_duration", "workout_distance"].includes(metric.id)
   )
-    return { ...metric, stepFallback: true };
+    return {
+      ...metric,
+      stepFallback: true,
+      ...(metric.id === "workout_duration"
+        ? { timerEnabled: metric.timerEnabled ?? true }
+        : {}),
+    };
   return metric;
 }
 
@@ -92,6 +118,16 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
   return {
     ...state,
     metrics: repairedMetricList(state.metrics),
+    settings: {
+      ...state.settings,
+      scheduleStartHour: state.settings.scheduleStartHour ?? 7,
+      timeFormat: state.settings.timeFormat ?? "24h",
+      showPerformance: state.settings.showPerformance ?? false,
+      healthHistoryDays: state.settings.healthHistoryDays ?? 90,
+      tabOrder: state.settings.tabOrder?.includes("performance")
+        ? state.settings.tabOrder
+        : [...(state.settings.tabOrder ?? []), "performance"],
+    },
     group,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
   };
@@ -103,8 +139,21 @@ export function upgradeStateV21(
   defaults: AppState,
   sourceVersion = Number(state.version ?? 1),
 ): AppState {
-  if (sourceVersion >= 21) return repairOrphanedGroupMetrics(state);
+  if (sourceVersion >= 23) return repairOrphanedGroupMetrics(state);
   const metrics = upgradeMetricList(state.metrics, defaults);
+  const withTodo =
+    sourceVersion < 22 &&
+    !metrics.some((metric) => metric.id === "todo_completion")
+      ? [
+          ...metrics,
+          {
+            ...defaults.metrics.find(
+              (metric) => metric.id === "todo_completion",
+            )!,
+            order: metrics.length,
+          },
+        ]
+      : metrics;
   const groups = state.groups.map((group) => ({
     ...group,
     metricConfiguration: group.metricConfiguration
@@ -119,14 +168,15 @@ export function upgradeStateV21(
   };
   return repairOrphanedGroupMetrics({
     ...state,
-    version: 21,
-    metrics,
+    version: 23,
+    metrics: withTodo,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
     group,
     settings: {
       ...state.settings,
-      fontScale: 1.12,
-      showAllTodayTiles: true,
+      ...(sourceVersion < 22
+        ? { fontScale: 1.12, showAllTodayTiles: true }
+        : {}),
     },
   });
 }

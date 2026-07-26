@@ -36,6 +36,7 @@ const pages: {
   { id: "gym", label: "Gym", icon: "barbell-outline" },
   { id: "calendar", label: "Schedule", icon: "calendar-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
+  { id: "performance", label: "Performance", icon: "speedometer-outline" },
 ];
 export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
@@ -45,6 +46,8 @@ export default function DisplaySettings() {
     state.settings.personalThemeColor ?? accent,
   );
   const [navigationOpen, setNavigationOpen] = React.useState(false);
+  const [indicatorOpen, setIndicatorOpen] = React.useState(false);
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const normalizedCustomColor = normalizeHexColor(customColor);
   const visible = pages.filter(
     (page) =>
@@ -56,6 +59,8 @@ export default function DisplaySettings() {
       (page.id !== "gym" || state.settings.showGym) &&
       (page.id !== "calendar" || state.settings.showCalendar) &&
       (page.id !== "journal" || state.settings.showJournal),
+  ).filter(
+    (page) => page.id !== "performance" || state.settings.showPerformance,
   );
   const navigationOrder = React.useMemo(() => {
     const saved = state.settings.tabOrder ?? [];
@@ -93,6 +98,7 @@ export default function DisplaySettings() {
       | "showGym"
       | "showCalendar"
       | "showJournal"
+      | "showPerformance"
       | "showTodosToday"
       | "showAiAssistant",
     value: boolean,
@@ -108,7 +114,9 @@ export default function DisplaySettings() {
         (key === "showCalendar" &&
           state.settings.defaultLandingPage === "calendar") ||
         (key === "showJournal" &&
-          state.settings.defaultLandingPage === "journal"))
+          state.settings.defaultLandingPage === "journal") ||
+        (key === "showPerformance" &&
+          state.settings.defaultLandingPage === "performance"))
     )
       changes.defaultLandingPage = "index";
     updateSettings(changes);
@@ -282,6 +290,12 @@ export default function DisplaySettings() {
             "book-outline",
           ],
           [
+            "showPerformance",
+            "Show Performance",
+            "At-a-glance strengths, trends, and areas to improve",
+            "speedometer-outline",
+          ],
+          [
             "showAiAssistant",
             "Show MetRal AI",
             "Floating assistant for logging, setup, reminders, and food-photo estimates",
@@ -323,6 +337,7 @@ export default function DisplaySettings() {
                     | "showGym"
                     | "showCalendar"
                     | "showJournal"
+                    | "showPerformance"
                     | "showTodosToday"
                     | "showAiAssistant",
                   value,
@@ -338,6 +353,29 @@ export default function DisplaySettings() {
           </View>
         ))}
       </Card>
+      <Pressable
+        onPress={() => setAdvancedOpen((open) => !open)}
+        style={[
+          styles.advancedHeading,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
+        <View style={styles.copy}>
+          <Text style={[styles.title, { color: colors.ink }]}>
+            Advanced display
+          </Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            Calendar, text size, Today behavior, landing page, and tab order
+          </Text>
+        </View>
+        <Ionicons
+          name={advancedOpen ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={accent}
+        />
+      </Pressable>
+      {advancedOpen ? (
+        <>
       <SectionHeader title="Calendar" />
       <Card style={styles.fontCard}>
         <Text style={[styles.title, { color: colors.ink }]}>Week starts on</Text>
@@ -360,6 +398,19 @@ export default function DisplaySettings() {
             />
           ))}
         </View>
+        <Text style={[styles.title, { color: colors.ink }]}>Time format</Text>
+        <View style={styles.countChips}>
+          <Chip
+            label="24 hour"
+            selected={(state.settings.timeFormat ?? "24h") === "24h"}
+            onPress={() => updateSettings({ timeFormat: "24h" })}
+          />
+          <Chip
+            label="AM / PM"
+            selected={state.settings.timeFormat === "12h"}
+            onPress={() => updateSettings({ timeFormat: "12h" })}
+          />
+        </View>
       </Card>
       <SectionHeader title="Text size" />
       <Card style={styles.fontCard}>
@@ -381,6 +432,77 @@ export default function DisplaySettings() {
       </Card>
       <SectionHeader title="Today tiles" />
       <Card style={styles.list}>
+        <Pressable
+          onPress={() => setIndicatorOpen((open) => !open)}
+          style={styles.row}
+        >
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons
+              name={
+                (state.settings.completionIndicatorIcon ??
+                  "ellipse-outline") as keyof typeof Ionicons.glyphMap
+              }
+              size={18}
+              color={accent}
+            />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>
+              Completion symbol
+            </Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Choose the symbol in Today&apos;s focus.
+            </Text>
+          </View>
+          <Ionicons
+            name={indicatorOpen ? "chevron-up" : "chevron-down"}
+            size={18}
+            color={colors.faint}
+          />
+        </Pressable>
+        {indicatorOpen ? (
+          <View
+            style={[styles.symbolGrid, { borderTopColor: colors.border }]}
+          >
+            {[
+              "ellipse-outline",
+              "square-outline",
+              "flash-outline",
+              "happy-outline",
+              "beer-outline",
+              "cafe-outline",
+              "heart-outline",
+              "star-outline",
+            ].map((icon) => {
+              const selected =
+                (state.settings.completionIndicatorIcon ??
+                  "ellipse-outline") === icon;
+              return (
+                <Pressable
+                  key={icon}
+                  onPress={() =>
+                    updateSettings({ completionIndicatorIcon: icon })
+                  }
+                  style={[
+                    styles.symbol,
+                    {
+                      borderColor: selected ? accent : colors.border,
+                      backgroundColor: selected
+                        ? colors.primarySoft
+                        : colors.canvas,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={icon as keyof typeof Ionicons.glyphMap}
+                    size={21}
+                    color={selected ? accent : colors.muted}
+                  />
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
         <View style={styles.row}>
           <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
             <Ionicons name="list-outline" size={18} color={accent} />
@@ -444,6 +566,26 @@ export default function DisplaySettings() {
                 }
               />
             ))}
+          </View>
+        </View>
+        <View style={[styles.tileCount, { borderTopColor: colors.border }]}>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>To-do placement</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Put tasks above or below your tracker cards.
+            </Text>
+          </View>
+          <View style={styles.countChips}>
+            <Chip
+              label="Above goals"
+              selected={state.settings.todosBelowGoals !== true}
+              onPress={() => updateSettings({ todosBelowGoals: false })}
+            />
+            <Chip
+              label="Below goals"
+              selected={state.settings.todosBelowGoals === true}
+              onPress={() => updateSettings({ todosBelowGoals: true })}
+            />
           </View>
         </View>
       </Card>
@@ -566,6 +708,8 @@ export default function DisplaySettings() {
             })
           : null}
       </Card>
+        </>
+      ) : null}
     </Screen>
   );
 }
@@ -607,6 +751,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   tileCount: { borderTopWidth: 1, paddingVertical: 10, gap: 8 },
+  symbolGrid: {
+    borderTopWidth: 1,
+    paddingVertical: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  symbol: {
+    width: 42,
+    height: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   countChips: { flexDirection: "row", gap: 6 },
   fontCard: { gap: 9 },
   themeCard: { gap: 12 },
@@ -644,4 +803,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   applyColorText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
+  advancedHeading: {
+    minHeight: 58,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 13,
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
 });

@@ -1,14 +1,15 @@
 import { User } from "@supabase/supabase-js";
 
 import { DEFAULT_METRICS } from "@/src/data/seed";
+import { dateKey } from "@/src/domain/date";
 import {
   effectiveGoalTarget,
   displayGoalProgress,
   formatMetricValue,
-  goalProgress,
   hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
+  metricVisualProgress,
   rankedMembers,
   safeMetricValue,
   scheduledGoalReached,
@@ -44,6 +45,31 @@ const COLORS = [
   "#2A8F86",
   "#9B6B43",
 ];
+
+function batches<T>(items: T[], size = 500) {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size)
+    result.push(items.slice(index, index + size));
+  return result;
+}
+
+/** Supabase REST responses are capped by the project's max_rows setting. */
+async function loadAllPages<T>(
+  query: (from: number, to: number) => PromiseLike<{
+    data: T[] | null;
+    error: { message: string } | null;
+  }>,
+  pageSize = 750,
+) {
+  const rows: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const result = await query(from, from + pageSize - 1);
+    if (result.error) throw result.error;
+    const page = result.data ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
 
 export function isCloudGroupId(id: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -102,12 +128,13 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     aggregation: row.aggregation_method,
     rankingDirection: row.ranking_direction,
     goal: configuration.goal ?? { kind: "at_least", target: 1 },
+    goalProgressMode:
+      configuration.goalProgressMode ?? preset?.goalProgressMode,
     goalEnabled:
-      row.slug === "lean_body_mass"
-        ? false
-        : configuration.goalEnabled ?? preset?.goalEnabled ?? true,
+      configuration.goalEnabled ?? preset?.goalEnabled ?? true,
     goalRange: configuration.goalRange,
     category,
+    grouping: configuration.grouping,
     healthMapping: configuration.healthMapping ?? preset?.healthMapping,
     gymMapping,
     gymMuscleGroups:
@@ -117,6 +144,11 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
       gymMapping
         ? false
         : configuration.manualEntry ?? preset?.manualEntry ?? row.slug !== "steps",
+    timerEnabled:
+      configuration.timerEnabled ?? preset?.timerEnabled,
+    submetrics: configuration.submetrics ?? preset?.submetrics,
+    submetricDisplay:
+      configuration.submetricDisplay ?? preset?.submetricDisplay,
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,
@@ -151,14 +183,19 @@ function metricRow(groupId: string, metric: MetricDefinition) {
     default_visibility: metric.defaultVisibility,
     configuration: {
       goal: metric.goal,
+      goalProgressMode: metric.goalProgressMode,
       goalEnabled: metric.goalEnabled,
       goalRange: metric.goalRange,
       category: metric.category,
+      grouping: metric.grouping,
       healthMapping: metric.healthMapping,
       gymMapping: metric.gymMapping,
       gymMuscleGroups: metric.gymMuscleGroups,
       stepFallback: metric.stepFallback,
       manualEntry: metric.manualEntry,
+      timerEnabled: metric.timerEnabled,
+      submetrics: metric.submetrics,
+      submetricDisplay: metric.submetricDisplay,
       sections: metric.sections,
       order: metric.order,
       activeFrom: metric.activeFrom,
@@ -189,13 +226,14 @@ export async function loadCloudMessages(
   groupId: string,
 ): Promise<ChatMessage[]> {
   const client = requireCloud();
-  const { data, error } = await client
-    .from("messages")
-    .select("*")
-    .eq("group_id", groupId)
-    .order("created_at");
-  if (error) throw error;
-  const rows = data ?? [];
+  const rows = await loadAllPages((from, to) =>
+    client
+      .from("messages")
+      .select("*")
+      .eq("group_id", groupId)
+      .order("created_at")
+      .range(from, to),
+  );
   const urls = await signedUrls(
     rows.map((message) => message.image_path).filter(Boolean),
   );
@@ -252,22 +290,30 @@ export async function loadCloudGroupActivity(
   if (metricError) throw metricError;
   const metricIds = (metricRows ?? []).map((row) => row.id);
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
-  const [entryResult, statusResult] = await Promise.all([
+  const [entryRows, statusRows] = await Promise.all([
     metricIds.length
-      ? client
-          .from("metric_entries")
-          .select("*")
-          .in("metric_id", metricIds)
-          .order("recorded_at")
-      : Promise.resolve({ data: [], error: null }),
-    client.from("daily_metric_status").select("*").eq("group_id", groupId),
+      ? loadAllPages((from, to) =>
+          client
+            .from("metric_entries")
+            .select("*")
+            .in("metric_id", metricIds)
+            .order("recorded_at")
+            .range(from, to),
+        )
+      : Promise.resolve([]),
+    loadAllPages((from, to) =>
+      client
+        .from("daily_metric_status")
+        .select("*")
+        .eq("group_id", groupId)
+        .order("local_date")
+        .range(from, to),
+    ),
   ]);
-  if (entryResult.error) throw entryResult.error;
-  if (statusResult.error) throw statusResult.error;
   const urls = await signedUrls(
-    (entryResult.data ?? []).map((entry) => entry.image_path).filter(Boolean),
+    entryRows.map((entry) => entry.image_path).filter(Boolean),
   );
-  const remoteEntries: MetricEntry[] = (entryResult.data ?? []).map((entry) => ({
+  const remoteEntries: MetricEntry[] = entryRows.map((entry) => ({
     id: entry.client_generated_id,
     metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
     userId: entry.user_id,
@@ -279,6 +325,7 @@ export async function loadCloudGroupActivity(
     label: entry.label ?? undefined,
     note: entry.note ?? undefined,
     nutrition: entry.nutrition ?? undefined,
+    submetricValues: entry.submetric_values ?? undefined,
     sourceProvider: entry.source_provider ?? undefined,
     sourceRecordId: entry.source_record_id ?? undefined,
     sourceOrigin: entry.source_origin ?? undefined,
@@ -295,7 +342,7 @@ export async function loadCloudGroupActivity(
       if (!entriesById.has(entry.id)) entriesById.set(entry.id, entry);
     });
   const dailyMetricStatuses: DailyMetricStatus[] = (
-    statusResult.data ?? []
+    statusRows
   ).map((status) => ({
     groupId,
     metricId: slugById.get(status.metric_id) ?? status.metric_id,
@@ -308,6 +355,11 @@ export async function loadCloudGroupActivity(
         ? undefined
         : Number(status.goal_progress),
     goalKind: status.goal_kind ?? undefined,
+    goalTarget:
+      status.goal_target === null || status.goal_target === undefined
+        ? undefined
+        : Number(status.goal_target),
+    visibility: status.visibility ?? undefined,
     goalEligible:
       status.goal_eligible === null || status.goal_eligible === undefined
         ? undefined
@@ -583,7 +635,9 @@ export async function sendMembershipPush(input: {
   recipientId?: string;
   route?: string;
 }) {
-  const { error } = await requireCloud().functions.invoke("send-push", {
+  // Membership changes must remain successful even if the optional push
+  // function is temporarily unavailable or not deployed yet.
+  await requireCloud().functions.invoke("send-push", {
     body: {
       eventKey: input.eventKey,
       groupId: input.groupId,
@@ -598,7 +652,6 @@ export async function sendMembershipPush(input: {
       },
     },
   });
-  if (error) throw error;
 }
 
 export async function setCloudGroupApprovalRequired(
@@ -759,34 +812,44 @@ export async function loadCloudWorkspace(
   if (metricError) throw metricError;
   const metricIds = (metricRows ?? []).map((row) => row.id);
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
-  const [entryResult, statusResult, messageResult, photoResult] =
+  const [entryRows, statusRows, messageRows, photoRows] =
     await Promise.all([
       metricIds.length
-        ? client
-            .from("metric_entries")
-            .select("*")
-            .in("metric_id", metricIds)
-            .order("recorded_at")
-        : Promise.resolve({ data: [], error: null }),
-      client.from("daily_metric_status").select("*").eq("group_id", groupId),
-      client
-        .from("messages")
-        .select("*")
-        .eq("group_id", groupId)
-        .order("created_at"),
-      client
-        .from("photo_updates")
-        .select("*")
-        .eq("group_id", groupId)
-        .order("created_at", { ascending: false }),
+        ? loadAllPages((from, to) =>
+            client
+              .from("metric_entries")
+              .select("*")
+              .in("metric_id", metricIds)
+              .order("recorded_at")
+              .range(from, to),
+          )
+        : Promise.resolve([]),
+      loadAllPages((from, to) =>
+        client
+          .from("daily_metric_status")
+          .select("*")
+          .eq("group_id", groupId)
+          .order("local_date")
+          .range(from, to),
+      ),
+      loadAllPages((from, to) =>
+        client
+          .from("messages")
+          .select("*")
+          .eq("group_id", groupId)
+          .order("created_at")
+          .range(from, to),
+      ).catch(() => []),
+      loadAllPages((from, to) =>
+        client
+          .from("photo_updates")
+          .select("*")
+          .eq("group_id", groupId)
+          .order("created_at", { ascending: false })
+          .range(from, to),
+      ),
     ]);
-  if (entryResult.error) throw entryResult.error;
-  if (statusResult.error) throw statusResult.error;
-  // A stale chat schema must not make the entire group disappear. The local
-  // snapshot remains usable while the latest migration is being applied.
-  const messageRows = messageResult.error ? [] : (messageResult.data ?? []);
-  if (photoResult.error) throw photoResult.error;
-  const mediaIds = (photoResult.data ?? []).map(
+  const mediaIds = photoRows.map(
     (photo) => photo.media_asset_id,
   );
   const { data: media, error: mediaError } = mediaIds.length
@@ -798,7 +861,7 @@ export async function loadCloudWorkspace(
   if (mediaError) throw mediaError;
   const mediaById = new Map((media ?? []).map((item) => [item.id, item]));
   const paths = [
-    ...(entryResult.data ?? [])
+    ...entryRows
       .map((entry) => entry.image_path)
       .filter(Boolean),
     ...messageRows
@@ -807,7 +870,7 @@ export async function loadCloudWorkspace(
     ...(media ?? []).map((item) => item.storage_path).filter(Boolean),
   ];
   const urls = await signedUrls(paths);
-  const remoteEntries: MetricEntry[] = (entryResult.data ?? []).map((entry) => ({
+  const remoteEntries: MetricEntry[] = entryRows.map((entry) => ({
     id: entry.client_generated_id,
     metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
     userId: entry.user_id,
@@ -819,6 +882,7 @@ export async function loadCloudWorkspace(
     label: entry.label ?? undefined,
     note: entry.note ?? undefined,
     nutrition: entry.nutrition ?? undefined,
+    submetricValues: entry.submetric_values ?? undefined,
     sourceProvider: entry.source_provider ?? undefined,
     sourceRecordId: entry.source_record_id ?? undefined,
     sourceOrigin: entry.source_origin ?? undefined,
@@ -847,6 +911,7 @@ export async function loadCloudWorkspace(
           label: local.label,
           note: local.note,
           nutrition: local.nutrition,
+          submetricValues: local.submetricValues,
           recordedAt: local.recordedAt,
         }) !==
           JSON.stringify({
@@ -854,6 +919,7 @@ export async function loadCloudWorkspace(
             label: remote?.label,
             note: remote?.note,
             nutrition: remote?.nutrition,
+            submetricValues: remote?.submetricValues,
             recordedAt: remote?.recordedAt,
           });
       const localIsNewer =
@@ -872,7 +938,7 @@ export async function loadCloudWorkspace(
     a.recordedAt.localeCompare(b.recordedAt),
   );
   const dailyMetricStatuses: DailyMetricStatus[] = (
-    statusResult.data ?? []
+    statusRows
   ).map((status) => ({
     groupId,
     metricId: slugById.get(status.metric_id) ?? status.metric_id,
@@ -885,6 +951,11 @@ export async function loadCloudWorkspace(
         ? undefined
         : Number(status.goal_progress),
     goalKind: status.goal_kind ?? undefined,
+    goalTarget:
+      status.goal_target === null || status.goal_target === undefined
+        ? undefined
+        : Number(status.goal_target),
+    visibility: status.visibility ?? undefined,
     goalEligible:
       status.goal_eligible === null || status.goal_eligible === undefined
         ? undefined
@@ -942,7 +1013,7 @@ export async function loadCloudWorkspace(
   const messages = [...messagesById.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
-  const photos: PhotoUpdate[] = (photoResult.data ?? []).map((photo) => {
+  const photos: PhotoUpdate[] = photoRows.map((photo) => {
     const asset = mediaById.get(photo.media_asset_id);
     const path = asset?.storage_path;
     return {
@@ -1026,7 +1097,7 @@ export async function pushCloudMessagesNow(state: AppState) {
     { onConflict: "sender_id,client_generated_id" },
   );
   if (upsert.error) throw upsert.error;
-  await Promise.all(
+  await Promise.allSettled(
     pending.map(async (message) => {
       const result = await client.functions.invoke("send-push", {
         body: {
@@ -1210,8 +1281,7 @@ export async function pushCloudWorkspace(state: AppState) {
     }),
   );
   if (ownedEntries.length) {
-    const { error } = await client.from("metric_entries").upsert(
-      ownedEntries.map((entry) => ({
+    const rows = ownedEntries.map((entry) => ({
         client_generated_id: entry.id,
         metric_id: idBySlug.get(entry.metricId),
         user_id: state.currentUserId,
@@ -1223,15 +1293,19 @@ export async function pushCloudWorkspace(state: AppState) {
         label: entry.label ?? null,
         note: entry.note ?? null,
         nutrition: entry.nutrition ?? null,
+        submetric_values: entry.submetricValues ?? null,
         image_path: entry.imageStoragePath ?? null,
         source_provider: entry.sourceProvider ?? null,
         source_record_id: entry.sourceRecordId ?? null,
         source_origin: entry.sourceOrigin ?? null,
         source_updated_at: entry.sourceUpdatedAt ?? null,
-      })),
-      { onConflict: "user_id,client_generated_id" },
-    );
-    if (error) throw error;
+      }));
+    for (const batch of batches(rows)) {
+      const { error } = await client.from("metric_entries").upsert(batch, {
+        onConflict: "user_id,client_generated_id",
+      });
+      if (error) throw error;
+    }
   }
 
   const statusDates = [
@@ -1240,14 +1314,17 @@ export async function pushCloudWorkspace(state: AppState) {
       ...(state.gymSessions ?? [])
         .filter((session) => session.userId === state.currentUserId)
         .map((session) => session.localDate),
+      ...state.dailyMetricStatuses
+        .filter(
+          (status) =>
+            status.groupId === state.group.id &&
+            status.userId === state.currentUserId,
+        )
+        .map((status) => status.localDate),
       ...vacationDates(state, state.currentUserId),
+      dateKey(),
     ]),
   ];
-  await client
-    .from("daily_metric_status")
-    .delete()
-    .eq("group_id", state.group.id)
-    .eq("user_id", state.currentUserId);
   const statuses = statusDates.flatMap((localDate) =>
     (state.group.metricConfiguration ?? [])
       .filter((groupMetric) => {
@@ -1313,8 +1390,11 @@ export async function pushCloudWorkspace(state: AppState) {
           ),
           score_contribution:
             Math.min(
-              goalProgress(
+              metricVisualProgress(
+                state,
                 metric,
+                state.currentUserId,
+                localDate,
                 value,
                 effectiveGoalTarget(
                   state,
@@ -1326,17 +1406,32 @@ export async function pushCloudWorkspace(state: AppState) {
               1,
             ) * 100,
           goal_progress:
-            displayGoalProgress(
-              metric,
-              value,
-              effectiveGoalTarget(
-                state,
-                metric,
-                state.currentUserId,
-                localDate,
-              ),
-            ) * 100,
+            (metric.goalProgressMode === "journey"
+              ? metricVisualProgress(
+                  state,
+                  metric,
+                  state.currentUserId,
+                  localDate,
+                  value,
+                )
+              : displayGoalProgress(
+                  metric,
+                  value,
+                  effectiveGoalTarget(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                  ),
+                )) * 100,
           goal_kind: metric.goal.kind,
+          goal_target: effectiveGoalTarget(
+            state,
+            metric,
+            state.currentUserId,
+            localDate,
+          ),
+          visibility: metric.defaultVisibility,
           goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
           exact_value: exactShared ? value : null,
           has_data: hasData,
@@ -1344,28 +1439,39 @@ export async function pushCloudWorkspace(state: AppState) {
       }),
   );
   if (statuses.length) {
-    let { error } = await client.from("daily_metric_status").insert(statuses);
-    if (
-      error &&
-      /goal_progress|goal_kind|goal_eligible|exact_value|has_data/i.test(
-        `${error.code ?? ""} ${error.message ?? ""}`,
-      )
-    ) {
-      const legacyStatuses = statuses.map(
-        ({
-          goal_progress: _progress,
-          goal_kind: _kind,
-          goal_eligible: _eligible,
-          exact_value: _exact,
-          has_data: _hasData,
-          ...status
-        }) => status,
-      );
-      ({ error } = await client
-        .from("daily_metric_status")
-        .insert(legacyStatuses));
+    // Never delete the last good group snapshot before its replacement is
+    // accepted. A transient Edge Function/schema failure must not make a
+    // member's values disappear from everyone else's leaderboard.
+    for (const batch of batches(statuses)) {
+      let { error } = await client.from("daily_metric_status").upsert(batch, {
+        onConflict: "group_id,metric_id,user_id,local_date",
+      });
+      if (
+        error &&
+        /goal_progress|goal_kind|goal_target|visibility|goal_eligible|exact_value|has_data/i.test(
+          `${error.code ?? ""} ${error.message ?? ""}`,
+        )
+      ) {
+        const legacyStatuses = batch.map(
+          ({
+            goal_progress: _progress,
+            goal_kind: _kind,
+            goal_target: _target,
+            visibility: _visibility,
+            goal_eligible: _eligible,
+            exact_value: _exact,
+            has_data: _hasData,
+            ...status
+          }) => status,
+        );
+        ({ error } = await client
+          .from("daily_metric_status")
+          .upsert(legacyStatuses, {
+          onConflict: "group_id,metric_id,user_id,local_date",
+          }));
+      }
+      if (error) throw error;
     }
-    if (error) throw error;
   }
 
   const ownedMessages = state.messages.filter(
@@ -1463,7 +1569,7 @@ export async function pushCloudWorkspace(state: AppState) {
           newMessages.some((candidate) => candidate.id === message.id) ||
           pendingPushIds.has(message.id),
       );
-  const pushResults = await Promise.all(
+  const pushResults = await Promise.allSettled(
     pushCandidates.map(async (message) => {
       const result = await client.functions.invoke("send-push", {
         body: {

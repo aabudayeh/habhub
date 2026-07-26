@@ -138,6 +138,8 @@ type Action =
   | { type: "saveTodo"; todo: TodoItem }
   | { type: "deleteTodo"; todoId: string }
   | { type: "toggleTodo"; todoId: string; localDate: string }
+  | { type: "skipTodo"; todoId: string; localDate: string }
+  | { type: "reorderTodo"; todoId: string; targetIndex: number }
   | { type: "saveJournalNote"; note: JournalNote }
   | { type: "deleteJournalNote"; noteId: string }
   | { type: "saveCalendarReminder"; reminder: CalendarReminder }
@@ -448,6 +450,7 @@ function reducer(state: AppState, action: Action): AppState {
             recordedAt: action.details?.recordedAt ?? new Date().toISOString(),
             source: "manual",
             nutrition: action.details?.nutrition,
+            submetricValues: action.details?.submetricValues,
           },
         ],
       };
@@ -939,7 +942,7 @@ function reducer(state: AppState, action: Action): AppState {
           gymMapping?.kind === "exercise_one_rep_max" && !definition.unit
             ? "kg e1RM"
             : definition.unit,
-        defaultVisibility: "group",
+        defaultVisibility: definition.defaultVisibility ?? "group",
         order: existing.length,
         activeFrom: action.metric.activeFrom ?? dateKey(),
         scoreWeight:
@@ -1193,7 +1196,14 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         todos: [
           ...(state.todos ?? []).filter((todo) => todo.id !== action.todo.id),
-          action.todo,
+          {
+            ...action.todo,
+            order:
+              action.todo.order ??
+              (state.todos ?? []).find((todo) => todo.id === action.todo.id)
+                ?.order ??
+              (state.todos ?? []).length,
+          },
         ],
       };
     case "deleteTodo":
@@ -1222,9 +1232,49 @@ function reducer(state: AppState, action: Action): AppState {
               : completed
                 ? undefined
                 : new Date().toISOString(),
+            skippedDates: (todo.skippedDates ?? []).filter(
+              (date) => date !== action.localDate,
+            ),
           };
         }),
       };
+    case "skipTodo":
+      return {
+        ...state,
+        todos: (state.todos ?? []).map((todo) =>
+          todo.id !== action.todoId
+            ? todo
+            : {
+                ...todo,
+                completedDates: todo.completedDates.filter(
+                  (date) => date !== action.localDate,
+                ),
+                skippedDates: (todo.skippedDates ?? []).includes(
+                  action.localDate,
+                )
+                  ? (todo.skippedDates ?? []).filter(
+                      (date) => date !== action.localDate,
+                    )
+                  : [...(todo.skippedDates ?? []), action.localDate].sort(),
+                completedAt: todo.recurrence
+                  ? undefined
+                  : new Date().toISOString(),
+              },
+        ),
+      };
+    case "reorderTodo": {
+      const todos = [...(state.todos ?? [])].sort(
+        (a, b) => (a.order ?? 0) - (b.order ?? 0),
+      );
+      const from = todos.findIndex((todo) => todo.id === action.todoId);
+      if (from < 0) return state;
+      const [moved] = todos.splice(from, 1);
+      todos.splice(Math.max(0, Math.min(action.targetIndex, todos.length)), 0, moved);
+      return {
+        ...state,
+        todos: todos.map((todo, order) => ({ ...todo, order })),
+      };
+    }
     case "saveJournalNote":
       return {
         ...state,
@@ -1678,6 +1728,8 @@ type AppContextValue = {
   saveTodo: (todo: TodoItem) => void;
   deleteTodo: (todoId: string) => void;
   toggleTodo: (todoId: string, localDate: string) => void;
+  skipTodo: (todoId: string, localDate: string) => void;
+  reorderTodo: (todoId: string, targetIndex: number) => void;
   saveJournalNote: (note: JournalNote) => void;
   deleteJournalNote: (noteId: string) => void;
   saveCalendarReminder: (reminder: CalendarReminder) => void;
@@ -1844,7 +1896,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 21,
+            version: 23,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -2181,6 +2233,10 @@ export function AppProvider({ children }: PropsWithChildren) {
       deleteTodo: (todoId) => dispatch({ type: "deleteTodo", todoId }),
       toggleTodo: (todoId, localDate) =>
         dispatch({ type: "toggleTodo", todoId, localDate }),
+      skipTodo: (todoId, localDate) =>
+        dispatch({ type: "skipTodo", todoId, localDate }),
+      reorderTodo: (todoId, targetIndex) =>
+        dispatch({ type: "reorderTodo", todoId, targetIndex }),
       saveJournalNote: (note) =>
         dispatch({ type: "saveJournalNote", note }),
       deleteJournalNote: (noteId) =>

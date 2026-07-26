@@ -547,7 +547,7 @@ export default function SettingsScreen() {
               onPress={() =>
                 Alert.alert(
                   "Repair health history?",
-                  "This rechecks up to two years and can take longer. Normal syncing only checks recent changes.",
+                  `This rechecks ${state.settings.healthHistoryDays ?? 90} days in small batches. Normal syncing only checks recent changes.`,
                   [
                     { text: "Cancel", style: "cancel" },
                     {
@@ -578,10 +578,28 @@ export default function SettingsScreen() {
                     : "Repair health history"}
                 </Text>
                 <Text style={[styles.meta, { color: colors.muted }]}>
-                  Re-import up to two years only when data is missing.
+                  Re-import missing or edited history in 30-day batches.
                 </Text>
               </View>
             </Pressable>
+            <View style={styles.originChips}>
+              {([30, 90, 365, 730] as const).map((days) => (
+                <Chip
+                  key={days}
+                  label={
+                    days === 30
+                      ? "30 days"
+                      : days === 90
+                        ? "90 days"
+                        : days === 365
+                          ? "1 year"
+                          : "2 years"
+                  }
+                  selected={(state.settings.healthHistoryDays ?? 90) === days}
+                  onPress={() => updateSettings({ healthHistoryDays: days })}
+                />
+              ))}
+            </View>
           </>
         ) : null}
         {health.sourceOrigins.length ? (

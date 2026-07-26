@@ -5,6 +5,24 @@ export function dateKey(date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+export function formatClockTime(
+  input: Date | string,
+  format: "12h" | "24h" = "24h",
+): string {
+  const date =
+    input instanceof Date
+      ? input
+      : /^\d{2}:\d{2}$/.test(input)
+        ? new Date(`2000-01-01T${input}:00`)
+        : new Date(input);
+  if (Number.isNaN(date.getTime())) return String(input);
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: format === "12h",
+  });
+}
+
 export function dateKeyWithOffset(days: number): string {
   const date = new Date();
   date.setHours(12, 0, 0, 0);

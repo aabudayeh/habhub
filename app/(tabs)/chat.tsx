@@ -25,6 +25,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { Avatar } from "@/src/components/ui";
 import { memberDisplayName } from "@/src/domain/members";
+import { formatClockTime } from "@/src/domain/date";
 import {
   directConversationId,
   MessageCategory,
@@ -41,6 +42,7 @@ export default function ChatScreen() {
   const colors = useAppColors();
   const cloud = useCloudSync();
   const refreshMessages = cloud.refreshMessages;
+  const syncMessagesNow = cloud.syncMessagesNow;
   const health = useHealthSync();
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
@@ -107,6 +109,17 @@ export default function ChatScreen() {
       }),
     [conversationId, recipientId, state.group.id, state.messages],
   );
+  const latestOwnedMessageId = [...messages]
+    .reverse()
+    .find((message) => message.senderId === state.currentUserId)?.id;
+  useEffect(() => {
+    if (!latestOwnedMessageId) return;
+    const timer = setTimeout(
+      () => syncMessagesNow().catch(() => undefined),
+      180,
+    );
+    return () => clearTimeout(timer);
+  }, [latestOwnedMessageId, syncMessagesNow]);
   useFocusEffect(
     useCallback(() => {
       refreshMessages().catch(() => undefined);
@@ -415,10 +428,10 @@ export default function ChatScreen() {
                           style={[styles.systemText, { color: colors.muted }]}
                         >
                           {message.text} ·{" "}
-                          {timestamp.toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatClockTime(
+                            timestamp,
+                            state.settings.timeFormat,
+                          )}
                         </Text>
                       </View>
                     </React.Fragment>
@@ -517,10 +530,10 @@ export default function ChatScreen() {
                               },
                             ]}
                           >
-                            {timestamp.toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            {formatClockTime(
+                              timestamp,
+                              state.settings.timeFormat,
+                            )}
                           </Text>
                         </View>
                       </View>

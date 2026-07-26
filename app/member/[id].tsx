@@ -65,8 +65,8 @@ import {
 } from "@/src/domain/members";
 import {
   formatMetricValue,
-  goalProgress,
   metricOverallAverage,
+  metricVisualProgress,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors } from "@/src/theme";
@@ -93,8 +93,7 @@ export default function MemberProfile() {
       (groupMetricConfiguration ?? []).filter(
         (metric) =>
           metric.dataType !== "text" &&
-          metric.dataType !== "photo" &&
-          metric.sections.insights,
+          metric.dataType !== "photo",
       ),
     [groupMetricConfiguration],
   );
@@ -646,7 +645,12 @@ export default function MemberProfile() {
                     <Text style={[styles.duelTitle, { color: colors.ink }]}>{metric.name}</Text>
                     <Text style={[styles.duelMeta, { color: colors.muted }]}>
                       {duel.eligibleDays} comparable day
-                      {duel.eligibleDays === 1 ? "" : "s"} · higher wins
+                      {duel.eligibleDays === 1 ? "" : "s"} ·{" "}
+                      {metric.rankingDirection === "lower"
+                        ? "lower wins"
+                        : metric.rankingDirection === "closest"
+                          ? "closest to personal goal wins"
+                          : "higher wins"}
                     </Text>
                   </View>
                 </View>
@@ -742,7 +746,13 @@ export default function MemberProfile() {
                             result.mode === "private"
                               ? 0
                               : (result.averageDisplayProgress ??
-                                goalProgress(metric, result.average))
+                                metricVisualProgress(
+                                  state,
+                                  metric,
+                                  person.id,
+                                  anchor,
+                                  result.average,
+                                ))
                           }
                           color={person.color}
                           layered={
@@ -757,7 +767,7 @@ export default function MemberProfile() {
                               { color: colors.muted },
                             ]}
                           >
-                            Current streak {result.streak ?? 0}d · Best streak{" "}
+                            {result.streak ?? 0}d · Best streak{" "}
                             {result.bestStreak ?? 0}d
                           </Text>
                         ) : null}

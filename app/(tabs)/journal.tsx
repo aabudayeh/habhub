@@ -8,7 +8,21 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { Card, Chip, PageHeader, Screen } from "@/src/components/ui";
+import { Card, PageHeader, Screen } from "@/src/components/ui";
+import { MetricSelector } from "@/src/components/MetricSelector";
+import { InfoPopover } from "@/src/components/InfoPopover";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import {
+  DateRangeNavigator,
+  PeriodChoiceBar,
+} from "@/src/components/PeriodNavigator";
+import { RichNoteText } from "@/src/components/RichNoteText";
+import { dateKey } from "@/src/domain/date";
+import {
+  LeaderboardPeriod,
+  periodDates,
+  shiftedPeriodAnchor,
+} from "@/src/domain/leaderboard";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -19,6 +33,7 @@ type JournalItem = {
   localDate: string;
   createdAt: string;
   metricId?: string;
+  filterIds: string[];
   imageUri?: string;
   editable: boolean;
 };
@@ -28,15 +43,38 @@ export default function JournalPage() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [filterIds, setFilterIds] = useState<string[]>([]);
+  const [period, setPeriod] = useState<LeaderboardPeriod>("month");
+  const [anchor, setAnchor] = useState(dateKey());
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const visibleDates = useMemo(
+    () =>
+      period === "overall"
+        ? null
+        : new Set(
+            periodDates(
+              period,
+              anchor,
+              state.settings.weekStartsOn ?? 1,
+            ),
+          ),
+    [anchor, period, state.settings.weekStartsOn],
+  );
   const items = useMemo<JournalItem[]>(() => {
-    const general = (state.journalNotes ?? []).map((note) => ({
+    const authored = (state.journalNotes ?? []).map((note) => ({
       id: note.id,
-      title: note.title || "General note",
+      title: note.title || "Unlabelled note",
       body: note.body,
       localDate: note.localDate,
       createdAt: note.createdAt,
       metricId: note.metricId,
+      filterIds: [
+        ...(note.metricIds ?? (note.metricId ? [note.metricId] : [])),
+        ...(note.labels ?? []).map((label) => `label:${label}`),
+        ...(note.metricId || note.metricIds?.length || note.labels?.length
+          ? []
+          : ["unlabelled"]),
+      ],
       imageUri: note.imageUri,
       editable: true,
     }));
@@ -57,17 +95,43 @@ export default function JournalPage() {
           localDate: entry.localDate,
           createdAt: entry.recordedAt,
           metricId: entry.metricId,
+          filterIds: [entry.metricId],
           imageUri: entry.imageUri,
           editable: false,
         };
       });
+    const gym = (state.gymSessions ?? []).flatMap((session) => [
+      ...(session.notes?.trim()
+        ? [{
+            id: `gym:${session.id}`,
+            title: session.name,
+            body: session.notes,
+            localDate: session.localDate,
+            createdAt: session.recordedAt,
+            metricId: "gym_completed",
+            filterIds: ["gym", "gym_completed"],
+            editable: false,
+          }]
+        : []),
+      ...session.exercises
+        .filter((exercise) => Boolean(exercise.notes?.trim()))
+        .map((exercise) => ({
+          id: `gym:${session.id}:${exercise.id}`,
+          title: exercise.name,
+          body: exercise.notes!,
+          localDate: session.localDate,
+          createdAt: session.recordedAt,
+          filterIds: ["gym", `exercise:${exercise.exerciseKey ?? exercise.name}`],
+          editable: false,
+        })),
+    ]);
     const normalized = query.trim().toLocaleLowerCase();
-    return [...general, ...entries]
+    return [...authored, ...entries, ...gym]
       .filter(
         (item) =>
-          (filter === "all" ||
-            (filter === "general" && !item.metricId) ||
-            item.metricId === filter) &&
+          (!filterIds.length ||
+            filterIds.some((filter) => item.filterIds.includes(filter))) &&
+          (!visibleDates || visibleDates.has(item.localDate)) &&
           (!normalized ||
             `${item.title} ${item.body} ${item.localDate}`
               .toLocaleLowerCase()
@@ -75,31 +139,126 @@ export default function JournalPage() {
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [
-    filter,
+    filterIds,
     query,
     state.entries,
     state.journalNotes,
     state.metrics,
+    state.gymSessions,
     state.currentUserId,
+    visibleDates,
   ]);
-  const labels = state.metrics.filter((metric) =>
-    state.entries.some(
-      (entry) => entry.metricId === metric.id && Boolean(entry.note?.trim()),
-    ),
-  );
+  const filterItems = useMemo(() => {
+    const metricIds = new Set(items.flatMap((item) => item.filterIds));
+    const metrics = state.metrics
+      .filter((metric) => metricIds.has(metric.id))
+      .map((metric) => ({
+        id: metric.id,
+        label: metric.name,
+        icon: metric.icon as keyof typeof Ionicons.glyphMap,
+        color: metric.color,
+        group: metric.grouping || "Trackers",
+      }));
+    const exerciseKeys = [...metricIds]
+      .filter((id) => id.startsWith("exercise:"))
+      .map((id) => ({
+        id,
+        label: id.slice("exercise:".length),
+        icon: "barbell-outline" as const,
+        group: "Gym exercises",
+      }));
+    const labels = [...metricIds]
+      .filter((id) => id.startsWith("label:"))
+      .map((id) => ({
+        id,
+        label: `#${id.slice("label:".length)}`,
+        icon: "pricetag-outline" as const,
+        group: "Labels",
+      }));
+    return [
+      ...(metricIds.has("unlabelled")
+        ? [{
+            id: "unlabelled",
+            label: "Unlabelled notes",
+            icon: "document-text-outline" as const,
+            group: "Notes",
+          }]
+        : []),
+      ...(metricIds.has("gym")
+        ? [{
+            id: "gym",
+            label: "All gym notes",
+            icon: "barbell-outline" as const,
+            group: "Gym",
+          }]
+        : []),
+      ...metrics,
+      ...exerciseKeys,
+      ...labels,
+    ];
+  }, [items, state.metrics]);
   return (
     <Screen>
       <PageHeader
         title="Journal"
         action={
-          <Pressable
-            onPress={() => router.navigate("/note-editor" as never)}
-            style={[styles.add, { backgroundColor: accent }]}
-          >
-            <Ionicons name="add" size={18} color="#FFFFFF" />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <InfoPopover
+              label="Explain Journal"
+              message="Journal collects authored notes, tracker logs, and gym or exercise notes. Select several labels at once, search all text, and tap a note to edit or open its source."
+            />
+            <Pressable
+              onPress={() => router.navigate("/note-editor" as never)}
+              style={[styles.add, { backgroundColor: accent }]}
+            >
+              <Ionicons name="add" size={18} color="#FFFFFF" />
+            </Pressable>
+          </View>
         }
       />
+      <PeriodChoiceBar
+        period={period}
+        onChange={(next) => {
+          setPeriod(next);
+          if (next === "today") setAnchor(dateKey());
+        }}
+      />
+      <DateRangeNavigator
+        period={period}
+        anchor={anchor}
+        dates={
+          period === "overall"
+            ? []
+            : periodDates(
+                period,
+                anchor,
+                state.settings.weekStartsOn ?? 1,
+              )
+        }
+        calendarOpen={calendarOpen}
+        onToggleCalendar={() => setCalendarOpen((open) => !open)}
+        onShift={(direction) => {
+          const next = shiftedPeriodAnchor(period, anchor, direction);
+          if (!next) return;
+          if (period === "today" || period === "yesterday")
+            setPeriod("custom");
+          setAnchor(next);
+        }}
+      >
+        <MonthCalendar
+          monthDate={anchor}
+          selectedDate={anchor}
+          onMonthChange={setAnchor}
+          onSelect={(date) => {
+            setAnchor(date);
+            setPeriod("custom");
+            setCalendarOpen(false);
+          }}
+          hasActivity={(date) =>
+            items.some((item) => item.localDate === date)
+          }
+        />
+      </DateRangeNavigator>
       <View
         style={[
           styles.search,
@@ -115,22 +274,14 @@ export default function JournalPage() {
           style={[styles.searchInput, { color: colors.ink }]}
         />
       </View>
-      <View style={styles.filters}>
-        <Chip label="All" selected={filter === "all"} onPress={() => setFilter("all")} />
-        <Chip
-          label="General"
-          selected={filter === "general"}
-          onPress={() => setFilter("general")}
-        />
-        {labels.slice(0, 5).map((metric) => (
-          <Chip
-            key={metric.id}
-            label={metric.name}
-            selected={filter === metric.id}
-            onPress={() => setFilter(metric.id)}
-          />
-        ))}
-      </View>
+      <MetricSelector
+        title="Filter journal"
+        items={filterItems}
+        selectedIds={filterIds}
+        onChange={setFilterIds}
+        emptyLabel="All notes"
+        collapsibleGroups={["Trackers", "Gym exercises", "Labels"]}
+      />
       <View style={styles.notes}>
         {items.map((item) => (
           <Pressable
@@ -166,12 +317,7 @@ export default function JournalPage() {
                   color={accent}
                 />
               </View>
-              <Text
-                numberOfLines={4}
-                style={[styles.noteBody, { color: colors.muted }]}
-              >
-                {item.body}
-              </Text>
+              <RichNoteText body={item.body} numberOfLines={4} />
               {item.imageUri ? (
                 <Image source={item.imageUri} style={styles.image} />
               ) : null}
@@ -191,6 +337,13 @@ export default function JournalPage() {
 }
 
 const styles = StyleSheet.create({
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
+  help: {
+    width: 30,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   add: {
     width: 36,
     height: 36,

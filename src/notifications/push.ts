@@ -42,6 +42,19 @@ function storedPreferences(preferences: NotificationSettings) {
   return { ...preferences, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
 }
 
+async function registerPushToken(
+  token: string,
+  preferences: NotificationSettings,
+) {
+  if (!supabase) return;
+  const { error } = await supabase.rpc('register_device_push_token', {
+    p_token: token,
+    p_platform: Platform.OS,
+    p_preferences: storedPreferences(preferences),
+  });
+  if (error) throw error;
+}
+
 export async function enablePushNotifications(userId: string, preferences: NotificationSettings) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
@@ -54,8 +67,15 @@ export async function enablePushNotifications(userId: string, preferences: Notif
   if (!projectId) throw new Error('This build is missing its EAS project ID.');
   const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
   if (supabase) {
-    const { error } = await supabase.from('device_push_tokens').upsert({ token, user_id: userId, platform: Platform.OS, preferences: storedPreferences(preferences) });
-    if (error) throw new Error(`Permission is enabled, but cloud registration failed: ${error.message}`);
+    try {
+      await registerPushToken(token, preferences);
+    } catch (error) {
+      throw new Error(
+        `Permission is enabled, but cloud registration failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
   return token;
 }
@@ -69,7 +89,7 @@ export async function updatePushPreferences(userId: string, preferences: Notific
   if (!projectId) return;
   try {
     const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-    await supabase.from('device_push_tokens').upsert({ token, user_id: userId, platform: Platform.OS, preferences: storedPreferences(preferences) });
+    await registerPushToken(token, preferences);
   } catch { /* The next foreground/settings visit retries registration. */ }
 }
 
@@ -280,6 +300,7 @@ export async function syncProductivityNotifications(state: AppState) {
       )
         continue;
       for (const reminder of todo.reminders) {
+        if (reminder.at && reminder.at.slice(0, 10) !== localDate) continue;
         await schedule(
           reminder.at?.slice(0, 10) ?? localDate,
           reminder.time ?? todo.dueAt?.slice(11, 16) ?? '09:00',
