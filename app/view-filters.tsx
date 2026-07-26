@@ -17,7 +17,6 @@ import {
   ALL_AVAILABLE_TRACKERS_FILTER,
   ALL_TRACKERS_FILTER,
   TRACKED_ONLY_FILTER,
-  UNTRACKED_ONLY_FILTER,
 } from "@/src/domain/viewFilters";
 
 export default function ViewFilters() {
@@ -181,7 +180,6 @@ export default function ViewFilters() {
             [TRACKED_ONLY_FILTER, "Tracked goals only", "Updates automatically"],
             [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "Every available tracker"],
             [ALL_TRACKERS_FILTER, "None", "Your page customization"],
-            [UNTRACKED_ONLY_FILTER, "Other trackers", "Goals not currently tracked"],
           ].map(([id, label, meta]) => (
             <Card key={id} style={styles.filter}>
               <Pressable

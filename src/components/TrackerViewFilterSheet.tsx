@@ -10,7 +10,6 @@ import {
   ALL_TRACKERS_FILTER,
   TRACKED_ONLY_FILTER,
   TrackerViewScope,
-  UNTRACKED_ONLY_FILTER,
 } from "@/src/domain/viewFilters";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -35,7 +34,6 @@ export function TrackerViewFilterSheet({
     [TRACKED_ONLY_FILTER, "Tracked goals only", "flag-outline"],
     [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "apps-outline"],
     [ALL_TRACKERS_FILTER, "None", "remove-circle-outline"],
-    [UNTRACKED_ONLY_FILTER, "Other trackers", "ellipse-outline"],
     ...(state.settings.trackerViewFilters ?? [])
       .filter((filter) => filter.visible !== false)
       .map((filter) => [filter.id, filter.name, "funnel-outline"]),

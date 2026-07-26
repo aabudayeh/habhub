@@ -11,13 +11,16 @@ export function activeTrackerViewId(
   state: AppState,
   scope: TrackerViewScope,
 ) {
-  return (
+  const selected =
     (scope === "today"
       ? state.settings.activeTodayTrackerViewFilterId
       : state.settings.activeProgressTrackerViewFilterId) ??
     state.settings.activeTrackerViewFilterId ??
-    ALL_TRACKERS_FILTER
-  );
+    ALL_TRACKERS_FILTER;
+  // "Other trackers" was removed from the UI. Treat any saved legacy
+  // selection as the normal page configuration instead of leaving users
+  // stuck on a filter they can no longer select or clear.
+  return selected === UNTRACKED_ONLY_FILTER ? ALL_TRACKERS_FILTER : selected;
 }
 
 export function metricMatchesActiveView(
@@ -47,7 +50,6 @@ export function activeTrackerViewLabel(
 ) {
   const id = activeTrackerViewId(state, scope);
   if (id === TRACKED_ONLY_FILTER) return "Tracked goals";
-  if (id === UNTRACKED_ONLY_FILTER) return "Other trackers";
   if (id === ALL_AVAILABLE_TRACKERS_FILTER) return "All trackers";
   return (
     state.settings.trackerViewFilters?.find((filter) => filter.id === id)

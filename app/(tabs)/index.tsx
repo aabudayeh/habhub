@@ -79,7 +79,6 @@ import {
   ALL_TRACKERS_FILTER,
   metricMatchesActiveView,
   TRACKED_ONLY_FILTER,
-  UNTRACKED_ONLY_FILTER,
 } from "@/src/domain/viewFilters";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -872,7 +871,6 @@ export default function Today() {
               [TRACKED_ONLY_FILTER, "Tracked goals only", "flag-outline"],
               [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "apps-outline"],
               [ALL_TRACKERS_FILTER, "None", "remove-circle-outline"],
-              [UNTRACKED_ONLY_FILTER, "Other trackers", "ellipse-outline"],
               ...(state.settings.trackerViewFilters ?? [])
                 .filter((filter) => filter.visible !== false)
                 .map((filter) => [
