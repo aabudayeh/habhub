@@ -1,7 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import React, { useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  Alert,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import {
@@ -35,6 +42,7 @@ export function TodoTodayList({
     skipTodo,
     deleteTodo,
     reorderTodo,
+    saveTodo,
     updateSettings,
   } = useApp();
   const colors = useAppColors();
@@ -44,6 +52,8 @@ export function TodoTodayList({
     .filter((todo) => todoAppearsOnDate(todo, localDate))
     .sort(
       (a, b) =>
+        Number(Boolean(b.pinnedAt)) -
+          Number(Boolean(a.pinnedAt)) ||
         Number(
           todoCompletedOnDate(a, localDate) ||
             todoSkippedOnDate(a, localDate),
@@ -65,6 +75,14 @@ export function TodoTodayList({
       : items;
   if (!visible && !editing) return null;
 
+  const moveTodoBeside = (todo: TodoItem, targetTodo?: TodoItem) => {
+    if (!targetTodo || targetTodo.id === todo.id) return;
+    const globalTargetIndex = [...(state.todos ?? [])]
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      .findIndex((item) => item.id === targetTodo.id);
+    if (globalTargetIndex >= 0) reorderTodo(todo.id, globalTargetIndex);
+  };
+
   const openActions = (todo: TodoItem) => {
     const sourceIndex = items.findIndex((item) => item.id === todo.id);
     Alert.alert(todo.title, "Edit, reorder, skip, or delete this to-do.", [
@@ -76,11 +94,19 @@ export function TodoTodayList({
             params: { id: todo.id },
           } as never),
       },
+      {
+        text: todo.pinnedAt ? "Unpin" : "Pin to top",
+        onPress: () =>
+          saveTodo({
+            ...todo,
+            pinnedAt: todo.pinnedAt ? undefined : new Date().toISOString(),
+          }),
+      },
       ...(sourceIndex > 0
         ? [
             {
               text: "Move up",
-              onPress: () => reorderTodo(todo.id, sourceIndex - 1),
+              onPress: () => moveTodoBeside(todo, items[sourceIndex - 1]),
             },
           ]
         : []),
@@ -88,7 +114,7 @@ export function TodoTodayList({
         ? [
             {
               text: "Move down",
-              onPress: () => reorderTodo(todo.id, sourceIndex + 1),
+              onPress: () => moveTodoBeside(todo, items[sourceIndex + 1]),
             },
           ]
         : []),
@@ -146,11 +172,25 @@ export function TodoTodayList({
         </Text>
       ) : null}
       {visible
-        ? shownItems.map((todo) => (
+        ? shownItems.map((todo, index) => (
             <TodoRow
               key={todo.id}
               todo={todo}
               localDate={localDate}
+              editing={editing}
+              index={index}
+              count={shownItems.length}
+              onPin={() =>
+                saveTodo({
+                  ...todo,
+                  pinnedAt: todo.pinnedAt
+                    ? undefined
+                    : new Date().toISOString(),
+                })
+              }
+              onMove={(targetIndex) => {
+                moveTodoBeside(todo, shownItems[targetIndex]);
+              }}
               onLongPress={() => openActions(todo)}
               onToggle={() => {
                 const completing = !todoCompletedOnDate(todo, localDate);
@@ -178,15 +218,68 @@ export function TodoTodayList({
 function TodoRow({
   todo,
   localDate,
+  editing,
+  index,
+  count,
+  onPin,
+  onMove,
   onToggle,
   onLongPress,
 }: {
   todo: TodoItem;
   localDate: string;
+  editing: boolean;
+  index: number;
+  count: number;
+  onPin: () => void;
+  onMove: (targetIndex: number) => void;
   onToggle: () => void;
   onLongPress: () => void;
 }) {
   const colors = useAppColors();
+  const [dragging, setDragging] = useState(false);
+  const dragY = useRef(new Animated.Value(0)).current;
+  const targetRef = useRef(index);
+  const indexRef = useRef(index);
+  const countRef = useRef(count);
+  const onMoveRef = useRef(onMove);
+  indexRef.current = index;
+  countRef.current = count;
+  onMoveRef.current = onMove;
+  const responder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => editing,
+        onMoveShouldSetPanResponder: () => editing,
+        onPanResponderGrant: () => {
+          targetRef.current = indexRef.current;
+          setDragging(true);
+        },
+        onPanResponderMove: (_event, gesture) => {
+          dragY.setValue(gesture.dy);
+          targetRef.current = Math.max(
+            0,
+            Math.min(
+              countRef.current - 1,
+              indexRef.current + Math.round(gesture.dy / 54),
+            ),
+          );
+        },
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => true,
+        onPanResponderRelease: () => {
+          const target = targetRef.current;
+          setDragging(false);
+          dragY.setValue(0);
+          if (target !== indexRef.current) onMoveRef.current(target);
+        },
+        onPanResponderTerminate: () => {
+          setDragging(false);
+          dragY.setValue(0);
+        },
+      }),
+    [dragY, editing],
+  );
   const complete = todoCompletedOnDate(todo, localDate);
   const skipped = todoSkippedOnDate(todo, localDate);
   const deadline = Boolean(
@@ -196,6 +289,16 @@ function TodoRow({
     (item) => item.at?.slice(0, 10) === localDate,
   );
   return (
+    <Animated.View
+      style={{
+        zIndex: dragging ? 20 : 0,
+        elevation: dragging ? 10 : 0,
+        transform: [
+          { translateY: dragY },
+          { scale: dragging ? 1.015 : 1 },
+        ],
+      }}
+    >
     <Pressable
       onPress={() =>
         router.navigate({
@@ -263,8 +366,46 @@ function TodoRow({
           )}
         </View>
       </View>
-      <Ionicons name="ellipsis-horizontal" size={14} color={colors.faint} />
+      <View style={styles.rowActions}>
+        {editing ? (
+          <Pressable
+            accessibilityLabel={todo.pinnedAt ? "Unpin to-do" : "Pin to-do"}
+            hitSlop={7}
+            onPress={onPin}
+            style={styles.smallAction}
+          >
+            <Ionicons
+              name={todo.pinnedAt ? "pin" : "pin-outline"}
+              size={14}
+              color={todo.pinnedAt ? "#E9A23B" : colors.faint}
+            />
+          </Pressable>
+        ) : todo.pinnedAt ? (
+          <Ionicons name="pin" size={12} color="#E9A23B" />
+        ) : null}
+        {editing ? (
+          <View
+            accessibilityLabel="Drag to reorder to-do"
+            collapsable={false}
+            style={styles.dragHandle}
+            {...responder.panHandlers}
+          >
+            <Ionicons
+              name="reorder-three-outline"
+              size={20}
+              color={colors.muted}
+            />
+          </View>
+        ) : (
+          <Ionicons
+            name="ellipsis-horizontal"
+            size={14}
+            color={colors.faint}
+          />
+        )}
+      </View>
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -297,6 +438,19 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 },
   meta: { fontSize: 7, fontWeight: "700" },
   deadline: { fontSize: 7, fontWeight: "900" },
+  rowActions: { flexDirection: "row", alignItems: "center", gap: 4 },
+  smallAction: {
+    width: 26,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dragHandle: {
+    width: 30,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   empty: {
     minHeight: 44,
     borderWidth: 1,

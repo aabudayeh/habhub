@@ -116,6 +116,8 @@ export default function Insights() {
     ),
   );
   const [editing, setEditing] = useState(false);
+  const [orderDraft, setOrderDraft] = useState<string[] | null>(null);
+  const orderDraftRef = useRef<string[] | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
   const overviewScrollRef = useRef<ScrollView>(null);
@@ -176,8 +178,10 @@ export default function Insights() {
   }, [editing, progressMode]);
   const activeProgressFilter = activeTrackerViewId(state, "progress");
   const savedOrder = (
-    state.settings.progressMetricOrderIds?.length
-      ? state.settings.progressMetricOrderIds
+    editing && orderDraft?.length
+      ? orderDraft
+      : state.settings.progressMetricOrderIds?.length
+        ? state.settings.progressMetricOrderIds
       : [
           ...selectedIds,
           ...state.metrics.map((metric) => metric.id),
@@ -248,16 +252,25 @@ export default function Insights() {
   ];
   const hiddenItems = selectorItems.filter((item) => !selectedIds.includes(item.id));
 
+  const finishEditing = useCallback(() => {
+    const pendingOrder = orderDraftRef.current;
+    if (pendingOrder?.length)
+      updateSettings({ progressMetricOrderIds: pendingOrder });
+    orderDraftRef.current = null;
+    setOrderDraft(null);
+    setEditing(false);
+    setShowPicker(false);
+  }, [updateSettings]);
+
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         if (!editing) return false;
-        setEditing(false);
-        setShowPicker(false);
+        finishEditing();
         return true;
       });
       return () => subscription.remove();
-    }, [editing]),
+    }, [editing, finishEditing]),
   );
 
   function select(ids: string[]) {
@@ -292,6 +305,11 @@ export default function Insights() {
       visibleIds.has(id) ? current[visibleIndex++] : id,
     );
     progressMetricOrderIds.push(...current.slice(visibleIndex));
+    if (editing) {
+      orderDraftRef.current = progressMetricOrderIds;
+      setOrderDraft(progressMetricOrderIds);
+      return;
+    }
     updateSettings({ progressMetricOrderIds });
   }
 
@@ -422,10 +440,7 @@ export default function Insights() {
         onOpenDay={openDay}
         onOpenEditor={() => setEditing(true)}
         editing={editing}
-        onDoneEditing={() => {
-          setEditing(false);
-          setShowPicker(false);
-        }}
+        onDoneEditing={finishEditing}
         onRemove={(id) =>
           select(selectedIds.filter((candidate) => candidate !== id))
         }
@@ -475,10 +490,7 @@ export default function Insights() {
               <Ionicons name="settings-outline" size={17} color={accent} />
             </Pressable>
             <Pressable
-              onPress={() => {
-                setEditing(false);
-                setShowPicker(false);
-              }}
+              onPress={finishEditing}
               style={[styles.done, { backgroundColor: accent }]}
             >
               <Text style={styles.doneText}>Done</Text>

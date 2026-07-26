@@ -32,7 +32,10 @@ import {
   todoAppearsOnDate,
   todoResolvedOnDate,
 } from "@/src/domain/schedule";
-import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
+import {
+  ALL_GOALS_COMPLETE_COLOR,
+  GOAL_COMPLETE_COLOR,
+} from "@/src/domain/colors";
 import { ReorderItem } from "@/src/components/ReorderItem";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -566,38 +569,18 @@ export default function Today() {
                     : "Choose your first goal"}
               </Text>
             </View>
-            <Animated.View
-              style={[
-                styles.ring,
-                {
-                  borderColor:
-                    goals.met > 0
-                      ? heroCompletionColor
-                      : "rgba(255,255,255,.28)",
-                  backgroundColor: "transparent",
-                },
-              ]}
-            >
-              <Ionicons
-                name={
-                  (state.settings.completionIndicatorIcon ??
-                    "ellipse-outline") as keyof typeof Ionicons.glyphMap
-                }
-                size={15}
-                color={
-                  goals.met > 0 ? palette.lime : "rgba(255,255,255,.46)"
-                }
-              />
-              <Text
-                preserveColor
-                style={[
-                  styles.ringText,
-                  { color: palette.white },
-                ]}
-              >
-                {goals.total ? Math.round((goals.met / goals.total) * 100) : 0}%
-              </Text>
-            </Animated.View>
+            <CompletionShapeIndicator
+              icon={
+                (state.settings.completionIndicatorIcon ??
+                  "ellipse-outline") as keyof typeof Ionicons.glyphMap
+              }
+              progress={goals.total ? goals.met / goals.total : 0}
+              color={
+                goals.allMet
+                  ? ALL_GOALS_COMPLETE_COLOR
+                  : GOAL_COMPLETE_COLOR
+              }
+            />
           </View>
           <View
             style={[
@@ -2197,6 +2180,85 @@ function Celebration({
     </Pressable>
   );
 }
+
+const COMPLETION_SEGMENTS = [
+  { left: 18, top: 0, width: 18, height: 14 },
+  { left: 36, top: 0, width: 18, height: 18 },
+  { left: 42, top: 14, width: 12, height: 14 },
+  { left: 36, top: 28, width: 18, height: 26 },
+  { left: 18, top: 40, width: 18, height: 14 },
+  { left: 0, top: 28, width: 18, height: 26 },
+  { left: 0, top: 14, width: 12, height: 14 },
+  { left: 0, top: 0, width: 18, height: 18 },
+] as const;
+
+/**
+ * The selected completion shape is the progress track itself. Its outline is
+ * revealed clockwise, rather than drawing a second ring around a small icon.
+ */
+function CompletionShapeIndicator({
+  icon,
+  progress,
+  color,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  progress: number;
+  color: string;
+}) {
+  const normalized = Math.max(0, Math.min(1, progress));
+  const label = `${Math.round(normalized * 100)}%`;
+  return (
+    <View
+      accessibilityLabel={`${label} of today's tracked goals complete`}
+      style={styles.completionShape}
+    >
+      <Ionicons
+        name={icon}
+        size={54}
+        color="rgba(255,255,255,.28)"
+        style={styles.completionShapeIcon}
+      />
+      {COMPLETION_SEGMENTS.map((segment, index) => {
+        const opacity = Math.max(
+          0,
+          Math.min(1, normalized * COMPLETION_SEGMENTS.length - index),
+        );
+        if (opacity <= 0) return null;
+        return (
+          <View
+            key={`${segment.left}-${segment.top}`}
+            pointerEvents="none"
+            style={[
+              styles.completionSegment,
+              {
+                left: segment.left,
+                top: segment.top,
+                width: segment.width,
+                height: segment.height,
+                opacity,
+              },
+            ]}
+          >
+            <Ionicons
+              name={icon}
+              size={54}
+              color={color}
+              style={{
+                position: "absolute",
+                left: -segment.left,
+                top: -segment.top,
+              }}
+            />
+          </View>
+        );
+      })}
+      <Text preserveColor style={styles.completionShapeLabel}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   confetti: {
     position: "absolute",
@@ -2292,16 +2354,23 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   heroTitle: { color: palette.white, fontSize: 11, fontWeight: "800" },
-  ring: {
+  completionShape: {
     width: 54,
     height: 54,
-    borderRadius: 27,
-    borderWidth: 5,
-    borderColor: palette.lime,
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
   },
-  ringText: { color: palette.white, fontSize: 10, fontWeight: "900" },
+  completionShapeIcon: { position: "absolute", left: 0, top: 0 },
+  completionSegment: { position: "absolute", overflow: "hidden" },
+  completionShapeLabel: {
+    color: palette.white,
+    fontSize: 10,
+    fontWeight: "900",
+    textShadowColor: "rgba(0,0,0,.45)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
   heroProgressTrack: {
     height: 7,
     borderRadius: 999,

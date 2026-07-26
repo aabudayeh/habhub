@@ -332,6 +332,8 @@ export type TodoItem = {
   completedAt?: string;
   /** Stable personal ordering used by Today and tracker details. */
   order?: number;
+  /** Pinned to-dos remain above the rest of the Today list. */
+  pinnedAt?: string;
 };
 export type JournalNote = {
   id: string;

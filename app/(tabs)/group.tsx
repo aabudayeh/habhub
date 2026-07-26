@@ -624,7 +624,12 @@ export default function LeaderboardScreen() {
                         }
                       />
                       {rangeSummary ? (
-                        <Text style={[styles.rangeSummary, { color: colors.muted }]}>
+                        <Text
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.72}
+                          style={[styles.rangeSummary, { color: colors.muted }]}
+                        >
                           {rangeSummary}
                         </Text>
                       ) : null}
@@ -992,7 +997,7 @@ const styles = StyleSheet.create({
   syncDetail: { fontSize: 7, lineHeight: 10, marginLeft: 15 },
   detailCopy: { flex: 1 },
   private: { fontStyle: "italic" },
-  bar: { width: 96, gap: 3 },
+  bar: { width: 124, gap: 3 },
   score: { fontSize: 12, fontWeight: "900", textAlign: "right" },
   rangeSummary: {
     fontSize: 7,
