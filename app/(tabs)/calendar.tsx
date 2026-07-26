@@ -76,7 +76,7 @@ export default function SchedulePage() {
         params: { id: event.todoId },
       } as never);
     else if (event.metricId)
-      router.navigate({
+      router.push({
         pathname: "/metric-editor",
         params: { id: event.metricId, focus: "notifications" },
       } as never);

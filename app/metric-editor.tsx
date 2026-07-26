@@ -328,6 +328,7 @@ export default function TrackerEditor() {
   const scrolledToGoalStart = useRef(false);
   const scrolledToNotifications = useRef(false);
   const behaviorSectionY = useRef(0);
+  const remindersSectionY = useRef(0);
   const [showIcons, setShowIcons] = useState(false);
   const [showColors, setShowColors] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
@@ -996,6 +997,24 @@ export default function TrackerEditor() {
       }),
     [navigation],
   );
+  useEffect(() => {
+    if (groupScope || focus !== "notifications") return;
+    setAdvanced(true);
+    setBehaviorOpen(true);
+    setRemindersOpen(true);
+    scrolledToNotifications.current = false;
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(
+          0,
+          behaviorSectionY.current + remindersSectionY.current - 75,
+        ),
+        animated: true,
+      });
+      scrolledToNotifications.current = true;
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [focus, groupScope, id]);
   function remove() {
     if (!tracker) return;
     const dependencies = sourceMetrics.filter(
@@ -1025,6 +1044,75 @@ export default function TrackerEditor() {
           },
         },
       ],
+    );
+  }
+  function renderFormulaEditor() {
+    if (dataType !== "calculated") return null;
+    return (
+      <>
+        <TextInput
+          value={formula}
+          onChangeText={(value) => {
+            setFormula(value);
+            setValidation(null);
+          }}
+          autoCapitalize="none"
+          multiline
+          placeholder="Choose values below, then add + or −"
+          placeholderTextColor={colors.faint}
+          style={[
+            styles.input,
+            styles.formula,
+            { color: colors.ink, borderColor: colors.border },
+          ]}
+        />
+        <Text style={[styles.mini, { color: colors.muted }]}>
+          AVAILABLE VALUES
+        </Text>
+        <View style={styles.wrap}>
+          {state.metrics
+            .filter(
+              (item) => item.id !== tracker?.id && item.dataType !== "text",
+            )
+            .map((item) => (
+              <Chip
+                key={item.id}
+                label={item.name}
+                onPress={() => insert(item.id)}
+              />
+            ))}
+        </View>
+        <View style={styles.wrap}>
+          {["bmr", "daily_activity", "+", "-", "*", "/", "(", ")"].map(
+            (item) => (
+              <Chip
+                key={item}
+                label={item.replace("_", " ")}
+                onPress={() => insert(item)}
+              />
+            ),
+          )}
+        </View>
+        <Button
+          label="Check calculation"
+          variant="ghost"
+          onPress={validate}
+        />
+        {validation ? (
+          <Text
+            style={[
+              styles.validation,
+              {
+                color: validation.startsWith("Looks")
+                  ? accent
+                  : palette.red,
+              },
+            ]}
+          >
+            {validation}
+          </Text>
+        ) : null}
+      </>
     );
   }
   let deferredSubmetrics: React.ReactNode = null;
@@ -2067,6 +2155,18 @@ export default function TrackerEditor() {
               </>
             ) : null}
           </View>
+          {groupScope && dataType === "calculated" ? (
+            <View style={[styles.advancedSection, { borderColor: colors.border }]}>
+              <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                Calculation
+              </Text>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Build the shared calculated value from available trackers.
+              </Text>
+              {renderFormulaEditor()}
+            </View>
+          ) : null}
+          {!groupScope ? (
           <View
             onLayout={(event) => {
               behaviorSectionY.current = event.nativeEvent.layout.y;
@@ -2189,6 +2289,7 @@ export default function TrackerEditor() {
             ) : null}
             {!groupScope ? <View
               onLayout={(event) => {
+                remindersSectionY.current = event.nativeEvent.layout.y;
                 if (
                   focus !== "notifications" ||
                   scrolledToNotifications.current
@@ -2484,73 +2585,7 @@ export default function TrackerEditor() {
               </>
             ) : null}
             </> : null}
-            {dataType === "calculated" ? (
-              <>
-                <TextInput
-                  value={formula}
-                  onChangeText={(value) => {
-                    setFormula(value);
-                    setValidation(null);
-                  }}
-                  autoCapitalize="none"
-                  multiline
-                  placeholder="Choose values below, then add + or −"
-                  placeholderTextColor={colors.faint}
-                  style={[
-                    styles.input,
-                    styles.formula,
-                    { color: colors.ink, borderColor: colors.border },
-                  ]}
-                />
-                <Text style={[styles.mini, { color: colors.muted }]}>
-                  AVAILABLE VALUES
-                </Text>
-                <View style={styles.wrap}>
-                  {state.metrics
-                    .filter(
-                      (item) =>
-                        item.id !== tracker?.id && item.dataType !== "text",
-                    )
-                    .map((item) => (
-                      <Chip
-                        key={item.id}
-                        label={item.name}
-                        onPress={() => insert(item.id)}
-                      />
-                    ))}
-                </View>
-                <View style={styles.wrap}>
-                  {["bmr", "daily_activity", "+", "-", "*", "/", "(", ")"].map(
-                    (item) => (
-                      <Chip
-                        key={item}
-                        label={item.replace("_", " ")}
-                        onPress={() => insert(item)}
-                      />
-                    ),
-                  )}
-                </View>
-                <Button
-                  label="Check calculation"
-                  variant="ghost"
-                  onPress={validate}
-                />
-                {validation ? (
-                  <Text
-                    style={[
-                      styles.validation,
-                      {
-                        color: validation.startsWith("Looks")
-                          ? accent
-                          : palette.red,
-                      },
-                    ]}
-                  >
-                    {validation}
-                  </Text>
-                ) : null}
-              </>
-            ) : null}
+            {renderFormulaEditor()}
               </>
             ) : null}
             {false ? <>
@@ -2577,6 +2612,7 @@ export default function TrackerEditor() {
             </> : null}
           </View>
           </View>
+          ) : null}
           {deferredSubmetrics}
         </Card>
       ) : null}
