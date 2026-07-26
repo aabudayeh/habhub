@@ -109,6 +109,7 @@ export default function Today() {
   const [showAddTiles, setShowAddTiles] = useState(false);
   const [showDayEnd, setShowDayEnd] = useState(false);
   const [showHistoryOptions, setShowHistoryOptions] = useState(false);
+  const [expandedHistoryIds, setExpandedHistoryIds] = useState<string[]>([]);
   const [showViewFilters, setShowViewFilters] = useState(false);
   const todaySwipeResponder = useMemo(
     () =>
@@ -714,23 +715,37 @@ export default function Today() {
                     ? "off"
                     : todayHistoryRange
                 }
+                historyExpanded={expandedHistoryIds.includes(item.id)}
                 onEdit={beginEditing}
                 onMove={(target) =>
                   reorderMetric(item.id, visible[target]?.order ?? target)
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
-                onHistoryToggle={() =>
+                onHistoryToggle={() => {
+                  const currentlyEnabled =
+                    (state.settings.todayHistoryByMetric?.[item.id] ??
+                      "off") !== "off";
                   updateSettings({
                     todayHistoryByMetric: {
                       ...(state.settings.todayHistoryByMetric ?? {}),
                       [item.id]:
-                        (state.settings.todayHistoryByMetric?.[item.id] ??
-                          "off") === "off"
+                        !currentlyEnabled
                           ? todayHistoryRange
                           : "off",
                     },
-                  })
+                  });
+                  if (currentlyEnabled)
+                    setExpandedHistoryIds((current) =>
+                      current.filter((id) => id !== item.id),
+                    );
+                }}
+                onHistoryExpandToggle={() =>
+                  setExpandedHistoryIds((current) =>
+                    current.includes(item.id)
+                      ? current.filter((id) => id !== item.id)
+                      : [...current, item.id],
+                  )
                 }
                 onDragStart={() => {
                   setDraggingMetricId(item.id);
@@ -1033,11 +1048,21 @@ export default function Today() {
                 style={[styles.sheetRow, { borderColor: colors.border }]}
               >
                 <Ionicons name="calendar-outline" size={17} color={accent} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.sheetName, { color: colors.ink }]}>
+                <View style={styles.historyOptionCopy}>
+                  <Text
+                    style={[
+                      styles.historyOptionTitle,
+                      { color: colors.ink },
+                    ]}
+                  >
                     {label}
                   </Text>
-                  <Text style={[styles.moreCount, { color: colors.muted }]}>
+                  <Text
+                    style={[
+                      styles.historyOptionDescription,
+                      { color: colors.muted },
+                    ]}
+                  >
                     {description}
                   </Text>
                 </View>
@@ -1046,40 +1071,46 @@ export default function Today() {
                 ) : null}
               </Pressable>
             ))}
-            <Pressable
-              onPress={() =>
-                updateSettings({
-                  todayHistoryByMetric: Object.fromEntries(
-                    state.metrics
-                      .filter((metric) => !isInternalTracker(metric))
-                      .map((metric) => [metric.id, todayHistoryRange]),
-                  ),
-                })
-              }
-              style={[styles.sheetRow, { borderColor: colors.border }]}
-            >
-              <Ionicons name="eye-outline" size={17} color={accent} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.sheetName, { color: colors.ink }]}>
-                  Show for all trackers
+            <View style={styles.historyBulkRow}>
+              <Pressable
+                onPress={() => {
+                  setExpandedHistoryIds(
+                    primary
+                      .filter(
+                        (metric) =>
+                          (state.settings.todayHistoryByMetric?.[metric.id] ??
+                            "off") !== "off",
+                      )
+                      .map((metric) => metric.id),
+                  );
+                  setShowHistoryOptions(false);
+                }}
+                style={[
+                  styles.historyBulkButton,
+                  { borderColor: colors.border },
+                ]}
+              >
+                <Ionicons name="chevron-down" size={17} color={accent} />
+                <Text style={[styles.historyBulkText, { color: colors.ink }]}>
+                  Expand all
                 </Text>
-                <Text style={[styles.moreCount, { color: colors.muted }]}>
-                  Includes trackers not currently shown on Today
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setExpandedHistoryIds([]);
+                  setShowHistoryOptions(false);
+                }}
+                style={[
+                  styles.historyBulkButton,
+                  { borderColor: colors.border },
+                ]}
+              >
+                <Ionicons name="chevron-up" size={17} color={accent} />
+                <Text style={[styles.historyBulkText, { color: colors.ink }]}>
+                  Collapse all
                 </Text>
-              </View>
-            </Pressable>
-            <Pressable
-              onPress={() => {
-                updateSettings({ todayHistoryByMetric: {} });
-                setShowHistoryOptions(false);
-              }}
-              style={[styles.sheetRow, { borderColor: colors.border }]}
-            >
-              <Ionicons name="eye-off-outline" size={17} color={palette.red} />
-              <Text style={[styles.sheetName, { color: palette.red }]}>
-                Hide for all trackers
-              </Text>
-            </Pressable>
+              </Pressable>
+            </View>
           </View>
         </Pressable>
       </Modal>
@@ -1293,11 +1324,13 @@ function TrackerRow({
   goldSequenceRun,
   celebrating,
   historyRange,
+  historyExpanded,
   onEdit,
   onMove,
   onRemove,
   onPin,
   onHistoryToggle,
+  onHistoryExpandToggle,
   onDragStart,
   onDragHover,
   onDragCancel,
@@ -1319,17 +1352,18 @@ function TrackerRow({
   goldSequenceRun: number;
   celebrating: boolean;
   historyRange: HistoryRange | "off";
+  historyExpanded: boolean;
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
   onPin: () => void;
   onHistoryToggle: () => void;
+  onHistoryExpandToggle: () => void;
   onDragStart: () => void;
   onDragHover: (target: number) => void;
   onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
   const dragOrigin = useRef(index);
   const liveTarget = useRef(index);
   const indexRef = useRef(index);
@@ -1822,7 +1856,6 @@ function TrackerRow({
             }
             onPress={() => {
               onHistoryToggle();
-              if (historyRange !== "off") setHistoryOpen(false);
             }}
             hitSlop={8}
             style={[styles.editTracker, { borderColor: accent }]}
@@ -1842,17 +1875,17 @@ function TrackerRow({
           {historyRange !== "off" ? (
             <Pressable
               accessibilityLabel={
-                historyOpen ? "Collapse history" : "Expand history"
+                historyExpanded ? "Collapse history" : "Expand history"
               }
               onPress={(event) => {
                 event.stopPropagation();
-                setHistoryOpen((open) => !open);
+                onHistoryExpandToggle();
               }}
               hitSlop={8}
               style={styles.historyToggle}
             >
               <Ionicons
-                name={historyOpen ? "chevron-up" : "chevron-down"}
+                name={historyExpanded ? "chevron-up" : "chevron-down"}
                 size={16}
                 color={accent}
               />
@@ -1863,7 +1896,7 @@ function TrackerRow({
         </View>
       )}
     </AnimatedPressable>
-    {!editing && historyRange !== "off" && historyOpen ? (
+    {!editing && historyRange !== "off" && historyExpanded ? (
       <View
         style={[
           styles.todayHistory,
@@ -2462,6 +2495,38 @@ const styles = StyleSheet.create({
   },
   sheetName: { flex: 1, fontSize: 11, fontWeight: "900" },
   sheetValue: { fontSize: 10, fontWeight: "800" },
+  historyOptionCopy: {
+    flex: 1,
+    minHeight: 40,
+    justifyContent: "center",
+    gap: 1,
+  },
+  historyOptionTitle: {
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "900",
+  },
+  historyOptionDescription: {
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: "600",
+  },
+  historyBulkRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+  },
+  historyBulkButton: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  historyBulkText: { fontSize: 9, fontWeight: "900" },
   manageFilters: {
     minHeight: 42,
     borderWidth: 1,
