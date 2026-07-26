@@ -2217,9 +2217,11 @@ function CompletionShapeIndicator({
           ]}
         />
       </View>
-      <Text preserveColor style={styles.completionShapeLabel}>
-        {label}
-      </Text>
+      <View pointerEvents="none" style={styles.completionShapeLabelCenter}>
+        <Text preserveColor style={styles.completionShapeLabel}>
+          {label}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -2326,7 +2328,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
   },
-  completionShapeIcon: { position: "absolute", left: 0, top: 0 },
+  completionShapeIcon: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: COMPLETION_INDICATOR_SIZE,
+    height: COMPLETION_INDICATOR_SIZE,
+    lineHeight: COMPLETION_INDICATOR_SIZE,
+    textAlign: "center",
+    textAlignVertical: "center",
+    includeFontPadding: false,
+  },
   completionShapeTrackIcon: {
     textShadowColor: "rgba(255,255,255,.28)",
     textShadowOffset: { width: 0, height: 0 },
@@ -2339,11 +2351,20 @@ const styles = StyleSheet.create({
     height: COMPLETION_INDICATOR_SIZE,
     overflow: "hidden",
   },
+  completionShapeLabelCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   completionShapeLabel: {
     color: palette.white,
     fontSize: 12,
     lineHeight: 15,
     fontWeight: "900",
+    includeFontPadding: false,
+    textAlign: "center",
+    textAlignVertical: "center",
+    fontVariant: ["tabular-nums"],
     textShadowColor: "rgba(0,0,0,.45)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
