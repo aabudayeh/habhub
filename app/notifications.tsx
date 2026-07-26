@@ -5,10 +5,10 @@ import {
   Alert,
   Pressable,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { TimeInput } from "@/src/components/TimeInput";
 
 import {
   Card,
@@ -453,32 +453,16 @@ export default function NotificationsScreen() {
           <View style={styles.times}>
             <View style={styles.time}>
               <Text style={[styles.label, { color: colors.muted }]}>From</Text>
-              <TextInput
+              <TimeInput
                 value={value.quietHoursStart}
-                onChangeText={(quietHoursStart) => patch({ quietHoursStart })}
-                style={[
-                  styles.input,
-                  {
-                    color: colors.ink,
-                    borderColor: colors.border,
-                    backgroundColor: colors.canvas,
-                  },
-                ]}
+                onChange={(quietHoursStart) => patch({ quietHoursStart })}
               />
             </View>
             <View style={styles.time}>
               <Text style={[styles.label, { color: colors.muted }]}>Until</Text>
-              <TextInput
+              <TimeInput
                 value={value.quietHoursEnd}
-                onChangeText={(quietHoursEnd) => patch({ quietHoursEnd })}
-                style={[
-                  styles.input,
-                  {
-                    color: colors.ink,
-                    borderColor: colors.border,
-                    backgroundColor: colors.canvas,
-                  },
-                ]}
+                onChange={(quietHoursEnd) => patch({ quietHoursEnd })}
               />
             </View>
           </View>

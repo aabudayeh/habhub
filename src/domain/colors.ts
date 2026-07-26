@@ -54,10 +54,6 @@ export function isReservedGoalColor(value: string) {
   );
 }
 
-export function isAllowedTrackerColor(value: string) {
-  return Boolean(normalizeHexColor(value)) && !isReservedGoalColor(value);
-}
-
 function rgb(value: string) {
   const normalized = normalizeHexColor(value);
   if (!normalized) return;
@@ -68,8 +64,7 @@ function rgb(value: string) {
   ] as const;
 }
 
-/** Keep theme accents visually distinct from goal and perfect-day feedback. */
-export function isAllowedThemeColor(value: string) {
+function isFarFromGoalColors(value: string, minimumDistance: number) {
   const candidate = rgb(value);
   if (!candidate) return false;
   return [GOAL_COMPLETE_COLOR, ALL_GOALS_COMPLETE_COLOR].every((reserved) => {
@@ -81,6 +76,16 @@ export function isAllowedThemeColor(value: string) {
         0,
       ),
     );
-    return distance >= 58;
+    return distance >= minimumDistance;
   });
+}
+
+/** Tracker identity colors must not resemble lime/gold completion feedback. */
+export function isAllowedTrackerColor(value: string) {
+  return isFarFromGoalColors(value, 66);
+}
+
+/** Keep theme accents visually distinct from goal and perfect-day feedback. */
+export function isAllowedThemeColor(value: string) {
+  return isFarFromGoalColors(value, 72);
 }

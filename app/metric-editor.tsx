@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
+import { TimeInput } from "@/src/components/TimeInput";
 
 import {
   Button,
@@ -39,6 +40,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   Aggregation,
   GoalKind,
+  GoalSchedule,
   HealthDataType,
   HealthMetricField,
   MetricDataType,
@@ -247,6 +249,13 @@ export default function TrackerEditor() {
     id && id !== "new"
       ? sourceMetrics.find((item) => item.id === id)
       : undefined;
+  const linkedScheduledReminders =
+    !groupScope && tracker
+      ? (state.calendarReminders ?? []).filter(
+          (reminder) =>
+            reminder.kind === "tracker" && reminder.metricId === tracker.id,
+        )
+      : [];
   const trackerPeriods = tracker
     ? state.trackedGoalPeriods[tracker.id]
     : undefined;
@@ -492,6 +501,15 @@ export default function TrackerEditor() {
         ? [tracker.reminder.time]
         : defaultReminderTimes(tracker ?? { id: presetId || "custom", category } as MetricDefinition)),
   );
+  const [reminderSchedules, setReminderSchedules] = useState<
+    (GoalSchedule | undefined)[]
+  >(
+    tracker?.reminders?.map((item) => item.schedule) ??
+      reminderTimes.map(() => undefined),
+  );
+  const [reminderFrequencyOpen, setReminderFrequencyOpen] = useState<
+    number | null
+  >(null);
   const [validation, setValidation] = useState<string | null>(null);
   const draftSignature = JSON.stringify({
     presetId,
@@ -538,6 +556,7 @@ export default function TrackerEditor() {
     selectedDays,
     reminderEnabled,
     reminderTimes,
+    reminderSchedules,
   });
   const initialDraftSignature = useRef(draftSignature);
   const dirtyRef = useRef(false);
@@ -659,6 +678,9 @@ export default function TrackerEditor() {
     setReminderTimes(
       preset.reminders?.map((item) => item.time) ??
         defaultReminderTimes({ id: preset.templateId, category: preset.category }),
+    );
+    setReminderSchedules(
+      preset.reminders?.map((item) => item.schedule) ?? [],
     );
     setScheduleMode("daily");
     setAdvanced(false);
@@ -878,9 +900,10 @@ export default function TrackerEditor() {
         enabled: reminderEnabled,
         time: reminderTimes[0] ?? "19:00",
       },
-      reminders: reminderTimes.map((time) => ({
+      reminders: reminderTimes.map((time, index) => ({
         enabled: reminderEnabled,
         time,
+        schedule: reminderSchedules[index],
       })),
       rankingDirection: dataType === "boolean" ? "higher" : ranking,
       defaultVisibility: visibility,
@@ -1003,17 +1026,22 @@ export default function TrackerEditor() {
     setBehaviorOpen(true);
     setRemindersOpen(true);
     scrolledToNotifications.current = false;
-    const timer = setTimeout(() => {
+    const scrollToReminders = () =>
       scrollRef.current?.scrollTo({
         y: Math.max(
           0,
-          behaviorSectionY.current + remindersSectionY.current - 75,
+          behaviorSectionY.current + remindersSectionY.current - 65,
         ),
         animated: true,
       });
-      scrolledToNotifications.current = true;
-    }, 220);
-    return () => clearTimeout(timer);
+    // Native layout can settle in more than one pass as Advanced and
+    // Reminders expand. Retry briefly so a Schedule deep-link always lands on
+    // the actual reminder controls rather than merely opening Advanced.
+    const timers = [180, 420, 760].map((delay) =>
+      setTimeout(scrollToReminders, delay),
+    );
+    scrolledToNotifications.current = true;
+    return () => timers.forEach(clearTimeout);
   }, [focus, groupScope, id]);
   function remove() {
     if (!tracker) return;
@@ -2355,20 +2383,19 @@ export default function TrackerEditor() {
                       />
                     </View>
                     {reminderTimes.map((time, index) => (
-                      <View key={index} style={styles.reminderRow}>
+                      <View key={index} style={styles.reminderBlock}>
+                      <View style={styles.reminderRow}>
                         <View style={styles.grow}>
-                          <Field
+                          <TimeInput
                             label={`Time ${index + 1}`}
                             value={time}
-                            set={(value) =>
+                            onChange={(value) =>
                               setReminderTimes((current) =>
                                 current.map((item, itemIndex) =>
                                   itemIndex === index ? value : item,
                                 ),
                               )
                             }
-                            colors={colors}
-                            keyboard={false}
                           />
                         </View>
                         {reminderTimes.length > 1 ? (
@@ -2376,20 +2403,70 @@ export default function TrackerEditor() {
                             icon="trash-outline"
                             label="Remove reminder"
                             onPress={() =>
-                              setReminderTimes((current) =>
-                                current.filter(
-                                  (_, itemIndex) => itemIndex !== index,
-                                ),
-                              )
+                              {
+                                setReminderTimes((current) =>
+                                  current.filter(
+                                    (_, itemIndex) => itemIndex !== index,
+                                  ),
+                                );
+                                setReminderSchedules((current) =>
+                                  current.filter(
+                                    (_, itemIndex) => itemIndex !== index,
+                                  ),
+                                );
+                              }
                             }
                           />
                         ) : null}
                       </View>
+                      <Pressable
+                        onPress={() =>
+                          setReminderFrequencyOpen((current) =>
+                            current === index ? null : index,
+                          )
+                        }
+                        style={[
+                          styles.reminderFrequency,
+                          { borderColor: colors.border },
+                        ]}
+                      >
+                        <Ionicons name="repeat-outline" size={14} color={accent} />
+                        <Text style={[styles.help, { color: colors.ink }]}>
+                          {reminderScheduleLabel(reminderSchedules[index])}
+                        </Text>
+                        <Ionicons
+                          name={
+                            reminderFrequencyOpen === index
+                              ? "chevron-up"
+                              : "chevron-down"
+                          }
+                          size={14}
+                          color={colors.faint}
+                        />
+                      </Pressable>
+                      {reminderFrequencyOpen === index ? (
+                        <ReminderScheduleEditor
+                          schedule={reminderSchedules[index]}
+                          anchorDate={activeFrom}
+                          onChange={(schedule) =>
+                            setReminderSchedules((current) => {
+                              const next = [...current];
+                              next[index] = schedule;
+                              return next;
+                            })
+                          }
+                        />
+                      ) : null}
+                      </View>
                     ))}
                     <Pressable
-                      onPress={() =>
-                        setReminderTimes((current) => [...current, "19:00"])
-                      }
+                      onPress={() => {
+                        setReminderTimes((current) => [...current, "19:00"]);
+                        setReminderSchedules((current) => [
+                          ...current,
+                          undefined,
+                        ]);
+                      }}
                       style={[styles.addReminder, { borderColor: accent }]}
                     >
                       <Ionicons name="add" size={16} color={accent} />
@@ -2397,6 +2474,50 @@ export default function TrackerEditor() {
                         Add time
                       </Text>
                     </Pressable>
+                    {linkedScheduledReminders.length ? (
+                      <View
+                        style={[
+                          styles.linkedReminders,
+                          { borderColor: colors.border },
+                        ]}
+                      >
+                        <Text style={[styles.help, { color: colors.muted }]}>
+                          Added from Schedule
+                        </Text>
+                        {linkedScheduledReminders.map((reminder) => (
+                          <Pressable
+                            key={reminder.id}
+                            onPress={() =>
+                              router.navigate({
+                                pathname: "/reminder-editor",
+                                params: { id: reminder.id },
+                              } as never)
+                            }
+                            style={styles.linkedReminderRow}
+                          >
+                            <Ionicons
+                              name="calendar-outline"
+                              size={14}
+                              color={accent}
+                            />
+                            <Text
+                              style={[
+                                styles.linkedReminderText,
+                                { color: colors.ink },
+                              ]}
+                            >
+                              {reminder.time} ·{" "}
+                              {reminderScheduleLabel(reminder.schedule)}
+                            </Text>
+                            <Ionicons
+                              name="chevron-forward"
+                              size={14}
+                              color={colors.faint}
+                            />
+                          </Pressable>
+                        ))}
+                      </View>
+                    ) : null}
                   </>
                 ) : null}
               </View>
@@ -2414,6 +2535,7 @@ export default function TrackerEditor() {
                     <Text style={[styles.help, { color: colors.muted }]}>
                       {
                         {
+                          once: "Once",
                           daily: "Every day",
                           selected_days: "Selected weekdays",
                           every_other_day: "Every other day",
@@ -2636,6 +2758,167 @@ export default function TrackerEditor() {
   );
 }
 
+function reminderScheduleLabel(schedule?: GoalSchedule) {
+  if (!schedule) return "Every day this goal is due";
+  return (
+    {
+      once: `Once · ${schedule.anchorDate ?? "selected date"}`,
+      daily: "Every day",
+      selected_days: "Selected weekdays",
+      every_other_day: "Every other day",
+      interval_days: `Every ${schedule.intervalDays ?? 1} days`,
+      days_of_month: "Specific dates each month",
+      weekly_min: "Minimum completions per week",
+      monthly_min: "Minimum completions per month",
+    }[schedule.mode] ?? "Custom frequency"
+  );
+}
+
+function ReminderScheduleEditor({
+  schedule,
+  anchorDate,
+  onChange,
+}: {
+  schedule?: GoalSchedule;
+  anchorDate: string;
+  onChange: (schedule?: GoalSchedule) => void;
+}) {
+  const colors = useAppColors();
+  const selected = schedule?.mode ?? "__goal__";
+  const replace = (changes: Partial<GoalSchedule>) =>
+    onChange({
+      mode: schedule?.mode ?? "daily",
+      anchorDate: schedule?.anchorDate ?? anchorDate,
+      ...schedule,
+      ...changes,
+    });
+  return (
+    <View style={[styles.reminderSchedule, { borderColor: colors.border }]}>
+      <MetricSelector
+        title="Frequency"
+        items={[
+          {
+            id: "__goal__",
+            label: "Whenever the goal is due",
+            sublabel: "Uses the goal schedule below",
+            icon: "flag-outline",
+          },
+          {
+            id: "once",
+            label: "Once",
+            sublabel: `On ${anchorDate}`,
+            icon: "calendar-outline",
+          },
+          {
+            id: "daily",
+            label: "Every day",
+            icon: "today-outline",
+          },
+          {
+            id: "selected_days",
+            label: "Selected weekdays",
+            icon: "calendar-number-outline",
+          },
+          {
+            id: "every_other_day",
+            label: "Every other day",
+            icon: "swap-horizontal-outline",
+          },
+          {
+            id: "interval_days",
+            label: "Custom interval",
+            icon: "repeat-outline",
+          },
+          {
+            id: "days_of_month",
+            label: "Dates each month",
+            icon: "calendar-clear-outline",
+          },
+        ]}
+        selectedIds={[selected]}
+        onChange={(ids) => {
+          const mode = ids[0];
+          if (!mode || mode === "__goal__") onChange(undefined);
+          else
+            onChange({
+              mode: mode as GoalSchedule["mode"],
+              anchorDate,
+              daysOfWeek:
+                mode === "selected_days" ? [1, 3, 5] : undefined,
+              intervalDays: mode === "interval_days" ? 7 : undefined,
+              daysOfMonth: mode === "days_of_month" ? [1, 15] : undefined,
+            });
+        }}
+        multiple={false}
+      />
+      {schedule?.mode === "selected_days" ? (
+        <MetricSelector
+          title="Weekdays"
+          items={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+            (label, day) => ({
+              id: String(day),
+              label,
+              icon: "calendar-outline" as const,
+            }),
+          )}
+          selectedIds={(schedule.daysOfWeek ?? []).map(String)}
+          onChange={(ids) => replace({ daysOfWeek: ids.map(Number) })}
+        />
+      ) : null}
+      {schedule?.mode === "interval_days" ? (
+        <View style={styles.reminderScheduleField}>
+          <Text style={[styles.help, { color: colors.muted }]}>
+            Days between reminders
+          </Text>
+          <TextInput
+            value={String(schedule.intervalDays ?? 7)}
+            onChangeText={(value) =>
+              replace({
+                intervalDays: Math.max(1, Math.round(Number(value) || 1)),
+              })
+            }
+            keyboardType="number-pad"
+            style={[
+              styles.reminderScheduleInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+        </View>
+      ) : null}
+      {schedule?.mode === "days_of_month" ? (
+        <View style={styles.reminderScheduleField}>
+          <Text style={[styles.help, { color: colors.muted }]}>
+            Dates each month
+          </Text>
+          <TextInput
+            value={(schedule.daysOfMonth ?? []).join(", ")}
+            onChangeText={(value) =>
+              replace({
+                daysOfMonth: [
+                  ...new Set(
+                    value
+                      .split(/[,\s]+/)
+                      .map(Number)
+                      .filter(
+                        (day) =>
+                          Number.isInteger(day) && day >= 1 && day <= 31,
+                      ),
+                  ),
+                ],
+              })
+            }
+            keyboardType="numbers-and-punctuation"
+            style={[
+              styles.reminderScheduleInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function ChoicePicker<T extends string>({
   label,
   value,
@@ -2830,7 +3113,46 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   submetricTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  reminderBlock: { gap: 6, marginBottom: 7 },
   reminderRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  reminderFrequency: {
+    minHeight: 36,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 7,
+  },
+  reminderSchedule: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 7,
+    gap: 7,
+  },
+  reminderScheduleField: { gap: 4 },
+  reminderScheduleInput: {
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  linkedReminders: {
+    borderWidth: 1,
+    borderRadius: 11,
+    padding: 8,
+    gap: 4,
+  },
+  linkedReminderRow: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  linkedReminderText: { flex: 1, fontSize: 8, fontWeight: "800" },
   addReminder: {
     minHeight: 36,
     borderWidth: 1,

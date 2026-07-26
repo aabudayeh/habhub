@@ -89,7 +89,16 @@ export function scheduleEventsForDate(
     )
       return [];
     const reminders =
-      metric.reminders?.filter((reminder) => reminder.enabled) ??
+      metric.reminders?.filter(
+        (reminder) =>
+          reminder.enabled &&
+          (!reminder.schedule ||
+            scheduleAppliesOnDate(
+              reminder.schedule,
+              reminder.schedule.anchorDate ?? metric.activeFrom,
+              localDate,
+            )),
+      ) ??
       (metric.reminder?.enabled ? [metric.reminder] : []);
     const final = localDate < dateKey();
     const completed =

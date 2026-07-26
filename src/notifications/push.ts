@@ -184,6 +184,15 @@ export async function syncGoalNotifications(state: AppState) {
       ) continue;
       const configured = metric.reminders?.length ? metric.reminders : metric.reminder ? [metric.reminder] : [];
       for (const reminder of configured.filter((item) => item.enabled)) {
+        if (
+          reminder.schedule &&
+          !scheduleAppliesOnDate(
+            reminder.schedule,
+            reminder.schedule.anchorDate ?? metric.activeFrom,
+            localDate,
+          )
+        )
+          continue;
         if (!/^\d{2}:\d{2}$/.test(reminder.time)) continue;
         const time = reminderTime(state, reminder.time);
         const trigger = new Date(`${localDate}T${time}:00`);

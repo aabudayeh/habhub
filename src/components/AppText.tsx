@@ -60,17 +60,22 @@ export function AppText({ style, preserveColor = false, ...props }: AppTextProps
   );
 }
 
-export function AppTextInput({
-  style,
-  placeholderTextColor,
-  ...props
-}: TextInputProps) {
+export const AppTextInput = React.forwardRef<NativeTextInput, TextInputProps>(
+function AppTextInput(
+  {
+    style,
+    placeholderTextColor,
+    ...props
+  },
+  ref,
+) {
   const scale = useFontScale();
   const colors = useAppColors();
   const flattened = StyleSheet.flatten(style) as TextStyle | undefined;
   const fontSize = flattened?.fontSize ?? 14;
   return (
     <NativeTextInput
+      ref={ref}
       {...props}
       allowFontScaling={false}
       placeholderTextColor={remapColor(placeholderTextColor, colors)}
@@ -85,4 +90,4 @@ export function AppTextInput({
       ]}
     />
   );
-}
+});

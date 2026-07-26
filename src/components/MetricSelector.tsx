@@ -58,9 +58,7 @@ export function MetricSelector({
     }
     onChange(
       selectedIds.includes(id)
-        ? selectedIds.length > 1
-          ? selectedIds.filter((item) => item !== id)
-          : selectedIds
+        ? selectedIds.filter((item) => item !== id)
         : [...selectedIds, id],
     );
   }

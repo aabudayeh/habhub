@@ -60,7 +60,7 @@ export default function JournalPage() {
           ),
     [anchor, period, state.settings.weekStartsOn],
   );
-  const items = useMemo<JournalItem[]>(() => {
+  const allItems = useMemo<JournalItem[]>(() => {
     const authored = (state.journalNotes ?? []).map((note) => ({
       id: note.id,
       title: note.title || "Unlabelled note",
@@ -125,31 +125,30 @@ export default function JournalPage() {
           editable: false,
         })),
     ]);
-    const normalized = query.trim().toLocaleLowerCase();
     return [...authored, ...entries, ...gym]
-      .filter(
-        (item) =>
-          (!filterIds.length ||
-            filterIds.some((filter) => item.filterIds.includes(filter))) &&
-          (!visibleDates || visibleDates.has(item.localDate)) &&
-          (!normalized ||
-            `${item.title} ${item.body} ${item.localDate}`
-              .toLocaleLowerCase()
-              .includes(normalized)),
-      )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [
-    filterIds,
-    query,
     state.entries,
     state.journalNotes,
     state.metrics,
     state.gymSessions,
     state.currentUserId,
-    visibleDates,
   ]);
+  const items = useMemo<JournalItem[]>(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return allItems.filter(
+      (item) =>
+        (!filterIds.length ||
+          filterIds.some((filter) => item.filterIds.includes(filter))) &&
+        (!visibleDates || visibleDates.has(item.localDate)) &&
+        (!normalized ||
+          `${item.title} ${item.body} ${item.localDate}`
+            .toLocaleLowerCase()
+            .includes(normalized)),
+    );
+  }, [allItems, filterIds, query, visibleDates]);
   const filterItems = useMemo(() => {
-    const metricIds = new Set(items.flatMap((item) => item.filterIds));
+    const metricIds = new Set(allItems.flatMap((item) => item.filterIds));
     const metrics = state.metrics
       .filter((metric) => metricIds.has(metric.id))
       .map((metric) => ({
@@ -179,9 +178,9 @@ export default function JournalPage() {
       ...(metricIds.has("unlabelled")
         ? [{
             id: "unlabelled",
-            label: "Unlabelled notes",
+            label: "Journal entries (no labels)",
             icon: "document-text-outline" as const,
-            group: "Notes",
+            group: "Journal entries",
           }]
         : []),
       ...(metricIds.has("gym")
@@ -196,7 +195,7 @@ export default function JournalPage() {
       ...exerciseKeys,
       ...labels,
     ];
-  }, [items, state.metrics]);
+  }, [allItems, state.metrics]);
   return (
     <Screen>
       <PageHeader
@@ -275,12 +274,18 @@ export default function JournalPage() {
         />
       </View>
       <MetricSelector
-        title="Filter journal"
+        title="Filter notes"
         items={filterItems}
         selectedIds={filterIds}
         onChange={setFilterIds}
         emptyLabel="All notes"
-        collapsibleGroups={["Trackers", "Gym exercises", "Labels"]}
+        collapsibleGroups={[
+          ...new Set(
+            state.metrics.map((metric) => metric.grouping || "Trackers"),
+          ),
+          "Gym exercises",
+          "Labels",
+        ]}
       />
       <View style={styles.notes}>
         {items.map((item) => (

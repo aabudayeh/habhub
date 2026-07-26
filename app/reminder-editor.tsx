@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import { Alert, Pressable, StyleSheet, View } from "react-native";
@@ -6,20 +7,52 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
+import { MetricSelector } from "@/src/components/MetricSelector";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TimeInput } from "@/src/components/TimeInput";
+import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { CalendarReminder, GoalSchedule } from "@/src/types";
 
+const FREQUENCIES: {
+  id: GoalSchedule["mode"];
+  label: string;
+  sublabel: string;
+}[] = [
+  { id: "once", label: "Once", sublabel: "Only on the selected date" },
+  { id: "daily", label: "Every day", sublabel: "Repeats daily" },
+  {
+    id: "selected_days",
+    label: "Selected weekdays",
+    sublabel: "Choose one or several weekdays",
+  },
+  {
+    id: "every_other_day",
+    label: "Every other day",
+    sublabel: "Repeats from the selected date",
+  },
+  {
+    id: "interval_days",
+    label: "Custom interval",
+    sublabel: "Repeat every chosen number of days",
+  },
+  {
+    id: "days_of_month",
+    label: "Dates each month",
+    sublabel: "For example, the 1st and 15th",
+  },
+];
+
 export default function ReminderEditor() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
-  const {
-    state,
-    saveCalendarReminder,
-    deleteCalendarReminder,
-  } = useApp();
+  const { id, date, time: routeTime } = useLocalSearchParams<{
+    id?: string;
+    date?: string;
+    time?: string;
+  }>();
+  const { state, saveCalendarReminder, deleteCalendarReminder } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const existing = (state.calendarReminders ?? []).find(
@@ -37,9 +70,13 @@ export default function ReminderEditor() {
     existing?.todoId ?? todos[0]?.id ?? "",
   );
   const [title, setTitle] = useState(existing?.title ?? "");
-  const [time, setTime] = useState(existing?.time ?? "19:00");
+  const [time, setTime] = useState(existing?.time ?? routeTime ?? "19:00");
+  const [scheduledDate, setScheduledDate] = useState(
+    existing?.schedule.anchorDate ?? date ?? dateKey(),
+  );
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [mode, setMode] = useState<GoalSchedule["mode"]>(
-    existing?.schedule.mode ?? "daily",
+    existing?.schedule.mode ?? "once",
   );
   const [days, setDays] = useState(
     existing?.schedule.daysOfWeek ?? [1, 2, 3, 4, 5],
@@ -47,13 +84,21 @@ export default function ReminderEditor() {
   const [interval, setInterval] = useState(
     String(existing?.schedule.intervalDays ?? 7),
   );
+  const [monthDays, setMonthDays] = useState(
+    (existing?.schedule.daysOfMonth ?? [1]).join(", "),
+  );
+
   const save = () => {
     const selectedTracker = trackers.find((metric) => metric.id === metricId);
     const selectedTodo = todos.find((todo) => todo.id === todoId);
+    if (kind === "tracker" && !selectedTracker)
+      return Alert.alert("Choose a tracker");
+    if (kind === "todo" && !selectedTodo)
+      return Alert.alert("Choose a to-do");
     const resolvedTitle =
       title.trim() ||
       (kind === "tracker" && selectedTracker
-        ? `Work on ${selectedTracker.name}`
+        ? selectedTracker.name
         : kind === "todo" && selectedTodo
           ? selectedTodo.title
           : "Reminder");
@@ -72,124 +117,223 @@ export default function ReminderEditor() {
           mode === "interval_days"
             ? Math.max(1, Math.round(Number(interval) || 1))
             : undefined,
-        anchorDate: dateKey(),
+        daysOfMonth:
+          mode === "days_of_month"
+            ? [
+                ...new Set(
+                  monthDays
+                    .split(",")
+                    .map((item) => Number(item.trim()))
+                    .filter(
+                      (item) =>
+                        Number.isInteger(item) && item >= 1 && item <= 31,
+                    ),
+                ),
+              ].sort((a, b) => a - b)
+            : undefined,
+        anchorDate: scheduledDate,
       },
     });
     router.back();
   };
+
   return (
     <Screen>
       <PageHeader
         title={existing ? "Edit reminder" : "New reminder"}
-        subtitle="Schedule a tracker, to-do, or general prompt."
+        subtitle="Choose what, when, and how often."
         showMenu={false}
-        action={<IconButton icon="close" label="Close" onPress={() => router.back()} />}
+        action={
+          <IconButton
+            icon="close"
+            label="Close"
+            onPress={() => router.back()}
+          />
+        }
       />
       <Card style={styles.card}>
-        <View style={styles.wrap}>
-          {(
-            [
-              ["tracker", "Tracker"],
-              ["todo", "To-do"],
-              ["general", "General"],
-            ] as const
-          ).map(([value, label]) => (
-            <Chip
-              key={value}
-              label={label}
-              selected={kind === value}
-              onPress={() => setKind(value)}
-            />
-          ))}
-        </View>
+        <MetricSelector
+          title="Reminder for"
+          items={[
+            {
+              id: "tracker",
+              label: "A tracker",
+              icon: "analytics-outline",
+              sublabel: "A goal or tracked activity",
+            },
+            {
+              id: "todo",
+              label: "An existing to-do",
+              icon: "checkbox-outline",
+              sublabel: "Choose from your to-do list",
+            },
+            {
+              id: "general",
+              label: "Something else",
+              icon: "notifications-outline",
+              sublabel: "A standalone reminder",
+            },
+          ]}
+          selectedIds={[kind]}
+          onChange={(ids) =>
+            ids[0] && setKind(ids[0] as CalendarReminder["kind"])
+          }
+          multiple={false}
+        />
         {kind === "tracker" ? (
-          <View style={styles.choices}>
-            {trackers.map((metric) => (
-              <Chip
-                key={metric.id}
-                label={metric.name}
-                selected={metricId === metric.id}
-                onPress={() => setMetricId(metric.id)}
-              />
-            ))}
-          </View>
-        ) : null}
-        {kind === "todo" ? (
-          <View style={styles.choices}>
-            {todos.map((todo) => (
-              <Chip
-                key={todo.id}
-                label={todo.title}
-                selected={todoId === todo.id}
-                onPress={() => setTodoId(todo.id)}
-              />
-            ))}
-          </View>
-        ) : null}
-        <TextInput
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Custom message (optional)"
-          placeholderTextColor={colors.faint}
-          style={[styles.input, { color: colors.ink, borderColor: colors.border }]}
-        />
-        <TextInput
-          value={time}
-          onChangeText={setTime}
-          placeholder="19:00"
-          placeholderTextColor={colors.faint}
-          style={[styles.input, { color: colors.ink, borderColor: colors.border }]}
-        />
-      </Card>
-      <Card style={styles.card}>
-        <Text style={[styles.label, { color: colors.ink }]}>How often?</Text>
-        <View style={styles.wrap}>
-          {(
-            [
-              ["daily", "Daily"],
-              ["selected_days", "Chosen days"],
-              ["every_other_day", "Every other day"],
-              ["interval_days", "Every N days"],
-            ] as const
-          ).map(([value, label]) => (
-            <Chip
-              key={value}
-              label={label}
-              selected={mode === value}
-              onPress={() => setMode(value)}
-            />
-          ))}
-        </View>
-        {mode === "selected_days" ? (
-          <View style={styles.wrap}>
-            {["S", "M", "T", "W", "T", "F", "S"].map((label, day) => (
-              <Chip
-                key={`${label}-${day}`}
-                label={label}
-                selected={days.includes(day)}
-                onPress={() =>
-                  setDays((current) =>
-                    current.includes(day)
-                      ? current.filter((item) => item !== day)
-                      : [...current, day],
-                  )
-                }
-              />
-            ))}
-          </View>
-        ) : null}
-        {mode === "interval_days" ? (
-          <TextInput
-            value={interval}
-            onChangeText={setInterval}
-            keyboardType="number-pad"
-            placeholder="Every N days"
-            placeholderTextColor={colors.faint}
-            style={[styles.input, { color: colors.ink, borderColor: colors.border }]}
+          <MetricSelector
+            title="Choose tracker"
+            items={trackers.map((metric) => ({
+              id: metric.id,
+              label: metric.name,
+              icon: metric.icon as keyof typeof Ionicons.glyphMap,
+              color: metric.color,
+              group: metric.grouping || "Trackers",
+            }))}
+            selectedIds={metricId ? [metricId] : []}
+            onChange={(ids) => ids[0] && setMetricId(ids[0])}
+            multiple={false}
+            collapsibleGroups={[
+              ...new Set(
+                trackers.map((metric) => metric.grouping || "Trackers"),
+              ),
+            ]}
           />
         ) : null}
+        {kind === "todo" ? (
+          <MetricSelector
+            title="Choose to-do"
+            items={todos.map((todo) => ({
+              id: todo.id,
+              label: todo.title,
+              icon: "checkbox-outline",
+              sublabel: todo.dueAt
+                ? `Due ${todo.dueAt.slice(0, 10)}`
+                : "No deadline",
+            }))}
+            selectedIds={todoId ? [todoId] : []}
+            onChange={(ids) => ids[0] && setTodoId(ids[0])}
+            multiple={false}
+            emptyLabel="No to-dos available"
+          />
+        ) : null}
+        <View>
+          <Text style={[styles.label, { color: colors.ink }]}>
+            Message (optional)
+          </Text>
+          <TextInput
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Use the selected item's name"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.input,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+        </View>
       </Card>
-      <Pressable onPress={save} style={[styles.save, { backgroundColor: accent }]}>
+
+      <Card style={styles.card}>
+        <Pressable
+          onPress={() => setCalendarOpen((open) => !open)}
+          style={[styles.dateButton, { borderColor: colors.border }]}
+        >
+          <Ionicons name="calendar-outline" size={17} color={accent} />
+          <View style={styles.grow}>
+            <Text style={[styles.label, { color: colors.muted }]}>Date</Text>
+            <Text style={[styles.dateText, { color: colors.ink }]}>
+              {scheduledDate}
+            </Text>
+          </View>
+          <Ionicons
+            name={calendarOpen ? "chevron-up" : "chevron-down"}
+            size={16}
+            color={colors.muted}
+          />
+        </Pressable>
+        {calendarOpen ? (
+          <MonthCalendar
+            monthDate={scheduledDate}
+            selectedDate={scheduledDate}
+            onMonthChange={setScheduledDate}
+            onSelect={(next) => {
+              setScheduledDate(next);
+              setCalendarOpen(false);
+            }}
+          />
+        ) : null}
+        <TimeInput value={time} onChange={setTime} label="Time" />
+        <MetricSelector
+          title="Frequency"
+          items={FREQUENCIES.map((item) => ({
+            ...item,
+            icon: "repeat-outline" as const,
+          }))}
+          selectedIds={[mode]}
+          onChange={(ids) =>
+            ids[0] && setMode(ids[0] as GoalSchedule["mode"])
+          }
+          multiple={false}
+        />
+        {mode === "selected_days" ? (
+          <MetricSelector
+            title="Weekdays"
+            items={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
+              (label, day) => ({
+                id: String(day),
+                label,
+                icon: "calendar-outline" as const,
+              }),
+            )}
+            selectedIds={days.map(String)}
+            onChange={(ids) => setDays(ids.map(Number))}
+          />
+        ) : null}
+        {mode === "interval_days" ? (
+          <View>
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Repeat every
+            </Text>
+            <View style={styles.inline}>
+              <TextInput
+                value={interval}
+                onChangeText={setInterval}
+                keyboardType="number-pad"
+                placeholder="7"
+                placeholderTextColor={colors.faint}
+                style={[
+                  styles.shortInput,
+                  { color: colors.ink, borderColor: colors.border },
+                ]}
+              />
+              <Text style={[styles.suffix, { color: colors.muted }]}>days</Text>
+            </View>
+          </View>
+        ) : null}
+        {mode === "days_of_month" ? (
+          <View>
+            <Text style={[styles.label, { color: colors.ink }]}>
+              Dates each month
+            </Text>
+            <TextInput
+              value={monthDays}
+              onChangeText={setMonthDays}
+              keyboardType="numbers-and-punctuation"
+              placeholder="1, 15"
+              placeholderTextColor={colors.faint}
+              style={[
+                styles.input,
+                { color: colors.ink, borderColor: colors.border },
+              ]}
+            />
+          </View>
+        ) : null}
+      </Card>
+      <Pressable
+        onPress={save}
+        style={[styles.save, { backgroundColor: accent }]}
+      >
         <Text style={styles.saveText}>Save reminder</Text>
       </Pressable>
       {existing ? (
@@ -218,9 +362,8 @@ export default function ReminderEditor() {
 
 const styles = StyleSheet.create({
   card: { gap: 10, marginBottom: 8 },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  choices: { maxHeight: 145, flexDirection: "row", flexWrap: "wrap", gap: 5 },
-  label: { fontSize: 10, fontWeight: "900" },
+  grow: { flex: 1 },
+  label: { fontSize: 9, fontWeight: "900", marginBottom: 5 },
   input: {
     minHeight: 42,
     borderWidth: 1,
@@ -229,6 +372,28 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
   },
+  dateButton: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  dateText: { fontSize: 10, fontWeight: "900" },
+  inline: { flexDirection: "row", alignItems: "center", gap: 8 },
+  shortInput: {
+    width: 76,
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    textAlign: "center",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  suffix: { fontSize: 9, fontWeight: "800" },
   save: {
     minHeight: 46,
     borderRadius: 14,

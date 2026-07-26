@@ -16,6 +16,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TimeInput } from "@/src/components/TimeInput";
 import { dateKey } from "@/src/domain/date";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
@@ -606,15 +607,9 @@ export default function LogScreen() {
                 <Text style={[styles.fieldLabel, { color: colors.muted }]}>
                   Time
                 </Text>
-                <TextInput
+                <TimeInput
                   value={logTime}
-                  onChangeText={setLogTime}
-                  placeholder="HH:MM"
-                  placeholderTextColor={palette.faint}
-                  style={[
-                    styles.dateInput,
-                    { color: colors.ink, borderColor: colors.border },
-                  ]}
+                  onChange={setLogTime}
                 />
               </View>
               <Pressable

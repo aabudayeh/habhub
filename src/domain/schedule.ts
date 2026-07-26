@@ -6,6 +6,8 @@ export function scheduleAppliesOnDate(
   anchorDate: string,
   localDate: string,
 ) {
+  if (schedule?.mode === "once")
+    return localDate === (schedule.anchorDate ?? anchorDate);
   if (!schedule || schedule.mode === "daily") return localDate >= anchorDate;
   if (localDate < anchorDate) return false;
   const day = new Date(`${localDate}T12:00:00`).getDay();

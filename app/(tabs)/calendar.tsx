@@ -1,7 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { router, useFocusEffect } from "expo-router";
+import React, { useCallback, useMemo, useState } from "react";
+import {
+  Alert,
+  BackHandler,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
@@ -31,6 +37,9 @@ export default function SchedulePage() {
   const [anchor, setAnchor] = useState(dateKey());
   const [editing, setEditing] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(
+    () => new Set(),
+  );
   const startHour = state.settings.scheduleStartHour ?? 7;
   const hours = useMemo(
     () => [...HOURS.filter((hour) => hour >= startHour), ...HOURS.filter((hour) => hour < startHour)],
@@ -46,6 +55,19 @@ export default function SchedulePage() {
         dates.map((date) => [date, scheduleEventsForDate(state, date)]),
       ) as Record<string, ScheduleEvent[]>,
     [dates, state],
+  );
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          if (!editing) return false;
+          setEditing(false);
+          return true;
+        },
+      );
+      return () => subscription.remove();
+    }, [editing]),
   );
 
   function openEvent(event: ScheduleEvent, localDate: string) {
@@ -87,6 +109,37 @@ export default function SchedulePage() {
       } as never);
   }
 
+  function toggleRow(rowId: string) {
+    setExpandedRows((current) => {
+      const next = new Set(current);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  function createInSlot(localDate: string, time?: string) {
+    Alert.alert("Add to this slot", undefined, [
+      {
+        text: "New to-do",
+        onPress: () =>
+          router.navigate({
+            pathname: "/todo-editor",
+            params: { date: localDate, time },
+          } as never),
+      },
+      {
+        text: "New reminder",
+        onPress: () =>
+          router.navigate({
+            pathname: "/reminder-editor",
+            params: { date: localDate, time },
+          } as never),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
   const weekLabel = `${friendlyDate(dates[0])} – ${friendlyDate(
     dates[dates.length - 1],
   )}`;
@@ -98,7 +151,7 @@ export default function SchedulePage() {
           <View style={styles.headerActions}>
             <InfoPopover
               label="Explain Schedule"
-              message="Tap an item to edit it, hold the calendar to enter edit mode, double-tap an empty cell to create a dated to-do, tap a crowded cell's count to expand it, and tap the date range to jump through the month."
+              message="Tap an item to edit it. Hold an empty slot to add a to-do or reminder, hold a filled slot to expand it, tap a row label to reveal crowded rows, and hold the calendar background to enter edit mode."
             />
             <Pressable
               onPress={() => setEditing((value) => !value)}
@@ -133,9 +186,11 @@ export default function SchedulePage() {
           <Text style={[styles.weekTitle, { color: colors.ink }]}>
             {weekLabel}
           </Text>
-          <Text style={[styles.weekMeta, { color: colors.muted }]}>
-            Tap to choose a week
-          </Text>
+          <Ionicons
+            name={calendarOpen ? "chevron-up" : "chevron-down"}
+            size={15}
+            color={colors.muted}
+          />
         </Pressable>
         <Pressable
           onPress={() => setAnchor(dateWithOffsetFrom(anchor, 7))}
@@ -236,8 +291,42 @@ export default function SchedulePage() {
             );
           })}
         </View>
-        <View style={[styles.allDayRow, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.allDayLabel, { color: colors.muted }]}>ALL</Text>
+        <View
+          style={[
+            styles.allDayRow,
+            {
+              borderBottomColor: colors.border,
+              minHeight: expandedRows.has("all")
+                ? Math.max(
+                    44,
+                    ...dates.map(
+                      (date) =>
+                        (eventsByDate[date] ?? []).filter(
+                          (event) => !event.time,
+                        ).length *
+                          18 +
+                        8,
+                    ),
+                  )
+                : 44,
+            },
+          ]}
+        >
+          <Pressable
+            onPress={() => toggleRow("all")}
+            style={styles.rowLabelButton}
+          >
+            <Text style={[styles.allDayLabel, { color: colors.muted }]}>
+              ALL
+            </Text>
+            <Ionicons
+              name={
+                expandedRows.has("all") ? "chevron-up" : "chevron-down"
+              }
+              size={9}
+              color={colors.faint}
+            />
+          </Pressable>
           {dates.map((date) => (
             <ScheduleCell
               key={date}
@@ -246,24 +335,55 @@ export default function SchedulePage() {
               )}
               date={date}
               editing={editing}
+              expanded={expandedRows.has("all")}
+              onExpand={() => toggleRow("all")}
               onOpen={openEvent}
-              onCreate={(date) =>
-                router.navigate({
-                  pathname: "/todo-editor",
-                  params: { date },
-                } as never)
-              }
+              onCreate={(date) => createInSlot(date)}
             />
           ))}
         </View>
         {hours.map((hour) => (
           <View
             key={hour}
-            style={[styles.hourRow, { borderBottomColor: colors.border }]}
+            style={[
+              styles.hourRow,
+              {
+                borderBottomColor: colors.border,
+                minHeight: expandedRows.has(String(hour))
+                  ? Math.max(
+                      48,
+                      ...dates.map(
+                        (date) =>
+                          (eventsByDate[date] ?? []).filter(
+                            (event) =>
+                              event.time &&
+                              Number(event.time.slice(0, 2)) === hour,
+                          ).length *
+                            18 +
+                          8,
+                      ),
+                    )
+                  : 48,
+              },
+            ]}
           >
-            <Text style={[styles.hourLabel, { color: colors.muted }]}>
-              {formatHour(hour, state.settings.timeFormat)}
-            </Text>
+            <Pressable
+              onPress={() => toggleRow(String(hour))}
+              style={styles.rowLabelButton}
+            >
+              <Text style={[styles.hourLabel, { color: colors.muted }]}>
+                {formatHour(hour, state.settings.timeFormat)}
+              </Text>
+              <Ionicons
+                name={
+                  expandedRows.has(String(hour))
+                    ? "chevron-up"
+                    : "chevron-down"
+                }
+                size={9}
+                color={colors.faint}
+              />
+            </Pressable>
             {dates.map((date) => (
               <ScheduleCell
                 key={date}
@@ -274,15 +394,14 @@ export default function SchedulePage() {
                 )}
                 date={date}
                 editing={editing}
+                expanded={expandedRows.has(String(hour))}
+                onExpand={() => toggleRow(String(hour))}
                 onOpen={openEvent}
                 onCreate={(date) =>
-                  router.navigate({
-                    pathname: "/todo-editor",
-                    params: {
-                      date,
-                      time: `${String(hour).padStart(2, "0")}:00`,
-                    },
-                  } as never)
+                  createInSlot(
+                    date,
+                    `${String(hour).padStart(2, "0")}:00`,
+                  )
                 }
               />
             ))}
@@ -298,25 +417,27 @@ function ScheduleCell({
   events,
   date,
   editing,
+  expanded,
+  onExpand,
   onOpen,
   onCreate,
 }: {
   events: ScheduleEvent[];
   date: string;
   editing: boolean;
+  expanded: boolean;
+  onExpand: () => void;
   onOpen: (event: ScheduleEvent, date: string) => void;
   onCreate: (date: string) => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [expanded, setExpanded] = useState(false);
-  const lastTap = React.useRef(0);
   return (
     <Pressable
-      onPress={() => {
-        const now = Date.now();
-        if (now - lastTap.current < 320) onCreate(date);
-        lastTap.current = now;
+      delayLongPress={380}
+      onLongPress={() => {
+        if (events.length) onExpand();
+        else onCreate(date);
       }}
       style={[styles.cell, { borderLeftColor: colors.border }]}
     >
@@ -356,7 +477,7 @@ function ScheduleCell({
         );
       })}
       {events.length > 2 ? (
-        <Pressable onPress={() => setExpanded((value) => !value)}>
+        <Pressable onPress={onExpand}>
           <Text style={[styles.more, { color: colors.muted }]}>
             {expanded ? "Collapse" : `+${events.length - 2}`}
           </Text>
@@ -403,9 +524,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  navCopy: { flex: 1, alignItems: "center" },
+  navCopy: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
   weekTitle: { fontSize: 11, fontWeight: "900" },
-  weekMeta: { fontSize: 7, marginTop: 2 },
   quickActions: { flexDirection: "row", gap: 6, marginVertical: 7 },
   scheduleSettings: {
     minHeight: 46,
@@ -462,23 +588,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   allDayLabel: {
-    width: 31,
     fontSize: 6,
     fontWeight: "900",
     textAlign: "center",
-    paddingTop: 12,
+  },
+  rowLabelButton: {
+    width: 31,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 5,
+    gap: 2,
   },
   hourRow: {
-    height: 48,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
   },
   hourLabel: {
-    width: 31,
     fontSize: 6,
     fontWeight: "800",
     textAlign: "center",
-    paddingTop: 4,
   },
   cell: {
     flex: 1,

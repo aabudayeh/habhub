@@ -8,6 +8,7 @@ import {
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TimeInput } from "@/src/components/TimeInput";
 import {
   Card,
   Chip,
@@ -39,6 +40,12 @@ export default function TodoEditor() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const existing = (state.todos ?? []).find((todo) => todo.id === id);
+  const linkedScheduledReminders = existing
+    ? (state.calendarReminders ?? []).filter(
+        (reminder) =>
+          reminder.kind === "todo" && reminder.todoId === existing.id,
+      )
+    : [];
   const [title, setTitle] = useState(existing?.title ?? "");
   const [description, setDescription] = useState(
     existing?.description ?? "",
@@ -399,15 +406,10 @@ export default function TodoEditor() {
                 }}
               />
             ) : null}
-            <TextInput
+            <TimeInput
               value={dueTime}
-              onChangeText={setDueTime}
-              placeholder="18:00"
-              placeholderTextColor={colors.faint}
-              style={[
-                styles.timeInput,
-                { color: colors.ink, borderColor: colors.border },
-              ]}
+              onChange={setDueTime}
+              label="Time"
             />
           </>
         ) : null}
@@ -672,22 +674,15 @@ export default function TodoEditor() {
                 {reminder.date}
               </Text>
             </Pressable>
-            <TextInput
+            <TimeInput
               value={reminder.time}
-              onChangeText={(value) =>
+              onChange={(value) =>
                 setReminders((current) =>
                   current.map((item, itemIndex) =>
                     itemIndex === index ? { ...item, time: value } : item,
                   ),
                 )
               }
-              placeholder="09:00"
-              placeholderTextColor={colors.faint}
-              style={[
-                styles.timeInput,
-                styles.reminderInput,
-                { color: colors.ink, borderColor: colors.border },
-              ]}
             />
             <IconButton
               icon="trash-outline"
@@ -726,6 +721,35 @@ export default function TodoEditor() {
             Add custom reminder
           </Text>
         </Pressable>
+        {linkedScheduledReminders.length ? (
+          <View style={[styles.scheduledList, { borderColor: colors.border }]}>
+            <Text style={[styles.help, { color: colors.muted }]}>
+              Added from Schedule
+            </Text>
+            {linkedScheduledReminders.map((reminder) => (
+              <Pressable
+                key={reminder.id}
+                onPress={() =>
+                  router.navigate({
+                    pathname: "/reminder-editor",
+                    params: { id: reminder.id },
+                  } as never)
+                }
+                style={styles.scheduledRow}
+              >
+                <Ionicons name="calendar-outline" size={14} color={accent} />
+                <Text style={[styles.scheduledText, { color: colors.ink }]}>
+                  {reminder.time} · {reminder.schedule.mode.replaceAll("_", " ")}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={14}
+                  color={colors.faint}
+                />
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         </> : null}
       </Card>
       <Pressable onPress={() => save()} style={[styles.save, { backgroundColor: accent }]}>
@@ -817,6 +841,19 @@ const styles = StyleSheet.create({
   },
   reminderDateText: { flex: 1, fontSize: 9, fontWeight: "800" },
   reminderInput: { flex: 1 },
+  scheduledList: {
+    borderWidth: 1,
+    borderRadius: 11,
+    padding: 8,
+    gap: 4,
+  },
+  scheduledRow: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  scheduledText: { flex: 1, fontSize: 8, fontWeight: "800" },
   presetSection: { gap: 7 },
   presetHeading: {
     minHeight: 46,

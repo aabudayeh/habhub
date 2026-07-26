@@ -111,6 +111,7 @@ export type GymMetricMapping =
 
 export type GoalSchedule = {
   mode:
+    | "once"
     | "daily"
     | "selected_days"
     | "every_other_day"
@@ -128,7 +129,12 @@ export type GoalSchedule = {
   anchorDate?: string;
 };
 
-export type GoalReminder = { enabled: boolean; time: string };
+export type GoalReminder = {
+  enabled: boolean;
+  time: string;
+  /** Optional cadence; omitted means every day the goal itself is due. */
+  schedule?: GoalSchedule;
+};
 
 export type MetricDefinition = {
   id: string;
