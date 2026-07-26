@@ -61,6 +61,8 @@ export default function TodoEditor() {
   );
   const [repeatOpen, setRepeatOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [customDaysBefore, setCustomDaysBefore] = useState("2");
   const [days, setDays] = useState<number[]>(
     existing?.recurrence?.daysOfWeek ?? [1, 2, 3, 4, 5],
   );
@@ -131,7 +133,10 @@ export default function TodoEditor() {
         : dueDate;
     if (
       reminders.some(
-        (item) => item.date === date && item.daysBeforeDue === daysBeforeDue,
+        (item) =>
+          item.date === date &&
+          item.daysBeforeDue === daysBeforeDue &&
+          !item.id.startsWith("reminder-weekly-"),
       )
     )
       return;
@@ -144,6 +149,27 @@ export default function TodoEditor() {
         daysBeforeDue,
       },
     ]);
+  };
+  const isWeeklyReminder = (reminder: ReminderDraft) =>
+    reminder.id.startsWith("reminder-weekly-");
+  const relativeReminderSelected = (daysBeforeDue: number) =>
+    reminders.some(
+      (reminder) =>
+        reminder.daysBeforeDue === daysBeforeDue &&
+        !isWeeklyReminder(reminder),
+    );
+  const toggleRelativeReminder = (daysBeforeDue: number) => {
+    if (relativeReminderSelected(daysBeforeDue)) {
+      setReminders((current) =>
+        current.filter(
+          (reminder) =>
+            reminder.daysBeforeDue !== daysBeforeDue ||
+            isWeeklyReminder(reminder),
+        ),
+      );
+      return;
+    }
+    addReminder(daysBeforeDue);
   };
   const addWeeklyBeforeDeadline = () => {
     const created = existing?.createdAt.slice(0, 10) ?? dateKey();
@@ -165,6 +191,39 @@ export default function TodoEditor() {
       ),
     ]);
   };
+  const weeklyBeforeSelected = reminders.some(isWeeklyReminder);
+  const toggleWeeklyBeforeDeadline = () => {
+    if (weeklyBeforeSelected) {
+      setReminders((current) =>
+        current.filter((reminder) => !isWeeklyReminder(reminder)),
+      );
+      return;
+    }
+    addWeeklyBeforeDeadline();
+  };
+  const addCustomDaysBefore = () => {
+    const daysBefore = Math.round(Number(customDaysBefore));
+    if (!Number.isFinite(daysBefore) || daysBefore < 1 || daysBefore > 3650) {
+      Alert.alert(
+        "Choose a valid number",
+        "Enter between 1 and 3,650 days before the deadline.",
+      );
+      return;
+    }
+    if (!relativeReminderSelected(daysBefore)) addReminder(daysBefore);
+  };
+  useEffect(() => {
+    setReminders((current) =>
+      current.map((reminder) =>
+        reminder.daysBeforeDue === undefined
+          ? reminder
+          : {
+              ...reminder,
+              date: dateWithOffsetFrom(dueDate, -reminder.daysBeforeDue),
+            },
+      ),
+    );
+  }, [dueDate]);
   const save = (exit: () => void = () => router.back()) => {
     if (!title.trim())
       return Alert.alert("Add a title", "What needs to be done?");
@@ -456,28 +515,142 @@ export default function TodoEditor() {
         </Pressable>
         {remindersOpen ? <>
         {hasDeadline ? (
-          <View style={styles.wrap}>
-            {[0, 1, 3, 7].map((offset) => (
-              <Chip
-                key={offset}
-                label={
-                  offset === 0
-                    ? "At deadline"
-                    : offset === 1
-                      ? "1 day before"
-                      : `${offset} days before`
-                }
-                selected={reminders.some(
-                  (item) => item.daysBeforeDue === offset,
-                )}
-                onPress={() => addReminder(offset)}
+          <View style={styles.presetSection}>
+            <Pressable
+              onPress={() => setPresetsOpen((open) => !open)}
+              style={[
+                styles.presetHeading,
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.canvas,
+                },
+              ]}
+            >
+              <Ionicons name="notifications-outline" size={17} color={accent} />
+              <View style={styles.copy}>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Reminder presets
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Choose one or several
+                </Text>
+              </View>
+              <Ionicons
+                name={presetsOpen ? "chevron-up" : "chevron-down"}
+                size={16}
+                color={colors.muted}
               />
-            ))}
-            <Chip
-              label="Weekly before"
-              selected={false}
-              onPress={addWeeklyBeforeDeadline}
-            />
+            </Pressable>
+            {presetsOpen ? (
+              <View
+                style={[
+                  styles.presetList,
+                  { borderColor: colors.border },
+                ]}
+              >
+                {(
+                  [
+                    [0, "At the deadline", "Uses the deadline time"],
+                    [1, "One day before", "At 09:00"],
+                    [3, "Three days before", "At 09:00"],
+                    [7, "One week before", "At 09:00"],
+                  ] as const
+                ).map(([offset, label, description]) => {
+                  const selected = relativeReminderSelected(offset);
+                  return (
+                    <Pressable
+                      key={offset}
+                      onPress={() => toggleRelativeReminder(offset)}
+                      style={[
+                        styles.presetRow,
+                        { borderBottomColor: colors.border },
+                      ]}
+                    >
+                      <Ionicons
+                        name={selected ? "checkbox" : "square-outline"}
+                        size={19}
+                        color={selected ? accent : colors.faint}
+                      />
+                      <View style={styles.copy}>
+                        <Text
+                          style={[styles.presetTitle, { color: colors.ink }]}
+                        >
+                          {label}
+                        </Text>
+                        <Text
+                          style={[styles.presetMeta, { color: colors.muted }]}
+                        >
+                          {description}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+                <Pressable
+                  onPress={toggleWeeklyBeforeDeadline}
+                  style={[
+                    styles.presetRow,
+                    { borderBottomColor: colors.border },
+                  ]}
+                >
+                  <Ionicons
+                    name={weeklyBeforeSelected ? "checkbox" : "square-outline"}
+                    size={19}
+                    color={weeklyBeforeSelected ? accent : colors.faint}
+                  />
+                  <View style={styles.copy}>
+                    <Text
+                      style={[styles.presetTitle, { color: colors.ink }]}
+                    >
+                      Every week before the deadline
+                    </Text>
+                    <Text
+                      style={[styles.presetMeta, { color: colors.muted }]}
+                    >
+                      Weekly at 09:00, starting from the task date
+                    </Text>
+                  </View>
+                </Pressable>
+                <View style={styles.customPresetRow}>
+                  <View style={styles.copy}>
+                    <Text
+                      style={[styles.presetTitle, { color: colors.ink }]}
+                    >
+                      Custom days before
+                    </Text>
+                    <Text
+                      style={[styles.presetMeta, { color: colors.muted }]}
+                    >
+                      Add any number of days before the deadline
+                    </Text>
+                  </View>
+                  <TextInput
+                    value={customDaysBefore}
+                    onChangeText={setCustomDaysBefore}
+                    keyboardType="number-pad"
+                    placeholder="2"
+                    placeholderTextColor={colors.faint}
+                    style={[
+                      styles.customDaysInput,
+                      {
+                        color: colors.ink,
+                        borderColor: colors.border,
+                        backgroundColor: colors.card,
+                      },
+                    ]}
+                  />
+                  <Pressable
+                    onPress={addCustomDaysBefore}
+                    style={[
+                      styles.customDaysAdd,
+                      { backgroundColor: accent },
+                    ]}
+                  >
+                    <Ionicons name="add" size={17} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
           </View>
         ) : null}
         {reminders.map((reminder, index) => (
@@ -644,6 +817,55 @@ const styles = StyleSheet.create({
   },
   reminderDateText: { flex: 1, fontSize: 9, fontWeight: "800" },
   reminderInput: { flex: 1 },
+  presetSection: { gap: 7 },
+  presetHeading: {
+    minHeight: 46,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  presetList: {
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  presetRow: {
+    minHeight: 50,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  presetTitle: { fontSize: 9, lineHeight: 13, fontWeight: "900" },
+  presetMeta: { fontSize: 7, lineHeight: 10, marginTop: 1 },
+  customPresetRow: {
+    minHeight: 58,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  customDaysInput: {
+    width: 52,
+    minHeight: 36,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    textAlign: "center",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  customDaysAdd: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   addReminder: {
     minHeight: 38,
     borderWidth: 1,
