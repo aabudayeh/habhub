@@ -406,7 +406,9 @@ export function TutorialSpotlight() {
       tutorialGuideId: undefined,
       tutorialGuideRunId: undefined,
     });
-  }, [updateSettings]);
+    if (guideId === "full")
+      setTimeout(() => router.replace("/" as never), 0);
+  }, [guideId, updateSettings]);
 
   useEffect(() => {
     setIndex(0);

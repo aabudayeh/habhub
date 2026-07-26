@@ -42,17 +42,24 @@ function storedPreferences(preferences: NotificationSettings) {
   return { ...preferences, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
 }
 
+let pushRegistrationQueue: Promise<void> = Promise.resolve();
+
 async function registerPushToken(
   token: string,
   preferences: NotificationSettings,
 ) {
-  if (!supabase) return;
-  const { error } = await supabase.rpc('register_device_push_token', {
-    p_token: token,
-    p_platform: Platform.OS,
-    p_preferences: storedPreferences(preferences),
+  const client = supabase;
+  if (!client) return;
+  const operation = pushRegistrationQueue.catch(() => undefined).then(async () => {
+    const { error } = await client.rpc('register_device_push_token', {
+      p_token: token,
+      p_platform: Platform.OS,
+      p_preferences: storedPreferences(preferences),
+    });
+    if (error) throw error;
   });
-  if (error) throw error;
+  pushRegistrationQueue = operation;
+  return operation;
 }
 
 function notificationErrorMessage(error: unknown) {

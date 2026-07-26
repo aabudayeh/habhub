@@ -199,7 +199,6 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     setStatus('requesting');
     try {
       await nativeHealthAdapter.requestPermissions(dataTypes, backgroundAccess);
-      await runSync('connect', true);
       const latest = stateRef.current.settings;
       const healthSync = {
         ...latest.healthSync,
@@ -211,6 +210,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         ...stateRef.current,
         settings: { ...latest, healthSync },
       };
+      // Permission approval should return control to onboarding immediately.
+      // The first lightweight import runs after navigation instead of making
+      // the setup button wait while Health Connect reads and maps its records.
+      setStatus('ready');
+      if (stateRef.current.settings.onboardingComplete)
+        setTimeout(() => {
+          runSync('connect', true).catch(() => undefined);
+        }, 350);
     } catch (error) {
       setStatus('error');
       throw error;
@@ -228,7 +235,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   }, [state.settings.healthSync, state.settings.syncMode]);
 
   useEffect(() => {
-    if (!state.settings.healthSync.enabled || state.settings.syncMode === 'manual') return;
+    if (
+      !state.settings.onboardingComplete ||
+      !state.settings.healthSync.enabled ||
+      state.settings.syncMode === 'manual'
+    ) return;
     // An automatic failure must remain quiet until the user retries or the app
     // is reopened. Including `error` here previously created an immediate loop.
     if (status !== 'ready') return;
@@ -237,11 +248,23 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       : 0;
     const stale = Date.now() - last >= minimumIntervalMs(state.settings.syncMode);
     if (stale) runSync('open').catch(() => undefined);
-  }, [persisted.lastSyncedAt, runSync, state.settings.healthSync.enabled, state.settings.syncMode, status]);
+  }, [
+    persisted.lastSyncedAt,
+    runSync,
+    state.settings.healthSync.enabled,
+    state.settings.onboardingComplete,
+    state.settings.syncMode,
+    status,
+  ]);
 
   useEffect(() => {
     const subscription = NativeAppState.addEventListener('change', (next) => {
-      if (next !== 'active' || !stateRef.current.settings.healthSync.enabled || stateRef.current.settings.syncMode === 'manual') return;
+      if (
+        next !== 'active' ||
+        !stateRef.current.settings.onboardingComplete ||
+        !stateRef.current.settings.healthSync.enabled ||
+        stateRef.current.settings.syncMode === 'manual'
+      ) return;
       // A denied/revoked permission stays quiet until the user explicitly
       // reconnects; Android emits several active events around permission UI.
       if (persistedRef.current.error) return;

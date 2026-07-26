@@ -15,6 +15,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth/AuthProvider";
+import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
@@ -178,6 +179,10 @@ export default function Onboarding() {
   const initialized = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   useKeyboardReveal(scrollRef);
+  useEffect(() => {
+    setCloudSyncPaused("onboarding", true);
+    return () => setCloudSyncPaused("onboarding", false);
+  }, []);
   const nextProfile = useMemo(
     () => ({
       ...profile,
@@ -391,17 +396,17 @@ export default function Onboarding() {
       );
     }
   }
-  async function saveDisplayName() {
+  function saveDisplayName() {
     const name = displayName.trim().replace(/\s+/g, " ").slice(0, 40);
     if (!name) return;
     updateMemberName(state.currentUserId, name);
     if (auth.status === "signedIn")
-      await auth.updateDisplayName(name).catch(() => undefined);
+      void auth.updateDisplayName(name).catch(() => undefined);
   }
   async function finish() {
     if (finishing) return;
     setFinishing(true);
-    await saveDisplayName();
+    saveDisplayName();
     updateSettings({
       onboardingComplete: true,
       tutorialComplete: false,
@@ -484,7 +489,7 @@ export default function Onboarding() {
     setCustomDataType("number");
   }
   async function continueFlow() {
-    if (step === 0) await saveDisplayName();
+    if (step === 0) saveDisplayName();
     if (step === 2) configure();
     if (step === 4) await finish();
     else setStep((value) => value + 1);
@@ -496,7 +501,7 @@ export default function Onboarding() {
       return;
     }
     setFinishing(true);
-    await saveDisplayName();
+    saveDisplayName();
     updateSettings({
       onboardingComplete: true,
       tutorialComplete: false,
