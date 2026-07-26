@@ -7,6 +7,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   UIManager,
   View,
@@ -119,6 +120,7 @@ export default function Insights() {
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
+  const overviewScrollRef = useRef<ScrollView>(null);
   const progressMode =
     state.settings.progressViewMode === "compact"
       ? "goal_maps"
@@ -171,13 +173,40 @@ export default function Insights() {
     setCloudSyncPaused("progress-edit", editing);
     return () => setCloudSyncPaused("progress-edit", false);
   }, [editing]);
+  useEffect(() => {
+    if (!editing || progressMode !== "overview") return;
+    const timer = setTimeout(
+      () => overviewScrollRef.current?.scrollToEnd({ animated: true }),
+      120,
+    );
+    return () => clearTimeout(timer);
+  }, [editing, progressMode]);
   const activeProgressFilter = activeTrackerViewId(state, "progress");
+  const configuredOrder = (
+    state.settings.progressMetricOrderIds?.length
+      ? state.settings.progressMetricOrderIds
+      : [
+          ...selectedIds.filter((id) => id !== TRACKED),
+          ...state.metrics.map((metric) => metric.id),
+        ]
+  ).filter((id, index, all) => all.indexOf(id) === index);
+  const orderIndex = new Map(
+    configuredOrder.map((metricId, index) => [metricId, index]),
+  );
+  const fallbackOrder = new Map(
+    state.metrics.map((metric, index) => [metric.id, index]),
+  );
+  const orderedMetrics = [...metrics].sort(
+    (left, right) =>
+      (orderIndex.get(left.id) ??
+        configuredOrder.length + (fallbackOrder.get(left.id) ?? 0)) -
+      (orderIndex.get(right.id) ??
+        configuredOrder.length + (fallbackOrder.get(right.id) ?? 0)),
+  );
   const selectedMetrics =
     activeProgressFilter === ALL_TRACKERS_FILTER
-      ? selectedIds
-          .map((id) => metrics.find((metric) => metric.id === id))
-          .filter((metric): metric is MetricDefinition => Boolean(metric))
-      : metrics;
+      ? orderedMetrics.filter((metric) => selectedIds.includes(metric.id))
+      : orderedMetrics;
   const tracked =
     selectedIds.includes(TRACKED) ||
     activeProgressFilter === TRACKED_ONLY_FILTER;
@@ -222,15 +251,35 @@ export default function Insights() {
 
   function select(ids: string[]) {
     setSelectedIds(ids);
-    updateSettings({ progressMetricIds: ids });
+    const orderedIds = [
+      ...configuredOrder,
+      ...state.metrics.map((metric) => metric.id),
+      ...ids.filter((id) => id !== TRACKED),
+    ].filter(
+      (id, index, all) => id !== TRACKED && all.indexOf(id) === index,
+    );
+    updateSettings({
+      progressMetricIds: ids,
+      progressMetricOrderIds: orderedIds,
+    });
   }
   function move(metricId: string, targetIndex: number) {
-    const current = selectedIds.filter((id) => id !== TRACKED);
+    const current = selectedMetrics.map((metric) => metric.id);
     const index = current.indexOf(metricId);
     if (index < 0) return;
     const [item] = current.splice(index, 1);
     current.splice(Math.max(0, Math.min(targetIndex, current.length)), 0, item);
-    select(selectedIds.includes(TRACKED) ? [TRACKED, ...current] : current);
+    const visibleIds = new Set(current);
+    const universe = [
+      ...configuredOrder,
+      ...state.metrics.map((metric) => metric.id),
+    ].filter((id, position, all) => all.indexOf(id) === position);
+    let visibleIndex = 0;
+    const progressMetricOrderIds = universe.map((id) =>
+      visibleIds.has(id) ? current[visibleIndex++] : id,
+    );
+    progressMetricOrderIds.push(...current.slice(visibleIndex));
+    updateSettings({ progressMetricOrderIds });
   }
 
   function openDay(day: string) {
@@ -391,6 +440,7 @@ export default function Insights() {
   return (
     <View style={styles.pageSwipe} {...pageViewSwipeResponder.panHandlers}>
     <Screen
+      scrollRef={overviewScrollRef}
       contentContainerStyle={{ paddingBottom: 14 }}
       refreshEnabled={!editing}
     >
@@ -921,7 +971,34 @@ function GoalMapProgress({
                 <Text style={styles.doneText}>Done</Text>
               </Pressable>
             </View>
-          ) : undefined
+          ) : (
+            <View style={styles.headerEditActions}>
+              <Pressable
+                accessibilityLabel="Toggle compact grid"
+                onPress={() =>
+                  updateSettings({ compactProgressGrid: !compact })
+                }
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons
+                  name={compact ? "grid" : "grid-outline"}
+                  size={17}
+                  color={accent}
+                />
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Open performance"
+                onPress={() => router.push("/performance" as never)}
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons
+                  name="speedometer-outline"
+                  size={17}
+                  color={accent}
+                />
+              </Pressable>
+            </View>
+          )
         }
       />
       <ProgressModeBar mode={mode} onChange={onModeChange} />
@@ -993,6 +1070,7 @@ function GoalMapProgress({
               style={[
                 styles.mapCard,
                 compact && styles.compactMapCard,
+                compact && range === "year" && styles.compactYearMapCard,
               ]}
             >
               <View
@@ -1141,6 +1219,7 @@ function GoalMapProgress({
                 style={[
                   styles.mapCard,
                   compact && styles.compactMapCard,
+                  compact && range === "year" && styles.compactYearMapCard,
                 ]}
               >
                 <View
@@ -2077,6 +2156,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 7,
     gap: 4,
+  },
+  compactYearMapCard: {
+    paddingHorizontal: 12,
+    paddingBottom: 9,
   },
   mapHeading: {
     flexDirection: "row",

@@ -577,6 +577,8 @@ export type UserSettings = {
   /** Up to five badge ids the current user chose to feature in each group. */
   badgeShowcaseByGroup: Record<string, string[]>;
   progressMetricIds: string[];
+  /** Personal Progress card order, independent from filters and visibility. */
+  progressMetricOrderIds?: string[];
   leaderboardMetricIdsByGroup: Record<string, string[]>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<

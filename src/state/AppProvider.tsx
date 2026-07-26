@@ -231,6 +231,7 @@ function withoutMetricSelections(
   return {
     ...settings,
     progressMetricIds: remove(settings.progressMetricIds),
+    progressMetricOrderIds: remove(settings.progressMetricOrderIds ?? []),
     leaderboardMetricIdsByGroup: Object.fromEntries(
       Object.entries(settings.leaderboardMetricIdsByGroup).map(
         ([groupId, ids]) => [groupId, remove(ids)],
