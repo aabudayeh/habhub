@@ -1243,15 +1243,10 @@ function GoalMapProgress({
             today,
           );
           const period = heatmapModel.period;
-          const completionDenominator = metric.goalEnabled
-            ? period.applicableDates.length
-            : dates.filter((date) => date <= today).length;
-          const completionNumerator = metric.goalEnabled
-            ? period.goalsReached
-            : period.loggedDates.length;
-          const completion = completionDenominator
+          // Match the percentage rendered by the non-compact GoalHeatmap.
+          const completion = period.applicableDates.length
             ? Math.round(
-                (completionNumerator / completionDenominator) * 100,
+                (period.goalsReached / period.applicableDates.length) * 100,
               )
             : 0;
           return (
