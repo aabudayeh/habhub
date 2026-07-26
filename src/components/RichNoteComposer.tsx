@@ -40,6 +40,7 @@ export type RichNoteComposerHandle = {
   setBlock: (block: Block) => void;
   toggleInline: (style: Exclude<Inline, "link">) => void;
   insertLink: (text: string, url: string) => void;
+  replaceHashtag: (label: string) => void;
 };
 
 function parseRun(raw: string): InlineRun {
@@ -140,9 +141,10 @@ export const RichNoteComposer = forwardRef<
     value: string;
     onChange: (value: string) => void;
     onEditingChange?: (editing: boolean) => void;
+    onHashtagQuery?: (query: string | null) => void;
   }
 >(function RichNoteComposer(
-  { value, onChange, onEditingChange },
+  { value, onChange, onEditingChange, onHashtagQuery },
   ref,
 ) {
   const colors = useAppColors();
@@ -207,8 +209,26 @@ export const RichNoteComposer = forwardRef<
         setActive({ line: active.line, run: nextIndex });
         focus(active.line, nextIndex);
       },
+      replaceHashtag: (label) => {
+        const line = lines[active.line] ?? parseLine("");
+        const current = line.runs[active.run] ?? parseRun("");
+        const cleanLabel = label.trim().replace(/^#/, "").replace(/\s+/g, "_");
+        const match = current.text.match(
+          /(^|\s)#([\p{L}\p{N}_-]*)$/u,
+        );
+        if (!match || !cleanLabel) return;
+        const prefix = current.text.slice(0, match.index ?? 0);
+        const runs = [...line.runs];
+        runs[active.run] = {
+          ...current,
+          text: `${prefix}${match[1]}#${cleanLabel} `,
+        };
+        replaceLine(active.line, { ...line, runs });
+        onHashtagQuery?.(null);
+        focus(active.line, active.run);
+      },
     }),
-    [active, lines, replaceLine],
+    [active, lines, onHashtagQuery, replaceLine],
   );
 
   const insertAfter = (index: number, runIndex: number) => {
@@ -317,6 +337,10 @@ export const RichNoteComposer = forwardRef<
                   const runs = [...line.runs];
                   runs[runIndex] = { ...run, text };
                   replaceLine(lineIndex, { ...line, runs });
+                  const hashtag = text.match(
+                    /(?:^|\s)#([\p{L}\p{N}_-]*)$/u,
+                  );
+                  onHashtagQuery?.(hashtag ? hashtag[1] : null);
                 }}
                 onSubmitEditing={() => insertAfter(lineIndex, runIndex)}
                 onKeyPress={(event) =>

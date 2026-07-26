@@ -43,12 +43,54 @@ export default function NoteEditor() {
   const [labels, setLabels] = useState(existing?.labels ?? []);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [hashtagQuery, setHashtagQuery] = useState<string | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkText, setLinkText] = useState("");
   const [linkUrl, setLinkUrl] = useState("https://");
   const undo = useRef<string[]>([]);
   const redo = useRef<string[]>([]);
   const composer = useRef<RichNoteComposerHandle>(null);
+  const existingLabels = [
+    ...new Set(
+      (state.journalNotes ?? []).flatMap((note) => note.labels ?? []),
+    ),
+  ];
+  const normalizedHashtagQuery = hashtagQuery?.toLocaleLowerCase() ?? "";
+  const hashtagSuggestions =
+    hashtagQuery === null
+      ? []
+      : [
+          ...state.metrics
+            .filter((metric) =>
+              metric.name
+                .toLocaleLowerCase()
+                .includes(normalizedHashtagQuery),
+            )
+            .map((metric) => ({
+              id: `metric:${metric.id}`,
+              label: metric.name,
+              icon: metric.icon as keyof typeof Ionicons.glyphMap,
+              color: metric.color,
+              metricId: metric.id,
+            })),
+          ...existingLabels
+            .filter(
+              (label) =>
+                label.toLocaleLowerCase().includes(normalizedHashtagQuery) &&
+                !state.metrics.some(
+                  (metric) =>
+                    metric.name.replace(/\s+/g, "_").toLocaleLowerCase() ===
+                    label.toLocaleLowerCase(),
+                ),
+            )
+            .map((label) => ({
+              id: `label:${label}`,
+              label,
+              icon: "pricetag-outline" as const,
+              color: accent,
+              metricId: undefined,
+            })),
+        ].slice(0, 6);
 
   React.useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () =>
@@ -154,10 +196,59 @@ export default function NoteEditor() {
       <Tool icon="link-outline" onPress={() => setLinkOpen(true)} />
     </View>
   );
+  const editorTools = (
+    <View style={styles.editorTools}>
+      {toolbar}
+      {hashtagSuggestions.length ? (
+        <View
+          style={[
+            styles.tagMenu,
+            { borderColor: colors.border, backgroundColor: colors.card },
+          ]}
+        >
+          {hashtagSuggestions.map((suggestion) => (
+            <Pressable
+              key={suggestion.id}
+              onPress={() => {
+                composer.current?.replaceHashtag(suggestion.label);
+                if (suggestion.metricId) {
+                  setMetricIds((current) =>
+                    current.includes(suggestion.metricId!)
+                      ? current
+                      : [...current, suggestion.metricId!],
+                  );
+                } else {
+                  setLabels((current) =>
+                    current.includes(suggestion.label)
+                      ? current
+                      : [...current, suggestion.label],
+                  );
+                }
+              }}
+              style={styles.tagRow}
+            >
+              <Ionicons
+                name={suggestion.icon}
+                size={15}
+                color={suggestion.color}
+              />
+              <Text style={[styles.tagText, { color: colors.ink }]}>
+                #{suggestion.label.replace(/\s+/g, "_")}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
 
   return (
-    <View style={styles.page}>
+    <>
     <Screen
+      fixedTop={
+        keyboardVisible || composerFocused ? editorTools : undefined
+      }
+      keyboardDismissMode="none"
       contentContainerStyle={keyboardVisible ? styles.keyboardContent : undefined}
     >
       <PageHeader
@@ -192,9 +283,7 @@ export default function NoteEditor() {
               group: trackerGroupLabel(metric),
             })),
             ...[
-              ...new Set(
-                (state.journalNotes ?? []).flatMap((note) => note.labels ?? []),
-              ),
+              ...existingLabels,
             ].map((label) => ({
               id: `label:${label}`,
               label: `#${label}`,
@@ -232,6 +321,7 @@ export default function NoteEditor() {
           value={body}
           onChange={change}
           onEditingChange={setComposerFocused}
+          onHashtagQuery={setHashtagQuery}
         />
         {imageUri ? <Image source={imageUri} style={styles.image} /> : null}
         <Pressable onPress={pickImage} style={styles.imageButton}>
@@ -268,9 +358,6 @@ export default function NoteEditor() {
         </Pressable>
       ) : null}
     </Screen>
-    {keyboardVisible || composerFocused ? (
-      <View style={styles.floatingToolbar}>{toolbar}</View>
-    ) : null}
     <Modal
       transparent
       visible={linkOpen}
@@ -334,7 +421,7 @@ export default function NoteEditor() {
         </Pressable>
       </Pressable>
     </Modal>
-    </View>
+    </>
   );
 }
 
@@ -363,9 +450,9 @@ function Tool({
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1 },
   keyboardContent: { paddingBottom: 64 },
   editor: { gap: 8 },
+  editorTools: { gap: 5 },
   linkHeading: {
     flexDirection: "row",
     alignItems: "center",
@@ -393,13 +480,24 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 10,
   },
-  floatingToolbar: {
-    position: "absolute",
-    left: 8,
-    right: 8,
-    bottom: 7,
-    zIndex: 100,
+  tagMenu: {
+    borderWidth: 1,
+    borderRadius: 11,
+    padding: 4,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 3,
   },
+  tagRow: {
+    minHeight: 30,
+    maxWidth: "100%",
+    borderRadius: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 7,
+  },
+  tagText: { fontSize: 9, fontWeight: "800" },
   tool: {
     minWidth: 29,
     height: 28,
