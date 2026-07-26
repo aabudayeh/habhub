@@ -1,14 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useMemo, useRef, useState } from "react";
-import {
-  Animated,
-  Alert,
-  PanResponder,
-  Pressable,
-  StyleSheet,
-  View,
-} from "react-native";
+import { Animated, PanResponder, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import {
@@ -31,16 +24,16 @@ export function TodoTodayList({
   localDate,
   onComplete,
   editing = false,
+  onRequestEdit,
 }: {
   localDate: string;
   onComplete?: (todoId: string) => void;
   editing?: boolean;
+  onRequestEdit?: () => void;
 }) {
   const {
     state,
     toggleTodo,
-    skipTodo,
-    deleteTodo,
     reorderTodo,
     saveTodo,
     updateSettings,
@@ -54,14 +47,16 @@ export function TodoTodayList({
       (a, b) =>
         Number(Boolean(b.pinnedAt)) -
           Number(Boolean(a.pinnedAt)) ||
-        Number(
-          todoCompletedOnDate(a, localDate) ||
-            todoSkippedOnDate(a, localDate),
-        ) -
-          Number(
-            todoCompletedOnDate(b, localDate) ||
-              todoSkippedOnDate(b, localDate),
-          ) ||
+        (state.settings.completedTodayBehavior === "bottom"
+          ? Number(
+              todoCompletedOnDate(a, localDate) ||
+                todoSkippedOnDate(a, localDate),
+            ) -
+            Number(
+              todoCompletedOnDate(b, localDate) ||
+                todoSkippedOnDate(b, localDate),
+            )
+          : 0) ||
         (a.order ?? 0) - (b.order ?? 0) ||
         (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"),
     );
@@ -81,54 +76,6 @@ export function TodoTodayList({
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
       .findIndex((item) => item.id === targetTodo.id);
     if (globalTargetIndex >= 0) reorderTodo(todo.id, globalTargetIndex);
-  };
-
-  const openActions = (todo: TodoItem) => {
-    const sourceIndex = items.findIndex((item) => item.id === todo.id);
-    Alert.alert(todo.title, "Edit, reorder, skip, or delete this to-do.", [
-      {
-        text: "Edit",
-        onPress: () =>
-          router.navigate({
-            pathname: "/todo-editor",
-            params: { id: todo.id },
-          } as never),
-      },
-      {
-        text: todo.pinnedAt ? "Unpin" : "Pin to top",
-        onPress: () =>
-          saveTodo({
-            ...todo,
-            pinnedAt: todo.pinnedAt ? undefined : new Date().toISOString(),
-          }),
-      },
-      ...(sourceIndex > 0
-        ? [
-            {
-              text: "Move up",
-              onPress: () => moveTodoBeside(todo, items[sourceIndex - 1]),
-            },
-          ]
-        : []),
-      ...(sourceIndex < items.length - 1
-        ? [
-            {
-              text: "Move down",
-              onPress: () => moveTodoBeside(todo, items[sourceIndex + 1]),
-            },
-          ]
-        : []),
-      {
-        text: todoSkippedOnDate(todo, localDate) ? "Undo skip" : "Skip",
-        onPress: () => skipTodo(todo.id, localDate),
-      },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => deleteTodo(todo.id),
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
   };
 
   return (
@@ -191,7 +138,9 @@ export function TodoTodayList({
               onMove={(targetIndex) => {
                 moveTodoBeside(todo, shownItems[targetIndex]);
               }}
-              onLongPress={() => openActions(todo)}
+              onLongPress={() => {
+                if (!editing) onRequestEdit?.();
+              }}
               onToggle={() => {
                 const completing = !todoCompletedOnDate(todo, localDate);
                 toggleTodo(todo.id, localDate);

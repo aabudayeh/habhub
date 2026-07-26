@@ -539,14 +539,20 @@ export default function DisplaySettings() {
               Completed goals
             </Text>
             <Text style={[styles.meta, { color: colors.muted }]}>
-              Keep completed goals at the bottom or hide them from Today.
+              Keep completed goals in place, move them down, or hide them.
             </Text>
           </View>
           <View style={styles.countChips}>
-            {(["bottom", "hide"] as const).map((behavior) => (
+            {(["stay", "bottom", "hide"] as const).map((behavior) => (
               <Chip
                 key={behavior}
-                label={behavior === "bottom" ? "Move down" : "Hide"}
+                label={
+                  behavior === "stay"
+                    ? "Do nothing"
+                    : behavior === "bottom"
+                      ? "Move down"
+                      : "Hide"
+                }
                 selected={
                   (state.settings.completedTodayBehavior ?? "bottom") ===
                   behavior

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
   BackHandler,
@@ -151,7 +151,7 @@ export default function SchedulePage() {
           <View style={styles.headerActions}>
             <InfoPopover
               label="Explain Schedule"
-              message="Tap an item to edit it. Hold an empty slot to add a to-do or reminder, hold a filled slot to expand it, tap a row label to reveal crowded rows, and hold the calendar background to enter edit mode."
+              message="Tap an item to edit it. Double-tap or hold any slot to add another to-do or reminder. Tap a row label to reveal crowded rows, and hold the calendar background to enter edit mode."
             />
             <Pressable
               onPress={() => setEditing((value) => !value)}
@@ -165,9 +165,6 @@ export default function SchedulePage() {
                 size={16}
                 color={accent}
               />
-              <Text style={[styles.actionText, { color: accent }]}>
-                {editing ? "Done" : "Edit"}
-              </Text>
             </Pressable>
           </View>
         }
@@ -432,12 +429,50 @@ function ScheduleCell({
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const lastTap = useRef(0);
+  const cellLongPress = useRef(false);
+  const eventLongPress = useRef(false);
+  const eventTap = useRef<{ id: string; at: number } | undefined>(undefined);
+  const eventTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const pressEvent = (event: ScheduleEvent) => {
+    const now = Date.now();
+    if (
+      eventTap.current?.id === event.id &&
+      now - eventTap.current.at < 320
+    ) {
+      if (eventTimer.current) clearTimeout(eventTimer.current);
+      eventTap.current = undefined;
+      onCreate(date);
+      return;
+    }
+    eventTap.current = { id: event.id, at: now };
+    if (eventTimer.current) clearTimeout(eventTimer.current);
+    eventTimer.current = setTimeout(() => {
+      eventTap.current = undefined;
+      onOpen(event, date);
+    }, 325);
+  };
   return (
     <Pressable
       delayLongPress={380}
       onLongPress={() => {
-        if (events.length) onExpand();
-        else onCreate(date);
+        cellLongPress.current = true;
+        onCreate(date);
+      }}
+      onPress={() => {
+        if (cellLongPress.current) {
+          cellLongPress.current = false;
+          return;
+        }
+        const now = Date.now();
+        if (now - lastTap.current < 320) {
+          lastTap.current = 0;
+          onCreate(date);
+        } else {
+          lastTap.current = now;
+        }
       }}
       style={[styles.cell, { borderLeftColor: colors.border }]}
     >
@@ -459,7 +494,20 @@ function ScheduleCell({
         return (
           <Pressable
             key={event.id}
-            onPress={() => onOpen(event, date)}
+            delayLongPress={380}
+            onPress={() => {
+              if (eventLongPress.current) {
+                eventLongPress.current = false;
+                return;
+              }
+              pressEvent(event);
+            }}
+            onLongPress={() => {
+              eventLongPress.current = true;
+              if (eventTimer.current) clearTimeout(eventTimer.current);
+              eventTap.current = undefined;
+              onCreate(date);
+            }}
             style={[styles.event, { backgroundColor: `${color}24` }]}
           >
             <Text
@@ -503,12 +551,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   editButton: {
-    minHeight: 32,
+    width: 34,
+    height: 32,
     borderWidth: 1,
     borderRadius: 10,
-    paddingHorizontal: 9,
-    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 4,
   },
   actionText: { fontSize: 8, fontWeight: "900" },

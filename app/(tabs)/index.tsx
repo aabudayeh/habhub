@@ -210,6 +210,7 @@ export default function Today() {
       if (pinOrder) return pinOrder;
       if (a.pinnedTodayAt && b.pinnedTodayAt)
         return a.pinnedTodayAt.localeCompare(b.pinnedTodayAt);
+      if (completedBehavior === "stay") return a.order - b.order;
       const aMet = metricApplicableOnDate(state, a, state.currentUserId, today) && scheduledGoalReached(state, a, state.currentUserId, today);
       const bMet = metricApplicableOnDate(state, b, state.currentUserId, today) && scheduledGoalReached(state, b, state.currentUserId, today);
       return Number(aMet) - Number(bMet) || a.order - b.order;
@@ -646,6 +647,7 @@ export default function Today() {
             localDate={today}
             onComplete={celebrateTodo}
             editing={editing}
+            onRequestEdit={beginEditing}
           />
         ) : null}
         <View style={styles.sectionRow}>
@@ -764,6 +766,7 @@ export default function Today() {
             localDate={today}
             onComplete={celebrateTodo}
             editing={editing}
+            onRequestEdit={beginEditing}
           />
         ) : null}
         {editing ? (
@@ -2181,20 +2184,9 @@ function Celebration({
   );
 }
 
-const COMPLETION_SEGMENTS = [
-  { left: 18, top: 0, width: 18, height: 14 },
-  { left: 36, top: 0, width: 18, height: 18 },
-  { left: 42, top: 14, width: 12, height: 14 },
-  { left: 36, top: 28, width: 18, height: 26 },
-  { left: 18, top: 40, width: 18, height: 14 },
-  { left: 0, top: 28, width: 18, height: 26 },
-  { left: 0, top: 14, width: 12, height: 14 },
-  { left: 0, top: 0, width: 18, height: 18 },
-] as const;
-
 /**
  * The selected completion shape is the progress track itself. Its outline is
- * revealed clockwise, rather than drawing a second ring around a small icon.
+ * revealed continuously, rather than drawing a second ring around a small icon.
  */
 function CompletionShapeIndicator({
   icon,
@@ -2218,40 +2210,20 @@ function CompletionShapeIndicator({
         color="rgba(255,255,255,.28)"
         style={styles.completionShapeIcon}
       />
-      {COMPLETION_SEGMENTS.map((segment, index) => {
-        const opacity = Math.max(
-          0,
-          Math.min(1, normalized * COMPLETION_SEGMENTS.length - index),
-        );
-        if (opacity <= 0) return null;
-        return (
-          <View
-            key={`${segment.left}-${segment.top}`}
-            pointerEvents="none"
-            style={[
-              styles.completionSegment,
-              {
-                left: segment.left,
-                top: segment.top,
-                width: segment.width,
-                height: segment.height,
-                opacity,
-              },
-            ]}
-          >
-            <Ionicons
-              name={icon}
-              size={54}
-              color={color}
-              style={{
-                position: "absolute",
-                left: -segment.left,
-                top: -segment.top,
-              }}
-            />
-          </View>
-        );
-      })}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.completionReveal,
+          { width: `${normalized * 100}%` },
+        ]}
+      >
+        <Ionicons
+          name={icon}
+          size={54}
+          color={color}
+          style={styles.completionShapeIcon}
+        />
+      </View>
       <Text preserveColor style={styles.completionShapeLabel}>
         {label}
       </Text>
@@ -2362,7 +2334,13 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   completionShapeIcon: { position: "absolute", left: 0, top: 0 },
-  completionSegment: { position: "absolute", overflow: "hidden" },
+  completionReveal: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    height: 54,
+    overflow: "hidden",
+  },
   completionShapeLabel: {
     color: palette.white,
     fontSize: 10,

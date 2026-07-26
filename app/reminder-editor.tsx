@@ -7,12 +7,15 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { MetricSelector } from "@/src/components/MetricSelector";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
-import { isInternalTracker } from "@/src/domain/trackerCatalog";
+import {
+  isInternalTracker,
+  trackerGroupLabel,
+} from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { CalendarReminder, GoalSchedule } from "@/src/types";
@@ -52,7 +55,12 @@ export default function ReminderEditor() {
     date?: string;
     time?: string;
   }>();
-  const { state, saveCalendarReminder, deleteCalendarReminder } = useApp();
+  const {
+    state,
+    saveCalendarReminder,
+    deleteCalendarReminder,
+    updateMetric,
+  } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const existing = (state.calendarReminders ?? []).find(
@@ -102,6 +110,50 @@ export default function ReminderEditor() {
         : kind === "todo" && selectedTodo
           ? selectedTodo.title
           : "Reminder");
+    const schedule: GoalSchedule = {
+      mode,
+      daysOfWeek: mode === "selected_days" ? days : undefined,
+      intervalDays:
+        mode === "interval_days"
+          ? Math.max(1, Math.round(Number(interval) || 1))
+          : undefined,
+      daysOfMonth:
+        mode === "days_of_month"
+          ? [
+              ...new Set(
+                monthDays
+                  .split(",")
+                  .map((item) => Number(item.trim()))
+                  .filter(
+                    (item) =>
+                      Number.isInteger(item) && item >= 1 && item <= 31,
+                  ),
+              ),
+            ].sort((a, b) => a - b)
+          : undefined,
+      anchorDate: scheduledDate,
+    };
+    if (kind === "tracker" && selectedTracker) {
+      const reminder = { enabled: true, time, schedule };
+      const previous = selectedTracker.reminders ?? [];
+      const reminders = [
+        ...previous.filter(
+          (item) =>
+            !(
+              item.time === reminder.time &&
+              JSON.stringify(item.schedule ?? {}) === JSON.stringify(schedule)
+            ),
+        ),
+        reminder,
+      ];
+      updateMetric(selectedTracker.id, {
+        reminder,
+        reminders,
+      });
+      if (existing) deleteCalendarReminder(existing.id);
+      router.back();
+      return;
+    }
     saveCalendarReminder({
       id: existing?.id ?? `calendar-${Date.now().toString(36)}`,
       title: resolvedTitle,
@@ -110,29 +162,7 @@ export default function ReminderEditor() {
       todoId: kind === "todo" ? todoId : undefined,
       time,
       enabled: true,
-      schedule: {
-        mode,
-        daysOfWeek: mode === "selected_days" ? days : undefined,
-        intervalDays:
-          mode === "interval_days"
-            ? Math.max(1, Math.round(Number(interval) || 1))
-            : undefined,
-        daysOfMonth:
-          mode === "days_of_month"
-            ? [
-                ...new Set(
-                  monthDays
-                    .split(",")
-                    .map((item) => Number(item.trim()))
-                    .filter(
-                      (item) =>
-                        Number.isInteger(item) && item >= 1 && item <= 31,
-                    ),
-                ),
-              ].sort((a, b) => a - b)
-            : undefined,
-        anchorDate: scheduledDate,
-      },
+      schedule,
     });
     router.back();
   };
@@ -152,7 +182,7 @@ export default function ReminderEditor() {
         }
       />
       <Card style={styles.card}>
-        <MetricSelector
+        <SelectionMenu
           title="Reminder for"
           items={[
             {
@@ -181,27 +211,22 @@ export default function ReminderEditor() {
           multiple={false}
         />
         {kind === "tracker" ? (
-          <MetricSelector
+          <SelectionMenu
             title="Choose tracker"
             items={trackers.map((metric) => ({
               id: metric.id,
               label: metric.name,
               icon: metric.icon as keyof typeof Ionicons.glyphMap,
               color: metric.color,
-              group: metric.grouping || "Trackers",
+              group: trackerGroupLabel(metric),
             }))}
             selectedIds={metricId ? [metricId] : []}
             onChange={(ids) => ids[0] && setMetricId(ids[0])}
             multiple={false}
-            collapsibleGroups={[
-              ...new Set(
-                trackers.map((metric) => metric.grouping || "Trackers"),
-              ),
-            ]}
           />
         ) : null}
         {kind === "todo" ? (
-          <MetricSelector
+          <SelectionMenu
             title="Choose to-do"
             items={todos.map((todo) => ({
               id: todo.id,
@@ -264,7 +289,7 @@ export default function ReminderEditor() {
           />
         ) : null}
         <TimeInput value={time} onChange={setTime} label="Time" />
-        <MetricSelector
+        <SelectionMenu
           title="Frequency"
           items={FREQUENCIES.map((item) => ({
             ...item,
@@ -277,7 +302,7 @@ export default function ReminderEditor() {
           multiple={false}
         />
         {mode === "selected_days" ? (
-          <MetricSelector
+          <SelectionMenu
             title="Weekdays"
             items={["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
               (label, day) => ({

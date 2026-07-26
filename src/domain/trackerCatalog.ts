@@ -6,6 +6,25 @@ import { EXERCISE_CATALOG, MUSCLE_LABELS } from '@/src/domain/exerciseCatalog';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
+export function trackerGroupLabel(metric: {
+  grouping?: string;
+  category?: NewMetric["category"];
+}) {
+  if (metric.grouping?.trim()) return metric.grouping.trim();
+  const labels: Record<NonNullable<NewMetric["category"]>, string> = {
+    goals: "Goals",
+    activity: "Activity",
+    nutrition: "Food & nutrition",
+    body: "Body composition",
+    health: "Health readings",
+    gym: "Gym",
+    mind: "Mind & focus",
+    photos: "Photos",
+    other: "Other",
+  };
+  return metric.category ? labels[metric.category] : "Other";
+}
+
 export function isBloodPressureSystolic(metric: {
   id?: string;
   templateId?: string;

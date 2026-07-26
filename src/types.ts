@@ -545,8 +545,8 @@ export type UserSettings = {
   showUntrackedToday?: boolean;
   showUntrackedProgress?: boolean;
   showUntrackedLeaderboardByGroup?: Record<string, boolean>;
-  /** Choose whether completed Today goals move down or disappear until edit mode. */
-  completedTodayBehavior?: "bottom" | "hide";
+  /** Choose whether completed Today goals stay put, move down, or disappear. */
+  completedTodayBehavior?: "stay" | "bottom" | "hide";
   /** Optional visual used for the hero completion indicator. */
   completionIndicatorIcon?: string;
   /** Put the to-do block below goal trackers instead of above them. */

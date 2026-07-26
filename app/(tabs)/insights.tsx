@@ -259,6 +259,12 @@ export default function Insights() {
   ];
   const hiddenItems = selectorItems.filter((item) => !selectedIds.includes(item.id));
 
+  const beginEditing = useCallback(() => {
+    // Pause before the first drag event can mutate local draft ordering.
+    setCloudSyncPaused("progress-edit", true);
+    setEditing(true);
+  }, []);
+
   const finishEditing = useCallback(() => {
     const pendingOrder = orderDraftRef.current;
     if (pendingOrder?.length)
@@ -445,7 +451,7 @@ export default function Insights() {
         onModeChange={setProgressMode}
         onRangeChange={setHistoryRange}
         onOpenDay={openDay}
-        onOpenEditor={() => setEditing(true)}
+        onOpenEditor={beginEditing}
         editing={editing}
         onDoneEditing={finishEditing}
         onRemove={(id) =>
@@ -718,7 +724,7 @@ export default function Insights() {
               editing={editing}
               index={index}
               count={progressCardIds.length}
-              onEdit={() => setEditing(true)}
+              onEdit={beginEditing}
               onMove={(target) => move(TRACKED, target)}
               onRemove={() =>
                 select(selectedIds.filter((id) => id !== TRACKED))
@@ -733,7 +739,7 @@ export default function Insights() {
               editing={editing}
               index={index}
               count={progressCardIds.length}
-              onEdit={() => setEditing(true)}
+              onEdit={beginEditing}
               onMove={(target) => move(itemId, target)}
               onRemove={() =>
                 select(selectedIds.filter((id) => id !== itemId))
@@ -788,7 +794,7 @@ export default function Insights() {
         </View>
       ) : (
         <Pressable
-          onPress={() => setEditing(true)}
+          onPress={beginEditing}
           style={styles.editHint}
         >
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a summary to edit what Progress shows</Text>
@@ -1553,6 +1559,7 @@ function MapReorderCard({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: () => editing,
         onPanResponderGrant: () => {
+          setCloudSyncPaused("progress-edit", true);
           origin.current = indexRef.current;
           target.current = indexRef.current;
           setDragging(true);
@@ -1690,6 +1697,7 @@ function TrackedSummary({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: () => editing,
         onPanResponderGrant: () => {
+          setCloudSyncPaused("progress-edit", true);
           origin.current = indexRef.current;
           target.current = indexRef.current;
           setDragging(true);
@@ -1874,6 +1882,7 @@ function MetricSummary({
         onStartShouldSetPanResponder: () => editing,
         onMoveShouldSetPanResponder: () => editing,
         onPanResponderGrant: () => {
+          setCloudSyncPaused("progress-edit", true);
           dragOrigin.current = indexRef.current;
           liveTarget.current = indexRef.current;
           setDragging(true);

@@ -9,7 +9,7 @@ import {
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
-import { MetricSelector } from "@/src/components/MetricSelector";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
@@ -23,6 +23,7 @@ import {
   periodDates,
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
+import { trackerGroupLabel } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -156,7 +157,7 @@ export default function JournalPage() {
         label: metric.name,
         icon: metric.icon as keyof typeof Ionicons.glyphMap,
         color: metric.color,
-        group: metric.grouping || "Trackers",
+        group: trackerGroupLabel(metric),
       }));
     const exerciseKeys = [...metricIds]
       .filter((id) => id.startsWith("exercise:"))
@@ -273,19 +274,12 @@ export default function JournalPage() {
           style={[styles.searchInput, { color: colors.ink }]}
         />
       </View>
-      <MetricSelector
+      <SelectionMenu
         title="Filter notes"
         items={filterItems}
         selectedIds={filterIds}
         onChange={setFilterIds}
         emptyLabel="All notes"
-        collapsibleGroups={[
-          ...new Set(
-            state.metrics.map((metric) => metric.grouping || "Trackers"),
-          ),
-          "Gym exercises",
-          "Labels",
-        ]}
       />
       <View style={styles.notes}>
         {items.map((item) => (

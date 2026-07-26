@@ -415,10 +415,17 @@ export default function Customize() {
                   Completed goals
                 </Text>
                 <Text style={[styles.meta, { color: colors.muted }]}>
-                  Move completed goals down or hide them from Today.
+                  Keep completed goals in place, move them down, or hide them.
                 </Text>
               </View>
               <View style={styles.preferenceChoices}>
+                <Chip
+                  label="Do nothing"
+                  selected={state.settings.completedTodayBehavior === "stay"}
+                  onPress={() =>
+                    updateSettings({ completedTodayBehavior: "stay" })
+                  }
+                />
                 <Chip
                   label="Move down"
                   selected={

@@ -3,20 +3,28 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useRef, useState } from "react";
-import { Alert, Keyboard, Pressable, StyleSheet, View } from "react-native";
+import {
+  Alert,
+  Keyboard,
+  Modal,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
 import { InfoPopover } from "@/src/components/InfoPopover";
-import { MetricSelector } from "@/src/components/MetricSelector";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import {
   RichNoteComposer,
   RichNoteComposerHandle,
 } from "@/src/components/RichNoteComposer";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
+import { trackerGroupLabel } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -34,6 +42,9 @@ export default function NoteEditor() {
   );
   const [labels, setLabels] = useState(existing?.labels ?? []);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkText, setLinkText] = useState("");
+  const [linkUrl, setLinkUrl] = useState("https://");
   const undo = useRef<string[]>([]);
   const redo = useRef<string[]>([]);
   const composer = useRef<RichNoteComposerHandle>(null);
@@ -68,14 +79,15 @@ export default function NoteEditor() {
   };
 
   const save = () => {
-    if (!body.trim())
+    const cleanBody = body.replaceAll("\u200B", "");
+    if (!cleanBody.trim())
       return Alert.alert("Write a note", "The note cannot be empty.");
     const now = new Date().toISOString();
     saveJournalNote({
       id: existing?.id ?? `note-${Date.now().toString(36)}`,
       userId: state.currentUserId,
       title: title.trim() || undefined,
-      body: body.trim(),
+      body: cleanBody.trim(),
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       localDate: existing?.localDate ?? dateKey(),
@@ -83,7 +95,7 @@ export default function NoteEditor() {
       labels: [
         ...new Set([
           ...labels,
-          ...[...body.matchAll(/(?:^|\s)#([\p{L}\p{N}_-]+)/gu)].map(
+          ...[...cleanBody.matchAll(/(?:^|\s)#([\p{L}\p{N}_-]+)/gu)].map(
             (match) => match[1],
           ),
         ]),
@@ -93,8 +105,59 @@ export default function NoteEditor() {
     router.back();
   };
 
+  const toolbar = (
+    <View
+      style={[
+        styles.toolbar,
+        {
+          borderColor: colors.border,
+          backgroundColor: colors.card,
+        },
+      ]}
+    >
+      <Tool
+        icon="arrow-undo"
+        onPress={() => {
+          const previous = undo.current.pop();
+          if (previous !== undefined) {
+            redo.current.push(body);
+            setBody(previous);
+          }
+        }}
+      />
+      <Tool
+        icon="arrow-redo"
+        onPress={() => {
+          const next = redo.current.pop();
+          if (next !== undefined) {
+            undo.current.push(body);
+            setBody(next);
+          }
+        }}
+      />
+      <Tool text="H1" onPress={() => composer.current?.setBlock("h1")} />
+      <Tool text="H2" onPress={() => composer.current?.setBlock("h2")} />
+      <Tool text="B" onPress={() => composer.current?.toggleInline("bold")} />
+      <Tool text="I" onPress={() => composer.current?.toggleInline("italic")} />
+      <Tool text="S" onPress={() => composer.current?.toggleInline("strike")} />
+      <Tool icon="list" onPress={() => composer.current?.setBlock("bullet")} />
+      <Tool
+        icon="checkbox-outline"
+        onPress={() => composer.current?.setBlock("check")}
+      />
+      <Tool
+        icon="chatbox-outline"
+        onPress={() => composer.current?.setBlock("quote")}
+      />
+      <Tool icon="link-outline" onPress={() => setLinkOpen(true)} />
+    </View>
+  );
+
   return (
-    <Screen>
+    <View style={styles.page}>
+    <Screen
+      contentContainerStyle={keyboardVisible ? styles.keyboardContent : undefined}
+    >
       <PageHeader
         title={existing ? "Edit note" : "New note"}
         showMenu={false}
@@ -116,7 +179,7 @@ export default function NoteEditor() {
             message="Type # followed by a word to create a searchable Journal label. Linking a tracker also groups this note with that tracker."
           />
         </View>
-        <MetricSelector
+        <SelectionMenu
           title="Trackers and labels"
           items={[
             ...state.metrics.map((metric) => ({
@@ -124,7 +187,7 @@ export default function NoteEditor() {
               label: metric.name,
               icon: metric.icon as keyof typeof Ionicons.glyphMap,
               color: metric.color,
-              group: metric.grouping || "Trackers",
+              group: trackerGroupLabel(metric),
             })),
             ...[
               ...new Set(
@@ -154,12 +217,6 @@ export default function NoteEditor() {
             );
           }}
           emptyLabel="No links"
-          collapsibleGroups={[
-            ...new Set(
-              state.metrics.map((metric) => metric.grouping || "Trackers"),
-            ),
-            "Labels",
-          ]}
         />
         <TextInput
           value={title}
@@ -168,60 +225,6 @@ export default function NoteEditor() {
           placeholderTextColor={colors.faint}
           style={[styles.title, { color: colors.ink, borderColor: colors.border }]}
         />
-        {keyboardVisible ? (
-          <View style={[styles.toolbar, { borderColor: colors.border }]}>
-            <Tool
-              icon="arrow-undo"
-              onPress={() => {
-                const previous = undo.current.pop();
-                if (previous !== undefined) {
-                  redo.current.push(body);
-                  setBody(previous);
-                }
-              }}
-            />
-            <Tool
-              icon="arrow-redo"
-              onPress={() => {
-                const next = redo.current.pop();
-                if (next !== undefined) {
-                  undo.current.push(body);
-                  setBody(next);
-                }
-              }}
-            />
-            <Tool text="H1" onPress={() => composer.current?.setBlock("h1")} />
-            <Tool text="H2" onPress={() => composer.current?.setBlock("h2")} />
-            <Tool
-              text="B"
-              onPress={() => composer.current?.toggleInline("bold")}
-            />
-            <Tool
-              text="I"
-              onPress={() => composer.current?.toggleInline("italic")}
-            />
-            <Tool
-              text="S"
-              onPress={() => composer.current?.toggleInline("strike")}
-            />
-            <Tool
-              icon="list"
-              onPress={() => composer.current?.setBlock("bullet")}
-            />
-            <Tool
-              icon="checkbox-outline"
-              onPress={() => composer.current?.setBlock("check")}
-            />
-            <Tool
-              icon="chatbox-outline"
-              onPress={() => composer.current?.setBlock("quote")}
-            />
-            <Tool
-              icon="link-outline"
-              onPress={() => composer.current?.toggleInline("link")}
-            />
-          </View>
-        ) : null}
         <RichNoteComposer ref={composer} value={body} onChange={change} />
         {imageUri ? <Image source={imageUri} style={styles.image} /> : null}
         <Pressable onPress={pickImage} style={styles.imageButton}>
@@ -258,6 +261,71 @@ export default function NoteEditor() {
         </Pressable>
       ) : null}
     </Screen>
+    {keyboardVisible ? <View style={styles.floatingToolbar}>{toolbar}</View> : null}
+    <Modal
+      transparent
+      visible={linkOpen}
+      animationType="fade"
+      onRequestClose={() => setLinkOpen(false)}
+    >
+      <Pressable style={styles.linkBackdrop} onPress={() => setLinkOpen(false)}>
+        <Pressable
+          onPress={(event) => event.stopPropagation()}
+          style={[styles.linkCard, { backgroundColor: colors.card }]}
+        >
+          <Text style={[styles.linkModalTitle, { color: colors.ink }]}>
+            Insert hyperlink
+          </Text>
+          <TextInput
+            value={linkText}
+            onChangeText={setLinkText}
+            placeholder="Text to display"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.linkInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+          <TextInput
+            value={linkUrl}
+            onChangeText={setLinkUrl}
+            autoCapitalize="none"
+            keyboardType="url"
+            placeholder="https://example.com"
+            placeholderTextColor={colors.faint}
+            style={[
+              styles.linkInput,
+              { color: colors.ink, borderColor: colors.border },
+            ]}
+          />
+          <View style={styles.linkActions}>
+            <Pressable onPress={() => setLinkOpen(false)} style={styles.linkAction}>
+              <Text style={[styles.linkActionText, { color: colors.muted }]}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                const text = linkText.trim();
+                const rawUrl = linkUrl.trim();
+                if (!text || !rawUrl) return;
+                const url = /^[a-z][a-z0-9+.-]*:/i.test(rawUrl)
+                  ? rawUrl
+                  : `https://${rawUrl}`;
+                composer.current?.insertLink(text, url);
+                setLinkText("");
+                setLinkUrl("https://");
+                setLinkOpen(false);
+              }}
+              style={[styles.linkAction, { backgroundColor: accent }]}
+            >
+              <Text preserveColor style={styles.linkSaveText}>Insert</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </View>
   );
 }
 
@@ -286,6 +354,8 @@ function Tool({
 }
 
 const styles = StyleSheet.create({
+  page: { flex: 1 },
+  keyboardContent: { paddingBottom: 64 },
   editor: { gap: 8 },
   linkHeading: {
     flexDirection: "row",
@@ -309,6 +379,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 4,
+    shadowColor: "#000000",
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  floatingToolbar: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    bottom: 7,
+    zIndex: 100,
   },
   tool: {
     minWidth: 29,
@@ -338,4 +419,35 @@ const styles = StyleSheet.create({
   saveText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
   delete: { minHeight: 42, alignItems: "center", justifyContent: "center" },
   deleteText: { color: "#C44949", fontSize: 9, fontWeight: "900" },
+  linkBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,.48)",
+    padding: 18,
+  },
+  linkCard: { borderRadius: 18, padding: 15, gap: 9 },
+  linkModalTitle: { fontSize: 13, fontWeight: "900" },
+  linkInput: {
+    minHeight: 43,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    fontSize: 10,
+  },
+  linkActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 7,
+    marginTop: 2,
+  },
+  linkAction: {
+    minWidth: 76,
+    minHeight: 39,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  linkActionText: { fontSize: 9, fontWeight: "900" },
+  linkSaveText: { color: "#FFFFFF", fontSize: 9, fontWeight: "900" },
 });
