@@ -1298,6 +1298,7 @@ export function createInitialState(): AppState {
       memberNicknamesByGroup: { "weekend-warriors": {} },
       badgeShowcaseByGroup: {},
       progressMetricIds: ["tracked_goals", "steps"],
+      performancePinnedMetricIds: [],
       leaderboardMetricIdsByGroup: { "weekend-warriors": ["__score", "steps"] },
       comparisonMetricIdsByGroup: { "weekend-warriors": ["steps"] },
       comparisonPeriodByGroup: { "weekend-warriors": "week" },

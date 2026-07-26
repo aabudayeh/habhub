@@ -47,6 +47,14 @@ const RANGES: { id: PerformanceRange; label: string }[] = [
   { id: "month", label: "Monthly" },
 ];
 
+type PerformancePriority =
+  | "gaining"
+  | "steady"
+  | "focus"
+  | "missing"
+  | "strongest"
+  | "opportunity";
+
 function moveItem(ids: string[], from: number, to: number) {
   const next = [...ids];
   const [item] = next.splice(from, 1);
@@ -126,6 +134,8 @@ function PerformanceTile({
   onEdit,
   onMove,
   onRemove,
+  pinned,
+  onPin,
 }: {
   row: TrackerPerformance;
   range: PerformanceRange;
@@ -135,6 +145,8 @@ function PerformanceTile({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
+  pinned: boolean;
+  onPin: () => void;
 }) {
   const colors = useAppColors();
   const [dragging, setDragging] = useState(false);
@@ -194,7 +206,7 @@ function PerformanceTile({
   return (
     <Animated.View
       onLayout={(event) => {
-        step.current = event.nativeEvent.layout.height + 8;
+        step.current = event.nativeEvent.layout.height + 12;
       }}
       style={{
         zIndex: dragging ? 30 : 0,
@@ -224,13 +236,40 @@ function PerformanceTile({
       >
         <Card style={[styles.tile, editing && { borderColor: row.metric.color }]}>
           {editing ? (
-            <Pressable
-              accessibilityLabel={`Hide ${row.metric.name}`}
-              onPress={onRemove}
-              style={[styles.remove, { backgroundColor: palette.red }]}
-            >
-              <Ionicons name="remove" size={15} color="#FFFFFF" />
-            </Pressable>
+            <View style={styles.editActions}>
+              <Pressable
+                accessibilityLabel={`Hide ${row.metric.name}`}
+                onPress={onRemove}
+                style={[
+                  styles.editAction,
+                  {
+                    backgroundColor: palette.red,
+                    borderColor: palette.red,
+                  },
+                ]}
+              >
+                <Ionicons name="remove" size={15} color="#FFFFFF" />
+              </Pressable>
+              <Pressable
+                accessibilityLabel={
+                  pinned ? `Unpin ${row.metric.name}` : `Pin ${row.metric.name}`
+                }
+                onPress={onPin}
+                style={[
+                  styles.editAction,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: pinned ? palette.amber : colors.border,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={pinned ? "pin" : "pin-outline"}
+                  size={14}
+                  color={pinned ? palette.amber : colors.muted}
+                />
+              </Pressable>
+            </View>
           ) : null}
           <View
             style={[
@@ -324,7 +363,12 @@ function PerformanceTile({
               />
             </View>
           ) : (
-            <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+            <View style={styles.trailing}>
+              {pinned ? (
+                <Ionicons name="pin" size={13} color={palette.amber} />
+              ) : null}
+              <Ionicons name="chevron-forward" size={16} color={colors.faint} />
+            </View>
           )}
         </Card>
       </Pressable>
@@ -340,6 +384,7 @@ export default function PerformancePage() {
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [priority, setPriority] = useState<PerformancePriority | null>(null);
   const compatible = useMemo(
     () =>
       state.metrics
@@ -415,7 +460,7 @@ export default function PerformancePage() {
     () => performanceOverview(state, range, visibleOrder),
     [range, state, visibleOrder],
   );
-  const rows = useMemo(() => {
+  const baseRows = useMemo(() => {
     const byId = new Map(overview.rows.map((row) => [row.metric.id, row]));
     return visibleOrder
       .map((id) => byId.get(id))
@@ -465,19 +510,83 @@ export default function PerformancePage() {
     ]);
   }
 
-  const improvingCount = rows.filter(
+  const improvingCount = baseRows.filter(
     (row) => row.direction === "up" || row.direction === "new",
   ).length;
-  const focusCount = rows.filter((row) => row.direction === "down").length;
-  const missingCount = rows.filter(
+  const focusCount = baseRows.filter(
+    (row) => row.direction === "down",
+  ).length;
+  const missingCount = baseRows.filter(
     (row) => row.direction === "missing",
   ).length;
   const steadyCount =
-    rows.length - improvingCount - focusCount - missingCount;
+    baseRows.length - improvingCount - focusCount - missingCount;
   const strongest = overview.strengths[0];
   const opportunity = overview.opportunities.find(
     (row) => row.metric.id !== strongest?.metric.id,
   );
+  const pinnedIds = useMemo(
+    () => state.settings.performancePinnedMetricIds ?? [],
+    [state.settings.performancePinnedMetricIds],
+  );
+  const rows = useMemo(() => {
+    if (editing) return baseRows;
+    const originalPositions = new Map(
+      baseRows.map((row, index) => [row.metric.id, index]),
+    );
+    const pinPositions = new Map(
+      pinnedIds.map((metricId, index) => [metricId, index]),
+    );
+    const matchesPriority = (row: TrackerPerformance) => {
+      if (!priority) return false;
+      if (priority === "gaining")
+        return row.direction === "up" || row.direction === "new";
+      if (priority === "steady") return row.direction === "steady";
+      if (priority === "focus") return row.direction === "down";
+      if (priority === "missing") return row.direction === "missing";
+      if (priority === "strongest")
+        return row.metric.id === strongest?.metric.id;
+      return row.metric.id === opportunity?.metric.id;
+    };
+    return [...baseRows].sort((a, b) => {
+      const aPin = pinPositions.get(a.metric.id);
+      const bPin = pinPositions.get(b.metric.id);
+      if (aPin !== undefined || bPin !== undefined) {
+        if (aPin === undefined) return 1;
+        if (bPin === undefined) return -1;
+        return aPin - bPin;
+      }
+      if (priority) {
+        const priorityDifference =
+          Number(matchesPriority(b)) - Number(matchesPriority(a));
+        if (priorityDifference) return priorityDifference;
+      }
+      return (
+        (originalPositions.get(a.metric.id) ?? 0) -
+        (originalPositions.get(b.metric.id) ?? 0)
+      );
+    });
+  }, [
+    baseRows,
+    editing,
+    opportunity?.metric.id,
+    pinnedIds,
+    priority,
+    strongest?.metric.id,
+  ]);
+
+  function togglePriority(next: PerformancePriority) {
+    if (editing) return;
+    setPriority((current) => (current === next ? null : next));
+  }
+
+  function togglePin(metricId: string) {
+    updateSettings({
+      performancePinnedMetricIds: pinnedIds.includes(metricId)
+        ? pinnedIds.filter((id) => id !== metricId)
+        : [...pinnedIds, metricId],
+    });
+  }
 
   return (
     <Screen refreshEnabled={!editing}>
@@ -544,48 +653,119 @@ export default function PerformancePage() {
               </View>
               <View style={[styles.scorePill, { backgroundColor: colors.primarySoft }]}>
                 <Text style={[styles.scoreText, { color: accent }]}>
-                  {improvingCount}/{rows.length} improving
+                  {improvingCount}/{baseRows.length} improving
                 </Text>
               </View>
             </View>
             <View style={styles.momentumStats}>
-              <View style={styles.momentumStat}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Prioritize gaining trackers"
+                onPress={() => togglePriority("gaining")}
+                style={[
+                  styles.momentumStat,
+                  {
+                    borderColor:
+                      priority === "gaining" ? palette.lime : "transparent",
+                    backgroundColor:
+                      priority === "gaining"
+                        ? colors.primarySoft
+                        : "transparent",
+                  },
+                ]}
+              >
                 <Text style={[styles.momentumNumber, { color: palette.lime }]}>
                   {improvingCount}
                 </Text>
                 <Text style={[styles.momentumLabel, { color: colors.muted }]}>
                   gaining
                 </Text>
-              </View>
-              <View style={styles.momentumStat}>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Prioritize steady trackers"
+                onPress={() => togglePriority("steady")}
+                style={[
+                  styles.momentumStat,
+                  {
+                    borderColor:
+                      priority === "steady" ? accent : "transparent",
+                    backgroundColor:
+                      priority === "steady"
+                        ? colors.primarySoft
+                        : "transparent",
+                  },
+                ]}
+              >
                 <Text style={[styles.momentumNumber, { color: colors.ink }]}>
                   {steadyCount}
                 </Text>
                 <Text style={[styles.momentumLabel, { color: colors.muted }]}>
                   steady
                 </Text>
-              </View>
-              <View style={styles.momentumStat}>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Prioritize trackers needing focus"
+                onPress={() => togglePriority("focus")}
+                style={[
+                  styles.momentumStat,
+                  {
+                    borderColor:
+                      priority === "focus" ? palette.amber : "transparent",
+                    backgroundColor:
+                      priority === "focus"
+                        ? colors.primarySoft
+                        : "transparent",
+                  },
+                ]}
+              >
                 <Text style={[styles.momentumNumber, { color: palette.amber }]}>
                   {focusCount}
                 </Text>
                 <Text style={[styles.momentumLabel, { color: colors.muted }]}>
                   need focus
                 </Text>
-              </View>
-              <View style={styles.momentumStat}>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Prioritize trackers with no data"
+                onPress={() => togglePriority("missing")}
+                style={[
+                  styles.momentumStat,
+                  {
+                    borderColor:
+                      priority === "missing" ? colors.muted : "transparent",
+                    backgroundColor:
+                      priority === "missing"
+                        ? colors.primarySoft
+                        : "transparent",
+                  },
+                ]}
+              >
                 <Text style={[styles.momentumNumber, { color: colors.muted }]}>
                   {missingCount}
                 </Text>
                 <Text style={[styles.momentumLabel, { color: colors.muted }]}>
                   no data
                 </Text>
-              </View>
+              </Pressable>
             </View>
           </Card>
 
           <View style={styles.insightGrid}>
-            <Card style={styles.insight}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Prioritize strongest tracker"
+              onPress={() => togglePriority("strongest")}
+              style={styles.insightPressable}
+            >
+            <Card
+              style={[
+                styles.insight,
+                priority === "strongest" && { borderColor: palette.lime },
+              ]}
+            >
               <Ionicons name="sparkles" size={19} color={palette.lime} />
               <Text style={[styles.insightEyebrow, { color: palette.lime }]}>
                 Strongest
@@ -599,7 +779,19 @@ export default function PerformancePage() {
                   : "Keep logging to reveal a pattern."}
               </Text>
             </Card>
-            <Card style={styles.insight}>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Prioritize next focus tracker"
+              onPress={() => togglePriority("opportunity")}
+              style={styles.insightPressable}
+            >
+            <Card
+              style={[
+                styles.insight,
+                priority === "opportunity" && { borderColor: palette.amber },
+              ]}
+            >
               <Ionicons name="compass-outline" size={19} color={palette.amber} />
               <Text style={[styles.insightEyebrow, { color: palette.amber }]}>
                 Focus next
@@ -613,6 +805,7 @@ export default function PerformancePage() {
                   : "No weaker area is clear yet."}
               </Text>
             </Card>
+            </Pressable>
           </View>
         </>
       ) : null}
@@ -636,11 +829,15 @@ export default function PerformancePage() {
             count={rows.length}
             onEdit={beginEditing}
             onMove={(target) => reorder(row.metric.id, target)}
-            onRemove={() =>
+            onRemove={() => {
               setDraftIds((current) =>
                 current.filter((id) => id !== row.metric.id),
-              )
-            }
+              );
+              if (pinnedIds.includes(row.metric.id))
+                togglePin(row.metric.id);
+            }}
+            pinned={pinnedIds.includes(row.metric.id)}
+            onPin={() => togglePin(row.metric.id)}
           />
         ))}
       </View>
@@ -707,7 +904,7 @@ const styles = StyleSheet.create({
   period: { fontSize: 8, fontWeight: "700" },
   filterLabel: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "55%" },
   filterText: { fontSize: 8, fontWeight: "900" },
-  momentum: { gap: 9 },
+  momentum: { gap: 9, marginTop: 7 },
   momentumTop: {
     flexDirection: "row",
     alignItems: "center",
@@ -719,16 +916,24 @@ const styles = StyleSheet.create({
   scorePill: { borderRadius: 99, paddingHorizontal: 9, paddingVertical: 5 },
   scoreText: { fontSize: 8, fontWeight: "900" },
   momentumStats: { flexDirection: "row", gap: 6 },
-  momentumStat: { flex: 1, alignItems: "center" },
+  momentumStat: {
+    flex: 1,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderRadius: 11,
+  },
   momentumNumber: { fontSize: 17, fontWeight: "900" },
   momentumLabel: { fontSize: 7, fontWeight: "800", marginTop: 1 },
-  insightGrid: { flexDirection: "row", gap: 7 },
+  insightGrid: { flexDirection: "row", gap: 9, marginTop: 10 },
+  insightPressable: { flex: 1, minWidth: 0 },
   insight: { flex: 1, minWidth: 0, gap: 3 },
   insightEyebrow: { fontSize: 7, fontWeight: "900", textTransform: "uppercase" },
   insightTitle: { fontSize: 10, fontWeight: "900" },
   insightMeta: { fontSize: 7, lineHeight: 10 },
-  sectionHeading: { marginTop: 3, marginBottom: 1 },
-  rows: { gap: 7 },
+  sectionHeading: { marginTop: 13, marginBottom: 6 },
+  rows: { gap: 12 },
   tile: {
     minHeight: 102,
     flexDirection: "row",
@@ -766,17 +971,23 @@ const styles = StyleSheet.create({
   barFill: { height: "100%", borderRadius: 3 },
   stats: { flexDirection: "row", flexWrap: "wrap", columnGap: 9, rowGap: 2 },
   stat: { fontSize: 7, fontWeight: "700" },
-  remove: {
+  editActions: {
     position: "absolute",
-    top: -5,
-    left: -5,
+    top: -7,
+    left: -7,
+    flexDirection: "row",
+    gap: 5,
+    zIndex: 5,
+  },
+  editAction: {
     width: 23,
     height: 23,
     borderRadius: 12,
+    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 5,
   },
+  trailing: { alignItems: "center", justifyContent: "center", gap: 6 },
   drag: {
     width: 31,
     minHeight: 62,
@@ -787,6 +998,8 @@ const styles = StyleSheet.create({
   },
   add: {
     minHeight: 46,
+    marginTop: 12,
+    marginBottom: 4,
     borderWidth: 1,
     borderStyle: "dashed",
     borderRadius: 14,

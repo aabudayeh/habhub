@@ -594,6 +594,8 @@ export type UserSettings = {
   performanceMetricIds?: string[];
   /** Personal Performance order, independent from Progress and groups. */
   performanceMetricOrderIds?: string[];
+  /** Personally pinned Performance tiles; pins sort before temporary insights. */
+  performancePinnedMetricIds?: string[];
   performanceRange?: "day" | "week" | "month";
   leaderboardMetricIdsByGroup: Record<string, string[]>;
   comparisonMetricIdsByGroup: Record<string, string[]>;

@@ -238,6 +238,9 @@ function withoutMetricSelections(
     performanceMetricOrderIds: remove(
       settings.performanceMetricOrderIds ?? [],
     ),
+    performancePinnedMetricIds: remove(
+      settings.performancePinnedMetricIds ?? [],
+    ),
     leaderboardMetricIdsByGroup: Object.fromEntries(
       Object.entries(settings.leaderboardMetricIdsByGroup).map(
         ([groupId, ids]) => [groupId, remove(ids)],
