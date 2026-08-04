@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { useTranslation } from "@/src/i18n";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   useCloudSyncActions,
   useCloudSyncStatus,
@@ -52,19 +52,11 @@ export function Screen({
   const colors = useAppColors();
   const internalRef = useRef<ScrollView>(null);
   const activeRef = scrollRef ?? internalRef;
-  const insets = useSafeAreaInsets();
-  const basePaddingBottom = compact ? 90 : 120;
-  const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
-  const userPaddingBottom =
-    typeof userPaddingBottomRaw === "number" ? userPaddingBottomRaw : 0;
-  const paddingBottom =
-    Math.max(basePaddingBottom, userPaddingBottom ?? basePaddingBottom) +
-    insets.bottom;
   useKeyboardReveal(activeRef);
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top", "bottom"]}
+      edges={["top"]}
     >
       <KeyboardAvoidingView
         style={styles.safe}
@@ -98,7 +90,6 @@ export function Screen({
           contentContainerStyle={[
             styles.screen,
             compact && styles.screenCompact,
-            { paddingBottom },
             contentContainerStyle,
           ]}
           {...props}
