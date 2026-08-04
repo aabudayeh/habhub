@@ -128,16 +128,17 @@ export default function TabLayout() {
   return (
     <Tabs
       initialRouteName={defaultTab}
-      // Native views may detach while inactive to keep the Android tree small;
-      // the route stays mounted and is restored by React Navigation on focus.
-      detachInactiveScreens
+      // Keeping native tab views attached avoids an Android/New Architecture
+      // re-attachment failure that leaves only the tab bar visible. Screens
+      // are still created lazily when first opened.
+      detachInactiveScreens={false}
       screenOptions={({ route }) => ({
         headerShown: false,
         lazy: true,
-        // Pause inactive chart/list trees without unmounting their route state.
-        // Do not add a custom focus wrapper or unmountOnBlur here: both race
-        // Android tab transitions and previously produced empty tab bodies.
-        freezeOnBlur: true,
+        // React Navigation owns the native screen lifecycle. A custom
+        // useIsFocused wrapper returned null during Android tab transitions
+        // in Expo Go, while native freezing also produced blank routes.
+        freezeOnBlur: false,
         tabBarButton: isVisible(route.name as LandingPage)
           ? (props) => (
               <HapticTab {...props} tutorialId={`tab-${route.name}`} />
