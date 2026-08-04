@@ -73,12 +73,12 @@ const MEDIA_BUCKET = "paceboard-media";
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 const GROUP_ACTIVITY_LOCAL_CACHE_DAYS = 120;
 const GROUP_ACTIVITY_BACKGROUND_HISTORY_DAYS = 730;
-const WORKSPACE_ACK_KEY_PREFIX = "habhub-workspace-ack-v1:";
+const WORKSPACE_ACK_KEY_PREFIX = "habhub-workspace-ack-v2:";
 const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
-  "habhub-group-configuration-ack-v1:";
+  "habhub-group-configuration-ack-v2:";
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
-const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v1:";
-const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v1:";
+const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v2:";
+const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
 const CHAT_OUTBOX_FRESHNESS_MS = 15 * 60 * 1000;
 const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
@@ -160,7 +160,7 @@ type SnapshotRow = {
 };
 
 type CloudMergeBase = {
-  version: 1;
+  version: 2;
   settings: Record<string, string>;
   collections: Record<string, Record<string, string>>;
 };
@@ -228,7 +228,7 @@ async function readCloudMergeBase(userId: string): Promise<CloudMergeBase | null
     );
     if (!saved) return null;
     const parsed = JSON.parse(saved) as CloudMergeBase;
-    return parsed?.version === 1 && parsed.settings && parsed.collections
+    return parsed?.version === 2 && parsed.settings && parsed.collections
       ? parsed
       : null;
   } catch {
@@ -702,8 +702,21 @@ function snapshotPayload(state: AppState): AppState {
   };
 }
 
+function canonicalHashValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalHashValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalHashValue(item)]),
+    );
+  }
+  return value;
+}
+
 function valueHash(value: unknown) {
-  const serialized = JSON.stringify(value);
+  const serialized = JSON.stringify(canonicalHashValue(value));
   const source = serialized === undefined ? "__undefined__" : serialized;
   let hash = 2166136261;
   for (let index = 0; index < source.length; index += 1) {
@@ -742,7 +755,7 @@ function createCloudMergeBase(state: AppState): CloudMergeBase {
       ? [payload.activeTimer]
       : [];
   return {
-    version: 1,
+    version: 2,
     settings: hashRecord(payload.settings as unknown as Record<string, unknown>),
     collections: {
       energyProfiles: hashRecord(
@@ -760,6 +773,18 @@ function createCloudMergeBase(state: AppState): CloudMergeBase {
       ),
       pendingDeletedPhotoIds: hashCollection(
         payload.settings.pendingDeletedPhotoIds,
+        (id) => id,
+      ),
+      deletedEntryIds: hashCollection(
+        payload.settings.deletedEntryIds,
+        (id) => id,
+      ),
+      deletedPhotoIds: hashCollection(
+        payload.settings.deletedPhotoIds,
+        (id) => id,
+      ),
+      dismissedHealthEntryIds: hashCollection(
+        payload.settings.dismissedHealthEntryIds,
         (id) => id,
       ),
       metrics: hashCollection(payload.metrics, (item) => item.id),
@@ -1217,29 +1242,31 @@ function mergeStates(
     (id) => id,
     base?.collections.pendingDeletedPhotoIds,
   );
-  settings.deletedEntryIds = [
-    ...new Set([
-      ...(remote.settings.deletedEntryIds ?? []),
-      ...(local.settings.deletedEntryIds ?? []),
-    ]),
-  ];
-  settings.deletedPhotoIds = [
-    ...new Set([
-      ...(remote.settings.deletedPhotoIds ?? []),
-      ...(local.settings.deletedPhotoIds ?? []),
-    ]),
-  ];
+  settings.deletedEntryIds = mergeCollectionFromBase(
+    remote.settings.deletedEntryIds,
+    local.settings.deletedEntryIds,
+    (id) => id,
+    base?.collections.deletedEntryIds,
+  );
+  settings.deletedPhotoIds = mergeCollectionFromBase(
+    remote.settings.deletedPhotoIds,
+    local.settings.deletedPhotoIds,
+    (id) => id,
+    base?.collections.deletedPhotoIds,
+  );
+  settings.dismissedHealthEntryIds = mergeCollectionFromBase(
+    remote.settings.dismissedHealthEntryIds,
+    local.settings.dismissedHealthEntryIds,
+    (id) => id,
+    base?.collections.dismissedHealthEntryIds,
+  );
   const deletedEntryIds = new Set([
-    ...(remote.settings.pendingDeletedEntryIds ?? []),
-    ...(local.settings.pendingDeletedEntryIds ?? []),
-    ...(remote.settings.deletedEntryIds ?? []),
-    ...(local.settings.deletedEntryIds ?? []),
+    ...(settings.pendingDeletedEntryIds ?? []),
+    ...(settings.deletedEntryIds ?? []),
   ]);
   const deletedPhotoIds = new Set([
-    ...(remote.settings.pendingDeletedPhotoIds ?? []),
-    ...(local.settings.pendingDeletedPhotoIds ?? []),
-    ...(remote.settings.deletedPhotoIds ?? []),
-    ...(local.settings.deletedPhotoIds ?? []),
+    ...(settings.pendingDeletedPhotoIds ?? []),
+    ...(settings.deletedPhotoIds ?? []),
   ]);
   const activityTimers = mergeCollectionFromBase(
     remote.activityTimers?.length
@@ -2064,13 +2091,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const chatOutboxAttemptsRef = useRef(new Map<string, number>());
   const chatOutboxPromiseRef = useRef<Promise<void> | null>(null);
   const chatOutboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mergeBaseWriteRef = useRef<Promise<void>>(Promise.resolve());
   stateRef.current = state;
 
   const rememberCloudMergeBase = useCallback(
     (userId: string, acknowledgedState: AppState) => {
       const base = createCloudMergeBase(acknowledgedState);
       mergeBaseRef.current = base;
-      void writeCloudMergeBase(userId, base).catch(() => undefined);
+      mergeBaseWriteRef.current = mergeBaseWriteRef.current
+        .catch(() => undefined)
+        .then(() => writeCloudMergeBase(userId, base))
+        .catch(() => undefined);
     },
     [],
   );
@@ -2740,6 +2771,35 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             // with the older state captured when this request began.
             const liveAfterWorkspacePush = stateRef.current;
             let acknowledgedState = liveAfterWorkspacePush;
+            const publishedGroupConfigurationRevision = Number(
+              workspaceResult.groupConfigurationRevision,
+            );
+            if (
+              workspaceResult.groupConfigurationPushed &&
+              Number.isFinite(publishedGroupConfigurationRevision)
+            ) {
+              const groups = acknowledgedState.groups.map((group) =>
+                group.id === pushedGroupId
+                  ? {
+                      ...group,
+                      configurationRevision:
+                        publishedGroupConfigurationRevision,
+                    }
+                  : group,
+              );
+              acknowledgedState = {
+                ...acknowledgedState,
+                groups,
+                group:
+                  acknowledgedState.group.id === pushedGroupId
+                    ? {
+                        ...acknowledgedState.group,
+                        configurationRevision:
+                          publishedGroupConfigurationRevision,
+                      }
+                    : acknowledgedState.group,
+              };
+            }
             if (workspaceResult.deletedEntryIds.length) {
               const acknowledged = new Set(
                 workspaceResult.deletedEntryIds,
@@ -2833,7 +2893,29 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             }
           } catch (error) {
             const workspaceErrorText = errorText(error);
-            if (/stale_group_publish|40001/i.test(workspaceErrorText))
+            if (/stale_group_configuration/i.test(workspaceErrorText)) {
+              // Another administrator committed first. Refresh the common
+              // group CAS token and server shell while preserving this
+              // device's explicitly pending edits, then let the serialized
+              // retry publish them against the new revision.
+              try {
+                const loaded = await loadCloudWorkspace(
+                  stateRef.current,
+                  pushedGroupId,
+                );
+                if (operationIsCurrent()) {
+                  const rebased = mergeRemoteWorkspace(
+                    loaded,
+                    stateRef.current,
+                  );
+                  stateRef.current = rebased;
+                  replaceState(rebased);
+                }
+              } catch {
+                // Keep the durable local outbox. The normal retry below will
+                // hydrate again after transient connectivity recovers.
+              }
+            } else if (/stale_group_publish|40001/i.test(workspaceErrorText))
               throw new Error(
                 `snapshot_conflict: ${workspaceErrorText || "newer account revision"}`,
               );
@@ -3021,6 +3103,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.user,
     hasUnsyncedLocalChanges,
+    mergeRemoteWorkspace,
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,

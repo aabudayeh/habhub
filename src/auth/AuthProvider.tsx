@@ -172,11 +172,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
         data: { display_name: trimmed, full_name: trimmed },
       });
       if (authError) throw authError;
-      const { error: profileError } = await client
-        .from("profiles")
-        .update({ display_name: trimmed })
-        .eq("id", session.user.id);
-      if (profileError) throw profileError;
+      // App state is updated by the caller and published with the next private
+      // snapshot revision. Writing profiles directly here could race another
+      // device and bypass the causal workspace projection.
     },
     continueInDemo: async () => {
       await AsyncStorage.setItem(DEMO_MODE_KEY, 'true');

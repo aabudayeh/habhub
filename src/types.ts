@@ -839,6 +839,8 @@ export type TrackedGoalPeriod = { from: string; to?: string };
 
 export type Group = {
   id: string;
+  /** Server CAS token for administrator-owned group configuration. */
+  configurationRevision?: number;
   name: string;
   inviteCode: string;
   templateName: string;

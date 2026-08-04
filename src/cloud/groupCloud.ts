@@ -518,10 +518,6 @@ function initials(name: string) {
   );
 }
 
-function inviteCode() {
-  return `PACE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-}
-
 function metricFromRow(row: Record<string, any>): MetricDefinition {
   const configuration = (row.configuration ?? {}) as Partial<MetricDefinition>;
   const preset = DEFAULT_METRICS.find((metric) => metric.id === row.slug);
@@ -753,7 +749,8 @@ export async function loadCloudGroupActivity(
     const metricResult = await client
       .from("metric_definitions")
       .select("id, slug")
-      .eq("group_id", groupId);
+      .eq("group_id", groupId)
+      .is("archived_at", null);
     if (metricResult.error) throw metricResult.error;
     metricRows = metricResult.data ?? [];
     const metricIds = metricRows.map((row) => row.id);
@@ -928,91 +925,6 @@ export async function loadCloudGroupActivity(
   };
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value))
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .filter((key) => record[key] !== undefined)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
-function metricStatusSemantics(row: Record<string, unknown>) {
-  const configuration =
-    row.configuration && typeof row.configuration === "object"
-      ? (row.configuration as Record<string, unknown>)
-      : {};
-  return canonicalJson({
-    slug: row.slug,
-    dataType: row.data_type,
-    aggregation: row.aggregation_method,
-    rankingDirection: row.ranking_direction,
-    formula: row.formula ?? null,
-    scoreWeight: row.score_weight,
-    defaultVisibility: row.default_visibility,
-    goal: configuration.goal,
-    goalProgressMode: configuration.goalProgressMode,
-    goalEnabled: configuration.goalEnabled,
-    goalRange: configuration.goalRange,
-    gymMapping: configuration.gymMapping,
-    stepFallback: configuration.stepFallback,
-    submetrics: configuration.submetrics,
-    submetricDisplay: configuration.submetricDisplay,
-    sections: configuration.sections,
-    activeFrom: configuration.activeFrom,
-  });
-}
-
-async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
-  const client = requireCloud();
-  const { data: existing, error: existingError } = await client
-    .from("metric_definitions")
-    .select(
-      "id, slug, data_type, aggregation_method, ranking_direction, formula, score_weight, default_visibility, configuration",
-    )
-    .eq("group_id", groupId);
-  if (existingError) throw existingError;
-  const existingSlugs = new Set((existing ?? []).map((row) => row.slug));
-  const nextSlugs = new Set(metrics.map((metric) => metric.id));
-  const metricSetChanged =
-    existingSlugs.size !== nextSlugs.size ||
-    [...nextSlugs].some((slug) => !existingSlugs.has(slug));
-  const existingBySlug = new Map(
-    (existing ?? []).map((row) => [row.slug, row as Record<string, unknown>]),
-  );
-  const metricSemanticsChanged = metrics.some((metric) => {
-    const previous = existingBySlug.get(metric.id);
-    return (
-      !previous ||
-      metricStatusSemantics(previous) !==
-        metricStatusSemantics(metricRow(groupId, metric))
-    );
-  });
-  const removed = (existing ?? [])
-    .filter((row) => !metrics.some((metric) => metric.id === row.slug))
-    .map((row) => row.id);
-  if (removed.length) {
-    const { error } = await client
-      .from("metric_definitions")
-      .delete()
-      .in("id", removed);
-    if (error) throw error;
-  }
-  if (metrics.length) {
-    const { error } = await client.from("metric_definitions").upsert(
-      metrics.map((metric) => metricRow(groupId, metric)),
-      { onConflict: "group_id,owner_user_id,slug" },
-    );
-    if (error) throw error;
-  }
-  return metricSetChanged || metricSemanticsChanged;
-}
-
 async function groupMembers(groupIds: string[]) {
   const client = requireCloud();
   if (!groupIds.length)
@@ -1145,9 +1057,15 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
   ] = await Promise.all([
     client
       .from("groups")
-      .select("id, name, invite_code, template_name, settings")
+      .select(
+        "id, name, invite_code, template_name, settings, configuration_revision",
+      )
       .in("id", groupIds),
-    client.from("metric_definitions").select("*").in("group_id", groupIds),
+    client
+      .from("metric_definitions")
+      .select("*")
+      .in("group_id", groupIds)
+      .is("archived_at", null),
     groupMembers(groupIds),
   ]);
   if (groupError) throw groupError;
@@ -1155,6 +1073,7 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
   return (rows ?? []).map(
     (row): Group => ({
       id: row.id,
+      configurationRevision: Number(row.configuration_revision ?? 0),
       name: row.name,
       inviteCode: row.invite_code,
       templateName: row.template_name,
@@ -1197,70 +1116,29 @@ export async function createCloudGroup(
   requireMemberApproval = false,
 ) {
   const client = requireCloud();
-  if (displayName?.trim()) {
-    const { error } = await client
-      .from("profiles")
-      .update({ display_name: displayName.trim() })
-      .eq("id", user.id);
-    if (error) throw error;
-  }
+  void displayName;
+  void user;
   const { data: atomicGroupId, error: atomicError } = await client.rpc(
-    "create_group_with_metrics",
+    "create_group_with_metrics_v2",
     {
-      group_name: name.trim(),
-      metric_configuration: metrics,
-      group_theme_color: themeColor,
+      p_group_name: name.trim(),
+      p_metric_rows: metrics.map((metric) => metricRow("", metric)),
+      p_group_theme_color: themeColor,
+      p_require_member_approval: requireMemberApproval,
     },
   );
-  if (!atomicError && atomicGroupId) {
-    // The RPC creates membership atomically; this follow-up writes the complete
-    // versioned configuration (including schedules, reminders and mappings).
-    await upsertMetrics(atomicGroupId as string, metrics);
-    const { error: settingsError } = await client
-      .from("groups")
-      .update({
-        settings: {
-          streakRestDaysPerWeek: 1,
-          themeColor,
-          requireMemberApproval,
-        },
-      })
-      .eq("id", atomicGroupId);
-    if (settingsError) throw settingsError;
-    return atomicGroupId as string;
-  }
-  if (
-    atomicError &&
-    !/create_group_with_metrics|schema cache|function.*does not exist/i.test(
+  if (atomicError) {
+    if (/schema cache|function.*does not exist|create_group_with_metrics_v2/i.test(
       atomicError.message,
-    )
-  )
+    ))
+      throw new Error(
+        "Group creation needs the latest Supabase migration. Apply it and try again.",
+      );
     throw atomicError;
-
-  let created: Record<string, any> | null = null;
-  for (let attempt = 0; attempt < 3 && !created; attempt += 1) {
-    const { data, error } = await client
-      .from("groups")
-      .insert({
-        owner_id: user.id,
-        name: name.trim(),
-        invite_code: inviteCode(),
-        template_name: "Healthy Competition",
-        settings: {
-          streakRestDaysPerWeek: 1,
-          themeColor,
-          requireMemberApproval,
-        },
-      })
-      .select("id")
-      .single();
-    if (!error) created = data;
-    else if (!/invite_code|duplicate/i.test(error.message)) throw error;
   }
-  if (!created)
-    throw new Error("Could not create a unique invitation code. Try again.");
-  await upsertMetrics(created.id, metrics);
-  return created.id as string;
+  if (!atomicGroupId)
+    throw new Error("The group could not be created. Try again.");
+  return atomicGroupId as string;
 }
 
 export async function joinCloudGroup(code: string) {
@@ -1312,34 +1190,14 @@ export async function sendMembershipPush(input: {
   if (result.error) throw result.error;
 }
 
-export async function setCloudGroupApprovalRequired(
-  groupId: string,
-  required: boolean,
-) {
-  const client = requireCloud();
-  const { data, error } = await client
-    .from("groups")
-    .select("settings")
-    .eq("id", groupId)
-    .single();
-  if (error) throw error;
-  const settings = {
-    ...((data?.settings as Record<string, unknown> | null) ?? {}),
-    requireMemberApproval: required,
-  };
-  const { error: updateError } = await client
-    .from("groups")
-    .update({ settings })
-    .eq("id", groupId);
-  if (updateError) throw updateError;
-}
-
 export async function approveCloudGroupMember(groupId: string, userId: string) {
-  const { error } = await requireCloud()
-    .from("group_members")
-    .update({ status: "active" })
-    .eq("group_id", groupId)
-    .eq("user_id", userId);
+  const { error } = await requireCloud().rpc(
+    "approve_group_member_transactionally",
+    {
+      p_group_id: groupId,
+      p_user_id: userId,
+    },
+  );
   if (error) throw error;
 }
 
@@ -1361,59 +1219,21 @@ export async function touchCloudGroupPresence(groupId: string) {
 }
 
 export async function removeCloudGroupMember(groupId: string, userId: string) {
-  const { error } = await requireCloud()
-    .from("group_members")
-    .delete()
-    .eq("group_id", groupId)
-    .eq("user_id", userId);
+  const { error } = await requireCloud().rpc(
+    "remove_group_member_transactionally",
+    {
+      p_group_id: groupId,
+      p_user_id: userId,
+    },
+  );
   if (error) throw error;
 }
 
 export async function leaveCloudGroup(groupId: string) {
   const client = requireCloud();
-  const { data: userData } = await client.auth.getUser();
-  if (!userData.user) throw new Error("Sign in before leaving a cloud group.");
-  const [
-    { data: group, error: groupError },
-    { data: members, error: memberError },
-  ] = await Promise.all([
-    client.from("groups").select("owner_id").eq("id", groupId).single(),
-    client
-      .from("group_members")
-      .select("user_id, role, joined_at")
-      .eq("group_id", groupId)
-      .order("joined_at"),
-  ]);
-  if (groupError) throw groupError;
-  if (memberError) throw memberError;
-  if (group.owner_id === userData.user.id) {
-    const successor = (members ?? [])
-      .filter((member) => member.user_id !== userData.user!.id)
-      .sort(
-        (a, b) => (a.role === "admin" ? -1 : 1) - (b.role === "admin" ? -1 : 1),
-      )[0];
-    if (!successor) {
-      const { error } = await client.from("groups").delete().eq("id", groupId);
-      if (error) throw error;
-      return;
-    }
-    const { error: ownerError } = await client
-      .from("groups")
-      .update({ owner_id: successor.user_id })
-      .eq("id", groupId);
-    if (ownerError) throw ownerError;
-    const { error: roleError } = await client
-      .from("group_members")
-      .update({ role: "owner" })
-      .eq("group_id", groupId)
-      .eq("user_id", successor.user_id);
-    if (roleError) throw roleError;
-  }
-  const { error } = await client
-    .from("group_members")
-    .delete()
-    .eq("group_id", groupId)
-    .eq("user_id", userData.user.id);
+  const { error } = await client.rpc("leave_group_transactionally", {
+    p_group_id: groupId,
+  });
   if (error) throw error;
 }
 
@@ -1859,7 +1679,8 @@ export async function pushCloudRecentActivity(
     client
       .from("metric_definitions")
       .select("id, slug")
-      .eq("group_id", state.group.id),
+      .eq("group_id", state.group.id)
+      .is("archived_at", null),
     resolveAccountRevision(client, state.currentUserId, accountRevision),
   ]);
   if (membership.error) throw membership.error;
@@ -1946,66 +1767,71 @@ export async function pushCloudWorkspace(
     };
   const canManage = current.role === "owner" || current.role === "admin";
   const groupConfigurationPushed = canManage && pushGroupConfiguration;
-  const { error: profileError } = await client
-    .from("profiles")
-    .update({
-      display_name: current.name,
-      avatar_path: current.avatarStoragePath ?? null,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    })
-    .eq("id", state.currentUserId);
-  if (profileError) throw profileError;
   const profile = normalizeEnergyProfile(
     state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile,
   );
-  const { error: energyError } = await client.from("energy_profiles").upsert({
-    user_id: state.currentUserId,
-    age: profile.age,
-    biological_sex: profile.sex,
-    height_cm: profile.heightCm,
-    weight_kg: profile.weightKg,
-    target_weight_kg: profile.targetWeightKg,
-    activity_level: profile.activityLevel,
-    desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
-  });
-  if (energyError) throw energyError;
-  let groupMetricSetChanged = false;
-  if (groupConfigurationPushed) {
-    const { error: groupError } = await client
-      .from("groups")
-      .update({
-        name: state.group.name,
-        template_name: state.group.templateName,
-        settings: {
-          streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
-          themeColor: state.group.themeColor ?? "#0FBFB8",
-          requireMemberApproval: state.group.requireMemberApproval ?? false,
-          gymPlans: state.group.gymPlans ?? [],
-        },
-      })
-      .eq("id", state.group.id);
-    if (groupError) throw groupError;
-    groupMetricSetChanged = await upsertMetrics(
-      state.group.id,
-      state.group.metricConfiguration ?? [],
-    );
-    if (current.role === "owner") {
-      for (const member of state.group.members.filter(
-        (member) => member.role !== "owner",
-      )) {
-        const { error } = await client
-          .from("group_members")
-          .update({ role: member.role })
-          .eq("group_id", state.group.id)
-          .eq("user_id", member.id);
-        if (error) throw error;
-      }
-    }
-  }
+  const metadataProjection = await client.rpc(
+    "publish_account_workspace_metadata",
+    {
+      p_expected_revision: publishRevision,
+      p_display_name: current.name,
+      p_avatar_path: current.avatarStoragePath ?? null,
+      p_timezone:
+        Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      p_energy_profile: {
+        age: profile.age,
+        biological_sex: profile.sex,
+        height_cm: profile.heightCm,
+        weight_kg: profile.weightKg,
+        target_weight_kg: profile.targetWeightKg,
+        activity_level: profile.activityLevel,
+        desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
+      },
+      p_group_id: groupConfigurationPushed ? state.group.id : null,
+      p_expected_group_configuration_revision: groupConfigurationPushed
+        ? (state.group.configurationRevision ?? 0)
+        : null,
+      p_group_name: groupConfigurationPushed ? state.group.name : null,
+      p_group_template_name: groupConfigurationPushed
+        ? state.group.templateName
+        : null,
+      p_group_settings: groupConfigurationPushed
+        ? {
+            streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
+            themeColor: state.group.themeColor ?? "#0FBFB8",
+            requireMemberApproval:
+              state.group.requireMemberApproval ?? false,
+            gymPlans: state.group.gymPlans ?? [],
+          }
+        : null,
+      p_group_metrics: groupConfigurationPushed
+        ? (state.group.metricConfiguration ?? []).map((metric) =>
+            metricRow(state.group.id, metric),
+          )
+        : null,
+      p_member_roles:
+        groupConfigurationPushed && current.role === "owner"
+          ? state.group.members
+              .filter((member) => member.role !== "owner")
+              .map((member) => ({
+                user_id: member.id,
+                role: member.role,
+              }))
+          : [],
+    },
+  );
+  if (metadataProjection.error) throw metadataProjection.error;
+  const projectionResult = metadataProjection.data as {
+    groupMetricSetChanged?: boolean;
+    groupConfigurationRevision?: number;
+  } | null;
+  const groupMetricSetChanged =
+    projectionResult?.groupMetricSetChanged === true;
   const { data: metricRows, error: metricError } = await client
     .from("metric_definitions")
     .select("id, slug")
-    .eq("group_id", state.group.id);
+    .eq("group_id", state.group.id)
+    .is("archived_at", null);
   if (metricError) throw metricError;
   const idBySlug = new Map((metricRows ?? []).map((row) => [row.slug, row.id]));
   const explicitDeletedEntryIds = [
@@ -2179,30 +2005,6 @@ export async function pushCloudWorkspace(
   });
   // Never infer deletion from absence in the device cache. Only the explicit
   // tombstones processed above may remove a server row.
-  await Promise.allSettled(
-    newSharedEntries.map((entry) => {
-      const metric =
-        (state.group.metricConfiguration ?? []).find(
-          (item) => item.id === entry.metricId,
-        ) ?? state.metrics.find((item) => item.id === entry.metricId);
-      return client.functions.invoke("send-push", {
-        body: withLocalizedPushCopy({
-          eventKey: `entry:${state.group.id}:${entry.id}`,
-          groupId: state.group.id,
-          category: "metric",
-          metricId: entry.metricId,
-          title: `${current.name} logged ${metric?.name ?? "a metric"}`,
-          body:
-            entry.visibility === "group" &&
-            metric &&
-            typeof entry.value !== "string"
-              ? formatMetricValue(metric, Number(entry.value))
-              : `A shared ${metric?.name ?? "metric"} update was added.`,
-          data: { route: `/day/${entry.localDate}`, metricId: entry.metricId },
-        }),
-      });
-    }),
-  );
   const leadEntriesByMetric = new Map<string, MetricEntry[]>();
   const today = dateKey();
   const sharedCompetitionState = (source: AppState): AppState => ({
@@ -2226,8 +2028,37 @@ export async function pushCloudWorkspace(
     if (entries) entries.push(entry);
     else leadEntriesByMetric.set(entry.metricId, [entry]);
   });
-  await Promise.allSettled(
-    [...leadEntriesByMetric.entries()].flatMap(([metricId, changedEntries]) => {
+  const dispatchCommittedEntryNotifications = () =>
+    Promise.allSettled(
+      newSharedEntries.map((entry) => {
+        const metric =
+          (state.group.metricConfiguration ?? []).find(
+            (item) => item.id === entry.metricId,
+          ) ?? state.metrics.find((item) => item.id === entry.metricId);
+        return client.functions.invoke("send-push", {
+          body: withLocalizedPushCopy({
+            eventKey: `entry:${state.group.id}:${state.currentUserId}:${entry.id}`,
+            groupId: state.group.id,
+            category: "metric",
+            metricId: entry.metricId,
+            title: `${current.name} logged ${metric?.name ?? "a metric"}`,
+            body:
+              entry.visibility === "group" &&
+              metric &&
+              typeof entry.value !== "string"
+                ? formatMetricValue(metric, Number(entry.value))
+                : `A shared ${metric?.name ?? "metric"} update was added.`,
+            data: {
+              route: `/day/${entry.localDate}`,
+              metricId: entry.metricId,
+            },
+          }),
+        });
+      }),
+    );
+  const dispatchCommittedLeadNotifications = () =>
+    Promise.allSettled(
+      [...leadEntriesByMetric.entries()].flatMap(([metricId, changedEntries]) => {
       const metric = (state.group.metricConfiguration ?? []).find(
         (item) => item.id === metricId,
       );
@@ -2354,7 +2185,7 @@ export async function pushCloudWorkspace(
         ];
         return client.functions.invoke("send-push", {
           body: withLocalizedPushCopy({
-            eventKey: `lead:${state.group.id}:${metric.id}:${leaderId}:${firstChangedId}:${latestChange ?? today}`,
+            eventKey: `lead:${state.group.id}:${state.currentUserId}:${metric.id}:${leaderId}:${firstChangedId}:${latestChange ?? today}`,
             groupId: state.group.id,
             category: "lead",
             audience: "group_including_sender",
@@ -2367,8 +2198,8 @@ export async function pushCloudWorkspace(
           }),
         });
       });
-    }),
-  );
+      }),
+    );
   if (entriesToUpsert.length) {
     const rows = entriesToUpsert.map((entry) => ({
         client_generated_id: entry.id,
@@ -2594,6 +2425,15 @@ export async function pushCloudWorkspace(
   const activityCommit = needsHistoricalCommit
     ? await commitActivity(activityCommitDates)
     : fastRecentCheckpoint;
+
+  // Notifications may expose an exact value or a ranking change. Dispatch
+  // only after the detailed entries, compact statuses, and revision-checked
+  // activity checkpoint are all durable. A stale publish that loses its CAS
+  // race therefore cannot announce data that the group never received.
+  await Promise.all([
+    dispatchCommittedEntryNotifications(),
+    dispatchCommittedLeadNotifications(),
+  ]);
 
   // Period-winner alerts are distinct from live lead-change alerts: they only
   // announce a period that has finished. Stable event keys plus the server's
@@ -2872,30 +2712,25 @@ export async function pushCloudWorkspace(
   }
 
   const aliases = state.settings.memberNicknamesByGroup[state.group.id] ?? {};
-  await client
-    .from("group_member_aliases")
-    .delete()
-    .eq("owner_user_id", state.currentUserId)
-    .eq("group_id", state.group.id);
   const aliasRows = Object.entries(aliases)
     .filter(([, alias]) => alias.trim())
     .map(([memberId, alias]) => ({
-      owner_user_id: state.currentUserId,
-      group_id: state.group.id,
       subject_user_id: memberId,
       nickname: alias.trim(),
     }));
-  if (aliasRows.length) {
-    const { error } = await client
-      .from("group_member_aliases")
-      .insert(aliasRows);
-    if (error) throw error;
-  }
+  const aliasProjection = await client.rpc("publish_group_member_aliases", {
+    p_group_id: state.group.id,
+    p_expected_revision: publishRevision,
+    p_aliases: aliasRows,
+  });
+  if (aliasProjection.error) throw aliasProjection.error;
   return {
     deletedEntryIds: explicitDeletedEntryIds,
     deletedPhotoIds,
     activityVersion: activityCommit.version,
     workspacePushed: true,
     groupConfigurationPushed,
+    groupConfigurationRevision:
+      projectionResult?.groupConfigurationRevision,
   };
 }
