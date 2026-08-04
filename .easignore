@@ -1,0 +1,47 @@
+# Dependencies and local tooling
+node_modules/
+.pnpm-store/
+.expo/
+.idea/
+.vscode/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*-firebase-adminsdk-*.json
+*.mobileprovision
+
+# Generated native and export output
+/android/
+/ios/
+dist/
+web-build/
+dist-android-check/
+dist-android-check-2/
+expo-env.d.ts
+*.tsbuildinfo
+.metro-health-check*
+
+# Downloadable companion artifacts are not runtime build inputs. The web app's
+# live /extension route remains part of app/ and public/ remains deployable.
+artifacts/
+browser-extension/
+
+# Scratch and local-only projects
+/work/
+/outputs/
+/invite-site/
+app-example/
+
+# Editor/OS/debug noise
+.DS_Store
+*.orig.*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
