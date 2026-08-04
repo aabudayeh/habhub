@@ -77,6 +77,8 @@ const WORKSPACE_ACK_KEY_PREFIX = "habhub-workspace-ack-v1:";
 const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
   "habhub-group-configuration-ack-v1:";
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
+const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v1:";
+const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v1:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
 const CHAT_OUTBOX_FRESHNESS_MS = 15 * 60 * 1000;
 const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
@@ -157,6 +159,12 @@ type SnapshotRow = {
   schema_version: number;
 };
 
+type CloudMergeBase = {
+  version: 1;
+  settings: Record<string, string>;
+  collections: Record<string, Record<string, string>>;
+};
+
 const CloudSyncContext = createContext<CloudSyncContextValue | null>(null);
 const CloudSyncActionsContext = createContext<CloudSyncActions | null>(null);
 const CloudSyncStatusContext = createContext<CloudSyncStatus>("disabled");
@@ -199,6 +207,39 @@ async function writeCloudSyncCheckpoint(userId: string, value: string) {
   await AsyncStorage.setItem(
     `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${userId}`,
     value,
+  );
+}
+
+async function readCloudSnapshotAck(userId: string) {
+  return AsyncStorage.getItem(`${CLOUD_SNAPSHOT_ACK_KEY_PREFIX}${userId}`);
+}
+
+async function writeCloudSnapshotAck(userId: string, hash: string) {
+  await AsyncStorage.setItem(
+    `${CLOUD_SNAPSHOT_ACK_KEY_PREFIX}${userId}`,
+    hash,
+  );
+}
+
+async function readCloudMergeBase(userId: string): Promise<CloudMergeBase | null> {
+  try {
+    const saved = await AsyncStorage.getItem(
+      `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
+    );
+    if (!saved) return null;
+    const parsed = JSON.parse(saved) as CloudMergeBase;
+    return parsed?.version === 1 && parsed.settings && parsed.collections
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCloudMergeBase(userId: string, base: CloudMergeBase) {
+  await AsyncStorage.setItem(
+    `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
+    JSON.stringify(base),
   );
 }
 
@@ -662,13 +703,98 @@ function snapshotPayload(state: AppState): AppState {
 }
 
 function valueHash(value: unknown) {
-  const source = JSON.stringify(value);
+  const serialized = JSON.stringify(value);
+  const source = serialized === undefined ? "__undefined__" : serialized;
   let hash = 2166136261;
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+
+function hashRecord(record: Record<string, unknown> | undefined) {
+  return Object.fromEntries(
+    Object.entries(record ?? {}).map(([key, value]) => [key, valueHash(value)]),
+  );
+}
+
+function hashCollection<T>(
+  items: T[] | undefined,
+  keyFor: (item: T) => string,
+) {
+  return Object.fromEntries(
+    (items ?? []).map((item) => [keyFor(item), valueHash(item)]),
+  );
+}
+
+/**
+ * Compact three-way merge base for account fields commonly edited from both
+ * mobile and the web companion. Hashes distinguish an unchanged cached value
+ * from an offline edit or deletion without duplicating the account payload in
+ * AsyncStorage.
+ */
+function createCloudMergeBase(state: AppState): CloudMergeBase {
+  const payload = snapshotPayload(state);
+  const timers = payload.activityTimers?.length
+    ? payload.activityTimers
+    : payload.activeTimer
+      ? [payload.activeTimer]
+      : [];
+  return {
+    version: 1,
+    settings: hashRecord(payload.settings as unknown as Record<string, unknown>),
+    collections: {
+      energyProfiles: hashRecord(
+        payload.energyProfiles as unknown as Record<string, unknown>,
+      ),
+      gymExerciseGoals: hashRecord(
+        payload.gymExerciseGoals as unknown as Record<string, unknown>,
+      ),
+      trackedGoalPeriods: hashRecord(
+        payload.trackedGoalPeriods as unknown as Record<string, unknown>,
+      ),
+      pendingDeletedEntryIds: hashCollection(
+        payload.settings.pendingDeletedEntryIds,
+        (id) => id,
+      ),
+      pendingDeletedPhotoIds: hashCollection(
+        payload.settings.pendingDeletedPhotoIds,
+        (id) => id,
+      ),
+      metrics: hashCollection(payload.metrics, (item) => item.id),
+      entries: hashCollection(payload.entries, (item) =>
+        metricEntryKey(item.userId, item.id),
+      ),
+      photos: hashCollection(
+        payload.photos,
+        (item) => `${item.userId}:${item.id}`,
+      ),
+      messages: hashCollection(payload.messages, (item) => item.id),
+      dailyMetricStatuses: hashCollection(
+        payload.dailyMetricStatuses,
+        dailyStatusKey,
+      ),
+      gymPlans: hashCollection(
+        payload.gymPlans,
+        (item) => `${item.userId}:${item.id}`,
+      ),
+      gymSessions: hashCollection(
+        payload.gymSessions,
+        (item) => `${item.userId}:${item.id}`,
+      ),
+      todos: hashCollection(payload.todos, (item) => item.id),
+      journalNotes: hashCollection(
+        payload.journalNotes,
+        (item) => `${item.userId}:${item.id}`,
+      ),
+      calendarReminders: hashCollection(
+        payload.calendarReminders,
+        (item) => item.id,
+      ),
+      activityTimers: hashCollection(timers, (item) => item.id),
+    },
+  };
 }
 
 const stableHashCache = new WeakMap<AppState, string>();
@@ -695,6 +821,12 @@ function stableHash(state: AppState) {
     "performanceRange",
     "tutorialGuideId",
     "tutorialGuideRunId",
+    // Native health authorization/import preferences belong to this physical
+    // device. They may ride with another durable save, but must never reopen
+    // the account outbox merely because two devices use different schedules.
+    "healthSync",
+    "healthHistoryDays",
+    "syncMode",
   ].forEach((key) => delete settings[key]);
   const groupShell = (group: Group) =>
     isCloudGroupId(group.id) ? { id: group.id } : group;
@@ -813,29 +945,252 @@ async function resolvePrivateMedia(state: AppState): Promise<AppState> {
   };
 }
 
+/**
+ * Copy only resolved/cached media URLs into the current durable state. Signed
+ * URLs are presentation cache, not conflict-resolution input, so this helper
+ * must never replace tracker, to-do, timer, or log fields.
+ */
+function mergePrivateMediaUrls(
+  current: AppState,
+  mediaSource: AppState,
+): AppState {
+  let changed = false;
+  const avatarUrls = new Map<string, string>();
+  mediaSource.groups.forEach((group) =>
+    group.members.forEach((member) => {
+      if (member.avatarStoragePath && member.avatarUri)
+        avatarUrls.set(
+          `${group.id}:${member.id}:${member.avatarStoragePath}`,
+          member.avatarUri,
+        );
+    }),
+  );
+  const groups = current.groups.map((group) => ({
+    ...group,
+    members: group.members.map((member) => {
+      if (!member.avatarStoragePath) return member;
+      const uri = avatarUrls.get(
+        `${group.id}:${member.id}:${member.avatarStoragePath}`,
+      );
+      if (!uri || uri === member.avatarUri) return member;
+      changed = true;
+      return { ...member, avatarUri: uri };
+    }),
+  }));
+  const entryUrls = new Map(
+    mediaSource.entries
+      .filter((entry) => entry.imageStoragePath && entry.imageUri)
+      .map((entry) => [
+        `${metricEntryKey(entry.userId, entry.id)}:${entry.imageStoragePath}`,
+        entry.imageUri!,
+      ]),
+  );
+  const entries = current.entries.map((entry) => {
+    if (!entry.imageStoragePath) return entry;
+    const uri = entryUrls.get(
+      `${metricEntryKey(entry.userId, entry.id)}:${entry.imageStoragePath}`,
+    );
+    if (!uri || uri === entry.imageUri) return entry;
+    changed = true;
+    return { ...entry, imageUri: uri };
+  });
+  const photoUrls = new Map(
+    mediaSource.photos
+      .filter((photo) => photo.storagePath && photo.uri)
+      .map((photo) => [`${photo.id}:${photo.storagePath}`, photo.uri]),
+  );
+  const photos = current.photos.map((photo) => {
+    if (!photo.storagePath) return photo;
+    const uri = photoUrls.get(`${photo.id}:${photo.storagePath}`);
+    if (!uri || uri === photo.uri) return photo;
+    changed = true;
+    return { ...photo, uri };
+  });
+  const messageUrls = new Map(
+    mediaSource.messages
+      .filter((message) => message.imageStoragePath && message.imageUri)
+      .map((message) => [
+        `${message.id}:${message.imageStoragePath}`,
+        message.imageUri!,
+      ]),
+  );
+  const messages = current.messages.map((message) => {
+    if (!message.imageStoragePath) return message;
+    const uri = messageUrls.get(
+      `${message.id}:${message.imageStoragePath}`,
+    );
+    if (!uri || uri === message.imageUri) return message;
+    changed = true;
+    return { ...message, imageUri: uri };
+  });
+  if (!changed) return current;
+  return {
+    ...current,
+    groups,
+    group: groups.find((group) => group.id === current.group.id) ?? current.group,
+    entries,
+    photos,
+    messages,
+  };
+}
+
+/** Merge only newly uploaded storage paths into the latest live state. */
+function mergeUploadedMediaMetadata(
+  current: AppState,
+  uploaded: AppState,
+): AppState {
+  let changed = false;
+  const userId = current.currentUserId;
+  const uploadedAvatar = [uploaded.group, ...uploaded.groups]
+    .flatMap((group) => group.members)
+    .find(
+      (member) => member.id === userId && member.avatarStoragePath,
+    );
+  const groups = current.groups.map((group) => ({
+    ...group,
+    members: group.members.map((member) => {
+      if (
+        member.id !== userId ||
+        member.avatarStoragePath ||
+        !uploadedAvatar?.avatarStoragePath ||
+        member.avatarUri !== uploadedAvatar.avatarUri
+      )
+        return member;
+      changed = true;
+      return {
+        ...member,
+        avatarStoragePath: uploadedAvatar.avatarStoragePath,
+      };
+    }),
+  }));
+  const uploadedEntries = new Map(
+    uploaded.entries.map((entry) => [
+      metricEntryKey(entry.userId, entry.id),
+      entry,
+    ]),
+  );
+  const entries = current.entries.map((entry) => {
+    const source = uploadedEntries.get(metricEntryKey(entry.userId, entry.id));
+    if (
+      entry.imageStoragePath ||
+      !source?.imageStoragePath ||
+      entry.imageUri !== source.imageUri
+    )
+      return entry;
+    changed = true;
+    return { ...entry, imageStoragePath: source.imageStoragePath };
+  });
+  const uploadedPhotos = new Map(
+    uploaded.photos.map((photo) => [photo.id, photo]),
+  );
+  const photos = current.photos.map((photo) => {
+    const source = uploadedPhotos.get(photo.id);
+    if (
+      photo.storagePath ||
+      !source?.storagePath ||
+      photoUri(photo.uri) !== photoUri(source.uri)
+    )
+      return photo;
+    changed = true;
+    return { ...photo, storagePath: source.storagePath };
+  });
+  const uploadedMessages = new Map(
+    uploaded.messages.map((message) => [message.id, message]),
+  );
+  const messages = current.messages.map((message) => {
+    const source = uploadedMessages.get(message.id);
+    if (
+      message.imageStoragePath ||
+      !source?.imageStoragePath ||
+      message.imageUri !== source.imageUri
+    )
+      return message;
+    changed = true;
+    return { ...message, imageStoragePath: source.imageStoragePath };
+  });
+  if (!changed) return current;
+  return {
+    ...current,
+    groups,
+    group: groups.find((group) => group.id === current.group.id) ?? current.group,
+    entries,
+    photos,
+    messages,
+  };
+}
+
 function mergeById<T extends { id: string }>(remote: T[], local: T[]) {
   const merged = new Map(remote.map((item) => [item.id, item]));
   local.forEach((item) => merged.set(item.id, item));
   return [...merged.values()];
 }
 
-function mergeEntriesByOwnerId(
-  remote: AppState["entries"],
-  local: AppState["entries"],
+function mergeRecordFromBase<T>(
+  remote: Record<string, T> | undefined,
+  local: Record<string, T> | undefined,
+  baseHashes?: Record<string, string>,
 ) {
-  const merged = new Map(
-    remote.map((entry) => [
-      metricEntryKey(entry.userId, entry.id),
-      entry,
-    ]),
-  );
-  local.forEach((entry) =>
-    merged.set(metricEntryKey(entry.userId, entry.id), entry),
-  );
-  return [...merged.values()];
+  const remoteRecord = remote ?? {};
+  const localRecord = local ?? {};
+  const keys = new Set([
+    ...Object.keys(baseHashes ?? {}),
+    ...Object.keys(remoteRecord),
+    ...Object.keys(localRecord),
+  ]);
+  const merged: Record<string, T> = {};
+  keys.forEach((key) => {
+    const remoteHas = Object.prototype.hasOwnProperty.call(remoteRecord, key);
+    const localHas = Object.prototype.hasOwnProperty.call(localRecord, key);
+    const remoteHash = remoteHas ? valueHash(remoteRecord[key]) : undefined;
+    const localHash = localHas ? valueHash(localRecord[key]) : undefined;
+    const baseHash = baseHashes?.[key];
+    const remoteChanged = remoteHash !== baseHash;
+    const localChanged = localHash !== baseHash;
+    const useLocal =
+      (localChanged && !remoteChanged) ||
+      (localChanged && remoteChanged && localHash !== remoteHash);
+    if (useLocal ? localHas : remoteHas)
+      merged[key] = useLocal ? localRecord[key] : remoteRecord[key];
+  });
+  return merged;
 }
 
-function mergeStates(remote: AppState, local: AppState): AppState {
+function mergeCollectionFromBase<T>(
+  remote: T[] | undefined,
+  local: T[] | undefined,
+  keyFor: (item: T) => string,
+  baseHashes?: Record<string, string>,
+) {
+  const remoteMap = new Map((remote ?? []).map((item) => [keyFor(item), item]));
+  const localMap = new Map((local ?? []).map((item) => [keyFor(item), item]));
+  const keys = new Set([
+    ...Object.keys(baseHashes ?? {}),
+    ...remoteMap.keys(),
+    ...localMap.keys(),
+  ]);
+  const merged: T[] = [];
+  keys.forEach((key) => {
+    const remoteItem = remoteMap.get(key);
+    const localItem = localMap.get(key);
+    const remoteHash = remoteItem ? valueHash(remoteItem) : undefined;
+    const localHash = localItem ? valueHash(localItem) : undefined;
+    const baseHash = baseHashes?.[key];
+    const remoteChanged = remoteHash !== baseHash;
+    const localChanged = localHash !== baseHash;
+    const useLocal =
+      (localChanged && !remoteChanged) ||
+      (localChanged && remoteChanged && localHash !== remoteHash);
+    const selected = useLocal ? localItem : remoteItem;
+    if (selected) merged.push(selected);
+  });
+  return merged;
+}
+
+function mergeStates(
+  remote: AppState,
+  local: AppState,
+  base?: CloudMergeBase | null,
+): AppState {
   const groups = mergeById(remote.groups, local.groups);
   const onboardingComplete =
     remote.settings.onboardingComplete ||
@@ -843,20 +1198,157 @@ function mergeStates(remote: AppState, local: AppState): AppState {
   const tutorialComplete =
     remote.settings.tutorialComplete ||
     local.settings.tutorialComplete;
+  const settings = mergeRecordFromBase(
+    remote.settings as unknown as Record<string, unknown>,
+    local.settings as unknown as Record<string, unknown>,
+    base?.settings,
+  ) as unknown as AppState["settings"];
+  settings.onboardingComplete = onboardingComplete;
+  settings.tutorialComplete = tutorialComplete;
+  settings.pendingDeletedEntryIds = mergeCollectionFromBase(
+    remote.settings.pendingDeletedEntryIds,
+    local.settings.pendingDeletedEntryIds,
+    (id) => id,
+    base?.collections.pendingDeletedEntryIds,
+  );
+  settings.pendingDeletedPhotoIds = mergeCollectionFromBase(
+    remote.settings.pendingDeletedPhotoIds,
+    local.settings.pendingDeletedPhotoIds,
+    (id) => id,
+    base?.collections.pendingDeletedPhotoIds,
+  );
+  settings.deletedEntryIds = [
+    ...new Set([
+      ...(remote.settings.deletedEntryIds ?? []),
+      ...(local.settings.deletedEntryIds ?? []),
+    ]),
+  ];
+  settings.deletedPhotoIds = [
+    ...new Set([
+      ...(remote.settings.deletedPhotoIds ?? []),
+      ...(local.settings.deletedPhotoIds ?? []),
+    ]),
+  ];
+  const deletedEntryIds = new Set([
+    ...(remote.settings.pendingDeletedEntryIds ?? []),
+    ...(local.settings.pendingDeletedEntryIds ?? []),
+    ...(remote.settings.deletedEntryIds ?? []),
+    ...(local.settings.deletedEntryIds ?? []),
+  ]);
+  const deletedPhotoIds = new Set([
+    ...(remote.settings.pendingDeletedPhotoIds ?? []),
+    ...(local.settings.pendingDeletedPhotoIds ?? []),
+    ...(remote.settings.deletedPhotoIds ?? []),
+    ...(local.settings.deletedPhotoIds ?? []),
+  ]);
+  const activityTimers = mergeCollectionFromBase(
+    remote.activityTimers?.length
+      ? remote.activityTimers
+      : remote.activeTimer
+        ? [remote.activeTimer]
+        : [],
+    local.activityTimers?.length
+      ? local.activityTimers
+      : local.activeTimer
+        ? [local.activeTimer]
+        : [],
+    (item) => item.id,
+    base?.collections.activityTimers,
+  );
   return {
     ...remote,
     ...local,
-    settings: {
-      ...remote.settings,
-      ...local.settings,
-      onboardingComplete,
-      tutorialComplete,
-    },
+    settings,
     groups,
     group: groups.find((group) => group.id === local.group.id) ?? local.group,
-    entries: mergeEntriesByOwnerId(remote.entries, local.entries),
-    photos: mergeById(remote.photos, local.photos),
-    messages: mergeById(remote.messages, local.messages),
+    energyProfiles: mergeRecordFromBase(
+      remote.energyProfiles,
+      local.energyProfiles,
+      base?.collections.energyProfiles,
+    ),
+    metrics: mergeCollectionFromBase(
+      remote.metrics,
+      local.metrics,
+      (item) => item.id,
+      base?.collections.metrics,
+    ),
+    entries: mergeCollectionFromBase(
+      remote.entries,
+      local.entries,
+      (entry) => metricEntryKey(entry.userId, entry.id),
+      base?.collections.entries,
+    ).filter(
+      (entry) =>
+        entry.userId !== local.currentUserId ||
+        !deletedEntryIds.has(entry.id),
+    ),
+    photos: mergeCollectionFromBase(
+      remote.photos,
+      local.photos,
+      (photo) => `${photo.userId}:${photo.id}`,
+      base?.collections.photos,
+    ).filter(
+      (photo) =>
+        photo.userId !== local.currentUserId ||
+        !deletedPhotoIds.has(photo.id),
+    ),
+    messages: mergeCollectionFromBase(
+      remote.messages,
+      local.messages,
+      (message) => message.id,
+      base?.collections.messages,
+    ),
+    dailyMetricStatuses: mergeCollectionFromBase(
+      remote.dailyMetricStatuses,
+      local.dailyMetricStatuses,
+      dailyStatusKey,
+      base?.collections.dailyMetricStatuses,
+    ),
+    gymPlans: mergeCollectionFromBase(
+      remote.gymPlans,
+      local.gymPlans,
+      (plan) => `${plan.userId}:${plan.id}`,
+      base?.collections.gymPlans,
+    ),
+    gymSessions: mergeCollectionFromBase(
+      remote.gymSessions,
+      local.gymSessions,
+      (session) => `${session.userId}:${session.id}`,
+      base?.collections.gymSessions,
+    ),
+    gymExerciseGoals: mergeRecordFromBase(
+      remote.gymExerciseGoals,
+      local.gymExerciseGoals,
+      base?.collections.gymExerciseGoals,
+    ),
+    todos: mergeCollectionFromBase(
+      remote.todos,
+      local.todos,
+      (item) => item.id,
+      base?.collections.todos,
+    ),
+    journalNotes: mergeCollectionFromBase(
+      remote.journalNotes,
+      local.journalNotes,
+      (item) => `${item.userId}:${item.id}`,
+      base?.collections.journalNotes,
+    ),
+    calendarReminders: mergeCollectionFromBase(
+      remote.calendarReminders,
+      local.calendarReminders,
+      (item) => item.id,
+      base?.collections.calendarReminders,
+    ),
+    activityTimers,
+    activeTimer:
+      activityTimers.find((timer) => timer.id === local.activeTimer?.id) ??
+      activityTimers.find((timer) => timer.id === remote.activeTimer?.id) ??
+      activityTimers[0],
+    trackedGoalPeriods: mergeRecordFromBase(
+      remote.trackedGoalPeriods,
+      local.trackedGoalPeriods,
+      base?.collections.trackedGoalPeriods,
+    ),
     lastSavedAt: null,
   };
 }
@@ -875,6 +1367,93 @@ function preserveDeviceHealthState(
       healthHistoryDays: local.settings.healthHistoryDays,
       syncMode: local.settings.syncMode,
     },
+  };
+}
+
+/**
+ * Accept a newer account snapshot when this device has no local outbox.
+ * Server-owned account fields (to-dos, timers, tracker order/settings, notes,
+ * and owned logs) win, while relational group history remains a local cache
+ * and native health authorization remains device-owned.
+ */
+function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
+  if (remote.currentUserId !== local.currentUserId) return remote;
+  const userId = remote.currentUserId;
+  const remoteWithDeviceSettings = preserveDeviceHealthState(remote, local);
+  // Personal setup groups are account-owned and therefore follow the remote
+  // snapshot. Cloud groups are relational data, so retain their hydrated local
+  // cache until the workspace refresh below replaces it. Treating every local
+  // group as newer here resurrected stale personal setup colors/trackers after
+  // a clean pull and could leave `group` inconsistent with the same item in
+  // `groups`.
+  const remoteGroupIds = new Set(
+    remoteWithDeviceSettings.groups.map((group) => group.id),
+  );
+  const localCloudGroups = new Map(
+    local.groups
+      .filter((group) => isCloudGroupId(group.id))
+      .map((group) => [group.id, group] as const),
+  );
+  const groups = [
+    ...remoteWithDeviceSettings.groups.map((group) =>
+      isCloudGroupId(group.id)
+        ? (localCloudGroups.get(group.id) ?? group)
+        : group,
+    ),
+    ...local.groups.filter(
+      (group) =>
+        isCloudGroupId(group.id) && !remoteGroupIds.has(group.id),
+    ),
+  ];
+  const activeGroup = isCloudGroupId(remoteWithDeviceSettings.group.id)
+    ? (groups.find(
+        (group) => group.id === remoteWithDeviceSettings.group.id,
+      ) ?? remoteWithDeviceSettings.group)
+    : remoteWithDeviceSettings.group;
+  const keepForeign = <T extends { userId: string }>(items: T[]) =>
+    items.filter((item) => item.userId !== userId);
+  const keepForeignPhotos = local.photos.filter(
+    (photo) => photo.userId !== userId,
+  );
+  const keepForeignMessages = local.messages.filter(
+    (message) => message.senderId !== userId,
+  );
+  const keepForeignStatuses = local.dailyMetricStatuses.filter(
+    (item) => item.userId !== userId,
+  );
+  return {
+    ...remoteWithDeviceSettings,
+    group: activeGroup,
+    groups,
+    selectedGroupMetricId:
+      remoteWithDeviceSettings.group.id === local.group.id
+        ? local.selectedGroupMetricId
+        : remoteWithDeviceSettings.selectedGroupMetricId,
+    entries: [
+      ...remoteWithDeviceSettings.entries.filter(
+        (entry) => entry.userId === userId,
+      ),
+      ...keepForeign(local.entries),
+    ],
+    photos: [
+      ...remoteWithDeviceSettings.photos.filter(
+        (photo) => photo.userId === userId,
+      ),
+      ...keepForeignPhotos,
+    ],
+    messages: [
+      ...remoteWithDeviceSettings.messages.filter(
+        (message) => message.senderId === userId,
+      ),
+      ...keepForeignMessages,
+    ].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
+    dailyMetricStatuses: [
+      ...remoteWithDeviceSettings.dailyMetricStatuses.filter(
+        (item) => item.userId === userId,
+      ),
+      ...keepForeignStatuses,
+    ],
+    lastSavedAt: null,
   };
 }
 
@@ -1223,10 +1802,20 @@ function mergeWorkspaceWithoutRegression(
       (remoteGroupMetricIds.has(entry.metricId) &&
         groupMemberIds.has(entry.userId)),
   );
+  const pendingDeletedEntryIds = new Set(
+    [
+      ...(live.settings.pendingDeletedEntryIds ?? []),
+      ...(live.settings.deletedEntryIds ?? []),
+    ],
+  );
   const entries = mergeActivityEntries(
     cachedEntries,
     remote.entries,
     live.currentUserId,
+  ).filter(
+    (entry) =>
+      entry.userId !== live.currentUserId ||
+      !pendingDeletedEntryIds.has(entry.id),
   );
   const photos = new Map(remote.photos.map((photo) => [photo.id, photo]));
   live.photos
@@ -1238,6 +1827,12 @@ function mergeWorkspaceWithoutRegression(
   live.messages
     .filter((message) => message.senderId === live.currentUserId)
     .forEach((message) => messages.set(message.id, message));
+  const pendingDeletedPhotoIds = new Set(
+    [
+      ...(live.settings.pendingDeletedPhotoIds ?? []),
+      ...(live.settings.deletedPhotoIds ?? []),
+    ],
+  );
   const statuses = mergeActivityStatuses(
     live.dailyMetricStatuses,
     remote.dailyMetricStatuses,
@@ -1251,7 +1846,11 @@ function mergeWorkspaceWithoutRegression(
     ),
     metrics,
     entries,
-    photos: [...photos.values()],
+    photos: [...photos.values()].filter(
+      (photo) =>
+        photo.userId !== live.currentUserId ||
+        !pendingDeletedPhotoIds.has(photo.id),
+    ),
     messages: [...messages.values()].sort((a, b) =>
       a.createdAt.localeCompare(b.createdAt),
     ),
@@ -1408,6 +2007,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const lastSyncedAtRef = useRef<string | null>(null);
   const revisionRef = useRef(0);
   const hashRef = useRef<string | null>(null);
+  const mergeBaseRef = useRef<CloudMergeBase | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
   const workspaceAckHashesRef = useRef(new Map<string, string>());
   const groupConfigurationAckHashesRef = useRef(
@@ -1423,6 +2023,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const remoteInitializationPendingRef = useRef(false);
   const identityResetUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
+  const pullLatestPromiseRef = useRef<Promise<void> | null>(null);
+  const pullLatestQueuedRevisionRef = useRef(0);
+  const pullLatestRef = useRef<
+    ((expectedRevision?: number) => Promise<void>) | null
+  >(null);
+  const pullRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pullRetryAttemptRef = useRef(0);
+  const snapshotWriteTargetRevisionRef = useRef(0);
   const syncIsForcedRef = useRef(false);
   const performSyncRef = useRef<
     ((forceWorkspace?: boolean, forceAttempt?: boolean) => Promise<void>) | null
@@ -1457,6 +2065,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const chatOutboxPromiseRef = useRef<Promise<void> | null>(null);
   const chatOutboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   stateRef.current = state;
+
+  const rememberCloudMergeBase = useCallback(
+    (userId: string, acknowledgedState: AppState) => {
+      const base = createCloudMergeBase(acknowledgedState);
+      mergeBaseRef.current = base;
+      void writeCloudMergeBase(userId, base).catch(() => undefined);
+    },
+    [],
+  );
 
   const hasUnsyncedLocalChanges = useCallback(() => {
     const live = stateRef.current;
@@ -1706,30 +2323,55 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     );
   }, [auth.user]);
 
-  const pullLatest = useCallback(async () => {
+  const pullLatestOnce = useCallback(async () => {
     if (!auth.user || !supabase) return;
+    const operationUser = auth.user;
+    const operationUserId = operationUser.id;
+    const operationIsCurrent = () =>
+      initializedUserRef.current === operationUserId &&
+      stateRef.current.currentUserId === operationUserId;
+    // Account reads and writes share one revision stream. If a save is already
+    // in flight, let it finish before reading so a stale candidate can never
+    // write against a revision advanced by this pull.
+    const activeSync = syncPromiseRef.current;
+    if (activeSync) await activeSync;
+    if (!operationIsCurrent()) return;
     if (!networkAvailableRef.current) {
       setStatus("offline");
       setPendingChanges(hasUnsyncedLocalChanges());
       setErrorMessage(
         "Offline changes are safe on this device and will retry automatically.",
       );
-      return;
+      throw new Error("Network offline");
     }
     // Realtime account updates hydrate behind the currently rendered cache.
     // A global loading state here made every tab appear to reload.
     setErrorMessage(null);
+    const pullStartAccountHash = stableHash(stateRef.current);
+    const accountWasDirty = pullStartAccountHash !== hashRef.current;
     try {
-      const remote = await fetchSnapshot(auth.user.id);
+      const remote = await fetchSnapshot(operationUserId);
+      if (!operationIsCurrent()) return;
       if (!remote) return;
       revisionRef.current = remote.revision;
-      const bound = bindStateToAccount(remote.payload, auth.user);
-      const resolvedRemote = await resolvePrivateMedia(bound);
-      const remoteHash = stableHash(resolvedRemote);
-      // Pulling group/chat updates can race with a just-finished Health Connect
-      // import. Merge by stable client ids so the UI never flashes back to the
-      // older cloud snapshot while the local import is still uploading.
-      const resolved = mergeStates(resolvedRemote, stateRef.current);
+      const bound = bindStateToAccount(remote.payload, operationUser);
+      // Reuse matching signed URLs from the rendered cache. Signing media is a
+      // best-effort presentation refresh and must never delay a timer, to-do,
+      // tracker-order, or settings update.
+      const resolvedRemote = mergePrivateMediaUrls(bound, stateRef.current);
+      const remoteHash = stableHash(bound);
+      const accountChangedDuringPull =
+        stableHash(stateRef.current) !== pullStartAccountHash;
+      const preserveLocalAccount =
+        accountWasDirty || accountChangedDuringPull;
+      // A clean client must accept the newer account-owned fields. Always
+      // merging local-over-remote made website/extension timer, to-do and order
+      // changes appear briefly and then get overwritten by the phone cache.
+      // Dirty/offline clients and edits made while this request was in flight
+      // still keep their outbox and merge by stable ids.
+      const resolved = preserveLocalAccount
+        ? mergeStates(resolvedRemote, stateRef.current, mergeBaseRef.current)
+        : acceptCleanRemoteState(resolvedRemote, stateRef.current);
       const resolvedHash = stableHash(resolved);
       hashRef.current = remoteHash;
       workspaceHashRef.current = isCloudGroupId(resolved.group.id)
@@ -1740,12 +2382,36 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         : null;
       replaceState(resolved);
       stateRef.current = resolved;
+      rememberCloudMergeBase(operationUserId, bound);
       recordServerSyncedAt(remote.updated_at);
-      setPendingChanges(resolvedHash !== remoteHash);
+      setPendingChanges(hasUnsyncedLocalChanges());
+      // Also seeds the acknowledgement for upgraded clients whose cached and
+      // remote durable state already match exactly.
+      if (!preserveLocalAccount || resolvedHash === remoteHash)
+        await writeCloudSnapshotAck(operationUserId, remoteHash).catch(
+          () => undefined,
+        );
+      if (!operationIsCurrent()) return;
       setStatus("synced");
       cloudRetryAttemptRef.current = 0;
       nextRetryAtRef.current = 0;
       setNextRetryAt(0);
+      InteractionManager.runAfterInteractions(() => {
+        resolvePrivateMedia(bound)
+          .then((mediaState) => {
+            if (!operationIsCurrent()) return;
+            const withMedia = mergePrivateMediaUrls(
+              stateRef.current,
+              mediaState,
+            );
+            if (withMedia === stateRef.current) return;
+            stateRef.current = withMedia;
+            replaceState(withMedia);
+          })
+          // Exhausted Storage egress or a transient signing failure must not
+          // turn an otherwise successful account pull into a sync error.
+          .catch(() => undefined);
+      });
       if (isCloudGroupId(resolved.group.id)) {
         // "Get latest" returns as soon as the private account snapshot is
         // merged. The heavier group workspace catches up after interactions,
@@ -1762,7 +2428,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             .then((loaded) => {
               if (
                 groupSequence !== groupLoadSequenceRef.current ||
-                stateRef.current.group.id !== groupId
+                stateRef.current.group.id !== groupId ||
+                !operationIsCurrent()
               )
                 return;
               const next = mergeRemoteWorkspace(
@@ -1782,12 +2449,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         });
       }
     } catch (error) {
+      if (!operationIsCurrent()) return;
       setStatus(
-        /network|fetch|offline|timeout/i.test(String(error))
+        /network|fetch|offline|timeout/i.test(errorText(error))
           ? "offline"
           : "error",
       );
       setErrorMessage(friendlySyncError(error));
+      throw error;
     }
   }, [
     auth.user,
@@ -1795,8 +2464,92 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     mergeRemoteWorkspace,
     recordActivityMetadata,
     recordServerSyncedAt,
+    rememberCloudMergeBase,
     replaceState,
   ]);
+
+  const pullLatest = useCallback((expectedRevision?: number): Promise<void> => {
+    if (pullLatestPromiseRef.current) {
+      // Manual callers share the in-flight request. Realtime callers retain the
+      // highest revision they need, so a trailing request is only made when the
+      // current response did not already include that update.
+      if (expectedRevision !== undefined)
+        pullLatestQueuedRevisionRef.current = Math.max(
+          pullLatestQueuedRevisionRef.current,
+          expectedRevision,
+        );
+      return pullLatestPromiseRef.current;
+    }
+    let operation: Promise<void>;
+    operation = (async () => {
+      let requiredRevision = expectedRevision ?? 0;
+      const scheduleRequiredPull = (revision: number) => {
+        if (
+          revision <= revisionRef.current ||
+          initializedUserRef.current !== auth.user?.id
+        )
+          return;
+        pullLatestQueuedRevisionRef.current = Math.max(
+          pullLatestQueuedRevisionRef.current,
+          revision,
+        );
+        if (pullRetryTimerRef.current) return;
+        const attempt = Math.min(6, pullRetryAttemptRef.current + 1);
+        pullRetryAttemptRef.current = attempt;
+        pullRetryTimerRef.current = setTimeout(() => {
+          pullRetryTimerRef.current = null;
+          const queuedRevision = pullLatestQueuedRevisionRef.current;
+          pullLatestQueuedRevisionRef.current = 0;
+          pullLatestRef.current?.(queuedRevision).catch(() => undefined);
+        }, Math.min(30_000, 2_000 * 2 ** (attempt - 1)));
+      };
+      // A committed Broadcast revision should be visible on the first fetch.
+      // One bounded trailing fetch covers a replica/race delay and any higher
+      // revision that arrived while the first request was resolving.
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          pullLatestQueuedRevisionRef.current = 0;
+          await pullLatestOnce();
+          requiredRevision = Math.max(
+            requiredRevision,
+            pullLatestQueuedRevisionRef.current,
+          );
+          if (requiredRevision <= revisionRef.current) break;
+        }
+      } catch (error) {
+        requiredRevision = Math.max(
+          requiredRevision,
+          pullLatestQueuedRevisionRef.current,
+        );
+        scheduleRequiredPull(requiredRevision);
+        throw error;
+      }
+      if (requiredRevision > revisionRef.current)
+        scheduleRequiredPull(requiredRevision);
+      else {
+        if (pullRetryTimerRef.current) clearTimeout(pullRetryTimerRef.current);
+        pullRetryTimerRef.current = null;
+        pullRetryAttemptRef.current = 0;
+        pullLatestQueuedRevisionRef.current = 0;
+      }
+    })().finally(() => {
+      if (pullLatestPromiseRef.current === operation)
+        pullLatestPromiseRef.current = null;
+    });
+    pullLatestPromiseRef.current = operation;
+    return operation;
+  }, [auth.user?.id, pullLatestOnce]);
+  pullLatestRef.current = pullLatest;
+
+  useEffect(
+    () => () => {
+      if (pullRetryTimerRef.current) clearTimeout(pullRetryTimerRef.current);
+      pullRetryTimerRef.current = null;
+      pullRetryAttemptRef.current = 0;
+      pullLatestQueuedRevisionRef.current = 0;
+    },
+    [auth.user?.id],
+  );
 
   const performSync = useCallback(async (
     forceWorkspace = false,
@@ -1804,6 +2557,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   ) => {
     if (!auth.user || !supabase || initializedUserRef.current !== auth.user.id)
       return;
+    if (remoteInitializationPendingRef.current) {
+      // The local cache remains fully editable while startup restores the
+      // account, but it must not race that fetch with a revision-0 write. The
+      // initialization path drains the durable outbox as soon as it resolves.
+      setPendingChanges(hasUnsyncedLocalChanges());
+      return;
+    }
+    const operationUser = auth.user;
+    const operationUserId = operationUser.id;
+    const operationIsCurrent = () =>
+      initializedUserRef.current === operationUserId &&
+      stateRef.current.currentUserId === operationUserId;
     if (!forceAttempt && isCloudSyncPaused()) {
       // Edit/reorder mode pauses network writes, not the account itself. Avoid
       // showing a false Pending chip when there is no durable local change.
@@ -1830,25 +2595,70 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
     syncIsForcedRef.current = forceAttempt;
     const operation = (async () => {
+      // Serialize against a pull that started first. A pull that starts after
+      // this operation observes syncPromiseRef and waits for this save instead.
+      const activePull = pullLatestPromiseRef.current;
+      if (activePull) await activePull;
+      if (!operationIsCurrent()) return;
       // Routine debounced saves stay visually quiet. Explicit refresh controls
       // already expose their own progress and should not flash on every tap.
       if (forceAttempt) setStatus("syncing");
       if (!deferGroupRetry) setErrorMessage(null);
       try {
         const deviceId = deviceIdRef.current ?? (await getDeviceId());
+        if (!operationIsCurrent()) return;
         deviceIdRef.current = deviceId;
         let candidate =
-          stateRef.current.currentUserId === auth.user!.id
+          stateRef.current.currentUserId === operationUserId
             ? stateRef.current
-            : bindStateToAccount(stateRef.current, auth.user!);
+            : bindStateToAccount(stateRef.current, operationUser);
         const initialCandidateHash = stableHash(candidate);
-        if (initialCandidateHash !== hashRef.current)
-          candidate = await uploadOwnedMedia(candidate);
+        if (initialCandidateHash !== hashRef.current) {
+          const uploadedCandidate = await uploadOwnedMedia(candidate);
+          if (!operationIsCurrent()) return;
+          candidate = mergeUploadedMediaMetadata(
+            stateRef.current,
+            uploadedCandidate,
+          );
+        }
         let candidateHash = stableHash(candidate);
         if (candidate !== stateRef.current) {
           replaceState(candidate);
           stateRef.current = candidate;
         }
+        let syncedAt: string | null = null;
+        const persistPrivateSnapshot = async () => {
+          if (candidateHash === hashRef.current) return;
+          if (!operationIsCurrent()) return;
+          const payload = snapshotPayload(candidate);
+          const expectedRevision = revisionRef.current;
+          const ownTargetRevision = expectedRevision + 1;
+          snapshotWriteTargetRevisionRef.current = ownTargetRevision;
+          try {
+            const result = await writeSnapshot(
+              operationUserId,
+              payload,
+              expectedRevision,
+              deviceId,
+            );
+            if (!operationIsCurrent()) return;
+            revisionRef.current = result.revision;
+            syncedAt = result.updatedAt;
+            hashRef.current = candidateHash;
+            rememberCloudMergeBase(operationUserId, candidate);
+          } finally {
+            if (
+              snapshotWriteTargetRevisionRef.current === ownTargetRevision
+            )
+              snapshotWriteTargetRevisionRef.current = 0;
+          }
+        };
+
+        // Establish the private snapshot revision before mutating relational
+        // group rows. A stale device now conflicts and merges first, so it
+        // cannot temporarily re-publish older visibility or deleted content.
+        await persistPrivateSnapshot();
+        if (!operationIsCurrent()) return;
         let nextWorkspaceHash = workspaceHash(candidate);
         const nextGroupConfigurationHash = groupConfigurationHash(candidate);
         const pushedGroupId = candidate.group.id;
@@ -1882,6 +2692,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               candidate,
               shouldPushGroupConfiguration,
               ({ syncedAt }) => {
+                if (!operationIsCurrent()) return;
                 // A large historical status backfill publishes the newest
                 // month first. Reflect that durable server checkpoint now;
                 // older compact summaries may continue without making the
@@ -1906,7 +2717,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                   replaceState(published);
                 }
               },
+              revisionRef.current,
             );
+            if (!operationIsCurrent()) return;
             if (!workspaceResult.workspacePushed)
               throw new Error("Group workspace is not active yet.");
             if (
@@ -1938,6 +2751,32 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                   pendingDeletedEntryIds: (
                     acknowledgedState.settings.pendingDeletedEntryIds ?? []
                   ).filter((id) => !acknowledged.has(id)),
+                  deletedEntryIds: [
+                    ...new Set([
+                      ...(acknowledgedState.settings.deletedEntryIds ?? []),
+                      ...acknowledged,
+                    ]),
+                  ],
+                },
+              };
+            }
+            if (workspaceResult.deletedPhotoIds.length) {
+              const acknowledged = new Set(
+                workspaceResult.deletedPhotoIds,
+              );
+              acknowledgedState = {
+                ...acknowledgedState,
+                settings: {
+                  ...acknowledgedState.settings,
+                  pendingDeletedPhotoIds: (
+                    acknowledgedState.settings.pendingDeletedPhotoIds ?? []
+                  ).filter((id) => !acknowledged.has(id)),
+                  deletedPhotoIds: [
+                    ...new Set([
+                      ...(acknowledgedState.settings.deletedPhotoIds ?? []),
+                      ...acknowledged,
+                    ]),
+                  ],
                 },
               };
             }
@@ -1975,9 +2814,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               pushedWorkspaceHash,
             );
             await writeWorkspaceAcks(
-              auth.user!.id,
+              operationUserId,
               workspaceAckHashesRef.current,
             ).catch(() => undefined);
+            if (!operationIsCurrent()) return;
             if (workspaceResult.groupConfigurationPushed) {
               groupConfigurationHashRef.current =
                 nextGroupConfigurationHash;
@@ -1986,16 +2826,22 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 nextGroupConfigurationHash,
               );
               await writeGroupConfigurationAcks(
-                auth.user!.id,
+                operationUserId,
                 groupConfigurationAckHashesRef.current,
               ).catch(() => undefined);
+              if (!operationIsCurrent()) return;
             }
           } catch (error) {
+            const workspaceErrorText = errorText(error);
+            if (/stale_group_publish|40001/i.test(workspaceErrorText))
+              throw new Error(
+                `snapshot_conflict: ${workspaceErrorText || "newer account revision"}`,
+              );
             // Group tables and the private account snapshot are independent.
             // Preserve settings and imported health data even when one shared
             // table is temporarily unavailable, then retry group data later.
             workspaceSynced = false;
-            workspaceWarning = `Group data will retry: ${errorText(error) || "unknown server error"}`;
+            workspaceWarning = `Group data will retry: ${workspaceErrorText || "unknown server error"}`;
             const attempt = Math.min(
               8,
               cloudRetryAttemptRef.current + 1,
@@ -2021,7 +2867,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           !workspaceWasUploaded &&
           isCloudGroupId(candidate.group.id)
         ) {
-          const recent = await pushCloudRecentActivity(candidate, 2);
+          const recent = await pushCloudRecentActivity(
+            candidate,
+            2,
+            revisionRef.current,
+          );
+          if (!operationIsCurrent()) return;
           if (recent.published)
             leaderboardPublishedAtByGroupRef.current.set(
               candidate.group.id,
@@ -2050,19 +2901,30 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             }
           }
         }
-        let syncedAt: string | null = null;
-        if (candidateHash !== hashRef.current) {
-          const payload = snapshotPayload(candidate);
-          const result = await writeSnapshot(
-            auth.user!.id,
-            payload,
-            revisionRef.current,
-            deviceId,
+        // Group publication and media uploads may take long enough for another
+        // local edit to land. Include the latest durable account state instead
+        // of uploading the stale candidate captured at operation start.
+        const latestBeforeSnapshot = stateRef.current;
+        if (stableHash(latestBeforeSnapshot) !== candidateHash) {
+          const uploadedLatest = await uploadOwnedMedia(latestBeforeSnapshot);
+          if (!operationIsCurrent()) return;
+          candidate = mergeUploadedMediaMetadata(
+            stateRef.current,
+            uploadedLatest,
           );
-          revisionRef.current = result.revision;
-          syncedAt = result.updatedAt;
+          candidateHash = stableHash(candidate);
+          if (candidate !== stateRef.current) {
+            stateRef.current = candidate;
+            replaceState(candidate);
+          }
         }
+        await persistPrivateSnapshot();
+        if (!operationIsCurrent()) return;
         hashRef.current = candidateHash;
+        await writeCloudSnapshotAck(operationUserId, candidateHash).catch(
+          () => undefined,
+        );
+        if (!operationIsCurrent()) return;
         if (workspaceSynced) {
           if (!isCloudGroupId(candidate.group.id)) {
             workspaceHashRef.current = nextWorkspaceHash;
@@ -2109,14 +2971,22 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             .then(() => undefined, () => undefined);
         }
       } catch (error) {
-        if (/snapshot_conflict/i.test(String(error))) {
+        if (!operationIsCurrent()) return;
+        const syncErrorText = errorText(error);
+        if (/snapshot_conflict/i.test(syncErrorText)) {
           setStatus("conflict");
-          const remote = await fetchSnapshot(auth.user!.id).catch(() => null);
+          const remote = await fetchSnapshot(operationUserId).catch(() => null);
+          if (!operationIsCurrent()) return;
           if (remote) {
             revisionRef.current = remote.revision;
             const merged = mergeStates(
-              bindStateToAccount(remote.payload, auth.user!),
+              bindStateToAccount(remote.payload, operationUser),
               stateRef.current,
+              mergeBaseRef.current,
+            );
+            rememberCloudMergeBase(
+              operationUserId,
+              bindStateToAccount(remote.payload, operationUser),
             );
             replaceState(merged);
             stateRef.current = merged;
@@ -2130,7 +3000,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             return;
           }
         }
-        const offline = /network|fetch|offline|timeout/i.test(String(error));
+        const offline = /network|fetch|offline|timeout/i.test(syncErrorText);
         const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
         cloudRetryAttemptRef.current = attempt;
         const retryAt =
@@ -2152,6 +3022,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.user,
     hasUnsyncedLocalChanges,
     recordServerSyncedAt,
+    rememberCloudMergeBase,
     replaceState,
     touchPresence,
   ]);
@@ -2195,7 +3066,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     // schema failure must not become a tight foreground retry loop.
     leaderboardPublishedAtByGroupRef.current.set(groupId, Date.now());
     const operation = (async () => {
-      const recent = await pushCloudRecentActivity(current, 2);
+      const recent = await pushCloudRecentActivity(
+        current,
+        2,
+        revisionRef.current,
+      );
       if (
         !recent.published ||
         stateRef.current.group.id !== groupId
@@ -2244,6 +3119,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         workspaceAckHashesRef.current = await readWorkspaceAcks(user.id);
         groupConfigurationAckHashesRef.current =
           await readGroupConfigurationAcks(user.id);
+        const acknowledgedSnapshotHash = await readCloudSnapshotAck(user.id);
+        mergeBaseRef.current = await readCloudMergeBase(user.id);
+        if (
+          !mergeBaseRef.current &&
+          acknowledgedSnapshotHash &&
+          stableHash(stateRef.current) === acknowledgedSnapshotHash
+        )
+          rememberCloudMergeBase(user.id, stateRef.current);
         const savedCheckpoint = await readCloudSyncCheckpoint(user.id);
         if (savedCheckpoint) {
           lastSyncedAtRef.current = savedCheckpoint;
@@ -2287,24 +3170,51 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           revisionRef.current = remote.revision;
           const identityWasReset =
             identityResetUserRef.current === user.id;
+          const cachedAccountHash = stableHash(stateRef.current);
           correctedAccountState =
             remote.payload.currentUserId !== user.id ||
             isDemoBoundState(remote.payload);
           const bound = bindStateToAccount(remote.payload, user);
           const remoteHash = stableHash(bound);
-          let resolved = preserveDeviceHealthState(
-            bound,
+          const checkpointTime = savedCheckpoint
+            ? new Date(savedCheckpoint).getTime()
+            : Number.NaN;
+          const remoteTime = new Date(remote.updated_at).getTime();
+          const cachedSavedTime = stateRef.current.lastSavedAt
+            ? new Date(stateRef.current.lastSavedAt).getTime()
+            : Number.NaN;
+          // Older builds did not persist an account hash acknowledgement. On
+          // the first upgraded launch, accept a provably newer remote snapshot
+          // only when the local cache has not changed after its last server
+          // checkpoint. Otherwise preserve the local/offline outbox. A small
+          // tolerance covers the local persistence timestamp written just
+          // after a successful server response.
+          const firstUpgradeCanAcceptRemote =
+            !acknowledgedSnapshotHash &&
+            Number.isFinite(checkpointTime) &&
+            remoteTime > checkpointTime &&
+            (!Number.isFinite(cachedSavedTime) ||
+              cachedSavedTime <= checkpointTime + 2_000);
+          const localWasDirty =
+            !identityWasReset &&
+            (acknowledgedSnapshotHash
+              ? cachedAccountHash !== acknowledgedSnapshotHash
+              : cachedAccountHash !== remoteHash &&
+                !firstUpgradeCanAcceptRemote);
+          const remoteWithDeviceState = preserveDeviceHealthState(
+            mergePrivateMediaUrls(bound, stateRef.current),
             stateRef.current,
           );
-          // The cached device state is rendered first. Preserve its stable-id
-          // local writes while the older cloud snapshot and group tables load
-          // in the background; the next normal sync uploads the merged result.
-          if (
-            !identityWasReset &&
-            stateRef.current.currentUserId === user.id &&
-            !isDemoBoundState(stateRef.current)
-          )
-            resolved = mergeStates(resolved, stateRef.current);
+          // A persisted acknowledgement distinguishes an offline local edit
+          // from an older-but-clean cache. Clean clients accept newer website,
+          // extension, or phone changes; dirty clients preserve their outbox.
+          let resolved = localWasDirty
+            ? mergeStates(
+                remoteWithDeviceState,
+                stateRef.current,
+                mergeBaseRef.current,
+              )
+            : acceptCleanRemoteState(remoteWithDeviceState, stateRef.current);
           if (onboardingComplete && !resolved.settings.onboardingComplete)
             resolved = {
               ...resolved,
@@ -2334,8 +3244,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               : null;
             replaceState(resolved);
             stateRef.current = resolved;
+            rememberCloudMergeBase(user.id, bound);
             recordServerSyncedAt(remote.updated_at);
-            setPendingChanges(stableHash(resolved) !== remoteHash);
+            const resolvedHash = stableHash(resolved);
+            setPendingChanges(hasUnsyncedLocalChanges());
+            if (!localWasDirty || resolvedHash === remoteHash)
+              await writeCloudSnapshotAck(user.id, remoteHash).catch(
+                () => undefined,
+              );
             setStatus("synced");
           }
           // Signed media URLs and group history are cache hydration, not an
@@ -2343,19 +3259,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // then merge these server-owned rows without regressing local writes.
           InteractionManager.runAfterInteractions(() => {
             (async () => {
-              let hydratedState = preserveDeviceHealthState(
-                await resolvePrivateMedia(bound),
-                stateRef.current,
-              );
-              if (
-                !identityWasReset &&
-                stateRef.current.currentUserId === user.id &&
-                !isDemoBoundState(stateRef.current)
-              )
-                hydratedState = mergeStates(
+              let hydratedState = stateRef.current;
+              try {
+                hydratedState = mergePrivateMediaUrls(
                   hydratedState,
-                  stateRef.current,
+                  await resolvePrivateMedia(bound),
                 );
+              } catch {
+                // The account and group cache remain usable even when Storage
+                // signing is temporarily unavailable or egress is restricted.
+              }
               const existingGroups = await loadCloudGroupShells();
               const targetGroup =
                 existingGroups.find(
@@ -2433,14 +3346,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           client_label: null,
         }).then(() => undefined, () => undefined);
         deviceHeartbeatAtRef.current = Date.now();
-        if (!remote || correctedAccountState)
+        if (
+          !remote ||
+          correctedAccountState ||
+          hasUnsyncedLocalChanges()
+        )
           await performSync(false, true);
         else setStatus("synced");
         loadDevices().catch(() => undefined);
       } catch (error) {
         if (!cancelled) {
           setStatus(
-            /network|fetch|offline|timeout/i.test(String(error))
+            /network|fetch|offline|timeout/i.test(errorText(error))
               ? "offline"
               : "error",
           );
@@ -2462,6 +3379,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
       initializedUserRef.current = null;
+      remoteInitializationPendingRef.current = false;
+      mergeBaseRef.current = null;
     };
   }, [
     auth.status,
@@ -2474,6 +3393,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     performSync,
     recordActivityMetadata,
     recordServerSyncedAt,
+    rememberCloudMergeBase,
     replaceState,
   ]);
 
@@ -2516,7 +3436,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         performSync().catch(() => undefined);
       });
     };
-    timerRef.current = setTimeout(saveWhenReady, 2400);
+    timerRef.current = setTimeout(saveWhenReady, 1200);
   }, [
     auth.status,
     auth.user?.id,
@@ -2564,29 +3484,73 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!supabase || auth.status !== "signedIn" || !auth.user) return;
-    const channel = supabase
-      .channel(`account-snapshot:${auth.user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "user_snapshots",
-          filter: `user_id=eq.${auth.user.id}`,
-        },
-        (event) => {
-          const next = event.new as { revision?: number; device_id?: string };
-          if (
-            Number(next.revision ?? 0) <= revisionRef.current ||
-            next.device_id === deviceIdRef.current
-          )
-            return;
-          pullLatest().catch(() => undefined);
-        },
+    const client = supabase;
+    let fallbackChannel: ReturnType<typeof client.channel> | null = null;
+    const handleInvalidation = (next: {
+      revision?: number;
+      device_id?: string;
+    }) => {
+      const expectedRevision = Number(next.revision ?? 0);
+      if (expectedRevision <= revisionRef.current) return;
+      // Database-triggered Broadcast is not covered by channel `self: false`.
+      // Ignore only the exact revision this runtime is currently writing. A
+      // website and extension can share the same persistent device id, so a
+      // blanket same-device guard would incorrectly hide their updates.
+      if (
+        next.device_id === deviceIdRef.current &&
+        expectedRevision === snapshotWriteTargetRevisionRef.current
       )
-      .subscribe();
+        return;
+      pullLatest(expectedRevision).catch(() => undefined);
+    };
+    const startPostgresFallback = () => {
+      if (fallbackChannel) return;
+      // Compatibility only for projects where the compact Broadcast migration
+      // has not been applied yet. The normal path never streams snapshot JSON.
+      fallbackChannel = client
+        .channel(`account-snapshot-fallback:${auth.user!.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "user_snapshots",
+            filter: `user_id=eq.${auth.user!.id}`,
+          },
+          (event) =>
+            handleInvalidation(
+              event.new as { revision?: number; device_id?: string },
+            ),
+        )
+        .subscribe();
+    };
+    const channel = client
+      .channel(`account:${auth.user.id}:snapshot`, {
+        config: { private: true, broadcast: { self: false } },
+      })
+      .on(
+        "broadcast",
+        { event: "snapshot_updated" },
+        (event: { payload?: { revision?: number; device_id?: string } }) =>
+          handleInvalidation(event.payload ?? {}),
+      )
+      .subscribe((channelStatus) => {
+        if (channelStatus === "SUBSCRIBED" && fallbackChannel) {
+          const staleFallback = fallbackChannel;
+          fallbackChannel = null;
+          client.removeChannel(staleFallback).catch(() => undefined);
+          return;
+        }
+        if (
+          channelStatus === "CHANNEL_ERROR" ||
+          channelStatus === "TIMED_OUT"
+        )
+          startPostgresFallback();
+      });
     return () => {
-      supabase?.removeChannel(channel).catch(() => undefined);
+      client.removeChannel(channel).catch(() => undefined);
+      if (fallbackChannel)
+        client.removeChannel(fallbackChannel).catch(() => undefined);
     };
   }, [auth.status, auth.user, pullLatest]);
 

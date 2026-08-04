@@ -311,6 +311,7 @@ const commonTranslationRows = [
   ["Success", "نجاح", "Éxito", "成功", "Klart", "Erfolg", "Готово", "Réussi"],
   ["Error", "خطأ", "Error", "错误", "Fel", "Fehler", "Ошибка", "Erreur"],
   ["Saved", "تم الحفظ", "Guardado", "已保存", "Sparat", "Gespeichert", "Сохранено", "Enregistré"],
+  ["Saved locally", "محفوظ محليًا", "Guardado localmente", "已保存到本机", "Sparat lokalt", "Lokal gespeichert", "Сохранено локально", "Enregistré localement"],
   ["Pending", "قيد الانتظار", "Pendiente", "待处理", "Väntar", "Ausstehend", "Ожидает", "En attente"],
   ["Syncing", "جارٍ المزامنة", "Sincronizando", "同步中", "Synkar", "Synchronisierung", "Синхронизация", "Synchronisation"],
   ["Cloud on", "السحابة مفعلة", "Nube activa", "云端已开启", "Moln på", "Cloud aktiv", "Облако включено", "Cloud activé"],

@@ -1427,6 +1427,9 @@ export function createInitialState(): AppState {
       comparisonPeriodByGroup: { "weekend-warriors": "week" },
       dismissedHealthEntryIds: [],
       pendingDeletedEntryIds: [],
+      pendingDeletedPhotoIds: [],
+      deletedEntryIds: [],
+      deletedPhotoIds: [],
       notifications: {
         pushEnabled: true,
         groupMetricActivity: true,

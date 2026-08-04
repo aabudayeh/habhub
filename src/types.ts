@@ -788,6 +788,12 @@ export type UserSettings = {
   dismissedHealthEntryIds?: string[];
   /** Explicit cloud deletes; absence from a bounded cache is never a delete. */
   pendingDeletedEntryIds?: string[];
+  /** Explicit progress-photo deletes awaiting relational cloud acknowledgement. */
+  pendingDeletedPhotoIds?: string[];
+  /** Durable tombstones prevent an offline device or stale fetch reviving logs. */
+  deletedEntryIds?: string[];
+  /** Durable tombstones prevent deleted progress photos being revived. */
+  deletedPhotoIds?: string[];
   /** Durable local-first outbox for administrator-owned group configuration. */
   pendingGroupConfigurationIds?: string[];
   /** Legacy v6 aliases retained only while migrating stored demo state. */

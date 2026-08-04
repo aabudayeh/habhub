@@ -639,6 +639,100 @@ function markGroupConfigurationPending(
   };
 }
 
+/**
+ * Every local reducer path shares one deletion outbox. This prevents generated
+ * rows (fasting, gym, Health Connect replacements, and future calculated
+ * trackers) from bypassing cloud deletion bookkeeping simply because they do
+ * not use the explicit delete-entry action.
+ */
+function withLocalDeletionTombstones(
+  previous: AppState,
+  next: AppState,
+): AppState {
+  if (previous.currentUserId !== next.currentUserId) return next;
+  const previousEntryIds = new Set(
+    previous.entries
+      .filter((entry) => entry.userId === previous.currentUserId)
+      .map((entry) => entry.id),
+  );
+  const nextEntryIds = new Set(
+    next.entries
+      .filter((entry) => entry.userId === next.currentUserId)
+      .map((entry) => entry.id),
+  );
+  const removedEntryIds = previous.entries
+    .filter(
+      (entry) =>
+        entry.userId === previous.currentUserId &&
+        !nextEntryIds.has(entry.id),
+    )
+    .map((entry) => entry.id);
+  const addedEntryIds = new Set(
+    [...nextEntryIds].filter((id) => !previousEntryIds.has(id)),
+  );
+  const previousPhotoIds = new Set(
+    previous.photos
+      .filter((photo) => photo.userId === previous.currentUserId)
+      .map((photo) => photo.id),
+  );
+  const nextPhotoIds = new Set(
+    next.photos
+      .filter((photo) => photo.userId === next.currentUserId)
+      .map((photo) => photo.id),
+  );
+  const removedPhotoIds = previous.photos
+    .filter(
+      (photo) =>
+        photo.userId === previous.currentUserId &&
+        !nextPhotoIds.has(photo.id),
+    )
+    .map((photo) => photo.id);
+  const addedPhotoIds = new Set(
+    [...nextPhotoIds].filter((id) => !previousPhotoIds.has(id)),
+  );
+  if (
+    !removedEntryIds.length &&
+    !removedPhotoIds.length &&
+    !addedEntryIds.size &&
+    !addedPhotoIds.size
+  )
+    return next;
+  const reconcileTombstones = (
+    existing: string[] | undefined,
+    removed: string[],
+    added: Set<string>,
+  ) =>
+    [...new Set([...(existing ?? []), ...removed])].filter(
+      (id) => !added.has(id),
+    );
+  return {
+    ...next,
+    settings: {
+      ...next.settings,
+      pendingDeletedEntryIds: reconcileTombstones(
+        next.settings.pendingDeletedEntryIds,
+        removedEntryIds,
+        addedEntryIds,
+      ),
+      deletedEntryIds: reconcileTombstones(
+        next.settings.deletedEntryIds,
+        removedEntryIds,
+        addedEntryIds,
+      ),
+      pendingDeletedPhotoIds: reconcileTombstones(
+        next.settings.pendingDeletedPhotoIds,
+        removedPhotoIds,
+        addedPhotoIds,
+      ),
+      deletedPhotoIds: reconcileTombstones(
+        next.settings.deletedPhotoIds,
+        removedPhotoIds,
+        addedPhotoIds,
+      ),
+    },
+  };
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "replaceLocal":
@@ -726,6 +820,12 @@ function reducer(state: AppState, action: Action): AppState {
               pendingDeletedEntryIds: [
                 ...new Set([
                   ...(state.settings.pendingDeletedEntryIds ?? []),
+                  ...replacedEntryIds,
+                ]),
+              ],
+              deletedEntryIds: [
+                ...new Set([
+                  ...(state.settings.deletedEntryIds ?? []),
                   ...replacedEntryIds,
                 ]),
               ],
@@ -1024,6 +1124,12 @@ function reducer(state: AppState, action: Action): AppState {
               ...removedEntryIds,
             ]),
           ],
+          deletedEntryIds: [
+            ...new Set([
+              ...(state.settings.deletedEntryIds ?? []),
+              ...removedEntryIds,
+            ]),
+          ],
         },
         selectedGroupMetricId: removedIds.has(state.selectedGroupMetricId)
             ? "steps"
@@ -1048,6 +1154,12 @@ function reducer(state: AppState, action: Action): AppState {
             pendingDeletedEntryIds: [
               ...new Set([
                 ...(state.settings.pendingDeletedEntryIds ?? []),
+                target.id,
+              ]),
+            ],
+            deletedEntryIds: [
+              ...new Set([
+                ...(state.settings.deletedEntryIds ?? []),
                 target.id,
               ]),
             ],
@@ -1094,15 +1206,37 @@ function reducer(state: AppState, action: Action): AppState {
         ],
       };
     }
-    case "deletePhoto":
+    case "deletePhoto": {
+      const ownedPhoto = state.photos.some(
+        (photo) =>
+          photo.id === action.photoId && photo.userId === state.currentUserId,
+      );
       return {
         ...state,
+        settings: ownedPhoto
+          ? {
+              ...state.settings,
+              pendingDeletedPhotoIds: [
+                ...new Set([
+                  ...(state.settings.pendingDeletedPhotoIds ?? []),
+                  action.photoId,
+                ]),
+              ],
+              deletedPhotoIds: [
+                ...new Set([
+                  ...(state.settings.deletedPhotoIds ?? []),
+                  action.photoId,
+                ]),
+              ],
+            }
+          : state.settings,
         photos: state.photos.filter(
           (photo) =>
             photo.id !== action.photoId ||
             photo.userId !== state.currentUserId,
         ),
       };
+    }
     case "setMetricSection": {
       const metric = state.metrics.find(
         (candidate) => candidate.id === action.metricId,
@@ -1505,8 +1639,34 @@ function reducer(state: AppState, action: Action): AppState {
           label: session.name,
           note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
         }));
+      const existingSyncedIds = state.entries
+        .filter(
+          (entry) =>
+            entry.userId === state.currentUserId &&
+            entry.id.startsWith(`gym-sync:${session.id}:`),
+        )
+        .map((entry) => entry.id);
+      const nextSyncedIds = new Set(synced.map((entry) => entry.id));
+      const removedSyncedIds = existingSyncedIds.filter(
+        (id) => !nextSyncedIds.has(id),
+      );
+      const reconcileDeletedIds = (ids: string[] | undefined) => [
+        ...new Set([
+          ...(ids ?? []).filter((id) => !nextSyncedIds.has(id)),
+          ...removedSyncedIds,
+        ]),
+      ];
       return {
         ...state,
+        settings: {
+          ...state.settings,
+          pendingDeletedEntryIds: reconcileDeletedIds(
+            state.settings.pendingDeletedEntryIds,
+          ),
+          deletedEntryIds: reconcileDeletedIds(
+            state.settings.deletedEntryIds,
+          ),
+        },
         gymSessions: [
           session,
           ...(state.gymSessions ?? []).filter((item) => item.id !== session.id),
@@ -1521,9 +1681,31 @@ function reducer(state: AppState, action: Action): AppState {
         ],
       };
     }
-    case "deleteGymSession":
+    case "deleteGymSession": {
+      const removedSyncedIds = state.entries
+        .filter(
+          (entry) =>
+            entry.userId === state.currentUserId &&
+            entry.id.startsWith(`gym-sync:${action.sessionId}:`),
+        )
+        .map((entry) => entry.id);
       return {
         ...state,
+        settings: {
+          ...state.settings,
+          pendingDeletedEntryIds: [
+            ...new Set([
+              ...(state.settings.pendingDeletedEntryIds ?? []),
+              ...removedSyncedIds,
+            ]),
+          ],
+          deletedEntryIds: [
+            ...new Set([
+              ...(state.settings.deletedEntryIds ?? []),
+              ...removedSyncedIds,
+            ]),
+          ],
+        },
         gymSessions: (state.gymSessions ?? []).filter(
           (item) => item.id !== action.sessionId,
         ),
@@ -1533,6 +1715,7 @@ function reducer(state: AppState, action: Action): AppState {
             !entry.id.startsWith(`gym-sync:${action.sessionId}:`),
         ),
       };
+    }
     case "gymExerciseGoal":
       return {
         ...state,
@@ -2932,10 +3115,14 @@ export function AppProvider({ children }: PropsWithChildren) {
   );
 
   const commitAction = useCallback(
-    (action: Exclude<Action, { type: "hydrate" } | { type: "replaceLocal" }>) =>
-      commitReducedState(reducer(persistenceStateRef.current, action)).catch(
-        () => undefined,
-      ),
+    (action: Exclude<Action, { type: "hydrate" } | { type: "replaceLocal" }>) => {
+      const previous = persistenceStateRef.current;
+      const next = withLocalDeletionTombstones(
+        previous,
+        reducer(previous, action),
+      );
+      return commitReducedState(next).catch(() => undefined);
+    },
     [commitReducedState],
   );
 
@@ -2957,14 +3144,17 @@ export function AppProvider({ children }: PropsWithChildren) {
       hydrated,
       logMetric: (metricId, entryValue, visibility, mode = "add", details) => {
         const previous = persistenceStateRef.current;
-        const next = reducer(previous, {
-          type: "log",
-          metricId,
-          value: entryValue,
-          visibility,
-          mode,
-          details,
-        });
+        const next = withLocalDeletionTombstones(
+          previous,
+          reducer(previous, {
+            type: "log",
+            metricId,
+            value: entryValue,
+            visibility,
+            mode,
+            details,
+          }),
+        );
         void commitReducedState(next)
           .then(() =>
             notifyProgressMilestones(
@@ -2977,12 +3167,15 @@ export function AppProvider({ children }: PropsWithChildren) {
       },
       setDeviceScreenTime: (localDate, minutes, recordedAt) => {
         const previous = persistenceStateRef.current;
-        const next = reducer(previous, {
-          type: "deviceScreenTime",
-          localDate,
-          minutes,
-          recordedAt,
-        });
+        const next = withLocalDeletionTombstones(
+          previous,
+          reducer(previous, {
+            type: "deviceScreenTime",
+            localDate,
+            minutes,
+            recordedAt,
+          }),
+        );
         void commitReducedState(next)
           .then(() => notifyProgressMilestones(previous, next, localDate))
           .catch(() => undefined);
@@ -3117,15 +3310,18 @@ export function AppProvider({ children }: PropsWithChildren) {
         preserveTrackedGoalHistory,
       ) => {
         const previous = persistenceStateRef.current;
-        const next = reducer(previous, {
-          type: "importHealth",
-          entries,
-          provider,
-          metricIds,
-          fromDate,
-          finalizeInitialImport,
-          preserveTrackedGoalHistory,
-        });
+        const next = withLocalDeletionTombstones(
+          previous,
+          reducer(previous, {
+            type: "importHealth",
+            entries,
+            provider,
+            metricIds,
+            fromDate,
+            finalizeInitialImport,
+            preserveTrackedGoalHistory,
+          }),
+        );
         return commitReducedState(next).then(async () => {
           // Historical repairs must remain silent. Only a current-day value
           // crossing a configured threshold can emit an immediate milestone.

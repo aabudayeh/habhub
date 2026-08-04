@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "HabHub Companion",
-  "version": "0.1.0",
-  "description": "Open HabHub timers, to-dos, schedule and progress from Chrome or Edge.",
+  "name": "HabHub Live Companion",
+  "version": "0.2.0",
+  "description": "A live HabHub Today dashboard with to-dos, trackers, timers and schedule in your browser side panel.",
+  "minimum_chrome_version": "114",
   "icons": {
     "16": "habhub-icon.png",
     "32": "habhub-icon.png",
@@ -17,10 +18,12 @@
   },
   "action": {
     "default_title": "HabHub",
-    "default_icon": "habhub-icon.png",
-    "default_popup": "popup.html"
+    "default_icon": "habhub-icon.png"
   },
   "side_panel": {
     "default_path": "panel.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://habhub.expo.app"
   }
 }

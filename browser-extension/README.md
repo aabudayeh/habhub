@@ -1,10 +1,18 @@
-# HabHub Companion for Chrome and Edge
+# HabHub Live Companion for Chrome and Edge
 
-The side panel opens HabHub's dedicated companion dashboard: the Today card,
-to-dos, filtered/reorderable trackers, active timers and today's schedule. It
-uses the same Supabase-backed account as the mobile app, so changes use the
-existing offline-first sync path. The small toolbar popup keeps fast links to
-the full timer, to-do, schedule and website pages.
+Clicking the HabHub toolbar icon opens a real side-panel companion rather than
+redirecting you to another tab. The panel contains the synced Today hero,
+to-dos, filterable/reorderable trackers, active timers with start/pause controls,
+and today's schedule.
+
+The panel embeds HabHub's dedicated `/extension` app surface. That surface
+uses the same authenticated, offline-first snapshot merge and Supabase realtime
+subscription as the mobile app and website. Keeping one shared data layer is
+important: the extension does not carry a service key, duplicate account data,
+or perform a second competing snapshot write. It also does not keep hidden
+mobile pages mounted. The dashboard runs only while its browser panel is open.
+An explicit route-ready handshake prevents a generic Expo error page from being
+shown as a successfully loaded companion.
 
 ## Install locally
 
@@ -12,10 +20,16 @@ the full timer, to-do, schedule and website pages.
 2. Enable **Developer mode**.
 3. Choose **Load unpacked** and select this `browser-extension` folder.
 4. Pin **HabHub Companion** to the browser toolbar.
+5. Click the HabHub icon. The live companion opens in the browser side panel.
 
-The production companion page is `https://habhub.expo.app/extension.html`.
+Sign in to `https://habhub.expo.app` with the same account used on the phone.
+Chrome and Edge share that HabHub web session with the companion when host
+access is allowed. If the panel asks you to sign in, use its **Open HabHub sign
+in** action once, then press refresh in the panel.
 
-If the public HabHub URL changes, edit `DEFAULT_APP_URL` in `config.js` before
-loading the extension. Chrome and Edge may refuse to embed a site when an
-organization enforces framing restrictions; the full-website buttons remain a
-reliable fallback.
+The production companion page is `https://habhub.expo.app/extension`.
+
+If the public HabHub URL changes, edit `DEFAULT_APP_URL` in `config.js` and the
+matching `host_permissions`/`frame-src` values in `manifest.json` before loading
+the extension. No Supabase service key or other private credential belongs in
+this directory.

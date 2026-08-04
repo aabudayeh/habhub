@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, useFocusEffect } from "expo-router";
 import * as Notifications from "expo-notifications";
@@ -397,6 +398,7 @@ function GymDraggableExercise({
 }
 
 function GymScreen() {
+  const isFocused = useIsFocused();
   const {
     state,
     hydrated,
@@ -1147,10 +1149,13 @@ function GymScreen() {
   ]);
 
   useEffect(() => {
-    if (!workoutTimer || workoutTimer.phase === "paused") return;
+    // Native timestamps and the workout notification remain authoritative while
+    // this tab is offscreen; only the visible one-second display ticker pauses.
+    if (!isFocused || !workoutTimer || workoutTimer.phase === "paused") return;
+    setTimerNow(Date.now());
     const timer = setInterval(() => setTimerNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [workoutTimer]);
+  }, [isFocused, workoutTimer]);
 
   useEffect(() => {
     if (

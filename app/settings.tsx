@@ -293,10 +293,10 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <Chip
-              label={cloud.pendingChanges ? "Pending" : "Cloud on"}
+              label={cloud.pendingChanges ? "Saved locally" : "Cloud on"}
               selected={!cloud.pendingChanges}
               icon={
-                cloud.pendingChanges ? "time-outline" : "cloud-done-outline"
+                cloud.pendingChanges ? "save-outline" : "cloud-done-outline"
               }
             />
           </View>

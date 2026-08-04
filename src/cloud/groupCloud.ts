@@ -145,6 +145,7 @@ type CloudDailyStatusUpsertRow = {
   goal_eligible: boolean;
   exact_value: number | null;
   has_data: boolean;
+  account_revision: number;
 };
 
 type GroupActivitySnapshot = {
@@ -211,6 +212,7 @@ function buildCloudDailyStatusRows(
   idBySlug: Map<string, string>,
   ownedEntries: MetricEntry[],
   statusDates: string[],
+  accountRevision: number,
 ): CloudDailyStatusUpsertRow[] {
   const exactSharedEntryDays = new Set<string>();
   const statusSharedEntryDays = new Set<string>();
@@ -341,9 +343,32 @@ function buildCloudDailyStatusRows(
           goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
           exact_value: exactShared ? value : null,
           has_data: hasData,
+          account_revision: accountRevision,
         };
       }),
   );
+}
+
+async function resolveAccountRevision(
+  client: SupabaseClient,
+  userId: string,
+  knownRevision?: number,
+) {
+  if (
+    Number.isSafeInteger(knownRevision) &&
+    Number(knownRevision) >= 0
+  )
+    return Number(knownRevision);
+  const result = await client
+    .from("user_snapshots")
+    .select("revision")
+    .eq("user_id", userId)
+    .single();
+  if (result.error) throw result.error;
+  const revision = Number(result.data.revision);
+  if (!Number.isSafeInteger(revision) || revision < 0)
+    throw new Error("Account sync revision is not available yet.");
+  return revision;
 }
 
 async function upsertCloudDailyStatusRows(
@@ -389,17 +414,14 @@ async function commitCloudActivityCheckpoint(
   groupId: string,
   dates: string[],
   fallbackSince: string,
+  accountRevision: number,
 ) {
   const commit = await client.rpc("commit_group_activity_version", {
     p_group_id: groupId,
     p_since_date: [...dates].sort()[0] ?? fallbackSince,
+    p_expected_revision: accountRevision,
   });
-  if (
-    commit.error &&
-    commit.error.code !== "PGRST202" &&
-    commit.error.code !== "42883"
-  )
-    throw commit.error;
+  if (commit.error) throw commit.error;
 
   const checkpoint = await client
     .from("group_activity_versions")
@@ -1822,11 +1844,12 @@ function chatPushPayload(
 export async function pushCloudRecentActivity(
   state: AppState,
   days = 2,
+  accountRevision?: number,
 ): Promise<{ published: boolean; version?: number; updatedAt?: string }> {
   if (!isCloudGroupId(state.group.id) || days < 1)
     return { published: false };
   const client = requireCloud();
-  const [membership, metricRows] = await Promise.all([
+  const [membership, metricRows, publishRevision] = await Promise.all([
     client
       .from("group_members")
       .select("status")
@@ -1837,6 +1860,7 @@ export async function pushCloudRecentActivity(
       .from("metric_definitions")
       .select("id, slug")
       .eq("group_id", state.group.id),
+    resolveAccountRevision(client, state.currentUserId, accountRevision),
   ]);
   if (membership.error) throw membership.error;
   if (metricRows.error) throw metricRows.error;
@@ -1854,6 +1878,7 @@ export async function pushCloudRecentActivity(
     idBySlug,
     ownedEntries,
     dates,
+    publishRevision,
   );
   await upsertCloudDailyStatusRows(client, rows);
   const checkpoint = await commitCloudActivityCheckpoint(
@@ -1861,6 +1886,7 @@ export async function pushCloudRecentActivity(
     state.group.id,
     dates,
     dates[0] ?? dateKey(),
+    publishRevision,
   );
   return {
     published: true,
@@ -1876,10 +1902,12 @@ export async function pushCloudWorkspace(
     syncedAt: string;
     localDates: string[];
   }) => void,
+  accountRevision?: number,
 ) {
   if (!isCloudGroupId(state.group.id))
     return {
       deletedEntryIds: [],
+      deletedPhotoIds: [],
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
@@ -1891,10 +1919,16 @@ export async function pushCloudWorkspace(
   if (!current)
     return {
       deletedEntryIds: [],
+      deletedPhotoIds: [],
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
     };
+  const publishRevision = await resolveAccountRevision(
+    client,
+    state.currentUserId,
+    accountRevision,
+  );
   const membership = await client
     .from("group_members")
     .select("status")
@@ -1905,6 +1939,7 @@ export async function pushCloudWorkspace(
   if (membership.data?.status !== "active")
     return {
       deletedEntryIds: [],
+      deletedPhotoIds: [],
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
@@ -1980,18 +2015,9 @@ export async function pushCloudWorkspace(
   for (const batch of batches(explicitDeletedEntryIds)) {
     const deleted = await client.rpc("delete_group_metric_entries", {
       p_client_generated_ids: batch,
+      p_expected_revision: publishRevision,
     });
-    if (
-      deleted.error?.code === "PGRST202" ||
-      deleted.error?.code === "42883"
-    ) {
-      const legacyDelete = await client
-        .from("metric_entries")
-        .delete()
-        .eq("user_id", state.currentUserId)
-        .in("client_generated_id", batch);
-      if (legacyDelete.error) throw legacyDelete.error;
-    } else if (deleted.error) {
+    if (deleted.error) {
       throw deleted.error;
     } else {
       (
@@ -2019,6 +2045,7 @@ export async function pushCloudWorkspace(
     idBySlug,
     ownedEntries,
     fastRecentDates,
+    publishRevision,
   );
   // Publish the current leaderboard window before comparing/uploading detailed
   // food, workout, message, photo, and historical rows. This keeps a manual or
@@ -2029,6 +2056,7 @@ export async function pushCloudWorkspace(
     state.group.id,
     fastRecentDates,
     recentCommitSinceDate,
+    publishRevision,
   );
   if (fastRecentCheckpoint.updatedAt)
     onRecentActivityCommitted?.({
@@ -2360,6 +2388,7 @@ export async function pushCloudWorkspace(
         source_record_id: entry.sourceRecordId ?? null,
         source_origin: entry.sourceOrigin ?? null,
         source_updated_at: entry.sourceUpdatedAt ?? null,
+        account_revision: publishRevision,
       }));
     for (const batch of batches(rows)) {
       const { error } = await client.from("metric_entries").upsert(batch, {
@@ -2371,17 +2400,14 @@ export async function pushCloudWorkspace(
     // resurrects that client id. Remove its old tombstone only after the new
     // row is durable, otherwise peers would keep filtering the replacement.
     for (const batch of batches(entriesToUpsert.map((entry) => entry.id))) {
-      const cleared = await client
-        .from("metric_entry_tombstones")
-        .delete()
-        .eq("user_id", state.currentUserId)
-        .in("client_generated_id", batch);
-      if (
-        cleared.error &&
-        cleared.error.code !== "42P01" &&
-        cleared.error.code !== "PGRST205"
-      )
-        throw cleared.error;
+      const cleared = await client.rpc(
+        "clear_group_metric_entry_tombstones",
+        {
+          p_client_generated_ids: batch,
+          p_expected_revision: publishRevision,
+        },
+      );
+      if (cleared.error) throw cleared.error;
     }
   }
 
@@ -2528,6 +2554,7 @@ export async function pushCloudWorkspace(
     idBySlug,
     ownedEntries,
     statusDates,
+    publishRevision,
   );
   const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) =>
     upsertCloudDailyStatusRows(client, rows);
@@ -2537,6 +2564,7 @@ export async function pushCloudWorkspace(
       state.group.id,
       dates,
       statusSinceDate,
+      publishRevision,
     );
 
   // Publish the newest month first. A large first-time history backfill can
@@ -2777,6 +2805,17 @@ export async function pushCloudWorkspace(
   );
   void pushResults;
 
+  const explicitDeletedPhotoIds = [
+    ...new Set(state.settings.pendingDeletedPhotoIds ?? []),
+  ];
+  for (const batch of batches(explicitDeletedPhotoIds)) {
+    const deleted = await client.rpc("delete_group_photo_updates", {
+      p_client_generated_ids: batch,
+      p_group_id: null,
+      p_expected_revision: publishRevision,
+    });
+    if (deleted.error) throw deleted.error;
+  }
   const ownedPhotos = state.photos.filter(
     (photo) => photo.userId === state.currentUserId && photo.storagePath,
   );
@@ -2787,16 +2826,20 @@ export async function pushCloudWorkspace(
     .eq("owner_user_id", state.currentUserId);
   if (oldPhotoError) throw oldPhotoError;
   const currentPhotoIds = new Set(ownedPhotos.map((photo) => photo.id));
-  const deletedPhotoIds = (oldPhotos ?? [])
+  const inferredDeletedPhotoIds = (oldPhotos ?? [])
     .map((photo) => photo.client_generated_id)
     .filter((id) => id && !currentPhotoIds.has(id));
-  if (deletedPhotoIds.length)
-    await client
-      .from("photo_updates")
-      .delete()
-      .eq("group_id", state.group.id)
-      .eq("owner_user_id", state.currentUserId)
-      .in("client_generated_id", deletedPhotoIds);
+  if (inferredDeletedPhotoIds.length) {
+    const deleted = await client.rpc("delete_group_photo_updates", {
+      p_client_generated_ids: inferredDeletedPhotoIds,
+      p_group_id: state.group.id,
+      p_expected_revision: publishRevision,
+    });
+    if (deleted.error) throw deleted.error;
+  }
+  const deletedPhotoIds = [
+    ...new Set([...explicitDeletedPhotoIds, ...inferredDeletedPhotoIds]),
+  ];
   for (const photo of ownedPhotos) {
     const { data: asset, error: assetError } = await client
       .from("media_assets")
@@ -2819,9 +2862,10 @@ export async function pushCloudWorkspace(
         client_generated_id: photo.id,
         caption: photo.caption,
         local_date: photo.localDate,
-        visibility: photo.visibility,
-        created_at: photo.createdAt,
-      },
+         visibility: photo.visibility,
+         created_at: photo.createdAt,
+         account_revision: publishRevision,
+       },
       { onConflict: "owner_user_id,client_generated_id" },
     );
     if (error) throw error;
@@ -2849,6 +2893,7 @@ export async function pushCloudWorkspace(
   }
   return {
     deletedEntryIds: explicitDeletedEntryIds,
+    deletedPhotoIds,
     activityVersion: activityCommit.version,
     workspacePushed: true,
     groupConfigurationPushed,

@@ -23,7 +23,7 @@ import { ActivityTimer } from "@/src/types";
 type Panel = "timers" | "schedule" | null;
 
 export default function ExtensionDashboard() {
-  const { state, setActivityTimer } = useApp();
+  const { state, hydrated, setActivityTimer } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
@@ -41,6 +41,37 @@ export default function ExtensionDashboard() {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [hasRunningTimer]);
+
+  useEffect(() => {
+    if (
+      !hydrated ||
+      typeof window === "undefined" ||
+      window.parent === window
+    )
+      return;
+
+    // The browser extension must distinguish this mounted dashboard from a
+    // generic document load (including Expo's Unmatched Route page). The
+    // message deliberately contains no account data and the parent validates
+    // both this frame and the deployed HabHub origin before accepting it.
+    const announceReady = () => {
+      window.parent.postMessage(
+        { type: "habhub:companion-ready", version: 1 },
+        "*",
+      );
+    };
+    const respondToProbe = (event: MessageEvent) => {
+      if (
+        event.source === window.parent &&
+        event.data?.type === "habhub:companion-ping"
+      )
+        announceReady();
+    };
+
+    announceReady();
+    window.addEventListener("message", respondToProbe);
+    return () => window.removeEventListener("message", respondToProbe);
+  }, [hydrated]);
 
   const events = useMemo(
     () =>
