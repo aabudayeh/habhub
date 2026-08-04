@@ -10,12 +10,20 @@ import React, {
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
+  InteractionManager,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import {
+  LocalizedAlert as Alert,
+  useLocale,
+  useLocalization,
+} from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -47,8 +55,6 @@ import {
   friendlyDate,
   relativeTime,
 } from "@/src/domain/date";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
-import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   allTimePeriodDates,
   averageAtDate,
@@ -58,6 +64,8 @@ import {
   periodTitle,
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
+import { latestMemberActivityPublishedAt } from "@/src/domain/leaderboardSync";
+import { imageSourceUri } from "@/src/domain/media";
 import {
   memberDisplayName,
   memberOriginalLabel,
@@ -79,14 +87,20 @@ export default function MemberProfile() {
     metrics?: string;
   }>();
   const { state, updateSettings } = useApp();
-  const cloud = useCloudSync();
-  const health = useHealthSync();
+  const locale = useLocale();
+  const { language } = useLocalization();
   const calculationStateRef = useRef(state);
   calculationStateRef.current = state;
   const colors = useAppColors();
   const member =
     state.group.members.find((item) => item.id === params.id) ??
     state.group.members[0];
+  const memberSyncedAt = latestMemberActivityPublishedAt(
+    state.dailyMetricStatuses,
+    state.group.id,
+    member.id,
+    member.lastDataSyncedAt,
+  );
   const groupMetricConfiguration = state.group.metricConfiguration;
   const available = useMemo(
     () =>
@@ -141,6 +155,10 @@ export default function MemberProfile() {
     [available, deferredMetricIds],
   );
   const groupMembers = state.group.members;
+  const groupMemberIds = useMemo(
+    () => groupMembers.map((item) => item.id).join("|"),
+    [groupMembers],
+  );
   const people = useMemo(
     () =>
       deferredSelectedIds
@@ -148,11 +166,27 @@ export default function MemberProfile() {
         .filter(Boolean) as typeof groupMembers,
     [deferredSelectedIds, groupMembers],
   );
+  const weekStartsOn = state.settings.weekStartsOn ?? 1;
+  const allTimeInputs = useMemo(
+    () => ({
+      statuses: state.dailyMetricStatuses,
+      entries: state.entries,
+      groupId: state.group.id,
+      gymSessions: state.gymSessions,
+    }),
+    [
+      state.dailyMetricStatuses,
+      state.entries,
+      state.group.id,
+      state.gymSessions,
+    ],
+  );
   const dates = useMemo(
-    () =>
-      deferredPeriod === "overall"
+    () => {
+      void allTimeInputs;
+      return deferredPeriod === "overall"
         ? allTimePeriodDates(
-            state,
+            calculationStateRef.current,
             deferredAnchor,
             deferredMetricIds,
             deferredSelectedIds,
@@ -160,45 +194,140 @@ export default function MemberProfile() {
         : periodDates(
             deferredPeriod,
             deferredAnchor,
-            state.settings.weekStartsOn ?? 1,
-          ),
+            weekStartsOn,
+          );
+    },
     [
+      allTimeInputs,
       deferredAnchor,
       deferredMetricIds,
       deferredPeriod,
       deferredSelectedIds,
-      state,
+      weekStartsOn,
     ],
   );
   const navigationDates = useMemo(
-    () =>
-      period === "overall"
-        ? allTimePeriodDates(state, anchor, metricIds, selectedIds)
-        : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
-    [anchor, metricIds, period, selectedIds, state],
+    () => {
+      void allTimeInputs;
+      return period === "overall"
+        ? allTimePeriodDates(
+            calculationStateRef.current,
+            anchor,
+            metricIds,
+            selectedIds,
+          )
+        : periodDates(period, anchor, weekStartsOn);
+    },
+    [
+      allTimeInputs,
+      anchor,
+      metricIds,
+      period,
+      selectedIds,
+      weekStartsOn,
+    ],
   );
   const comparisonInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
       energyProfiles: state.energyProfiles,
       entries: state.entries,
-      group: state.group,
+      groupId: state.group.id,
+      groupMemberIds,
+      groupMetrics: state.group.metricConfiguration,
+      groupRestDays: state.group.streakRestDaysPerWeek,
       gymSessions: state.gymSessions,
       metrics: state.metrics,
       photos: state.photos,
+      todos: state.todos,
       trackedGoalPeriods: state.trackedGoalPeriods,
+      currentUserId: state.currentUserId,
+      baselineCalories: state.settings.baselineCalories,
+      dayEndTime: state.settings.dayEndTime,
+      energyProfile: state.settings.energyProfile,
+      foodGoalMode: state.settings.foodGoalMode,
+      personalRestDays: state.settings.streakRestDaysPerWeek,
+      vacationPeriods: state.settings.vacationPeriods,
+      weightDirection: state.settings.weightDirection,
     }),
     [
       state.dailyMetricStatuses,
       state.energyProfiles,
       state.entries,
-      state.group,
+      state.group.id,
+      groupMemberIds,
+      state.group.metricConfiguration,
+      state.group.streakRestDaysPerWeek,
       state.gymSessions,
       state.metrics,
       state.photos,
+      state.todos,
       state.trackedGoalPeriods,
+      state.currentUserId,
+      state.settings.baselineCalories,
+      state.settings.dayEndTime,
+      state.settings.energyProfile,
+      state.settings.foodGoalMode,
+      state.settings.streakRestDaysPerWeek,
+      state.settings.vacationPeriods,
+      state.settings.weightDirection,
     ],
   );
+  const badgeInputs = useMemo(
+    () => ({
+      groupId: state.group.id,
+      groupMembers: state.group.members,
+      groupMetrics: state.group.metricConfiguration,
+      groupRestDays: state.group.streakRestDaysPerWeek,
+      metrics: state.metrics,
+      entries: state.entries,
+      statuses: state.dailyMetricStatuses,
+      trackedGoals: state.trackedGoalPeriods,
+      energyProfiles: state.energyProfiles,
+      gymSessions: state.gymSessions,
+      photos: state.photos,
+      energyProfile: state.settings.energyProfile,
+      weightDirection: state.settings.weightDirection,
+      baselineCalories: state.settings.baselineCalories,
+      foodGoalMode: state.settings.foodGoalMode,
+      vacationPeriods: state.settings.vacationPeriods,
+      currentUserId: state.currentUserId,
+    }),
+    [
+      state.group.id,
+      state.group.members,
+      state.group.metricConfiguration,
+      state.group.streakRestDaysPerWeek,
+      state.metrics,
+      state.entries,
+      state.dailyMetricStatuses,
+      state.trackedGoalPeriods,
+      state.energyProfiles,
+      state.gymSessions,
+      state.photos,
+      state.settings.energyProfile,
+      state.settings.weightDirection,
+      state.settings.baselineCalories,
+      state.settings.foodGoalMode,
+      state.settings.vacationPeriods,
+      state.currentUserId,
+    ],
+  );
+  const [allBadges, setAllBadges] = useState<ReturnType<typeof buildBadges>>(
+    [],
+  );
+  useEffect(() => {
+    let active = true;
+    const task = InteractionManager.runAfterInteractions(() => {
+      void badgeInputs;
+      const next = buildBadges(calculationStateRef.current, anchor);
+      if (active) setAllBadges(next);
+    });
+    return () => {
+      active = false;
+      task.cancel();
+    };
+  }, [anchor, badgeInputs]);
   const resultCache = useMemo(() => {
     void comparisonInputs;
     const cache = new Map<
@@ -263,6 +392,7 @@ export default function MemberProfile() {
                       [person.id],
                     ),
                   ),
+                  locale,
                 ),
         });
       }
@@ -274,6 +404,7 @@ export default function MemberProfile() {
     metrics,
     people,
     comparisonInputs,
+    locale,
   ]);
   const stats = useMemo(
     () => {
@@ -334,11 +465,24 @@ export default function MemberProfile() {
     period === "week" ? "week" : period === "month" ? "month" : "today";
   const badges = useMemo(
     () =>
-      buildBadges(state, anchor).filter(
+      allBadges.filter(
         (badge) =>
           badge.memberId === member.id && badge.period === periodBadge,
       ),
-    [anchor, member.id, periodBadge, state],
+    [allBadges, member.id, periodBadge],
+  );
+  const badgeOptions = useMemo(
+    () =>
+      allBadges
+        .filter((badge) => badge.memberId === member.id)
+        .map((badge) => ({
+          id: badge.id,
+          label: badge.title,
+          icon: badge.icon,
+          color: badge.color,
+          sublabel: badge.caption,
+        })),
+    [allBadges, member.id],
   );
   const showcase = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
   const displayedBadges = [...badges]
@@ -430,37 +574,6 @@ export default function MemberProfile() {
     state.settings.comparisonPeriodByGroup,
     updateSettings,
   ]);
-  const latestSync = [cloud.lastSyncedAt, health.lastSyncedAt]
-    .filter((value): value is string => Boolean(value))
-    .sort((a, b) => b.localeCompare(a))[0];
-  if (false)
-    return (
-      <Screen>
-        <PageHeader
-          eyebrow="Friend comparison"
-          title={
-            member.id === state.currentUserId
-              ? "Your progress"
-              : memberDisplayName(state, member)
-          }
-          subtitle="Opening saved comparison…"
-          showMenu={false}
-          action={
-            <IconButton
-              icon="close"
-              label="Close"
-              onPress={() => router.back()}
-            />
-          }
-        />
-        <Card style={styles.headEmpty}>
-          <Ionicons name="analytics-outline" size={20} color={colors.primary} />
-          <Text style={[styles.emptyPhotos, { color: colors.muted }]}>
-            Loading the latest locally cached stats…
-          </Text>
-        </Card>
-      </Screen>
-    );
   return (
     <Screen>
       <PageHeader
@@ -470,11 +583,7 @@ export default function MemberProfile() {
             ? "Your progress"
             : memberDisplayName(state, member)
         }
-        subtitle={`${periodTitle(period, anchor)} · ${
-          latestSync
-            ? `synced ${relativeTime(latestSync)}`
-            : "cached on this device"
-        }`}
+        translateTitle={member.id === state.currentUserId}
         showMenu={false}
         action={
           <IconButton
@@ -493,7 +602,7 @@ export default function MemberProfile() {
           size={58}
         />
         <View style={styles.copy}>
-          <Text style={[styles.name, { color: colors.ink }]}>
+          <Text translate={false} style={[styles.name, { color: colors.ink }]}>
             {memberDisplayName(state, member)}
           </Text>
           {memberOriginalLabel(state, member) ? (
@@ -502,8 +611,13 @@ export default function MemberProfile() {
             </Text>
           ) : null}
           <Text style={[styles.meta, { color: colors.muted }]}>
-            {memberRoleLabel(member)} · {state.group.name}
+            {memberRoleLabel(member)} · <Text translate={false}>{state.group.name}</Text>
           </Text>
+          {memberSyncedAt ? (
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Synced {relativeTime(memberSyncedAt)}
+            </Text>
+          ) : null}
         </View>
         <Ionicons
           name="shield-checkmark-outline"
@@ -642,7 +756,7 @@ export default function MemberProfile() {
                     />
                   </View>
                   <View style={styles.copy}>
-                    <Text style={[styles.duelTitle, { color: colors.ink }]}>{metric.name}</Text>
+                    <Text translate={false} style={[styles.duelTitle, { color: colors.ink }]}>{localizeMetricName(language, metric)}</Text>
                     <Text style={[styles.duelMeta, { color: colors.muted }]}>
                       {duel.eligibleDays} comparable day
                       {duel.eligibleDays === 1 ? "" : "s"} ·{" "}
@@ -657,8 +771,8 @@ export default function MemberProfile() {
                 <View style={styles.duelGrid}>
                   <DuelStat
                     label="Best day"
-                    you={`${formatMetricValue(metric, duel.viewerBest.value)} · ${friendlyDate(duel.viewerBest.date)}`}
-                    friend={`${formatMetricValue(metric, duel.subjectBest.value)} · ${friendlyDate(duel.subjectBest.date)}`}
+                    you={`${formatMetricValue(metric, duel.viewerBest.value)} · ${friendlyDate(duel.viewerBest.date, locale)}`}
+                    friend={`${formatMetricValue(metric, duel.subjectBest.value)} · ${friendlyDate(duel.subjectBest.date, locale)}`}
                     friendName={memberDisplayName(state, member)}
                   />
                   <DuelStat
@@ -697,7 +811,7 @@ export default function MemberProfile() {
                 <Text style={[styles.chartEyebrow, { color: metric.color }]}>
                   {periodTitle(period, anchor).toUpperCase()}
                 </Text>
-                <Text style={[styles.chartTitle, { color: colors.ink }]}>{metric.name}</Text>
+                <Text translate={false} style={[styles.chartTitle, { color: colors.ink }]}>{localizeMetricName(language, metric)}</Text>
               </View>
               <View
                 style={[
@@ -730,10 +844,10 @@ export default function MemberProfile() {
                           <Text style={[styles.barName, { color: colors.ink }]}>
                             {person.id === state.currentUserId
                               ? "You"
-                              : memberDisplayName(state, person)}
+                              : <Text translate={false}>{memberDisplayName(state, person)}</Text>}
                           </Text>
-                          <Text
-                            style={[
+                        <Text
+                          style={[
                               styles.barValue,
                               { color: result.mode === "private" ? colors.faint : colors.muted },
                             ]}
@@ -781,18 +895,18 @@ export default function MemberProfile() {
                             ? "Private"
                             : metric.dataType === "boolean"
                               ? (result.averageLabel ?? "—")
-                              : result.average.toLocaleString(undefined, {
+                              : result.average.toLocaleString(locale, {
                                   maximumFractionDigits: 1,
                                 })
                         }
                       />
                       <MiniStat
                         label="7-day avg"
-                        value={statValue(cached!.seven)}
+                        value={statValue(cached!.seven, locale)}
                       />
                       <MiniStat
                         label="30-day avg"
-                        value={statValue(cached!.thirty)}
+                        value={statValue(cached!.thirty, locale)}
                       />
                       <MiniStat
                         label="Overall avg"
@@ -826,15 +940,7 @@ export default function MemberProfile() {
           {member.id === state.currentUserId ? (
             <MetricSelector
               title="Choose up to 5 showcase badges"
-              items={buildBadges(state, anchor)
-                .filter((badge) => badge.memberId === member.id)
-                .map((badge) => ({
-                  id: badge.id,
-                  label: badge.title,
-                  icon: badge.icon,
-                  color: badge.color,
-                  sublabel: badge.caption,
-                }))}
+              items={badgeOptions}
               selectedIds={
                 showcase.length
                   ? showcase
@@ -961,10 +1067,10 @@ export default function MemberProfile() {
     </Screen>
   );
 }
-function statValue(result: ReturnType<typeof periodMetricResult>) {
+function statValue(result: ReturnType<typeof periodMetricResult>, locale: string) {
   if (result.mode === "private") return "Private";
   if (result.mode === "status") return result.label;
-  return result.average.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  return result.average.toLocaleString(locale, { maximumFractionDigits: 1 });
 }
 function MiniStat({ label, value }: { label: string; value: string }) {
   const colors = useAppColors();
@@ -1078,12 +1184,75 @@ function ProfilePhotoCompare({
     return entry ? `${Number(entry.value).toFixed(1)} kg` : "No weight log";
   }
   async function save() {
-    const uri = await collageRef.current?.capture?.();
-    if (uri)
-      await Sharing.shareAsync(uri, {
-        mimeType: "image/png",
-        dialogTitle: "Save or share progress comparison",
+    if (!primary || !comparison) return;
+    if (Platform.OS !== "web") {
+      const uri = await collageRef.current?.capture?.();
+      if (uri)
+        await Sharing.shareAsync(uri, {
+          mimeType: "image/png",
+          dialogTitle: "Save or share progress comparison",
+        });
+      return;
+    }
+    try {
+      const photos = [primary, comparison];
+      const canvas = document.createElement("canvas");
+      canvas.width = 1200;
+      canvas.height = 850;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas unavailable");
+      context.fillStyle = "#F5F7F2";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#17211B";
+      context.font = "bold 34px sans-serif";
+      context.fillText("HabHub progress comparison", 45, 55);
+      const images = await Promise.all(
+        photos.map(
+          (photo) =>
+            new Promise<HTMLImageElement>((resolve, reject) => {
+              const image = document.createElement("img");
+              image.onload = () => resolve(image);
+              image.onerror = () => reject(new Error("Photo unavailable"));
+              image.src = imageSourceUri(photo.uri);
+            }),
+        ),
+      );
+      images.forEach((image, index) => {
+        const x = 45 + index * 565;
+        context.drawImage(image, x, 90, 540, 620);
+        context.textAlign = "center";
+        context.fillStyle = "#17211B";
+        context.font = "bold 23px sans-serif";
+        context.fillText(
+          friendlyDate(photos[index].localDate),
+          x + 270,
+          755,
+        );
+        context.fillStyle = "#176B4D";
+        context.font = "bold 18px sans-serif";
+        context.fillText(weight(photos[index].localDate), x + 270, 790);
       });
+      await new Promise<void>((resolve, reject) =>
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("Could not create the comparison image."));
+            return;
+          }
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `habhub-${personId}-comparison.png`;
+          link.click();
+          URL.revokeObjectURL(url);
+          resolve();
+        }, "image/png"),
+      );
+    } catch (error) {
+      Alert.alert(
+        "Could not save collage",
+        error instanceof Error ? error.message : "Try again.",
+      );
+    }
   }
   return (
     <View style={styles.photoPerson}>
@@ -1100,7 +1269,7 @@ function ProfilePhotoCompare({
             style={styles.photoCapture}
           >
             <Text preserveColor style={styles.captureTitle}>
-              MetricRally progress comparison
+              HabHub progress comparison
             </Text>
             <View style={styles.photos}>
               <View style={styles.photoBlock}>

@@ -25,6 +25,7 @@ function bounded(value: number, fallback: number, minimum: number, maximum: numb
 /** Keeps persisted/cloud energy data inside the database and formula ranges. */
 export function normalizeEnergyProfile(profile: EnergyProfile): EnergyProfile {
   const weightKg = bounded(profile.weightKg, 70, 20, 500);
+  const activityOverride = profile.dailyActivityCaloriesOverride;
   return {
     ...profile,
     age: Math.round(bounded(profile.age, 30, 13, 120)),
@@ -35,6 +36,10 @@ export function normalizeEnergyProfile(profile: EnergyProfile): EnergyProfile {
         ? undefined
         : bounded(profile.startingWeightKg, weightKg, 20, 500),
     targetWeightKg: bounded(profile.targetWeightKg, weightKg, 20, 500),
+    dailyActivityCaloriesOverride:
+      activityOverride === undefined
+        ? undefined
+        : Math.round(bounded(activityOverride, 0, 0, 5000)),
     desiredWeeklyLossKg: bounded(profile.desiredWeeklyLossKg, 0.5, 0, 2),
   };
 }
@@ -47,9 +52,16 @@ export function calculateBmr(profile: EnergyProfile): number {
   return Math.max(0, base - 78);
 }
 
-export function calculateDailyActivity(profile: EnergyProfile): number {
+export function calculateActivityFromLevel(profile: EnergyProfile): number {
   const bmr = calculateBmr(profile);
   return bmr * (ACTIVITY_FACTORS[profile.activityLevel] - 1);
+}
+
+export function calculateDailyActivity(profile: EnergyProfile): number {
+  const override = profile.dailyActivityCaloriesOverride;
+  return override !== undefined && Number.isFinite(override)
+    ? Math.max(0, override)
+    : calculateActivityFromLevel(profile);
 }
 
 export function calculateDailyEnergy(profile: EnergyProfile): number {

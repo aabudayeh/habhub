@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, {
   useCallback,
   useEffect,
@@ -11,16 +11,23 @@ import React, {
 import {
   Keyboard,
   KeyboardAvoidingView,
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import { GestureDetector } from "react-native-gesture-handler";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { translateUiText, useLocale } from "@/src/i18n";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
@@ -34,29 +41,82 @@ import {
 } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
-import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 
-export default function ChatScreen() {
+function ChatScreen() {
+  const params = useLocalSearchParams<{ recipient?: string | string[] }>();
+  const requestedRecipient = Array.isArray(params.recipient)
+    ? params.recipient[0]
+    : params.recipient;
   const { state, sendMessage, updateSettings } = useApp();
   const accent = useGroupAccent();
   const colors = useAppColors();
-  const cloud = useCloudSync();
+  const locale = useLocale();
+  const cloud = useCloudSyncActions();
   const refreshMessages = cloud.refreshMessages;
   const syncMessagesNow = cloud.syncMessagesNow;
-  const health = useHealthSync();
+  const refreshMessagesRef = useRef(refreshMessages);
+  const syncMessagesNowRef = useRef(syncMessagesNow);
+  refreshMessagesRef.current = refreshMessages;
+  syncMessagesNowRef.current = syncMessagesNow;
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [recipientId, setRecipientId] = useState<string | null>(null);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const appliedRequestedRecipient = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      requestedRecipient &&
+      appliedRequestedRecipient.current !== requestedRecipient &&
+      requestedRecipient !== state.currentUserId &&
+      state.group.members.some((member) => member.id === requestedRecipient)
+    ) {
+      appliedRequestedRecipient.current = requestedRecipient;
+      setRecipientId(requestedRecipient);
+    }
+  }, [requestedRecipient, state.currentUserId, state.group.members]);
+  const [refreshingMessages, setRefreshingMessages] = useState(false);
   const messageScroll = useRef<ScrollView>(null);
+  const pendingScrollFrame = useRef<number | null>(null);
+  const pendingAnimatedScroll = useRef(false);
+  const settledScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const threadViewportHeight = useRef<number | null>(null);
+  const keyboardTransitionEventAt = useRef(0);
+  const userScrolledAwayFromBottom = useRef(false);
+  const userDragInProgress = useRef(false);
+  const userDragStartDistanceFromBottom = useRef<number | null>(null);
+  const renderedConversationKey = useRef<string | null>(null);
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
     : undefined;
   const groupConversationId = `group:${state.group.id}`;
+  const conversationMemberIds = useMemo(
+    () =>
+      state.group.members
+        .filter((member) => member.id !== state.currentUserId)
+        .map((member) => member.id),
+    [state.currentUserId, state.group.members],
+  );
+  const switchConversation = useCallback(
+    (direction: -1 | 1) => {
+      const ordered: (string | null)[] = [null, ...conversationMemberIds];
+      if (ordered.length <= 1) return;
+      const currentIndex = Math.max(0, ordered.indexOf(recipientId));
+      const nextIndex =
+        (currentIndex + direction + ordered.length) % ordered.length;
+      setRecipientId(ordered[nextIndex]);
+    },
+    [conversationMemberIds, recipientId],
+  );
+  const conversationSwipe = usePageSwipeGesture({
+    enabled: !userDragInProgress.current,
+    onPrevious: () => switchConversation(-1),
+    onNext: () => switchConversation(1),
+  });
   const conversationId = recipientId
     ? directConversationId(state.currentUserId, recipientId)
     : groupConversationId;
+  const conversationReadKey = `${state.group.id}:${conversationId}`;
   const notifications = state.settings.notifications;
   const readAt = useMemo(
     () => notifications.chatReadAtByConversation ?? {},
@@ -66,11 +126,13 @@ export default function ChatScreen() {
     (id: string) =>
       state.messages.some(
         (message) =>
+          (!message.groupId || message.groupId === state.group.id) &&
           (message.conversationId ?? "group") === id &&
           message.senderId !== state.currentUserId &&
-          message.createdAt > (readAt[id] ?? ""),
+          message.createdAt >
+            (readAt[`${state.group.id}:${id}`] ?? readAt[id] ?? ""),
       ),
-    [readAt, state.currentUserId, state.messages],
+    [readAt, state.currentUserId, state.group.id, state.messages],
   );
   const muted = recipientId
     ? (notifications.mutedConversationIds ?? []).includes(conversationId)
@@ -102,79 +164,279 @@ export default function ChatScreen() {
   }
   const messages = useMemo(
     () =>
-      state.messages.filter((message) => {
-        const id = message.conversationId ?? "group";
-        if (!recipientId && state.group.id === "weekend-warriors")
-          return id === conversationId || id === "group";
-        return id === conversationId;
-      }),
-    [conversationId, recipientId, state.group.id, state.messages],
+      state.messages
+        .filter((message) => {
+          const id = message.conversationId ?? "group";
+          if (message.groupId && message.groupId !== state.group.id) return false;
+          if (
+            !message.groupId &&
+            id.startsWith("group:") &&
+            id !== groupConversationId
+          )
+            return false;
+          if (!recipientId && state.group.id === "weekend-warriors")
+            return id === conversationId || id === "group";
+          return id === conversationId;
+        })
+        .sort(
+          (a, b) =>
+            a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+        ),
+    [
+      conversationId,
+      groupConversationId,
+      recipientId,
+      state.group.id,
+      state.messages,
+    ],
   );
+  const latestMessage = messages[messages.length - 1];
+  const latestMessageKey = latestMessage
+    ? `${messages.length}:${latestMessage.id}:${latestMessage.createdAt}:${latestMessage.text}:${latestMessage.imageUri ?? ""}`
+    : `${conversationId}:empty`;
+  const scrollToNewest = useCallback((animated = false) => {
+    // Coalesce callers into one frame. In particular, do not repeatedly force
+    // the offset while Android is resizing the viewport around the keyboard.
+    userScrolledAwayFromBottom.current = false;
+    pendingAnimatedScroll.current ||= animated;
+    if (pendingScrollFrame.current !== null) return;
+    pendingScrollFrame.current = requestAnimationFrame(() => {
+      pendingScrollFrame.current = null;
+      const shouldAnimate = pendingAnimatedScroll.current;
+      pendingAnimatedScroll.current = false;
+      messageScroll.current?.scrollToEnd({ animated: shouldAnimate });
+    });
+  }, []);
+  const cancelPendingNewestScroll = useCallback(() => {
+    if (pendingScrollFrame.current !== null) {
+      cancelAnimationFrame(pendingScrollFrame.current);
+      pendingScrollFrame.current = null;
+    }
+    pendingAnimatedScroll.current = false;
+  }, []);
+  const cancelSettledNewestScroll = useCallback(() => {
+    if (settledScrollTimer.current !== null) {
+      clearTimeout(settledScrollTimer.current);
+      settledScrollTimer.current = null;
+    }
+  }, []);
+  const scrollToNewestAfterLayout = useCallback(
+    (delay = 48) => {
+      cancelSettledNewestScroll();
+      settledScrollTimer.current = setTimeout(() => {
+        settledScrollTimer.current = null;
+        scrollToNewest(false);
+      }, delay);
+    },
+    [cancelSettledNewestScroll, scrollToNewest],
+  );
+  const handleThreadLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const height = event.nativeEvent.layout.height;
+      const previousHeight = threadViewportHeight.current;
+      threadViewportHeight.current = height;
+      const heightChange =
+        previousHeight === null ? 0 : Math.abs(previousHeight - height);
+      const followsKeyboardEvent =
+        Date.now() - keyboardTransitionEventAt.current < 500;
+      if (
+        previousHeight !== null &&
+        (heightChange >= 120 ||
+          (followsKeyboardEvent && heightChange >= 24))
+      )
+        // Keyboard and tab-bar changes can commit in separate layout passes.
+        // Debouncing here produces one final alignment after the last pass.
+        scrollToNewestAfterLayout(
+          followsKeyboardEvent ? 64 : 320,
+        );
+    },
+    [scrollToNewestAfterLayout],
+  );
+  const bottomDistance = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } =
+        event.nativeEvent;
+      return Math.max(
+        0,
+        contentSize.height - layoutMeasurement.height - contentOffset.y,
+      );
+    },
+    [],
+  );
+  const handleUserScrollStart = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      // A real drag always wins over queued focus, sync, or message scrolling.
+      userDragInProgress.current = true;
+      userDragStartDistanceFromBottom.current = bottomDistance(event);
+      cancelPendingNewestScroll();
+    },
+    [bottomDistance, cancelPendingNewestScroll],
+  );
+  const handleThreadScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const dragStart = userDragStartDistanceFromBottom.current;
+      if (dragStart === null) return;
+      // Once a drag moves into older history, suppress automatic following for
+      // the rest of this Chat visit, even after only a few pixels of movement.
+      if (bottomDistance(event) > dragStart + 2) {
+        userScrolledAwayFromBottom.current = true;
+      }
+    },
+    [bottomDistance],
+  );
+  const handleUserScrollEnd = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      handleThreadScroll(event);
+      userDragInProgress.current = false;
+      userDragStartDistanceFromBottom.current = null;
+    },
+    [handleThreadScroll],
+  );
+  const handleComposerFocus = useCallback(() => {
+    // Align immediately, then keep a delayed fallback for Android versions
+    // where adjustResize can suppress the keyboardDidShow notification.
+    scrollToNewest(false);
+    scrollToNewestAfterLayout(360);
+  }, [scrollToNewest, scrollToNewestAfterLayout]);
+  useEffect(
+    () => () => {
+      cancelPendingNewestScroll();
+      cancelSettledNewestScroll();
+    },
+    [cancelPendingNewestScroll, cancelSettledNewestScroll],
+  );
+  useEffect(() => {
+    const shown = Keyboard.addListener("keyboardDidShow", () => {
+      keyboardTransitionEventAt.current = Date.now();
+      cancelPendingNewestScroll();
+      scrollToNewestAfterLayout();
+    });
+    const hidden = Keyboard.addListener("keyboardDidHide", () => {
+      // Android restores the window and tab scene in separate passes. Wait for
+      // both before aligning so the close transition does not visibly fight
+      // the ScrollView.
+      keyboardTransitionEventAt.current = Date.now();
+      cancelPendingNewestScroll();
+      scrollToNewestAfterLayout(64);
+    });
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, [cancelPendingNewestScroll, scrollToNewestAfterLayout]);
   const latestOwnedMessageId = [...messages]
     .reverse()
     .find((message) => message.senderId === state.currentUserId)?.id;
   useEffect(() => {
     if (!latestOwnedMessageId) return;
-    const timer = setTimeout(
-      () => syncMessagesNow().catch(() => undefined),
-      180,
+    let delivered = false;
+    const timers = [180, 2500, 10000].map((delay) =>
+      setTimeout(() => {
+        if (delivered) return;
+        syncMessagesNow()
+          .then(() => {
+            delivered = true;
+            return refreshMessages();
+          })
+          .catch(() => undefined);
+      }, delay),
     );
-    return () => clearTimeout(timer);
-  }, [latestOwnedMessageId, syncMessagesNow]);
+    return () => timers.forEach(clearTimeout);
+  }, [latestOwnedMessageId, refreshMessages, syncMessagesNow]);
   useFocusEffect(
     useCallback(() => {
-      refreshMessages().catch(() => undefined);
+      // Every visit to Chat starts at the newest message. Only a drag made
+      // after this point opts out of keyboard/new-message following.
+      userScrolledAwayFromBottom.current = false;
+      userDragInProgress.current = false;
+      userDragStartDistanceFromBottom.current = null;
+      scrollToNewest(false);
+      scrollToNewestAfterLayout(80);
+      let active = true;
+      syncMessagesNowRef.current()
+        .catch(() => undefined)
+        .finally(() =>
+          refreshMessagesRef.current()
+            .catch(() => undefined)
+            .finally(() => {
+              if (
+                active &&
+                !userScrolledAwayFromBottom.current &&
+                !userDragInProgress.current
+              )
+                scrollToNewest(false);
+            }),
+        );
       // Realtime remains primary; this inexpensive chat-only poll covers
       // suspended sockets without reloading leaderboard or health data.
       const timer = setInterval(
-        () => refreshMessages().catch(() => undefined),
-        45000,
+        () => refreshMessagesRef.current().catch(() => undefined),
+        25000,
       );
-      return () => clearInterval(timer);
-    }, [refreshMessages]),
+      return () => {
+        active = false;
+        clearInterval(timer);
+        cancelPendingNewestScroll();
+        cancelSettledNewestScroll();
+      };
+    }, [
+      cancelPendingNewestScroll,
+      cancelSettledNewestScroll,
+      scrollToNewest,
+      scrollToNewestAfterLayout,
+    ]),
   );
   useEffect(() => {
-    const timer = setTimeout(
-      () => messageScroll.current?.scrollToEnd({ animated: false }),
-      0,
-    );
-    return () => clearTimeout(timer);
-  }, [conversationId, messages.length]);
+    const conversationChanged =
+      renderedConversationKey.current !== conversationReadKey;
+    renderedConversationKey.current = conversationReadKey;
+    if (conversationChanged) {
+      userScrolledAwayFromBottom.current = false;
+      userDragInProgress.current = false;
+      userDragStartDistanceFromBottom.current = null;
+      scrollToNewest(false);
+      scrollToNewestAfterLayout(80);
+      return;
+    }
+    if (
+      !userScrolledAwayFromBottom.current &&
+      !userDragInProgress.current
+    )
+      scrollToNewest(false);
+  }, [
+    conversationReadKey,
+    latestMessageKey,
+    scrollToNewest,
+    scrollToNewestAfterLayout,
+  ]);
   useEffect(() => {
     const latestIncoming = messages
       .filter((message) => message.senderId !== state.currentUserId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.createdAt;
-    if (!latestIncoming || latestIncoming <= (readAt[conversationId] ?? ""))
+    if (
+      !latestIncoming ||
+      latestIncoming <=
+        (readAt[conversationReadKey] ?? readAt[conversationId] ?? "")
+    )
       return;
     updateSettings({
       notifications: {
         ...notifications,
         chatReadAtByConversation: {
           ...readAt,
-          [conversationId]: latestIncoming,
+          [conversationReadKey]: latestIncoming,
         },
       },
     });
   }, [
     conversationId,
+    conversationReadKey,
     messages,
     notifications,
     readAt,
     state.currentUserId,
     updateSettings,
   ]);
-  useEffect(() => {
-    const show = Keyboard.addListener("keyboardDidShow", () =>
-      setKeyboardVisible(true),
-    );
-    const hide = Keyboard.addListener("keyboardDidHide", () =>
-      setKeyboardVisible(false),
-    );
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, []);
   function submit() {
     if (!draft.trim() && !imageUri) return;
     sendMessage(
@@ -185,13 +447,17 @@ export default function ChatScreen() {
     );
     setDraft("");
     setImageUri(null);
-    setTimeout(() => messageScroll.current?.scrollToEnd({ animated: true }), 50);
-    // Insert the message and dispatch its push before the heavier account
-    // snapshot runs in the background.
-    setTimeout(() => cloud.syncMessagesNow().catch(() => undefined), 40);
+    setTimeout(() => scrollToNewest(true), 30);
   }
   function suggest(kind: MessageCategory) {
-    setDraft(randomMessage(kind, state.settings.banterTone));
+    setDraft(
+      randomMessage(
+        kind,
+        state.settings.banterTone,
+        undefined,
+        state.settings.language,
+      ),
+    );
   }
   async function chooseImage() {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -212,10 +478,15 @@ export default function ChatScreen() {
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top", "bottom"]}
+      // The tab bar already owns the bottom safe area. Applying it here too
+      // leaves the composer floating above the navigation bar.
+      edges={["top"]}
     >
+      <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
         style={styles.flex}
+        // Android still needs `height` on tab scenes to keep the composer above
+        // the resized window. Scroll position is handled independently below.
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
@@ -356,19 +627,26 @@ export default function ChatScreen() {
             style={styles.messageScroller}
             contentContainerStyle={styles.messages}
             keyboardShouldPersistTaps="always"
+            onLayout={handleThreadLayout}
+            onScroll={handleThreadScroll}
+            onScrollBeginDrag={handleUserScrollStart}
+            onScrollEndDrag={handleUserScrollEnd}
+            onMomentumScrollEnd={handleUserScrollEnd}
+            scrollEventThrottle={16}
             refreshControl={
               <RefreshControl
-                refreshing={cloud.status === "syncing" || health.status === "syncing"}
+                refreshing={refreshingMessages}
                 onRefresh={async () => {
-                  await cloud.syncNow().catch(() => undefined);
-                  await cloud.refreshMessages().catch(() => undefined);
-                  await health.syncNow("pull").catch(() => undefined);
+                  setRefreshingMessages(true);
+                  try {
+                    await syncMessagesNow().catch(() => undefined);
+                    await refreshMessages().catch(() => undefined);
+                  } finally {
+                    setRefreshingMessages(false);
+                  }
                 }}
                 tintColor={accent}
               />
-            }
-            onContentSizeChange={() =>
-              messageScroll.current?.scrollToEnd({ animated: false })
             }
           >
             {messages.length ? (
@@ -391,7 +669,7 @@ export default function ChatScreen() {
                             },
                           ]}
                         >
-                          {timestamp.toLocaleDateString(undefined, {
+                          {timestamp.toLocaleDateString(locale, {
                             weekday: "short",
                             month: "short",
                             day: "numeric",
@@ -425,13 +703,15 @@ export default function ChatScreen() {
                               : accent
                           }
                         />
-                        <Text
-                          style={[styles.systemText, { color: colors.muted }]}
-                        >
-                          {message.text} ·{" "}
+                        <Text style={[styles.systemText, { color: colors.muted }]}>
+                          {translateUiText(
+                            state.settings.language,
+                            message.text,
+                          )} ·{" "}
                           {formatClockTime(
                             timestamp,
                             state.settings.timeFormat,
+                            locale,
                           )}
                         </Text>
                       </View>
@@ -450,7 +730,7 @@ export default function ChatScreen() {
                           { color: colors.muted, backgroundColor: colors.card },
                         ]}
                       >
-                        {timestamp.toLocaleDateString(undefined, {
+                        {timestamp.toLocaleDateString(locale, {
                           weekday: "short",
                           month: "short",
                           day: "numeric",
@@ -483,7 +763,7 @@ export default function ChatScreen() {
                               router.push(`/member/${sender.id}` as never)
                             }
                           >
-                            <Text style={styles.sender}>
+                            <Text translate={false} style={styles.sender}>
                               {sender
                                 ? memberDisplayName(state, sender)
                                 : "Member"}
@@ -512,6 +792,7 @@ export default function ChatScreen() {
                           ) : null}
                           {message.text ? (
                             <Text
+                              translate={false}
                               preserveColor={mine}
                               style={[
                                 styles.messageText,
@@ -534,6 +815,7 @@ export default function ChatScreen() {
                             {formatClockTime(
                               timestamp,
                               state.settings.timeFormat,
+                              locale,
                             )}
                           </Text>
                         </View>
@@ -592,7 +874,6 @@ export default function ChatScreen() {
           <View
             style={[
               styles.composer,
-              { marginBottom: keyboardVisible ? 8 : 26 },
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}
           >
@@ -606,11 +887,7 @@ export default function ChatScreen() {
             <TextInput
               value={draft}
               onChangeText={setDraft}
-              onFocus={() =>
-                requestAnimationFrame(() =>
-                  messageScroll.current?.scrollToEnd({ animated: true }),
-                )
-              }
+              onFocus={handleComposerFocus}
               onSubmitEditing={submit}
               placeholder={
                 recipient ? `Message ${recipient.name}…` : "Message the group…"
@@ -635,9 +912,12 @@ export default function ChatScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      </GestureDetector>
     </SafeAreaView>
   );
 }
+
+export default ChatScreen;
 
 function ConversationButton({
   label,

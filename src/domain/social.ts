@@ -1,4 +1,5 @@
-import { BanterTone } from '@/src/types';
+import { AppLanguage, BanterTone } from '@/src/types';
+import { translateDomainText } from '@/src/i18n/domain';
 
 export type MessageCategory = 'cheer' | 'taunt' | 'reminder';
 
@@ -41,7 +42,11 @@ const parts: Record<MessageCategory, { openings: string[]; bodies: string[]; end
   },
 };
 
-export function messageLibrary(category: MessageCategory, tone: BanterTone): string[] {
+export function messageLibrary(
+  category: MessageCategory,
+  tone: BanterTone,
+  language: AppLanguage = 'en',
+): string[] {
   const source = parts[category];
   const messages: string[] = [];
   for (const opening of source.openings) {
@@ -49,21 +54,29 @@ export function messageLibrary(category: MessageCategory, tone: BanterTone): str
       for (const ending of source.endings) messages.push(`${opening} ${body}. ${ending}`);
     }
   }
+  let toned = messages;
   if (tone === 'supportive' && category === 'taunt') {
-    return messages.map((message) => message.replace('Catch us if you can.', 'We know you can catch up.').replace('Game on.', 'We believe in you.'));
+    toned = messages.map((message) => message.replace('Catch us if you can.', 'We know you can catch up.').replace('Game on.', 'We believe in you.'));
   }
-  if (tone === 'supportive' && category === 'cheer') return messages.map((message) => `${message} Be proud of the effort.`);
-  if (tone === 'supportive' && category === 'reminder') return messages.map((message) => `${message} No guilt if today is busy.`);
+  if (tone === 'supportive' && category === 'cheer') toned = messages.map((message) => `${message} Be proud of the effort.`);
+  if (tone === 'supportive' && category === 'reminder') toned = messages.map((message) => `${message} No guilt if today is busy.`);
   if (tone === 'ruthless' && category === 'taunt') {
-    return messages.map((message) => `${message} The excuses leaderboard is already full.`);
+    toned = messages.map((message) => `${message} The excuses leaderboard is already full.`);
   }
-  if (tone === 'ruthless' && category === 'cheer') return messages.map((message) => `${message} Now defend that rank.`);
-  if (tone === 'ruthless' && category === 'reminder') return messages.map((message) => `${message} The clock and leaderboard are both moving.`);
-  return messages;
+  if (tone === 'ruthless' && category === 'cheer') toned = messages.map((message) => `${message} Now defend that rank.`);
+  if (tone === 'ruthless' && category === 'reminder') toned = messages.map((message) => `${message} The clock and leaderboard are both moving.`);
+  return language === 'en'
+    ? toned
+    : toned.map((message) => translateDomainText(language, message));
 }
 
-export function randomMessage(category: MessageCategory, tone: BanterTone, custom?: string): string {
-  const library = messageLibrary(category, tone);
+export function randomMessage(
+  category: MessageCategory,
+  tone: BanterTone,
+  custom?: string,
+  language: AppLanguage = 'en',
+): string {
+  const library = messageLibrary(category, tone, language);
   const candidates = custom?.trim() ? [custom.trim(), ...library] : library;
   return candidates[Math.floor(Math.random() * candidates.length)];
 }

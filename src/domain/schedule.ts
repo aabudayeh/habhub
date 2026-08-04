@@ -6,10 +6,13 @@ export function scheduleAppliesOnDate(
   anchorDate: string,
   localDate: string,
 ) {
+  const effectiveAnchor = schedule?.anchorDate ?? anchorDate;
+  if (schedule?.endDate && localDate > schedule.endDate) return false;
   if (schedule?.mode === "once")
-    return localDate === (schedule.anchorDate ?? anchorDate);
-  if (!schedule || schedule.mode === "daily") return localDate >= anchorDate;
-  if (localDate < anchorDate) return false;
+    return localDate === effectiveAnchor;
+  if (!schedule || schedule.mode === "daily")
+    return localDate >= effectiveAnchor;
+  if (localDate < effectiveAnchor) return false;
   const day = new Date(`${localDate}T12:00:00`).getDay();
   if (schedule.mode === "selected_days")
     return (schedule.daysOfWeek ?? []).includes(day);
@@ -17,10 +20,9 @@ export function scheduleAppliesOnDate(
     schedule.mode === "every_other_day" ||
     schedule.mode === "interval_days"
   ) {
-    const anchor = schedule.anchorDate ?? anchorDate;
     const elapsed = Math.round(
       (new Date(`${localDate}T12:00:00`).getTime() -
-        new Date(`${anchor}T12:00:00`).getTime()) /
+        new Date(`${effectiveAnchor}T12:00:00`).getTime()) /
         86400000,
     );
     const interval =
@@ -46,12 +48,25 @@ export function todoAppearsOnDate(todo: TodoItem, localDate: string) {
     .sort()[0];
   if (
     todo.reminders.some(
-      (reminder) => reminder.at?.slice(0, 10) === localDate,
+      (reminder) =>
+        reminder.at?.slice(0, 10) === localDate ||
+        (reminder.repeatDailyUntilDue &&
+          localDate >= createdDate &&
+          (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10))),
     )
   )
     return !resolvedDate || localDate <= resolvedDate;
-  if (todo.recurrence)
-    return scheduleAppliesOnDate(todo.recurrence, createdDate, localDate);
+  if (todo.recurrence) {
+    // Older saved to-dos may not have an explicit recurrence anchor. Prefer
+    // their scheduled/deadline date before falling back to creation time so a
+    // future recurring item never appears early.
+    const recurrenceAnchor =
+      todo.recurrence.anchorDate ??
+      todo.scheduledStartAt?.slice(0, 10) ??
+      todo.dueAt?.slice(0, 10) ??
+      createdDate;
+    return scheduleAppliesOnDate(todo.recurrence, recurrenceAnchor, localDate);
+  }
   const begins = todo.dueAt?.slice(0, 10) ?? createdDate;
   return localDate >= begins && (!resolvedDate || localDate <= resolvedDate);
 }

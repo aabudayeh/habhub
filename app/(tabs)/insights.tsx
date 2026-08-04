@@ -12,13 +12,18 @@ import {
   UIManager,
   View,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
+import { useEditWiggle } from "@/src/components/useEditWiggle";
 import {
   cachedGoalHeatmapModel,
   cachedTrackedGoalsHeatmapModel,
@@ -28,7 +33,6 @@ import {
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   Card,
-  Chip,
   PageHeader,
   Screen,
   SectionHeader,
@@ -48,6 +52,7 @@ import {
   isMetricTrackedOnDate,
   metricAverageGoalOffsetLabel,
   metricApplicableOnDate,
+  metricJourneyProgressStats,
   metricOverallAverage,
   metricPeriodStats,
   metricStreakStats,
@@ -56,6 +61,7 @@ import {
   scheduledGoalReached,
   trackedGoalStreakStats,
   trackedGoalSummary,
+  weightDailyGoalStatus,
   weightProgressStats,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
@@ -67,6 +73,7 @@ import {
   ProgressViewMode,
 } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
+import { metricVisualization } from "@/src/domain/visualization";
 import { isVacationDate } from "@/src/domain/vacation";
 import {
   todoAppearsOnDate,
@@ -75,19 +82,84 @@ import {
 import {
   activeTrackerViewLabel,
   activeTrackerViewId,
+  ALL_AVAILABLE_TRACKERS_FILTER,
   ALL_TRACKERS_FILTER,
   TRACKED_ONLY_FILTER,
   metricMatchesActiveView,
 } from "@/src/domain/viewFilters";
 
 const TRACKED = "tracked_goals";
-const TRACKED_COLOR = "#9B6BDB";
+const TRACKED_COLOR = "#FFD166";
 const WEEK_CHART_MAX = 1.4;
 type ViewMode = "week" | "month";
 const PROGRESS_MODE_ORDER: ProgressViewMode[] = [
   "overview",
   "goal_maps",
 ];
+
+function bloodPressureProgressSummary(
+  state: AppState,
+  metric: MetricDefinition,
+  dates: string[],
+) {
+  const isBloodPressure =
+    metric.id === "blood_pressure_systolic" ||
+    (metric.healthMapping?.dataType === "blood_pressure" &&
+      metric.healthMapping.field === "systolic");
+  if (!isBloodPressure) return null;
+  const diastolic = state.metrics.find(
+    (candidate) =>
+      candidate.id === "blood_pressure_diastolic" ||
+      (candidate.healthMapping?.dataType === "blood_pressure" &&
+        candidate.healthMapping.field === "diastolic"),
+  );
+  if (!diastolic) return null;
+  const systolicPeriod = metricPeriodStats(
+    state,
+    metric,
+    state.currentUserId,
+    dates,
+  );
+  const diastolicPeriod = metricPeriodStats(
+    state,
+    diastolic,
+    state.currentUserId,
+    dates,
+  );
+  const hasSystolic = systolicPeriod.loggedDates.length > 0;
+  const hasDiastolic = diastolicPeriod.loggedDates.length > 0;
+  const offset = (
+    label: string,
+    average: number,
+    range: { min: number; max: number } | undefined,
+  ) => {
+    if (!range) return `${label} ${Math.round(average)} mmHg`;
+    if (average > range.max)
+      return `${label} ${Math.round(average - range.max)} high`;
+    if (average < range.min)
+      return `${label} ${Math.round(range.min - average)} low`;
+    return `${label} in range`;
+  };
+  return {
+    diastolic,
+    systolicPeriod,
+    diastolicPeriod,
+    averageLabel: `${hasSystolic ? Math.round(systolicPeriod.average) : "—"}/${
+      hasDiastolic ? Math.round(diastolicPeriod.average) : "—"
+    }`,
+    offsetLabel:
+      [
+        hasSystolic
+          ? offset("SYS", systolicPeriod.average, metric.goalRange)
+          : null,
+        hasDiastolic
+          ? offset("DIA", diastolicPeriod.average, diastolic.goalRange)
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "No complete blood-pressure readings",
+  };
+}
 
 if (
   Platform.OS === "android" &&
@@ -96,7 +168,7 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-export default function Insights() {
+function Insights() {
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -122,12 +194,32 @@ export default function Insights() {
   const orderDraftRef = useRef<string[] | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [showViewFilters, setShowViewFilters] = useState(false);
+  const [overviewVisualOpen, setOverviewVisualOpen] = useState(true);
   const overviewScrollRef = useRef<ScrollView>(null);
   const summarySectionY = useRef(0);
-  const progressMode =
+  const progressLayoutAvailability =
+    state.settings.progressLayoutAvailability ?? "both";
+  const availableProgressModes = useMemo<ProgressViewMode[]>(
+    () =>
+      progressLayoutAvailability === "overview"
+        ? ["overview"]
+        : progressLayoutAvailability === "goal_maps"
+          ? ["goal_maps"]
+          : PROGRESS_MODE_ORDER,
+    [progressLayoutAvailability],
+  );
+  const savedProgressMode =
     state.settings.progressViewMode === "compact"
       ? "goal_maps"
       : (state.settings.progressViewMode ?? "overview");
+  const progressMode = availableProgressModes.includes(savedProgressMode)
+    ? savedProgressMode
+    : availableProgressModes[0];
+  useEffect(() => {
+    // When Display settings hides the mode bar, its selected view must remain
+    // usable: the hidden bar can no longer act as the expand control.
+    if (availableProgressModes.length === 1) setOverviewVisualOpen(true);
+  }, [availableProgressModes.length, progressMode]);
   const setProgressMode = useCallback(
     (progressViewMode: ProgressViewMode) =>
       updateSettings({ progressViewMode }),
@@ -138,21 +230,22 @@ export default function Insights() {
       PanResponder.create({
         onMoveShouldSetPanResponder: (_event, gesture) =>
           !editing &&
+          availableProgressModes.length > 1 &&
           Math.abs(gesture.dx) > 24 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.45,
         onPanResponderRelease: (_event, gesture) => {
           if (Math.abs(gesture.dx) < 55) return;
-          const index = PROGRESS_MODE_ORDER.indexOf(progressMode);
+          const index = availableProgressModes.indexOf(progressMode);
           const offset = gesture.dx < 0 ? 1 : -1;
           setProgressMode(
-            PROGRESS_MODE_ORDER[
-              (index + offset + PROGRESS_MODE_ORDER.length) %
-                PROGRESS_MODE_ORDER.length
+            availableProgressModes[
+              (index + offset + availableProgressModes.length) %
+                availableProgressModes.length
             ],
           );
         },
       }),
-    [editing, progressMode, setProgressMode],
+    [availableProgressModes, editing, progressMode, setProgressMode],
   );
   const historyRange = state.settings.progressHistoryRange ?? "week";
   const historyAnchor = state.settings.progressHistoryAnchor ?? today;
@@ -214,13 +307,19 @@ export default function Insights() {
         configuredOrder.length + (fallbackOrder.get(right.id) ?? 0)),
   );
   const selectedMetrics =
-    activeProgressFilter === ALL_TRACKERS_FILTER
-      ? orderedMetrics.filter((metric) => selectedIds.includes(metric.id))
-      : orderedMetrics;
+    activeProgressFilter === ALL_AVAILABLE_TRACKERS_FILTER
+      ? orderedMetrics
+      : activeProgressFilter === ALL_TRACKERS_FILTER
+        ? orderedMetrics.filter((metric) => selectedIds.includes(metric.id))
+        : orderedMetrics;
   const tracked =
     selectedIds.includes(TRACKED) ||
     activeProgressFilter === TRACKED_ONLY_FILTER;
-  const progressCardIds = [
+  const pinnedProgressIds = state.settings.progressPinnedMetricIds ?? [];
+  const pinPositions = new Map(
+    pinnedProgressIds.map((metricId, index) => [metricId, index]),
+  );
+  const orderedProgressCardIds = [
     ...(tracked ? [TRACKED] : []),
     ...selectedMetrics.map((metric) => metric.id),
   ].sort(
@@ -232,6 +331,16 @@ export default function Insights() {
         configuredOrder.length +
           (right === TRACKED ? -1 : (fallbackOrder.get(right) ?? 0))),
   );
+  const progressCardIds = editing
+    ? orderedProgressCardIds
+    : [...orderedProgressCardIds].sort((left, right) => {
+        const leftPin = pinPositions.get(left);
+        const rightPin = pinPositions.get(right);
+        if (leftPin === undefined && rightPin === undefined) return 0;
+        if (leftPin === undefined) return 1;
+        if (rightPin === undefined) return -1;
+        return leftPin - rightPin;
+      });
   const dates =
     view === "week"
       ? calendarWeekRange(
@@ -301,6 +410,26 @@ export default function Insights() {
       progressMetricOrderIds: orderedIds,
     });
   }
+  function removeProgressCard(id: string) {
+    const ids = selectedIds.filter((candidate) => candidate !== id);
+    setSelectedIds(ids);
+    updateSettings({
+      progressMetricIds: ids,
+      progressPinnedMetricIds: pinnedProgressIds.filter(
+        (candidate) => candidate !== id,
+      ),
+      ...(activeProgressFilter !== ALL_TRACKERS_FILTER
+        ? { activeProgressTrackerViewFilterId: ALL_TRACKERS_FILTER }
+        : {}),
+    });
+  }
+  function toggleProgressPin(id: string) {
+    updateSettings({
+      progressPinnedMetricIds: pinnedProgressIds.includes(id)
+        ? pinnedProgressIds.filter((candidate) => candidate !== id)
+        : [...pinnedProgressIds, id],
+    });
+  }
   function move(metricId: string, targetIndex: number) {
     const current = [...progressCardIds];
     const index = current.indexOf(metricId);
@@ -352,26 +481,51 @@ export default function Insights() {
         state.currentUserId,
         day,
       );
-      return {
-        color: metric.color,
-        progress: applicable
-          ? metricVisualProgress(
+      const reached =
+        applicable &&
+        scheduledGoalReached(state, metric, state.currentUserId, day);
+      const value = safeMetricValue(state, metric, state.currentUserId, day);
+      const isBloodPressure =
+        metric.id === "blood_pressure_systolic" ||
+        (metric.healthMapping?.dataType === "blood_pressure" &&
+          metric.healthMapping.field === "systolic");
+      const journeyProgress =
+        isBloodPressure
+          ? reached
+            ? 1
+            : 0
+          : metric.id === "weight"
+          ? weightDailyGoalStatus(state, state.currentUserId, day).progress
+          : metric.goalProgressMode === "journey"
+          ? metricJourneyProgressStats(
               state,
               metric,
               state.currentUserId,
               day,
-              safeMetricValue(state, metric, state.currentUserId, day),
+            ).progress
+          : null;
+      return {
+        id: metric.id,
+        color: metric.color,
+        chartStyle: "bar" as const,
+        progress: applicable
+          ? journeyProgress ?? metricVisualProgress(
+              state,
+              metric,
+              state.currentUserId,
+              day,
+              value,
               effectiveGoalTarget(state, metric, state.currentUserId, day),
             )
           : 0,
-        goalReached:
-          applicable &&
-          scheduledGoalReached(state, metric, state.currentUserId, day),
+        goalReached: reached,
       };
     });
     if (tracked)
       visuals.unshift({
+        id: TRACKED,
         color: TRACKED_COLOR,
+        chartStyle: "bar" as const,
         progress: trackedProgress(day),
         goalReached: trackedGoalSummary(state, state.currentUserId, day).allMet,
       });
@@ -454,9 +608,10 @@ export default function Insights() {
         onOpenEditor={beginEditing}
         editing={editing}
         onDoneEditing={finishEditing}
-        onRemove={(id) =>
-          select(selectedIds.filter((candidate) => candidate !== id))
-        }
+        onRemove={removeProgressCard}
+        onPin={toggleProgressPin}
+        pinnedIds={pinnedProgressIds}
+        showModeBar={availableProgressModes.length > 1}
         onMove={move}
         onAddExisting={() => setShowPicker(true)}
         onOpenFilters={() => setShowViewFilters(true)}
@@ -520,10 +675,19 @@ export default function Insights() {
           )
         }
       />
-      <ProgressModeBar
-        mode={progressMode}
-        onChange={setProgressMode}
-      />
+      {availableProgressModes.length > 1 ? (
+        <TutorialTarget id="progress-modes">
+          <ProgressModeBar
+            mode={progressMode}
+            expanded={overviewVisualOpen}
+            onChange={setProgressMode}
+            onToggleSelected={() =>
+              setOverviewVisualOpen((open) => !open)
+            }
+          />
+        </TutorialTarget>
+      ) : null}
+      {overviewVisualOpen ? (
       <TutorialTarget id="progress-visual">
       <View {...visualSwipeResponder.panHandlers}>
       {view === "month" ? (
@@ -533,6 +697,11 @@ export default function Insights() {
             <InfoPopover
               label="Explain month view"
               message="Each color is one selected tracker. Tap a date to open that day's filtered log."
+            />
+            <RangeCycleButton
+              range="month"
+              ranges={["week", "month"]}
+              onChange={setHistoryRange}
             />
           </View>
           <MonthCalendar
@@ -545,6 +714,7 @@ export default function Insights() {
             allTrackedGoalsMet={(day) =>
               trackedGoalSummary(state, state.currentUserId, day).allMet
             }
+            trackedGoalColor={TRACKED_COLOR}
             vacationDay={(day) =>
               isVacationDate(state, state.currentUserId, day)
             }
@@ -568,19 +738,21 @@ export default function Insights() {
               </View>
             ))}
           </View>
-          <View
-            style={[
-              styles.mode,
-              styles.modeInside,
-              { borderTopColor: colors.border },
-            ]}
-          >
-            <Chip label="Week" selected={false} onPress={() => setHistoryRange("week")} />
-            <Chip label="Month" selected onPress={() => setHistoryRange("month")} />
-          </View>
         </Card>
       ) : (
         <Card style={styles.visualCard}>
+          <View style={styles.cardHeading}>
+            <Text style={[styles.eyebrow, { color: accent }]}>WEEK VIEW</Text>
+            <InfoPopover
+              label="Explain week view"
+              message="Each color is one selected tracker. Swipe or use the arrows to change weeks, then tap a day for its filtered log."
+            />
+            <RangeCycleButton
+              range="week"
+              ranges={["week", "month"]}
+              onChange={setHistoryRange}
+            />
+          </View>
           <View style={styles.weekNav}>
             <Pressable
               onPress={() => setHistoryAnchor(dateWithOffsetFrom(historyAnchor, -7))}
@@ -589,9 +761,6 @@ export default function Insights() {
               <Ionicons name="chevron-back" size={24} color={colors.ink} />
             </Pressable>
             <View style={styles.navCopy}>
-              <Text style={[styles.cardTitle, { color: colors.ink }]}>
-                Week
-              </Text>
               <Text style={[styles.legend, { color: colors.muted }]}>
                 {friendlyDate(dates[0])} – {friendlyDate(dates[6])}
               </Text>
@@ -628,17 +797,26 @@ export default function Insights() {
                 GOAL · 100%
               </Text>
             </View>
-            {dates.map((day) => (
+            {dates.map((day, index) => (
               <Pressable
                 key={day}
                 onPress={() => openDay(day)}
-                style={styles.dayColumn}
+                style={[
+                  styles.dayColumn,
+                  index > 0 && {
+                    borderLeftWidth: StyleSheet.hairlineWidth,
+                    borderLeftColor: colors.border,
+                  },
+                ]}
               >
                 <View
                   style={[styles.bars, { borderBottomColor: colors.border }]}
                 >
                   {rawDayVisuals(day)
-                    .slice(0, 6)
+                    .filter(
+                      (item) =>
+                        legendItems.some((legend) => legend.id === item.id),
+                    )
                     .map((item, index) => (
                       <View
                         key={index}
@@ -680,20 +858,11 @@ export default function Insights() {
               </View>
             ))}
           </View>
-          <View
-            style={[
-              styles.mode,
-              styles.modeInside,
-              { borderTopColor: colors.border },
-            ]}
-          >
-            <Chip label="Week" selected onPress={() => setHistoryRange("week")} />
-            <Chip label="Month" selected={false} onPress={() => setHistoryRange("month")} />
-          </View>
         </Card>
       )}
       </View>
       </TutorialTarget>
+      ) : null}
       <View
         onLayout={(event) => {
           summarySectionY.current = event.nativeEvent.layout.y;
@@ -726,9 +895,9 @@ export default function Insights() {
               count={progressCardIds.length}
               onEdit={beginEditing}
               onMove={(target) => move(TRACKED, target)}
-              onRemove={() =>
-                select(selectedIds.filter((id) => id !== TRACKED))
-              }
+              onRemove={() => removeProgressCard(TRACKED)}
+              pinned={pinnedProgressIds.includes(TRACKED)}
+              onPin={() => toggleProgressPin(TRACKED)}
             />
           ) : (
             <MetricSummary
@@ -741,9 +910,9 @@ export default function Insights() {
               count={progressCardIds.length}
               onEdit={beginEditing}
               onMove={(target) => move(itemId, target)}
-              onRemove={() =>
-                select(selectedIds.filter((id) => id !== itemId))
-              }
+              onRemove={() => removeProgressCard(itemId)}
+              pinned={pinnedProgressIds.includes(itemId)}
+              onPin={() => toggleProgressPin(itemId)}
             />
           ),
         )}
@@ -819,12 +988,18 @@ export default function Insights() {
   );
 }
 
+export default Insights;
+
 function ProgressModeBar({
   mode,
+  expanded,
   onChange,
+  onToggleSelected,
 }: {
   mode: ProgressViewMode;
+  expanded: boolean;
   onChange: (mode: ProgressViewMode) => void;
+  onToggleSelected: () => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -866,7 +1041,17 @@ function ProgressModeBar({
         return (
           <Pressable
             key={value}
-            onPress={() => onChange(value)}
+            accessibilityRole="button"
+            accessibilityLabel={
+              selected
+                ? `${label}, ${expanded ? "collapse" : "expand"} ${value === "overview" ? "visual" : "controls"}`
+                : `Show ${label}`
+            }
+            accessibilityState={{
+              selected,
+              expanded: selected ? expanded : undefined,
+            }}
+            onPress={selected ? onToggleSelected : () => onChange(value)}
             style={[
               styles.progressMode,
               selected && { backgroundColor: `${accent}18` },
@@ -886,6 +1071,13 @@ function ProgressModeBar({
             >
               {label}
             </Text>
+            {selected ? (
+              <Ionicons
+                name={expanded ? "chevron-up" : "chevron-down"}
+                size={10}
+                color={accent}
+              />
+            ) : null}
           </Pressable>
         );
       })}
@@ -896,6 +1088,39 @@ function ProgressModeBar({
         />
       </View>
     </View>
+  );
+}
+
+function RangeCycleButton({
+  range,
+  ranges,
+  onChange,
+}: {
+  range: HistoryRange;
+  ranges: HistoryRange[];
+  onChange: (range: HistoryRange) => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const next = () => {
+    const index = ranges.indexOf(range);
+    onChange(ranges[(index + 1) % ranges.length]);
+  };
+  return (
+    <Pressable
+      accessibilityLabel={`Showing ${range}. Tap to change range`}
+      onPress={next}
+      style={[
+        styles.rangeCycle,
+        { borderColor: colors.border, backgroundColor: colors.canvas },
+      ]}
+    >
+      <Ionicons name="calendar-outline" size={13} color={accent} />
+      <Text style={[styles.rangeCycleText, { color: accent }]}>
+        {range === "week" ? "Week" : range === "month" ? "Month" : "Year"}
+      </Text>
+      <Ionicons name="swap-horizontal" size={12} color={colors.faint} />
+    </Pressable>
   );
 }
 
@@ -914,6 +1139,9 @@ function GoalMapProgress({
   editing,
   onDoneEditing,
   onRemove,
+  onPin,
+  pinnedIds,
+  showModeBar,
   onMove,
   onAddExisting,
   onOpenFilters,
@@ -933,16 +1161,27 @@ function GoalMapProgress({
   editing: boolean;
   onDoneEditing: () => void;
   onRemove: (id: string) => void;
+  onPin: (id: string) => void;
+  pinnedIds: string[];
+  showModeBar: boolean;
   onMove: (id: string, target: number) => void;
   onAddExisting: () => void;
   onOpenFilters: () => void;
   orderedIds: string[];
 }) {
+  const locale = useLocale();
   const { updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const today = dateKey();
   const compact = state.settings.compactProgressGrid === true;
+  const [controlsCardOpen, setControlsCardOpen] = useState(true);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  useEffect(() => {
+    // Grid-map-only mode has no mode-bar toggle, so always reveal its date
+    // navigator when the user switches to that single-layout setting.
+    if (!showModeBar) setControlsCardOpen(true);
+  }, [showModeBar]);
   const visibleMetrics = metrics;
   const trackedSelected = selectedIds.includes(TRACKED);
   const gridItemIds = orderedIds.filter(
@@ -969,8 +1208,8 @@ function GoalMapProgress({
   };
   const label =
     range === "week"
-      ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[6])}`
-      : new Intl.DateTimeFormat(undefined, {
+      ? `${friendlyDate(dates[0], locale)} – ${friendlyDate(dates[6], locale)}`
+      : new Intl.DateTimeFormat(locale, {
           month: range === "month" ? "long" : undefined,
           year: "numeric",
         }).format(new Date(`${anchor}T12:00:00`));
@@ -1052,40 +1291,20 @@ function GoalMapProgress({
           )
         }
       />
-      <ProgressModeBar mode={mode} onChange={onModeChange} />
-      <Card style={styles.mapControls}>
-        <View style={styles.rangeRow}>
-          {(["week", "month", "year"] as HistoryRange[]).map((item) => (
-            <Chip
-              key={item}
-              label={
-                item === "week"
-                  ? "Week"
-                  : item === "month"
-                    ? "Month"
-                    : "Year"
-              }
-              selected={range === item}
-              onPress={() => onRangeChange(item)}
-            />
-          ))}
-          <Pressable
-            onPress={onOpenFilters}
-            style={styles.compactFilter}
-          >
-            <Ionicons name="funnel-outline" size={13} color={accent} />
-            <Text
-              numberOfLines={1}
-              style={[styles.mapUtilityText, { color: accent }]}
-            >
-              {activeTrackerViewLabel(state, "progress")}
-            </Text>
-          </Pressable>
-          <InfoPopover
-            label="Explain grid colors"
-            message="Grey: not logged. Red: goal missed. Pink: skipped or vacation. Lime: goal met. Orange: logged without a goal."
+      {showModeBar ? (
+        <TutorialTarget id="progress-modes">
+          <ProgressModeBar
+            mode={mode}
+            expanded={controlsCardOpen}
+            onChange={onModeChange}
+            onToggleSelected={() =>
+              setControlsCardOpen((open) => !open)
+            }
           />
-        </View>
+        </TutorialTarget>
+      ) : null}
+      {controlsCardOpen ? (
+      <Card style={styles.mapControls}>
         <View style={styles.periodNav}>
           <Pressable
             onPress={() => shift(-1)}
@@ -1093,7 +1312,28 @@ function GoalMapProgress({
           >
             <Ionicons name="chevron-back" size={18} color={colors.ink} />
           </Pressable>
-          <Text style={[styles.mapPeriod, { color: colors.ink }]}>{label}</Text>
+          <Pressable
+            accessibilityLabel={
+              controlsOpen ? "Hide grid controls" : "Show grid controls"
+            }
+            onPress={() => setControlsOpen((open) => !open)}
+            style={styles.mapPeriodToggle}
+          >
+            <Text style={[styles.mapRangeLabel, { color: accent }]}>
+              {range.toUpperCase()}
+            </Text>
+            <Text
+              numberOfLines={1}
+              style={[styles.mapPeriod, { color: colors.ink }]}
+            >
+              {label}
+            </Text>
+            <Ionicons
+              name={controlsOpen ? "chevron-up" : "chevron-down"}
+              size={14}
+              color={colors.muted}
+            />
+          </Pressable>
           <Pressable
             onPress={() => shift(1)}
             style={[styles.mapArrow, { backgroundColor: colors.canvas }]}
@@ -1101,7 +1341,30 @@ function GoalMapProgress({
             <Ionicons name="chevron-forward" size={18} color={colors.ink} />
           </Pressable>
         </View>
+        {controlsOpen ? (
+          <View style={[styles.rangeRow, { borderTopColor: colors.border }]}>
+            <RangeCycleButton
+              range={range}
+              ranges={["week", "month", "year"]}
+              onChange={onRangeChange}
+            />
+            <Pressable onPress={onOpenFilters} style={styles.compactFilter}>
+              <Ionicons name="funnel-outline" size={13} color={accent} />
+              <Text
+                numberOfLines={1}
+                style={[styles.mapUtilityText, { color: accent }]}
+              >
+                {activeTrackerViewLabel(state, "progress")}
+              </Text>
+            </Pressable>
+            <InfoPopover
+              label="Explain grid colors"
+              message="Grey: not logged. Red: goal missed. Pink: skipped or vacation. Lime: goal met. Orange: logged without a goal."
+            />
+          </View>
+        ) : null}
       </Card>
+      ) : null}
       <View
         style={compact ? styles.compactMaps : styles.detailedMaps}
       >
@@ -1211,14 +1474,46 @@ function GoalMapProgress({
                     <Ionicons name="flag" size={13} color={accent} />
                   </>
                 )}
+                {pinnedIds.includes(TRACKED) && !editing ? (
+                  <Ionicons
+                    accessibilityLabel="Pinned"
+                    name="pin"
+                    size={13}
+                    color={palette.amber}
+                  />
+                ) : null}
                 {editing ? (
-                  <Pressable
-                    onPress={() => onRemove(TRACKED)}
-                    style={styles.remove}
-                    hitSlop={7}
-                  >
-                    <Ionicons name="remove" size={15} color={palette.white} />
-                  </Pressable>
+                  <View style={styles.cardEditActions}>
+                    <Pressable
+                      accessibilityLabel={
+                        pinnedIds.includes(TRACKED)
+                          ? "Unpin tracked goals"
+                          : "Pin tracked goals"
+                      }
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        onPin(TRACKED);
+                      }}
+                      style={[styles.goalDate, { borderColor: colors.border }]}
+                      hitSlop={7}
+                    >
+                      <Ionicons
+                        name={pinnedIds.includes(TRACKED) ? "pin" : "pin-outline"}
+                        size={15}
+                        color={pinnedIds.includes(TRACKED) ? palette.amber : accent}
+                      />
+                    </Pressable>
+                    <Pressable
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        onRemove(TRACKED);
+                      }}
+                      style={styles.remove}
+                      hitSlop={7}
+                    >
+                      <Ionicons name="remove" size={15} color={palette.white} />
+                    </Pressable>
+                  </View>
                 ) : null}
               </View>
               <TrackedGoalsHeatmap
@@ -1243,6 +1538,11 @@ function GoalMapProgress({
             today,
           );
           const period = heatmapModel.period;
+          const bloodPressure = bloodPressureProgressSummary(
+            state,
+            metric,
+            dates,
+          );
           // Match the percentage rendered by the non-compact GoalHeatmap.
           const completion = period.applicableDates.length
             ? Math.round(
@@ -1333,15 +1633,19 @@ function GoalMapProgress({
                       numberOfLines={2}
                       style={[styles.mapMeta, { color: colors.muted }]}
                     >
-                      {metric.dataType === "boolean"
+                      {bloodPressure
+                        ? `${bloodPressure.averageLabel} mmHg avg`
+                        : metric.dataType === "boolean"
                         ? `${completion}% completion avg`
                         : `${formatMetricValue(metric, period.average)} avg`}
                       {metric.dataType !== "boolean"
-                        ? ` · ${period.loggedDates.length} logged · ${metricAverageGoalOffsetLabel(
-                            metric,
-                            period.average,
-                            period.averageTarget,
-                          )}`
+                        ? bloodPressure
+                          ? ` · ${period.loggedDates.length} logged · ${bloodPressure.offsetLabel}`
+                          : ` · ${period.loggedDates.length} logged · ${metricAverageGoalOffsetLabel(
+                              metric,
+                              period.average,
+                              period.averageTarget,
+                            )}`
                         : ""}
                     </Text>
                     <Text
@@ -1349,15 +1653,17 @@ function GoalMapProgress({
                       style={[styles.mapMeta, { color: colors.muted }]}
                     >
                       Overall{" "}
-                      {formatMetricValue(
-                        metric,
-                        metricOverallAverage(
-                          state,
-                          metric,
-                          state.currentUserId,
-                          today,
-                        ),
-                      )}
+                      {bloodPressure
+                        ? `${Math.round(metricOverallAverage(state, metric, state.currentUserId, today))}/${Math.round(metricOverallAverage(state, bloodPressure.diastolic, state.currentUserId, today))} mmHg`
+                        : formatMetricValue(
+                            metric,
+                            metricOverallAverage(
+                              state,
+                              metric,
+                              state.currentUserId,
+                              today,
+                            ),
+                          )}
                       {" · Best "}
                       {
                         metricStreakStats(
@@ -1393,36 +1699,68 @@ function GoalMapProgress({
                       ) : null}
                     </>
                   )}
-                  {editing &&
-                  isMetricTrackedOnDate(state, metric, today) ? (
-                    <Pressable
-                      onPress={() =>
-                        router.navigate({
-                          pathname: "/metric-editor",
-                          params: {
-                            id: metric.id,
-                            focus: "goal-start",
-                          },
-                        } as never)
-                      }
-                      style={[styles.dateEdit, { borderColor: colors.border }]}
-                      hitSlop={7}
-                    >
-                      <Ionicons
-                        name="calendar-outline"
-                        size={15}
-                        color={accent}
-                      />
-                    </Pressable>
+                  {pinnedIds.includes(metric.id) && !editing ? (
+                    <Ionicons
+                      accessibilityLabel="Pinned"
+                      name="pin"
+                      size={13}
+                      color={palette.amber}
+                    />
                   ) : null}
                   {editing ? (
-                    <Pressable
-                      onPress={() => onRemove(metric.id)}
-                      style={styles.remove}
-                      hitSlop={7}
-                    >
-                      <Ionicons name="remove" size={15} color={palette.white} />
-                    </Pressable>
+                    <View style={styles.cardEditActions}>
+                      {isMetricTrackedOnDate(state, metric, today) ? (
+                        <Pressable
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            router.navigate({
+                              pathname: "/metric-editor",
+                              params: {
+                                id: metric.id,
+                                focus: "goal-start",
+                              },
+                            } as never);
+                          }}
+                          style={[styles.dateEdit, { borderColor: colors.border }]}
+                          hitSlop={7}
+                        >
+                          <Ionicons
+                            name="calendar-outline"
+                            size={15}
+                            color={accent}
+                          />
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        accessibilityLabel={
+                          pinnedIds.includes(metric.id)
+                            ? `Unpin ${metric.name}`
+                            : `Pin ${metric.name}`
+                        }
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          onPin(metric.id);
+                        }}
+                        style={[styles.goalDate, { borderColor: colors.border }]}
+                        hitSlop={7}
+                      >
+                        <Ionicons
+                          name={pinnedIds.includes(metric.id) ? "pin" : "pin-outline"}
+                          size={15}
+                          color={pinnedIds.includes(metric.id) ? palette.amber : accent}
+                        />
+                      </Pressable>
+                      <Pressable
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          onRemove(metric.id);
+                        }}
+                        style={styles.remove}
+                        hitSlop={7}
+                      >
+                        <Ionicons name="remove" size={15} color={palette.white} />
+                      </Pressable>
+                    </View>
                   ) : null}
                 </View>
                 <GoalHeatmap
@@ -1433,6 +1771,9 @@ function GoalMapProgress({
                   compact={compact}
                   onSelect={onOpenDay}
                   model={heatmapModel}
+                  completionOnly={
+                    metricVisualization(metric).progressGrid === "completion"
+                  }
                 />
               </Card>
             </MapReorderCard>
@@ -1507,96 +1848,34 @@ function MapReorderCard({
   children: React.ReactNode;
 }) {
   const colors = useAppColors();
-  const [dragging, setDragging] = useState(false);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
   const step = useRef(112);
-  const origin = useRef(index);
-  const target = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  useEffect(() => {
-    if (!editing) {
-      wiggle.stopAnimation();
-      wiggle.setValue(0);
-      dragY.setValue(0);
-      return;
-    }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, {
-          toValue: 1,
-          duration: 145,
-          useNativeDriver: true,
-        }),
-        Animated.timing(wiggle, {
-          toValue: -1,
-          duration: 290,
-          useNativeDriver: true,
-        }),
-        Animated.timing(wiggle, {
-          toValue: 0,
-          duration: 145,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [dragY, editing, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
-        onPanResponderGrant: () => {
-          setCloudSyncPaused("progress-edit", true);
-          origin.current = indexRef.current;
-          target.current = indexRef.current;
-          setDragging(true);
-        },
-        onPanResponderMove: (_event, gesture) => {
-          dragY.setValue(gesture.dy);
-          target.current = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              origin.current + Math.round(gesture.dy / step.current),
-            ),
-          );
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderRelease: () => {
-          const next = target.current;
-          dragY.setValue(0);
-          setDragging(false);
-          if (next !== origin.current) onMoveRef.current(next);
-        },
-        onPanResponderTerminate: () => {
-          dragY.setValue(0);
-          setDragging(false);
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: step.current,
+    onMove,
+    onStart: () => setCloudSyncPaused("progress-edit", true),
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         step.current = event.nativeEvent.layout.height + 8;
+        smoothDrag.setStep(step.current);
       }}
       style={[
         wrapStyle,
+        smoothDrag.animatedStyle,
         {
-          zIndex: dragging ? 20 : editing ? 3 : 0,
-          elevation: dragging ? 12 : 0,
+          zIndex: smoothDrag.dragging ? 20 : editing ? 3 : 0,
+          elevation: smoothDrag.dragging ? 12 : 0,
+        },
+      ]}
+    >
+      <Animated.View
+        style={{
           transform: [
-            { translateY: dragY },
-            { scale: dragging ? 1.01 : 1 },
             {
               rotate: wiggle.interpolate({
                 inputRange: [-1, 1],
@@ -1604,9 +1883,8 @@ function MapReorderCard({
               }),
             },
           ],
-        },
-      ]}
-    >
+        }}
+      >
       <Pressable
         onPress={editing ? undefined : onPress}
         onLongPress={onLongPress}
@@ -1615,6 +1893,7 @@ function MapReorderCard({
         {children}
       </Pressable>
       {editing ? (
+        <GestureDetector gesture={smoothDrag.gesture}>
         <View
           accessibilityLabel="Drag to reorder"
           collapsable={false}
@@ -1625,7 +1904,6 @@ function MapReorderCard({
               borderColor: colors.border,
             },
           ]}
-          {...responder.panHandlers}
         >
           <Ionicons
             name="reorder-three-outline"
@@ -1633,8 +1911,10 @@ function MapReorderCard({
             color={colors.muted}
           />
         </View>
+        </GestureDetector>
       ) : null}
-    </Animated.View>
+      </Animated.View>
+    </Reanimated.View>
   );
 }
 
@@ -1647,6 +1927,8 @@ function TrackedSummary({
   onEdit,
   onMove,
   onRemove,
+  pinned,
+  onPin,
 }: {
   state: AppState;
   dates: string[];
@@ -1656,72 +1938,20 @@ function TrackedSummary({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
+  pinned: boolean;
+  onPin: () => void;
 }) {
   const colors = useAppColors();
-  const [dragging, setDragging] = useState(false);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
   const step = useRef(93);
-  const origin = useRef(index);
-  const target = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  useEffect(() => {
-    if (!editing) {
-      wiggle.stopAnimation();
-      wiggle.setValue(0);
-      return;
-    }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, { toValue: 1, duration: 140, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: -1, duration: 280, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0, duration: 140, useNativeDriver: true }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [editing, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
-        onPanResponderGrant: () => {
-          setCloudSyncPaused("progress-edit", true);
-          origin.current = indexRef.current;
-          target.current = indexRef.current;
-          setDragging(true);
-        },
-        onPanResponderMove: (_event, gesture) => {
-          dragY.setValue(gesture.dy);
-          target.current = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              origin.current + Math.round(gesture.dy / step.current),
-            ),
-          );
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderRelease: () => {
-          const next = target.current;
-          dragY.setValue(0);
-          setDragging(false);
-          if (next !== origin.current) onMoveRef.current(next);
-        },
-        onPanResponderTerminate: () => {
-          dragY.setValue(0);
-          setDragging(false);
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: step.current,
+    onMove,
+    onStart: () => setCloudSyncPaused("progress-edit", true),
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   const totals = dates.map((date) =>
     trackedGoalSummary(state, state.currentUserId, date),
   );
@@ -1732,34 +1962,39 @@ function TrackedSummary({
   const streaks = trackedGoalStreakStats(state, state.currentUserId);
   const completion = possible ? Math.round((met / possible) * 100) : 0;
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         step.current = event.nativeEvent.layout.height + 9;
+        smoothDrag.setStep(step.current);
       }}
       style={[
         styles.animatedSummary,
+        smoothDrag.animatedStyle,
         {
-          transform: [
-          { translateY: dragY },
+          zIndex: smoothDrag.dragging ? 30 : editing ? 3 : 0,
+          elevation: smoothDrag.dragging ? 14 : 0,
+        },
+      ]}
+    >
+    <Animated.View
+      style={{
+        transform: [
           {
             rotate: wiggle.interpolate({
               inputRange: [-1, 1],
               outputRange: ["-0.3deg", "0.3deg"],
             }),
           },
-          ],
-          zIndex: dragging ? 30 : editing ? 3 : 0,
-          elevation: dragging ? 14 : 0,
-        },
-      ]}
+        ],
+      }}
     >
     <Pressable style={styles.summaryWrap} onLongPress={onEdit}>
     <Card style={styles.summary}>
       {editing ? (
+        <GestureDetector gesture={smoothDrag.gesture}>
         <View
           collapsable={false}
           style={styles.drag}
-          {...responder.panHandlers}
         >
           <Ionicons
             name="reorder-three-outline"
@@ -1767,11 +2002,23 @@ function TrackedSummary({
             color={colors.faint}
           />
         </View>
+        </GestureDetector>
       ) : null}
       <View
         style={[styles.summaryIcon, { backgroundColor: `${TRACKED_COLOR}18` }]}
       >
         <Ionicons name="checkmark-done" size={20} color={TRACKED_COLOR} />
+        {pinned && !editing ? (
+          <View
+            accessibilityLabel="Pinned"
+            style={[
+              styles.visiblePin,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Ionicons name="pin" size={9} color={palette.amber} />
+          </View>
+        ) : null}
       </View>
       <View style={styles.summaryPrimary}>
         <Text
@@ -1808,13 +2055,38 @@ function TrackedSummary({
         </View>
       </View>
       {editing ? (
-        <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
-          <Ionicons name="remove" size={16} color={palette.white} />
-        </Pressable>
+        <View style={styles.cardEditActions}>
+          <Pressable
+            accessibilityLabel={pinned ? "Unpin tracked goals" : "Pin tracked goals"}
+            onPress={(event) => {
+              event.stopPropagation();
+              onPin();
+            }}
+            style={[styles.goalDate, { borderColor: colors.border }]}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={pinned ? "pin" : "pin-outline"}
+              size={15}
+              color={pinned ? palette.amber : colors.primary}
+            />
+          </Pressable>
+          <Pressable
+            onPress={(event) => {
+              event.stopPropagation();
+              onRemove();
+            }}
+            style={styles.remove}
+            hitSlop={8}
+          >
+            <Ionicons name="remove" size={16} color={palette.white} />
+          </Pressable>
+        </View>
       ) : null}
     </Card>
     </Pressable>
     </Animated.View>
+    </Reanimated.View>
   );
 }
 
@@ -1828,6 +2100,8 @@ function MetricSummary({
   onEdit,
   onMove,
   onRemove,
+  pinned,
+  onPin,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -1838,77 +2112,22 @@ function MetricSummary({
   onEdit: () => void;
   onMove: (target: number) => void;
   onRemove: () => void;
+  pinned: boolean;
+  onPin: () => void;
 }) {
+  const locale = useLocale();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [dragging, setDragging] = useState(false);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
-  const dragOrigin = useRef(index);
-  const liveTarget = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
   const dragStep = useRef(93);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  useEffect(() => {
-    if (!editing) {
-      dragY.setValue(0);
-      wiggle.stopAnimation();
-      wiggle.setValue(0);
-      return;
-    }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, { toValue: 1, duration: 135, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: -1, duration: 270, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0, duration: 135, useNativeDriver: true }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [dragY, editing, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
-        onPanResponderGrant: () => {
-          setCloudSyncPaused("progress-edit", true);
-          dragOrigin.current = indexRef.current;
-          liveTarget.current = indexRef.current;
-          setDragging(true);
-        },
-        onPanResponderMove: (_event, gesture) => {
-          const target = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
-            ),
-          );
-          dragY.setValue(gesture.dy);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-          }
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderRelease: () => {
-          const target = liveTarget.current;
-          dragY.setValue(0);
-          if (target !== dragOrigin.current) onMoveRef.current(target);
-          setDragging(false);
-        },
-        onPanResponderTerminate: () => {
-          dragY.setValue(0);
-          setDragging(false);
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: dragStep.current,
+    onMove,
+    onStart: () => setCloudSyncPaused("progress-edit", true),
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   const periodStats = metricPeriodStats(
     state,
     metric,
@@ -1966,27 +2185,33 @@ function MetricSummary({
     metric.id === "weight"
       ? weightProgressStats(state, state.currentUserId, dates[dates.length - 1])
       : null;
+  const bloodPressure = bloodPressureProgressSummary(state, metric, dates);
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         dragStep.current = event.nativeEvent.layout.height + 9;
+        smoothDrag.setStep(dragStep.current);
       }}
       style={[
         styles.animatedSummary,
+        smoothDrag.animatedStyle,
         {
-          transform: [
-          { translateY: dragY },
+          zIndex: smoothDrag.dragging ? 20 : editing ? 3 : 0,
+          elevation: smoothDrag.dragging ? 12 : 0,
+        },
+      ]}
+    >
+    <Animated.View
+      style={{
+        transform: [
           {
             rotate: wiggle.interpolate({
               inputRange: [-1, 1],
               outputRange: ["-0.3deg", "0.3deg"],
             }),
           },
-          ],
-          zIndex: dragging ? 20 : editing ? 3 : 0,
-          elevation: dragging ? 12 : 0,
-        },
-      ]}
+        ],
+      }}
     >
     <Pressable
       style={styles.summaryWrap}
@@ -2000,13 +2225,14 @@ function MetricSummary({
     >
       <Card style={styles.summary}>
         {editing ? (
+          <GestureDetector gesture={smoothDrag.gesture}>
           <View
             collapsable={false}
             style={styles.drag}
-            {...responder.panHandlers}
           >
             <Ionicons name="reorder-three-outline" size={23} color={colors.faint} />
           </View>
+          </GestureDetector>
         ) : null}
         <View
           style={[styles.summaryIcon, { backgroundColor: `${metric.color}18` }]}
@@ -2016,6 +2242,17 @@ function MetricSummary({
             size={20}
             color={metric.color}
           />
+          {pinned && !editing ? (
+            <View
+              accessibilityLabel="Pinned"
+              style={[
+                styles.visiblePin,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              <Ionicons name="pin" size={9} color={palette.amber} />
+            </View>
+          ) : null}
         </View>
         <View style={styles.summaryPrimary}>
           <View style={styles.summaryTitleLine}>
@@ -2052,15 +2289,21 @@ function MetricSummary({
           >
           {isTodo
               ? `${todoCompletion}%`
+              : bloodPressure
+              ? bloodPressure.averageLabel
               : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}%`
               : Math.abs(average) >= 100
-                ? Math.round(average).toLocaleString()
-                : (Math.round(average * 10) / 10).toLocaleString()}
+                ? Math.round(average).toLocaleString(locale)
+                : (Math.round(average * 10) / 10).toLocaleString(locale)}
           </Text>
           {isTodo ? (
             <Text style={[styles.summaryUnit, { color: colors.muted }]}>
               {todoPossible ? `${todoCompleted}/${todoPossible} completed` : "No to-dos"}
+            </Text>
+          ) : bloodPressure ? (
+            <Text style={[styles.summaryUnit, { color: colors.muted }]}>
+              {dates.length}-day avg · mmHg
             </Text>
           ) : isBoolean ? (
             <Text style={[styles.summaryUnit, { color: colors.muted }]}>
@@ -2085,6 +2328,8 @@ function MetricSummary({
               : "No to-dos scheduled in this range"
             : weightStats
             ? `${dates.length}-day average · ${Math.abs(weightStats.totalChange).toFixed(1)} kg ${weightStats.direction === "gain" ? "gained" : "lost"} · ${Math.abs(weightStats.averageWeeklyChange).toFixed(1)} kg/week`
+            : bloodPressure
+              ? `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${Math.round(overall)}/${Math.round(metricOverallAverage(state, bloodPressure.diastolic, state.currentUserId, dates[dates.length - 1]))} mmHg`
             : isBoolean
               ? `${applicable.length ? Math.round((reached / applicable.length) * 100) : 0}% completed in this range`
               : `${measured.length ? `${measured.length} logged days` : "No entries"} · overall ${formatMetricValue(metric, overall)}`}
@@ -2094,6 +2339,10 @@ function MetricSummary({
             Last 7 days {Math.abs(weightStats.lastWeekChange).toFixed(1)} kg ·
             planned {weightStats.expectedWeeklyChange.toFixed(1)} kg/week ·{" "}
             {weightStats.remaining.toFixed(1)} kg remaining
+          </Text>
+        ) : bloodPressure ? (
+          <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
+            {bloodPressure.offsetLabel}
           </Text>
         ) : !isBoolean ? (
           <Text numberOfLines={2} style={[styles.remaining, { color: colors.ink }]}>
@@ -2134,7 +2383,29 @@ function MetricSummary({
                 <Ionicons name="calendar-outline" size={15} color={accent} />
               </Pressable>
             ) : null}
-            <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+            <Pressable
+              accessibilityLabel={pinned ? `Unpin ${metric.name}` : `Pin ${metric.name}`}
+              onPress={(event) => {
+                event.stopPropagation();
+                onPin();
+              }}
+              style={[styles.goalDate, { borderColor: colors.border }]}
+              hitSlop={6}
+            >
+              <Ionicons
+                name={pinned ? "pin" : "pin-outline"}
+                size={15}
+                color={pinned ? palette.amber : accent}
+              />
+            </Pressable>
+            <Pressable
+              onPress={(event) => {
+                event.stopPropagation();
+                onRemove();
+              }}
+              style={styles.remove}
+              hitSlop={8}
+            >
               <Ionicons name="remove" size={16} color={palette.white} />
             </Pressable>
           </View>
@@ -2142,6 +2413,7 @@ function MetricSummary({
       </Card>
     </Pressable>
     </Animated.View>
+    </Reanimated.View>
   );
 }
 
@@ -2183,12 +2455,25 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   activeFilterText: { fontSize: 8, fontWeight: "900" },
-  mapControls: { gap: 8, marginBottom: 9 },
+  mapControls: { gap: 0, marginBottom: 9, paddingVertical: 8 },
   rangeRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    borderTopWidth: 1,
+    marginTop: 7,
+    paddingTop: 7,
   },
+  rangeCycle: {
+    minHeight: 31,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  rangeCycleText: { fontSize: 8, fontWeight: "900" },
   compactFilter: {
     flex: 1,
     minWidth: 54,
@@ -2202,6 +2487,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
+  mapPeriodToggle: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  mapRangeLabel: {
+    fontSize: 7,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+  },
   mapArrow: {
     width: 32,
     height: 32,
@@ -2210,7 +2509,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   mapPeriod: {
-    flex: 1,
+    flexShrink: 1,
     textAlign: "center",
     fontSize: 10,
     fontWeight: "900",
@@ -2330,6 +2629,17 @@ const styles = StyleSheet.create({
   },
   cardEditActions: { flexDirection: "row", alignItems: "center", gap: 5 },
   goalDate: { width: 27, height: 27, borderRadius: 9, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  visiblePin: {
+    position: "absolute",
+    right: -5,
+    top: -5,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   recap: {
     flexDirection: "row",
     alignItems: "center",
@@ -2370,11 +2680,12 @@ const styles = StyleSheet.create({
   visualCard: { marginTop: 10, marginBottom: 14 },
   cardHeading: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
+    gap: 7,
     marginBottom: 8,
   },
   eyebrow: {
+    flex: 1,
     color: palette.primary,
     fontSize: 9,
     fontWeight: "900",

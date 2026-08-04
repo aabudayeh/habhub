@@ -8,6 +8,7 @@ export function dateKey(date = new Date()): string {
 export function formatClockTime(
   input: Date | string,
   format: "12h" | "24h" = "24h",
+  locale?: string,
 ): string {
   const date =
     input instanceof Date
@@ -16,7 +17,7 @@ export function formatClockTime(
         ? new Date(`2000-01-01T${input}:00`)
         : new Date(input);
   if (Number.isNaN(date.getTime())) return String(input);
-  return date.toLocaleTimeString([], {
+  return date.toLocaleTimeString(locale, {
     hour: "2-digit",
     minute: "2-digit",
     hour12: format === "12h",
@@ -30,20 +31,20 @@ export function dateKeyWithOffset(days: number): string {
   return dateKey(date);
 }
 
-export function shortDay(date: string): string {
-  return new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(new Date(`${date}T12:00:00`));
+export function shortDay(date: string, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(new Date(`${date}T12:00:00`));
 }
 
-export function friendlyDate(date: string): string {
+export function friendlyDate(date: string, locale?: string): string {
   if (date === dateKey()) return 'Today';
   if (date === dateKeyWithOffset(-1)) return 'Yesterday';
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(
     new Date(`${date}T12:00:00`),
   );
 }
 
-export function compactDayDate(date: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+export function compactDayDate(date: string, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, {
     weekday: "short",
     day: "numeric",
   }).format(new Date(`${date}T12:00:00`));
@@ -107,7 +108,7 @@ export function relativeTime(isoString: string): string {
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
-  if (seconds < 5) return 'Just now';
+  if (seconds < 5) return 'now';
   if (seconds < 60) return `${seconds}s ago`;
   if (minutes < 60) return `${minutes}m ago`;
   if (hours < 24) return `${hours}h ago`;

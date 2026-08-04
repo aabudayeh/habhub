@@ -1,9 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useMemo, useRef, useState } from "react";
-import { Animated, PanResponder, Pressable, StyleSheet, View } from "react-native";
+import React from "react";
+import { Pressable, StyleSheet, View } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import {
   todoAppearsOnDate,
   todoCompletedOnDate,
@@ -25,11 +28,16 @@ export function TodoTodayList({
   onComplete,
   editing = false,
   onRequestEdit,
+  visibleOverride = true,
+  todoIds,
 }: {
   localDate: string;
   onComplete?: (todoId: string) => void;
   editing?: boolean;
   onRequestEdit?: () => void;
+  visibleOverride?: boolean;
+  /** Undefined keeps every To-Do; an empty list intentionally shows none. */
+  todoIds?: string[];
 }) {
   const {
     state,
@@ -41,7 +49,9 @@ export function TodoTodayList({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const visible = state.settings.showTodosToday !== false;
+  const allowedIds = todoIds ? new Set(todoIds) : undefined;
   const items = (state.todos ?? [])
+    .filter((todo) => !allowedIds || allowedIds.has(todo.id))
     .filter((todo) => todoAppearsOnDate(todo, localDate))
     .sort(
       (a, b) =>
@@ -68,7 +78,7 @@ export function TodoTodayList({
             !todoSkippedOnDate(todo, localDate),
         )
       : items;
-  if (!visible && !editing) return null;
+  if (visibleOverride === false || (!visible && !editing)) return null;
 
   const moveTodoBeside = (todo: TodoItem, targetTodo?: TodoItem) => {
     if (!targetTodo || targetTodo.id === todo.id) return;
@@ -186,49 +196,13 @@ function TodoRow({
   onLongPress: () => void;
 }) {
   const colors = useAppColors();
-  const [dragging, setDragging] = useState(false);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const targetRef = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
-        onPanResponderGrant: () => {
-          targetRef.current = indexRef.current;
-          setDragging(true);
-        },
-        onPanResponderMove: (_event, gesture) => {
-          dragY.setValue(gesture.dy);
-          targetRef.current = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              indexRef.current + Math.round(gesture.dy / 54),
-            ),
-          );
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderRelease: () => {
-          const target = targetRef.current;
-          setDragging(false);
-          dragY.setValue(0);
-          if (target !== indexRef.current) onMoveRef.current(target);
-        },
-        onPanResponderTerminate: () => {
-          setDragging(false);
-          dragY.setValue(0);
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: 54,
+    onMove,
+  });
   const complete = todoCompletedOnDate(todo, localDate);
   const skipped = todoSkippedOnDate(todo, localDate);
   const deadline = Boolean(
@@ -237,16 +211,22 @@ function TodoRow({
   const reminder = todo.reminders.find(
     (item) => item.at?.slice(0, 10) === localDate,
   );
+  const repeats = Boolean(
+    todo.recurrence ||
+      todo.reminders.some((item) => item.repeatDailyUntilDue),
+  );
   return (
-    <Animated.View
-      style={{
-        zIndex: dragging ? 20 : 0,
-        elevation: dragging ? 10 : 0,
-        transform: [
-          { translateY: dragY },
-          { scale: dragging ? 1.015 : 1 },
-        ],
-      }}
+    <Reanimated.View
+      onLayout={(event) =>
+        smoothDrag.setStep(event.nativeEvent.layout.height + 6)
+      }
+      style={[
+        smoothDrag.animatedStyle,
+        {
+          zIndex: smoothDrag.dragging ? 20 : 0,
+          elevation: smoothDrag.dragging ? 10 : 0,
+        },
+      ]}
     >
     <Pressable
       onPress={() =>
@@ -280,6 +260,7 @@ function TodoRow({
       </Pressable>
       <View style={styles.copy}>
         <Text
+          translate={false}
           numberOfLines={1}
           style={[
             styles.name,
@@ -295,6 +276,14 @@ function TodoRow({
             size={10}
             color={priorityColors[todo.priority]}
           />
+          {repeats ? (
+            <Ionicons
+              name="repeat-outline"
+              size={10}
+              color={colors.muted}
+              accessibilityLabel="Repeating to-do"
+            />
+          ) : null}
           {skipped ? (
             <Text style={[styles.deadline, { color: "#E783B5" }]}>Skipped</Text>
           ) : deadline ? (
@@ -333,11 +322,11 @@ function TodoRow({
           <Ionicons name="pin" size={12} color="#E9A23B" />
         ) : null}
         {editing ? (
+          <GestureDetector gesture={smoothDrag.gesture}>
           <View
             accessibilityLabel="Drag to reorder to-do"
             collapsable={false}
             style={styles.dragHandle}
-            {...responder.panHandlers}
           >
             <Ionicons
               name="reorder-three-outline"
@@ -345,6 +334,7 @@ function TodoRow({
               color={colors.muted}
             />
           </View>
+          </GestureDetector>
         ) : (
           <Ionicons
             name="ellipsis-horizontal"
@@ -354,7 +344,7 @@ function TodoRow({
         )}
       </View>
     </Pressable>
-    </Animated.View>
+    </Reanimated.View>
   );
 }
 

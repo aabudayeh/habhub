@@ -1,11 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Href, Tabs } from "expo-router";
-import React from "react";
+import React, { useMemo } from "react";
+import { StyleSheet, View } from "react-native";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { useApp } from "@/src/state/AppProvider";
 import { LandingPage } from "@/src/types";
+import { useTranslation } from "@/src/i18n";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -23,6 +26,44 @@ export default function TabLayout() {
   const accent = useGroupAccent();
   const { state } = useApp();
   const colors = useAppColors();
+  const t = useTranslation();
+  const insets = useSafeAreaInsets();
+  const hasUnreadChat = useMemo(() => {
+    const readAt =
+      state.settings.notifications.chatReadAtByConversation ?? {};
+    const groupConversationId = `group:${state.group.id}`;
+    return state.messages.some((message) => {
+      if (
+        message.senderId === state.currentUserId ||
+        message.senderId === "system" ||
+        (message.groupId && message.groupId !== state.group.id)
+      )
+        return false;
+      const rawConversationId = message.conversationId ?? "group";
+      const conversationId =
+        rawConversationId === "group"
+          ? groupConversationId
+          : rawConversationId;
+      const isCurrentGroup = conversationId === groupConversationId;
+      const isDirectForCurrentUser =
+        conversationId.startsWith("dm:") &&
+        conversationId
+          .slice(3)
+          .split(":")
+          .includes(state.currentUserId);
+      if (!isCurrentGroup && !isDirectForCurrentUser) return false;
+      const cursor =
+        readAt[`${state.group.id}:${conversationId}`] ??
+        readAt[conversationId] ??
+        "";
+      return message.createdAt > cursor;
+    });
+  }, [
+    state.currentUserId,
+    state.group.id,
+    state.messages,
+    state.settings.notifications.chatReadAtByConversation,
+  ]);
   const defaultOrder: LandingPage[] = [
     "index",
     "log",
@@ -35,6 +76,13 @@ export default function TabLayout() {
     "performance",
   ];
   const savedOrder = state.settings.tabOrder ?? [];
+  const showLog = state.settings.showLog !== false;
+  const showLeaderboard = state.settings.showLeaderboard !== false;
+  const showChat = state.settings.showChat !== false;
+  const showGym = state.settings.showGym !== false;
+  const showCalendar = state.settings.showCalendar !== false;
+  const showJournal = state.settings.showJournal !== false;
+  const showPerformance = state.settings.showPerformance !== false;
   const tabOrder = [
     ...savedOrder.filter(
       (id, index) =>
@@ -46,69 +94,131 @@ export default function TabLayout() {
     LandingPage,
     { title: string; href?: Href | null }
   > = {
-    index: { title: "Today" },
-    log: { title: "Log", href: state.settings.showLog ? "/log" : null },
-    group: {
-      title: "Leaderboard",
-      href: state.settings.showLeaderboard ? "/group" : null,
+    index: { title: t("Today") },
+    log: {
+      title: t("Log"),
+      href: showLog ? "/log" : null,
     },
-    insights: { title: "Progress" },
-    chat: { title: "Chat", href: state.settings.showChat ? "/chat" : null },
-    gym: { title: "Gym", href: state.settings.showGym ? "/gym" : null },
+    group: {
+      title: t("Leaderboard"),
+      href: showLeaderboard ? "/group" : null,
+    },
+    insights: { title: t("Progress") },
+    chat: { title: t("Chat"), href: showChat ? "/chat" : null },
+    gym: { title: t("Workout"), href: showGym ? "/gym" : null },
     calendar: {
-      title: "Schedule",
-      href: state.settings.showCalendar ? "/calendar" : null,
+      title: t("Schedule"),
+      href: showCalendar ? "/calendar" : null,
     },
     journal: {
-      title: "Journal",
-      href: state.settings.showJournal ? "/journal" : null,
+      title: t("Journal"),
+      href: showJournal ? "/journal" : null,
     },
     performance: {
-      title: "Performance",
-      href: state.settings.showPerformance ? "/performance" : null,
+      title: t("Performance"),
+      href: showPerformance ? "/performance" : null,
     },
   };
+  const isVisible = (name: LandingPage) => tabOptions[name].href !== null;
+  const orderedTabs = tabOrder;
+  const requestedDefault = state.settings.defaultLandingPage ?? "index";
+  const defaultTab: LandingPage = isVisible(requestedDefault)
+    ? requestedDefault
+    : orderedTabs.find(isVisible) ?? "index";
   return (
     <Tabs
-      initialRouteName={state.settings.defaultLandingPage ?? "index"}
+      initialRouteName={defaultTab}
+      // Keeping native tab views attached avoids an Android/New Architecture
+      // re-attachment failure that leaves only the tab bar visible. Screens
+      // are still created lazily when first opened.
+      detachInactiveScreens={false}
       screenOptions={({ route }) => ({
         headerShown: false,
         lazy: true,
-        // Health/chat updates should not recalculate every inactive chart tab.
-        freezeOnBlur: true,
-        tabBarButton: (props) => (
-          <HapticTab {...props} tutorialId={`tab-${route.name}`} />
-        ),
+        // React Navigation owns the native screen lifecycle. A custom
+        // useIsFocused wrapper returned null during Android tab transitions
+        // in Expo Go, while native freezing also produced blank routes.
+        freezeOnBlur: false,
+        tabBarButton: isVisible(route.name as LandingPage)
+          ? (props) => (
+              <HapticTab {...props} tutorialId={`tab-${route.name}`} />
+            )
+          : () => null,
         tabBarActiveTintColor: accent,
         tabBarInactiveTintColor: colors.faint,
         tabBarHideOnKeyboard: true,
+        // The default tab-bar show animation keeps the bar absolutely
+        // positioned for 250 ms after Android has already closed the keyboard,
+        // then puts it back into layout. On Chat that creates a second resize
+        // and a visible composer flicker. Reinsert it immediately; the native
+        // keyboard transition still supplies the visual movement.
+        tabBarVisibilityAnimationConfig:
+          route.name === "chat"
+            ? {
+                show: { animation: "timing", config: { duration: 0 } },
+                hide: { animation: "timing", config: { duration: 0 } },
+              }
+            : undefined,
         tabBarStyle: {
-          height: 76,
+          height: 76 + insets.bottom,
           paddingTop: 8,
-          paddingBottom: 11,
+          paddingBottom: 11 + insets.bottom,
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },
         tabBarLabelStyle: { fontSize: 9, fontWeight: "700" },
-        tabBarIcon: ({ color, focused }) => (
-          <Ionicons
-            name={
-              focused
-                ? (icons[route.name].replace(
-                    "-outline",
-                    "",
-                  ) as keyof typeof Ionicons.glyphMap)
-                : icons[route.name]
-            }
-            size={23}
-            color={color}
-          />
-        ),
+        tabBarIcon: ({ color, focused }) => {
+          const icon = icons[route.name];
+          return (
+            <View style={styles.tabIcon}>
+              <Ionicons
+                name={
+                  focused
+                    ? (icon.replace(
+                        "-outline",
+                        "",
+                      ) as keyof typeof Ionicons.glyphMap)
+                    : icon
+                }
+                size={23}
+                color={color}
+              />
+              {route.name === "chat" && hasUnreadChat ? (
+                <View
+                  accessibilityLabel={t("Unread chat messages")}
+                  style={[
+                    styles.unreadDot,
+                    { borderColor: colors.card },
+                  ]}
+                />
+              ) : null}
+            </View>
+          );
+        },
       })}
     >
-      {tabOrder.map((name) => (
+      {orderedTabs.map((name) => (
         <Tabs.Screen key={name} name={name} options={tabOptions[name]} />
       ))}
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabIcon: {
+    width: 30,
+    height: 27,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unreadDot: {
+    position: "absolute",
+    top: 0,
+    right: 1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+    backgroundColor: "#F06A45",
+  },
+});

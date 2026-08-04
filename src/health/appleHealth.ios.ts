@@ -8,6 +8,7 @@ import {
 import { CategoryTypes } from '@kingstinct/react-native-healthkit/modules';
 import { Linking } from 'react-native';
 
+import { appleWorkoutExercise, exerciseFromActivityName } from '@/src/domain/exerciseCatalog';
 import { HealthAdapter, HealthImportRecord } from '@/src/health/types';
 import { HealthDataType, NutritionDetails } from '@/src/types';
 
@@ -143,6 +144,10 @@ export const appleHealthAdapter: HealthAdapter = {
       const raw = workout as unknown as Record<string, unknown>;
       const start = asDate(workout.startDate, from);
       const end = asDate(workout.endDate, start);
+      const nativeActivity = workout.workoutActivityType;
+      const activity =
+        appleWorkoutExercise(Number(nativeActivity)) ??
+        exerciseFromActivityName(String(nativeActivity ?? ''));
       return {
         id: String(workout.uuid ?? `workout:${start.toISOString()}`),
         provider: 'apple_health',
@@ -152,7 +157,9 @@ export const appleHealthAdapter: HealthAdapter = {
         value: Math.max(1,(end.getTime()-start.getTime())/60000),
         unit: 'min',
         origin: sourceName(workout),
-        label: String(workout.workoutActivityType ?? 'Workout'),
+        label: activity?.name ?? (Number.isFinite(Number(nativeActivity)) ? `Workout (${nativeActivity})` : 'Workout'),
+        activityKey: activity?.key,
+        workoutRecordKind: 'session',
         measurements: {
           durationMinutes: Math.max(0,(end.getTime()-start.getTime())/60000),
           activeCalories: nestedNumber(raw,'totalEnergyBurned','quantity') || Number(raw.totalEnergyBurned ?? 0),

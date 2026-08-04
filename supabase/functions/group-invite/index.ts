@@ -6,7 +6,7 @@ Deno.serve((request) => {
   const code =
     new URL(request.url).searchParams.get("code")?.trim().toUpperCase() ?? "";
   if (!/^[A-Z0-9-]{3,32}$/.test(code))
-    return new Response("Invalid MetricRally invite.", {
+    return new Response("Invalid HabHub invite.", {
       status: 400,
       headers,
     });

@@ -1,11 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { entriesForDay } from "@/src/domain/dataIndex";
 import {
   effectiveGoalTarget,
+  goalProgress,
+  goalReached,
   hasMetricData,
   isMetricTrackedOnDate,
   metricPeriodStats,
@@ -13,6 +17,7 @@ import {
   safeMetricValue,
   scheduledGoalReached,
   trackedGoalSummary,
+  weightDailyGoalStatus,
 } from "@/src/domain/metrics";
 import { useAppColors } from "@/src/theme";
 import { AppState, HistoryRange, MetricDefinition } from "@/src/types";
@@ -35,8 +40,10 @@ type HeatmapCellModel = {
   date: string;
   future: boolean;
   backgroundColor?: string;
+  secondaryBackgroundColor?: string;
   reached?: boolean;
   tracked?: boolean;
+  logged?: boolean;
 };
 
 export type GoalHeatmapModel = {
@@ -161,6 +168,18 @@ export function cachedGoalHeatmapModel(
     state.currentUserId,
     dates.filter((date) => date <= today),
   );
+  const isBloodPressure =
+    metric.id === "blood_pressure_systolic" ||
+    (metric.healthMapping?.dataType === "blood_pressure" &&
+      metric.healthMapping.field === "systolic");
+  const diastolic = isBloodPressure
+    ? state.metrics.find(
+        (candidate) =>
+          candidate.id === "blood_pressure_diastolic" ||
+          (candidate.healthMapping?.dataType === "blood_pressure" &&
+            candidate.healthMapping.field === "diastolic"),
+      )
+    : undefined;
   const cells = dates.map((date) => {
     const future = date > today;
     const logged =
@@ -180,7 +199,9 @@ export function cachedGoalHeatmapModel(
       ? safeMetricValue(state, metric, state.currentUserId, date)
       : 0;
     const progress = logged
-      ? metricVisualProgress(
+      ? metric.id === "weight"
+        ? weightDailyGoalStatus(state, state.currentUserId, date).progress
+        : metricVisualProgress(
           state,
           metric,
           state.currentUserId,
@@ -189,7 +210,7 @@ export function cachedGoalHeatmapModel(
           effectiveGoalTarget(state, metric, state.currentUserId, date),
         )
       : 0;
-    const backgroundColor = skipped
+    let backgroundColor = skipped
       ? VACATION_COLOR
       : !logged
         ? alpha(NOT_LOGGED, tracked ? 0.72 : 0.46)
@@ -206,7 +227,71 @@ export function cachedGoalHeatmapModel(
               : progress >= 0.35
                 ? "#B93838"
                 : GOAL_MISSED_FAR;
-    return { date, future, backgroundColor, reached, tracked };
+    let secondaryBackgroundColor: string | undefined;
+    if (!future && !skipped && isBloodPressure && diastolic) {
+      const diastolicLogged = hasMetricData(
+        state,
+        diastolic,
+        state.currentUserId,
+        date,
+      );
+      const diastolicValue = diastolicLogged
+        ? safeMetricValue(state, diastolic, state.currentUserId, date)
+        : 0;
+      const diastolicReached =
+        diastolicLogged &&
+        goalReached(
+          diastolic,
+          diastolicValue,
+          effectiveGoalTarget(state, diastolic, state.currentUserId, date),
+        );
+      const systolicReached =
+        logged &&
+        goalReached(
+          metric,
+          value,
+          effectiveGoalTarget(state, metric, state.currentUserId, date),
+        );
+      const pressureColor = (
+        hasReading: boolean,
+        pressureReached: boolean,
+        pressureProgress: number,
+      ) =>
+        !hasReading
+          ? alpha(NOT_LOGGED, tracked ? 0.72 : 0.46)
+          : pressureReached
+            ? GOAL_COMPLETE_COLOR
+            : pressureProgress >= 0.7
+              ? GOAL_MISSED_NEAR
+              : GOAL_MISSED_FAR;
+      backgroundColor = pressureColor(
+        logged,
+        systolicReached,
+        goalProgress(
+          metric,
+          value,
+          effectiveGoalTarget(state, metric, state.currentUserId, date),
+        ),
+      );
+      secondaryBackgroundColor = pressureColor(
+        diastolicLogged,
+        diastolicReached,
+        goalProgress(
+          diastolic,
+          diastolicValue,
+          effectiveGoalTarget(state, diastolic, state.currentUserId, date),
+        ),
+      );
+    }
+    return {
+      date,
+      future,
+      backgroundColor,
+      secondaryBackgroundColor,
+      reached,
+      tracked,
+      logged,
+    };
   });
   const model = { period, cells };
   return remember(bucket, key, { ...inputs, metric, model });
@@ -280,6 +365,7 @@ export function TrackedGoalsHeatmap({
   model?: TrackedGoalsHeatmapModel;
 }) {
   const colors = useAppColors();
+  const locale = useLocale();
   const today = new Date().toISOString().slice(0, 10);
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
   const firstWeekday = dates[0]
@@ -306,8 +392,8 @@ export function TrackedGoalsHeatmap({
       ? yearCellWidth
       : range === "week"
         ? Math.max(
-            28,
-            (layoutWidth - dates.length * gap) /
+            8,
+            (layoutWidth - Math.max(0, dates.length - 1) * gap - 2) /
               Math.max(1, dates.length),
           )
         : compact
@@ -332,7 +418,7 @@ export function TrackedGoalsHeatmap({
               key={date}
               style={[styles.weekLabel, { color: colors.muted }]}
             >
-              {new Intl.DateTimeFormat(undefined, { weekday: "short" })
+              {new Intl.DateTimeFormat(locale, { weekday: "short" })
                 .format(new Date(`${date}T12:00:00`))
                 .slice(0, 2)}
             </Text>
@@ -352,6 +438,7 @@ export function TrackedGoalsHeatmap({
             alignContent: "center",
           },
           range === "week" && styles.weekGrid,
+          range === "week" && { columnGap: gap },
         ]}
       >
         {cells.map((date, index) => {
@@ -362,7 +449,7 @@ export function TrackedGoalsHeatmap({
                 style={{
                   width: cellWidth,
                   height: cellHeight,
-                  margin: gap / 2,
+                  margin: range === "week" ? 0 : gap / 2,
                 }}
               />
             );
@@ -370,7 +457,7 @@ export function TrackedGoalsHeatmap({
           const cellStyle = {
             width: cellWidth,
             height: cellHeight,
-            margin: gap / 2,
+            margin: range === "week" ? 0 : gap / 2,
             borderRadius: range === "year" ? 1.5 : 4,
             backgroundColor: cell?.future
               ? colors.canvas
@@ -415,6 +502,7 @@ export function GoalHeatmap({
   compact = false,
   onSelect,
   model,
+  completionOnly = false,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -423,8 +511,10 @@ export function GoalHeatmap({
   compact?: boolean;
   onSelect?: (date: string) => void;
   model?: GoalHeatmapModel;
+  completionOnly?: boolean;
 }) {
   const colors = useAppColors();
+  const locale = useLocale();
   const today = new Date().toISOString().slice(0, 10);
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
   const firstDate = dates[0];
@@ -466,8 +556,8 @@ export function GoalHeatmap({
       ? yearCellWidth
       : range === "week"
         ? Math.max(
-            28,
-            (layoutWidth - dates.length * gap) /
+            8,
+            (layoutWidth - Math.max(0, dates.length - 1) * gap - 2) /
               Math.max(1, dates.length),
           )
         : compact
@@ -488,7 +578,7 @@ export function GoalHeatmap({
               key={date}
               style={[styles.weekLabel, { color: colors.muted }]}
             >
-              {new Intl.DateTimeFormat(undefined, { weekday: "short" })
+              {new Intl.DateTimeFormat(locale, { weekday: "short" })
                 .format(new Date(`${date}T12:00:00`))
                 .slice(0, 2)}
             </Text>
@@ -508,6 +598,7 @@ export function GoalHeatmap({
             alignContent: "center",
           },
           range === "week" && styles.weekGrid,
+          range === "week" && { columnGap: gap },
         ]}
       >
         {cells.map((date, index) => {
@@ -518,24 +609,47 @@ export function GoalHeatmap({
                 style={{
                   width: cellWidth,
                   height: cellHeight,
-                  margin: gap / 2,
+                  margin: range === "week" ? 0 : gap / 2,
                 }}
               />
             );
           const cell = cellsByDate.get(date);
+          const completionColor =
+            completionOnly && cell?.logged && !cell.secondaryBackgroundColor
+              ? cell.reached
+                ? GOAL_COMPLETE_COLOR
+                : GOAL_MISSED_NEAR
+              : cell?.backgroundColor;
           const cellStyle = {
             width: cellWidth,
             height: cellHeight,
-            margin: gap / 2,
+            margin: range === "week" ? 0 : gap / 2,
             borderRadius: range === "year" ? 1.5 : 4,
             backgroundColor: cell?.future
               ? colors.canvas
-              : cell?.backgroundColor,
+              : completionColor,
             borderWidth: date === today ? 1 : 0,
             borderColor: colors.ink,
+            overflow: "hidden" as const,
           };
+          const split =
+            !cell?.future && cell?.secondaryBackgroundColor ? (
+              <LinearGradient
+                pointerEvents="none"
+                colors={[
+                  completionColor ?? NOT_LOGGED,
+                  completionColor ?? NOT_LOGGED,
+                  cell.secondaryBackgroundColor,
+                  cell.secondaryBackgroundColor,
+                ]}
+                locations={[0, 0.49, 0.51, 1]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFillObject}
+              />
+            ) : null;
           return range === "year" ? (
-            <View key={date} style={cellStyle} />
+            <View key={date} style={cellStyle}>{split}</View>
           ) : (
             <Pressable
               key={date}
@@ -549,7 +663,9 @@ export function GoalHeatmap({
               disabled={!onSelect}
               onPress={() => onSelect?.(date)}
               style={cellStyle}
-            />
+            >
+              {split}
+            </Pressable>
           );
         })}
       </View>
@@ -580,7 +696,11 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     alignItems: "flex-start",
   },
-  weekGrid: { justifyContent: "center", alignItems: "center" },
+  weekGrid: {
+    justifyContent: "center",
+    alignItems: "center",
+    flexWrap: "nowrap",
+  },
   caption: {
     flexDirection: "row",
     justifyContent: "space-between",

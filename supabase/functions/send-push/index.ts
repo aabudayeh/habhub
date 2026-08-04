@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'|'membership'; audience?:'admins'|'user'|'group'; title:string; body:string; recipientId?:string; metricId?:string; data?:Record<string,string> };
+type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'|'winner'|'membership'; audience?:'admins'|'user'|'group'|'group_including_sender'; title:string; body:string; titles?:Record<string,string>; bodies?:Record<string,string>; recipientId?:string; metricId?:string; data?:Record<string,string> };
 const cors={ 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type' };
 
 Deno.serve(async(req)=>{
@@ -16,6 +16,15 @@ Deno.serve(async(req)=>{
     if(!membership)return json({error:'Not a group member'},403);
     if(payload.category!=='membership'&&membership.status!=='active')return json({error:'Membership is pending'},403);
     if(payload.category==='membership'&&payload.audience==='user'&&!['owner','admin'].includes(membership.role))return json({error:'Admin role required'},403);
+    if(payload.category==='chat'&&payload.clientMessageId){
+      const {data:stored,error:messageError}=await admin.from('messages').select('created_at').eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId).maybeSingle();
+      if(messageError)throw messageError;
+      if(!stored)return json({error:'Message is not committed yet',retryable:true},409);
+      if(Date.now()-new Date(stored.created_at).getTime()>15*60*1000){
+        await admin.from('messages').update({push_dispatched_at:new Date().toISOString()}).eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId);
+        return json({sent:0,stale:true});
+      }
+    }
     const {data:claimed,error:eventError}=await admin
       .from('push_events')
       .upsert(
@@ -29,7 +38,8 @@ Deno.serve(async(req)=>{
       return json({sent:0,deduplicated:true});
     }
     claimedEvent=payload.eventKey;
-    let members=admin.from('group_members').select('user_id').eq('group_id',payload.groupId).neq('user_id',user.id);
+    let members=admin.from('group_members').select('user_id').eq('group_id',payload.groupId);
+    if(payload.audience!=='group_including_sender')members=members.neq('user_id',user.id);
     members=members.eq('status','active');
     if(payload.category==='membership'&&payload.audience==='admins')members=members.in('role',['owner','admin']);
     if(payload.recipientId)members=members.eq('user_id',payload.recipientId);
@@ -46,7 +56,10 @@ Deno.serve(async(req)=>{
       return json({sent:0,retryable:true});
     }
     const eligible=(tokens??[]).filter((item)=>allowed(item.preferences??{},payload));
-    const messages=eligible.map((item)=>({to:item.token,sound:'default',channelId:'paceboard',priority:'high',title:payload.title,body:payload.body,data:payload.data??{}}));
+    const messages=eligible.map((item)=>{
+      const language=pushLanguage(item.preferences??{});
+      return {to:item.token,sound:'default',channelId:'paceboard',priority:'high',title:payload.titles?.[language]??payload.titles?.en??payload.title,body:payload.bodies?.[language]??payload.bodies?.en??payload.body,data:payload.data??{}};
+    });
     if(messages.length){
       const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messages)});
       if(!response.ok)throw new Error(`Expo push failed: ${response.status}`);
@@ -68,6 +81,7 @@ Deno.serve(async(req)=>{
     return json({error:error instanceof Error?error.message:String(error)},500);
   }
 });
-function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='membership'&&settings.groupMembership===false)return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
+function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='membership'&&settings.groupMembership===false)return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='winner'&&settings.badgesAndWinners===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
+function pushLanguage(settings:Record<string,unknown>){const language=String(settings.language||'en');return ['en','ar','es','zh-Hans','sv','de','ru','fr'].includes(language)?language:'en';}
 function inQuietHours(settings:Record<string,unknown>){if(settings.quietHoursEnabled!==true)return false;try{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:String(settings.timezone||'UTC'),hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const now=Number(parts.find((part)=>part.type==='hour')?.value||0)*60+Number(parts.find((part)=>part.type==='minute')?.value||0);const minutes=(value:unknown)=>{const [hour,minute]=String(value||'').split(':').map(Number);return Number.isFinite(hour)&&Number.isFinite(minute)?hour*60+minute:0;};const start=minutes(settings.quietHoursStart),end=minutes(settings.quietHoursEnd);return start===end?false:start<end?now>=start&&now<end:now>=start||now<end;}catch{return false;}}
 function json(body:unknown,status=200){return new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});}

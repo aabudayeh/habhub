@@ -1,7 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import { Pressable, StyleSheet, View } from "react-native";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { useLocalization, useTranslation } from "@/src/i18n";
+import { localizeMetricName, translateDomainText } from "@/src/i18n/domain";
 
 import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -23,6 +28,7 @@ export function MetricSelector({
   title = "Metrics",
   emptyLabel = "No logged metrics",
   collapsibleGroups = [],
+  searchable = true,
 }: {
   items: MetricSelectorItem[];
   selectedIds: string[];
@@ -32,24 +38,56 @@ export function MetricSelector({
   title?: string;
   emptyLabel?: string;
   collapsibleGroups?: string[];
+  searchable?: boolean;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
+  const { language } = useLocalization();
+  const localizedItems = React.useMemo(
+    () =>
+      items.map((item) => {
+        const domainLabel = localizeMetricName(language, {
+          id: item.id,
+          name: item.label,
+        });
+        const domainSublabel = item.sublabel
+          ? translateDomainText(language, item.sublabel)
+          : item.sublabel;
+        const domainGroup = item.group
+          ? translateDomainText(language, item.group)
+          : item.group;
+        return {
+          ...item,
+          sourceGroup: item.group,
+          label: domainLabel === item.label ? t(item.label) : domainLabel,
+          sublabel:
+            domainSublabel === item.sublabel && item.sublabel
+              ? t(item.sublabel)
+              : domainSublabel,
+          group:
+            domainGroup === item.group && item.group
+              ? t(item.group)
+              : domainGroup,
+        };
+      }),
+    [items, language, t],
+  );
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState(
     () => new Set(collapsibleGroups),
   );
-  const selected = items.filter((item) => selectedIds.includes(item.id));
+  const selected = localizedItems.filter((item) => selectedIds.includes(item.id));
   const visibleItems = React.useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) return items;
-    return items.filter((item) =>
+    if (!normalized) return localizedItems;
+    return localizedItems.filter((item) =>
       `${item.label} ${item.sublabel ?? ""} ${item.group ?? ""}`
         .toLowerCase()
         .includes(normalized),
     );
-  }, [items, query]);
+  }, [localizedItems, query]);
   function choose(id: string) {
     if (!multiple) {
       onChange(allowClear && selectedIds.includes(id) ? [] : [id]);
@@ -66,6 +104,9 @@ export function MetricSelector({
     <View style={styles.wrap}>
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel={t(title)}
+        accessibilityHint={t("Open selection")}
+        accessibilityState={{ expanded: open }}
         onPress={() => setOpen((value) => !value)}
         style={[
           styles.button,
@@ -78,6 +119,7 @@ export function MetricSelector({
         <View style={styles.copy}>
           <Text style={[styles.title, { color: colors.ink }]}>{title}</Text>
           <Text
+            translate={!selected.length}
             numberOfLines={1}
             style={[styles.summary, { color: colors.muted }]}
           >
@@ -114,7 +156,7 @@ export function MetricSelector({
               </Pressable>
             </View>
           ) : null}
-          {items.length > 6 ? (
+          {searchable && items.length > 6 ? (
             <View style={[styles.search, { borderColor: colors.border }]}>
               <Ionicons name="search-outline" size={16} color={colors.muted} />
               <TextInput
@@ -142,10 +184,10 @@ export function MetricSelector({
                 Boolean(item.group) &&
                 item.group !== visibleItems[index - 1]?.group;
               const groupIsCollapsible = Boolean(
-                item.group && collapsibleGroups.includes(item.group),
+                item.sourceGroup && collapsibleGroups.includes(item.sourceGroup),
               );
               const groupIsCollapsed = Boolean(
-                item.group && collapsed.has(item.group),
+                item.sourceGroup && collapsed.has(item.sourceGroup),
               );
               return (
                 <React.Fragment key={item.id}>
@@ -155,8 +197,8 @@ export function MetricSelector({
                         onPress={() =>
                           setCollapsed((current) => {
                             const next = new Set(current);
-                            if (next.has(item.group!)) next.delete(item.group!);
-                            else next.add(item.group!);
+                            if (next.has(item.sourceGroup!)) next.delete(item.sourceGroup!);
+                            else next.add(item.sourceGroup!);
                             return next;
                           })
                         }
@@ -206,11 +248,17 @@ export function MetricSelector({
                     />
                   </View>
                   <View style={styles.copy}>
-                    <Text style={[styles.itemLabel, { color: colors.ink }]}>
+                    <Text
+                      translate={false}
+                      style={[styles.itemLabel, { color: colors.ink }]}
+                    >
                       {item.label}
                     </Text>
                     {item.sublabel ? (
-                      <Text style={[styles.sublabel, { color: colors.muted }]}>
+                      <Text
+                        translate={false}
+                        style={[styles.sublabel, { color: colors.muted }]}
+                      >
                         {item.sublabel}
                       </Text>
                     ) : null}

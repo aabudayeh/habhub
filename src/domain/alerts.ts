@@ -94,11 +94,15 @@ export function buildAlerts(state: AppState): PaceAlert[] {
         color: achievement ? palette.amber : palette.primary,
         title:
           message.senderId === "system"
-            ? "MetricRally update"
+            ? "HabHub update"
             : sender
-              ? `Message from ${memberDisplayName(state, sender)}`
+              ? groupConversation
+                ? `Group message from ${memberDisplayName(state, sender)}`
+                : `Direct message from ${memberDisplayName(state, sender)}`
               : "New message",
-        detail: message.text || "Sent an image",
+        detail: groupConversation
+          ? `${state.group.name} · ${message.text || "Sent an image"}`
+          : message.text || "Sent an image",
         createdAt: message.createdAt,
         memberId: sender?.id,
         scope: groupConversation || achievement ? "group" : "personal",

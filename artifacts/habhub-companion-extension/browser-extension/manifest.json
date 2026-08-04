@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "HabHub Companion",
+  "version": "0.1.0",
+  "description": "Open HabHub timers, to-dos, schedule and progress from Chrome or Edge.",
+  "icons": {
+    "16": "habhub-icon.png",
+    "32": "habhub-icon.png",
+    "48": "habhub-icon.png",
+    "128": "habhub-icon.png"
+  },
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": ["https://habhub.expo.app/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "HabHub",
+    "default_icon": "habhub-icon.png",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  }
+}

@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNetInfo } from "@react-native-community/netinfo";
 import { User } from "@supabase/supabase-js";
 import React, {
   createContext,
@@ -6,6 +7,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +21,7 @@ import {
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
   approveCloudGroupMember,
+  type CloudActivityMetadata,
   createCloudGroup,
   isCloudGroupId,
   joinCloudGroup,
@@ -29,18 +32,30 @@ import {
   loadCloudWorkspace,
   removeCloudGroupMember,
   sendMembershipPush,
+  touchCloudGroupPresence,
+  pushCloudRecentActivity,
   pushCloudWorkspace,
   pushCloudMessagesNow,
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
-import { dateKey } from "@/src/domain/date";
+import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import { metricEntryKey } from "@/src/domain/metricEntry";
+import { suggestedAccountName } from "@/src/domain/profileName";
 import {
+  createPersonalSetupGroup,
   DEFAULT_GROUP_THEME,
   groupMetricDefinitions,
+  isPersonalSetupGroup,
+  personalSetupMetricConfiguration,
 } from "@/src/domain/groupSetup";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
+import {
+  readGroupActivityCache,
+  writeGroupActivityCache,
+} from "@/src/storage/groupActivityCache";
+import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
 import {
   AppState,
   ChatMessage,
@@ -56,6 +71,15 @@ const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
 const MEDIA_BUCKET = "paceboard-media";
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
+const GROUP_ACTIVITY_LOCAL_CACHE_DAYS = 120;
+const GROUP_ACTIVITY_BACKGROUND_HISTORY_DAYS = 730;
+const WORKSPACE_ACK_KEY_PREFIX = "habhub-workspace-ack-v1:";
+const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
+  "habhub-group-configuration-ack-v1:";
+const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
+const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
+const CHAT_OUTBOX_FRESHNESS_MS = 15 * 60 * 1000;
+const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
 
 export type CloudSyncStatus =
   | "disabled"
@@ -96,10 +120,29 @@ type CloudSyncContextValue = {
   refreshGroup: () => Promise<void>;
   refreshActivity: () => Promise<void>;
   refreshMessages: () => Promise<void>;
-  syncMessagesNow: () => Promise<void>;
+  syncMessagesNow: (messageId?: string) => Promise<void>;
   approveMember: (userId: string) => Promise<void>;
   removeMember: (userId: string) => Promise<void>;
 };
+
+type CloudSyncActions = Pick<
+  CloudSyncContextValue,
+  | "syncNow"
+  | "pullLatest"
+  | "refreshDevices"
+  | "forgetDevice"
+  | "deleteAccount"
+  | "createGroup"
+  | "joinGroup"
+  | "switchGroup"
+  | "leaveGroup"
+  | "refreshGroup"
+  | "refreshActivity"
+  | "refreshMessages"
+  | "syncMessagesNow"
+  | "approveMember"
+  | "removeMember"
+>;
 
 export type PendingGroupRequest = {
   groupId: string;
@@ -115,6 +158,8 @@ type SnapshotRow = {
 };
 
 const CloudSyncContext = createContext<CloudSyncContextValue | null>(null);
+const CloudSyncActionsContext = createContext<CloudSyncActions | null>(null);
+const CloudSyncStatusContext = createContext<CloudSyncStatus>("disabled");
 
 function parsePendingGroup(value: string | null): PendingGroupRequest | null {
   if (!value) return null;
@@ -140,13 +185,75 @@ async function getDeviceId() {
 }
 
 function accountName(user: User, fallback: string) {
-  const metadataName =
-    user.user_metadata?.display_name ??
-    user.user_metadata?.full_name ??
-    user.user_metadata?.name;
-  return typeof metadataName === "string" && metadataName.trim()
-    ? metadataName.trim()
-    : user.email?.split("@")[0] || fallback;
+  return suggestedAccountName(user) || fallback;
+}
+
+async function readCloudSyncCheckpoint(userId: string) {
+  const value = await AsyncStorage.getItem(
+    `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${userId}`,
+  );
+  return value && Number.isFinite(new Date(value).getTime()) ? value : null;
+}
+
+async function writeCloudSyncCheckpoint(userId: string, value: string) {
+  await AsyncStorage.setItem(
+    `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${userId}`,
+    value,
+  );
+}
+
+async function readWorkspaceAcks(userId: string) {
+  try {
+    const saved = await AsyncStorage.getItem(
+      `${WORKSPACE_ACK_KEY_PREFIX}${userId}`,
+    );
+    if (!saved) return new Map<string, string>();
+    const parsed = JSON.parse(saved) as Record<string, string>;
+    return new Map(
+      Object.entries(parsed).filter(
+        ([groupId, hash]) => Boolean(groupId) && typeof hash === "string",
+      ),
+    );
+  } catch {
+    return new Map<string, string>();
+  }
+}
+
+async function writeWorkspaceAcks(
+  userId: string,
+  acks: Map<string, string>,
+) {
+  await AsyncStorage.setItem(
+    `${WORKSPACE_ACK_KEY_PREFIX}${userId}`,
+    JSON.stringify(Object.fromEntries(acks)),
+  );
+}
+
+async function readGroupConfigurationAcks(userId: string) {
+  try {
+    const saved = await AsyncStorage.getItem(
+      `${GROUP_CONFIGURATION_ACK_KEY_PREFIX}${userId}`,
+    );
+    if (!saved) return new Map<string, string>();
+    const parsed = JSON.parse(saved) as Record<string, string>;
+    return new Map(
+      Object.entries(parsed).filter(
+        ([groupId, hash]) => Boolean(groupId) && typeof hash === "string",
+      ),
+    );
+  } catch {
+    return new Map<string, string>();
+  }
+}
+
+async function writeGroupConfigurationAcks(
+  userId: string,
+  acks: Map<string, string>,
+) {
+  await AsyncStorage.setItem(
+    `${GROUP_CONFIGURATION_ACK_KEY_PREFIX}${userId}`,
+    JSON.stringify(Object.fromEntries(acks)),
+  );
 }
 
 function isDemoBoundState(state: AppState) {
@@ -162,7 +269,7 @@ function isDemoBoundState(state: AppState) {
 function createCleanAccountState(user: User): AppState {
   const defaults = createInitialState();
   const today = dateKey();
-  const name = accountName(user, "MetricRally member");
+  const name = accountName(user, "HabHub member");
   const metrics = defaults.metrics.map((metric) => ({
     ...metric,
     activeFrom: today,
@@ -176,30 +283,21 @@ function createCleanAccountState(user: User): AppState {
     activityLevel: "sedentary" as const,
     desiredWeeklyLossKg: 0.25,
   };
-  const group: Group = {
-    id: `account-starter-${user.id}`,
-    name: "Personal setup",
-    inviteCode: "CREATE-GROUP",
-    templateName: "Healthy Competition",
-    members: [
-      {
-        id: user.id,
-        name,
-        initials:
-          name
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part) => part[0] ?? "")
-            .join("")
-            .toUpperCase() || "P",
-        color: "#176B4D",
-        role: "owner",
-      },
-    ],
-    streakRestDaysPerWeek: 1,
-    themeColor: "#176B4D",
-    metricConfiguration: metrics,
-  };
+  // Onboarding fills the starter shell with only the goals the user chooses.
+  // Keeping it empty here avoids leaking every catalog preset into Leaderboard.
+  const group = createPersonalSetupGroup({
+    id: user.id,
+    name,
+    initials:
+      name
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part[0] ?? "")
+        .join("")
+        .toUpperCase() || "P",
+    color: DEFAULT_GROUP_THEME,
+    role: "owner",
+  });
   return {
     ...defaults,
     currentUserId: user.id,
@@ -221,19 +319,35 @@ function createCleanAccountState(user: User): AppState {
       comparisonPeriodByGroup: {},
     },
     trackedGoalPeriods: Object.fromEntries(
-      metrics
-        .filter(
-          (metric) =>
-            metric.sections.today &&
-            metric.goalEnabled !== false &&
-            !["weight", "weekly_deficit_balance", "overall_score"].includes(
-              metric.id,
-            ),
-        )
-        .map((metric) => [metric.id, [{ from: today }]]),
+      metrics.map((metric) => [metric.id, []]),
     ),
-    selectedGroupMetricId: "steps",
+    selectedGroupMetricId: "__score",
     lastSavedAt: null,
+  };
+}
+
+function stateWithActiveGroup(
+  state: AppState,
+  group: Group,
+  groups: Group[] = state.groups,
+): AppState {
+  if (!isPersonalSetupGroup(group)) return { ...state, group, groups };
+  const metricConfiguration = personalSetupMetricConfiguration(
+    state.metrics,
+    state.trackedGoalPeriods,
+  );
+  const personalGroup = { ...group, metricConfiguration };
+  return {
+    ...state,
+    group: personalGroup,
+    groups: groups.map((candidate) =>
+      candidate.id === personalGroup.id ? personalGroup : candidate,
+    ),
+    selectedGroupMetricId: metricConfiguration.some(
+      (metric) => metric.id === state.selectedGroupMetricId,
+    )
+      ? state.selectedGroupMetricId
+      : (metricConfiguration[0]?.id ?? "__score"),
   };
 }
 
@@ -377,6 +491,28 @@ async function uploadMedia(
 async function uploadOwnedMedia(state: AppState): Promise<AppState> {
   const userId = state.currentUserId;
   let changed = false;
+
+  // Upload the account avatar first. A large Health Connect/photo backlog must
+  // never leave a newly-selected profile picture waiting behind every other
+  // media item. The path is deterministic and upserted, so retries are safe.
+  const localAvatar = [state.group, ...state.groups]
+    .flatMap((group) => group.members)
+    .find(
+      (member) =>
+        member.id === userId &&
+        !member.avatarStoragePath &&
+        isUploadableLocalUri(member.avatarUri ?? null),
+    );
+  const uploadedAvatarPath = localAvatar
+    ? await uploadMedia(
+        userId,
+        "avatar",
+        userId,
+        localAvatar.avatarUri!,
+      )
+    : undefined;
+  if (uploadedAvatarPath) changed = true;
+
   const entries: MetricEntry[] = [];
   for (const entry of state.entries) {
     if (
@@ -425,23 +561,11 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
     } else messages.push(message);
   }
   const updateGroup = async (group: Group): Promise<Group> => {
-    const members: Member[] = [];
-    for (const member of group.members) {
-      if (
-        member.id === userId &&
-        !member.avatarStoragePath &&
-        isUploadableLocalUri(member.avatarUri ?? null)
-      ) {
-        const path = await uploadMedia(
-          userId,
-          "avatar",
-          member.id,
-          member.avatarUri!,
-        );
-        members.push({ ...member, avatarStoragePath: path });
-        changed = true;
-      } else members.push(member);
-    }
+    const members: Member[] = group.members.map((member) =>
+      member.id === userId && uploadedAvatarPath
+        ? { ...member, avatarStoragePath: uploadedAvatarPath }
+        : member,
+    );
     return { ...group, members };
   };
   const groups = [] as Group[];
@@ -458,13 +582,58 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
 function snapshotPayload(state: AppState): AppState {
   const groups = state.groups.map((group) => ({
     ...group,
-    members: group.members.map((member) =>
-      member.avatarStoragePath ? { ...member, avatarUri: undefined } : member,
-    ),
+    members: group.members.map((member) => {
+      const {
+        lastSeenAt: _presence,
+        lastDataSyncedAt: _published,
+        ...stableMember
+      } = member;
+      return stableMember.avatarStoragePath
+        ? { ...stableMember, avatarUri: undefined }
+        : stableMember;
+    }),
+    pendingMembers: group.pendingMembers?.map((member) => {
+      const {
+        lastSeenAt: _presence,
+        lastDataSyncedAt: _published,
+        ...stableMember
+      } = member;
+      return stableMember;
+    }),
   }));
+  const currentGroup =
+    groups.find((group) => group.id === state.group.id) ??
+    {
+      ...state.group,
+      members: state.group.members.map((member) => {
+        const {
+          lastSeenAt: _presence,
+          lastDataSyncedAt: _published,
+          ...stableMember
+        } = member;
+        return stableMember;
+      }),
+    };
   return {
     ...state,
-    group: groups.find((group) => group.id === state.group.id) ?? state.group,
+    // These flags describe a native import cursor on this physical device.
+    // Syncing them to another phone could start (or finish) the wrong Health
+    // Connect backfill there.
+    settings: {
+      ...state.settings,
+      // This is a device-local outbox marker. Uploading it could make another
+      // device push stale group settings on this device's behalf.
+      pendingGroupConfigurationIds: undefined,
+      healthSync: {
+        ...state.settings.healthSync,
+        enabled: false,
+        backgroundAccess: false,
+        initialHistoryImportPending: undefined,
+        backfillTrackedGoalsOnFirstImport: undefined,
+        backfillTrackedGoalsEmptyReadCount: undefined,
+      },
+    },
+    group: currentGroup,
     groups,
     // Shared group history is an on-device cache backed by relational tables.
     // Keeping it out of the private snapshot makes hashing/saving proportional
@@ -508,7 +677,37 @@ const workspaceHashCache = new WeakMap<AppState, string>();
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
   if (cached) return cached;
-  const hash = valueHash(snapshotPayload(state));
+  const payload = snapshotPayload(state);
+  // These values only remember which view was open on this device. They can
+  // hitch a ride with a later durable account save, but switching a filter or
+  // date range must not turn Cloud Account into a permanent "Pending" outbox.
+  // Actual display preferences (theme, text size, tab order, visibility, etc.)
+  // remain part of the synced hash.
+  const settings = { ...payload.settings } as Record<string, unknown>;
+  [
+    "activeTrackerViewFilterId",
+    "activeTodayTrackerViewFilterId",
+    "activeProgressTrackerViewFilterId",
+    "activePerformanceTrackerViewFilterId",
+    "activeScheduleViewFilterId",
+    "progressHistoryAnchor",
+    "progressHistoryRange",
+    "performanceRange",
+    "tutorialGuideId",
+    "tutorialGuideRunId",
+  ].forEach((key) => delete settings[key]);
+  const groupShell = (group: Group) =>
+    isCloudGroupId(group.id) ? { id: group.id } : group;
+  const hash = valueHash({
+    ...payload,
+    settings,
+    // Cloud group shells are hydrated from relational tables. Membership,
+    // invites and admin-owned configuration changing on the server is not a
+    // private account edit and must not re-open this device's outbox.
+    group: groupShell(payload.group),
+    groups: payload.groups.map(groupShell),
+    selectedGroupMetricId: undefined,
+  });
   stableHashCache.set(state, hash);
   return hash;
 }
@@ -518,10 +717,24 @@ function workspaceHash(state: AppState) {
   const cached = workspaceHashCache.get(state);
   if (cached) return cached;
   const payload = snapshotPayload(state);
+  const currentMember = payload.group.members.find(
+    (member) => member.id === payload.currentUserId,
+  );
   const hash = valueHash({
     currentUserId: payload.currentUserId,
-    group: payload.group,
-    groupMetrics: payload.group.metricConfiguration ?? [],
+    groupId: payload.group.id,
+    // The group shell, membership list and shared tracker definitions are
+    // server-owned cache. Only this member's editable profile belongs in their
+    // workspace outbox; group configuration has its own explicit hash below.
+    currentMember: currentMember
+      ? {
+          id: currentMember.id,
+          name: currentMember.name,
+          initials: currentMember.initials,
+          color: currentMember.color,
+          avatarStoragePath: currentMember.avatarStoragePath,
+        }
+      : null,
     energyProfile:
       payload.energyProfiles[payload.currentUserId] ??
       payload.settings.energyProfile,
@@ -606,17 +819,152 @@ function mergeById<T extends { id: string }>(remote: T[], local: T[]) {
   return [...merged.values()];
 }
 
+function mergeEntriesByOwnerId(
+  remote: AppState["entries"],
+  local: AppState["entries"],
+) {
+  const merged = new Map(
+    remote.map((entry) => [
+      metricEntryKey(entry.userId, entry.id),
+      entry,
+    ]),
+  );
+  local.forEach((entry) =>
+    merged.set(metricEntryKey(entry.userId, entry.id), entry),
+  );
+  return [...merged.values()];
+}
+
 function mergeStates(remote: AppState, local: AppState): AppState {
   const groups = mergeById(remote.groups, local.groups);
+  const onboardingComplete =
+    remote.settings.onboardingComplete ||
+    local.settings.onboardingComplete;
+  const tutorialComplete =
+    remote.settings.tutorialComplete ||
+    local.settings.tutorialComplete;
   return {
     ...remote,
     ...local,
+    settings: {
+      ...remote.settings,
+      ...local.settings,
+      onboardingComplete,
+      tutorialComplete,
+    },
     groups,
     group: groups.find((group) => group.id === local.group.id) ?? local.group,
-    entries: mergeById(remote.entries, local.entries),
+    entries: mergeEntriesByOwnerId(remote.entries, local.entries),
     photos: mergeById(remote.photos, local.photos),
     messages: mergeById(remote.messages, local.messages),
     lastSavedAt: null,
+  };
+}
+
+/** Native health authorization/import state belongs to this device, not cloud. */
+function preserveDeviceHealthState(
+  remote: AppState,
+  local: AppState,
+): AppState {
+  if (remote.currentUserId !== local.currentUserId) return remote;
+  return {
+    ...remote,
+    settings: {
+      ...remote.settings,
+      healthSync: local.settings.healthSync,
+      healthHistoryDays: local.settings.healthHistoryDays,
+      syncMode: local.settings.syncMode,
+    },
+  };
+}
+
+type MembershipRealtimeRow = {
+  group_id?: string;
+  user_id?: string;
+  role?: Member["role"];
+  status?: "active" | "pending";
+  last_seen_at?: string;
+  last_data_synced_at?: string;
+};
+
+function applyMembershipRealtimeRow(
+  state: AppState,
+  row: MembershipRealtimeRow,
+): AppState | null {
+  const groupId = row.group_id;
+  const userId = row.user_id;
+  if (!groupId || !userId) return null;
+  const group = state.groups.find((item) => item.id === groupId);
+  if (!group) return null;
+  const active = group.members.find((member) => member.id === userId);
+  const pending = (group.pendingMembers ?? []).find(
+    (member) => member.id === userId,
+  );
+  const localCurrentMember = [state.group, ...state.groups]
+    .flatMap((candidate) => candidate.members)
+    .find((member) => member.id === userId);
+  const source =
+    active ??
+    pending ??
+    localCurrentMember ?? {
+      id: userId,
+      name: userId === state.currentUserId ? "You" : "New member",
+      initials: userId === state.currentUserId ? "Y" : "N",
+      color: DEFAULT_GROUP_THEME,
+      role: row.role ?? ("member" as const),
+    };
+  const member: Member = {
+    ...source,
+    role: row.role ?? source.role,
+    lastSeenAt: row.last_seen_at ?? source.lastSeenAt,
+    lastDataSyncedAt:
+      row.last_data_synced_at &&
+      (!source.lastDataSyncedAt ||
+        row.last_data_synced_at >= source.lastDataSyncedAt)
+        ? row.last_data_synced_at
+        : source.lastDataSyncedAt,
+  };
+  const targetIsPending = row.status === "pending";
+  const targetMember = targetIsPending ? pending : active;
+  const membershipAlreadyMatches = targetIsPending
+    ? Boolean(targetMember && !active)
+    : Boolean(targetMember && !pending);
+  if (
+    membershipAlreadyMatches &&
+    targetMember?.role === member.role &&
+    targetMember.lastSeenAt === member.lastSeenAt &&
+    targetMember.lastDataSyncedAt === member.lastDataSyncedAt
+  )
+    return state;
+  const nextGroup: Group =
+    targetIsPending
+      ? {
+          ...group,
+          members: group.members.filter((item) => item.id !== userId),
+          pendingMembers: [
+            ...(group.pendingMembers ?? []).filter(
+              (item) => item.id !== userId,
+            ),
+            member,
+          ],
+        }
+      : {
+          ...group,
+          members: [
+            ...group.members.filter((item) => item.id !== userId),
+            member,
+          ],
+          pendingMembers: (group.pendingMembers ?? []).filter(
+            (item) => item.id !== userId,
+          ),
+        };
+  const groups = state.groups.map((item) =>
+    item.id === groupId ? nextGroup : item,
+  );
+  return {
+    ...state,
+    groups,
+    group: state.group.id === groupId ? nextGroup : state.group,
   };
 }
 
@@ -645,6 +993,119 @@ function dailyStatusKey(
   ].join(":");
 }
 
+function mergeActivityEntries(
+  cached: AppState["entries"],
+  fetched: AppState["entries"],
+  currentUserId: string,
+) {
+  const entries = new Map(
+    cached.map((entry) => [
+      metricEntryKey(entry.userId, entry.id),
+      entry,
+    ]),
+  );
+  fetched.forEach((entry) => {
+    const key = metricEntryKey(entry.userId, entry.id);
+    const existing = entries.get(key);
+    const existingIsNewer =
+      Boolean(existing?.sourceUpdatedAt) &&
+      Boolean(entry.sourceUpdatedAt) &&
+      existing!.sourceUpdatedAt! > entry.sourceUpdatedAt!;
+    // Owned rows may be newer local writes waiting for upload. Fetched rows are
+    // authoritative for friends unless their native-source revision is older
+    // than the one already rendered from cache.
+    if (
+      !existing ||
+      (existing.userId !== currentUserId && !existingIsNewer)
+    )
+      entries.set(key, entry);
+  });
+  return [...entries.values()].sort((a, b) =>
+    a.recordedAt.localeCompare(b.recordedAt),
+  );
+}
+
+function mergeActivityStatuses(
+  cached: AppState["dailyMetricStatuses"],
+  fetched: AppState["dailyMetricStatuses"],
+) {
+  const statuses = new Map(
+    cached.map((status) => [dailyStatusKey(status), status]),
+  );
+  fetched.forEach((status) => {
+    const key = dailyStatusKey(status);
+    const existing = statuses.get(key);
+    if (
+      !existing?.syncedAt ||
+      !status.syncedAt ||
+      status.syncedAt >= existing.syncedAt
+    )
+      statuses.set(key, status);
+  });
+  return [...statuses.values()];
+}
+
+function messagesEquivalent(
+  left: AppState["messages"],
+  right: AppState["messages"],
+) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((message, index) => {
+    const other = right[index];
+    return (
+      message.id === other?.id &&
+      message.groupId === other.groupId &&
+      message.senderId === other.senderId &&
+      message.text === other.text &&
+      message.createdAt === other.createdAt &&
+      message.kind === other.kind &&
+      message.conversationId === other.conversationId &&
+      message.recipientId === other.recipientId &&
+      message.imageStoragePath === other.imageStoragePath &&
+      message.imageUri === other.imageUri
+    );
+  });
+}
+
+function cachedGroupActivity(
+  state: AppState,
+  groupId: string,
+) {
+  const cacheStart = new Date();
+  cacheStart.setDate(
+    cacheStart.getDate() - GROUP_ACTIVITY_LOCAL_CACHE_DAYS,
+  );
+  const cacheSinceDate = dateKey(cacheStart);
+  const metricIds = new Set(
+    state.group.id === groupId
+      ? (state.group.metricConfiguration ?? []).map((metric) => metric.id)
+      : [],
+  );
+  const memberIds = new Set(
+    state.group.id === groupId
+      ? state.group.members.map((member) => member.id)
+      : [],
+  );
+  return {
+    entries: state.entries
+      .filter(
+        (entry) =>
+          entry.localDate >= cacheSinceDate &&
+          metricIds.has(entry.metricId) &&
+          memberIds.has(entry.userId),
+      )
+      .map((entry) =>
+        entry.imageStoragePath
+          ? { ...entry, imageUri: undefined }
+          : entry,
+      ),
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => status.groupId === groupId,
+    ),
+  };
+}
+
 /**
  * A workspace request can finish after a local health import, log, setting
  * change, or message. Keep those live personal writes while accepting the
@@ -653,6 +1114,7 @@ function dailyStatusKey(
 function mergeWorkspaceWithoutRegression(
   remote: AppState,
   live: AppState,
+  preserveLocalGroupConfiguration = false,
 ): AppState {
   const remoteGroupMetricIds = new Set(
     (remote.group.metricConfiguration ?? []).map((metric) => metric.id),
@@ -660,14 +1122,25 @@ function mergeWorkspaceWithoutRegression(
   const remoteMetrics = new Map(
     remote.metrics.map((metric) => [metric.id, metric]),
   );
+  const locallyConfiguredMetricIds = new Set(
+    (live.group.metricConfiguration ?? []).map((metric) => metric.id),
+  );
   const metrics = mergeById(remote.metrics, live.metrics).map((metric) => {
     const shared = remoteMetrics.get(metric.id);
     if (!shared || !remoteGroupMetricIds.has(metric.id)) return metric;
+    if (
+      preserveLocalGroupConfiguration &&
+      locallyConfiguredMetricIds.has(metric.id)
+    )
+      return metric;
     return {
       ...shared,
       goal: metric.goal,
       goalRange: metric.goalRange,
       goalEnabled: metric.goalEnabled,
+      goalSchedule: metric.goalSchedule,
+      reminder: metric.reminder,
+      reminders: metric.reminders,
       defaultVisibility: metric.defaultVisibility,
       healthMapping: metric.healthMapping ?? shared.healthMapping,
       gymMapping: metric.gymMapping ?? shared.gymMapping,
@@ -684,10 +1157,77 @@ function mergeWorkspaceWithoutRegression(
       activeFrom: metric.activeFrom,
     };
   });
-  const entries = new Map(remote.entries.map((entry) => [entry.id, entry]));
-  live.entries
-    .filter((entry) => entry.userId === live.currentUserId)
-    .forEach((entry) => entries.set(entry.id, entry));
+  // The group shell is server-owned, but an account name/avatar selected on
+  // this device is an offline-capable pending write. Preserve those fields
+  // while the signed URL/profile row catches up instead of flashing the old
+  // avatar back over the local selection.
+  const liveCurrentMember = [live.group, ...live.groups]
+    .flatMap((group) => group.members)
+    .find((member) => member.id === live.currentUserId);
+  const preserveLocalAvatar = isUploadableLocalUri(
+    liveCurrentMember?.avatarUri ?? null,
+  );
+  const localGroupConfiguration =
+    preserveLocalGroupConfiguration && live.group.id === remote.group.id
+      ? live.group
+      : null;
+  const remoteGroupBase: Group = localGroupConfiguration
+    ? {
+        ...remote.group,
+        name: localGroupConfiguration.name,
+        templateName: localGroupConfiguration.templateName,
+        streakRestDaysPerWeek:
+          localGroupConfiguration.streakRestDaysPerWeek,
+        themeColor: localGroupConfiguration.themeColor,
+        requireMemberApproval:
+          localGroupConfiguration.requireMemberApproval,
+        metricConfiguration:
+          localGroupConfiguration.metricConfiguration,
+        gymPlans: localGroupConfiguration.gymPlans,
+        members: remote.group.members.map((member) => ({
+          ...member,
+          role:
+            localGroupConfiguration.members.find(
+              (localMember) => localMember.id === member.id,
+            )?.role ?? member.role,
+        })),
+      }
+    : remote.group;
+  const remoteGroup: Group = liveCurrentMember
+    ? {
+        ...remoteGroupBase,
+        members: remoteGroupBase.members.map((member) =>
+          member.id === live.currentUserId
+            ? {
+                ...member,
+                name: liveCurrentMember.name,
+                initials: liveCurrentMember.initials,
+                color: liveCurrentMember.color,
+                avatarUri: preserveLocalAvatar
+                  ? liveCurrentMember.avatarUri
+                  : member.avatarUri,
+                avatarStoragePath: preserveLocalAvatar
+                  ? liveCurrentMember.avatarStoragePath
+                  : member.avatarStoragePath,
+              }
+            : member,
+        ),
+      }
+    : remoteGroupBase;
+  const groupMemberIds = new Set(
+    remoteGroup.members.map((member) => member.id),
+  );
+  const cachedEntries = live.entries.filter(
+    (entry) =>
+      entry.userId === live.currentUserId ||
+      (remoteGroupMetricIds.has(entry.metricId) &&
+        groupMemberIds.has(entry.userId)),
+  );
+  const entries = mergeActivityEntries(
+    cachedEntries,
+    remote.entries,
+    live.currentUserId,
+  );
   const photos = new Map(remote.photos.map((photo) => [photo.id, photo]));
   live.photos
     .filter((photo) => photo.userId === live.currentUserId)
@@ -698,29 +1238,24 @@ function mergeWorkspaceWithoutRegression(
   live.messages
     .filter((message) => message.senderId === live.currentUserId)
     .forEach((message) => messages.set(message.id, message));
-  const statuses = new Map(
-    remote.dailyMetricStatuses.map((status) => [
-      dailyStatusKey(status),
-      status,
-    ]),
+  const statuses = mergeActivityStatuses(
+    live.dailyMetricStatuses,
+    remote.dailyMetricStatuses,
   );
-  live.dailyMetricStatuses
-    .filter((status) => status.userId === live.currentUserId)
-    .forEach((status) => statuses.set(dailyStatusKey(status), status));
   return {
     ...remote,
     ...live,
-    group: remote.group,
-    groups: mergeById(live.groups, remote.groups),
-    metrics,
-    entries: [...entries.values()].sort((a, b) =>
-      a.recordedAt.localeCompare(b.recordedAt),
+    group: remoteGroup,
+    groups: mergeById(live.groups, remote.groups).map((group) =>
+      group.id === remoteGroup.id ? remoteGroup : group,
     ),
+    metrics,
+    entries,
     photos: [...photos.values()],
     messages: [...messages.values()].sort((a, b) =>
       a.createdAt.localeCompare(b.createdAt),
     ),
-    dailyMetricStatuses: [...statuses.values()],
+    dailyMetricStatuses: statuses,
     trackedGoalPeriods: {
       ...remote.trackedGoalPeriods,
       ...live.trackedGoalPeriods,
@@ -855,31 +1390,297 @@ function friendlySyncError(error: unknown) {
 export function CloudSyncProvider({ children }: PropsWithChildren) {
   const { state, hydrated, replaceState } = useApp();
   const auth = useAuth();
+  const network = useNetInfo();
+  const networkAvailable =
+    network.isConnected !== false && network.isInternetReachable !== false;
   const [status, setStatus] = useState<CloudSyncStatus>(
     auth.status === "signedIn" ? "initializing" : "disabled",
   );
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingChanges, setPendingChanges] = useState(false);
+  const [nextRetryAt, setNextRetryAt] = useState(0);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [pendingGroup, setPendingGroup] =
     useState<PendingGroupRequest | null>(null);
   const [devices, setDevices] = useState<AccountDevice[]>([]);
   const stateRef = useRef(state);
+  const lastSyncedAtRef = useRef<string | null>(null);
   const revisionRef = useRef(0);
   const hashRef = useRef<string | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
+  const workspaceAckHashesRef = useRef(new Map<string, string>());
+  const groupConfigurationAckHashesRef = useRef(
+    new Map<string, string>(),
+  );
+  const workspaceUploadRequiredGroupsRef = useRef(new Set<string>());
   const groupConfigurationHashRef = useRef<string | null>(null);
   const deviceIdRef = useRef<string | null>(null);
   const deviceHeartbeatAtRef = useRef(0);
+  const presenceHeartbeatAtRef = useRef(0);
+  const lastResumeRecoveryAtRef = useRef(0);
   const initializedUserRef = useRef<string | null>(null);
+  const remoteInitializationPendingRef = useRef(false);
+  const identityResetUserRef = useRef<string | null>(null);
   const syncPromiseRef = useRef<Promise<void> | null>(null);
+  const syncIsForcedRef = useRef(false);
+  const performSyncRef = useRef<
+    ((forceWorkspace?: boolean, forceAttempt?: boolean) => Promise<void>) | null
+  >(null);
+  const leaderboardPublishPromiseRef = useRef<Promise<void> | null>(null);
+  const leaderboardPublishedAtByGroupRef = useRef(new Map<string, number>());
+  const cloudRetryAttemptRef = useRef(0);
+  const nextRetryAtRef = useRef(0);
+  const networkAvailableRef = useRef(networkAvailable);
+  networkAvailableRef.current = networkAvailable;
+  const previousNetworkAvailableRef = useRef(networkAvailable);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleSyncRef = useRef<
     ReturnType<typeof InteractionManager.runAfterInteractions> | null
   >(null);
   const suppressGroupRefreshUntilRef = useRef(0);
   const groupLoadSequenceRef = useRef(0);
+  const activityLoadSequenceRef = useRef(0);
+  const activityRefreshPromiseRef = useRef<Promise<void> | null>(null);
+  const activityVersionByGroupRef = useRef(new Map<string, number>());
+  const activityCoverageSinceByGroupRef = useRef(new Map<string, string>());
+  const activityVersionCheckByGroupRef = useRef(
+    new Map<string, Promise<void>>(),
+  );
+  const historicalHydrationStartedRef = useRef(new Set<string>());
+  // undefined = no queued request, null = full activity refresh, string =
+  // earliest local date requested by coalesced realtime events.
+  const queuedActivitySinceRef = useRef<string | null | undefined>(undefined);
+  const chatOutboxSeenRef = useRef(new Set<string>());
+  const chatOutboxPendingRef = useRef(new Set<string>());
+  const chatOutboxAttemptsRef = useRef(new Map<string, number>());
+  const chatOutboxPromiseRef = useRef<Promise<void> | null>(null);
+  const chatOutboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   stateRef.current = state;
+
+  const hasUnsyncedLocalChanges = useCallback(() => {
+    const live = stateRef.current;
+    if (stableHash(live) !== hashRef.current) return true;
+    if (!isCloudGroupId(live.group.id)) return false;
+    return (
+      live.settings.pendingGroupConfigurationIds?.includes(live.group.id) ===
+        true ||
+      workspaceUploadRequiredGroupsRef.current.has(live.group.id) ||
+      workspaceHash(live) !== workspaceHashRef.current
+    );
+  }, []);
+
+  const mergeRemoteWorkspace = useCallback(
+    (remote: AppState, live: AppState) => {
+      const groupId = remote.group.id;
+      const explicitlyPending =
+        live.settings.pendingGroupConfigurationIds?.includes(groupId) === true;
+      const acknowledged =
+        groupConfigurationAckHashesRef.current.get(groupId) ?? null;
+      const preserveLocalGroupConfiguration =
+        live.group.id === groupId &&
+        (explicitlyPending ||
+          (acknowledged !== null &&
+            groupConfigurationHash(live) !== acknowledged));
+      const next = mergeWorkspaceWithoutRegression(
+        remote,
+        live,
+        preserveLocalGroupConfiguration,
+      );
+      if (!preserveLocalGroupConfiguration) {
+        const nextConfigurationHash = groupConfigurationHash(next);
+        // This hash comes from the server-owned group workspace. The ref and
+        // persisted map therefore mean "server acknowledged", never merely
+        // "last value rendered locally".
+        groupConfigurationHashRef.current = nextConfigurationHash;
+        groupConfigurationAckHashesRef.current.set(
+          groupId,
+          nextConfigurationHash,
+        );
+        if (auth.user)
+          void writeGroupConfigurationAcks(
+            auth.user.id,
+            groupConfigurationAckHashesRef.current,
+          ).catch(() => undefined);
+      }
+      return next;
+    },
+    [auth.user],
+  );
+
+  const flushChatOutbox = useCallback(() => {
+    if (
+      chatOutboxPromiseRef.current ||
+      auth.status !== "signedIn" ||
+      !networkAvailableRef.current ||
+      !isCloudGroupId(stateRef.current.group.id)
+    ) return;
+    const pending = [...chatOutboxPendingRef.current].slice(0, 8);
+    if (!pending.length) return;
+    const operation = (async () => {
+      let shouldRetry = false;
+      for (const messageId of pending) {
+        try {
+          await pushCloudMessagesNow(stateRef.current, messageId);
+          chatOutboxPendingRef.current.delete(messageId);
+          chatOutboxAttemptsRef.current.delete(messageId);
+        } catch {
+          const attempts = (chatOutboxAttemptsRef.current.get(messageId) ?? 0) + 1;
+          chatOutboxAttemptsRef.current.set(messageId, attempts);
+          if (attempts < 5) shouldRetry = true;
+          else chatOutboxPendingRef.current.delete(messageId);
+        }
+      }
+      if (shouldRetry && !chatOutboxTimerRef.current) {
+        const attempts = Math.max(
+          1,
+          ...pending.map((id) => chatOutboxAttemptsRef.current.get(id) ?? 1),
+        );
+        chatOutboxTimerRef.current = setTimeout(() => {
+          chatOutboxTimerRef.current = null;
+          flushChatOutbox();
+        }, Math.min(20_000, 1_200 * 2 ** (attempts - 1)));
+      }
+    })().finally(() => {
+      chatOutboxPromiseRef.current = null;
+      // Messages can arrive while this batch is in flight, and a reconnect may
+      // queue more than the bounded batch. Drain the remainder without waiting
+      // for a page change or the heavier workspace sync.
+      if (
+        chatOutboxPendingRef.current.size &&
+        !chatOutboxTimerRef.current
+      ) {
+        chatOutboxTimerRef.current = setTimeout(() => {
+          chatOutboxTimerRef.current = null;
+          flushChatOutbox();
+        }, 120);
+      }
+    });
+    chatOutboxPromiseRef.current = operation;
+  }, [auth.status]);
+
+  useEffect(() => {
+    if (auth.status !== "signedIn" || !isCloudGroupId(state.group.id)) return;
+    const now = Date.now();
+    for (const message of state.messages) {
+      const createdAt = new Date(message.createdAt).getTime();
+      if (
+        message.senderId !== state.currentUserId ||
+        (message.groupId
+          ? message.groupId !== state.group.id
+          : message.conversationId !== `group:${state.group.id}`) ||
+        !Number.isFinite(createdAt) ||
+        now - createdAt > CHAT_OUTBOX_FRESHNESS_MS ||
+        chatOutboxSeenRef.current.has(message.id)
+      ) continue;
+      chatOutboxSeenRef.current.add(message.id);
+      chatOutboxPendingRef.current.add(message.id);
+    }
+    if (networkAvailable) flushChatOutbox();
+  }, [
+    auth.status,
+    flushChatOutbox,
+    networkAvailable,
+    state.currentUserId,
+    state.group.id,
+    state.messages,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (chatOutboxTimerRef.current) clearTimeout(chatOutboxTimerRef.current);
+    },
+    [],
+  );
+
+  const recordServerSyncedAt = useCallback(
+    (value: string | null | undefined) => {
+      if (!value || !Number.isFinite(new Date(value).getTime())) return;
+      const current = lastSyncedAtRef.current;
+      const next =
+        !current || new Date(value).getTime() >= new Date(current).getTime()
+          ? value
+          : current;
+      lastSyncedAtRef.current = next;
+      setLastSyncedAt(next);
+      if (auth.user)
+        void writeCloudSyncCheckpoint(auth.user.id, next).catch(
+          () => undefined,
+        );
+    },
+    [auth.user],
+  );
+
+  const recordActivityMetadata = useCallback(
+    (groupId: string, metadata: CloudActivityMetadata) => {
+      if (metadata.version !== undefined)
+        activityVersionByGroupRef.current.set(groupId, metadata.version);
+      if (metadata.sinceDate) {
+        const current =
+          activityCoverageSinceByGroupRef.current.get(groupId);
+        if (!current || metadata.sinceDate < current)
+          activityCoverageSinceByGroupRef.current.set(
+            groupId,
+            metadata.sinceDate,
+          );
+      }
+    },
+    [],
+  );
+
+  // Account identity is a hard cache boundary. Clear another account's local
+  // theme/group state in a layout effect so it cannot flash on screen or be
+  // persisted while the signed-in account snapshot is still loading.
+  useLayoutEffect(() => {
+    if (!hydrated || auth.status !== "signedIn" || !auth.user) return;
+    if (
+      stateRef.current.currentUserId === auth.user.id &&
+      !isDemoBoundState(stateRef.current)
+    )
+      return;
+    const clean = createCleanAccountState(auth.user);
+    stateRef.current = clean;
+    revisionRef.current = 0;
+    hashRef.current = null;
+    workspaceHashRef.current = null;
+    groupConfigurationHashRef.current = null;
+    initializedUserRef.current = null;
+    identityResetUserRef.current = auth.user.id;
+    activityVersionByGroupRef.current.clear();
+    activityCoverageSinceByGroupRef.current.clear();
+    activityVersionCheckByGroupRef.current.clear();
+    historicalHydrationStartedRef.current.clear();
+    lastSyncedAtRef.current = null;
+    setLastSyncedAt(null);
+    replaceState(clean);
+  }, [auth.status, auth.user, hydrated, replaceState]);
+
+  const touchPresence = useCallback(
+    async (force = false) => {
+      const groupId = stateRef.current.group.id;
+      if (
+        auth.status !== "signedIn" ||
+        !isCloudGroupId(groupId) ||
+        (!force &&
+          Date.now() - presenceHeartbeatAtRef.current < 5 * 60 * 1000)
+      )
+        return;
+      presenceHeartbeatAtRef.current = Date.now();
+      const lastSeenAt = await touchCloudGroupPresence(groupId);
+      const live = stateRef.current;
+      const next = applyMembershipRealtimeRow(live, {
+        group_id: groupId,
+        user_id: live.currentUserId,
+        status: "active",
+        last_seen_at: lastSeenAt,
+      });
+      if (next && next !== live) {
+        stateRef.current = next;
+        replaceState(next);
+      }
+    },
+    [auth.status, replaceState],
+  );
 
   useEffect(() => {
     if (auth.status !== "signedIn") setPendingGroup(null);
@@ -907,6 +1708,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
 
   const pullLatest = useCallback(async () => {
     if (!auth.user || !supabase) return;
+    if (!networkAvailableRef.current) {
+      setStatus("offline");
+      setPendingChanges(hasUnsyncedLocalChanges());
+      setErrorMessage(
+        "Offline changes are safe on this device and will retry automatically.",
+      );
+      return;
+    }
     // Realtime account updates hydrate behind the currently rendered cache.
     // A global loading state here made every tab appear to reload.
     setErrorMessage(null);
@@ -920,33 +1729,58 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // Pulling group/chat updates can race with a just-finished Health Connect
       // import. Merge by stable client ids so the UI never flashes back to the
       // older cloud snapshot while the local import is still uploading.
-      let resolved = mergeStates(resolvedRemote, stateRef.current);
-      if (isCloudGroupId(resolved.group.id)) {
-        try {
-          const loaded = await loadCloudWorkspace(
-            resolved,
-            resolved.group.id,
-          );
-          resolved = mergeWorkspaceWithoutRegression(
-            loaded,
-            stateRef.current,
-          );
-        } catch (groupError) {
-          setErrorMessage(
-            `Account synced; group refresh will retry: ${errorText(groupError)}`,
-          );
-        }
-      }
+      const resolved = mergeStates(resolvedRemote, stateRef.current);
       const resolvedHash = stableHash(resolved);
       hashRef.current = remoteHash;
-      workspaceHashRef.current =
-        resolvedHash === remoteHash ? workspaceHash(resolved) : null;
-      groupConfigurationHashRef.current = groupConfigurationHash(resolved);
+      workspaceHashRef.current = isCloudGroupId(resolved.group.id)
+        ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
+        : null;
+      groupConfigurationHashRef.current = isCloudGroupId(resolved.group.id)
+        ? (groupConfigurationAckHashesRef.current.get(resolved.group.id) ?? null)
+        : null;
       replaceState(resolved);
       stateRef.current = resolved;
-      setLastSyncedAt(remote.updated_at);
+      recordServerSyncedAt(remote.updated_at);
       setPendingChanges(resolvedHash !== remoteHash);
       setStatus("synced");
+      cloudRetryAttemptRef.current = 0;
+      nextRetryAtRef.current = 0;
+      setNextRetryAt(0);
+      if (isCloudGroupId(resolved.group.id)) {
+        // "Get latest" returns as soon as the private account snapshot is
+        // merged. The heavier group workspace catches up after interactions,
+        // so the button and navigation never wait on 120 days of history.
+        const groupId = resolved.group.id;
+        const groupSequence = ++groupLoadSequenceRef.current;
+        activityLoadSequenceRef.current += 1;
+        InteractionManager.runAfterInteractions(() => {
+          loadCloudWorkspace(
+            stateRef.current,
+            groupId,
+            (metadata) => recordActivityMetadata(groupId, metadata),
+          )
+            .then((loaded) => {
+              if (
+                groupSequence !== groupLoadSequenceRef.current ||
+                stateRef.current.group.id !== groupId
+              )
+                return;
+              const next = mergeRemoteWorkspace(
+                loaded,
+                stateRef.current,
+              );
+              stateRef.current = next;
+              workspaceHashRef.current =
+                workspaceAckHashesRef.current.get(groupId) ?? null;
+              replaceState(next);
+            })
+            .catch((groupError) =>
+              setErrorMessage(
+                `Account synced; group refresh will retry: ${errorText(groupError)}`,
+              ),
+            );
+        });
+      }
     } catch (error) {
       setStatus(
         /network|fetch|offline|timeout/i.test(String(error))
@@ -955,16 +1789,51 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       );
       setErrorMessage(friendlySyncError(error));
     }
-  }, [auth.user, replaceState]);
+  }, [
+    auth.user,
+    hasUnsyncedLocalChanges,
+    mergeRemoteWorkspace,
+    recordActivityMetadata,
+    recordServerSyncedAt,
+    replaceState,
+  ]);
 
-  const performSync = useCallback(async (forceWorkspace = false) => {
+  const performSync = useCallback(async (
+    forceWorkspace = false,
+    forceAttempt = false,
+  ) => {
     if (!auth.user || !supabase || initializedUserRef.current !== auth.user.id)
       return;
-    if (syncPromiseRef.current) return syncPromiseRef.current;
+    if (!forceAttempt && isCloudSyncPaused()) {
+      // Edit/reorder mode pauses network writes, not the account itself. Avoid
+      // showing a false Pending chip when there is no durable local change.
+      setPendingChanges(hasUnsyncedLocalChanges());
+      return;
+    }
+    if (!networkAvailableRef.current) {
+      setStatus("offline");
+      setPendingChanges(hasUnsyncedLocalChanges());
+      setErrorMessage(
+        "Offline changes are safe on this device and will retry automatically.",
+      );
+      return;
+    }
+    const deferGroupRetry =
+      !forceAttempt && nextRetryAtRef.current > Date.now();
+    if (syncPromiseRef.current) {
+      const activeSync = syncPromiseRef.current;
+      if (!forceAttempt || syncIsForcedRef.current) return activeSync;
+      // A pull-to-refresh that lands during a quiet autosave still needs its
+      // own freshness assertion after that serialized write completes.
+      await activeSync;
+      return performSyncRef.current?.(forceWorkspace, true);
+    }
+    syncIsForcedRef.current = forceAttempt;
     const operation = (async () => {
       // Routine debounced saves stay visually quiet. Explicit refresh controls
       // already expose their own progress and should not flash on every tap.
-      setErrorMessage(null);
+      if (forceAttempt) setStatus("syncing");
+      if (!deferGroupRetry) setErrorMessage(null);
       try {
         const deviceId = deviceIdRef.current ?? (await getDeviceId());
         deviceIdRef.current = deviceId;
@@ -972,54 +1841,261 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current.currentUserId === auth.user!.id
             ? stateRef.current
             : bindStateToAccount(stateRef.current, auth.user!);
-        candidate = await uploadOwnedMedia(candidate);
-        const candidateHash = stableHash(candidate);
+        const initialCandidateHash = stableHash(candidate);
+        if (initialCandidateHash !== hashRef.current)
+          candidate = await uploadOwnedMedia(candidate);
+        let candidateHash = stableHash(candidate);
         if (candidate !== stateRef.current) {
           replaceState(candidate);
           stateRef.current = candidate;
         }
-        const nextWorkspaceHash = workspaceHash(candidate);
+        let nextWorkspaceHash = workspaceHash(candidate);
         const nextGroupConfigurationHash = groupConfigurationHash(candidate);
-        let workspaceSynced = true;
-        let workspaceWarning: string | null = null;
-        if (
+        const pushedGroupId = candidate.group.id;
+        const pushedWorkspaceHash = nextWorkspaceHash;
+        const pendingGroupConfiguration =
+          candidate.settings.pendingGroupConfigurationIds?.includes(
+            candidate.group.id,
+          ) === true;
+        const acknowledgedGroupConfigurationHash =
+          groupConfigurationAckHashesRef.current.get(candidate.group.id) ??
+          null;
+        const shouldPushGroupConfiguration =
+          pendingGroupConfiguration ||
+          (acknowledgedGroupConfigurationHash !== null &&
+            nextGroupConfigurationHash !==
+              acknowledgedGroupConfigurationHash);
+        const groupWorkspaceNeedsUpload =
           isCloudGroupId(candidate.group.id) &&
           (forceWorkspace ||
-            nextWorkspaceHash !== workspaceHashRef.current)
-        ) {
+            pendingGroupConfiguration ||
+            workspaceUploadRequiredGroupsRef.current.has(candidate.group.id) ||
+            nextWorkspaceHash !== workspaceHashRef.current);
+        let workspaceSynced = !groupWorkspaceNeedsUpload;
+        let workspaceWasUploaded = false;
+        let workspaceWarning: string | null = null;
+        if (groupWorkspaceNeedsUpload && !deferGroupRetry) {
+          workspaceSynced = true;
           suppressGroupRefreshUntilRef.current = Date.now() + 3000;
           try {
-            await pushCloudWorkspace(
+            const workspaceResult = await pushCloudWorkspace(
               candidate,
-              nextGroupConfigurationHash !==
-                groupConfigurationHashRef.current,
+              shouldPushGroupConfiguration,
+              ({ syncedAt }) => {
+                // A large historical status backfill publishes the newest
+                // month first. Reflect that durable server checkpoint now;
+                // older compact summaries may continue without making the
+                // Cloud page look frozen or delaying current leaderboard data.
+                recordServerSyncedAt(syncedAt);
+                leaderboardPublishedAtByGroupRef.current.set(
+                  pushedGroupId,
+                  Date.now(),
+                );
+                const live = stateRef.current;
+                const published = applyMembershipRealtimeRow(
+                  live,
+                  {
+                    group_id: pushedGroupId,
+                    user_id: stateRef.current.currentUserId,
+                    status: "active",
+                    last_data_synced_at: syncedAt,
+                  },
+                );
+                if (published && published !== live) {
+                  stateRef.current = published;
+                  replaceState(published);
+                }
+              },
             );
+            if (!workspaceResult.workspacePushed)
+              throw new Error("Group workspace is not active yet.");
+            if (
+              shouldPushGroupConfiguration &&
+              !workspaceResult.groupConfigurationPushed
+            )
+              throw new Error(
+                "Group settings are waiting for administrator access.",
+              );
+            workspaceWasUploaded = true;
+            if (workspaceResult.activityVersion !== undefined)
+              activityVersionByGroupRef.current.set(
+                candidate.group.id,
+                workspaceResult.activityVersion,
+              );
+            // A cloud request can finish after another local edit. Apply only
+            // the acknowledgements to the latest live state; never replace it
+            // with the older state captured when this request began.
+            const liveAfterWorkspacePush = stateRef.current;
+            let acknowledgedState = liveAfterWorkspacePush;
+            if (workspaceResult.deletedEntryIds.length) {
+              const acknowledged = new Set(
+                workspaceResult.deletedEntryIds,
+              );
+              acknowledgedState = {
+                ...acknowledgedState,
+                settings: {
+                  ...acknowledgedState.settings,
+                  pendingDeletedEntryIds: (
+                    acknowledgedState.settings.pendingDeletedEntryIds ?? []
+                  ).filter((id) => !acknowledged.has(id)),
+                },
+              };
+            }
+            const pushedConfigurationIsStillCurrent =
+              acknowledgedState.group.id === pushedGroupId &&
+              groupConfigurationHash(acknowledgedState) ===
+                nextGroupConfigurationHash;
+            if (
+              workspaceResult.groupConfigurationPushed &&
+              pushedConfigurationIsStillCurrent
+            ) {
+              acknowledgedState = {
+                ...acknowledgedState,
+                settings: {
+                  ...acknowledgedState.settings,
+                  pendingGroupConfigurationIds: (
+                    acknowledgedState.settings.pendingGroupConfigurationIds ??
+                    []
+                  ).filter((groupId) => groupId !== pushedGroupId),
+                },
+              };
+            }
+            candidate = acknowledgedState;
+            candidateHash = stableHash(candidate);
+            nextWorkspaceHash = workspaceHash(candidate);
+            if (acknowledgedState !== liveAfterWorkspacePush) {
+              stateRef.current = acknowledgedState;
+              replaceState(acknowledgedState);
+            }
+            workspaceUploadRequiredGroupsRef.current.delete(
+              pushedGroupId,
+            );
+            workspaceAckHashesRef.current.set(
+              pushedGroupId,
+              pushedWorkspaceHash,
+            );
+            await writeWorkspaceAcks(
+              auth.user!.id,
+              workspaceAckHashesRef.current,
+            ).catch(() => undefined);
+            if (workspaceResult.groupConfigurationPushed) {
+              groupConfigurationHashRef.current =
+                nextGroupConfigurationHash;
+              groupConfigurationAckHashesRef.current.set(
+                pushedGroupId,
+                nextGroupConfigurationHash,
+              );
+              await writeGroupConfigurationAcks(
+                auth.user!.id,
+                groupConfigurationAckHashesRef.current,
+              ).catch(() => undefined);
+            }
           } catch (error) {
             // Group tables and the private account snapshot are independent.
             // Preserve settings and imported health data even when one shared
             // table is temporarily unavailable, then retry group data later.
             workspaceSynced = false;
             workspaceWarning = `Group data will retry: ${errorText(error) || "unknown server error"}`;
+            const attempt = Math.min(
+              8,
+              cloudRetryAttemptRef.current + 1,
+            );
+            cloudRetryAttemptRef.current = attempt;
+            const retryAt =
+              Date.now() +
+                Math.min(
+                  MAX_CLOUD_RETRY_MS,
+                  5_000 * 2 ** (attempt - 1),
+                );
+            nextRetryAtRef.current = retryAt;
+            setNextRetryAt(retryAt);
           }
         }
-        const payload = snapshotPayload(candidate);
-        const result = await writeSnapshot(
-          auth.user!.id,
-          payload,
-          revisionRef.current,
-          deviceId,
-        );
-        revisionRef.current = result.revision;
-        const syncedAt = result.updatedAt;
+        // A deliberate refresh is also a freshness assertion. Even when no
+        // value changed, publish the compact recent status window so the
+        // server can stamp this member as checked and up to date. Never use a
+        // viewer refresh or phone clock as another member's sync timestamp.
+        if (
+          forceAttempt &&
+          workspaceSynced &&
+          !workspaceWasUploaded &&
+          isCloudGroupId(candidate.group.id)
+        ) {
+          const recent = await pushCloudRecentActivity(candidate, 2);
+          if (recent.published)
+            leaderboardPublishedAtByGroupRef.current.set(
+              candidate.group.id,
+              Date.now(),
+            );
+          if (recent.version !== undefined)
+            activityVersionByGroupRef.current.set(
+              candidate.group.id,
+              recent.version,
+            );
+          if (recent.updatedAt) {
+            recordServerSyncedAt(recent.updatedAt);
+            const live = stateRef.current;
+            const published = applyMembershipRealtimeRow(
+              live,
+              {
+                group_id: candidate.group.id,
+                user_id: candidate.currentUserId,
+                status: "active",
+                last_data_synced_at: recent.updatedAt,
+              },
+            );
+            if (published && published !== live) {
+              stateRef.current = published;
+              replaceState(published);
+            }
+          }
+        }
+        let syncedAt: string | null = null;
+        if (candidateHash !== hashRef.current) {
+          const payload = snapshotPayload(candidate);
+          const result = await writeSnapshot(
+            auth.user!.id,
+            payload,
+            revisionRef.current,
+            deviceId,
+          );
+          revisionRef.current = result.revision;
+          syncedAt = result.updatedAt;
+        }
         hashRef.current = candidateHash;
         if (workspaceSynced) {
-          workspaceHashRef.current = nextWorkspaceHash;
-          groupConfigurationHashRef.current = nextGroupConfigurationHash;
+          if (!isCloudGroupId(candidate.group.id)) {
+            workspaceHashRef.current = nextWorkspaceHash;
+          } else if (workspaceWasUploaded) {
+            workspaceHashRef.current =
+              candidate.group.id === pushedGroupId
+                ? pushedWorkspaceHash
+                : (workspaceAckHashesRef.current.get(candidate.group.id) ??
+                  null);
+          }
         }
-        setLastSyncedAt(syncedAt);
-        setPendingChanges(!workspaceSynced);
+        recordServerSyncedAt(syncedAt);
+        const latestState = stateRef.current;
+        const hasNewerLocalState = stableHash(latestState) !== candidateHash;
+        const hasPendingWorkspace =
+          isCloudGroupId(latestState.group.id) &&
+          (latestState.settings.pendingGroupConfigurationIds?.includes(
+            latestState.group.id,
+          ) === true ||
+            workspaceHash(latestState) !== workspaceHashRef.current);
+        const needsFollowUpSync = hasNewerLocalState || hasPendingWorkspace;
+        setPendingChanges(
+          !workspaceSynced || needsFollowUpSync,
+        );
         setStatus("synced");
-        setErrorMessage(workspaceWarning);
+        if (!deferGroupRetry) setErrorMessage(workspaceWarning);
+        if (workspaceSynced) {
+          cloudRetryAttemptRef.current = 0;
+          const retryAt = needsFollowUpSync ? Date.now() + 500 : 0;
+          nextRetryAtRef.current = retryAt;
+          setNextRetryAt(retryAt);
+        }
+        void touchPresence().catch(() => undefined);
         // Device presence is a low-frequency heartbeat, not part of every
         // autosave. This avoids a second query after routine local edits.
         if (Date.now() - deviceHeartbeatAtRef.current >= 15 * 60 * 1000) {
@@ -1048,20 +2124,106 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             setErrorMessage(
               "Changes from two devices were merged. Sync once more to confirm them.",
             );
+            cloudRetryAttemptRef.current = 1;
+            nextRetryAtRef.current = Date.now() + 5_000;
+            setNextRetryAt(nextRetryAtRef.current);
             return;
           }
         }
         const offline = /network|fetch|offline|timeout/i.test(String(error));
+        const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
+        cloudRetryAttemptRef.current = attempt;
+        const retryAt =
+          Date.now() +
+          Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+        nextRetryAtRef.current = retryAt;
+        setNextRetryAt(retryAt);
         setStatus(offline ? "offline" : "error");
-        setPendingChanges(true);
+        setPendingChanges(hasUnsyncedLocalChanges());
         setErrorMessage(friendlySyncError(error));
       } finally {
+        syncIsForcedRef.current = false;
         syncPromiseRef.current = null;
       }
     })();
     syncPromiseRef.current = operation;
     return operation;
-  }, [auth.user, replaceState]);
+  }, [
+    auth.user,
+    hasUnsyncedLocalChanges,
+    recordServerSyncedAt,
+    replaceState,
+    touchPresence,
+  ]);
+  performSyncRef.current = performSync;
+
+  const publishLeaderboardFreshness = useCallback(async () => {
+    if (
+      auth.status !== "signedIn" ||
+      !auth.user ||
+      !supabase ||
+      initializedUserRef.current !== auth.user.id ||
+      remoteInitializationPendingRef.current ||
+      !networkAvailableRef.current ||
+      NativeAppState.currentState !== "active" ||
+      isCloudSyncPaused()
+    )
+      return;
+    const current = stateRef.current;
+    const groupId = current.group.id;
+    if (!isCloudGroupId(groupId)) return;
+    const lastAttempt =
+      leaderboardPublishedAtByGroupRef.current.get(groupId) ?? 0;
+    if (Date.now() - lastAttempt < LEADERBOARD_FRESHNESS_INTERVAL_MS) return;
+    // A real local edit owns the next publication. Let the normal outbox save
+    // it immediately instead of racing a metadata-only freshness assertion.
+    const privateSnapshotChanged = stableHash(current) !== hashRef.current;
+    const groupWorkspaceChanged =
+      current.settings.pendingGroupConfigurationIds?.includes(groupId) ===
+        true ||
+      workspaceUploadRequiredGroupsRef.current.has(groupId) ||
+      workspaceHash(current) !== workspaceHashRef.current;
+    if (
+      syncPromiseRef.current ||
+      privateSnapshotChanged ||
+      groupWorkspaceChanged ||
+      leaderboardPublishPromiseRef.current
+    )
+      return;
+
+    // Record the attempt boundary as well as success. A temporary network or
+    // schema failure must not become a tight foreground retry loop.
+    leaderboardPublishedAtByGroupRef.current.set(groupId, Date.now());
+    const operation = (async () => {
+      const recent = await pushCloudRecentActivity(current, 2);
+      if (
+        !recent.published ||
+        stateRef.current.group.id !== groupId
+      )
+        return;
+      if (recent.version !== undefined)
+        activityVersionByGroupRef.current.set(groupId, recent.version);
+      if (!recent.updatedAt) return;
+      recordServerSyncedAt(recent.updatedAt);
+      const published = applyMembershipRealtimeRow(stateRef.current, {
+        group_id: groupId,
+        user_id: current.currentUserId,
+        status: "active",
+        last_data_synced_at: recent.updatedAt,
+      });
+      if (published && published !== stateRef.current) {
+        stateRef.current = published;
+        replaceState(published);
+      }
+    })();
+    leaderboardPublishPromiseRef.current = operation;
+    try {
+      await operation;
+    } finally {
+      if (leaderboardPublishPromiseRef.current === operation)
+        leaderboardPublishPromiseRef.current = null;
+    }
+  }, [auth.status, auth.user, recordServerSyncedAt, replaceState]);
 
   useEffect(() => {
     if (!hydrated || auth.status !== "signedIn" || !auth.user || !supabase) {
@@ -1071,6 +2233,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
     let cancelled = false;
     const user = auth.user;
+    remoteInitializationPendingRef.current = true;
     setStatus("initializing");
     setErrorMessage(null);
     (async () => {
@@ -1078,95 +2241,200 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const deviceId = await getDeviceId();
         if (cancelled) return;
         deviceIdRef.current = deviceId;
+        workspaceAckHashesRef.current = await readWorkspaceAcks(user.id);
+        groupConfigurationAckHashesRef.current =
+          await readGroupConfigurationAcks(user.id);
+        const savedCheckpoint = await readCloudSyncCheckpoint(user.id);
+        if (savedCheckpoint) {
+          lastSyncedAtRef.current = savedCheckpoint;
+          setLastSyncedAt(savedCheckpoint);
+        }
+        if (cancelled) return;
+        // Local state is authoritative and usable before the first network
+        // request. Mark the account initialized now so offline edits enter the
+        // outbox instead of being silently ignored until a relaunch.
+        initializedUserRef.current = user.id;
+        const onboardingComplete = await onboardingCompletedLocally(user.id);
+        if (cancelled) return;
+        if (
+          onboardingComplete &&
+          stateRef.current.currentUserId === user.id &&
+          !stateRef.current.settings.onboardingComplete
+        ) {
+          const markedComplete = {
+            ...stateRef.current,
+            settings: {
+              ...stateRef.current.settings,
+              onboardingComplete: true,
+            },
+          };
+          stateRef.current = markedComplete;
+          replaceState(markedComplete);
+        }
+        if (!networkAvailableRef.current) {
+          setStatus("offline");
+          setPendingChanges(hasUnsyncedLocalChanges());
+          setErrorMessage(
+            "Offline changes are safe on this device and will retry automatically.",
+          );
+          return;
+        }
         const remote = await fetchSnapshot(user.id);
         if (cancelled) return;
+        remoteInitializationPendingRef.current = false;
         let correctedAccountState = false;
         if (remote) {
           revisionRef.current = remote.revision;
+          const identityWasReset =
+            identityResetUserRef.current === user.id;
           correctedAccountState =
             remote.payload.currentUserId !== user.id ||
             isDemoBoundState(remote.payload);
           const bound = bindStateToAccount(remote.payload, user);
-          let resolved = await resolvePrivateMedia(bound);
+          const remoteHash = stableHash(bound);
+          let resolved = preserveDeviceHealthState(
+            bound,
+            stateRef.current,
+          );
           // The cached device state is rendered first. Preserve its stable-id
           // local writes while the older cloud snapshot and group tables load
           // in the background; the next normal sync uploads the merged result.
           if (
+            !identityWasReset &&
             stateRef.current.currentUserId === user.id &&
             !isDemoBoundState(stateRef.current)
           )
             resolved = mergeStates(resolved, stateRef.current);
-          let existingGroups: Group[] = [];
-          try {
-            existingGroups = await loadCloudGroupShells();
-          } catch (groupError) {
-            setErrorMessage(
-              `Account restored; group refresh will retry: ${errorText(groupError)}`,
-            );
-          }
-          const targetGroup =
-            existingGroups.find((group) => group.id === resolved.group.id) ??
-            existingGroups[0];
-          if (targetGroup) {
-            const loaded = await loadCloudWorkspace(
-              { ...resolved, groups: existingGroups },
-              targetGroup.id,
-            );
-            resolved =
-              stateRef.current.currentUserId === user.id &&
-              !isDemoBoundState(stateRef.current)
-                ? mergeWorkspaceWithoutRegression(
-                    loaded,
-                    stateRef.current,
-                  )
-                : loaded;
-          }
+          if (onboardingComplete && !resolved.settings.onboardingComplete)
+            resolved = {
+              ...resolved,
+              settings: {
+                ...resolved.settings,
+                onboardingComplete: true,
+              },
+            };
           if (!cancelled) {
             hashRef.current = correctedAccountState
               ? null
-              : stableHash(resolved);
-            workspaceHashRef.current = workspaceHash(resolved);
-            groupConfigurationHashRef.current =
-              groupConfigurationHash(resolved);
+              : remoteHash;
+            workspaceHashRef.current = isCloudGroupId(resolved.group.id)
+              ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
+              : null;
+            if (
+              isCloudGroupId(resolved.group.id) &&
+              !workspaceHashRef.current
+            )
+              workspaceUploadRequiredGroupsRef.current.add(resolved.group.id);
+            groupConfigurationHashRef.current = isCloudGroupId(
+              resolved.group.id,
+            )
+              ? (groupConfigurationAckHashesRef.current.get(
+                  resolved.group.id,
+                ) ?? null)
+              : null;
             replaceState(resolved);
             stateRef.current = resolved;
-            setLastSyncedAt(remote.updated_at);
+            recordServerSyncedAt(remote.updated_at);
+            setPendingChanges(stableHash(resolved) !== remoteHash);
+            setStatus("synced");
           }
+          // Signed media URLs and group history are cache hydration, not an
+          // app-start prerequisite. Render the local/private snapshot first,
+          // then merge these server-owned rows without regressing local writes.
+          InteractionManager.runAfterInteractions(() => {
+            (async () => {
+              let hydratedState = preserveDeviceHealthState(
+                await resolvePrivateMedia(bound),
+                stateRef.current,
+              );
+              if (
+                !identityWasReset &&
+                stateRef.current.currentUserId === user.id &&
+                !isDemoBoundState(stateRef.current)
+              )
+                hydratedState = mergeStates(
+                  hydratedState,
+                  stateRef.current,
+                );
+              const existingGroups = await loadCloudGroupShells();
+              const targetGroup =
+                existingGroups.find(
+                  (group) => group.id === hydratedState.group.id,
+                ) ?? existingGroups[0];
+              if (targetGroup)
+                hydratedState = await loadCloudWorkspace(
+                  { ...hydratedState, groups: existingGroups },
+                  targetGroup.id,
+                  (metadata) =>
+                    recordActivityMetadata(targetGroup.id, metadata),
+                );
+              if (cancelled) return;
+              const next = mergeRemoteWorkspace(
+                hydratedState,
+                stateRef.current,
+              );
+              stateRef.current = next;
+              replaceState(next);
+            })().catch((groupError) => {
+              if (!cancelled)
+                setErrorMessage(
+                  `Account restored; group refresh will retry: ${errorText(groupError)}`,
+                );
+            });
+          });
         } else {
-          let bound = bindStateToAccount(stateRef.current, user);
-          let existingGroups: Group[] = [];
-          try {
-            existingGroups = await loadCloudGroupShells();
-          } catch (groupError) {
-            setErrorMessage(
-              `Account ready; group refresh will retry: ${errorText(groupError)}`,
-            );
-          }
-          if (existingGroups.length)
-            bound = await loadCloudWorkspace(
-              { ...bound, groups: existingGroups },
-              existingGroups[0].id,
-            );
+          const bound = bindStateToAccount(stateRef.current, user);
           stateRef.current = bound;
           replaceState(bound);
           revisionRef.current = 0;
           hashRef.current = null;
-          workspaceHashRef.current = existingGroups.length
-            ? workspaceHash(bound)
+          workspaceHashRef.current = isCloudGroupId(bound.group.id)
+            ? (workspaceAckHashesRef.current.get(bound.group.id) ?? null)
             : null;
-          groupConfigurationHashRef.current = existingGroups.length
-            ? groupConfigurationHash(bound)
+          groupConfigurationHashRef.current = isCloudGroupId(bound.group.id)
+            ? (groupConfigurationAckHashesRef.current.get(bound.group.id) ?? null)
             : null;
+          setPendingChanges(true);
+          InteractionManager.runAfterInteractions(() => {
+            (async () => {
+              const existingGroups = await loadCloudGroupShells();
+              if (!existingGroups.length || cancelled) return;
+              const targetGroup = existingGroups[0];
+              const loaded = await loadCloudWorkspace(
+                { ...stateRef.current, groups: existingGroups },
+                targetGroup.id,
+                (metadata) =>
+                  recordActivityMetadata(targetGroup.id, metadata),
+              );
+              if (cancelled) return;
+              const next = mergeRemoteWorkspace(
+                loaded,
+                stateRef.current,
+              );
+              stateRef.current = next;
+              workspaceHashRef.current =
+                workspaceAckHashesRef.current.get(targetGroup.id) ?? null;
+              if (!workspaceHashRef.current)
+                workspaceUploadRequiredGroupsRef.current.add(targetGroup.id);
+              replaceState(next);
+            })().catch((groupError) => {
+              if (!cancelled)
+                setErrorMessage(
+                  `Account ready; group refresh will retry: ${errorText(groupError)}`,
+                );
+            });
+          });
         }
         if (cancelled) return;
-        initializedUserRef.current = user.id;
-        await supabase!.rpc("register_account_device", {
+        identityResetUserRef.current = null;
+        supabase!.rpc("register_account_device", {
           client_device_id: deviceId,
           client_platform: Platform.OS,
           client_label: null,
-        });
+        }).then(() => undefined, () => undefined);
         deviceHeartbeatAtRef.current = Date.now();
-        if (!remote || correctedAccountState) await performSync();
+        if (!remote || correctedAccountState)
+          await performSync(false, true);
         else setStatus("synced");
         loadDevices().catch(() => undefined);
       } catch (error) {
@@ -1177,6 +2445,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               : "error",
           );
           setErrorMessage(friendlySyncError(error));
+          setPendingChanges(hasUnsyncedLocalChanges());
+          const attempt = Math.min(
+            8,
+            cloudRetryAttemptRef.current + 1,
+          );
+          cloudRetryAttemptRef.current = attempt;
+          const retryAt =
+            Date.now() +
+            Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+          nextRetryAtRef.current = retryAt;
+          setNextRetryAt(retryAt);
         }
       }
     })();
@@ -1188,8 +2467,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.status,
     auth.user,
     hydrated,
+    hasUnsyncedLocalChanges,
+    initializationAttempt,
     loadDevices,
+    mergeRemoteWorkspace,
     performSync,
+    recordActivityMetadata,
+    recordServerSyncedAt,
     replaceState,
   ]);
 
@@ -1199,28 +2483,84 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       initializedUserRef.current !== auth.user?.id
     )
       return;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    idleSyncRef.current?.cancel();
+    // Do not restart the debounce clock for every state object. Busy pages can
+    // update several times per gesture; repeatedly cancelling here used to
+    // postpone the actual outbox save indefinitely and created timer churn.
+    if (timerRef.current || idleSyncRef.current) return;
     // Coalesce and defer full-snapshot hashing. Serializing the whole offline
     // state synchronously on every tap or keystroke caused phone UI stutter.
     const saveWhenReady = () => {
+      timerRef.current = null;
       if (isCloudSyncPaused()) {
         timerRef.current = setTimeout(saveWhenReady, 1200);
         return;
       }
+      if (!networkAvailableRef.current) {
+        setPendingChanges(hasUnsyncedLocalChanges());
+        setStatus("offline");
+        return;
+      }
       idleSyncRef.current = InteractionManager.runAfterInteractions(() => {
-        const hash = stableHash(stateRef.current);
-        if (hash === hashRef.current) return;
+        idleSyncRef.current = null;
+        const live = stateRef.current;
+        const privateSnapshotChanged = stableHash(live) !== hashRef.current;
+        const groupWorkspaceChanged =
+          isCloudGroupId(live.group.id) &&
+          (live.settings.pendingGroupConfigurationIds?.includes(
+            live.group.id,
+          ) === true ||
+            workspaceUploadRequiredGroupsRef.current.has(live.group.id) ||
+            workspaceHash(live) !== workspaceHashRef.current);
+        if (!privateSnapshotChanged && !groupWorkspaceChanged) return;
         setPendingChanges(true);
         performSync().catch(() => undefined);
       });
     };
     timerRef.current = setTimeout(saveWhenReady, 2400);
-    return () => {
+  }, [
+    auth.status,
+    auth.user?.id,
+    hasUnsyncedLocalChanges,
+    performSync,
+    state,
+  ]);
+
+  useEffect(
+    () => () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = null;
       idleSyncRef.current?.cancel();
-    };
-  }, [auth.status, auth.user?.id, performSync, state]);
+      idleSyncRef.current = null;
+    },
+    [auth.user?.id],
+  );
+
+  useEffect(() => {
+    if (
+      !nextRetryAt ||
+      !networkAvailable ||
+      !pendingChanges ||
+      auth.status !== "signedIn"
+    )
+      return;
+    const timer = setTimeout(() => {
+      if (
+        NativeAppState.currentState === "active" &&
+        networkAvailableRef.current
+      ) {
+        if (remoteInitializationPendingRef.current)
+          setInitializationAttempt((value) => value + 1);
+        else performSync(false, false).catch(() => undefined);
+      }
+    }, Math.max(0, nextRetryAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [
+    auth.status,
+    networkAvailable,
+    nextRetryAt,
+    pendingChanges,
+    performSync,
+  ]);
 
   useEffect(() => {
     if (!supabase || auth.status !== "signedIn" || !auth.user) return;
@@ -1253,29 +2593,75 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (!supabase || auth.status !== "signedIn" || !auth.user) return;
     let cancelled = false;
+    let requestToWatch: PendingGroupRequest | null = null;
+    let approvalCheckInFlight = false;
     const activateIfApproved = async (groupId: string) => {
-      const shells = await loadCloudGroupShells();
-      if (cancelled || !shells.some((group) => group.id === groupId)) return;
-      const next = await loadCloudWorkspace(
-        { ...stateRef.current, groups: shells },
-        groupId,
-      );
-      if (cancelled) return;
-      stateRef.current = next;
-      hashRef.current = stableHash(next);
-      workspaceHashRef.current = workspaceHash(next);
-      groupConfigurationHashRef.current = groupConfigurationHash(next);
-      replaceState(next);
-      await AsyncStorage.removeItem(PENDING_GROUP_KEY);
-      setPendingGroup(null);
+      if (approvalCheckInFlight) return;
+      approvalCheckInFlight = true;
+      try {
+        const shells = await loadCloudGroupShells();
+        const shell = shells.find((group) => group.id === groupId);
+        if (cancelled || !shell) return;
+        // Show approval immediately from the lightweight group shell. History
+        // then hydrates behind the rendered page instead of blocking it.
+        const optimistic = {
+          ...stateRef.current,
+          group: shell,
+          groups: mergeById(
+            stateRef.current.groups.filter(isPersonalSetupGroup),
+            shells,
+          ),
+        };
+        stateRef.current = optimistic;
+        hashRef.current = null;
+        workspaceUploadRequiredGroupsRef.current.add(groupId);
+        workspaceHashRef.current = null;
+        groupConfigurationHashRef.current =
+          groupConfigurationAckHashesRef.current.get(groupId) ?? null;
+        replaceState(optimistic);
+        await AsyncStorage.removeItem(PENDING_GROUP_KEY);
+        requestToWatch = null;
+        setPendingGroup(null);
+        loadCloudWorkspace(
+          optimistic,
+          groupId,
+          (metadata) => recordActivityMetadata(groupId, metadata),
+        )
+          .then((next) => {
+            if (cancelled || stateRef.current.group.id !== groupId) return;
+            const merged = mergeRemoteWorkspace(
+              next,
+              stateRef.current,
+            );
+            stateRef.current = merged;
+            workspaceHashRef.current =
+              workspaceAckHashesRef.current.get(groupId) ?? null;
+            replaceState(merged);
+          })
+          .catch((error) =>
+            setErrorMessage(
+              `Group history will retry: ${errorText(error)}`,
+            ),
+          );
+      } finally {
+        approvalCheckInFlight = false;
+      }
     };
     AsyncStorage.getItem(PENDING_GROUP_KEY)
       .then((stored) => {
         const request = parsePendingGroup(stored);
+        requestToWatch = request;
         setPendingGroup(request);
         if (request) return activateIfApproved(request.groupId);
       })
       .catch(() => undefined);
+    const approvalPoll = setInterval(() => {
+      if (
+        requestToWatch &&
+        NativeAppState.currentState === "active"
+      )
+        activateIfApproved(requestToWatch.groupId).catch(() => undefined);
+    }, 15000);
     const channel = supabase
       .channel(`membership-approval:${auth.user.id}`)
       .on(
@@ -1291,8 +2677,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             group_id?: string;
             status?: string;
           };
-          if (membership.group_id && membership.status === "active")
+          if (membership.group_id && membership.status === "active") {
+            requestToWatch = {
+              groupId: membership.group_id,
+              groupName: requestToWatch?.groupName,
+            };
             activateIfApproved(membership.group_id).catch(() => undefined);
+          }
         },
       )
       .on(
@@ -1311,33 +2702,41 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       .subscribe();
     return () => {
       cancelled = true;
+      clearInterval(approvalPoll);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [auth.status, auth.user, replaceState]);
+  }, [
+    auth.status,
+    auth.user,
+    mergeRemoteWorkspace,
+    recordActivityMetadata,
+    replaceState,
+  ]);
 
   const refreshGroup = useCallback(async () => {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
     const groupId = stateRef.current.group.id;
     const sequence = ++groupLoadSequenceRef.current;
+    activityLoadSequenceRef.current += 1;
     const loaded = await loadCloudWorkspace(
       stateRef.current,
       groupId,
+      (metadata) => recordActivityMetadata(groupId, metadata),
     );
     if (
       sequence !== groupLoadSequenceRef.current ||
       stateRef.current.group.id !== groupId
     )
       return;
-    const refreshed = mergeWorkspaceWithoutRegression(
+    const refreshed = mergeRemoteWorkspace(
       loaded,
       stateRef.current,
     );
     stateRef.current = refreshed;
-    hashRef.current = stableHash(refreshed);
-    workspaceHashRef.current = workspaceHash(refreshed);
-    groupConfigurationHashRef.current = groupConfigurationHash(refreshed);
+    workspaceHashRef.current =
+      workspaceAckHashesRef.current.get(groupId) ?? null;
     replaceState(refreshed);
-  }, [replaceState]);
+  }, [mergeRemoteWorkspace, recordActivityMetadata, replaceState]);
 
   const refreshMessages = useCallback(async () => {
     if (!isCloudGroupId(stateRef.current.group.id)) return;
@@ -1345,65 +2744,299 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       stateRef.current,
       stateRef.current.group.id,
     );
+    if (messagesEquivalent(stateRef.current.messages, messages)) return;
     const next = { ...stateRef.current, messages };
     stateRef.current = next;
     // Do not hash or reload the full group workspace for a chat-only update.
     replaceState(next);
   }, [replaceState]);
 
-  const refreshGroupActivity = useCallback(async (sinceDate?: string) => {
-    if (!isCloudGroupId(stateRef.current.group.id)) return;
-    const groupId = stateRef.current.group.id;
-    const activity = await loadCloudGroupActivity(
-      stateRef.current,
-      groupId,
-      sinceDate,
+  const refreshGroupActivity = useCallback(
+    (sinceDate?: string): Promise<void> => {
+      if (!isCloudGroupId(stateRef.current.group.id))
+        return Promise.resolve();
+      const requestedSince = sinceDate ?? null;
+      const alreadyQueued = queuedActivitySinceRef.current;
+      if (
+        alreadyQueued === undefined ||
+        requestedSince === null ||
+        (alreadyQueued !== null && requestedSince < alreadyQueued)
+      )
+        queuedActivitySinceRef.current = requestedSince;
+
+      // Realtime can emit one event for the entry and another for its daily
+      // summary. Coalesce them into one serialized refresh rather than allowing
+      // overlapping range requests to commit out of order.
+      if (activityRefreshPromiseRef.current)
+        return activityRefreshPromiseRef.current;
+
+      const operation = (async () => {
+        while (queuedActivitySinceRef.current !== undefined) {
+          const queuedSince = queuedActivitySinceRef.current;
+          queuedActivitySinceRef.current = undefined;
+          const groupId = stateRef.current.group.id;
+          if (!isCloudGroupId(groupId)) continue;
+          const sequence = ++activityLoadSequenceRef.current;
+          const activity = await loadCloudGroupActivity(
+            stateRef.current,
+            groupId,
+            queuedSince ?? undefined,
+          );
+          if (
+            sequence !== activityLoadSequenceRef.current ||
+            stateRef.current.group.id !== groupId
+          )
+            continue;
+          const lastVersion = activityVersionByGroupRef.current.get(groupId);
+          const lastCoverage =
+            activityCoverageSinceByGroupRef.current.get(groupId);
+          const responseCoverage =
+            activity.authoritativeStatusSinceDate ?? queuedSince ?? undefined;
+          const extendsCoverage = Boolean(
+            responseCoverage &&
+              (!lastCoverage || responseCoverage < lastCoverage),
+          );
+          if (
+            activity.version !== undefined &&
+            lastVersion !== undefined &&
+            activity.version <= lastVersion &&
+            !extendsCoverage
+          )
+            continue;
+          if (activity.version !== undefined)
+            activityVersionByGroupRef.current.set(
+              groupId,
+              activity.version,
+            );
+          if (
+            responseCoverage &&
+            (!lastCoverage || responseCoverage < lastCoverage)
+          )
+            activityCoverageSinceByGroupRef.current.set(
+              groupId,
+              responseCoverage,
+            );
+          const live = stateRef.current;
+          const deletedEntryKeys = new Set(
+            activity.deletedEntryKeys ?? [],
+          );
+          const groupMetricIds = new Set(
+            (live.group.metricConfiguration ?? []).map(
+              (metric) => metric.id,
+            ),
+          );
+          const groupMemberIds = new Set(
+            live.group.members.map((member) => member.id),
+          );
+          const baseEntries = activity.authoritativeEntrySinceDate
+            ? live.entries.filter(
+                (entry) =>
+                  entry.userId === live.currentUserId ||
+                  !groupMetricIds.has(entry.metricId) ||
+                  !groupMemberIds.has(entry.userId) ||
+                  entry.localDate < activity.authoritativeEntrySinceDate!,
+              )
+            : live.entries;
+          const baseStatuses = activity.authoritativeStatusSinceDate
+            ? live.dailyMetricStatuses.filter(
+                (status) =>
+                  status.groupId !== groupId ||
+                  status.userId === live.currentUserId ||
+                  status.localDate < activity.authoritativeStatusSinceDate!,
+              )
+            : live.dailyMetricStatuses;
+          // Absence in a range response is not a deletion signal. Merge the
+          // fetched delta monotonically. Only the versioned snapshot RPC may
+          // authoritatively prune absent friend rows in its bounded date range.
+          const next = {
+            ...live,
+            entries: mergeActivityEntries(
+              baseEntries.filter(
+                (entry) =>
+                  !deletedEntryKeys.has(
+                    metricEntryKey(entry.userId, entry.id),
+                  ),
+              ),
+              activity.entries,
+              live.currentUserId,
+            ),
+            dailyMetricStatuses: mergeActivityStatuses(
+              baseStatuses,
+              activity.dailyMetricStatuses,
+            ),
+          };
+          stateRef.current = next;
+          replaceState(next);
+          const cached = cachedGroupActivity(next, groupId);
+          InteractionManager.runAfterInteractions(() => {
+            writeGroupActivityCache({
+              groupId,
+              version: activity.version,
+              updatedAt: activity.updatedAt,
+              ...cached,
+            }).catch(() => undefined);
+          });
+        }
+      })();
+      activityRefreshPromiseRef.current = operation;
+      void operation
+        .finally(() => {
+          if (activityRefreshPromiseRef.current === operation)
+            activityRefreshPromiseRef.current = null;
+        })
+        .catch(() => undefined);
+      return operation;
+    },
+    [replaceState],
+  );
+
+  useEffect(() => {
+    const wasAvailable = previousNetworkAvailableRef.current;
+    previousNetworkAvailableRef.current = networkAvailable;
+    if (
+      !networkAvailable ||
+      wasAvailable ||
+      auth.status !== "signedIn" ||
+      !auth.user
+    )
+      return;
+
+    // Connectivity can return while the app remains foregrounded. Reset the
+    // offline backoff and drain local writes immediately instead of waiting for
+    // another edit, tab change, or app resume.
+    cloudRetryAttemptRef.current = 0;
+    nextRetryAtRef.current = 0;
+    setNextRetryAt(0);
+    flushChatOutbox();
+    if (remoteInitializationPendingRef.current) {
+      setInitializationAttempt((value) => value + 1);
+      return;
+    }
+    const timer = setTimeout(() => {
+      performSync(false, false).catch(() => undefined);
+      refreshMessages().catch(() => undefined);
+      refreshGroupActivity(
+        dateWithOffsetFrom(dateKey(), -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1)),
+      ).catch(() => undefined);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [
+    auth.status,
+    auth.user,
+    flushChatOutbox,
+    networkAvailable,
+    performSync,
+    refreshGroupActivity,
+    refreshMessages,
+  ]);
+
+  useEffect(() => {
+    if (
+      auth.status !== "signedIn" ||
+      !networkAvailable ||
+      pendingChanges ||
+      status !== "synced" ||
+      NativeAppState.currentState !== "active" ||
+      !isCloudGroupId(state.group.id)
+    )
+      return;
+    const groupId = state.group.id;
+    const historySince = dateWithOffsetFrom(
+      dateKey(),
+      -(GROUP_ACTIVITY_BACKGROUND_HISTORY_DAYS - 1),
     );
-    if (stateRef.current.group.id !== groupId) return;
-    const live = stateRef.current;
-    const groupMetricIds = new Set(
-      (live.group.metricConfiguration ?? []).map((metric) => metric.id),
-    );
-    const entries = new Map(
-      live.entries
-        .filter(
-          (entry) =>
-            !sinceDate ||
-            entry.localDate < sinceDate ||
-            !groupMetricIds.has(entry.metricId),
-        )
-        .map((entry) => [entry.id, entry]),
-    );
-    activity.entries.forEach((entry) => entries.set(entry.id, entry));
-    const statuses = new Map(
-      live.dailyMetricStatuses
-        .filter(
-          (status) =>
-            status.groupId !== groupId ||
-            !sinceDate ||
-            status.localDate < sinceDate,
-        )
-        .map((status) => [dailyStatusKey(status), status]),
-    );
-    activity.dailyMetricStatuses.forEach((status) =>
-      statuses.set(dailyStatusKey(status), status),
-    );
-    const next = {
-      ...live,
-      entries: [...entries.values()].sort((a, b) =>
-        a.recordedAt.localeCompare(b.recordedAt),
-      ),
-      dailyMetricStatuses: [...statuses.values()],
+    if (
+      historicalHydrationStartedRef.current.has(groupId) ||
+      (activityCoverageSinceByGroupRef.current.get(groupId) ?? "9999-12-31") <=
+        historySince
+    )
+      return;
+    historicalHydrationStartedRef.current.add(groupId);
+    let idleWork: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
+    let timer: ReturnType<typeof setTimeout>;
+    const hydrateWhenIdle = () => {
+      if (NativeAppState.currentState !== "active") {
+        historicalHydrationStartedRef.current.delete(groupId);
+        return;
+      }
+      if (syncPromiseRef.current) {
+        timer = setTimeout(hydrateWhenIdle, 5_000);
+        return;
+      }
+      idleWork = InteractionManager.runAfterInteractions(() => {
+        refreshGroupActivity(historySince).catch(() => {
+          // A later resume/reconnect may retry; never loop aggressively while
+          // the phone is idle or the server is unavailable.
+          historicalHydrationStartedRef.current.delete(groupId);
+        });
+      });
     };
-    stateRef.current = next;
-    replaceState(next);
-  }, [replaceState]);
+    timer = setTimeout(hydrateWhenIdle, 12_000);
+    return () => {
+      clearTimeout(timer);
+      idleWork?.cancel();
+    };
+  }, [
+    auth.status,
+    networkAvailable,
+    pendingChanges,
+    refreshGroupActivity,
+    state.group.id,
+    status,
+  ]);
 
   const hydrateGroupInBackground = useCallback(
     (groupId: string) => {
       const base = stateRef.current;
+      // A null hash means this device has local rows that have not yet been
+      // acknowledged by the relational group tables (not merely the private
+      // account snapshot). Keep that outbox marker through hydration.
+      const workspaceUploadRequired =
+        workspaceUploadRequiredGroupsRef.current.has(groupId);
       const sequence = ++groupLoadSequenceRef.current;
-      loadCloudWorkspace(base, groupId)
+      activityLoadSequenceRef.current += 1;
+      const hydrate = async () => {
+        // Start the authoritative request immediately. Reading SQLite must not
+        // sit in front of the network request; the cache and server race in
+        // parallel, while each still commits as one complete snapshot.
+        const workspacePromise = loadCloudWorkspace(
+          base,
+          groupId,
+          (metadata) => recordActivityMetadata(groupId, metadata),
+        );
+        const cached = await readGroupActivityCache(groupId).catch(
+          () => null,
+        );
+        if (
+          cached &&
+          sequence === groupLoadSequenceRef.current &&
+          stateRef.current.group.id === groupId
+        ) {
+          const live = stateRef.current;
+          const next = {
+            ...live,
+            entries: mergeActivityEntries(
+              live.entries,
+              cached.entries,
+              live.currentUserId,
+            ),
+            dailyMetricStatuses: mergeActivityStatuses(
+              live.dailyMetricStatuses,
+              cached.dailyMetricStatuses,
+            ),
+          };
+          if (cached.version !== undefined)
+            activityVersionByGroupRef.current.set(
+              groupId,
+              cached.version,
+            );
+          stateRef.current = next;
+          replaceState(next);
+        }
+        return workspacePromise;
+      };
+      hydrate()
         .then((loaded) => {
           // A slow response for an old group must never pull the user back
           // after they already switched elsewhere.
@@ -1412,58 +3045,92 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             stateRef.current.group.id !== groupId
           )
             return;
-          const next = mergeWorkspaceWithoutRegression(
+          const next = mergeRemoteWorkspace(
             loaded,
             stateRef.current,
           );
           stateRef.current = next;
-          // Persist the active-group selection after the cached shell has been
-          // replaced by the authoritative workspace.
-          hashRef.current = null;
-          workspaceHashRef.current = workspaceHash(next);
-          groupConfigurationHashRef.current = groupConfigurationHash(next);
+          workspaceHashRef.current = workspaceUploadRequired
+            ? null
+            : (workspaceAckHashesRef.current.get(groupId) ?? null);
           replaceState(next);
-          setPendingChanges(true);
+          setPendingChanges(hasUnsyncedLocalChanges());
+          const cachePayload = cachedGroupActivity(next, groupId);
+          InteractionManager.runAfterInteractions(() => {
+            writeGroupActivityCache({
+              groupId,
+              updatedAt: new Date().toISOString(),
+              ...cachePayload,
+            }).catch(() => undefined);
+          });
         })
         .catch((error) =>
           setErrorMessage(`Group refresh will retry: ${errorText(error)}`),
         );
     },
-    [replaceState],
+    [
+      hasUnsyncedLocalChanges,
+      mergeRemoteWorkspace,
+      recordActivityMetadata,
+      replaceState,
+    ],
   );
 
   useEffect(() => {
     if (
       !supabase ||
       auth.status !== "signedIn" ||
+      !auth.user ||
+      initializedUserRef.current !== auth.user.id ||
       !isCloudGroupId(state.group.id)
     )
       return;
+    const client = supabase;
+    const activityVersionChecks =
+      activityVersionCheckByGroupRef.current;
+    let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     let messageTimer: ReturnType<typeof setTimeout> | null = null;
     let activityTimer: ReturnType<typeof setTimeout> | null = null;
     let activitySinceDate: string | undefined;
+    const afterWriteSuppression = (baseDelay: number) =>
+      Math.max(
+        baseDelay,
+        suppressGroupRefreshUntilRef.current - Date.now() + 50,
+      );
     const queueRefresh = () => {
-      if (Date.now() < suppressGroupRefreshUntilRef.current) return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(
         () => refreshGroup().catch(() => undefined),
-        500,
+        afterWriteSuppression(220),
       );
     };
     const queueMessageRefresh = () => {
       if (messageTimer) clearTimeout(messageTimer);
       messageTimer = setTimeout(() => {
         refreshMessages().catch(() => undefined);
-      }, 120);
+      }, 60);
     };
     const queueActivityRefresh = (event?: {
       new?: Record<string, unknown>;
       old?: Record<string, unknown>;
     }) => {
-      if (Date.now() < suppressGroupRefreshUntilRef.current) return;
+      const announcedVersion = Number(event?.new?.version);
+      const knownVersion = activityVersionByGroupRef.current.get(
+        state.group.id,
+      );
+      if (
+        Number.isFinite(announcedVersion) &&
+        knownVersion !== undefined &&
+        announcedVersion <= knownVersion
+      )
+        return;
       const changedDate = String(
-        event?.new?.local_date ?? event?.old?.local_date ?? "",
+        event?.new?.local_date ??
+          event?.new?.since_date ??
+          event?.old?.local_date ??
+          event?.old?.since_date ??
+          "",
       );
       const fallback = new Date();
       fallback.setDate(fallback.getDate() - 2);
@@ -1481,10 +3148,52 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           activitySinceDate = undefined;
           refreshGroupActivity(since).catch(() => undefined);
         },
-        700,
+        afterWriteSuppression(120),
       );
     };
-    const channel = supabase
+    const catchUpActivityIfNeeded = () => {
+      const groupId = state.group.id;
+      if (activityVersionChecks.has(groupId)) return;
+      const check = (async () => {
+        const { data, error } = await client
+          .from("group_activity_versions")
+          .select("version")
+          .eq("group_id", groupId)
+          .maybeSingle();
+        if (
+          cancelled ||
+          error ||
+          stateRef.current.group.id !== groupId
+        )
+          return;
+        const remoteVersion = Number(data?.version);
+        const knownVersion =
+          activityVersionByGroupRef.current.get(groupId);
+        if (
+          !Number.isFinite(remoteVersion) ||
+          knownVersion === undefined ||
+          remoteVersion > knownVersion
+        ) {
+          const catchUpStart = new Date();
+          catchUpStart.setDate(
+            catchUpStart.getDate() - GROUP_ACTIVITY_LOCAL_CACHE_DAYS,
+          );
+          queueActivityRefresh({
+            new: {
+              since_date: dateKey(catchUpStart),
+              version: Number.isFinite(remoteVersion)
+                ? remoteVersion
+                : undefined,
+            },
+          });
+        }
+      })().finally(() => {
+        if (activityVersionChecks.get(groupId) === check)
+          activityVersionChecks.delete(groupId);
+      });
+      activityVersionChecks.set(groupId, check);
+    };
+    const workspaceChannel = supabase
       .channel(`group-workspace:${state.group.id}`)
       .on(
         "postgres_changes",
@@ -1514,7 +3223,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           table: "group_members",
           filter: `group_id=eq.${state.group.id}`,
         },
-        queueRefresh,
+        (event) => {
+          if (event.eventType === "DELETE") {
+            queueRefresh();
+            return;
+          }
+          const live = stateRef.current;
+          const next = applyMembershipRealtimeRow(
+            live,
+            event.new as MembershipRealtimeRow,
+          );
+          if (!next) {
+            queueRefresh();
+            return;
+          }
+          if (next !== live) {
+            stateRef.current = next;
+            replaceState(next);
+          }
+        },
       )
       .on(
         "postgres_changes",
@@ -1531,44 +3258,148 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         {
           event: "*",
           schema: "public",
-          table: "metric_entries",
-        },
-        queueActivityRefresh,
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "daily_metric_status",
+          table: "group_activity_versions",
           filter: `group_id=eq.${state.group.id}`,
         },
         queueActivityRefresh,
       )
       .subscribe();
+    const activityChannel = supabase
+      .channel(`group:${state.group.id}:activity`, {
+        config: { private: true, broadcast: { self: false } },
+      })
+      .on(
+        "broadcast",
+        { event: "activity_updated" },
+        (event: { payload?: Record<string, unknown> }) => {
+          // Coverage is as important as the version: a same/newer version may
+          // announce an older historical date than the last applied window.
+          // The serialized loader owns the combined version+coverage guard.
+          queueActivityRefresh({
+            new: {
+              since_date: event.payload?.since_date,
+              version: event.payload?.version,
+            },
+          });
+        },
+      )
+      .subscribe((channelStatus) => {
+        if (channelStatus === "SUBSCRIBED") catchUpActivityIfNeeded();
+      });
+    const chatChannel = supabase
+      .channel(`group:${state.group.id}:chat`, {
+        config: { private: true, broadcast: { self: false } },
+      })
+      .on("broadcast", { event: "message_committed" }, queueMessageRefresh)
+      .subscribe((channelStatus) => {
+        if (channelStatus === "SUBSCRIBED") queueMessageRefresh();
+      });
     return () => {
+      cancelled = true;
+      activityVersionChecks.delete(state.group.id);
       if (refreshTimer) clearTimeout(refreshTimer);
       if (messageTimer) clearTimeout(messageTimer);
       if (activityTimer) clearTimeout(activityTimer);
-      supabase?.removeChannel(channel).catch(() => undefined);
+      supabase?.removeChannel(workspaceChannel).catch(() => undefined);
+      supabase?.removeChannel(activityChannel).catch(() => undefined);
+      supabase?.removeChannel(chatChannel).catch(() => undefined);
     };
   }, [
     auth.status,
+    auth.user,
     refreshGroup,
     refreshGroupActivity,
     refreshMessages,
+    replaceState,
     state.group.id,
   ]);
 
   useEffect(() => {
+    const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
+    const later = (delay: number, work: () => void) => {
+      const timer = setTimeout(() => {
+        resumeTimers.delete(timer);
+        if (NativeAppState.currentState === "active") work();
+      }, delay);
+      resumeTimers.add(timer);
+    };
     const subscription = NativeAppState.addEventListener("change", (next) => {
-      if (next === "active" && auth.status === "signedIn") {
-        if (pendingChanges || status === "offline")
-          performSync().catch(() => undefined);
+      if (next !== "active") {
+        resumeTimers.forEach(clearTimeout);
+        resumeTimers.clear();
+        return;
       }
+      if (
+        auth.status !== "signedIn" ||
+        Date.now() - lastResumeRecoveryAtRef.current < 3000
+      )
+        return;
+      lastResumeRecoveryAtRef.current = Date.now();
+      if (supabase && !supabase.realtime.isConnected())
+        supabase.realtime.connect();
+      if (auth.user)
+        void readCloudSyncCheckpoint(auth.user.id)
+          .then(recordServerSyncedAt)
+          .catch(() => undefined);
+      void touchPresence(true).catch(() => undefined);
+      // Resume cached UI first, then recover chat and pending writes in
+      // separate turns. The activity subscription checks its lightweight
+      // server version on reconnect and only reloads history when it changed.
+      later(150, () => {
+        pushCloudMessagesNow(stateRef.current).catch(() => undefined);
+        refreshMessages().catch(() => undefined);
+      });
+      // If the app was backgrounded for longer than the freshness window,
+      // publish one compact leaderboard assertion after resume. The helper is
+      // independently throttled and never marks the private outbox pending.
+      later(450, () => {
+        publishLeaderboardFreshness().catch(() => undefined);
+      });
+      if (pendingChanges || status === "offline")
+        later(900, () => performSync().catch(() => undefined));
     });
-    return () => subscription.remove();
-  }, [auth.status, pendingChanges, performSync, status]);
+    return () => {
+      subscription.remove();
+      resumeTimers.forEach(clearTimeout);
+      resumeTimers.clear();
+    };
+  }, [
+    auth.status,
+    auth.user,
+    pendingChanges,
+    performSync,
+    publishLeaderboardFreshness,
+    recordServerSyncedAt,
+    refreshMessages,
+    status,
+    touchPresence,
+  ]);
+
+  useEffect(() => {
+    if (
+      auth.status !== "signedIn" ||
+      !isCloudGroupId(state.group.id)
+    )
+      return;
+    const timer = setInterval(() => {
+      publishLeaderboardFreshness().catch(() => undefined);
+    }, LEADERBOARD_FRESHNESS_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [auth.status, publishLeaderboardFreshness, state.group.id]);
+
+  useEffect(() => {
+    if (
+      auth.status !== "signedIn" ||
+      !isCloudGroupId(state.group.id)
+    )
+      return;
+    void touchPresence(true).catch(() => undefined);
+    const timer = setInterval(() => {
+      if (NativeAppState.currentState === "active")
+        void touchPresence().catch(() => undefined);
+    }, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [auth.status, state.group.id, touchPresence]);
 
   const value = useMemo<CloudSyncContextValue>(
     () => ({
@@ -1580,7 +3411,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       devices,
       // A user-requested refresh also repairs relational group rows that may
       // be absent even when the private account snapshot is already current.
-      syncNow: () => performSync(true),
+      syncNow: async () => {
+        if (remoteInitializationPendingRef.current) {
+          cloudRetryAttemptRef.current = 0;
+          nextRetryAtRef.current = 0;
+          setNextRetryAt(0);
+          setInitializationAttempt((value) => value + 1);
+          return;
+        }
+        // Manual pull-to-refresh bypasses the automatic five-minute cadence.
+        // Serialize behind an already-running compact publish, then force the
+        // normal outbox + recent leaderboard publication immediately.
+        await leaderboardPublishPromiseRef.current?.catch(() => undefined);
+        await performSync(false, true);
+      },
       pullLatest,
       refreshDevices: loadDevices,
       forgetDevice: async (deviceId) => {
@@ -1625,13 +3469,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               id: auth.user.id,
               name: accountName(auth.user, "You"),
               initials: "Y",
-              color: "#176B4D",
+              color: DEFAULT_GROUP_THEME,
               role: "owner" as const,
             };
         const group: Group = {
           id: groupId,
           name: name.trim(),
-          inviteCode: "Loading...",
+          inviteCode: "PREPARING",
           templateName: "Custom",
           members: [current],
           streakRestDaysPerWeek: 1,
@@ -1648,8 +3492,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           ],
         };
         stateRef.current = next;
-        workspaceHashRef.current = workspaceHash(next);
-        groupConfigurationHashRef.current = groupConfigurationHash(next);
+        // Group creation is atomic, but personal history/profile data still
+        // needs its own idempotent relational upload.
+        workspaceUploadRequiredGroupsRef.current.add(groupId);
+        workspaceHashRef.current = null;
+        const createdConfigurationHash = groupConfigurationHash(next);
+        groupConfigurationHashRef.current = createdConfigurationHash;
+        groupConfigurationAckHashesRef.current.set(
+          groupId,
+          createdConfigurationHash,
+        );
+        await writeGroupConfigurationAcks(
+          auth.user!.id,
+          groupConfigurationAckHashesRef.current,
+        ).catch(() => undefined);
         replaceState(next);
         setPendingChanges(true);
         hydrateGroupInBackground(groupId);
@@ -1687,7 +3543,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             id: stateRef.current.currentUserId,
             name: accountName(auth.user!, "You"),
             initials: "Y",
-            color: "#176B4D",
+            color: DEFAULT_GROUP_THEME,
             role: "member" as const,
           };
         const cached = stateRef.current.groups.find(
@@ -1698,11 +3554,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           ({
             id: groupId,
             name: result.groupName || "Joined group",
-            inviteCode: "Loading...",
+            inviteCode: "PREPARING",
             templateName: "Shared",
             members: [current],
             streakRestDaysPerWeek: 1,
-            themeColor: "#176B4D",
+            themeColor: DEFAULT_GROUP_THEME,
             metricConfiguration: [],
           } satisfies Group);
         const next = {
@@ -1714,8 +3570,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           ],
         };
         stateRef.current = next;
-        workspaceHashRef.current = workspaceHash(next);
-        groupConfigurationHashRef.current = groupConfigurationHash(next);
+        // Joining grants read access immediately. Leave a local outbox marker
+        // so this member's group-enabled history is uploaded after the cached
+        // shell renders instead of being incorrectly treated as synchronized.
+        workspaceUploadRequiredGroupsRef.current.add(groupId);
+        workspaceHashRef.current = null;
+        groupConfigurationHashRef.current =
+          groupConfigurationAckHashesRef.current.get(groupId) ?? null;
         replaceState(next);
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
@@ -1736,27 +3597,64 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           (candidate) => candidate.id === groupId,
         );
         if (!group) throw new Error("That group is not available.");
-        const next = { ...stateRef.current, group };
+        const next = stateWithActiveGroup(stateRef.current, group);
         stateRef.current = next;
-        workspaceHashRef.current = workspaceHash(next);
-        groupConfigurationHashRef.current = groupConfigurationHash(next);
+        workspaceHashRef.current = isCloudGroupId(groupId)
+          ? (workspaceAckHashesRef.current.get(groupId) ?? null)
+          : null;
+        if (
+          isCloudGroupId(groupId) &&
+          !workspaceHashRef.current
+        )
+          workspaceUploadRequiredGroupsRef.current.add(groupId);
+        groupConfigurationHashRef.current = isCloudGroupId(groupId)
+          ? (groupConfigurationAckHashesRef.current.get(groupId) ?? null)
+          : null;
         replaceState(next);
         if (isCloudGroupId(groupId)) hydrateGroupInBackground(groupId);
       },
       leaveGroup: async (groupId) => {
         const before = stateRef.current;
-        const leavingMember = before.group.members.find(
+        const leavingGroup = before.groups.find(
+          (group) => group.id === groupId,
+        );
+        if (!leavingGroup)
+          throw new Error("That group is no longer available.");
+        if (isPersonalSetupGroup(leavingGroup) || !isCloudGroupId(groupId))
+          throw new Error("Personal setup is private and cannot be left.");
+        const leavingMember = leavingGroup.members.find(
           (member) => member.id === before.currentUserId,
         );
-        const remaining = before.groups.filter((group) => group.id !== groupId);
-        const nextGroup = remaining[0];
-        if (!nextGroup)
-          throw new Error(
-            "Create another group before leaving your only group.",
-          );
-        const next = { ...before, group: nextGroup, groups: remaining };
+        if (!leavingMember)
+          throw new Error("Your membership is no longer available.");
+        let remaining = before.groups.filter(
+          (group) => group.id !== groupId,
+        );
+        if (!remaining.length)
+          remaining = [
+            createPersonalSetupGroup(
+              leavingMember,
+              personalSetupMetricConfiguration(
+                before.metrics,
+                before.trackedGoalPeriods,
+              ),
+            ),
+          ];
+        const nextGroup =
+          before.group.id === groupId ? remaining[0] : before.group;
+        const next = stateWithActiveGroup(before, nextGroup, remaining);
         stateRef.current = next;
-        workspaceHashRef.current = workspaceHash(next);
+        workspaceHashRef.current = isCloudGroupId(nextGroup.id)
+          ? (workspaceAckHashesRef.current.get(nextGroup.id) ?? null)
+          : null;
+        if (
+          isCloudGroupId(nextGroup.id) &&
+          !workspaceHashRef.current
+        )
+          workspaceUploadRequiredGroupsRef.current.add(nextGroup.id);
+        groupConfigurationHashRef.current = isCloudGroupId(nextGroup.id)
+          ? (groupConfigurationAckHashesRef.current.get(nextGroup.id) ?? null)
+          : null;
         replaceState(next);
         try {
           await sendMembershipPush({
@@ -1764,7 +3662,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             eventKey: `membership-left:${groupId}:${before.currentUserId}:${Date.now()}`,
             audience: "admins",
             title: `${leavingMember?.name ?? "A member"} left`,
-            body: `${leavingMember?.name ?? "A member"} left ${before.group.name}.`,
+            body: `${leavingMember?.name ?? "A member"} left ${leavingGroup.name}.`,
             route: "/group-settings",
           }).catch(() => undefined);
           await leaveCloudGroup(groupId);
@@ -1779,26 +3677,45 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       refreshGroup,
       refreshActivity: () => {
-        const recent = new Date();
-        recent.setDate(recent.getDate() - 120);
-        return refreshGroupActivity(dateKey(recent));
+        const groupId = stateRef.current.group.id;
+        // A deliberate user refresh is also the mixed-version escape hatch:
+        // older installed clients do not publish activity commit versions.
+        activityVersionByGroupRef.current.delete(groupId);
+        activityCoverageSinceByGroupRef.current.delete(groupId);
+        return refreshGroupActivity(
+          dateWithOffsetFrom(
+            dateKey(),
+            -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1),
+          ),
+        );
       },
       refreshMessages,
-      syncMessagesNow: async () => {
-        await pushCloudMessagesNow(stateRef.current);
+      syncMessagesNow: async (messageId) => {
+        await pushCloudMessagesNow(stateRef.current, messageId);
       },
       approveMember: async (userId) => {
-        await approveCloudGroupMember(stateRef.current.group.id, userId);
+        const groupId = stateRef.current.group.id;
+        await approveCloudGroupMember(groupId, userId);
+        const live = stateRef.current;
+        const optimistic = applyMembershipRealtimeRow(live, {
+          group_id: groupId,
+          user_id: userId,
+          status: "active",
+        });
+        if (optimistic && optimistic !== live) {
+          stateRef.current = optimistic;
+          replaceState(optimistic);
+        }
         await sendMembershipPush({
-          groupId: stateRef.current.group.id,
-          eventKey: `membership-approved:${stateRef.current.group.id}:${userId}`,
+          groupId,
+          eventKey: `membership-approved:${groupId}:${userId}`,
           audience: "user",
           recipientId: userId,
           title: `Welcome to ${stateRef.current.group.name}`,
           body: `Your request was approved. Tap to open the group.`,
           route: "/group",
         }).catch(() => undefined);
-        await refreshGroup();
+        refreshGroup().catch(() => undefined);
       },
       removeMember: async (userId) => {
         await sendMembershipPush({
@@ -1810,8 +3727,31 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           body: `You were removed from ${stateRef.current.group.name}.`,
           route: "/groups",
         }).catch(() => undefined);
-        await removeCloudGroupMember(stateRef.current.group.id, userId);
-        await refreshGroup();
+        const groupId = stateRef.current.group.id;
+        await removeCloudGroupMember(groupId, userId);
+        const live = stateRef.current;
+        const activeGroup = live.groups.find((group) => group.id === groupId);
+        if (activeGroup) {
+          const nextGroup = {
+            ...activeGroup,
+            members: activeGroup.members.filter(
+              (member) => member.id !== userId,
+            ),
+            pendingMembers: (activeGroup.pendingMembers ?? []).filter(
+              (member) => member.id !== userId,
+            ),
+          };
+          const next = {
+            ...live,
+            group: live.group.id === groupId ? nextGroup : live.group,
+            groups: live.groups.map((group) =>
+              group.id === groupId ? nextGroup : group,
+            ),
+          };
+          stateRef.current = next;
+          replaceState(next);
+        }
+        refreshGroup().catch(() => undefined);
       },
     }),
     [
@@ -1833,10 +3773,43 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     ],
   );
 
+  // Action-only consumers (Chat, Leaderboard, group administration) should not
+  // redraw their large lists whenever a background sync updates a timestamp or
+  // retry flag. Stable proxies always call the newest provider implementation.
+  const latestValueRef = useRef(value);
+  latestValueRef.current = value;
+  const actions = useMemo<CloudSyncActions>(
+    () => ({
+      syncNow: () => latestValueRef.current.syncNow(),
+      pullLatest: () => latestValueRef.current.pullLatest(),
+      refreshDevices: () => latestValueRef.current.refreshDevices(),
+      forgetDevice: (deviceId) => latestValueRef.current.forgetDevice(deviceId),
+      deleteAccount: () => latestValueRef.current.deleteAccount(),
+      createGroup: (name, options) =>
+        latestValueRef.current.createGroup(name, options),
+      joinGroup: (code) => latestValueRef.current.joinGroup(code),
+      switchGroup: (groupId) => latestValueRef.current.switchGroup(groupId),
+      leaveGroup: (groupId) => latestValueRef.current.leaveGroup(groupId),
+      refreshGroup: () => latestValueRef.current.refreshGroup(),
+      refreshActivity: () => latestValueRef.current.refreshActivity(),
+      refreshMessages: () => latestValueRef.current.refreshMessages(),
+      syncMessagesNow: (messageId) =>
+        latestValueRef.current.syncMessagesNow(messageId),
+      approveMember: (userId) =>
+        latestValueRef.current.approveMember(userId),
+      removeMember: (userId) => latestValueRef.current.removeMember(userId),
+    }),
+    [],
+  );
+
   return (
-    <CloudSyncContext.Provider value={value}>
-      {children}
-    </CloudSyncContext.Provider>
+    <CloudSyncStatusContext.Provider value={status}>
+      <CloudSyncActionsContext.Provider value={actions}>
+        <CloudSyncContext.Provider value={value}>
+          {children}
+        </CloudSyncContext.Provider>
+      </CloudSyncActionsContext.Provider>
+    </CloudSyncStatusContext.Provider>
   );
 }
 
@@ -1845,4 +3818,17 @@ export function useCloudSync() {
   if (!context)
     throw new Error("useCloudSync must be used inside CloudSyncProvider");
   return context;
+}
+
+/** Stable cloud commands without subscribing the caller to sync status. */
+export function useCloudSyncActions() {
+  const context = useContext(CloudSyncActionsContext);
+  if (!context)
+    throw new Error("useCloudSyncActions must be used inside CloudSyncProvider");
+  return context;
+}
+
+/** Lightweight status subscription for refresh controls and small indicators. */
+export function useCloudSyncStatus() {
+  return useContext(CloudSyncStatusContext);
 }

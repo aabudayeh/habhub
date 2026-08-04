@@ -2,15 +2,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import { TimeInput } from "@/src/components/TimeInput";
 
@@ -25,6 +27,7 @@ import {
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { InfoPopover } from "@/src/components/InfoPopover";
+import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import {
   isAllowedTrackerColor,
   TRACKER_COLOR_CHOICES,
@@ -33,8 +36,12 @@ import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
-import { defaultReminderTimes } from "@/src/domain/reminders";
+import {
+  defaultProgressReminderPercentages,
+  defaultReminderTimes,
+} from "@/src/domain/reminders";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
+import { metricVisualization } from "@/src/domain/visualization";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -45,6 +52,7 @@ import {
   HealthMetricField,
   MetricDataType,
   MetricDefinition,
+  MetricChartStyle,
   MetricSubmetric,
   MuscleGroup,
   NewMetric,
@@ -128,11 +136,24 @@ const CATEGORIES: {
   { id: "nutrition", label: "Food", icon: "restaurant-outline" },
   { id: "body", label: "Body", icon: "body-outline" },
   { id: "health", label: "Health", icon: "heart-outline" },
-  { id: "gym", label: "Gym", icon: "barbell-outline" },
+  { id: "gym", label: "Workout", icon: "barbell-outline" },
   { id: "mind", label: "Mind", icon: "book-outline" },
   { id: "photos", label: "Photos", icon: "camera-outline" },
   { id: "other", label: "Other", icon: "apps-outline" },
 ];
+
+function clockPlusMinutes(time: string, minutes: number) {
+  const [hour, minute] = time.split(":").map(Number);
+  const total = ((hour * 60 + minute + minutes) % 1440 + 1440) % 1440;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function clockDurationMinutes(start: string, end: string) {
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  const delta = endHour * 60 + endMinute - (startHour * 60 + startMinute);
+  return delta > 0 ? delta : delta + 1440;
+}
 const SOURCES: {
   id: HealthDataType;
   label: string;
@@ -249,6 +270,14 @@ export default function TrackerEditor() {
     id && id !== "new"
       ? sourceMetrics.find((item) => item.id === id)
       : undefined;
+  const trackerVisualDefaults = tracker
+    ? metricVisualization(tracker)
+    : {
+        detailDay: "progress" as const,
+        detailRange: "bar" as const,
+        progressOverview: "bar" as const,
+        progressGrid: "intensity" as const,
+      };
   const linkedScheduledReminders =
     !groupScope && tracker
       ? (state.calendarReminders ?? []).filter(
@@ -261,6 +290,7 @@ export default function TrackerEditor() {
     : undefined;
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const presets = trackerPresets(state).filter(
     (preset) =>
       !sourceMetrics.some((item) => item.id === preset.templateId) &&
@@ -354,6 +384,25 @@ export default function TrackerEditor() {
   const [aggregationOpen, setAggregationOpen] = useState(false);
   const [rankingOpen, setRankingOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
+  const [visualsOpen, setVisualsOpen] = useState(false);
+  const [detailDayVisual, setDetailDayVisual] = useState<
+    "progress" | "completion" | "none"
+  >(tracker?.visualization?.detailDay ?? trackerVisualDefaults.detailDay);
+  const [detailRangeVisual, setDetailRangeVisual] =
+    useState<MetricChartStyle>(
+      tracker?.visualization?.detailRange ?? trackerVisualDefaults.detailRange,
+    );
+  const [progressOverviewVisual, setProgressOverviewVisual] =
+    useState<MetricChartStyle>(
+      tracker?.visualization?.progressOverview ??
+        trackerVisualDefaults.progressOverview,
+    );
+  const [progressGridVisual, setProgressGridVisual] = useState<
+    "intensity" | "completion"
+  >(
+    tracker?.visualization?.progressGrid ??
+      trackerVisualDefaults.progressGrid,
+  );
   const [healthType, setHealthType] = useState<HealthDataType | "">(
     tracker?.healthMapping?.dataType ?? "",
   );
@@ -379,6 +428,28 @@ export default function TrackerEditor() {
         /min|hour|hr|sec/i.test(tracker?.unit ?? "") ||
         tracker?.category === "mind"),
   );
+  const [fastingStartTime, setFastingStartTime] = useState(
+    tracker?.fastingSettings?.startTime ?? "20:00",
+  );
+  const [fastingHours, setFastingHours] = useState(
+    String((tracker?.fastingSettings?.fastingMinutes ?? 16 * 60) / 60),
+  );
+  const [automaticFoodBreak, setAutomaticFoodBreak] = useState(
+    tracker?.fastingSettings?.automaticFoodBreak ?? true,
+  );
+  const isFastingTracker =
+    (presetId || tracker?.id) === "intermittent_fasting";
+  const fastingDurationMinutes = Math.max(
+    15,
+    Math.min(1425, Math.round((Number(fastingHours) || 16) * 60)),
+  );
+  const fastingEndTime = clockPlusMinutes(
+    fastingStartTime,
+    fastingDurationMinutes,
+  );
+  const eatingWindowHours = Number(
+    ((1440 - fastingDurationMinutes) / 60).toFixed(2),
+  );
   const [submetricsOpen, setSubmetricsOpen] = useState(false);
   const [openSubmetricGoalId, setOpenSubmetricGoalId] = useState<string | null>(
     null,
@@ -387,6 +458,9 @@ export default function TrackerEditor() {
     string | null
   >(null);
   const [openSubmetricFieldId, setOpenSubmetricFieldId] = useState<
+    string | null
+  >(null);
+  const [openSubmetricChartId, setOpenSubmetricChartId] = useState<
     string | null
   >(null);
   const [submetrics, setSubmetrics] = useState<MetricSubmetric[]>(() => {
@@ -455,6 +529,10 @@ export default function TrackerEditor() {
   const [submetricsCollapsible, setSubmetricsCollapsible] = useState(
     tracker?.submetricDisplay?.collapsible ?? tracker?.id === "food",
   );
+  const [mainValueEnabled, setMainValueEnabled] = useState(
+    tracker?.submetricDisplay?.mainValueEnabled ??
+      tracker?.id !== "blood_pressure_systolic",
+  );
   const [submetricsLabel, setSubmetricsLabel] = useState(
     tracker?.submetricDisplay?.collapsibleLabel ??
       (tracker?.id === "food" ? "Add vitamins, minerals and more" : "More fields"),
@@ -508,9 +586,33 @@ export default function TrackerEditor() {
     tracker?.reminders?.map((item) => item.schedule) ??
       reminderTimes.map(() => undefined),
   );
+  const [reminderDurations, setReminderDurations] = useState<
+    (number | undefined)[]
+  >(
+    tracker?.reminders?.map((item) => item.durationMinutes) ??
+      reminderTimes.map(() => undefined),
+  );
   const [reminderFrequencyOpen, setReminderFrequencyOpen] = useState<
     number | null
   >(null);
+  const [progressRemindersEnabled, setProgressRemindersEnabled] = useState(
+    tracker?.progressRemindersEnabled ?? false,
+  );
+  const [progressReminderPercentages, setProgressReminderPercentages] = useState<
+    number[]
+  >(
+    tracker?.progressReminderPercentages ??
+      defaultProgressReminderPercentages(
+        tracker ?? {
+          goal: { kind: goalKind, target: Number(goal) || 1 },
+          goalRange: rangeGoal
+            ? { min: Number(rangeMin) || 0, max: Number(rangeMax) || 1 }
+            : undefined,
+          goalProgressMode,
+        },
+      ),
+  );
+  const [customProgressReminder, setCustomProgressReminder] = useState("");
   const [validation, setValidation] = useState<string | null>(null);
   const draftSignature = JSON.stringify({
     presetId,
@@ -541,12 +643,20 @@ export default function TrackerEditor() {
     stepFallback,
     manualEntry,
     timerEnabled,
+    fastingStartTime,
+    fastingHours,
+    automaticFoodBreak,
+    detailDayVisual,
+    detailRangeVisual,
+    progressOverviewVisual,
+    progressGridVisual,
     submetrics,
     submetricDisplayMode,
     submetricTemplate,
     submetricsCollapsible,
     submetricsLabel,
     visibleSubmetricCount,
+    mainValueEnabled,
     activeFrom,
     trackGoal,
     addToToday,
@@ -558,6 +668,9 @@ export default function TrackerEditor() {
     reminderEnabled,
     reminderTimes,
     reminderSchedules,
+    reminderDurations,
+    progressRemindersEnabled,
+    progressReminderPercentages,
   });
   const initialDraftSignature = useRef(draftSignature);
   const dirtyRef = useRef(false);
@@ -566,6 +679,7 @@ export default function TrackerEditor() {
     () => undefined,
   );
   dirtyRef.current = draftSignature !== initialDraftSignature.current;
+  useWebBeforeUnload(() => dirtyRef.current && !allowExit.current);
   const source = SOURCES.find((item) => item.id === healthType);
   const reusableGroupings = [
     ...new Set(
@@ -612,14 +726,27 @@ export default function TrackerEditor() {
     setStepFallback(false);
     setManualEntry(true);
     setTimerEnabled(false);
+    setFastingStartTime("20:00");
+    setFastingHours("16");
+    setAutomaticFoodBreak(false);
+    setDetailDayVisual("progress");
+    setDetailRangeVisual("auto");
+    setProgressOverviewVisual("auto");
+    setProgressGridVisual("intensity");
     setSubmetrics([]);
     setVisibleSubmetricCount("1");
+    setMainValueEnabled(true);
     setTrackGoal(false);
     setAddToToday(true);
     setReminderEnabled(false);
+    setReminderDurations([]);
     setAdvanced(false);
   }
   function applyPreset(preset: TrackerPreset) {
+    const presetVisuals = metricVisualization({
+      ...preset,
+      id: preset.templateId,
+    });
     setPresetId(preset.templateId);
     setName(preset.name);
     setColor(preset.color);
@@ -660,6 +787,21 @@ export default function TrackerEditor() {
         (/min|hour|hr|sec/i.test(preset.unit) ||
           preset.category === "mind"),
     );
+    setFastingStartTime(preset.fastingSettings?.startTime ?? "20:00");
+    setFastingHours(
+      String((preset.fastingSettings?.fastingMinutes ?? 16 * 60) / 60),
+    );
+    setAutomaticFoodBreak(
+      preset.fastingSettings?.automaticFoodBreak ?? true,
+    );
+    setDetailDayVisual(presetVisuals.detailDay);
+    setDetailRangeVisual(presetVisuals.detailRange);
+    setProgressOverviewVisual(
+      presetVisuals.progressOverview,
+    );
+    setProgressGridVisual(
+      presetVisuals.progressGrid,
+    );
     setSubmetrics(preset.submetrics ?? []);
     setSubmetricDisplayMode(preset.submetricDisplay?.mode ?? "separate");
     setSubmetricTemplate(preset.submetricDisplay?.template ?? "");
@@ -673,6 +815,10 @@ export default function TrackerEditor() {
           Math.min(4, Math.max(1, preset.submetrics?.length ?? 1)),
       ),
     );
+    setMainValueEnabled(
+      preset.submetricDisplay?.mainValueEnabled ??
+        preset.templateId !== "blood_pressure_systolic",
+    );
     setActiveFrom(dateKey());
     setTrackGoal(false);
     setGoalCalendarOpen(false);
@@ -682,6 +828,14 @@ export default function TrackerEditor() {
     );
     setReminderSchedules(
       preset.reminders?.map((item) => item.schedule) ?? [],
+    );
+    setReminderDurations(
+      preset.reminders?.map((item) => item.durationMinutes) ?? [],
+    );
+    setProgressRemindersEnabled(preset.progressRemindersEnabled ?? false);
+    setProgressReminderPercentages(
+      preset.progressReminderPercentages ??
+        defaultProgressReminderPercentages(preset),
     );
     setScheduleMode("daily");
     setAdvanced(false);
@@ -722,7 +876,9 @@ export default function TrackerEditor() {
     }
   }
   function save(onSaved: () => void = () => router.back()) {
-    const target = Number(goal.replace(",", "."));
+    const target = isFastingTracker
+      ? fastingDurationMinutes / 60
+      : Number(goal.replace(",", "."));
     const diastolicTarget = Number(diastolicGoal.replace(",", "."));
     const systolicMinimum = Number(rangeMin.replace(",", "."));
     const diastolicMinimum = Number(diastolicMin.replace(",", "."));
@@ -804,6 +960,11 @@ export default function TrackerEditor() {
                 : item,
           )
         : submetrics;
+    const presetReminderLabels = presetId
+      ? trackerPresets(state, true)
+          .find((preset) => preset.templateId === presetId)
+          ?.reminders?.map((reminder) => reminder.label)
+      : undefined;
     const common: NewMetric = {
       name: name.trim(),
       icon,
@@ -840,8 +1001,29 @@ export default function TrackerEditor() {
       gymMuscleGroups: category === "gym" ? gymMuscles : undefined,
       stepFallback,
       manualEntry:
-        healthType === "steps" || tracker?.id === "steps" ? false : manualEntry,
-      timerEnabled: dataType === "number" ? timerEnabled : false,
+        healthType === "steps" ||
+        tracker?.id === "steps" ||
+        isFastingTracker
+          ? false
+          : manualEntry,
+      timerEnabled:
+        dataType === "number" && !isFastingTracker ? timerEnabled : false,
+      fastingSettings:
+        isFastingTracker
+          ? {
+              startTime: fastingStartTime,
+              fastingMinutes: fastingDurationMinutes,
+              automaticFoodBreak,
+            }
+          : undefined,
+      visualization: {
+        detailDay: detailDayVisual,
+        detailRange: detailRangeVisual,
+        // Progress overview always uses per-day goal bars. Line charts remain
+        // available in the tracker detail range view.
+        progressOverview: "bar",
+        progressGrid: progressGridVisual,
+      },
       submetrics: savedSubmetrics.length
         ? savedSubmetrics.map((item) => ({
             ...item,
@@ -866,6 +1048,7 @@ export default function TrackerEditor() {
                   Math.max(1, Math.round(Number(visibleSubmetricCount) || 1)),
                 )
               : undefined,
+            mainValueEnabled,
           }
         : undefined,
       activeFrom,
@@ -905,7 +1088,14 @@ export default function TrackerEditor() {
         enabled: reminderEnabled,
         time,
         schedule: reminderSchedules[index],
+        durationMinutes: reminderDurations[index],
+        label:
+          tracker?.reminders?.[index]?.label ?? presetReminderLabels?.[index],
       })),
+      progressRemindersEnabled,
+      progressReminderPercentages: [...new Set(progressReminderPercentages)]
+        .filter((value) => Number.isFinite(value) && value > 0 && value <= 300)
+        .sort((left, right) => left - right),
       rankingDirection: dataType === "boolean" ? "higher" : ranking,
       defaultVisibility: visibility,
       formula:
@@ -927,6 +1117,8 @@ export default function TrackerEditor() {
         goalSchedule: undefined,
         reminder: undefined,
         reminders: undefined,
+        progressRemindersEnabled: undefined,
+        progressReminderPercentages: undefined,
       };
       if (tracker) updateGroupMetric(tracker.id, sharedDefinition);
       else addGroupMetric(sharedDefinition);
@@ -1162,6 +1354,7 @@ export default function TrackerEditor() {
     >
       <PageHeader
         eyebrow={groupScope ? state.group.name : "Personal setup"}
+        translateEyebrow={!groupScope}
         title={
           tracker
             ? `Edit ${tracker.name}`
@@ -1192,7 +1385,10 @@ export default function TrackerEditor() {
             icon: preset.icon as keyof typeof Ionicons.glyphMap,
             color: preset.color,
             sublabel: preset.description,
-            group: preset.category === "gym" ? "Gym" : "Ready-made",
+            group:
+              preset.category === "gym"
+                ? preset.grouping?.trim() || "Workout"
+                : "Ready-made",
           }))}
           selectedIds={presetId ? [presetId] : []}
           onChange={(ids) => {
@@ -1205,7 +1401,17 @@ export default function TrackerEditor() {
           }}
           multiple={false}
           allowClear
-          collapsibleGroups={state.settings.showGym ? ["Gym"] : []}
+          collapsibleGroups={
+            state.settings.showGym
+              ? [
+                  ...new Set(
+                    presets
+                      .filter((preset) => preset.category === "gym")
+                      .map((preset) => preset.grouping?.trim() || "Workout"),
+                  ),
+                ]
+              : []
+          }
           emptyLabel="Or create your own below"
         />
       ) : null}
@@ -1392,7 +1598,7 @@ export default function TrackerEditor() {
         {groupScope && category === "gym" && !gymMapping ? (
           <Text style={[styles.help, { color: colors.muted }]}>
             This becomes a standardized group exercise in every member&apos;s
-            Gym picker. Rankings use estimated one-rep max; raw sets and notes
+            Workout picker. Rankings use estimated one-rep max; raw sets and notes
             stay controlled by each workout&apos;s visibility.
           </Text>
         ) : null}
@@ -1462,7 +1668,7 @@ export default function TrackerEditor() {
             thumbColor={goalEnabled ? accent : colors.faint}
           />
         </View>
-        {goalEnabled && dataType !== "text" ? (
+        {goalEnabled && dataType !== "text" && !isFastingTracker ? (
           <>
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
               <Text style={[styles.help, { color: colors.muted }]}>
@@ -1586,6 +1792,51 @@ export default function TrackerEditor() {
             ) : null}
           </>
         ) : null}
+        {!groupScope && isFastingTracker ? (
+          <View style={[styles.advancedSection, { borderColor: colors.border }]}>
+            <Text style={[styles.rowTitle, { color: colors.ink }]}>Fasting plan</Text>
+            <Text style={[styles.help, { color: colors.muted }]}>Set the usual window here. Start or end the actual fast from the tracker page.</Text>
+            <View style={styles.inlineFields}>
+              <TimeInput
+                label="Desired start"
+                value={fastingStartTime}
+                onChange={setFastingStartTime}
+                wheelPicker
+              />
+              <View style={styles.grow}>
+                <Text style={[styles.label, { color: colors.ink }]}>Fast duration</Text>
+                <TextInput
+                  value={fastingHours}
+                  onChangeText={setFastingHours}
+                  keyboardType="decimal-pad"
+                  style={[styles.compactInput, { color: colors.ink, borderColor: colors.border }]}
+                />
+              </View>
+            </View>
+            <View
+              style={[
+                styles.fastingSummary,
+                { backgroundColor: colors.canvas, borderColor: colors.border },
+              ]}
+            >
+              <View style={styles.grow}>
+                <Text style={[styles.fastingSummaryLabel, { color: colors.muted }]}>Fast ends</Text>
+                <Text style={[styles.fastingSummaryValue, { color: colors.ink }]}>{fastingEndTime}</Text>
+              </View>
+              <View style={styles.grow}>
+                <Text style={[styles.fastingSummaryLabel, { color: colors.muted }]}>Eating window</Text>
+                <Text style={[styles.fastingSummaryValue, { color: colors.ink }]}>{eatingWindowHours} hr</Text>
+              </View>
+            </View>
+            <View style={[styles.switchRow, { borderColor: colors.border }]}>
+              <View style={styles.grow}>
+                <Text style={[styles.rowTitle, { color: colors.ink }]}>Auto from meals</Text>
+                <Text style={[styles.help, { color: colors.muted }]}>Food entries adjust the fast automatically. Manual Start and End remain available.</Text>
+              </View>
+              <Switch value={automaticFoodBreak} onValueChange={setAutomaticFoodBreak} />
+            </View>
+          </View>
+        ) : null}
       </Card>
       <Pressable
         onPress={() => setAdvanced((value) => !value)}
@@ -1668,7 +1919,7 @@ export default function TrackerEditor() {
               </View>
             </>
           ) : null}
-          {dataType === "number" ? (
+          {dataType === "number" && !isFastingTracker ? (
             <View style={[styles.switchRow, { borderColor: colors.border }]}>
               <View style={styles.grow}>
                 <Text style={[styles.rowTitle, { color: colors.ink }]}>
@@ -1705,6 +1956,7 @@ export default function TrackerEditor() {
               }
             />
           {dataType === "number" &&
+          !isFastingTracker &&
           !rangeGoal &&
           (presetId || tracker?.id) !== "blood_pressure_systolic" ? (
             <View style={[styles.advancedSection, { borderColor: colors.border }]}>
@@ -1726,6 +1978,76 @@ export default function TrackerEditor() {
               />
             </View>
           ) : null}
+          <View style={[styles.advancedSection, { borderColor: colors.border }]}>
+            <Pressable
+              onPress={() => setVisualsOpen((open) => !open)}
+              style={styles.collapseHeading}
+            >
+              <View style={styles.grow}>
+                <View style={styles.submetricTitleRow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Charts &amp; visuals
+                  </Text>
+                  <InfoPopover
+                    label="About chart customization"
+                    message="Chart and submetric customization is in beta and may not behave as expected for every custom tracker. If something looks wrong, send feedback from Settings so it can be fixed."
+                  />
+                </View>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Tracker detail and goal-map display
+                </Text>
+              </View>
+              <Ionicons
+                name={visualsOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={colors.faint}
+              />
+            </Pressable>
+            {visualsOpen ? (
+              <View style={styles.visualChoices}>
+                <VisualChoice
+                  label="Selected day"
+                  value={detailDayVisual}
+                  options={[
+                    ["progress", "Goal progress"],
+                    ["completion", "Complete / not"],
+                    ["none", "No visual"],
+                  ]}
+                  onChange={(value) =>
+                    setDetailDayVisual(
+                      value as "progress" | "completion" | "none",
+                    )
+                  }
+                />
+                <VisualChoice
+                  label="Detail ranges"
+                  value={detailRangeVisual}
+                  options={[
+                    ["auto", "Automatic"],
+                    ["line", "Line"],
+                    ["bar", "Bars"],
+                    ["completion", "Goal status"],
+                  ]}
+                  onChange={(value) =>
+                    setDetailRangeVisual(value as MetricChartStyle)
+                  }
+                />
+                <VisualChoice
+                  label="Goal map"
+                  value={progressGridVisual}
+                  options={[
+                    ["intensity", "Value intensity"],
+                    ["completion", "Complete / not"],
+                  ]}
+                  onChange={(value) =>
+                    setProgressGridVisual(
+                      value as "intensity" | "completion",
+                    )
+                  }
+                />
+              </View>
+            ) : null}
+          </View>
           {(() => {
             deferredSubmetrics = (
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
@@ -1740,7 +2062,7 @@ export default function TrackerEditor() {
                   </Text>
                   <InfoPopover
                     label="How submetrics work"
-                    message="Submetrics store related inputs together in one tracker. For example, blood pressure can collect systolic, diastolic and pulse, while selected fields can also update linked trackers."
+                    message="Submetrics store related inputs together in one tracker. For example, blood pressure can collect systolic, diastolic and pulse, while selected fields can also update linked trackers. This beta feature may not cover every custom setup yet; report unexpected behavior from Settings."
                   />
                 </View>
                 <Text style={[styles.help, { color: colors.muted }]}>
@@ -1757,6 +2079,22 @@ export default function TrackerEditor() {
             </Pressable>
             {submetricsOpen ? (
               <View style={[styles.submetricList, { borderTopColor: colors.border }]}>
+                {submetrics.length ? (
+                  <View style={styles.switchRow}>
+                    <View style={styles.grow}>
+                      <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                        Main value
+                      </Text>
+                      <Text style={[styles.help, { color: colors.muted }]}>
+                        Turn off when entries consist only of the fields below.
+                      </Text>
+                    </View>
+                    <Switch
+                      value={mainValueEnabled}
+                      onValueChange={setMainValueEnabled}
+                    />
+                  </View>
+                ) : null}
                 {submetrics.map((submetric, index) => (
                   <View
                     key={submetric.id}
@@ -1927,6 +2265,37 @@ export default function TrackerEditor() {
                             </View>
                           ))}
                         </View>
+                        <ChoicePicker
+                          label="Range chart"
+                          value={submetric.chartStyle ?? "auto"}
+                          open={openSubmetricChartId === submetric.id}
+                          setOpen={(open) =>
+                            setOpenSubmetricChartId(
+                              open ? submetric.id : null,
+                            )
+                          }
+                          options={[
+                            { id: "auto", label: "Follow tracker" },
+                            { id: "line", label: "Line" },
+                            { id: "bar", label: "Bars" },
+                            { id: "completion", label: "Goal status" },
+                          ]}
+                          onChange={(value) =>
+                            setSubmetrics((current) =>
+                              current.map((item) =>
+                                item.id === submetric.id
+                                  ? {
+                                      ...item,
+                                      chartStyle:
+                                        value as MetricChartStyle,
+                                    }
+                                  : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                          accent={accent}
+                        />
                       </>
                     ) : null}
                     <MetricSelector
@@ -2134,7 +2503,7 @@ export default function TrackerEditor() {
               <>
                 <Text style={[styles.help, { color: colors.muted }]}>
                   {gymMapping
-                    ? "This standardized tracker is calculated from Gym sessions. Raw sets and notes remain private."
+                    ? "This standardized tracker is calculated from Workout sessions. Raw sets and notes remain private."
                     : "Link this tracker to compatible data from Apple Health or Health Connect."}
                 </Text>
                 <ChoicePicker
@@ -2207,14 +2576,16 @@ export default function TrackerEditor() {
                 value={
                   gymMapping ||
                   healthType === "steps" ||
-                  tracker?.id === "steps"
+                  tracker?.id === "steps" ||
+                  isFastingTracker
                     ? false
                     : manualEntry
                 }
                 disabled={
                   Boolean(gymMapping) ||
                   healthType === "steps" ||
-                  tracker?.id === "steps"
+                  tracker?.id === "steps" ||
+                  isFastingTracker
                 }
                 onValueChange={setManualEntry}
               />
@@ -2319,7 +2690,7 @@ export default function TrackerEditor() {
                       <Text style={[styles.goalDateText, { color: colors.ink }]}>
                         {new Date(
                           `${activeFrom}T12:00:00`,
-                        ).toLocaleDateString(undefined, {
+                        ).toLocaleDateString(locale, {
                           month: "short",
                           day: "numeric",
                           year: "numeric",
@@ -2389,8 +2760,15 @@ export default function TrackerEditor() {
                       Reminders
                     </Text>
                     <Text style={[styles.help, { color: colors.muted }]}>
-                      {reminderEnabled
-                        ? `${reminderTimes.length} reminder${reminderTimes.length === 1 ? "" : "s"} enabled`
+                      {reminderEnabled || progressRemindersEnabled
+                        ? [
+                            reminderEnabled
+                              ? `${reminderTimes.length} timed reminder${reminderTimes.length === 1 ? "" : "s"}`
+                              : "",
+                            progressRemindersEnabled ? "progress alerts" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
                         : "Off"}
                     </Text>
                   </View>
@@ -2430,6 +2808,7 @@ export default function TrackerEditor() {
                           <TimeInput
                             label={`Time ${index + 1}`}
                             value={time}
+                            wheelPicker
                             onChange={(value) =>
                               setReminderTimes((current) =>
                                 current.map((item, itemIndex) =>
@@ -2455,11 +2834,52 @@ export default function TrackerEditor() {
                                     (_, itemIndex) => itemIndex !== index,
                                   ),
                                 );
+                                setReminderDurations((current) =>
+                                  current.filter(
+                                    (_, itemIndex) => itemIndex !== index,
+                                  ),
+                                );
                               }
                             }
                           />
                         ) : null}
                       </View>
+                      {timerEnabled ? (
+                        <>
+                          <Pressable
+                            onPress={() =>
+                              setReminderDurations((current) => {
+                                const next = [...current];
+                                next[index] = next[index] ? undefined : 60;
+                                return next;
+                              })
+                            }
+                            style={[styles.reminderFrequency, { borderColor: colors.border }]}
+                          >
+                            <Ionicons name="timer-outline" size={14} color={accent} />
+                            <Text style={[styles.help, { color: colors.ink }]}>Planned timed session</Text>
+                            <Ionicons
+                              name={reminderDurations[index] ? "checkbox" : "square-outline"}
+                              size={17}
+                              color={reminderDurations[index] ? accent : colors.faint}
+                            />
+                          </Pressable>
+                          {reminderDurations[index] ? (
+                            <TimeInput
+                              label="Ends"
+                              value={clockPlusMinutes(time, reminderDurations[index] ?? 60)}
+                              onChange={(end) =>
+                                setReminderDurations((current) => {
+                                  const next = [...current];
+                                  next[index] = clockDurationMinutes(time, end);
+                                  return next;
+                                })
+                              }
+                              wheelPicker
+                            />
+                          ) : null}
+                        </>
+                      ) : null}
                       <Pressable
                         onPress={() =>
                           setReminderFrequencyOpen((current) =>
@@ -2507,6 +2927,10 @@ export default function TrackerEditor() {
                           ...current,
                           undefined,
                         ]);
+                        setReminderDurations((current) => [
+                          ...current,
+                          undefined,
+                        ]);
                       }}
                       style={[styles.addReminder, { borderColor: accent }]}
                     >
@@ -2515,6 +2939,100 @@ export default function TrackerEditor() {
                         Add time
                       </Text>
                     </Pressable>
+                    <View
+                      style={[
+                        styles.progressReminderPanel,
+                        { borderTopColor: colors.border },
+                      ]}
+                    >
+                      <View style={styles.switchRow}>
+                        <View style={styles.grow}>
+                          <Text style={[styles.rowTitle, { color: colors.ink }]}>Progress alerts</Text>
+                          <Text style={[styles.help, { color: colors.muted }]}>
+                            Alert once per tracker and day when progress crosses a selected milestone.
+                          </Text>
+                        </View>
+                        <Switch
+                          value={progressRemindersEnabled}
+                          onValueChange={setProgressRemindersEnabled}
+                        />
+                      </View>
+                      {progressRemindersEnabled ? (
+                        <>
+                          <View style={styles.wrap}>
+                            {[25, 50, 75, 90, 100].map((percentage) => {
+                              const selected = progressReminderPercentages.includes(percentage);
+                              return (
+                                <Chip
+                                  key={percentage}
+                                  label={`${percentage}%`}
+                                  size="small"
+                                  selected={selected}
+                                  onPress={() =>
+                                    setProgressReminderPercentages((current) =>
+                                      selected
+                                        ? current.filter((value) => value !== percentage)
+                                        : [...current, percentage].sort((a, b) => a - b),
+                                    )
+                                  }
+                                />
+                              );
+                            })}
+                          </View>
+                          <View style={styles.progressReminderCustom}>
+                            <TextInput
+                              value={customProgressReminder}
+                              onChangeText={setCustomProgressReminder}
+                              keyboardType="number-pad"
+                              placeholder="Custom %"
+                              placeholderTextColor={colors.faint}
+                              style={[
+                                styles.reminderScheduleInput,
+                                styles.grow,
+                                {
+                                  color: colors.ink,
+                                  borderColor: colors.border,
+                                  backgroundColor: colors.canvas,
+                                },
+                              ]}
+                            />
+                            <IconButton
+                              icon="add"
+                              label="Add progress milestone"
+                              onPress={() => {
+                                const value = Math.round(Number(customProgressReminder));
+                                if (!Number.isFinite(value) || value < 1 || value > 300) return;
+                                setProgressReminderPercentages((current) =>
+                                  [...new Set([...current, value])].sort((a, b) => a - b),
+                                );
+                                setCustomProgressReminder("");
+                              }}
+                            />
+                          </View>
+                          {progressReminderPercentages.some(
+                            (percentage) => ![25, 50, 75, 90, 100].includes(percentage),
+                          ) ? (
+                            <View style={styles.wrap}>
+                              {progressReminderPercentages
+                                .filter((percentage) => ![25, 50, 75, 90, 100].includes(percentage))
+                                .map((percentage) => (
+                                  <Chip
+                                    key={percentage}
+                                    label={`${percentage}% ×`}
+                                    size="small"
+                                    selected
+                                    onPress={() =>
+                                      setProgressReminderPercentages((current) =>
+                                        current.filter((value) => value !== percentage),
+                                      )
+                                    }
+                                  />
+                                ))}
+                            </View>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </View>
                     {linkedScheduledReminders.length ? (
                       <View
                         style={[
@@ -2826,6 +3344,8 @@ function ReminderScheduleEditor({
   onChange: (schedule?: GoalSchedule) => void;
 }) {
   const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [endCalendarOpen, setEndCalendarOpen] = useState(false);
   const selected = schedule?.mode ?? "__goal__";
   const replace = (changes: Partial<GoalSchedule>) =>
     onChange({
@@ -2838,6 +3358,7 @@ function ReminderScheduleEditor({
     <View style={[styles.reminderSchedule, { borderColor: colors.border }]}>
       <MetricSelector
         title="Frequency"
+        searchable={false}
         items={[
           {
             id: "__goal__",
@@ -2956,6 +3477,44 @@ function ReminderScheduleEditor({
             ]}
           />
         </View>
+      ) : null}
+      {schedule && schedule.mode !== "once" ? (
+        <>
+          <Pressable
+            onPress={() =>
+              schedule.endDate
+                ? replace({ endDate: undefined })
+                : replace({ endDate: anchorDate })
+            }
+            style={[styles.reminderFrequency, { borderColor: colors.border }]}
+          >
+            <Ionicons name="calendar-outline" size={14} color={accent} />
+            <Text style={[styles.help, { color: colors.ink }]}>Schedule end date</Text>
+            <Ionicons name={schedule.endDate ? "checkbox" : "square-outline"} size={17} color={schedule.endDate ? accent : colors.faint} />
+          </Pressable>
+          {schedule.endDate ? (
+            <>
+              <Pressable
+                onPress={() => setEndCalendarOpen((open) => !open)}
+                style={[styles.goalDate, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={15} color={accent} />
+                <Text style={[styles.goalDateText, { color: colors.ink }]}>{schedule.endDate}</Text>
+                <Ionicons name={endCalendarOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.muted} />
+              </Pressable>
+              {endCalendarOpen ? (
+                <MonthCalendar
+                  monthDate={schedule.endDate}
+                  selectedDate={schedule.endDate}
+                  onSelect={(next) => {
+                    replace({ endDate: next });
+                    setEndCalendarOpen(false);
+                  }}
+                />
+              ) : null}
+            </>
+          ) : null}
+        </>
       ) : null}
     </View>
   );
@@ -3089,6 +3648,35 @@ function ChoicePicker<T extends string>({
   );
 }
 
+function VisualChoice({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: readonly (readonly [string, string])[];
+  onChange: (value: string) => void;
+}) {
+  const colors = useAppColors();
+  return (
+    <View>
+      <Text style={[styles.label, { color: colors.ink }]}>{label}</Text>
+      <View style={styles.wrap}>
+        {options.map(([id, option]) => (
+          <Chip
+            key={id}
+            label={option}
+            selected={value === id}
+            onPress={() => onChange(id)}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function Field({
   label,
   value,
@@ -3146,6 +3734,26 @@ const styles = StyleSheet.create({
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 8 },
   columns: { flexDirection: "row", gap: 9 },
   twoFields: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  inlineFields: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  compactInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  fastingSummary: {
+    flexDirection: "row",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+  fastingSummaryLabel: { fontSize: 8, fontWeight: "800" },
+  fastingSummaryValue: { fontSize: 11, fontWeight: "900", marginTop: 2 },
   shortField: { width: 92 },
   submetricList: { borderTopWidth: 1, paddingTop: 10, gap: 9 },
   submetricCard: { borderWidth: 1, borderRadius: 14, padding: 10 },
@@ -3206,6 +3814,8 @@ const styles = StyleSheet.create({
     gap: 5,
     marginBottom: 6,
   },
+  progressReminderPanel: { borderTopWidth: 1, paddingTop: 8, gap: 7 },
+  progressReminderCustom: { flexDirection: "row", alignItems: "center", gap: 6 },
   grow: { flex: 1 },
   choicePicker: {
     borderWidth: 1,
@@ -3358,7 +3968,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   colorApplyText: { color: palette.white, fontSize: 9, fontWeight: "900" },
-  icons: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginTop: 9 },
+  icons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginTop: 9,
+    marginBottom: 14,
+  },
   icon: {
     width: 38,
     height: 38,
@@ -3367,6 +3983,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  actions: { flexDirection: "row", gap: 9, marginBottom: 16 },
+  actions: {
+    flexDirection: "row",
+    gap: 9,
+    marginTop: 12,
+    marginBottom: 16,
+  },
   delete: { width: 96 },
+  visualChoices: { borderTopWidth: 1, borderTopColor: "transparent" },
 });

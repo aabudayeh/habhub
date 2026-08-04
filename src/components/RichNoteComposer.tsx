@@ -3,6 +3,7 @@ import React, {
   forwardRef,
   useCallback,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,7 @@ import {
   StyleSheet,
   TextInput as NativeTextInput,
   TextInputKeyPressEventData,
+  TextInputSelectionChangeEventData,
   View,
 } from "react-native";
 
@@ -28,25 +30,31 @@ type InlineRun = {
   text: string;
   inline: Set<Inline>;
   linkUrl?: string;
+  textColor?: string;
 };
 type ParsedLine = {
   block: Block;
   checked?: boolean;
   runs: InlineRun[];
 };
+type TextSelection = { start: number; end: number };
 const EMPTY_RUN = "\u200B";
 
 export type RichNoteComposerHandle = {
   setBlock: (block: Block) => void;
   toggleInline: (style: Exclude<Inline, "link">) => void;
+  setTextColor: (color?: string) => void;
   insertLink: (text: string, url: string) => void;
   replaceHashtag: (label: string) => void;
+  replaceValue: (value: string) => void;
+  getValue: () => string;
 };
 
 function parseRun(raw: string): InlineRun {
   const inline = new Set<Inline>();
   let text = raw;
   let linkUrl: string | undefined;
+  let textColor: string | undefined;
   let changed = true;
   while (changed) {
     changed = false;
@@ -72,14 +80,27 @@ function parseRun(raw: string): InlineRun {
       linkUrl = link[2];
       changed = true;
     }
+    const colored = text.match(
+      /^\[color=(#[0-9a-f]{6})\]([\s\S]*)\[\/color\]$/i,
+    );
+    if (colored) {
+      textColor = colored[1].toUpperCase();
+      text = colored[2];
+      changed = true;
+    }
   }
-  return { text: text === EMPTY_RUN ? "" : text, inline, linkUrl };
+  return {
+    text: text === EMPTY_RUN ? "" : text,
+    inline,
+    linkUrl,
+    textColor,
+  };
 }
 
 function parseRuns(raw: string) {
   const tokens = raw
     .split(
-      /(\*\*[^*\n]*\*\*|~~[^~\n]*~~|_[^_\n]*_|\[[^\]\n]+\]\([^)]+\))/g,
+      /(\[color=#[0-9a-fA-F]{6}\][^\n]*?\[\/color\]|\*\*[^*\n]*\*\*|~~[^~\n]*~~|_[^_\n]*_|\[[^\]\n]+\]\([^)]+\))/g,
     )
     .filter((token) => token.length > 0);
   return tokens.length ? tokens.map(parseRun) : [parseRun("")];
@@ -111,11 +132,11 @@ function parseLine(raw: string): ParsedLine {
 
 function serializeRun(run: InlineRun) {
   let text = run.text || EMPTY_RUN;
-  if (run.inline.has("link"))
-    text = `[${text}](${run.linkUrl ?? "https://"})`;
+  if (run.inline.has("link")) text = `[${text}](${run.linkUrl ?? "https://"})`;
   if (run.inline.has("strike")) text = `~~${text}~~`;
   if (run.inline.has("italic")) text = `_${text}_`;
   if (run.inline.has("bold")) text = `**${text}**`;
+  if (run.textColor) text = `[color=${run.textColor}]${text}[/color]`;
   return text;
 }
 
@@ -124,15 +145,112 @@ function serializeLine(line: ParsedLine) {
   if (line.block === "h1") return `# ${text}`;
   if (line.block === "h2") return `## ${text}`;
   if (line.block === "bullet") return `- ${text}`;
-  if (line.block === "check")
-    return `- [${line.checked ? "x" : " "}] ${text}`;
+  if (line.block === "check") return `- [${line.checked ? "x" : " "}] ${text}`;
   if (line.block === "quote") return `> ${text}`;
   return text;
 }
 
-function runWidth(text: string, block: Block) {
-  const characterWidth = block === "h1" ? 9 : block === "h2" ? 7.5 : 5.8;
-  return Math.max(18, Math.min(290, text.length * characterWidth + 8));
+function sameRunFormat(left: InlineRun, right: InlineRun) {
+  return (
+    left.textColor === right.textColor &&
+    left.linkUrl === right.linkUrl &&
+    left.inline.size === right.inline.size &&
+    [...left.inline].every((style) => right.inline.has(style))
+  );
+}
+
+function normalizeRuns(
+  runs: InlineRun[],
+  targetRun: number,
+  targetSelection: TextSelection,
+) {
+  const normalized: InlineRun[] = [];
+  let normalizedTarget = 0;
+  let normalizedSelection = targetSelection;
+
+  runs.forEach((run, index) => {
+    const previous = normalized[normalized.length - 1];
+    if (previous && sameRunFormat(previous, run)) {
+      const offset = previous.text.length;
+      previous.text += run.text;
+      if (index === targetRun) {
+        normalizedTarget = normalized.length - 1;
+        normalizedSelection = {
+          start: targetSelection.start + offset,
+          end: targetSelection.end + offset,
+        };
+      }
+      return;
+    }
+    normalized.push({ ...run, inline: new Set(run.inline) });
+    if (index === targetRun) normalizedTarget = normalized.length - 1;
+  });
+
+  if (!normalized.length) normalized.push(parseRun(""));
+  return {
+    runs: normalized,
+    run: normalizedTarget,
+    selection: normalizedSelection,
+  };
+}
+
+/** Removes editor-only empty runs without changing meaningful rich text. */
+export function cleanRichNoteValue(value: string) {
+  return value
+    .split("\n")
+    .map((rawLine) => {
+      const line = parseLine(rawLine);
+      const runs = line.runs
+        .map((run) => ({
+          ...run,
+          inline: new Set(run.inline),
+          text: run.text.replaceAll(EMPTY_RUN, ""),
+        }))
+        .filter((run) => run.text.length > 0);
+      return runs.length ? serializeLine({ ...line, runs }) : "";
+    })
+    .join("\n");
+}
+
+/** True only when the note contains user-visible text, not formatting markup. */
+export function richNoteHasText(value: string) {
+  return value
+    .split("\n")
+    .some((rawLine) =>
+      parseLine(rawLine).runs.some(
+        (run) => run.text.replaceAll(EMPTY_RUN, "").trim().length > 0,
+      ),
+    );
+}
+
+function formatRunAtSelection(
+  line: ParsedLine,
+  runIndex: number,
+  selection: TextSelection,
+  format: (run: InlineRun) => InlineRun,
+) {
+  const current = line.runs[runIndex] ?? parseRun("");
+  const start = Math.max(0, Math.min(selection.start, current.text.length));
+  const end = Math.max(start, Math.min(selection.end, current.text.length));
+  const before = current.text.slice(0, start);
+  const selected = current.text.slice(start, end);
+  const after = current.text.slice(end);
+  const replacements: InlineRun[] = [];
+
+  if (before) replacements.push({ ...current, text: before });
+  const localTarget = replacements.length;
+  replacements.push(format({ ...current, text: selected }));
+  if (after) replacements.push({ ...current, text: after });
+
+  return normalizeRuns(
+    [
+      ...line.runs.slice(0, runIndex),
+      ...replacements,
+      ...line.runs.slice(runIndex + 1),
+    ],
+    runIndex + localTarget,
+    start === end ? { start: 0, end: 0 } : { start: 0, end: selected.length },
+  );
 }
 
 export const RichNoteComposer = forwardRef<
@@ -150,25 +268,76 @@ export const RichNoteComposer = forwardRef<
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [active, setActive] = useState({ line: 0, run: 0 });
+  const [draft, setDraft] = useState(value);
+  const [focusRequest, setFocusRequest] = useState(0);
   const inputs = useRef<Record<string, NativeTextInput | null>>({});
-  const rawLines = useMemo(() => value.split("\n"), [value]);
+  const selections = useRef<Record<string, TextSelection>>({});
+  const pendingFocus = useRef<{
+    line: number;
+    run: number;
+    selection: TextSelection;
+  } | null>(null);
+  const rawLines = useMemo(() => draft.split("\n"), [draft]);
   const lines = useMemo(() => rawLines.map(parseLine), [rawLines]);
+  const commit = useCallback(
+    (next: string) => {
+      setDraft(next);
+      onChange(next);
+    },
+    [onChange],
+  );
 
   const replaceLine = useCallback(
     (index: number, next: ParsedLine) => {
       const updated = [...rawLines];
       updated[index] = serializeLine(next);
-      onChange(updated.join("\n"));
+      commit(updated.join("\n"));
     },
-    [onChange, rawLines],
+    [commit, rawLines],
   );
 
-  const focus = (line: number, run: number) =>
-    setTimeout(() => inputs.current[`${line}:${run}`]?.focus(), 30);
+  const focus = useCallback(
+    (
+      line: number,
+      run: number,
+      selection: TextSelection = { start: 0, end: 0 },
+    ) => {
+      pendingFocus.current = { line, run, selection };
+      setFocusRequest((request) => request + 1);
+    },
+    [],
+  );
+
+  // Move focus to a newly created formatting run before the frame is painted.
+  // A delayed focus caused Android to briefly dismiss and reopen the keyboard
+  // whenever styles changed or a run boundary was deleted.
+  useLayoutEffect(() => {
+    const target = pendingFocus.current;
+    if (!target) return;
+    const key = `${target.line}:${target.run}`;
+    const moveFocus = (input: NativeTextInput | null | undefined) => {
+      if (!input) return false;
+      input.focus();
+      input.setSelection(target.selection.start, target.selection.end);
+      selections.current[key] = target.selection;
+      pendingFocus.current = null;
+      return true;
+    };
+    if (moveFocus(inputs.current[key])) return;
+    const frame = requestAnimationFrame(() => {
+      if (!moveFocus(inputs.current[key])) pendingFocus.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest]);
 
   useImperativeHandle(
     ref,
     () => ({
+      replaceValue: (nextValue) => {
+        setDraft(nextValue);
+        onChange(nextValue);
+      },
+      getValue: () => draft,
       setBlock: (block) => {
         const line = lines[active.line] ?? parseLine("");
         replaceLine(active.line, { ...line, block });
@@ -176,21 +345,48 @@ export const RichNoteComposer = forwardRef<
       toggleInline: (style) => {
         const line = lines[active.line] ?? parseLine("");
         const current = line.runs[active.run] ?? parseRun("");
-        const inline = new Set(current.inline);
-        if (inline.has(style)) inline.delete(style);
-        else inline.add(style);
-        if (!current.text) {
-          const runs = [...line.runs];
-          runs[active.run] = { ...current, inline };
-          replaceLine(active.line, { ...line, runs });
-          return;
-        }
-        const nextRun = { text: "", inline };
-        const runs = [...line.runs];
-        runs.splice(active.run + 1, 0, nextRun);
-        replaceLine(active.line, { ...line, runs });
-        setActive({ line: active.line, run: active.run + 1 });
-        focus(active.line, active.run + 1);
+        const selection = selections.current[
+          `${active.line}:${active.run}`
+        ] ?? {
+          start: current.text.length,
+          end: current.text.length,
+        };
+        const result = formatRunAtSelection(
+          line,
+          active.run,
+          selection,
+          (run) => {
+            const inline = new Set(run.inline);
+            if (inline.has(style)) inline.delete(style);
+            else inline.add(style);
+            return { ...run, inline };
+          },
+        );
+        replaceLine(active.line, { ...line, runs: result.runs });
+        setActive({ line: active.line, run: result.run });
+        focus(active.line, result.run, result.selection);
+      },
+      setTextColor: (textColor) => {
+        const line = lines[active.line] ?? parseLine("");
+        const current = line.runs[active.run] ?? parseRun("");
+        const selection = selections.current[
+          `${active.line}:${active.run}`
+        ] ?? {
+          start: current.text.length,
+          end: current.text.length,
+        };
+        const result = formatRunAtSelection(
+          line,
+          active.run,
+          selection,
+          (run) => ({
+            ...run,
+            textColor,
+          }),
+        );
+        replaceLine(active.line, { ...line, runs: result.runs });
+        setActive({ line: active.line, run: result.run });
+        focus(active.line, result.run, result.selection);
       },
       insertLink: (text, url) => {
         const line = lines[active.line] ?? parseLine("");
@@ -213,22 +409,24 @@ export const RichNoteComposer = forwardRef<
         const line = lines[active.line] ?? parseLine("");
         const current = line.runs[active.run] ?? parseRun("");
         const cleanLabel = label.trim().replace(/^#/, "").replace(/\s+/g, "_");
-        const match = current.text.match(
-          /(^|\s)#([\p{L}\p{N}_-]*)$/u,
-        );
+        const match = current.text.match(/(^|\s)#([\p{L}\p{N}_-]*)$/u);
         if (!match || !cleanLabel) return;
         const prefix = current.text.slice(0, match.index ?? 0);
+        const text = `${prefix}${match[1]}#${cleanLabel} `;
         const runs = [...line.runs];
         runs[active.run] = {
           ...current,
-          text: `${prefix}${match[1]}#${cleanLabel} `,
+          text,
         };
         replaceLine(active.line, { ...line, runs });
         onHashtagQuery?.(null);
-        focus(active.line, active.run);
+        focus(active.line, active.run, {
+          start: text.length,
+          end: text.length,
+        });
       },
     }),
-    [active, lines, onHashtagQuery, replaceLine],
+    [active, draft, focus, lines, onChange, onHashtagQuery, replaceLine],
   );
 
   const insertAfter = (index: number, runIndex: number) => {
@@ -247,7 +445,7 @@ export const RichNoteComposer = forwardRef<
     });
     const updated = [...rawLines];
     updated.splice(index + 1, 0, next);
-    onChange(updated.join("\n"));
+    commit(updated.join("\n"));
     setActive({ line: index + 1, run: 0 });
     focus(index + 1, 0);
   };
@@ -260,13 +458,45 @@ export const RichNoteComposer = forwardRef<
     if (event.nativeEvent.key !== "Backspace") return;
     const line = lines[lineIndex];
     const run = line?.runs[runIndex];
-    if (run?.text) return;
+    if (run?.text) {
+      const selection = selections.current[`${lineIndex}:${runIndex}`] ?? {
+        start: run.text.length,
+        end: run.text.length,
+      };
+      if (selection.start !== 0 || selection.end !== 0 || runIndex === 0)
+        return;
+
+      // Native inputs cannot backspace across the boundary between two
+      // differently styled runs. Delete from the preceding run ourselves and
+      // keep the caret at the same visual position in this sentence.
+      const runs = [...line.runs];
+      const previous = runs[runIndex - 1];
+      const characters = [...previous.text];
+      characters.pop();
+      let targetRun = runIndex;
+      if (characters.length) {
+        runs[runIndex - 1] = { ...previous, text: characters.join("") };
+      } else {
+        runs.splice(runIndex - 1, 1);
+        targetRun -= 1;
+      }
+      const result = normalizeRuns(runs, targetRun, { start: 0, end: 0 });
+      replaceLine(lineIndex, { ...line, runs: result.runs });
+      setActive({ line: lineIndex, run: result.run });
+      focus(lineIndex, result.run, result.selection);
+      return;
+    }
     if (line.runs.length > 1) {
       const runs = line.runs.filter((_, index) => index !== runIndex);
       replaceLine(lineIndex, { ...line, runs });
       const previous = Math.max(0, runIndex - 1);
       setActive({ line: lineIndex, run: previous });
-      focus(lineIndex, previous);
+      const previousText = runs[previous]?.text ?? "";
+      const caret = runIndex === 0 ? 0 : previousText.length;
+      focus(lineIndex, previous, {
+        start: caret,
+        end: caret,
+      });
       return;
     }
     if (line.block !== "text" || run.inline.size) {
@@ -279,10 +509,14 @@ export const RichNoteComposer = forwardRef<
     if (lineIndex <= 0) return;
     const updated = [...rawLines];
     updated.splice(lineIndex, 1);
-    onChange(updated.join("\n"));
+    commit(updated.join("\n"));
     const previousRun = Math.max(0, lines[lineIndex - 1].runs.length - 1);
     setActive({ line: lineIndex - 1, run: previousRun });
-    focus(lineIndex - 1, previousRun);
+    const previousText = lines[lineIndex - 1].runs[previousRun]?.text ?? "";
+    focus(lineIndex - 1, previousRun, {
+      start: previousText.length,
+      end: previousText.length,
+    });
   };
 
   return (
@@ -294,7 +528,7 @@ export const RichNoteComposer = forwardRef<
     >
       {lines.map((line, lineIndex) => (
         <View
-          key={`${lineIndex}-${rawLines.length}`}
+          key={lineIndex}
           style={[
             styles.line,
             line.block === "quote" && {
@@ -322,58 +556,88 @@ export const RichNoteComposer = forwardRef<
             </Pressable>
           ) : null}
           <View style={styles.runs}>
-            {line.runs.map((run, runIndex) => (
-              <TextInput
-                key={`${lineIndex}:${runIndex}`}
-                ref={(input) => {
-                  inputs.current[`${lineIndex}:${runIndex}`] = input;
-                }}
-                value={run.text}
-                onFocus={() => {
-                  setActive({ line: lineIndex, run: runIndex });
-                  onEditingChange?.(true);
-                }}
-                onChangeText={(text) => {
-                  const runs = [...line.runs];
-                  runs[runIndex] = { ...run, text };
-                  replaceLine(lineIndex, { ...line, runs });
-                  const hashtag = text.match(
-                    /(?:^|\s)#([\p{L}\p{N}_-]*)$/u,
-                  );
-                  onHashtagQuery?.(hashtag ? hashtag[1] : null);
-                }}
-                onSubmitEditing={() => insertAfter(lineIndex, runIndex)}
-                onKeyPress={(event) =>
-                  backspace(lineIndex, runIndex, event)
-                }
-                blurOnSubmit={false}
-                multiline={false}
-                placeholder={
-                  lineIndex === 0 && runIndex === 0
-                    ? "Write anything…"
-                    : undefined
-                }
-                placeholderTextColor={colors.faint}
-                style={[
-                  styles.input,
-                  {
-                    color: run.inline.has("link") ? "#2877D4" : colors.ink,
-                    width:
-                      line.runs.length === 1
-                        ? undefined
-                        : runWidth(run.text, line.block),
-                    flex: line.runs.length === 1 ? 1 : undefined,
-                  },
-                  line.block === "h1" && styles.h1,
-                  line.block === "h2" && styles.h2,
-                  run.inline.has("bold") && styles.bold,
-                  run.inline.has("italic") && styles.italic,
-                  run.inline.has("strike") && styles.strike,
-                  run.inline.has("link") && styles.link,
-                  line.checked && styles.checked,
-                ]}
-              />
-            ))}
+            {line.runs.map((run, runIndex) => {
+              const key = `${lineIndex}:${runIndex}`;
+              const formattedStyles = [
+                line.block === "h1" && styles.h1,
+                line.block === "h2" && styles.h2,
+                run.inline.has("bold") && styles.bold,
+                run.inline.has("italic") && styles.italic,
+                run.inline.has("strike") && styles.strike,
+                run.inline.has("link") && styles.link,
+                line.checked && styles.checked,
+              ];
+              return (
+                <View
+                  key={key}
+                  style={[styles.run, line.runs.length === 1 && styles.onlyRun]}
+                >
+                  {line.runs.length > 1 ? (
+                    <Text
+                      translate={false}
+                      numberOfLines={1}
+                      style={[styles.input, styles.runMeasure, formattedStyles]}
+                    >
+                      {run.text || EMPTY_RUN}
+                    </Text>
+                  ) : null}
+                  <TextInput
+                    ref={(input) => {
+                      inputs.current[key] = input;
+                    }}
+                    value={run.text}
+                    // Styled runs are separate native inputs. Treating every
+                    // run as a sentence start makes Android capitalize the
+                    // next word whenever formatting changes mid-line.
+                    autoCapitalize={runIndex === 0 ? "sentences" : "none"}
+                    onFocus={() => {
+                      selections.current[key] ??= {
+                        start: run.text.length,
+                        end: run.text.length,
+                      };
+                      setActive({ line: lineIndex, run: runIndex });
+                      onEditingChange?.(true);
+                    }}
+                    onSelectionChange={(
+                      event: NativeSyntheticEvent<TextInputSelectionChangeEventData>,
+                    ) => {
+                      selections.current[key] = event.nativeEvent.selection;
+                    }}
+                    onChangeText={(text) => {
+                      const runs = [...line.runs];
+                      runs[runIndex] = { ...run, text };
+                      replaceLine(lineIndex, { ...line, runs });
+                      const hashtag = text.match(
+                        /(?:^|\s)#([\p{L}\p{N}_-]*)$/u,
+                      );
+                      onHashtagQuery?.(hashtag ? hashtag[1] : null);
+                    }}
+                    onSubmitEditing={() => insertAfter(lineIndex, runIndex)}
+                    onKeyPress={(event) =>
+                      backspace(lineIndex, runIndex, event)
+                    }
+                    blurOnSubmit={false}
+                    multiline={false}
+                    placeholder={
+                      lineIndex === 0 && runIndex === 0
+                        ? "Write anything…"
+                        : undefined
+                    }
+                    placeholderTextColor={colors.faint}
+                    style={[
+                      styles.input,
+                      line.runs.length > 1 && styles.inlineRunInput,
+                      {
+                        color: run.inline.has("link")
+                          ? "#2877D4"
+                          : (run.textColor ?? colors.ink),
+                      },
+                      formattedStyles,
+                    ]}
+                  />
+                </View>
+              );
+            })}
           </View>
         </View>
       ))}
@@ -399,6 +663,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "flex-start",
+  },
+  run: {
+    minWidth: 1,
+    maxWidth: "100%",
+    minHeight: 24,
+    position: "relative",
+  },
+  onlyRun: { flex: 1 },
+  runMeasure: { opacity: 0 },
+  inlineRunInput: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
   },
   marker: {
     width: 17,

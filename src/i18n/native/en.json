@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "HabHub reads only the health categories you choose so it can update your private goals and permitted group progress.",
+    "NSHealthUpdateUsageDescription": "HabHub does not write health data unless you explicitly choose a future export feature.",
+    "NSCameraUsageDescription": "HabHub uses your camera only when you choose to take a progress photo.",
+    "NSPhotoLibraryUsageDescription": "HabHub uses your photos only when you choose to add a progress update.",
+    "NSPhotoLibraryAddUsageDescription": "HabHub saves an image only when you choose to export or share it."
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

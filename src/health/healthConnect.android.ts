@@ -1,10 +1,16 @@
 import {
+  getGrantedPermissions,
   initialize,
   openHealthConnectSettings,
   readRecords,
   requestPermission,
 } from "react-native-health-connect";
 
+import {
+  exerciseFromActivityName,
+  healthConnectSegmentExercise,
+  healthConnectSessionExercise,
+} from "@/src/domain/exerciseCatalog";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
 
@@ -23,6 +29,20 @@ const RECORD_TYPES: Record<HealthDataType, string> = {
   blood_glucose: "BloodGlucose",
   menstruation: "MenstruationPeriod",
 };
+
+function recordTypesFor(dataTypes: HealthDataType[]) {
+  return [
+    ...new Set(
+      dataTypes.flatMap((type) =>
+        type === "workouts"
+          ? ["ExerciseSession", "Distance", "TotalCaloriesBurned"]
+          : type === "active_energy"
+            ? ["TotalCaloriesBurned", "ExerciseSession"]
+            : [RECORD_TYPES[type]],
+      ),
+    ),
+  ];
+}
 
 const EXERCISE_NAMES: Record<number, string> = {
   0: "Workout",
@@ -95,10 +115,59 @@ function workoutLabel(record: Record<string, unknown>) {
   const title = String(record.title ?? "").trim();
   if (title && !/^\d+$/.test(title) && title !== String(record.exerciseType))
     return title;
+  const canonical = healthConnectSessionExercise(code);
   return (
+    canonical?.name ??
     EXERCISE_NAMES[code] ??
     (Number.isFinite(code) ? `Workout (${code})` : "Workout")
   );
+}
+
+function workoutActivity(record: Record<string, unknown>) {
+  const title = String(record.title ?? "").trim();
+  return (
+    exerciseFromActivityName(title) ??
+    healthConnectSessionExercise(Number(record.exerciseType))
+  );
+}
+
+function workoutSegmentImports(
+  record: Record<string, unknown>,
+  session: HealthImportRecord,
+) {
+  const segments = Array.isArray(record.segments)
+    ? (record.segments as Record<string, unknown>[])
+    : [];
+  return segments.flatMap((segment, index): HealthImportRecord[] => {
+    const segmentType = Number(segment.segmentType);
+    if (!Number.isFinite(segmentType)) return [];
+    const startTime = String(segment.startTime ?? session.startTime);
+    const endTime = String(segment.endTime ?? startTime);
+    const durationMinutes = Math.max(
+      0,
+      (new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000,
+    );
+    const repetitions = Number(segment.repetitions ?? 0);
+    const exercise = healthConnectSegmentExercise(segmentType);
+    return [
+      {
+        id: `${session.id}:segment:${index}`,
+        provider: "health_connect",
+        type: "workouts",
+        startTime,
+        endTime,
+        value:
+          Number.isFinite(repetitions) && repetitions > 0 ? repetitions : 0,
+        unit: "reps",
+        origin: session.origin,
+        updatedAt: session.updatedAt,
+        label: exercise?.name ?? `Exercise segment (${segmentType})`,
+        activityKey: exercise?.key,
+        workoutRecordKind: "segment",
+        measurements: { durationMinutes },
+      },
+    ];
+  });
 }
 
 function nestedNumber(value: unknown, ...keys: string[]) {
@@ -358,6 +427,7 @@ function convert(
     unit = "";
   }
   const metadata = record.metadata as Record<string, unknown> | undefined;
+  const workout = type === "workouts" ? workoutActivity(record) : undefined;
   return {
     id: recordId(record, type),
     provider: "health_connect",
@@ -383,6 +453,8 @@ function convert(
         : type === "workouts"
           ? workoutLabel(record)
           : undefined,
+    activityKey: workout?.key,
+    workoutRecordKind: type === "workouts" ? "session" : undefined,
     nutrition: type === "nutrition" ? nutrition(record) : undefined,
     note: typeof record.notes === "string" ? record.notes : undefined,
     measurements:
@@ -427,18 +499,24 @@ export const healthConnectAdapter: HealthAdapter = {
         "Imports Android health data from compatible sources such as Samsung Health, Google Fit, and MyFitnessPal.",
     };
   },
-  requestPermissions: async (dataTypes, backgroundAccess) => {
-    const recordTypes = [
-      ...new Set(
-        dataTypes.flatMap((type) =>
-          type === "workouts"
-            ? ["ExerciseSession", "Distance", "TotalCaloriesBurned"]
-            : type === "active_energy"
-              ? ["TotalCaloriesBurned", "ExerciseSession"]
-            : [RECORD_TYPES[type]],
-        ),
+  grantedConnectionState: async (dataTypes) => {
+    const relevantRecordTypes = new Set(recordTypesFor(dataTypes));
+    const granted = await getGrantedPermissions();
+    return {
+      connected: granted.some(
+        (permission) =>
+          permission.accessType === "read" &&
+          relevantRecordTypes.has(permission.recordType),
       ),
-    ];
+      backgroundAccess: granted.some(
+        (permission) =>
+          permission.accessType === "read" &&
+          permission.recordType === "BackgroundAccessPermission",
+      ),
+    };
+  },
+  requestPermissions: async (dataTypes, backgroundAccess) => {
+    const recordTypes = recordTypesFor(dataTypes);
     const base = recordTypes.map((recordType) => ({
       accessType: "read" as const,
       recordType,
@@ -529,7 +607,7 @@ export const healthConnectAdapter: HealthAdapter = {
           (record) => recordDuration(record) / 60000,
         )
       : [];
-    const workoutImports = workoutRecords.map((record) => {
+    const workoutImports = workoutRecords.flatMap((record) => {
       const converted = convert("workouts", record);
       const start = String(record.startTime);
       const end = String(record.endTime);
@@ -563,7 +641,7 @@ export const healthConnectAdapter: HealthAdapter = {
       ]
         .filter(Boolean)
         .join(" · ");
-      return {
+      const session: HealthImportRecord = {
         ...converted,
         note: [converted.note, details].filter(Boolean).join(" · ") || undefined,
         measurements: {
@@ -572,6 +650,7 @@ export const healthConnectAdapter: HealthAdapter = {
           distanceKm,
         },
       };
+      return [session, ...workoutSegmentImports(record, session)];
     });
     const activeEnergyImports = calorieRecords.map((record) => {
       const converted = convert("active_energy", record);
@@ -583,10 +662,15 @@ export const healthConnectAdapter: HealthAdapter = {
         overlaps(workout, converted.startTime, converted.endTime),
       );
       return matchingWorkout
-        ? { ...converted, label: workoutLabel(matchingWorkout) }
+        ? {
+            ...converted,
+            label: workoutLabel(matchingWorkout),
+            activityKey: workoutActivity(matchingWorkout)?.key,
+          }
         : converted;
     });
     for (const workout of workoutImports) {
+      if (workout.workoutRecordKind !== "session") continue;
       const calories = workout.measurements?.activeCalories ?? 0;
       if (
         calories > 0 &&

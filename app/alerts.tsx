@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
 import {
   Avatar,
   Card,
@@ -26,6 +27,7 @@ export default function Alerts() {
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const [filter, setFilter] = useState<Filter>("all");
   const alertScope = scope === "group" ? "group" : "personal";
   const alerts = useMemo(() => buildAlerts(state), [state]).filter(
@@ -50,6 +52,7 @@ export default function Alerts() {
     <Screen>
       <PageHeader
         eyebrow={state.group.name}
+        translateEyebrow={false}
         title={scope === "group" ? "Group updates" : "Your updates"}
         subtitle={
           scope === "group"
@@ -70,7 +73,10 @@ export default function Alerts() {
       />
 
       {scope === "group" && (state.group.pendingMembers?.length ?? 0) > 0 ? (
-        <Pressable onPress={() => router.navigate("/group-settings" as never)}>
+        <Pressable
+          onPress={() => router.navigate("/group-settings" as never)}
+          style={styles.joinRequest}
+        >
           <Card style={[styles.alert, { borderLeftColor: "#F06A45" }]}>
             <View style={[styles.icon, { backgroundColor: "#F06A4520" }]}>
               <Ionicons
@@ -232,8 +238,8 @@ export default function Alerts() {
                         {alert.detail}
                       </Text>
                       <Text style={[styles.date, { color: colors.faint }]}>
-                        {friendlyDate(alert.createdAt.slice(0, 10))} ·{" "}
-                        {new Date(alert.createdAt).toLocaleTimeString([], {
+                        {friendlyDate(alert.createdAt.slice(0, 10), locale)} ·{" "}
+                        {new Date(alert.createdAt).toLocaleTimeString(locale, {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
@@ -269,6 +275,7 @@ export default function Alerts() {
 
 const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", gap: 6 },
+  joinRequest: { marginBottom: 12 },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
   link: { fontSize: 10, fontWeight: "900" },
   badges: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

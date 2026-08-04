@@ -12,6 +12,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 import {
   activityTimerDisplaySeconds,
   formatActivityTimer,
@@ -19,12 +21,19 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
-const OVERLAY_WIDTH = 154;
+const OVERLAY_WIDTH = 178;
 const OVERLAY_HEIGHT = 46;
 
 export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
-  const { state } = useApp();
-  const timer = state.activeTimer;
+  const { state, updateSettings } = useApp();
+  const { language, t } = useLocalization();
+  const timers = state.activityTimers?.length
+    ? state.activityTimers
+    : state.activeTimer
+      ? [state.activeTimer]
+      : [];
+  const timer =
+    timers.find((item) => item.id === state.activeTimer?.id) ?? timers[0];
   const colors = useAppColors();
   const accent = useGroupAccent();
   const insets = useSafeAreaInsets();
@@ -105,8 +114,15 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [height, insets.bottom, insets.top, position, width],
   );
-  if (!timer || !metric || hidden) return null;
+  if (
+    !timer ||
+    !metric ||
+    hidden ||
+    state.settings.showActivityTimerOverlay === false
+  )
+    return null;
   const seconds = activityTimerDisplaySeconds(timer, now);
+  const metricName = localizeMetricName(language, metric);
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       <Animated.View
@@ -122,8 +138,10 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open ${metric.name} timer`}
-          onPress={() => router.navigate("/timer" as never)}
+          accessibilityLabel={t(`Open ${metricName} timer`)}
+          onPress={() =>
+            router.navigate({ pathname: "/timer", params: { timer: timer.id } } as never)
+          }
           style={styles.pill}
         >
           <View
@@ -145,16 +163,35 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
           </View>
           <View style={styles.copy}>
             <Text
+              translate={false}
               numberOfLines={1}
               style={[styles.name, { color: colors.muted }]}
             >
-              {metric.name}
+              {metricName}
             </Text>
             <Text style={[styles.time, { color: colors.ink }]}>
               {formatActivityTimer(seconds)}
             </Text>
           </View>
-          <Ionicons name="open-outline" size={14} color={colors.faint} />
+          {timers.length > 1 ? (
+            <View style={[styles.count, { backgroundColor: colors.primarySoft }]}>
+              <Text translate={false} style={[styles.countText, { color: accent }]}>
+                +{timers.length - 1}
+              </Text>
+            </View>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("Hide floating timer")}
+            hitSlop={8}
+            onPress={(event) => {
+              event.stopPropagation();
+              updateSettings({ showActivityTimerOverlay: false });
+            }}
+            style={styles.close}
+          >
+            <Ionicons name="close" size={14} color={colors.faint} />
+          </Pressable>
         </Pressable>
       </Animated.View>
     </View>
@@ -191,4 +228,14 @@ const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 0 },
   name: { fontSize: 7, fontWeight: "800" },
   time: { fontSize: 12, fontWeight: "900", letterSpacing: 0.4 },
+  count: {
+    minWidth: 23,
+    height: 20,
+    paddingHorizontal: 5,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  countText: { fontSize: 8, fontWeight: "900" },
+  close: { width: 20, height: 28, alignItems: "center", justifyContent: "center" },
 });

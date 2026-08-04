@@ -34,7 +34,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 WebBrowser.maybeCompleteAuthSession();
 
 function callbackUrl() {
-  return Platform.OS === 'web' ? Linking.createURL('/auth-callback') : 'paceboard://auth-callback';
+  if (Platform.OS !== 'web') return 'paceboard://auth-callback';
+  const configuredOrigin = process.env.EXPO_PUBLIC_APP_URL?.trim().replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/auth-callback`;
+  }
+  return `${configuredOrigin || 'https://habhub.expo.app'}/auth-callback`;
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
@@ -49,14 +54,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     let mounted = true;
+    // Never leave the app behind an indefinite auth splash if browser storage
+    // or an OEM credential provider stalls. A late session result still wins.
+    const startupFallback = setTimeout(
+      () => mounted && setStatus('signedOut'),
+      Platform.OS === 'web' ? 2500 : 8000,
+    );
     Promise.all([supabase.auth.getSession(), AsyncStorage.getItem(DEMO_MODE_KEY)])
       .then(([result, demoMode]) => {
         if (!mounted) return;
+        clearTimeout(startupFallback);
         const nextSession = result.data.session;
         setSession(nextSession);
         setStatus(nextSession ? 'signedIn' : demoMode === 'true' ? 'demo' : 'signedOut');
       })
-      .catch(() => mounted && setStatus('signedOut'));
+      .catch(() => {
+        clearTimeout(startupFallback);
+        if (mounted) setStatus('signedOut');
+      });
 
     const authSubscription = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
@@ -75,13 +90,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (!url) return;
       consumeAuthUrl(url).catch(() => undefined);
     };
-    Linking.getInitialURL().then(acceptUrl).catch(() => undefined);
-    const linkSubscription = Linking.addEventListener('url', ({ url }) => acceptUrl(url));
+    if (Platform.OS !== 'web')
+      Linking.getInitialURL().then(acceptUrl).catch(() => undefined);
+    const linkSubscription =
+      Platform.OS !== 'web'
+        ? Linking.addEventListener('url', ({ url }) => acceptUrl(url))
+        : null;
 
     return () => {
       mounted = false;
+      clearTimeout(startupFallback);
       authSubscription.data.subscription.unsubscribe();
-      linkSubscription.remove();
+      linkSubscription?.remove();
     };
   }, []);
 

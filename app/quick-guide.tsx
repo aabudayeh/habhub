@@ -28,7 +28,7 @@ export default function QuickGuideScreen() {
     <Screen contentContainerStyle={styles.page}>
       <PageHeader
         title="Quick guide"
-        subtitle="Choose a short interactive walkthrough. Your data and settings stay unchanged."
+        subtitle="Choose a detailed interactive walkthrough. Your data and settings stay unchanged."
         showMenu={false}
         action={
           <IconButton

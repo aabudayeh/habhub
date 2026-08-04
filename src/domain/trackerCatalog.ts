@@ -2,7 +2,11 @@ import { DEFAULT_METRICS } from '@/src/data/seed';
 import { recommendedDailyDeficit, recommendedDailyIntakeForDirection } from '@/src/domain/energy';
 import { AppState, MuscleGroup, NewMetric } from '@/src/types';
 import { defaultReminderTimes } from '@/src/domain/reminders';
-import { EXERCISE_CATALOG, MUSCLE_LABELS } from '@/src/domain/exerciseCatalog';
+import {
+  EXERCISE_CATALOG,
+  EXERCISE_CATEGORY_LABELS,
+  MUSCLE_LABELS,
+} from '@/src/domain/exerciseCatalog';
 
 export type TrackerPreset = NewMetric & { templateId: string; description: string };
 
@@ -17,7 +21,7 @@ export function trackerGroupLabel(metric: {
     nutrition: "Food & nutrition",
     body: "Body composition",
     health: "Health readings",
-    gym: "Gym",
+    gym: "Workout",
     mind: "Mind & focus",
     photos: "Photos",
     other: "Other",
@@ -89,6 +93,9 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
         timerEnabled: item.timerEnabled,
+        fastingSettings: item.fastingSettings
+          ? { ...item.fastingSettings }
+          : undefined,
         submetrics: item.submetrics?.map((submetric) => ({
           ...submetric,
           goal: { ...submetric.goal },
@@ -173,7 +180,7 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
       },
       gymMuscleGroups: exercise.muscleGroups,
       description:
-        "Gym · shared group exercise using one stable comparison key.",
+        "Workout · shared group exercise using one stable comparison key.",
     }),
   );
   return [...builtIns, ...GYM_TRACKER_PRESETS, ...groupExercisePresets];
@@ -197,6 +204,8 @@ const gymPreset = (
         | "goalEnabled"
         | "rankingDirection"
         | "gymMuscleGroups"
+        | "healthMapping"
+        | "grouping"
       >
     >,
 ): TrackerPreset => ({
@@ -212,58 +221,145 @@ const gymPreset = (
   defaultVisibility: "group",
 });
 
+function exerciseTrackerPresets(): TrackerPreset[] {
+  return EXERCISE_CATALOG.filter((exercise) => exercise.key !== "custom").flatMap(
+    (exercise) => {
+      const grouping = `Workout · ${EXERCISE_CATEGORY_LABELS[exercise.category]}`;
+      const common = { gymMuscleGroups: exercise.muscles, grouping };
+
+      if (exercise.trackingMode === "duration") {
+        return [
+          gymPreset({
+            ...common,
+            templateId: `workout_${exercise.key}_duration`,
+            name: exercise.name,
+            unit: "min",
+            aggregation: "sum",
+            goal: { kind: "at_least", target: 30 },
+            gymMapping: { kind: "exercise_duration", exerciseKey: exercise.key },
+            healthMapping: exercise.health
+              ? {
+                  dataType: "workouts",
+                  field: "duration_minutes",
+                  activityKeys: [exercise.key],
+                  workoutRecordKind:
+                    exercise.health.healthConnectSessionTypes?.length ||
+                    exercise.health.appleWorkoutTypes?.length
+                      ? "session"
+                      : exercise.health.healthConnectSegmentTypes?.length
+                        ? "segment"
+                        : "session",
+                }
+              : undefined,
+            description: `Workout · ${EXERCISE_CATEGORY_LABELS[exercise.category]} duration from saved or compatible connected-health sessions.`,
+          }),
+        ];
+      }
+
+      if (exercise.trackingMode === "reps") {
+        return [
+          gymPreset({
+            ...common,
+            // Preserve the previous id so existing installs do not receive a
+            // second copy when this preset becomes repetition-based.
+            templateId: `gym_${exercise.key}_strength`,
+            name: `${exercise.name} reps`,
+            unit: "reps",
+            aggregation: "sum",
+            goal: { kind: "at_least", target: 1 },
+            gymMapping: { kind: "exercise_reps", exerciseKey: exercise.key },
+            healthMapping: exercise.health?.healthConnectSegmentTypes?.length
+              ? {
+                  dataType: "workouts",
+                  field: "value",
+                  activityKeys: [exercise.key],
+                  workoutRecordKind: "segment",
+                }
+              : undefined,
+            description:
+              "Workout · completed repetitions; compatible native exercise segments sync when exposed.",
+          }),
+        ];
+      }
+
+      const presets = [
+        gymPreset({
+          ...common,
+          templateId: `gym_${exercise.key}_strength`,
+          name: `${exercise.name} strength`,
+          unit: "kg e1RM",
+          goal: { kind: "at_least", target: 1 },
+          gymMapping: {
+            kind: "exercise_one_rep_max",
+            exerciseKey: exercise.key,
+          },
+          description:
+            "Workout · estimated one-rep max from HabHub sets; connected health does not expose lifted weight.",
+        }),
+      ];
+      if (exercise.health?.healthConnectSegmentTypes?.length) {
+        presets.push(
+          gymPreset({
+            ...common,
+            templateId: `workout_${exercise.key}_reps`,
+            name: `${exercise.name} reps`,
+            unit: "reps",
+            aggregation: "sum",
+            goal: { kind: "at_least", target: 1 },
+            gymMapping: { kind: "exercise_reps", exerciseKey: exercise.key },
+            healthMapping: {
+              dataType: "workouts",
+              field: "value",
+              activityKeys: [exercise.key],
+              workoutRecordKind: "segment",
+            },
+            description:
+              "Workout · native repetition segments when exposed; lifted weight remains an in-app log.",
+          }),
+        );
+      }
+      return presets;
+    },
+  );
+}
+
 const GYM_TRACKER_PRESETS: TrackerPreset[] = [
   gymPreset({
     templateId: "gym_completed",
-    name: "Gym completed",
+    name: "Workout completed",
     unit: "",
     dataType: "boolean",
     goal: { kind: "complete", target: 1 },
     goalEnabled: true,
     gymMapping: { kind: "session_completed" },
-    description: "Gym · completed at least one set on this workout day.",
+    description: "Workout · completed at least one set in this session.",
   }),
   gymPreset({
     templateId: "gym_duration",
-    name: "Gym duration",
+    name: "Workout duration",
     unit: "min",
     aggregation: "sum",
     goal: { kind: "at_least", target: 45 },
     gymMapping: { kind: "session_duration" },
-    description: "Gym · total saved workout duration for the day.",
+    description: "Workout · total saved session duration for the day.",
   }),
   gymPreset({
     templateId: "gym_total_volume",
-    name: "Gym volume",
+    name: "Workout volume",
     unit: "kg",
     goal: { kind: "at_least", target: 5000 },
     gymMapping: { kind: "session_volume" },
-    description: "Gym · total completed reps × external load for the day.",
+    description: "Workout · total completed reps × external load for the day.",
   }),
   gymPreset({
     templateId: "gym_completed_sets",
-    name: "Completed gym sets",
+    name: "Completed workout sets",
     unit: "sets",
     goal: { kind: "at_least", target: 12 },
     gymMapping: { kind: "completed_sets" },
-    description: "Gym · completed sets across all exercises for the day.",
+    description: "Workout · completed sets across all exercises for the day.",
   }),
-  ...EXERCISE_CATALOG.filter((exercise) => exercise.key !== "custom").map(
-    (exercise) =>
-      gymPreset({
-        templateId: `gym_${exercise.key}_strength`,
-        name: `${exercise.name} strength`,
-        unit: "kg e1RM",
-        goal: { kind: "at_least", target: 1 },
-        gymMapping: {
-          kind: "exercise_one_rep_max",
-          exerciseKey: exercise.key,
-        },
-        gymMuscleGroups: exercise.muscles,
-        description:
-          "Gym · standardized estimated one-rep max; raw sets and notes stay private.",
-      }),
-  ),
+  ...exerciseTrackerPresets(),
   ...(Object.keys(MUSCLE_LABELS) as MuscleGroup[]).map((muscleGroup) =>
     gymPreset({
       templateId: `gym_${muscleGroup}_volume`,
@@ -273,7 +369,7 @@ const GYM_TRACKER_PRESETS: TrackerPreset[] = [
       gymMapping: { kind: "muscle_volume", muscleGroup },
       gymMuscleGroups: [muscleGroup],
       description:
-        "Gym · standardized completed-set volume for this muscle group.",
+        "Workout · standardized completed-set volume for this muscle group.",
     }),
   ),
 ];
@@ -287,5 +383,7 @@ function presetDescription(id: string) {
   if (id === 'pulse') return 'Daily average pulse; no target until you choose a personal range.';
   if (id.startsWith('blood_pressure')) return 'One combined systolic/diastolic reading with editable preferred ranges.';
   if (id === 'sleep') return 'Sleep duration with a ready-made 7–9 hour target range.';
+  if (id === 'screen_time') return 'Private Android screen and app usage from system Usage Access.';
+  if (id === 'intermittent_fasting') return 'A configurable fasting/eating window with manual or optional first-food completion.';
   return 'Ready-made logging, goals, sharing and health mapping.';
 }

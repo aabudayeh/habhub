@@ -5,12 +5,15 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
 
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
 import { MetricSelectorItem } from "@/src/components/MetricSelector";
+import { useTranslation } from "@/src/i18n";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 export function SelectionMenu({
@@ -20,6 +23,9 @@ export function SelectionMenu({
   onChange,
   multiple = true,
   emptyLabel = "None selected",
+  searchable = true,
+  compactIcon = false,
+  icon = "options-outline",
 }: {
   title: string;
   items: MetricSelectorItem[];
@@ -27,28 +33,43 @@ export function SelectionMenu({
   onChange: (ids: string[]) => void;
   multiple?: boolean;
   emptyLabel?: string;
+  searchable?: boolean;
+  /** Render only the filter icon while retaining the same accessible modal. */
+  compactIcon?: boolean;
+  icon?: keyof typeof Ionicons.glyphMap;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const selected = items.filter((item) => selectedIds.includes(item.id));
+  const localizedItems = useMemo(
+    () =>
+      items.map((item) => ({
+        ...item,
+        label: t(item.label),
+        sublabel: item.sublabel ? t(item.sublabel) : item.sublabel,
+        group: item.group ? t(item.group) : item.group,
+      })),
+    [items, t],
+  );
+  const selected = localizedItems.filter((item) => selectedIds.includes(item.id));
   const groups = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     const filtered = normalized
-      ? items.filter((item) =>
+      ? localizedItems.filter((item) =>
           `${item.label} ${item.sublabel ?? ""} ${item.group ?? ""}`
             .toLocaleLowerCase()
             .includes(normalized),
         )
-      : items;
+      : localizedItems;
     const grouped = new Map<string, MetricSelectorItem[]>();
     for (const item of filtered) {
       const group = item.group?.trim() || "Options";
       grouped.set(group, [...(grouped.get(group) ?? []), item]);
     }
     return [...grouped.entries()];
-  }, [items, query]);
+  }, [localizedItems, query]);
 
   function choose(id: string) {
     if (!multiple) {
@@ -67,24 +88,34 @@ export function SelectionMenu({
     <>
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel={t(title)}
+        accessibilityHint={t("Open selection")}
         onPress={() => setOpen(true)}
         style={[
-          styles.trigger,
+          compactIcon ? styles.compactTrigger : styles.trigger,
           { backgroundColor: colors.card, borderColor: colors.border },
         ]}
       >
-        <View style={[styles.triggerIcon, { backgroundColor: colors.primarySoft }]}>
-          <Ionicons name="options-outline" size={17} color={accent} />
-        </View>
-        <View style={styles.copy}>
+        {compactIcon ? (
+          <Ionicons name={icon} size={17} color={accent} />
+        ) : (
+          <View style={[styles.triggerIcon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name={icon} size={17} color={accent} />
+          </View>
+        )}
+        {!compactIcon ? <View style={styles.copy}>
           <Text style={[styles.title, { color: colors.ink }]}>{title}</Text>
-          <Text numberOfLines={1} style={[styles.summary, { color: colors.muted }]}>
+          <Text
+            translate={!selected.length}
+            numberOfLines={1}
+            style={[styles.summary, { color: colors.muted }]}
+          >
             {selected.length
               ? selected.map((item) => item.label).join(", ")
               : emptyLabel}
           </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+        </View> : null}
+        {!compactIcon ? <Ionicons name="chevron-forward" size={17} color={colors.muted} /> : null}
       </Pressable>
       <Modal
         transparent
@@ -99,7 +130,7 @@ export function SelectionMenu({
           >
             <View style={[styles.handle, { backgroundColor: colors.border }]} />
             <Text style={[styles.sheetTitle, { color: colors.ink }]}>{title}</Text>
-            {items.length > 7 ? (
+            {searchable && items.length > 7 ? (
               <View style={[styles.search, { borderColor: colors.border }]}>
                 <Ionicons name="search-outline" size={15} color={colors.muted} />
                 <TextInput
@@ -157,11 +188,17 @@ export function SelectionMenu({
                           />
                         </View>
                         <View style={styles.copy}>
-                          <Text style={[styles.name, { color: colors.ink }]}>
+                          <Text
+                            translate={false}
+                            style={[styles.name, { color: colors.ink }]}
+                          >
                             {item.label}
                           </Text>
                           {item.sublabel ? (
-                            <Text style={[styles.meta, { color: colors.muted }]}>
+                            <Text
+                              translate={false}
+                              style={[styles.meta, { color: colors.muted }]}
+                            >
                               {item.sublabel}
                             </Text>
                           ) : null}
@@ -212,6 +249,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
+  },
+  compactTrigger: {
+    width: 34,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
   triggerIcon: {
     width: 34,

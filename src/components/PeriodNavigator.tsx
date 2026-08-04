@@ -3,6 +3,7 @@ import { PropsWithChildren } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
 import { Card, IconButton } from "@/src/components/ui";
 import { friendlyDate } from "@/src/domain/date";
 import {
@@ -37,9 +38,14 @@ export function adjacentPeriod(
 export function PeriodChoiceBar({
   period,
   onChange,
+  dateViewOpen,
+  onToggleDateView,
 }: {
   period: LeaderboardPeriod;
   onChange: (period: Exclude<LeaderboardPeriod, "custom">) => void;
+  /** Adds a compact toggle for a separate date navigator below this bar. */
+  dateViewOpen?: boolean;
+  onToggleDateView?: () => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -48,12 +54,36 @@ export function PeriodChoiceBar({
       <View style={styles.periodBar}>
         {PERIOD_CHOICES.map((item) => {
           const selected = period === item.id;
+          const showDateToggle =
+            selected && item.id !== "overall" && Boolean(onToggleDateView);
+          const selectedOverall =
+            selected && item.id === "overall" && Boolean(onToggleDateView);
           return (
             <Pressable
               key={item.id}
-              onPress={() => onChange(item.id)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                showDateToggle
+                  ? `${item.label}, ${dateViewOpen ? "collapse" : "expand"} date view`
+                  : item.label
+              }
+              accessibilityState={{
+                selected,
+                disabled: selectedOverall,
+                expanded: showDateToggle ? Boolean(dateViewOpen) : undefined,
+              }}
+              disabled={selectedOverall}
+              onPress={() => {
+                if (showDateToggle) onToggleDateView?.();
+                else onChange(item.id);
+              }}
               style={[
                 styles.periodChoice,
+                item.id === "yesterday"
+                  ? styles.periodChoiceYesterday
+                  : item.id === "overall"
+                    ? styles.periodChoiceOverall
+                    : null,
                 {
                   backgroundColor: selected
                     ? colors.primarySoft
@@ -73,6 +103,14 @@ export function PeriodChoiceBar({
               >
                 {item.label}
               </Text>
+              {showDateToggle ? (
+                <Ionicons
+                  name={dateViewOpen ? "chevron-up" : "chevron-down"}
+                  size={7}
+                  color={accent}
+                  style={styles.periodChevron}
+                />
+              ) : null}
             </Pressable>
           );
         })}
@@ -99,6 +137,7 @@ export function DateRangeNavigator({
 }>) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const allTime = period === "overall";
   return (
     <Card style={styles.navigator}>
@@ -114,7 +153,7 @@ export function DateRangeNavigator({
         )}
         <Pressable onPress={onToggleCalendar} style={styles.navCopy}>
           <Text style={[styles.navTitle, { color: colors.ink }]}>
-            {periodTitle(period, anchor)}
+            {periodTitle(period, anchor, locale)}
           </Text>
           <View style={styles.navDate}>
             <Ionicons name="calendar-outline" size={13} color={accent} />
@@ -123,8 +162,8 @@ export function DateRangeNavigator({
               style={[styles.navSub, { color: colors.muted }]}
             >
               {dates.length > 1
-                ? `${friendlyDate(dates[0])} – ${friendlyDate(dates[dates.length - 1])}`
-                : friendlyDate(anchor)}
+                ? `${friendlyDate(dates[0], locale)} – ${friendlyDate(dates[dates.length - 1], locale)}`
+                : friendlyDate(anchor, locale)}
             </Text>
             <Ionicons
               name={calendarOpen ? "chevron-up" : "chevron-down"}
@@ -163,9 +202,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
+    flexDirection: "column",
     paddingHorizontal: 2,
   },
-  periodText: { fontSize: 9, fontWeight: "900" },
+  periodText: {
+    alignSelf: "stretch",
+    fontSize: 9,
+    fontWeight: "900",
+    textAlign: "center",
+    paddingHorizontal: 1,
+  },
+  periodChoiceYesterday: { flex: 1.22 },
+  periodChoiceOverall: { flex: 1.08 },
+  periodChevron: { marginTop: -2 },
   navigator: { padding: 8, marginBottom: 10 },
   dateNav: { flexDirection: "row", alignItems: "center" },
   navSpacer: { width: 38, height: 38 },

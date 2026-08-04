@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HabHub</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="habhub-icon.png" alt="" />
+      <div><strong>HabHub</strong><span>Keep moving, anywhere.</span></div>
+    </header>
+    <main>
+      <button class="primary" id="panel">Open desktop panel</button>
+      <div class="grid">
+        <button data-path="/timer">Timer</button>
+        <button data-path="/todo-editor">New to-do</button>
+        <button data-path="/calendar">Schedule</button>
+        <button data-path="/">Today</button>
+      </div>
+      <button class="link" id="browser">Open full website</button>
+      <p>Uses the same HabHub account and syncs through the same secure cloud.</p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

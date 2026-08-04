@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "MetricRally",
+    "name": "HabHub",
     "slug": "metrally",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/habhub-icon.png",
     "scheme": "paceboard",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -15,16 +15,15 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.paceboard.mobile",
       "infoPlist": {
-        "NSHealthShareUsageDescription": "MetricRally reads only the health categories you choose so it can update your private goals and permitted group progress.",
-        "NSHealthUpdateUsageDescription": "MetricRally does not write health data unless you explicitly choose a future export feature."
+        "NSHealthShareUsageDescription": "HabHub reads only the health categories you choose so it can update your private goals and permitted group progress.",
+        "NSHealthUpdateUsageDescription": "HabHub does not write health data unless you explicitly choose a future export feature.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#081B49",
+        "foregroundImage": "./assets/images/habhub-icon.png"
       },
       "package": "app.paceboard.mobile",
       "googleServicesFile": "./google-services.json",
@@ -46,7 +45,8 @@
         "android.permission.health.READ_BLOOD_GLUCOSE",
         "android.permission.health.READ_MENSTRUATION",
         "android.permission.health.READ_HEALTH_DATA_HISTORY",
-        "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
+        "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND",
+        "android.permission.PACKAGE_USAGE_STATS"
       ],
       "edgeToEdgeEnabled": false,
       "predictiveBackGestureEnabled": false,
@@ -54,7 +54,17 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/habhub-icon.png"
+    },
+    "locales": {
+      "en": "./src/i18n/native/en.json",
+      "ar": "./src/i18n/native/ar.json",
+      "es": "./src/i18n/native/es.json",
+      "zh": "./src/i18n/native/zh-Hans.json",
+      "sv": "./src/i18n/native/sv.json",
+      "de": "./src/i18n/native/de.json",
+      "ru": "./src/i18n/native/ru.json",
+      "fr": "./src/i18n/native/fr.json"
     },
     "plugins": [
       "expo-router",
@@ -62,8 +72,8 @@
       [
         "@kingstinct/react-native-healthkit",
         {
-          "NSHealthShareUsageDescription": "MetricRally reads only the health categories you choose so it can update your private goals and permitted group progress.",
-          "NSHealthUpdateUsageDescription": "MetricRally does not write health data unless you explicitly choose a future export feature.",
+          "NSHealthShareUsageDescription": "HabHub reads only the health categories you choose so it can update your private goals and permitted group progress.",
+          "NSHealthUpdateUsageDescription": "HabHub does not write health data unless you explicitly choose a future export feature.",
           "background": true
         }
       ],
@@ -79,30 +89,46 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "MetricRally uses your photos only when you choose to add a progress update.",
-          "cameraPermission": "MetricRally uses your camera only when you choose to take a progress photo.",
+          "photosPermission": "HabHub uses your photos only when you choose to add a progress update.",
+          "cameraPermission": "HabHub uses your camera only when you choose to take a progress photo.",
           "microphonePermission": false
         }
       ],
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/habhub-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#081B49",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#081B49"
           }
         }
       ],
-      "expo-localization",
+      [
+        "expo-localization",
+        {
+          "supportedLocales": [
+            "en",
+            "ar",
+            "es",
+            "zh",
+            "sv",
+            "de",
+            "ru",
+            "fr"
+          ],
+          "supportsRTL": true
+        }
+      ],
       [
         "./plugins/withGoogleAssistant",
         {
           "scheme": "paceboard"
         }
-      ]
+      ],
+      "./plugins/withHabHubAndroid"
     ],
     "experiments": {
       "typedRoutes": true,

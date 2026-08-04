@@ -2,7 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
-  Alert,
   Platform,
   Pressable,
   Share,
@@ -11,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
@@ -25,7 +25,12 @@ import {
 } from "@/src/components/ui";
 import { friendlyHealthOrigin } from "@/src/domain/health";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import {
+  healthSyncSchedule,
+  normalizeHealthSyncMode,
+} from "@/src/health/schedule";
 import { useApp } from "@/src/state/AppProvider";
+import { ScreenTimeAccessCard } from "@/src/screenTime/ScreenTimeAccessCard";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { HealthDataType, SyncMode } from "@/src/types";
 
@@ -34,30 +39,35 @@ const syncModes: {
   title: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
+  kind: "foreground" | "background";
 }[] = [
+  {
+    id: "manual",
+    title: "Manual refresh",
+    subtitle: "Foreground only - Sync now or pull to refresh",
+    icon: "hand-left-outline",
+    kind: "foreground",
+  },
   {
     id: "battery",
     title: "Battery saver",
-    subtitle: "On app open + occasional refresh",
+    subtitle: "Background, including while HabHub is closed - ~12-hour minimum",
     icon: "battery-half-outline",
+    kind: "background",
   },
   {
     id: "balanced",
     title: "Balanced",
-    subtitle: "About every 6 hours + on app open",
+    subtitle: "Background, including while HabHub is closed - ~6-hour minimum",
     icon: "sync-outline",
+    kind: "background",
   },
   {
     id: "frequent",
     title: "Frequent",
-    subtitle: "Use available background updates",
+    subtitle: "Background, including while HabHub is closed - ~1-hour minimum",
     icon: "flash-outline",
-  },
-  {
-    id: "manual",
-    title: "Manual only",
-    subtitle: "Only when you tap health refresh",
-    icon: "hand-left-outline",
+    kind: "background",
   },
 ];
 
@@ -164,12 +174,15 @@ export default function SettingsScreen() {
   const health = useHealthSync();
   const accent = useGroupAccent();
   const colors = useAppColors();
+  const locale = useLocale();
   const [busy, setBusy] = useState<
     "sync" | "pull" | "health" | "history" | "signout" | "delete" | null
   >(null);
   const [showDevices, setShowDevices] = useState(false);
   const [showHealthTypes, setShowHealthTypes] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
+  const selectedSyncMode = normalizeHealthSyncMode(state.settings.syncMode);
+  const selectedHealthSchedule = healthSyncSchedule(selectedSyncMode);
 
   async function run(
     kind: typeof busy,
@@ -190,11 +203,22 @@ export default function SettingsScreen() {
   }
   const syncLabel = statusCopy[cloud.status];
   const lastSync = cloud.lastSyncedAt
-    ? new Date(cloud.lastSyncedAt).toLocaleString()
+    ? new Date(cloud.lastSyncedAt).toLocaleString(locale)
     : "Not synced yet";
   const healthLastSync = health.lastSyncedAt
-    ? new Date(health.lastSyncedAt).toLocaleString()
+    ? new Date(health.lastSyncedAt).toLocaleString(locale)
     : "Not synced yet";
+  const healthScheduleStatus = !selectedHealthSchedule.requestsBackground
+    ? "Foreground only: use Sync now or pull to refresh."
+    : !state.settings.healthSync.enabled
+      ? "Connect health data to activate app-open checks and background requests."
+      : !state.settings.healthSync.backgroundAccess
+        ? "Background access is not available. HabHub will still check after the app opens when the selected interval has elapsed."
+        : health.backgroundRegistration === "registered"
+          ? "Background request registered, including while HabHub is closed. The phone decides the actual run time."
+          : health.backgroundRegistration === "configuring"
+            ? "Registering the background request on this device..."
+            : "Background scheduling is unavailable right now. App-open checks and Sync now still work.";
   async function exportData() {
     const portable = {
       ...state,
@@ -225,19 +249,19 @@ export default function SettingsScreen() {
       );
       const link = document.createElement("a");
       link.href = url;
-      link.download = `metric-rally-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.download = `habhub-export-${new Date().toISOString().slice(0, 10)}.json`;
       link.click();
       URL.revokeObjectURL(url);
       return;
     }
-    await Share.share({ title: "MetricRally data export", message: json });
+    await Share.share({ title: "HabHub data export", message: json });
   }
 
   return (
     <Screen>
       <PageHeader
         tutorialId="settings-header"
-        eyebrow="MetricRally"
+        eyebrow="HabHub"
         title="Cloud & health sync"
         subtitle="Account, device, backup, and health import preferences."
         showMenu={false}
@@ -360,7 +384,7 @@ export default function SettingsScreen() {
                         {device.isThisDevice ? " · This device" : ""}
                       </Text>
                       <Text style={styles.meta}>
-                        Last seen {new Date(device.lastSeenAt).toLocaleString()}
+                        Last seen {new Date(device.lastSeenAt).toLocaleString(locale)}
                       </Text>
                     </View>
                     {!device.isThisDevice ? (
@@ -693,7 +717,7 @@ export default function SettingsScreen() {
             <Text style={[styles.healthLink, { color: accent }]}>
               {showSchedule
                 ? "Hide"
-                : (syncModes.find((mode) => mode.id === state.settings.syncMode)
+                : (syncModes.find((mode) => mode.id === selectedSyncMode)
                     ?.title ?? "Show")}
             </Text>
           </Pressable>
@@ -702,56 +726,98 @@ export default function SettingsScreen() {
       {showSchedule ? (
         <Card style={styles.list}>
           {syncModes.map((mode, index) => (
-            <Pressable
-              key={mode.id}
-              onPress={() => updateSettings({ syncMode: mode.id })}
-              style={[
-                styles.mode,
-                index < syncModes.length - 1 && styles.border,
-              ]}
-            >
-              <View
+            <React.Fragment key={mode.id}>
+              {index === 0 || syncModes[index - 1]?.kind !== mode.kind ? (
+                <View style={styles.scheduleGroup}>
+                  <Text style={[styles.originLabel, { color: colors.faint }]}>
+                    {mode.kind === "foreground"
+                      ? "FOREGROUND ONLY"
+                      : "BACKGROUND + APP OPEN"}
+                  </Text>
+                </View>
+              ) : null}
+              <Pressable
+                onPress={() =>
+                  void run(
+                    "health",
+                    () => health.setSyncMode(mode.id),
+                    "Health schedule not changed",
+                  )
+                }
                 style={[
-                  styles.modeIcon,
-                  state.settings.syncMode === mode.id && styles.modeActive,
+                  styles.mode,
+                  index < syncModes.length - 1 && styles.border,
                 ]}
               >
+                <View
+                  style={[
+                    styles.modeIcon,
+                    selectedSyncMode === mode.id && styles.modeActive,
+                  ]}
+                >
+                  <Ionicons
+                    name={mode.icon}
+                    size={20}
+                    color={
+                      selectedSyncMode === mode.id ? accent : palette.muted
+                    }
+                  />
+                </View>
+                <View style={styles.copy}>
+                  <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                    {mode.title}
+                  </Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>
+                    {mode.subtitle}
+                  </Text>
+                </View>
                 <Ionicons
-                  name={mode.icon}
+                  name={
+                    selectedSyncMode === mode.id
+                      ? "radio-button-on"
+                      : "radio-button-off"
+                  }
                   size={20}
                   color={
-                    state.settings.syncMode === mode.id ? accent : palette.muted
+                    selectedSyncMode === mode.id ? accent : palette.faint
                   }
                 />
-              </View>
-              <View style={styles.copy}>
-                <Text style={[styles.modeTitle, { color: colors.ink }]}>
-                  {mode.title}
-                </Text>
-                <Text style={[styles.meta, { color: colors.muted }]}>
-                  {mode.subtitle}
-                </Text>
-              </View>
-              <Ionicons
-                name={
-                  state.settings.syncMode === mode.id
-                    ? "radio-button-on"
-                    : "radio-button-off"
-                }
-                size={20}
-                color={
-                  state.settings.syncMode === mode.id ? accent : palette.faint
-                }
-              />
-            </Pressable>
+              </Pressable>
+            </React.Fragment>
           ))}
         </Card>
       ) : null}
+      <View
+        style={[
+          styles.notice,
+          styles.scheduleNotice,
+          { backgroundColor: colors.canvas },
+        ]}
+      >
+        <Ionicons
+          name={
+            !selectedHealthSchedule.requestsBackground
+              ? "phone-portrait-outline"
+              : health.backgroundRegistration === "registered"
+                ? "checkmark-circle-outline"
+                : "information-circle-outline"
+          }
+          size={17}
+          color={accent}
+        />
+        <Text style={[styles.noticeText, { color: colors.muted }]}>
+          {healthScheduleStatus}
+        </Text>
+      </View>
       <Text style={styles.disclaimer}>
-        App-open and pull-to-refresh sync are immediate. Background timing is
-        controlled by iOS or Android and is therefore an approximate schedule.
-        Account cloud sync remains automatic.
+        Background intervals are minimum requests, not exact timers. iOS or
+        Android may run them later or skip a run based on system conditions.
+        Sync now is immediate; automatic app-open checks run only when the
+        selected interval is due. On Android, Force stop pauses background work
+        until HabHub is opened again. Account cloud sync remains separate.
       </Text>
+
+      <ScreenTimeAccessCard />
 
       <SectionHeader title="Data controls" />
       <Card>
@@ -903,6 +969,8 @@ const styles = StyleSheet.create({
   signOut: { alignSelf: "center", padding: 11, marginTop: 3 },
   signOutText: { color: palette.muted, fontSize: 11, fontWeight: "900" },
   list: { paddingHorizontal: 13, paddingVertical: 2 },
+  scheduleGroup: { paddingTop: 11, paddingBottom: 2 },
+  scheduleNotice: { marginTop: 8 },
   mode: { minHeight: 65, flexDirection: "row", alignItems: "center", gap: 10 },
   border: { borderBottomWidth: 1, borderBottomColor: palette.border },
   modeIcon: {

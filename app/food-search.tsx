@@ -2,16 +2,19 @@ import { Ionicons } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
 
 import {
   Button,
@@ -26,10 +29,12 @@ import {
   FoodProduct,
   searchFoods,
 } from "@/src/food/openFoodFacts";
+import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function FoodSearchScreen() {
   const params = useLocalSearchParams<{ q?: string; mode?: string }>();
+  const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [mode, setMode] = useState<"search" | "scan">(
@@ -45,22 +50,51 @@ export default function FoodSearchScreen() {
   const [multiplier, setMultiplier] = useState("1");
   const scrollRef = useRef<ScrollView>(null);
   const searchedInitially = useRef(false);
+  const searchSequence = useRef(0);
+  const recentFoodLabels = useMemo(() => {
+    const seen = new Set<string>();
+    return state.entries
+      .filter(
+        (entry) =>
+          entry.userId === state.currentUserId &&
+          entry.metricId === "food" &&
+          Boolean(entry.label?.trim()),
+      )
+      .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))
+      .flatMap((entry) => {
+        const label = entry.label!.trim();
+        const key = label.toLocaleLowerCase();
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [label];
+      })
+      .slice(0, 30);
+  }, [state.currentUserId, state.entries]);
 
   async function search(term = query) {
-    if (term.trim().length < 2) return;
+    const normalized = term.trim();
+    if (normalized.length < 2) {
+      setResults([]);
+      return;
+    }
+    const sequence = ++searchSequence.current;
     setLoading(true);
     setError(null);
     try {
-      const found = await searchFoods(term);
+      const found = await searchFoods(normalized, {
+        recentLabels: recentFoodLabels,
+      });
+      if (sequence !== searchSequence.current) return;
       setResults(found);
       if (!found.length)
         setError("No matching foods with usable nutrition were found.");
     } catch (reason) {
+      if (sequence !== searchSequence.current) return;
       setError(
         reason instanceof Error ? reason.message : "Food search failed.",
       );
     } finally {
-      setLoading(false);
+      if (sequence === searchSequence.current) setLoading(false);
     }
   }
 
@@ -71,21 +105,26 @@ export default function FoodSearchScreen() {
       mode === "search"
     ) {
       searchedInitially.current = true;
+      const sequence = ++searchSequence.current;
       setLoading(true);
-      searchFoods(params.q)
+      searchFoods(params.q, { recentLabels: recentFoodLabels })
         .then((found) => {
+          if (sequence !== searchSequence.current) return;
           setResults(found);
           if (!found.length)
             setError("No matching foods with usable nutrition were found.");
         })
-        .catch((reason) =>
-          setError(
-            reason instanceof Error ? reason.message : "Food search failed.",
-          ),
-        )
-        .finally(() => setLoading(false));
+        .catch((reason) => {
+          if (sequence === searchSequence.current)
+            setError(
+              reason instanceof Error ? reason.message : "Food search failed.",
+            );
+        })
+        .finally(() => {
+          if (sequence === searchSequence.current) setLoading(false);
+        });
     }
-  }, [mode, params.q]);
+  }, [mode, params.q, recentFoodLabels]);
 
   function choose(product: FoodProduct) {
     setSelected(product);
@@ -150,7 +189,7 @@ export default function FoodSearchScreen() {
     <Screen scrollRef={scrollRef} keyboardShouldPersistTaps="handled">
       <PageHeader
         title="Find food"
-        subtitle="Complete, popular database results are shown first."
+        subtitle="Relevant local matches and foods you use often are shown first."
         showMenu={false}
         action={
           <IconButton
@@ -326,19 +365,20 @@ export default function FoodSearchScreen() {
               <View style={styles.copy}>
                 <View style={styles.nameLine}>
                   <Text
+                    translate={false}
                     style={[styles.name, { color: colors.ink }]}
                     numberOfLines={2}
                   >
                     {product.name}
                   </Text>
-                  {product.verified ? (
+                  {product.verified || product.completeNutrition ? (
                     <Text
                       style={[
                         styles.complete,
                         { color: accent, backgroundColor: colors.primarySoft },
                       ]}
                     >
-                      VERIFIED
+                      {product.verified ? "VERIFIED" : "COMPLETE"}
                     </Text>
                   ) : null}
                 </View>
@@ -358,9 +398,20 @@ export default function FoodSearchScreen() {
         ))}
       </View>
       <Text style={[styles.attribution, { color: colors.faint }]}>
-        Open Food Facts is community supplied; review the package label before
-        saving.
+        Results may use Open Food Facts, USDA FoodData Central, FatSecret, or
+        offline staples. Community data should be checked against the package
+        label.
       </Text>
+      {results.some((product) => product.source === "FatSecret") ? (
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => void Linking.openURL("https://platform.fatsecret.com")}
+        >
+          <Text style={[styles.attribution, { color: accent }]}>
+            Powered by fatsecret Platform API
+          </Text>
+        </Pressable>
+      ) : null}
     </Screen>
   );
 }

@@ -4,6 +4,8 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+import { useLocalization } from "@/src/i18n";
+import { localizeMetricName, translateDomainText } from "@/src/i18n/domain";
 
 export type AddTrackerItem = {
   id: string;
@@ -26,6 +28,7 @@ export function AddTrackerModal({
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { language } = useLocalization();
   return (
     <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
@@ -47,8 +50,17 @@ export function AddTrackerModal({
             >
               <Ionicons name={item.icon} size={18} color={item.color} />
               <View style={styles.copy}>
-                <Text style={[styles.name, { color: colors.ink }]}>{item.label}</Text>
-                {item.sublabel ? <Text style={[styles.meta, { color: colors.muted }]}>{item.sublabel}</Text> : null}
+                <Text translate={false} style={[styles.name, { color: colors.ink }]}>
+                  {localizeMetricName(language, {
+                    id: item.id,
+                    name: item.label,
+                  })}
+                </Text>
+                {item.sublabel ? (
+                  <Text translate={false} style={[styles.meta, { color: colors.muted }]}>
+                    {translateDomainText(language, item.sublabel)}
+                  </Text>
+                ) : null}
               </View>
               <Ionicons name="add-circle-outline" size={19} color={accent} />
             </Pressable>

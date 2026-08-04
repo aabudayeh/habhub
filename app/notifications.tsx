@@ -2,12 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Pressable,
   StyleSheet,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
 
 import {
@@ -17,6 +18,7 @@ import {
   Screen,
 } from "@/src/components/ui";
 import { useApp } from "@/src/state/AppProvider";
+import { defaultProgressReminderPercentages } from "@/src/domain/reminders";
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
   disablePushNotifications,
@@ -44,6 +46,16 @@ export default function NotificationsScreen() {
   const reminderTrackers = state.metrics.filter(
     (metric) => metric.goalEnabled !== false && metric.dataType !== "text",
   );
+  const hasCycleTracker = state.metrics.some(
+    (metric) =>
+      metric.healthMapping?.dataType === "menstruation" ||
+      /(^|_)(menstrual|cycle|period)(_|$)/i.test(metric.id),
+  );
+  const hasGymTracker = state.metrics.some(
+    (metric) => metric.category === "gym" || Boolean(metric.gymMapping),
+  );
+  const showGymNotifications =
+    state.settings.showGym === true && hasGymTracker;
   function patch(changes: Partial<NotificationSettings>) {
     updateSettings({ notifications: { ...value, ...changes } });
   }
@@ -62,20 +74,29 @@ export default function NotificationsScreen() {
       : metric.reminder
         ? [metric.reminder]
         : [{ enabled: false, time: "19:00" }];
-    const enabled = reminders.some((item) => item.enabled);
+    const enabled =
+      reminders.some((item) => item.enabled) ||
+      metric.progressRemindersEnabled === true;
     const next = reminders.map((item) => ({ ...item, enabled: !enabled }));
-    updateMetric(metricId, { reminders: next, reminder: next[0] });
+    updateMetric(metricId, {
+      reminders: next,
+      reminder: next[0],
+      progressRemindersEnabled: !enabled,
+      progressReminderPercentages:
+        metric.progressReminderPercentages ??
+        defaultProgressReminderPercentages(metric),
+    });
   }
   useEffect(() => {
     if (!auth.user || !value.pushEnabled) return;
     if (registrationAttempted.current) {
-      updatePushPreferences(auth.user.id, value);
+      updatePushPreferences(auth.user.id, value, state.settings.language);
       return;
     }
     registrationAttempted.current = true;
-    enablePushNotifications(auth.user.id, value)
+    enablePushNotifications(auth.user.id, value, state.settings.language)
       .then(() =>
-        setPermissionNote("This phone is registered for MetricRally notifications."),
+        setPermissionNote("This phone is registered for HabHub notifications."),
       )
       .catch((error) => {
         setPermissionNote(
@@ -86,7 +107,7 @@ export default function NotificationsScreen() {
         // Keep the user's preference enabled when system permission exists;
         // registration is retried on the next settings/foreground visit.
       });
-  }, [auth.user, updateSettings, value]);
+  }, [auth.user, state.settings.language, updateSettings, value]);
   async function togglePush() {
     const next = !value.pushEnabled;
     if (!next) {
@@ -106,9 +127,9 @@ export default function NotificationsScreen() {
       await enablePushNotifications(auth.user.id, {
         ...value,
         pushEnabled: true,
-      });
+      }, state.settings.language);
       patch({ pushEnabled: true });
-      setPermissionNote("This phone is registered for MetricRally notifications.");
+      setPermissionNote("This phone is registered for HabHub notifications.");
     } catch (error) {
       const message =
         error instanceof Error
@@ -289,16 +310,17 @@ export default function NotificationsScreen() {
             patch({ todoReminders: value.todoReminders === false })
           }
         />
+        {showGymNotifications ? <>
         <ToggleRow
           icon="barbell-outline"
-          title="Gym reminders"
+          title="Workout reminders"
           copy={`Private prompt after ${value.gymReminderDays ?? 3} days without a completed workout`}
           enabled={value.gymReminders !== false}
           onPress={() => patch({ gymReminders: value.gymReminders === false })}
         />
         <ToggleRow
           icon="sparkles-outline"
-          title="Gym encouragement"
+          title="Workout encouragement"
           copy="Personal-best and completed-workout encouragement on this device"
           enabled={value.gymAchievements !== false}
           onPress={() =>
@@ -307,7 +329,7 @@ export default function NotificationsScreen() {
         />
         <ToggleRow
           icon="timer-outline"
-          title="Gym rest alerts"
+          title="Workout rest alerts"
           copy="Alert when a running rest timer goes more than a minute past its target"
           enabled={value.gymRestAlerts !== false}
           onPress={() =>
@@ -315,30 +337,23 @@ export default function NotificationsScreen() {
           }
         />
         {value.gymReminders !== false ? (
-          <View style={styles.times}>
-            <Text style={[styles.label, { color: colors.muted }]}>
-              Prompt after
-            </Text>
-            {[2, 3, 4, 7].map((days) => (
-              <Pressable
-                key={days}
-                onPress={() => patch({ gymReminderDays: days })}
-              >
-                <Text
-                  style={{
-                    color:
-                      (value.gymReminderDays ?? 3) === days
-                        ? accent
-                        : colors.muted,
-                    fontWeight: "900",
-                  }}
-                >
-                  {days} days
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <SelectionMenu
+            title="Inactivity reminder timing"
+            items={[2, 3, 4, 7].map((days) => ({
+              id: String(days),
+              label: `After ${days} days without a workout`,
+              icon: "calendar-outline" as const,
+            }))}
+            selectedIds={[String(value.gymReminderDays ?? 3)]}
+            onChange={([days]) =>
+              days && patch({ gymReminderDays: Number(days) })
+            }
+            multiple={false}
+            searchable={false}
+          />
         ) : null}
+        </> : null}
+        {hasCycleTracker ? <>
         <ToggleRow
           icon="calendar-outline"
           title="Upcoming period estimate"
@@ -363,6 +378,7 @@ export default function NotificationsScreen() {
             ))}
           </View>
         ) : null}
+        </> : null}
       </Card> : null}
       <CollapsibleTitle
         title="Tracker reminders"
@@ -378,6 +394,7 @@ export default function NotificationsScreen() {
                 ? [metric.reminder]
                 : [];
             const active = reminders.filter((item) => item.enabled);
+            const progressActive = metric.progressRemindersEnabled === true;
             return (
               <View
                 key={metric.id}
@@ -409,8 +426,20 @@ export default function NotificationsScreen() {
                       {metric.name}
                     </Text>
                     <Text style={[styles.copyText, { color: colors.muted }]}>
-                      {active.length
-                        ? active.map((item) => item.time).join(" · ")
+                      {active.length || progressActive
+                        ? [
+                            active.length
+                              ? active.map((item) => item.time).join(" · ")
+                              : "",
+                            progressActive
+                              ? `${(
+                                  metric.progressReminderPercentages ??
+                                  defaultProgressReminderPercentages(metric)
+                                ).join("/")}% progress`
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
                         : "Reminders off"}
                     </Text>
                   </View>
@@ -421,14 +450,14 @@ export default function NotificationsScreen() {
                   />
                 </Pressable>
                 <Pressable
-                  accessibilityLabel={`${active.length ? "Disable" : "Enable"} ${metric.name} reminders`}
+                  accessibilityLabel={`${active.length || progressActive ? "Disable" : "Enable"} ${metric.name} reminders`}
                   onPress={() => toggleTrackerReminder(metric.id)}
                   style={styles.reminderToggle}
                 >
                   <Ionicons
-                    name={active.length ? "toggle" : "toggle-outline"}
+                    name={active.length || progressActive ? "toggle" : "toggle-outline"}
                     size={29}
-                    color={active.length ? accent : colors.faint}
+                    color={active.length || progressActive ? accent : colors.faint}
                   />
                 </Pressable>
               </View>

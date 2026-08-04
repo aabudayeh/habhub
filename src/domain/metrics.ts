@@ -23,6 +23,7 @@ import {
   longestStreakWithRest,
 } from "./streaks";
 import { unrecordedStepActivity } from "./health";
+import { automaticFastProgress, fastingProgressForDate } from "./fasting";
 import {
   scheduleAppliesOnDate,
   todoAppearsOnDate,
@@ -99,13 +100,38 @@ export function metricValue(
   localDate: string,
   stack: string[] = [],
 ): number {
-  if (metric.gymMapping)
-    return gymMetricValue(
+  if (metric.gymMapping) {
+    const localHasData = hasGymMetricData(
       state,
       metric.gymMapping,
       userId,
       localDate,
     );
+    const localValue = localHasData
+      ? gymMetricValue(state, metric.gymMapping, userId, localDate)
+      : 0;
+    // saveGymSession writes convenience `gym-sync:*` rows for broad workout
+    // totals. Derived trackers already read the source session, so counting
+    // those rows again would duplicate the local workout. Native health rows
+    // remain additive for duration/repetition trackers.
+    const externalEntries = entriesForDay(
+      state.entries,
+      metric.id,
+      userId,
+      localDate,
+    ).filter((entry) => !entry.id.startsWith("gym-sync:"));
+    if (!externalEntries.length) return localValue;
+    const externalValue = aggregate(externalEntries, metric.aggregation);
+    if (!localHasData) return externalValue;
+    if (
+      metric.gymMapping.kind === "session_completed" ||
+      metric.gymMapping.kind === "exercise_one_rep_max"
+    )
+      return Math.max(localValue, externalValue);
+    if (metric.aggregation === "max") return Math.max(localValue, externalValue);
+    if (metric.aggregation === "min") return Math.min(localValue, externalValue);
+    return localValue + externalValue;
+  }
   if (metric.id === "weight") {
     const latest = latestEntryOnOrBefore(
       state.entries,
@@ -131,6 +157,14 @@ export function metricValue(
       100
     );
   }
+  if (
+    metric.id === "intermittent_fasting" &&
+    localDate === dateKey() &&
+    entriesForDay(state.entries, metric.id, userId, localDate).length === 0
+  ) {
+    const automatic = automaticFastProgress(state, userId);
+    if (automatic.active) return automatic.minutes / 60;
+  }
   if (metric.id === "cycle_day")
     return cycleForecast(state, userId, localDate).cycleDay;
   if (metric.id === "days_until_period")
@@ -152,15 +186,13 @@ export function metricValue(
       const stepCount = steps
         ? metricValue(state, steps, userId, localDate, [...stack, metric.id])
         : 0;
-      const weight =
-        state.energyProfiles?.[userId]?.weightKg ??
-        state.settings.energyProfile.weightKg ??
-        70;
+      const profile =
+        state.energyProfiles?.[userId] ?? state.settings.energyProfile;
       const estimate = unrecordedStepActivity(
         entriesForUserDay(state.entries, userId, localDate),
         state.metrics,
         stepCount,
-        weight,
+        profile,
       );
       if (
         metric.healthMapping?.dataType === "workouts" &&
@@ -219,6 +251,12 @@ export function safeMetricValue(
   userId: string,
   localDate: string,
 ): number {
+  if (
+    metric.id === "intermittent_fasting" &&
+    localDate === dateKey() &&
+    entriesForDay(state.entries, metric.id, userId, localDate).length === 0
+  )
+    return metricValue(state, metric, userId, localDate);
   return cachedMetricDateValue(
     metricValueCache,
     state,
@@ -263,13 +301,14 @@ export function effectiveGoalTarget(
         const profile =
           state.energyProfiles?.[userId] ?? state.settings.energyProfile;
         const direction = weightDirectionFromProfile(profile);
-        if (direction === "maintain") return profile.weightKg;
+        if (direction === "maintain") return profile.targetWeightKg;
         const startingWeight = profile.startingWeightKg ?? profile.weightKg;
+        const planStart = metricGoalPlanStartDate(state, metric, localDate);
         const elapsedDays = Math.max(
           0,
           Math.floor(
             (new Date(`${localDate}T12:00:00`).getTime() -
-              new Date(`${metric.activeFrom}T12:00:00`).getTime()) /
+              new Date(`${planStart}T12:00:00`).getTime()) /
               86400000,
           ),
         );
@@ -294,6 +333,25 @@ export function effectiveGoalTarget(
   );
 }
 
+/**
+ * Goal reference used by range charts. Weight has a pace-based daily target,
+ * but its chart destination is always the user's final target weight.
+ */
+export function metricChartTarget(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  if (metric.id === "weight") {
+    const profile =
+      state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+    return profile.targetWeightKg;
+  }
+  if (metric.goalProgressMode === "journey") return metric.goal.target;
+  return effectiveGoalTarget(state, metric, userId, localDate);
+}
+
 export function weightProgressStats(
   state: AppState,
   userId: string,
@@ -315,7 +373,16 @@ export function weightProgressStats(
   const weekEntry = [...entries]
     .reverse()
     .find((entry) => entry.localDate <= dateWithOffsetFrom(anchor, -7));
-  const startDate = metric?.activeFrom ?? entries[0]?.localDate ?? anchor;
+  const planStart = metric
+    ? metricGoalPlanStartDate(state, metric, anchor)
+    : undefined;
+  // A new tracking period must not inherit elapsed time from an older metric
+  // definition, while an imported history period begins with its first
+  // available weigh-in.
+  const startDate = [planStart, entries[0]?.localDate]
+    .filter((date): date is string => Boolean(date))
+    .sort()
+    .at(-1) ?? anchor;
   const elapsedDays = Math.max(
     1,
     (new Date(`${anchor}T12:00:00`).getTime() -
@@ -394,6 +461,95 @@ function weightDirectionFromProfile(profile: {
   if (profile.targetWeightKg > baseline) return "gain";
   if (profile.targetWeightKg < baseline) return "lose";
   return "maintain";
+}
+
+/** Start of the goal period that owns this date; falls back for legacy data. */
+function metricGoalPlanStartDate(
+  state: AppState,
+  metric: MetricDefinition,
+  localDate: string,
+) {
+  const period = [...(state.trackedGoalPeriods?.[metric.id] ?? [])]
+    .filter(
+      (candidate) =>
+        candidate.from <= localDate &&
+        (!candidate.to || localDate <= candidate.to),
+    )
+    .sort((a, b) => b.from.localeCompare(a.from))[0];
+  return period?.from ?? metric.activeFrom;
+}
+
+/**
+ * A weigh-in goal means being on (or ahead of) the profile's planned pace on
+ * that date. It is deliberately separate from the long-term journey bar.
+ */
+export function weightDailyGoalStatus(
+  state: AppState,
+  userId: string,
+  localDate: string,
+) {
+  const metric = state.metrics.find((candidate) => candidate.id === "weight");
+  const profile =
+    state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+  const direction = weightDirectionFromProfile(profile);
+  const expected = metric
+    ? effectiveGoalTarget(state, metric, userId, localDate)
+    : profile.targetWeightKg;
+  const current = metric
+    ? safeMetricValue(state, metric, userId, localDate)
+    : profile.weightKg;
+  const hasMeasurement = metric
+    ? entriesForDay(state.entries, metric.id, userId, localDate).length > 0 ||
+      Boolean(
+        statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          metric.id,
+          userId,
+          localDate,
+        )?.hasData,
+      )
+    : false;
+  const tolerance = 0.2;
+  const reached =
+    hasMeasurement &&
+    (direction === "lose"
+      ? current <= expected + tolerance
+      : direction === "gain"
+        ? current >= expected - tolerance
+        : Math.abs(current - expected) <= tolerance);
+  const starting = profile.startingWeightKg ?? profile.weightKg;
+  const expectedChange =
+    direction === "gain"
+      ? expected - starting
+      : direction === "lose"
+        ? starting - expected
+        : 0;
+  const actualChange =
+    direction === "gain"
+      ? current - starting
+      : direction === "lose"
+        ? starting - current
+        : 0;
+  const progress =
+    !hasMeasurement
+      ? 0
+      : direction === "maintain"
+        ? Math.max(0, 1 - Math.abs(current - expected) / 2)
+        : Math.abs(expectedChange) <= tolerance
+          ? reached
+            ? 1
+            : 0
+          : Math.max(0, Math.min(3, actualChange / expectedChange));
+  return {
+    direction,
+    current,
+    expected,
+    tolerance,
+    hasMeasurement,
+    reached,
+    progress,
+  };
 }
 
 export function latestTextValue(
@@ -681,7 +837,10 @@ export function metricApplicableOnDate(
       if (isVacationDate(state, userId, localDate)) return true;
       const hasExplicitData =
         metric.gymMapping
-          ? hasGymMetricData(state, metric.gymMapping, userId, localDate)
+          ? hasGymMetricData(state, metric.gymMapping, userId, localDate) ||
+            entriesForDay(state.entries, metric.id, userId, localDate).some(
+              (entry) => !entry.id.startsWith("gym-sync:"),
+            )
           : metric.dataType === "photo"
             ? photosForDay(state.photos, userId, localDate).length > 0
             : entriesForDay(state.entries, metric.id, userId, localDate)
@@ -711,6 +870,12 @@ export function metricApplicableOnDate(
         return (state.todos ?? []).some((todo) =>
           todoAppearsOnDate(todo, localDate),
         );
+      if (
+        metric.id === "intermittent_fasting" &&
+        localDate === dateKey() &&
+        automaticFastProgress(state, userId).active
+      )
+        return true;
       if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
       if (metric.id === "deficit") return hasDeficitInput;
       if (metric.id === "weekly_deficit_balance")
@@ -726,6 +891,12 @@ export function hasMetricData(
   userId: string,
   localDate: string,
 ) {
+  if (
+    metric.id === "intermittent_fasting" &&
+    localDate === dateKey() &&
+    automaticFastProgress(state, userId).active
+  )
+    return true;
   return cachedMetricDateValue(
     metricDataCache,
     state,
@@ -741,7 +912,12 @@ export function hasMetricData(
       if (metric.dataType === "photo")
         return photosForDay(state.photos, userId, localDate).length > 0;
       if (metric.gymMapping)
-        return hasGymMetricData(state, metric.gymMapping, userId, localDate);
+        return (
+          hasGymMetricData(state, metric.gymMapping, userId, localDate) ||
+          entriesForDay(state.entries, metric.id, userId, localDate).some(
+            (entry) => !entry.id.startsWith("gym-sync:"),
+          )
+        );
       if (metric.id === "todo_completion")
         return (state.todos ?? []).some((todo) =>
           todoAppearsOnDate(todo, localDate),
@@ -950,7 +1126,7 @@ export function metricOverallAverage(
           ),
         )
       : metric.gymMapping
-        ? gymDates
+        ? [...new Set([...gymDates, ...entryDates])].sort()
         : entryDates;
   return metricPeriodStats(state, metric, userId, dates).average;
 }
@@ -973,6 +1149,7 @@ export function metricHistoricalRecords(
   userId: string,
   throughDate = dateKey(),
   weekStartsOn: 0 | 1 | 6 = 1,
+  locale = "en-US",
 ): MetricHistoricalRecords {
   const explicitDates = [
     ...(state.trackedGoalPeriods?.[metric.id] ?? []).map(
@@ -1082,7 +1259,7 @@ export function metricHistoricalRecords(
   ).filter((item) => Number.isFinite(item.value));
   const weekdays = grouped(
     (date) =>
-      new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
+      new Intl.DateTimeFormat(locale, { weekday: "long" }).format(
         new Date(`${date}T12:00:00`),
       ),
     (weekday, items) => ({
@@ -1100,7 +1277,7 @@ export function metricHistoricalRecords(
   const monthsOfYear = grouped(
     (date) => date.slice(5, 7),
     (month, items) => ({
-      month: new Intl.DateTimeFormat(undefined, { month: "long" }).format(
+      month: new Intl.DateTimeFormat(locale, { month: "long" }).format(
         new Date(`2024-${month}-01T12:00:00`),
       ),
       value: items.reduce((sum, item) => sum + item.value, 0) / items.length,
@@ -1274,6 +1451,16 @@ export function scheduledGoalReached(
   ) return false;
   const reachedOnDate = (date: string) => {
     if (!metricApplicableOnDate(state, metric, userId, date)) return false;
+    if (metric.id === "weight")
+      return weightDailyGoalStatus(state, userId, date).reached;
+    if (metric.id === "intermittent_fasting") {
+      const fasting = fastingProgressForDate(state, userId, date);
+      if (!fasting.startedAt) return false;
+      return (
+        fasting.minutes >= fasting.targetMinutes &&
+        (fasting.active || fasting.endedOutsideEatingWindow !== true)
+      );
+    }
     const primaryReached = goalReached(
       metric,
       safeMetricValue(state, metric, userId, date),
@@ -1778,13 +1965,14 @@ export function weeklyDeficitBalance(
 export function formatMetricValue(
   metric: MetricDefinition,
   value: number,
+  locale?: string,
 ): string {
   if (metric.dataType === "boolean") return value > 0 ? "Done" : "Not yet";
   if (metric.dataType === "photo")
     return `${Math.round(value)} photo${Math.round(value) === 1 ? "" : "s"}`;
   const rounded =
     Math.abs(value) >= 1000
-      ? Math.round(value).toLocaleString()
-      : Number(value.toFixed(1)).toLocaleString();
+      ? Math.round(value).toLocaleString(locale)
+      : Number(value.toFixed(1)).toLocaleString(locale);
   return metric.unit ? `${rounded} ${metric.unit}` : rounded;
 }

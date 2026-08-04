@@ -58,6 +58,14 @@ export type HealthMetricField =
 export type HealthMetricMapping = {
   dataType: HealthDataType;
   field: HealthMetricField;
+  /**
+   * Optional canonical workout filters. When present, only matching exercise
+   * sessions may populate this tracker; an unfiltered workout mapping retains
+   * the existing all-workouts behavior.
+   */
+  activityKeys?: string[];
+  /** Distinguish an overall workout session from a typed movement segment. */
+  workoutRecordKind?: "session" | "segment";
 };
 export type TrackerCategory =
   | "goals"
@@ -88,6 +96,8 @@ export type MetricSubmetric = {
   linkedMetricId?: string;
   /** Optional device-data source for this individual field. */
   healthMapping?: HealthMetricMapping;
+  /** Optional range-chart override for this field. */
+  chartStyle?: MetricChartStyle;
 };
 
 export type MetricSubmetricDisplay = {
@@ -98,6 +108,20 @@ export type MetricSubmetricDisplay = {
   collapsibleLabel?: string;
   /** First N submetrics stay visible; later fields follow creation order under the disclosure. */
   visibleInputCount?: number;
+  /** False when all input belongs to submetrics (for example blood pressure). */
+  mainValueEnabled?: boolean;
+};
+
+export type MetricChartStyle = "auto" | "bar" | "line" | "completion";
+export type MetricVisualization = {
+  /** A single selected day in the tracker detail page. */
+  detailDay?: "progress" | "completion" | "none";
+  /** Week, month and year in tracker detail. */
+  detailRange?: MetricChartStyle;
+  /** Combined Progress overview. */
+  progressOverview?: MetricChartStyle;
+  /** Goal-map cells may show intensity or only completion state. */
+  progressGrid?: "intensity" | "completion";
 };
 
 export type GymMetricMapping =
@@ -107,6 +131,8 @@ export type GymMetricMapping =
   | { kind: "completed_sets" }
   | { kind: "exercise_one_rep_max"; exerciseKey: string }
   | { kind: "exercise_volume"; exerciseKey: string }
+  | { kind: "exercise_reps"; exerciseKey: string }
+  | { kind: "exercise_duration"; exerciseKey: string }
   | { kind: "muscle_volume"; muscleGroup: MuscleGroup };
 
 export type GoalSchedule = {
@@ -127,11 +153,17 @@ export type GoalSchedule = {
   /** Specific calendar dates (1-31); impossible dates are simply skipped. */
   daysOfMonth?: number[];
   anchorDate?: string;
+  /** Optional inclusive final date for a recurring schedule. */
+  endDate?: string;
 };
 
 export type GoalReminder = {
   enabled: boolean;
   time: string;
+  /** Optional purpose-specific copy, for example "Start fast". */
+  label?: string;
+  /** Planned session length; allows timed trackers to span Schedule slots. */
+  durationMinutes?: number;
   /** Optional cadence; omitted means every day the goal itself is due. */
   schedule?: GoalSchedule;
 };
@@ -161,7 +193,7 @@ export type MetricDefinition = {
   healthMapping?: HealthMetricMapping;
   /** Value is derived from standardized gym logs instead of a manual entry. */
   gymMapping?: GymMetricMapping;
-  /** Primary muscles for a custom exercise-backed Gym tracker. */
+  /** Primary muscles for a custom exercise-backed workout tracker. */
   gymMuscleGroups?: MuscleGroup[];
   /** Estimate uncovered walking activity from steps when no canonical activity calories exist. */
   stepFallback?: boolean;
@@ -169,9 +201,19 @@ export type MetricDefinition = {
   manualEntry?: boolean;
   /** Allow this numeric tracker to be selected by the activity timer. */
   timerEnabled?: boolean;
+  /** Purpose-built defaults for an intermittent-fasting window tracker. */
+  fastingSettings?: {
+    /** Local HH:mm time at which the fasting window normally starts. */
+    startTime: string;
+    /** Planned fasting duration. The eating window is 1,440 minus this value. */
+    fastingMinutes: number;
+    /** Derive the window from the last meal and end it at the next first meal. */
+    automaticFoodBreak: boolean;
+  };
   /** Advanced compound tracker fields (for example BP or nutrition). */
   submetrics?: MetricSubmetric[];
   submetricDisplay?: MetricSubmetricDisplay;
+  visualization?: MetricVisualization;
   scoreWeight: number;
   formula?: string;
   defaultVisibility: Visibility;
@@ -185,6 +227,9 @@ export type MetricDefinition = {
   reminder?: GoalReminder;
   /** Multiple local reminder times; `reminder` remains as a legacy fallback. */
   reminders?: GoalReminder[];
+  /** Local alerts emitted once when today's progress crosses each percentage. */
+  progressReminderPercentages?: number[];
+  progressRemindersEnabled?: boolean;
 };
 
 export type Member = {
@@ -193,6 +238,10 @@ export type Member = {
   initials: string;
   color: string;
   role: "owner" | "admin" | "member";
+  /** Lightweight group-visible presence, independent of tracker writes. */
+  lastSeenAt?: string;
+  /** Server-confirmed time this member last published current group data. */
+  lastDataSyncedAt?: string;
   avatarUri?: string;
   /** Private-bucket object path; signed URLs in avatarUri are intentionally temporary. */
   avatarStoragePath?: string;
@@ -254,6 +303,8 @@ export type PhotoUpdate = {
 
 export type ChatMessage = {
   id: string;
+  /** Group ownership is optional only while older persisted messages migrate. */
+  groupId?: string;
   senderId: string | "system";
   text: string;
   createdAt: string;
@@ -303,13 +354,32 @@ export type LandingPage =
   | "journal"
   | "performance";
 export type ProgressViewMode = "overview" | "goal_maps" | "compact";
+export type ProgressLayoutAvailability = "overview" | "goal_maps" | "both";
 export type HistoryRange = "week" | "month" | "year";
+export type CompletionFillMode =
+  | "auto"
+  | "clockwise"
+  | "bottom_up"
+  | "center_out";
 export type TrackerViewFilter = {
   id: string;
   name: string;
   metricIds: string[];
+  /** Today-only: include the To-Do block in this saved view. */
+  includeTodos?: boolean;
+  /** Today-only: explicit To-Dos to include; undefined preserves legacy all. */
+  todoIds?: string[];
   /** Hidden saved views remain editable without cluttering quick selectors. */
   visible?: boolean;
+};
+
+/** Personal Schedule visibility preset. Logged blocks are opt-in per tracker. */
+export type ScheduleViewFilter = {
+  id: string;
+  name: string;
+  includeTodos: boolean;
+  includeReminders: boolean;
+  logMetricIds: string[];
 };
 
 export type TodoPriority = "low" | "normal" | "high" | "urgent";
@@ -321,6 +391,8 @@ export type TodoReminder = {
   time?: string;
   /** Optional preset relative to the deadline. */
   daysBeforeDue?: number;
+  /** Remind once per day from creation until the deadline or completion. */
+  repeatDailyUntilDue?: boolean;
 };
 export type TodoItem = {
   id: string;
@@ -328,6 +400,9 @@ export type TodoItem = {
   description?: string;
   createdAt: string;
   dueAt?: string;
+  /** Optional planned work block, independent from the deadline. */
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
   priority: TodoPriority;
   recurrence?: GoalSchedule;
   reminders: TodoReminder[];
@@ -380,6 +455,8 @@ export type CalendarReminder = {
   metricId?: string;
   todoId?: string;
   time: string;
+  /** Planned duration for timed tracker reminders. */
+  durationMinutes?: number;
   schedule: GoalSchedule;
   enabled: boolean;
 };
@@ -398,6 +475,8 @@ export type MuscleGroup =
   | "calves"
   | "full_body";
 export type GymIntensity = "light" | "moderate" | "vigorous";
+export type GymCalorieCalculationMode = "session_met" | "set_aware";
+export type WorkoutExerciseTrackingMode = "load_reps" | "reps" | "duration";
 export type GymExerciseGoal = {
   targetOneRepMaxKg?: number;
   targetWeightKg?: number;
@@ -413,6 +492,19 @@ export type GymSet = {
   /** Rest taken after this set. Optional for older saved sessions. */
   restSeconds?: number;
   restTargetSeconds?: number;
+  /** Optional second movement performed immediately with this set. */
+  superset?: GymSuperset;
+};
+export type GymSuperset = {
+  exerciseKey?: string;
+  name: string;
+  muscleGroups?: MuscleGroup[];
+  reps: number;
+  weightKg: number;
+  customMet?: number;
+  trackingMode?: WorkoutExerciseTrackingMode;
+  /** Defaults to half of the paired set's measured active time. */
+  workSeconds?: number;
 };
 export type GymExercise = {
   id: string;
@@ -423,6 +515,8 @@ export type GymExercise = {
   sets: GymSet[];
   notes?: string;
   customMet?: number;
+  /** Controls which set fields are meaningful for this exercise. */
+  trackingMode?: WorkoutExerciseTrackingMode;
   /** Exercise-level completion and rest between exercises. */
   completed?: boolean;
   restAfterSeconds?: number;
@@ -435,9 +529,15 @@ export type GymPlanExercise = {
   muscleGroups?: MuscleGroup[];
   targetSets: number;
   targetReps: number;
+  targetDurationMinutes?: number;
   startingWeightKg?: number;
   notes?: string;
   customMet?: number;
+  trackingMode?: WorkoutExerciseTrackingMode;
+  supersets?: {
+    setIndex: number;
+    superset: GymSuperset;
+  }[];
 };
 export type GymPlan = {
   id: string;
@@ -458,8 +558,14 @@ export type GymSession = {
   startedAt?: string;
   completedAt?: string;
   pausedSeconds?: number;
+  /** Seconds removed from every guided set for phone-placement time. */
+  setStartDelaySeconds?: number;
   durationMinutes: number;
   calories?: number;
+  /** How estimated active calories were calculated for this saved workout. */
+  calorieCalculationMode?: GymCalorieCalculationMode;
+  /** Distinguishes a typed override from a reproducible app estimate. */
+  caloriesManual?: boolean;
   intensity?: GymIntensity;
   notes?: string;
   exercises: GymExercise[];
@@ -471,6 +577,16 @@ export type HealthSyncSettings = {
   dataTypes: Record<HealthDataType, boolean>;
   /** Requested separately because both mobile operating systems may decline it. */
   backgroundAccess: boolean;
+  /**
+   * One-shot onboarding handoff. Health permissions are granted before the
+   * first import is intentionally deferred, so the reducer consumes this flag
+   * when that initial history arrives after onboarding navigation completes.
+   */
+  backfillTrackedGoalsOnFirstImport?: boolean;
+  /** One transient empty read may retry before the one-shot handoff expires. */
+  backfillTrackedGoalsEmptyReadCount?: number;
+  /** One-shot import selected during onboarding; cleared after its final chunk. */
+  initialHistoryImportPending?: boolean;
 };
 
 export type EnergyProfile = {
@@ -482,6 +598,8 @@ export type EnergyProfile = {
   weightKg: number;
   targetWeightKg: number;
   activityLevel: ActivityLevel;
+  /** Optional baseline activity estimate; synced exercise remains separate. */
+  dailyActivityCaloriesOverride?: number;
   desiredWeeklyLossKg: number;
 };
 
@@ -490,6 +608,37 @@ export type VacationPeriod = {
   /** Missing while vacation mode is still active. */
   to?: string;
 };
+
+/**
+ * Personal, durable state for the current intermittent-fasting interaction.
+ * A metric definition owns the schedule; this record only owns one member's
+ * manual start/end state and must never be copied into group configuration.
+ */
+export type FastingRuntimeSetting = {
+  /** ISO timestamp at which the represented fast began. */
+  startedAt: string;
+  /** Distinguishes a Start-button session from an inferred automatic fast. */
+  startedManually: boolean;
+  /** ISO timestamp once the represented fast has been completed. */
+  endedAt?: string;
+  /** How this runtime session was completed. */
+  endedBy?: "manual" | "food";
+  /** Food row that completed a manual-start session, for safe reconciliation. */
+  endedByFoodEntryId?: string;
+  /** Prevent inferred progress from immediately restarting after manual End. */
+  suppressAutomaticUntil?: string;
+};
+
+/** App-owned interface language. User content is never machine-translated. */
+export type AppLanguage =
+  | "en"
+  | "ar"
+  | "es"
+  | "zh-Hans"
+  | "sv"
+  | "de"
+  | "ru"
+  | "fr";
 
 export type UserSettings = {
   /** Legacy/manual fallback. Formula variable `baseline` now resolves to calculated daily energy. */
@@ -507,6 +656,8 @@ export type UserSettings = {
   /** Legacy v15 setting retained while old snapshots migrate. */
   featuredTodayCard: "score" | string;
   defaultLandingPage: LandingPage;
+  /** Interface language; stored as a portable BCP-47-compatible id. */
+  language: AppLanguage;
   /** Personal navigation-tab order; hidden tabs retain their place for later. */
   tabOrder?: LandingPage[];
   /** Local clock time after which accumulating daily goals become final. */
@@ -527,6 +678,8 @@ export type UserSettings = {
   weekStartsOn?: 0 | 1 | 6;
   /** Progress supports the original combined chart and two goal-map layouts. */
   progressViewMode?: ProgressViewMode;
+  /** Choose whether Progress exposes Overview, Grid map, or both layouts. */
+  progressLayoutAvailability?: ProgressLayoutAvailability;
   /** Condense Grid map cards without creating a separate navigation mode. */
   compactProgressGrid?: boolean;
   progressHistoryRange?: HistoryRange;
@@ -536,6 +689,8 @@ export type UserSettings = {
   todayHistoryByMetric?: Record<string, HistoryRange | "off">;
   /** One shared range for every enabled Today history strip. */
   todayHistoryRange?: HistoryRange;
+  /** One global disclosure replaces per-tile history visibility controls. */
+  todayHistoryCollapsed?: boolean;
   /** Saved personal views are never written into group configuration. */
   trackerViewFilters?: TrackerViewFilter[];
   /** Legacy shared selection retained while stored snapshots migrate. */
@@ -550,12 +705,17 @@ export type UserSettings = {
   completedTodayBehavior?: "stay" | "bottom" | "hide";
   /** Optional visual used for the hero completion indicator. */
   completionIndicatorIcon?: string;
+  /** How the selected completion symbol reveals its completed portion. */
+  completionIndicatorFillMode?: CompletionFillMode;
   /** Put the to-do block below goal trackers instead of above them. */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */
   calendarEventOrder?: string[];
   /** First visible hour in Schedule; earlier hours remain reachable by scrolling. */
   scheduleStartHour?: number;
+  /** Saved personal combinations of to-dos, reminders and selected log blocks. */
+  scheduleViewFilters?: ScheduleViewFilter[];
+  activeScheduleViewFilterId?: string;
   /** Applies to every app-owned clock label and time input preview. */
   timeFormat?: "12h" | "24h";
   /** Optional shortcut tab; logging remains available from tracker details. */
@@ -566,10 +726,15 @@ export type UserSettings = {
   showGym?: boolean;
   showCalendar?: boolean;
   showJournal?: boolean;
+  /** Optional Today-header shortcuts; tabs may remain hidden independently. */
+  showCalendarShortcut?: boolean;
+  showJournalShortcut?: boolean;
   showPerformance?: boolean;
   showTodosToday?: boolean;
   /** Elapsed stopwatch/countdown thresholds that trigger local alerts. */
   activityTimerAlertMinutes?: number[];
+  /** Floating timer stays hidden while timers continue running. */
+  showActivityTimerOverlay?: boolean;
   /** Optional assistant entry point; cloud AI is proxied through a server function. */
   showAiAssistant?: boolean;
   onboardingComplete: boolean;
@@ -582,6 +747,8 @@ export type UserSettings = {
   selectedGoals: string[];
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
+  /** Personal Start/End state keyed by intermittent-fasting metric id. */
+  fastingRuntimeByMetric?: Record<string, FastingRuntimeSetting>;
   /** Personal pause periods protect goal streaks without inventing measurements. */
   vacationPeriods?: VacationPeriod[];
   /** Personal weekly rest allowance used by Today and Progress streaks. */
@@ -594,14 +761,18 @@ export type UserSettings = {
   progressMetricIds: string[];
   /** Personal Progress card order, independent from filters and visibility. */
   progressMetricOrderIds?: string[];
+  /** Personally pinned Progress cards; pins sort first outside edit mode. */
+  progressPinnedMetricIds?: string[];
   /** Personal Performance tiles; omitted means every compatible tracker. */
   performanceMetricIds?: string[];
   /** Personal Performance order, independent from Progress and groups. */
   performanceMetricOrderIds?: string[];
   /** Personally pinned Performance tiles; pins sort before temporary insights. */
   performancePinnedMetricIds?: string[];
-  performanceRange?: "day" | "week" | "month";
+  performanceRange?: "day" | "week" | "month" | "year";
   leaderboardMetricIdsByGroup: Record<string, string[]>;
+  /** Personal pinned Leaderboard cards, scoped to each group. */
+  leaderboardPinnedMetricIdsByGroup?: Record<string, string[]>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,
@@ -615,6 +786,10 @@ export type UserSettings = {
   >;
   /** Imported health records the user explicitly hid/deleted. */
   dismissedHealthEntryIds?: string[];
+  /** Explicit cloud deletes; absence from a bounded cache is never a delete. */
+  pendingDeletedEntryIds?: string[];
+  /** Durable local-first outbox for administrator-owned group configuration. */
+  pendingGroupConfigurationIds?: string[];
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;
@@ -648,7 +823,7 @@ export type NotificationSettings = {
   gymReminders?: boolean;
   /** Private personal-best and consistency encouragement. */
   gymAchievements?: boolean;
-  /** Wait this many full days after the latest completed gym session. */
+  /** Wait this many full days after the latest completed workout session. */
   gymReminderDays?: number;
   /** Alert while a live rest timer is running substantially past its target. */
   gymRestAlerts?: boolean;
@@ -672,7 +847,7 @@ export type Group = {
   pendingMembers?: Member[];
   /** Versioned locally in demo mode; cloud mode stores this as group-owned configuration. */
   metricConfiguration?: MetricDefinition[];
-  /** Admin-published workout templates shared into every member's Gym picker. */
+  /** Admin-published workout templates shared into every member's Workout picker. */
   gymPlans?: GymPlan[];
 };
 
@@ -695,6 +870,9 @@ export type AppState = {
   todos?: TodoItem[];
   journalNotes?: JournalNote[];
   calendarReminders?: CalendarReminder[];
+  /** Multiple local activity timers can run independently. */
+  activityTimers?: ActivityTimer[];
+  /** Legacy selected timer retained while older snapshots migrate. */
   activeTimer?: ActivityTimer;
   settings: UserSettings;
   /** Preserves which goals counted on each historical date. */
@@ -742,11 +920,15 @@ export type NewMetric = Pick<
   | "stepFallback"
   | "manualEntry"
   | "timerEnabled"
+  | "fastingSettings"
   | "submetrics"
   | "submetricDisplay"
+  | "visualization"
   | "goalSchedule"
   | "reminder"
   | "reminders"
+  | "progressReminderPercentages"
+  | "progressRemindersEnabled"
 > & {
   formula?: string;
   activeFrom?: string;

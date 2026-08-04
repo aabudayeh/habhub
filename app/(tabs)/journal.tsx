@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
 
 import {
   AppText as Text,
@@ -13,10 +14,13 @@ import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
+  adjacentPeriod,
   DateRangeNavigator,
   PeriodChoiceBar,
 } from "@/src/components/PeriodNavigator";
 import { RichNoteText } from "@/src/components/RichNoteText";
+import { useLocale } from "@/src/i18n";
+import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { dateKey } from "@/src/domain/date";
 import {
   LeaderboardPeriod,
@@ -39,15 +43,60 @@ type JournalItem = {
   editable: boolean;
 };
 
-export default function JournalPage() {
+function JournalPage() {
+  const params = useLocalSearchParams<{ metric?: string | string[] }>();
+  const requestedMetric = Array.isArray(params.metric)
+    ? params.metric[0]
+    : params.metric;
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const [query, setQuery] = useState("");
   const [filterIds, setFilterIds] = useState<string[]>([]);
   const [period, setPeriod] = useState<LeaderboardPeriod>("month");
   const [anchor, setAnchor] = useState(dateKey());
+  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const choosePeriod = useCallback(
+    (next: Exclude<LeaderboardPeriod, "custom">) => {
+      setPeriod(next);
+      if (next === "today") setAnchor(dateKey());
+      setCalendarOpen(false);
+    },
+    [],
+  );
+  const toggleDateNavigator = useCallback(() => {
+    if (dateNavigatorOpen) setCalendarOpen(false);
+    setDateNavigatorOpen((open) => !open);
+  }, [dateNavigatorOpen]);
+  const shiftPeriod = useCallback(
+    (direction: -1 | 1) => {
+      const next = shiftedPeriodAnchor(period, anchor, direction);
+      if (!next) return;
+      if (period === "today" || period === "yesterday") setPeriod("custom");
+      setAnchor(next);
+      setCalendarOpen(false);
+    },
+    [anchor, period],
+  );
+  const swipeRange = useCallback(
+    (direction: -1 | 1) => {
+      const next = adjacentPeriod(period, direction);
+      if (!next) return;
+      setPeriod(next);
+      if (next === "today") setAnchor(dateKey());
+      setCalendarOpen(false);
+    },
+    [period],
+  );
+  const swipeGesture = usePageSwipeGesture({
+    onPrevious: () => swipeRange(-1),
+    onNext: () => swipeRange(1),
+  });
+  useEffect(() => {
+    if (requestedMetric) setFilterIds([requestedMetric]);
+  }, [requestedMetric]);
   const visibleDates = useMemo(
     () =>
       period === "overall"
@@ -165,7 +214,7 @@ export default function JournalPage() {
         id,
         label: id.slice("exercise:".length),
         icon: "barbell-outline" as const,
-        group: "Gym exercises",
+        group: "Workout exercises",
       }));
     const labels = [...metricIds]
       .filter((id) => id.startsWith("label:"))
@@ -179,7 +228,7 @@ export default function JournalPage() {
       ...(metricIds.has("unlabelled")
         ? [{
             id: "unlabelled",
-            label: "Journal entries (no labels)",
+            label: "Journal notes",
             icon: "document-text-outline" as const,
             group: "Journal entries",
           }]
@@ -187,9 +236,9 @@ export default function JournalPage() {
       ...(metricIds.has("gym")
         ? [{
             id: "gym",
-            label: "All gym notes",
+            label: "All workout notes",
             icon: "barbell-outline" as const,
-            group: "Gym",
+            group: "Workout",
           }]
         : []),
       ...metrics,
@@ -198,6 +247,8 @@ export default function JournalPage() {
     ];
   }, [allItems, state.metrics]);
   return (
+    <GestureDetector gesture={swipeGesture}>
+    <View style={styles.pageGesture}>
     <Screen>
       <PageHeader
         title="Journal"
@@ -206,7 +257,7 @@ export default function JournalPage() {
           <View style={styles.headerActions}>
             <InfoPopover
               label="Explain Journal"
-              message="Journal collects authored notes, tracker logs, and gym or exercise notes. Select several labels at once, search all text, and tap a note to edit or open its source."
+              message="Journal collects authored notes, tracker logs, and workout or exercise notes. Select several labels at once, search all text, and tap a note to edit or open its source."
             />
             <Pressable
               onPress={() => router.navigate("/note-editor" as never)}
@@ -219,47 +270,38 @@ export default function JournalPage() {
       />
       <PeriodChoiceBar
         period={period}
-        onChange={(next) => {
-          setPeriod(next);
-          if (next === "today") setAnchor(dateKey());
-        }}
+        onChange={choosePeriod}
+        dateViewOpen={dateNavigatorOpen}
+        onToggleDateView={toggleDateNavigator}
       />
-      <DateRangeNavigator
-        period={period}
-        anchor={anchor}
-        dates={
-          period === "overall"
-            ? []
-            : periodDates(
-                period,
-                anchor,
-                state.settings.weekStartsOn ?? 1,
-              )
-        }
-        calendarOpen={calendarOpen}
-        onToggleCalendar={() => setCalendarOpen((open) => !open)}
-        onShift={(direction) => {
-          const next = shiftedPeriodAnchor(period, anchor, direction);
-          if (!next) return;
-          if (period === "today" || period === "yesterday")
-            setPeriod("custom");
-          setAnchor(next);
-        }}
-      >
-        <MonthCalendar
-          monthDate={anchor}
-          selectedDate={anchor}
-          onMonthChange={setAnchor}
-          onSelect={(date) => {
-            setAnchor(date);
-            setPeriod("custom");
-            setCalendarOpen(false);
-          }}
-          hasActivity={(date) =>
-            items.some((item) => item.localDate === date)
-          }
-        />
-      </DateRangeNavigator>
+      {period !== "overall" && dateNavigatorOpen ? (
+        <DateRangeNavigator
+          period={period}
+          anchor={anchor}
+          dates={periodDates(
+            period,
+            anchor,
+            state.settings.weekStartsOn ?? 1,
+          )}
+          calendarOpen={calendarOpen}
+          onToggleCalendar={() => setCalendarOpen((open) => !open)}
+          onShift={shiftPeriod}
+        >
+          <MonthCalendar
+            monthDate={anchor}
+            selectedDate={anchor}
+            onMonthChange={setAnchor}
+            onSelect={(date) => {
+              setAnchor(date);
+              setPeriod("custom");
+              setCalendarOpen(false);
+            }}
+            hasActivity={(date) =>
+              items.some((item) => item.localDate === date)
+            }
+          />
+        </DateRangeNavigator>
+      ) : null}
       <View
         style={[
           styles.search,
@@ -301,12 +343,12 @@ export default function JournalPage() {
             <Card style={styles.note}>
               <View style={styles.noteHeading}>
                 <View style={styles.copy}>
-                  <Text style={[styles.noteTitle, { color: colors.ink }]}>
+                  <Text translate={false} style={[styles.noteTitle, { color: colors.ink }]}>
                     {item.title}
                   </Text>
                   <Text style={[styles.noteDate, { color: colors.muted }]}>
                     {new Date(`${item.localDate}T12:00:00`).toLocaleDateString(
-                      undefined,
+                      locale,
                       { dateStyle: "medium" },
                     )}
                   </Text>
@@ -333,10 +375,15 @@ export default function JournalPage() {
         ) : null}
       </View>
     </Screen>
+    </View>
+    </GestureDetector>
   );
 }
 
+export default JournalPage;
+
 const styles = StyleSheet.create({
+  pageGesture: { flex: 1 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 4 },
   help: {
     width: 30,

@@ -9,19 +9,23 @@ import React, {
   useState,
 } from "react";
 import {
-  Alert,
   Animated,
   BackHandler,
   PanResponder,
   Platform,
   Pressable,
-  Share,
   StyleSheet,
   UIManager,
   View,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
+import { shareText } from "@/src/lib/shareText";
 import { ReorderItem } from "@/src/components/ReorderItem";
+import { useEditWiggle } from "@/src/components/useEditWiggle";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
@@ -43,7 +47,11 @@ import {
   dateKeyWithOffset,
   relativeTime,
 } from "@/src/domain/date";
-import { groupInviteMessage } from "@/src/domain/invites";
+import {
+  groupInviteMessage,
+  validGroupInviteCode,
+} from "@/src/domain/invites";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 import {
   LeaderboardPeriod,
   allTimePeriodDates,
@@ -53,10 +61,10 @@ import {
   periodTitle,
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
+import { leaderboardSyncTimestamp } from "@/src/domain/leaderboardSync";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
-import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
@@ -69,14 +77,14 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-export default function LeaderboardScreen() {
+function LeaderboardScreen() {
   const { state, updateMetric, updateSettings } = useApp();
-  const cloud = useCloudSync();
-  const health = useHealthSync();
+  const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
+  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -102,12 +110,8 @@ export default function LeaderboardScreen() {
   );
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
-  const ownLastSyncedAt = [
-    cloud.lastSyncedAt,
-    health.lastSyncedAt,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .sort((a, b) => b.localeCompare(a))[0];
+  const personalSetup = isPersonalSetupGroup(state.group);
+  const inviteReady = validGroupInviteCode(state.group.inviteCode);
   const tracked = useMemo(
     () =>
       (state.group.metricConfiguration ?? []).filter(
@@ -136,41 +140,107 @@ export default function LeaderboardScreen() {
     () => (selectedIds.length ? selectedIds : [SCORE_ID]),
     [selectedIds],
   );
-  const dates = useMemo(
+  const pinnedIds = useMemo(
     () =>
-      period === "overall"
+      state.settings.leaderboardPinnedMetricIdsByGroup?.[state.group.id] ?? [],
+    [state.group.id, state.settings.leaderboardPinnedMetricIdsByGroup],
+  );
+  const displayedSelected = useMemo(() => {
+    if (editing) return selected;
+    const pinOrder = new Map(pinnedIds.map((id, index) => [id, index]));
+    return [...selected].sort((left, right) => {
+      const leftPin = pinOrder.get(left);
+      const rightPin = pinOrder.get(right);
+      if (leftPin !== undefined || rightPin !== undefined)
+        return leftPin === undefined
+          ? 1
+          : rightPin === undefined
+            ? -1
+            : leftPin - rightPin;
+      return selected.indexOf(left) - selected.indexOf(right);
+    });
+  }, [editing, pinnedIds, selected]);
+  const weekStartsOn = state.settings.weekStartsOn ?? 1;
+  const allTimeInputs = useMemo(
+    () => ({
+      statuses: state.dailyMetricStatuses,
+      entries: state.entries,
+      groupId: state.group.id,
+      gymSessions: state.gymSessions,
+    }),
+    [
+      state.dailyMetricStatuses,
+      state.entries,
+      state.group.id,
+      state.gymSessions,
+    ],
+  );
+  const dates = useMemo(
+    () => {
+      void allTimeInputs;
+      return period === "overall"
         ? allTimePeriodDates(
-            state,
+            rankingStateRef.current,
             anchor,
             selected.includes(SCORE_ID)
               ? tracked.map((metric) => metric.id)
               : selected,
           )
-        : periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
-    [anchor, period, selected, state, tracked],
+        : periodDates(period, anchor, weekStartsOn);
+    },
+    [
+      allTimeInputs,
+      anchor,
+      period,
+      selected,
+      tracked,
+      weekStartsOn,
+    ],
   );
   const rankingInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
       energyProfiles: state.energyProfiles,
       entries: state.entries,
-      group: state.group,
+      groupId: state.group.id,
+      groupMembers: state.group.members,
+      groupMetrics: state.group.metricConfiguration,
+      groupRestDays: state.group.streakRestDaysPerWeek,
       gymSessions: state.gymSessions,
       metrics: state.metrics,
       photos: state.photos,
-      settings: state.settings,
+      todos: state.todos,
       trackedGoalPeriods: state.trackedGoalPeriods,
+      currentUserId: state.currentUserId,
+      baselineCalories: state.settings.baselineCalories,
+      dayEndTime: state.settings.dayEndTime,
+      energyProfile: state.settings.energyProfile,
+      foodGoalMode: state.settings.foodGoalMode,
+      personalRestDays: state.settings.streakRestDaysPerWeek,
+      vacationPeriods: state.settings.vacationPeriods,
+      weightDirection: state.settings.weightDirection,
     }),
     [
       state.dailyMetricStatuses,
       state.energyProfiles,
       state.entries,
-      state.group,
+      state.group.id,
+      state.group.members,
+      state.group.metricConfiguration,
+      state.group.streakRestDaysPerWeek,
       state.gymSessions,
       state.metrics,
       state.photos,
-      state.settings,
+      state.todos,
       state.trackedGoalPeriods,
+      state.currentUserId,
+      state.settings.baselineCalories,
+      state.settings.dayEndTime,
+      state.settings.energyProfile,
+      state.settings.foodGoalMode,
+      state.settings.streakRestDaysPerWeek,
+      state.settings.vacationPeriods,
+      state.settings.weightDirection,
     ],
   );
   const rankingRows = useMemo(() => {
@@ -209,6 +279,10 @@ export default function LeaderboardScreen() {
     if (next === "yesterday") setAnchor(dateKeyWithOffset(-1));
     setCalendarOpen(false);
   }
+  function toggleDateNavigator() {
+    if (dateNavigatorOpen) setCalendarOpen(false);
+    setDateNavigatorOpen((open) => !open);
+  }
   function shiftRange(direction: -1 | 1) {
     const next = shiftedPeriodAnchor(period, anchor, direction);
     if (!next) return;
@@ -233,9 +307,28 @@ export default function LeaderboardScreen() {
     [calendarOpen, editing, period],
   );
   async function invite() {
-    await Share.share({
-      message: groupInviteMessage(state.group.name, state.group.inviteCode),
-    });
+    if (personalSetup) return;
+    if (!inviteReady) {
+      await cloud.refreshGroup().catch(() => undefined);
+      Alert.alert(
+        "Invite is still preparing",
+        "The group was refreshed. Try sharing again in a moment.",
+      );
+      return;
+    }
+    try {
+      const result = await shareText(
+        groupInviteMessage(state.group.name, state.group.inviteCode),
+        `Join ${state.group.name} on HabHub`,
+      );
+      if (result === "copied")
+        Alert.alert("Invite copied", "The invite link is ready to paste.");
+    } catch (error) {
+      Alert.alert(
+        "Could not share invite",
+        error instanceof Error ? error.message : "Copy the group code instead.",
+      );
+    }
   }
   function chooseVisibility(metricId: string, metricName: string) {
     Alert.alert(`${metricName} visibility`, "What can this group see?", [
@@ -264,6 +357,20 @@ export default function LeaderboardScreen() {
       leaderboardMetricIdsByGroup: {
         ...state.settings.leaderboardMetricIdsByGroup,
         [state.group.id]: next,
+      },
+      leaderboardPinnedMetricIdsByGroup: {
+        ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
+        [state.group.id]: pinnedIds.filter((id) => next.includes(id)),
+      },
+    });
+  }
+  function togglePin(id: string) {
+    updateSettings({
+      leaderboardPinnedMetricIdsByGroup: {
+        ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
+        [state.group.id]: pinnedIds.includes(id)
+          ? pinnedIds.filter((candidate) => candidate !== id)
+          : [...pinnedIds, id],
       },
     });
   }
@@ -361,30 +468,36 @@ export default function LeaderboardScreen() {
             </View>
           )
         }
-        subtitle={`${state.group.name} · ${state.group.members.length} friends`}
       />
       <View {...pageSwipeResponder.panHandlers}>
-      <PeriodChoiceBar period={period} onChange={choosePeriod} />
-      <DateRangeNavigator
-        period={period}
-        anchor={anchor}
-        dates={dates}
-        calendarOpen={calendarOpen}
-        onToggleCalendar={() => setCalendarOpen((value) => !value)}
-        onShift={shiftRange}
-      >
-        <MonthCalendar
-          monthDate={anchor}
-          selectedDate={anchor}
-          onSelect={(date) => {
-            setAnchor(date);
-            setPeriod("custom");
-            setCalendarOpen(false);
-          }}
-          onMonthChange={setAnchor}
+        <PeriodChoiceBar
+          period={period}
+          onChange={choosePeriod}
+          dateViewOpen={dateNavigatorOpen}
+          onToggleDateView={toggleDateNavigator}
         />
-      </DateRangeNavigator>
-      {selected.map((id, cardIndex) => {
+        {period !== "overall" && dateNavigatorOpen ? (
+          <DateRangeNavigator
+            period={period}
+            anchor={anchor}
+            dates={dates}
+            calendarOpen={calendarOpen}
+            onToggleCalendar={() => setCalendarOpen((value) => !value)}
+            onShift={shiftRange}
+          >
+            <MonthCalendar
+              monthDate={anchor}
+              selectedDate={anchor}
+              onSelect={(date) => {
+                setAnchor(date);
+                setPeriod("custom");
+                setCalendarOpen(false);
+              }}
+              onMonthChange={setAnchor}
+            />
+          </DateRangeNavigator>
+        ) : null}
+      {displayedSelected.map((id, cardIndex) => {
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
         const rows = rankingRows.get(id) ?? [];
@@ -396,10 +509,12 @@ export default function LeaderboardScreen() {
             <EditableRankingCard
               editing={editing}
               index={cardIndex}
-              count={selected.length}
+              count={displayedSelected.length}
               colors={colors}
               onMove={(target) => move(id, target)}
               onRemove={() => saveSelection(selected.filter((item) => item !== id))}
+              pinned={pinnedIds.includes(id)}
+              onPin={() => togglePin(id)}
               visibility={
                 id === SCORE_ID
                   ? undefined
@@ -439,6 +554,10 @@ export default function LeaderboardScreen() {
                   {includeScore ? "Overall score" : metric?.name}
                 </Text>
               </View>
+              <View style={styles.rankingHeadAction}>
+              {pinnedIds.includes(id) && !editing ? (
+                <Ionicons name="pin" size={13} color={palette.amber} />
+              ) : null}
               {includeScore ? (
                 <Text
                   style={[
@@ -451,6 +570,7 @@ export default function LeaderboardScreen() {
               ) : (
                 <Ionicons name="expand-outline" size={20} color={accent} />
               )}
+              </View>
             </Pressable>
             {false ? (
               <View style={[styles.loadingRankings, { borderTopColor: colors.border }]}>
@@ -473,12 +593,7 @@ export default function LeaderboardScreen() {
                     ? palette.lime
                     : palette.red
                   : row.member.color;
-              const syncTimestamp =
-                row.member.id === state.currentUserId
-                  ? (ownLastSyncedAt ??
-                    result?.lastSyncedAt ??
-                    result?.lastRecordedAt)
-                  : (result?.lastSyncedAt ?? result?.lastRecordedAt);
+              const syncTimestamp = leaderboardSyncTimestamp(result);
               const canShowStreak =
                 !includeScore &&
                 result &&
@@ -677,13 +792,15 @@ export default function LeaderboardScreen() {
               <Ionicons name="swap-horizontal" size={17} color={accent} />
               <Text style={[styles.link, { color: accent }]}>Manage groups</Text>
             </Pressable>
-            <Pressable
-              onPress={invite}
-              style={[styles.editGroupAction, { backgroundColor: colors.primarySoft }]}
-            >
-              <Ionicons name="person-add-outline" size={17} color={accent} />
-              <Text style={[styles.link, { color: accent }]}>Invite</Text>
-            </Pressable>
+            {!personalSetup ? (
+              <Pressable
+                onPress={invite}
+                style={[styles.editGroupAction, { backgroundColor: colors.primarySoft }]}
+              >
+                <Ionicons name="person-add-outline" size={17} color={accent} />
+                <Text style={[styles.link, { color: accent }]}>Invite</Text>
+              </Pressable>
+            ) : null}
           </View>
         </>
       ) : (
@@ -699,12 +816,19 @@ export default function LeaderboardScreen() {
           <Ionicons name="swap-horizontal" size={17} color={accent} />
           <Text style={[styles.link, { color: accent }]}>Manage groups</Text>
         </Pressable>
-        <Pressable onPress={invite} style={styles.inline}>
-          <Ionicons name="person-add-outline" size={17} color={accent} />
-          <Text style={[styles.link, { color: accent }]}>Invite</Text>
-        </Pressable>
-        <Text style={[styles.code, { color: colors.faint }]}>
-          {state.group.inviteCode}
+        {!personalSetup ? (
+          <Pressable onPress={invite} style={styles.inline}>
+            <Ionicons name="person-add-outline" size={17} color={accent} />
+            <Text style={[styles.link, { color: accent }]}>Invite</Text>
+          </Pressable>
+        ) : null}
+        <Text
+          numberOfLines={1}
+          style={[styles.groupSummary, { color: colors.faint }]}
+        >
+          {personalSetup
+            ? `${state.group.name} · private`
+            : `${state.group.name} · ${state.group.members.length} friends`}
         </Text>
       </View> : null}
       <AddTrackerModal
@@ -729,6 +853,8 @@ function EditableRankingCard({
   colors,
   onMove,
   onRemove,
+  pinned,
+  onPin,
   visibility,
   onVisibilityPress,
   onDragStart,
@@ -743,6 +869,8 @@ function EditableRankingCard({
   colors: ReturnType<typeof useAppColors>;
   onMove: (target: number) => void;
   onRemove: () => void;
+  pinned: boolean;
+  onPin: () => void;
   visibility?: Visibility;
   onVisibilityPress?: () => void;
   onDragStart: (step: number) => void;
@@ -750,110 +878,37 @@ function EditableRankingCard({
   onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
-  const dragY = useRef(new Animated.Value(0)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
-  const dragOrigin = useRef(index);
-  const liveTarget = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  const onDragStartRef = useRef(onDragStart);
-  const onDragHoverRef = useRef(onDragHover);
-  const onDragCancelRef = useRef(onDragCancel);
-  const onDragEndRef = useRef(onDragEnd);
-  const lastDragY = useRef(0);
   const dragStep = useRef(240);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  onDragStartRef.current = onDragStart;
-  onDragHoverRef.current = onDragHover;
-  onDragCancelRef.current = onDragCancel;
-  onDragEndRef.current = onDragEnd;
-  useEffect(() => {
-    if (!editing) {
-      dragY.setValue(0);
-      wiggle.stopAnimation();
-      wiggle.setValue(0);
-      return;
-    }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, { toValue: 1, duration: 140, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: -1, duration: 280, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0, duration: 140, useNativeDriver: true }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [dragY, editing, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 3,
-        onPanResponderGrant: () => {
-          onDragStartRef.current(dragStep.current);
-          dragOrigin.current = indexRef.current;
-          liveTarget.current = indexRef.current;
-          lastDragY.current = 0;
-        },
-        onPanResponderMove: (_event, gesture) => {
-          lastDragY.current = gesture.dy;
-          const target = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
-            ),
-          );
-          dragY.setValue(gesture.dy);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onDragHoverRef.current(target);
-          }
-        },
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: () => {
-          const target = liveTarget.current;
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 24,
-            stiffness: 220,
-            mass: 0.72,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start();
-          if (target !== dragOrigin.current) onMoveRef.current(target);
-          onDragEndRef.current();
-        },
-        onPanResponderTerminate: () => {
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 240,
-            mass: 0.75,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => {
-            onDragCancelRef.current();
-            onDragEndRef.current();
-          });
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: dragStep.current,
+    onMove,
+    onStart: () => onDragStart(dragStep.current),
+    onTargetChange: onDragHover,
+    onCancel: onDragCancel,
+    onEnd: onDragEnd,
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         dragStep.current = event.nativeEvent.layout.height + 6;
+        smoothDrag.setStep(dragStep.current);
       }}
       style={[
         styles.rankingWrap,
+        smoothDrag.animatedStyle,
         {
+          zIndex: smoothDrag.dragging ? 20 : editing ? 3 : 0,
+          elevation: smoothDrag.dragging ? 12 : 0,
+        },
+      ]}
+    >
+      <Animated.View
+        style={{
           transform: [
-            { translateY: dragY },
             {
               rotate: wiggle.interpolate({
                 inputRange: [-1, 1],
@@ -861,16 +916,28 @@ function EditableRankingCard({
               }),
             },
           ],
-          zIndex: editing ? 3 : 0,
-        },
-      ]}
-    >
+        }}
+      >
       {editing ? (
         <View style={[styles.editBar, { borderColor: colors.border }]}>
-          <View {...responder.panHandlers} style={styles.drag}>
+          <GestureDetector gesture={smoothDrag.gesture}>
+          <View collapsable={false} style={styles.drag}>
             <Ionicons name="reorder-three-outline" size={24} color={colors.faint} />
           </View>
+          </GestureDetector>
           <Text style={[styles.dragText, { color: colors.muted }]}>Drag to reorder</Text>
+          <Pressable
+            accessibilityLabel={pinned ? "Unpin ranking" : "Pin ranking"}
+            onPress={onPin}
+            style={styles.pinAction}
+            hitSlop={6}
+          >
+            <Ionicons
+              name={pinned ? "pin" : "pin-outline"}
+              size={15}
+              color={pinned ? palette.amber : colors.muted}
+            />
+          </Pressable>
           {visibility && onVisibilityPress ? (
             <Pressable
               onPress={onVisibilityPress}
@@ -903,9 +970,12 @@ function EditableRankingCard({
         </View>
       ) : null}
       {children}
-    </Animated.View>
+      </Animated.View>
+    </Reanimated.View>
   );
 }
+
+export default LeaderboardScreen;
 const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", gap: 5, alignItems: "center" },
   pendingDot: {
@@ -927,6 +997,7 @@ const styles = StyleSheet.create({
   editBar: { height: 38, borderWidth: 1, borderBottomWidth: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, flexDirection: "row", alignItems: "center", paddingHorizontal: 8 },
   drag: { width: 34, alignItems: "center", justifyContent: "center" },
   dragText: { flex: 1, fontSize: 9, fontWeight: "800" },
+  pinAction: { width: 28, minHeight: 28, alignItems: "center", justifyContent: "center" },
   visibility: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, minHeight: 28 },
   visibilityText: { fontSize: 8, fontWeight: "900" },
   remove: { width: 24, height: 24, borderRadius: 12, backgroundColor: palette.red, alignItems: "center", justifyContent: "center" },
@@ -954,6 +1025,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  rankingHeadAction: { flexDirection: "row", alignItems: "center", gap: 7 },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -1026,10 +1098,11 @@ const styles = StyleSheet.create({
   },
   inline: { flexDirection: "row", alignItems: "center", gap: 5 },
   link: { fontSize: 10, fontWeight: "900" },
-  code: {
+  groupSummary: {
+    flexShrink: 1,
     marginLeft: "auto",
     fontSize: 8,
     fontWeight: "900",
-    letterSpacing: 1,
+    textAlign: "right",
   },
 });

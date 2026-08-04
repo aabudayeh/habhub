@@ -49,5 +49,8 @@ app-example
 /work/
 /outputs/
 
+# Local editor metadata
+/.idea/
+
 # The public invite landing page is deployed as a separate Sites project.
 /invite-site/

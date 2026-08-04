@@ -4,13 +4,14 @@ import React, { useEffect, useRef, useState } from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
-  Alert,
   Platform,
   Pressable,
   StyleSheet,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -252,7 +253,7 @@ export default function DayDetail() {
     if (collage.length < 2) return;
     if (Platform.OS !== "web") {
       await Share.share({
-        message: `MetricRally comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join("\n")}`,
+        message: `HabHub comparison\n${collage.map((photo) => `${photo.localDate} · ${nearestWeight(photo.localDate)}`).join("\n")}`,
       });
       return;
     }
@@ -266,7 +267,7 @@ export default function DayDetail() {
       context.fillRect(0, 0, 1200, 850);
       context.fillStyle = "#17211B";
       context.font = "bold 36px sans-serif";
-      context.fillText("MetricRally progress comparison", 45, 60);
+      context.fillText("HabHub progress comparison", 45, 60);
       const images = await Promise.all(
         collage.map(
           (photo) =>
@@ -517,6 +518,7 @@ export default function DayDetail() {
                 />
                 <View style={styles.grow}>
                   <Text
+                    translate={false}
                     style={[
                       styles.metricName,
                       { color: colors.ink },
@@ -653,7 +655,7 @@ export default function DayDetail() {
                     style={styles.capture}
                   >
                     <Text preserveColor style={styles.captureTitle}>
-                      MetricRally progress comparison
+                      HabHub progress comparison
                     </Text>
                     <View style={styles.compareGrid}>
                       {collage.map((photo) => (
@@ -715,6 +717,7 @@ function DayTracker({
 }) {
   const [open, setOpen] = useState(false);
   const { state } = useApp();
+  const { language } = useLocalization();
   const colors = useAppColors();
   const historicGoal =
     day < dateKey() &&
@@ -753,6 +756,7 @@ function DayTracker({
         </View>
         <View style={styles.grow}>
           <Text
+            translate={false}
             style={[
               styles.metricName,
               {
@@ -762,7 +766,7 @@ function DayTracker({
               },
             ]}
           >
-            {metric.name}
+            {localizeMetricName(language, metric)}
           </Text>
           <Text style={[styles.metricValue, { color: colors.ink }]}>
             {metric.dataType === "text"
@@ -798,7 +802,11 @@ function DayTracker({
             />
           ) : null}
           {entries.map((entry) => (
-            <EntryRow key={entry.id} entry={entry} metric={metric} />
+            <EntryRow
+              key={`${entry.userId}:${entry.id}`}
+              entry={entry}
+              metric={metric}
+            />
           ))}
           <Pressable
             onPress={() =>
@@ -910,6 +918,7 @@ function EntryRow({
   metric: MetricDefinition;
 }) {
   const { state } = useApp();
+  const { language } = useLocalization();
   const colors = useAppColors();
   const label =
     typeof entry.value === "string"
@@ -936,8 +945,8 @@ function EntryRow({
             size={13}
             color={metric.color}
           />
-          <Text style={[styles.entryMetricText, { color: metric.color }]}>
-            {metric.name}
+          <Text translate={false} style={[styles.entryMetricText, { color: metric.color }]}>
+            {localizeMetricName(language, metric)}
           </Text>
         </View>
         <View style={styles.entryTop}>
@@ -952,7 +961,7 @@ function EntryRow({
           </Text>
         </View>
         {entry.label ? (
-          <Text style={[styles.entryLabel, { color: colors.ink }]}>
+          <Text translate={false} style={[styles.entryLabel, { color: colors.ink }]}>
             {entry.nutrition?.mealType
               ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} · `
               : ""}
@@ -960,7 +969,7 @@ function EntryRow({
           </Text>
         ) : null}
         {entry.note ? (
-          <Text style={[styles.entryNote, { color: colors.muted }]}>
+          <Text translate={false} style={[styles.entryNote, { color: colors.muted }]}>
             {entry.note}
           </Text>
         ) : null}

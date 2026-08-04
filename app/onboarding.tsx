@@ -2,16 +2,19 @@ import { Ionicons } from "@expo/vector-icons";
 import { Redirect } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
+  Switch,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth/AuthProvider";
@@ -19,14 +22,19 @@ import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
+import { suggestedAccountName } from "@/src/domain/profileName";
 import {
   isInternalTracker,
   trackerPresets,
   TrackerPreset,
 } from "@/src/domain/trackerCatalog";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
-import { enablePushNotifications } from "@/src/notifications/push";
+import {
+  enablePushNotifications,
+  notificationPermissionGranted,
+} from "@/src/notifications/push";
 import { useApp } from "@/src/state/AppProvider";
+import { markOnboardingCompleted } from "@/src/storage/onboardingState";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   ActivityLevel,
@@ -52,7 +60,7 @@ const GOALS = [
   },
   {
     id: "gym",
-    title: "Track gym progress",
+    title: "Track workout progress",
     copy: "Programs, sets, reps, strength, rest, and workout history.",
     icon: "barbell-outline" as const,
   },
@@ -102,8 +110,8 @@ const GROUP_LABELS: Record<string, string> = {
   activity: "Movement",
   nutrition: "Food & hydration",
   health: "Health readings",
-  mind: "Learning",
-  gym: "Gym",
+  mind: "Mind & focus",
+  gym: "Workout",
   other: "Other",
 };
 const NOT_GOALS = new Set([
@@ -126,6 +134,7 @@ export default function Onboarding() {
     updateEnergyProfile,
     configurePersonalMetrics,
     updateMemberName,
+    replaceState,
   } = useApp();
   const auth = useAuth();
   const health = useHealthSync();
@@ -134,9 +143,12 @@ export default function Onboarding() {
   const [step, setStep] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const [completionRoute, setCompletionRoute] = useState<string | null>(null);
-  // Every unfinished account chooses its own name. Prefilling from the initial
-  // demo snapshot could briefly show "Ahmad" before cloud account binding.
-  const [displayName, setDisplayName] = useState("");
+  const [displayName, setDisplayName] = useState(() =>
+    auth.user
+      ? suggestedAccountName(auth.user)
+      : state.group.members.find((member) => member.id === state.currentUserId)
+          ?.name || suggestedAccountName({ id: state.currentUserId }),
+  );
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );
@@ -155,10 +167,46 @@ export default function Onboarding() {
   const [activity, setActivity] = useState<ActivityLevel>(
     profile.activityLevel,
   );
-  const [pushReady, setPushReady] = useState(false);
+  const [pushReady, setPushReady] = useState(
+    state.settings.notifications.pushEnabled,
+  );
   const [healthReady, setHealthReady] = useState(
     state.settings.healthSync.enabled,
   );
+  const [healthHistoryDays, setHealthHistoryDays] = useState<
+    30 | 90 | 365 | 730
+  >(state.settings.healthHistoryDays ?? 90);
+  const [startHealthGoalsFromHistory, setStartHealthGoalsFromHistory] =
+    useState(true);
+  useEffect(() => {
+    let active = true;
+    void notificationPermissionGranted()
+      .then(async (granted) => {
+        if (!active || !granted) return;
+        setPushReady(true);
+        const notifications = {
+          ...state.settings.notifications,
+          pushEnabled: true,
+        };
+        if (!state.settings.notifications.pushEnabled)
+          updateSettings({ notifications });
+        if (auth.user)
+          await enablePushNotifications(
+            auth.user.id,
+            notifications,
+            state.settings.language,
+          ).catch(
+            () => undefined,
+          );
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+    // Re-register when the physical device is attached to a different cloud
+    // account. Existing OS permission must not require revoking it first.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.user?.id]);
   const [advancedTutorial, setAdvancedTutorial] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [trackedSelected, setTrackedSelected] = useState<string[]>([]);
@@ -230,12 +278,13 @@ export default function Onboarding() {
         "gym_total_volume",
       ].forEach((id) => ids.add(id));
     if (goals.includes("nutrition"))
-      ["food", "water"].forEach((id) => ids.add(id));
+      ["food", "water", "intermittent_fasting"].forEach((id) => ids.add(id));
     if (goals.includes("health"))
       HEALTH.forEach((choice) =>
         choice.metrics.forEach((id) => ids.add(id)),
       );
-    if (goals.includes("learning")) ids.add("reading");
+    if (goals.includes("learning"))
+      ["reading", "study", "work"].forEach((id) => ids.add(id));
     return ids;
   }, [goals]);
   const proposed = useMemo(() => {
@@ -250,27 +299,7 @@ export default function Onboarding() {
     const presets = trackerPresets(adjusted, true).filter((item) =>
       desired.has(item.templateId),
     );
-    const reading: TrackerPreset[] = desired.has("reading")
-      ? [
-          {
-            templateId: "reading",
-            name: "Reading",
-            icon: "book-outline",
-            color: "#5969B0",
-            unit: "min",
-            dataType: "number",
-            aggregation: "sum",
-            goal: { kind: "at_least", target: 30 },
-            goalEnabled: true,
-            category: "mind",
-            manualEntry: true,
-            rankingDirection: "higher",
-            defaultVisibility: "group",
-            description: "A simple daily reading or study-time goal.",
-          },
-        ]
-      : [];
-    return [...presets, ...reading, ...customPresets];
+    return [...presets, ...customPresets];
   }, [state, desired, direction, nextProfile, customPresets]);
   const grouped = useMemo(
     () =>
@@ -285,6 +314,12 @@ export default function Onboarding() {
       ),
     [proposed],
   );
+  const trackedHealthHistoryCount = proposed.filter(
+    (item) =>
+      selected.includes(item.templateId) &&
+      trackedSelected.includes(item.templateId) &&
+      Boolean(item.healthMapping),
+  ).length;
   const targetIsValid =
     direction === "maintain" ||
     (direction === "lose" && nextProfile.targetWeightKg < nextProfile.weightKg) ||
@@ -335,6 +370,10 @@ export default function Onboarding() {
         gymMuscleGroups: item.gymMuscleGroups,
         stepFallback: item.stepFallback,
         manualEntry: item.manualEntry,
+        timerEnabled: item.timerEnabled,
+        fastingSettings: item.fastingSettings
+          ? { ...item.fastingSettings }
+          : undefined,
         reminders: item.reminders,
         rankingDirection: item.rankingDirection,
         defaultVisibility: item.defaultVisibility,
@@ -373,7 +412,7 @@ export default function Onboarding() {
         await enablePushNotifications(auth.user.id, {
           ...state.settings.notifications,
           pushEnabled: true,
-        });
+        }, state.settings.language);
       updateSettings({
         notifications: { ...state.settings.notifications, pushEnabled: true },
       });
@@ -387,7 +426,11 @@ export default function Onboarding() {
   }
   async function enableHealth() {
     try {
-      await health.connect();
+      await health.connect({
+        historyDays: healthHistoryDays,
+        startTrackedGoalsAtFirstData:
+          startHealthGoalsFromHistory && trackedHealthHistoryCount > 0,
+      });
       setHealthReady(true);
     } catch (error) {
       Alert.alert(
@@ -397,23 +440,54 @@ export default function Onboarding() {
     }
   }
   function saveDisplayName() {
-    const name = displayName.trim().replace(/\s+/g, " ").slice(0, 40);
-    if (!name) return;
+    const name =
+      displayName.trim().replace(/\s+/g, " ").slice(0, 40) ||
+      suggestedAccountName(auth.user ?? { id: state.currentUserId });
+    if (name !== displayName) setDisplayName(name);
     updateMemberName(state.currentUserId, name);
     if (auth.status === "signedIn")
       void auth.updateDisplayName(name).catch(() => undefined);
+    return name;
+  }
+  async function completeOnboarding(
+    settings: Partial<AppState["settings"]>,
+    route: string,
+  ) {
+    const name = saveDisplayName();
+    const groups = state.groups.map((group) => ({
+      ...group,
+      members: group.members.map((member) =>
+        member.id === state.currentUserId ? { ...member, name } : member,
+      ),
+    }));
+    const next: AppState = {
+      ...state,
+      groups,
+      group:
+        groups.find((group) => group.id === state.group.id) ?? state.group,
+      settings: {
+        ...state.settings,
+        // The picker is local onboarding state until Health Connect returns.
+        // Include it explicitly so Finish cannot restore the old default.
+        healthHistoryDays,
+        ...settings,
+        onboardingComplete: true,
+      },
+    };
+    replaceState(next);
+    await markOnboardingCompleted(auth.user?.id ?? state.currentUserId);
+    setCompletionRoute(route);
   }
   async function finish() {
     if (finishing) return;
     setFinishing(true);
-    saveDisplayName();
-    updateSettings({
-      onboardingComplete: true,
-      tutorialComplete: false,
+    await completeOnboarding({
+      tutorialComplete: state.settings.onboardingComplete
+        ? state.settings.tutorialComplete
+        : false,
       advancedTutorialComplete: advancedTutorial,
       defaultLandingPage: landingPage,
-    });
-    setCompletionRoute(landingPage === "index" ? "/" : `/${landingPage}`);
+    }, landingPage === "index" ? "/" : `/${landingPage}`);
   }
   function toggleTracker(id: string) {
     const linkedIds =
@@ -496,21 +570,19 @@ export default function Onboarding() {
   }
   async function skipSetup() {
     if (finishing) return;
-    if (!displayName.trim()) {
-      Alert.alert("Add your name", "Enter the name you want friends to see.");
-      return;
-    }
     setFinishing(true);
-    saveDisplayName();
-    updateSettings({
-      onboardingComplete: true,
-      tutorialComplete: false,
-    });
-    setCompletionRoute("/");
+    await completeOnboarding({
+      tutorialComplete: state.settings.onboardingComplete
+        ? state.settings.tutorialComplete
+        : false,
+    }, "/");
   }
   if (completionRoute) return <Redirect href={completionRoute as never} />;
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.canvas }]}>
+    <SafeAreaView
+      style={[styles.safe, { backgroundColor: colors.canvas }]}
+      edges={["top", "bottom"]}
+    >
       <KeyboardAvoidingView
         style={styles.safe}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -520,7 +592,7 @@ export default function Onboarding() {
             <View style={[styles.mark, { backgroundColor: accent }]}>
               <Ionicons name="navigate" size={20} color={palette.white} />
             </View>
-            <Text style={[styles.brand, { color: colors.ink }]}>METRICRALLY</Text>
+            <Text style={[styles.brand, { color: colors.ink }]}>HABHUB</Text>
             <Text style={[styles.step, { color: colors.muted }]}>
               {step + 1}/5
             </Text>
@@ -537,7 +609,7 @@ export default function Onboarding() {
               <>
                 <Title
                   title="What would you like to change?"
-                  copy="Choose only what matters now. MetricRally builds the rest for you."
+                  copy="Choose only what matters now. HabHub builds the rest for you."
                   colors={colors}
                 />
                 <View style={styles.nameField}>
@@ -791,7 +863,7 @@ export default function Onboarding() {
                       </Text>
                       <Text style={[styles.goalCopy, { color: colors.muted }]}>
                         {customTrackerOpen
-                          ? "Start simple here; icons, formulas, and schedules remain available in Advanced settings."
+                          ? "Start simple here; icons, formulas, and schedules remain available in Customize trackers."
                           : "Optional · expand only if the ready-made trackers do not fit."}
                       </Text>
                     </View>
@@ -882,6 +954,21 @@ export default function Onboarding() {
                   />
                     </>
                   ) : null}
+                </View>
+                <View
+                  style={[
+                    styles.flagHint,
+                    {
+                      backgroundColor: colors.primarySoft,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <Ionicons name="flag" size={16} color={accent} />
+                  <Text style={[styles.flagHintText, { color: colors.ink }]}>
+                    A filled flag counts this tracker toward your daily tracked
+                    goals. The checkbox only adds or removes the tracker.
+                  </Text>
                 </View>
                 {grouped.map(([group, items]) => (
                   <View
@@ -1052,6 +1139,47 @@ export default function Onboarding() {
                   colors={colors}
                   accent={accent}
                 />
+                <View
+                  style={[
+                    styles.healthImportOptions,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.goalTitle, { color: colors.ink }]}>History to import</Text>
+                  <Text style={[styles.goalCopy, { color: colors.muted }]}>Imported after setup in small monthly batches so HabHub stays responsive.</Text>
+                  <View style={styles.wrap}>
+                    {([
+                      [30, "30 days"],
+                      [90, "3 months"],
+                      [365, "1 year"],
+                      [730, "2 years"],
+                    ] as const).map(([days, label]) => (
+                      <Chip
+                        key={days}
+                        label={label}
+                        selected={healthHistoryDays === days}
+                        onPress={() => setHealthHistoryDays(days)}
+                      />
+                    ))}
+                  </View>
+                  {trackedHealthHistoryCount > 0 ? (
+                    <View style={styles.healthGoalHistoryRow}>
+                      <View style={styles.grow}>
+                        <Text style={[styles.goalTitle, { color: colors.ink }]}>Start tracked goals with imported history</Text>
+                        <Text style={[styles.goalCopy, { color: colors.muted }]}>For {trackedHealthHistoryCount} connected tracked goal{trackedHealthHistoryCount === 1 ? "" : "s"}, use the first available imported reading instead of today.</Text>
+                      </View>
+                      <Switch
+                        value={startHealthGoalsFromHistory}
+                        onValueChange={setStartHealthGoalsFromHistory}
+                        trackColor={{ false: colors.border, true: `${accent}88` }}
+                        thumbColor={startHealthGoalsFromHistory ? accent : colors.faint}
+                      />
+                    </View>
+                  ) : null}
+                </View>
               </>
             ) : null}
             {step === 4 ? (
@@ -1102,7 +1230,7 @@ export default function Onboarding() {
             {step === 4 ? (
               <View style={styles.landing}>
                 <Text style={[styles.label, { color: colors.ink }]}>
-                  Open MetricRally on
+                  Open HabHub on
                 </Text>
                 <View style={styles.wrap}>
                   <Chip
@@ -1132,6 +1260,35 @@ export default function Onboarding() {
                     onPress={() => setLandingPage("log")}
                   />
                 </View>
+                <View
+                  style={[
+                    styles.darkModeChoice,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <View style={styles.darkModeCopy}>
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                      Start in dark mode
+                    </Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                      Enabled by default. You can change it any time.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={state.settings.darkMode}
+                    onValueChange={(darkMode) => updateSettings({ darkMode })}
+                    trackColor={{
+                      false: colors.border,
+                      true: `${accent}88`,
+                    }}
+                    thumbColor={
+                      state.settings.darkMode ? accent : colors.faint
+                    }
+                  />
+                </View>
               </View>
             ) : null}
           </ScrollView>
@@ -1159,7 +1316,7 @@ export default function Onboarding() {
             )}
             <View style={styles.next}>
               <Button
-                label={step === 4 ? "Start using MetricRally" : "Continue"}
+                label={step === 4 ? "Start using HabHub" : "Continue"}
                 disabled={
                   finishing ||
                   (step === 0 && (!displayName.trim() || !goals.length)) ||
@@ -1407,6 +1564,18 @@ const styles = StyleSheet.create({
   },
   customField: { flex: 1 },
   action: { fontSize: 10, fontWeight: "900" },
+  flagHint: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  flagHintText: { flex: 1, fontSize: 9, lineHeight: 13, fontWeight: "800" },
   group: {
     borderWidth: 1,
     borderRadius: 14,
@@ -1471,7 +1640,34 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 20,
   },
+  healthImportOptions: {
+    borderWidth: 1,
+    borderRadius: 17,
+    padding: 12,
+    marginBottom: 9,
+  },
+  healthGoalHistoryRow: {
+    minHeight: 48,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(127,127,127,.24)",
+    paddingTop: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   landing: { marginTop: 14 },
+  darkModeChoice: {
+    minHeight: 54,
+    marginTop: 6,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  darkModeCopy: { flex: 1 },
   footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 },
   back: { padding: 11 },
   backText: { fontSize: 11, fontWeight: "900" },

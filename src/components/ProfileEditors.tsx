@@ -3,9 +3,12 @@ import { router } from "expo-router";
 import React from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 
 import {
   ACTIVITY_LABELS,
+  calculateActivityFromLevel,
   calculateBmr,
   calculateDailyActivity,
   calculateDailyEnergy,
@@ -28,7 +31,9 @@ export function EnergyProfileEditor() {
   const { state, updateEnergyProfile, updateSettings } = useApp();
   const profile = state.settings.energyProfile;
   const colors = useAppColors();
+  const locale = useLocale();
   const bmr = Math.round(calculateBmr(profile));
+  const estimatedActivity = Math.round(calculateActivityFromLevel(profile));
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
   const direction = state.settings.weightDirection ?? "lose";
@@ -41,7 +46,7 @@ export function EnergyProfileEditor() {
     dateKey(),
   );
   const expectedDate = weightPlan.expectedGoalDate
-    ? new Intl.DateTimeFormat(undefined, {
+    ? new Intl.DateTimeFormat(locale, {
         month: "long",
         day: "numeric",
         year: "numeric",
@@ -164,11 +169,51 @@ export function EnergyProfileEditor() {
             <Chip
               key={level}
               label={ACTIVITY_LABELS[level]}
-              selected={profile.activityLevel === level}
-              onPress={() => updateEnergyProfile({ activityLevel: level })}
+              selected={
+                profile.dailyActivityCaloriesOverride === undefined &&
+                profile.activityLevel === level
+              }
+              onPress={() =>
+                updateEnergyProfile({
+                  activityLevel: level,
+                  dailyActivityCaloriesOverride: undefined,
+                })
+              }
             />
           ))}
+          <Chip
+            label="Custom"
+            selected={profile.dailyActivityCaloriesOverride !== undefined}
+            onPress={() =>
+              updateEnergyProfile({
+                dailyActivityCaloriesOverride: estimatedActivity,
+              })
+            }
+          />
         </View>
+        {profile.dailyActivityCaloriesOverride !== undefined ? (
+          <View
+            style={[
+              styles.rateInputWrap,
+              styles.activityOverride,
+              { borderColor: colors.border },
+            ]}
+          >
+            <DraftNumberInput
+              value={profile.dailyActivityCaloriesOverride}
+              selectTextOnFocus
+              keyboardType="number-pad"
+              minimum={0}
+              maximum={5000}
+              commitOnChange
+              onCommit={(dailyActivityCaloriesOverride) =>
+                updateEnergyProfile({ dailyActivityCaloriesOverride })
+              }
+              style={[styles.rateInput, { color: colors.ink }]}
+            />
+            <Text style={[styles.unit, { color: colors.muted }]}>kcal/day</Text>
+          </View>
+        ) : null}
         {direction !== "maintain" ? (
           <>
             <Text style={[styles.label, { color: colors.ink }]}>Planned weight {direction === "gain" ? "gain" : "loss"} per week</Text>
@@ -273,12 +318,11 @@ export function EnergyProfileEditor() {
 }
 
 export function MetricGoalsEditor() {
-  const { state, updateMetric, updateSettings } = useApp();
+  const { state, updateMetric } = useApp();
+  const { language } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [collapsed, setCollapsed] = React.useState(true);
-  const [restDaysOpen, setRestDaysOpen] = React.useState(false);
-  const restDays = state.settings.streakRestDaysPerWeek ?? 1;
   const metrics = state.metrics
     .filter(
       (metric) =>
@@ -317,7 +361,7 @@ export function MetricGoalsEditor() {
                 />
               </View>
               <View style={styles.grow}>
-                <Text style={[styles.goalName, { color: colors.ink }]}>{metric.name}</Text>
+                <Text translate={false} style={[styles.goalName, { color: colors.ink }]}>{localizeMetricName(language, metric)}</Text>
                 <Text style={[styles.goalMeta, { color: colors.muted }]}>
                   {metric.goal.kind.replace("_", " ")} ·{" "}
                   {metric.defaultVisibility === "private"
@@ -341,55 +385,75 @@ export function MetricGoalsEditor() {
               </View>
             </View>
           )) : <Text style={[styles.help, { color: colors.muted, marginVertical: 12 }]}>No goals are currently tracked. Add one in customization.</Text>}
-        <View style={[styles.restDays, { borderTopColor: colors.border }]}>
-          <Pressable
-            accessibilityState={{ expanded: restDaysOpen }}
-            onPress={() => setRestDaysOpen((value) => !value)}
-            style={styles.restDaysHeading}
-          >
-            <View style={styles.grow}>
-              <Text style={[styles.goalName, { color: colors.ink }]}>
-                Weekly streak rest days
-              </Text>
-              <Text style={[styles.goalMeta, { color: colors.muted }]}>
-                {restDays === 0 ? "No rest days" : `${restDays} per week`} · personal streaks only
-              </Text>
-            </View>
-            <Ionicons
-              name={restDaysOpen ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={colors.muted}
-            />
-          </Pressable>
-          {restDaysOpen ? (
-            <View style={[styles.restDaysList, { borderTopColor: colors.border }]}>
-              {[0, 1, 2, 3].map((count) => {
-                const selected = restDays === count;
-                return (
-                  <Pressable
-                    key={count}
-                    onPress={() => {
-                      updateSettings({ streakRestDaysPerWeek: count });
-                      setRestDaysOpen(false);
-                    }}
+      </Card> : null}
+    </>
+  );
+}
+
+export function StreakSettingsEditor() {
+  const { state, updateSettings } = useApp();
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const [collapsed, setCollapsed] = React.useState(true);
+  const restDays = Math.max(
+    0,
+    Math.min(4, state.settings.streakRestDaysPerWeek ?? 1),
+  );
+  return (
+    <>
+      <CollapsibleSectionHeader
+        title="Streaks & rest days"
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((value) => !value)}
+      />
+      {!collapsed ? (
+        <Card style={styles.goalList}>
+          <Text style={[styles.goalName, { color: colors.ink }]}>
+            Weekly streak rest days
+          </Text>
+          <Text style={[styles.goalMeta, { color: colors.muted }]}>
+            Protect personal Today and Progress streaks without changing group
+            competition rules. Up to four days are allowed; use Vacation mode
+            for a longer break.
+          </Text>
+          <View style={[styles.restDaysList, { borderTopColor: colors.border }]}>
+            {Array.from({ length: 5 }, (_, count) => count).map((count) => {
+              const selected = restDays === count;
+              return (
+                <Pressable
+                  key={count}
+                  onPress={() => updateSettings({ streakRestDaysPerWeek: count })}
+                  style={[
+                    styles.restDaysOption,
+                    selected && { backgroundColor: colors.primarySoft },
+                  ]}
+                >
+                  <Text
                     style={[
-                      styles.restDaysOption,
-                      selected && { backgroundColor: colors.primarySoft },
+                      styles.goalName,
+                      { color: selected ? accent : colors.ink },
                     ]}
                   >
-                    <Text style={[styles.goalName, { color: selected ? accent : colors.ink }]}>
-                      {count === 0
-                        ? "No rest days"
-                        : `${count} rest day${count === 1 ? "" : "s"} per week`}
-                    </Text>
-                    {selected ? <Ionicons name="checkmark" size={17} color={accent} /> : null}
-                  </Pressable>
-                );
-              })}
-            </View>
-          ) : null}
-        </View>
-      </Card> : null}
+                    {count === 0
+                      ? "No rest days"
+                      : `${count} rest day${count === 1 ? "" : "s"} per week`}
+                  </Text>
+                  {selected ? (
+                    <Ionicons name="checkmark" size={17} color={accent} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+          <Pressable
+            onPress={() => router.navigate("/vacation" as never)}
+            style={styles.vacationLink}
+          >
+            <Ionicons name="airplane-outline" size={15} color={accent} />
+            <Text style={[styles.goalMeta, { color: accent }]}>Vacation mode</Text>
+          </Pressable>
+        </Card>
+      ) : null}
     </>
   );
 }
@@ -520,6 +584,7 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     paddingHorizontal: 9,
   },
+  activityOverride: { marginTop: 2 },
   rateInput: {
     flex: 1,
     fontSize: 11,
@@ -611,5 +676,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  vacationLink: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
   },
 });

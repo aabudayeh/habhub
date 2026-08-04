@@ -3,6 +3,7 @@ import {
   dateKey,
   dateWithOffsetFrom,
   monthDateRange,
+  yearDateRange,
 } from "@/src/domain/date";
 import {
   metricPeriodStats,
@@ -10,7 +11,7 @@ import {
 } from "@/src/domain/metrics";
 import { AppState, MetricDefinition } from "@/src/types";
 
-export type PerformanceRange = "day" | "week" | "month";
+export type PerformanceRange = "day" | "week" | "month" | "year";
 
 export type PerformancePeriod = {
   range: PerformanceRange;
@@ -18,6 +19,8 @@ export type PerformancePeriod = {
   previousDates: string[];
   currentLabel: string;
   previousLabel: string;
+  /** The current range includes today and is not yet a fair completed period. */
+  inProgress?: boolean;
 };
 
 export type TrackerPerformance = {
@@ -40,65 +43,161 @@ export type TrackerPerformance = {
   currentStreak: number;
   bestStreak: number;
   attentionScore: number;
+  /** A negative comparison is withheld until today's partial range closes. */
+  provisional: boolean;
 };
 
-function compactPeriodLabel(dates: string[]) {
+function compactPeriodLabel(dates: string[], locale = "en-US") {
   if (!dates.length) return "";
   const first = new Date(`${dates[0]}T12:00:00`);
   const last = new Date(`${dates[dates.length - 1]}T12:00:00`);
   if (dates.length === 1)
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(locale, {
       month: "short",
       day: "numeric",
     }).format(first);
-  const firstLabel = new Intl.DateTimeFormat(undefined, {
+  const firstLabel = new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
   }).format(first);
-  const lastLabel = new Intl.DateTimeFormat(undefined, {
+  const lastLabel = new Intl.DateTimeFormat(locale, {
     month: first.getMonth() === last.getMonth() ? undefined : "short",
     day: "numeric",
   }).format(last);
   return `${firstLabel}–${lastLabel}`;
 }
 
+export function inclusiveDateRange(start: string, end: string) {
+  const first = start <= end ? start : end;
+  const last = start <= end ? end : start;
+  const dates: string[] = [];
+  for (
+    let value = first;
+    value <= last && dates.length < 3660;
+    value = dateWithOffsetFrom(value, 1)
+  )
+    dates.push(value);
+  return dates;
+}
+
+export function customPerformancePeriod(
+  currentStart: string,
+  currentEnd: string,
+  previousStart: string,
+  previousEnd: string,
+  locale = "en-US",
+): PerformancePeriod {
+  const currentDates = inclusiveDateRange(currentStart, currentEnd);
+  const previousDates = inclusiveDateRange(previousStart, previousEnd);
+  return {
+    range:
+      currentDates.length <= 1
+        ? "day"
+        : currentDates.length <= 7
+          ? "week"
+          : currentDates.length <= 62
+            ? "month"
+            : "year",
+    currentDates,
+    previousDates,
+    currentLabel: compactPeriodLabel(currentDates, locale),
+    previousLabel: compactPeriodLabel(previousDates, locale),
+    inProgress: currentDates.includes(dateKey()),
+  };
+}
+
+export function overallPerformancePeriod(
+  state: AppState,
+  current: PerformancePeriod,
+): PerformancePeriod {
+  const firstCurrent = current.currentDates[0] ?? dateKey();
+  const candidates = [
+    ...state.entries
+      .filter((entry) => entry.userId === state.currentUserId)
+      .map((entry) => entry.localDate),
+    ...(state.gymSessions ?? [])
+      .filter((session) => session.userId === state.currentUserId)
+      .map((session) => session.localDate),
+    ...(state.todos ?? []).map((todo) => todo.createdAt.slice(0, 10)),
+  ].filter((date) => date < firstCurrent);
+  const first = candidates.sort()[0];
+  const previousDates = first
+    ? inclusiveDateRange(first, dateWithOffsetFrom(firstCurrent, -1))
+    : current.previousDates;
+  return {
+    ...current,
+    previousDates,
+    previousLabel: first ? "Overall average" : current.previousLabel,
+  };
+}
+
 export function performancePeriod(
   range: PerformanceRange,
   throughDate = dateKey(),
   weekStartsOn: 0 | 1 | 6 = 1,
+  locale = "en-US",
 ): PerformancePeriod {
   if (range === "day") {
-    const previous = dateWithOffsetFrom(throughDate, -1);
+    const current =
+      throughDate >= dateKey()
+        ? dateWithOffsetFrom(dateKey(), -1)
+        : throughDate;
+    const previous = dateWithOffsetFrom(current, -1);
     return {
       range,
-      currentDates: [throughDate],
+      currentDates: [current],
       previousDates: [previous],
-      currentLabel: "Today",
-      previousLabel: "Yesterday",
+      currentLabel: current === dateWithOffsetFrom(dateKey(), -1)
+        ? "Yesterday"
+        : compactPeriodLabel([current], locale),
+      previousLabel: compactPeriodLabel([previous], locale),
+      inProgress: false,
     };
   }
   if (range === "week") {
-    const currentDates = calendarWeekRange(throughDate, weekStartsOn).filter(
-      (date) => date <= throughDate,
-    );
-    const previousAnchor = dateWithOffsetFrom(throughDate, -7);
+    let currentDates = calendarWeekRange(throughDate, weekStartsOn);
+    if (currentDates.at(-1)! >= dateKey())
+      currentDates = calendarWeekRange(
+        dateWithOffsetFrom(currentDates[0], -7),
+        weekStartsOn,
+      );
     const previousDates = calendarWeekRange(
-      previousAnchor,
+      dateWithOffsetFrom(currentDates[0], -7),
       weekStartsOn,
-    ).slice(0, currentDates.length);
+    );
     return {
       range,
       currentDates,
       previousDates,
-      currentLabel: compactPeriodLabel(currentDates),
-      previousLabel: compactPeriodLabel(previousDates),
+      currentLabel: compactPeriodLabel(currentDates, locale),
+      previousLabel: compactPeriodLabel(previousDates, locale),
+      inProgress: false,
     };
   }
-  const currentDates = monthDateRange(throughDate).filter(
-    (date) => date <= throughDate,
-  );
+  if (range === "year") {
+    const selectedYear = Number(throughDate.slice(0, 4));
+    const currentYear =
+      selectedYear >= Number(dateKey().slice(0, 4))
+        ? selectedYear - 1
+        : selectedYear;
+    const currentAnchor = `${currentYear}-01-01`;
+    const previousAnchor = `${currentYear - 1}-01-01`;
+    return {
+      range,
+      currentDates: yearDateRange(currentAnchor),
+      previousDates: yearDateRange(previousAnchor),
+      currentLabel: String(currentYear),
+      previousLabel: String(currentYear - 1),
+      inProgress: false,
+    };
+  }
+  let monthAnchor = new Date(`${throughDate}T12:00:00`);
+  monthAnchor.setDate(1);
+  if (throughDate.slice(0, 7) >= dateKey().slice(0, 7))
+    monthAnchor.setMonth(monthAnchor.getMonth() - 1);
+  const currentDates = monthDateRange(dateKey(monthAnchor));
   const anchor = new Date(`${throughDate}T12:00:00`);
-  anchor.setDate(1);
+  anchor.setTime(monthAnchor.getTime());
   anchor.setMonth(anchor.getMonth() - 1);
   const previousMonthDates = monthDateRange(dateKey(anchor));
   const previousDates = previousMonthDates.slice(
@@ -109,12 +208,15 @@ export function performancePeriod(
     range,
     currentDates,
     previousDates,
-    currentLabel: new Intl.DateTimeFormat(undefined, {
+    currentLabel: new Intl.DateTimeFormat(locale, {
       month: "long",
-    }).format(new Date(`${throughDate}T12:00:00`)),
-    previousLabel: new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+    }).format(monthAnchor),
+    previousLabel: new Intl.DateTimeFormat(locale, {
       month: "long",
+      year: "numeric",
     }).format(anchor),
+    inProgress: false,
   };
 }
 
@@ -224,6 +326,7 @@ export function trackerPerformance(
     throughDate,
   );
   const hasPrevious = previousStats.loggedDates.length > 0;
+  const provisionalDrop = Boolean(period.inProgress && scoreDelta < 0);
   const steadyThreshold = goalAware
     ? 0.015
     : Math.max(0.01, Math.abs(previousStats.average) * 0.01);
@@ -235,18 +338,21 @@ export function trackerPerformance(
     previousTotal: previousStats.total,
     currentScore,
     previousScore,
-    changePercent: normalizedDelta,
+    changePercent: provisionalDrop ? 0 : normalizedDelta,
     direction: !currentStats.loggedDates.length
       ? "missing"
       : !hasPrevious
       ? "new"
+      : provisionalDrop
+        ? "steady"
       : Math.abs(scoreDelta) < steadyThreshold
         ? "steady"
         : scoreDelta > 0
           ? "up"
           : "down",
     improving:
-      currentStats.loggedDates.length > 0 && (!hasPrevious || scoreDelta >= 0),
+      currentStats.loggedDates.length > 0 &&
+      (!hasPrevious || scoreDelta >= 0 || provisionalDrop),
     currentGoalRate: currentGoalOpportunities
       ? currentStats.goalsReached / currentGoalOpportunities
       : 0,
@@ -262,6 +368,7 @@ export function trackerPerformance(
     attentionScore:
       (goalAware ? currentScore - 1 : 0) +
       Math.max(-1, Math.min(1, normalizedDelta / 100)),
+    provisional: provisionalDrop,
   };
 }
 
@@ -270,6 +377,7 @@ export function performanceOverview(
   rangeOrDays: PerformanceRange | 7 | 30 = "week",
   metricIds?: string[],
   throughDate = dateKey(),
+  periodOverride?: PerformancePeriod,
 ) {
   const range: PerformanceRange =
     typeof rangeOrDays === "number"
@@ -277,11 +385,13 @@ export function performanceOverview(
         ? "week"
         : "month"
       : rangeOrDays;
-  const period = performancePeriod(
-    range,
-    throughDate,
-    state.settings.weekStartsOn ?? 1,
-  );
+  const period =
+    periodOverride ??
+    performancePeriod(
+      range,
+      throughDate,
+      state.settings.weekStartsOn ?? 1,
+    );
   const selected =
     metricIds !== undefined
       ? new Set(metricIds)

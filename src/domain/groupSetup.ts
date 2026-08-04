@@ -4,16 +4,66 @@ import {
   isBloodPressureSystolic,
 } from "@/src/domain/trackerCatalog";
 import {
+  Group,
+  Member,
   MetricDefinition,
   NewMetric,
+  TrackedGoalPeriod,
 } from "@/src/types";
 
-export const DEFAULT_GROUP_THEME = "#176B4D";
+export const DEFAULT_GROUP_THEME = "#081B49";
+export const PERSONAL_SETUP_GROUP_ID_PREFIX = "account-starter-";
+export const PERSONAL_SETUP_INVITE_CODE = "CREATE-GROUP";
+
+export function isPersonalSetupGroup(group: Pick<Group, "id">) {
+  return group.id.startsWith(PERSONAL_SETUP_GROUP_ID_PREFIX);
+}
+
+export function personalSetupMetricConfiguration(
+  metrics: MetricDefinition[],
+  trackedGoalPeriods: Record<string, TrackedGoalPeriod[]> | undefined,
+) {
+  const trackedIds = new Set(
+    Object.entries(trackedGoalPeriods ?? {})
+      .filter(([, periods]) => periods.some((period) => !period.to))
+      .map(([metricId]) => metricId),
+  );
+  return metrics
+    .filter((metric) => trackedIds.has(metric.id))
+    .map((metric, order) => ({
+      ...metric,
+      sections: { ...metric.sections, group: true },
+      order,
+    }));
+}
+
+export function createPersonalSetupGroup(
+  member: Member,
+  metricConfiguration: MetricDefinition[] = [],
+): Group {
+  return {
+    id: `${PERSONAL_SETUP_GROUP_ID_PREFIX}${member.id}`,
+    name: "Personal setup",
+    inviteCode: PERSONAL_SETUP_INVITE_CODE,
+    templateName: "Healthy Competition",
+    members: [
+      {
+        ...member,
+        role: "owner",
+      },
+    ],
+    streakRestDaysPerWeek: 1,
+    themeColor: DEFAULT_GROUP_THEME,
+    metricConfiguration,
+  };
+}
 
 // Gold and yellow are intentionally absent because those colors communicate
 // all-goals-complete celebrations elsewhere in the app.
 export const GROUP_THEME_COLORS = [
   DEFAULT_GROUP_THEME,
+  "#0FBFB8",
+  "#FF5750",
   "#3478D4",
   "#7756D9",
   "#C45B35",
@@ -119,4 +169,3 @@ export function groupMetricDefinitions(
     };
   });
 }
-

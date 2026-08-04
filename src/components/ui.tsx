@@ -18,8 +18,12 @@ import {
   ViewStyle,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useTranslation } from "@/src/i18n";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  useCloudSyncActions,
+  useCloudSyncStatus,
+} from "@/src/cloud/CloudSyncProvider";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 
 import {
@@ -46,16 +50,21 @@ export function Screen({
 }) {
   const compact = useCompactMode();
   const colors = useAppColors();
-  const accent = useGroupAccent();
   const internalRef = useRef<ScrollView>(null);
   const activeRef = scrollRef ?? internalRef;
-  const cloud = useCloudSync();
-  const health = useHealthSync();
+  const insets = useSafeAreaInsets();
+  const basePaddingBottom = compact ? 90 : 120;
+  const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
+  const userPaddingBottom =
+    typeof userPaddingBottomRaw === "number" ? userPaddingBottomRaw : 0;
+  const paddingBottom =
+    Math.max(basePaddingBottom, userPaddingBottom ?? basePaddingBottom) +
+    insets.bottom;
   useKeyboardReveal(activeRef);
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top"]}
+      edges={["top", "bottom"]}
     >
       <KeyboardAvoidingView
         style={styles.safe}
@@ -80,28 +89,16 @@ export function Screen({
           keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           automaticallyAdjustKeyboardInsets
           refreshControl={
-            refreshEnabled
+            Platform.OS !== "web" && refreshEnabled
               ? refreshControl ?? (
-                  <RefreshControl
-                    refreshing={
-                      cloud.status === "syncing" || health.status === "syncing"
-                    }
-                    onRefresh={async () => {
-                      // Serialize local push, group refresh, then native health.
-                      // Running all three against the same entries array caused
-                      // transient disappear/reappear states on Android.
-                      await cloud.syncNow().catch(() => undefined);
-                      await cloud.refreshActivity().catch(() => undefined);
-                      await health.syncNow("pull").catch(() => undefined);
-                    }}
-                    tintColor={accent}
-                  />
+                  <DefaultRefreshControl />
                 )
               : undefined
           }
           contentContainerStyle={[
             styles.screen,
             compact && styles.screenCompact,
+            { paddingBottom },
             contentContainerStyle,
           ]}
           {...props}
@@ -133,10 +130,11 @@ export function useKeyboardReveal(
 export function PageHeader({
   eyebrow,
   title,
-  subtitle,
   action,
   showMenu = true,
   tutorialId,
+  translateTitle = true,
+  translateEyebrow = true,
 }: {
   eyebrow?: string;
   title: string;
@@ -144,6 +142,8 @@ export function PageHeader({
   action?: ReactNode;
   showMenu?: boolean;
   tutorialId?: string;
+  translateTitle?: boolean;
+  translateEyebrow?: boolean;
 }) {
   const accent = useGroupAccent();
   const colors = useAppColors();
@@ -152,9 +152,15 @@ export function PageHeader({
     <View style={[styles.header, compact && styles.headerCompact]}>
       <View style={styles.headerCopy}>
         {eyebrow ? (
-          <Text style={[styles.eyebrow, { color: accent }]}>{eyebrow}</Text>
+          <Text
+            translate={translateEyebrow}
+            style={[styles.eyebrow, { color: accent }]}
+          >
+            {eyebrow}
+          </Text>
         ) : null}
         <Text
+          translate={translateTitle}
           numberOfLines={1}
           adjustsFontSizeToFit
           minimumFontScale={0.78}
@@ -166,18 +172,6 @@ export function PageHeader({
         >
           {title}
         </Text>
-        {subtitle ? (
-          <Text
-            numberOfLines={compact ? 1 : undefined}
-            style={[
-              styles.subtitle,
-              compact && styles.subtitleCompact,
-              { color: colors.muted },
-            ]}
-          >
-            {subtitle}
-          </Text>
-        ) : null}
       </View>
       <View style={styles.headerActions}>
         {action}
@@ -200,12 +194,38 @@ export function PageHeader({
   );
 }
 
+/**
+ * Keep the large page tree out of the high-frequency cloud/health contexts.
+ * Only this tiny refresh control updates while a background sync changes
+ * status, so navigating and typing do not cause every Screen to re-render.
+ */
+function DefaultRefreshControl() {
+  const cloud = useCloudSyncActions();
+  const cloudStatus = useCloudSyncStatus();
+  const health = useHealthSync();
+  const accent = useGroupAccent();
+  return (
+    <RefreshControl
+      refreshing={cloudStatus === "syncing" || health.status === "syncing"}
+      onRefresh={async () => {
+        await health.syncNow("pull").catch(() => undefined);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await cloud.syncNow().catch(() => undefined);
+        await cloud.refreshActivity().catch(() => undefined);
+      }}
+      tintColor={accent}
+    />
+  );
+}
+
 export function SectionHeader({
   title,
   action,
+  translateTitle = true,
 }: {
   title: string;
   action?: ReactNode;
+  translateTitle?: boolean;
 }) {
   const compact = useCompactMode();
   const colors = useAppColors();
@@ -213,7 +233,12 @@ export function SectionHeader({
     <View
       style={[styles.sectionHeader, compact && styles.sectionHeaderCompact]}
     >
-      <Text style={[styles.sectionTitle, { color: colors.ink }]}>{title}</Text>
+      <Text
+        translate={translateTitle}
+        style={[styles.sectionTitle, { color: colors.ink }]}
+      >
+        {title}
+      </Text>
       {action}
     </View>
   );
@@ -244,17 +269,20 @@ export function IconButton({
   onPress,
   label,
   filled = false,
+  translate = true,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   label: string;
   filled?: boolean;
+  translate?: boolean;
 }) {
   const accent = useGroupAccent();
   const colors = useAppColors();
+  const t = useTranslation();
   return (
     <Pressable
-      accessibilityLabel={label}
+      accessibilityLabel={translate ? t(label) : label}
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [
@@ -282,6 +310,7 @@ export function Button({
   size = "default",
   disabled,
   loading,
+  translate = true,
 }: {
   label: string;
   onPress: () => void;
@@ -290,13 +319,17 @@ export function Button({
   size?: "default" | "small";
   disabled?: boolean;
   loading?: boolean;
+  translate?: boolean;
 }) {
   const accent = useGroupAccent();
   const compact = useCompactMode();
   const colors = useAppColors();
+  const t = useTranslation();
   return (
     <Pressable
+      accessibilityLabel={translate ? t(label) : label}
       accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: loading }}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed }) => [
@@ -331,6 +364,7 @@ export function Button({
             />
           ) : null}
           <Text
+            translate={translate}
             style={[
               styles.buttonText,
               size === "small" && styles.buttonTextSmall,
@@ -360,15 +394,20 @@ export function Chip({
   selected,
   onPress,
   icon,
+  size = "default",
+  translate = true,
 }: {
   label: string;
   selected?: boolean;
   onPress?: () => void;
   icon?: keyof typeof Ionicons.glyphMap;
+  size?: "default" | "small";
+  translate?: boolean;
 }) {
   const accent = useGroupAccent();
   const compact = useCompactMode();
   const colors = useAppColors();
+  const t = useTranslation();
   const content = (
     <>
       {icon ? (
@@ -379,8 +418,10 @@ export function Chip({
         />
       ) : null}
       <Text
+        translate={translate}
         style={[
           styles.chipText,
+          size === "small" && styles.chipTextSmall,
           { color: colors.muted },
           selected && styles.chipTextSelected,
           selected && { color: accent },
@@ -395,6 +436,7 @@ export function Chip({
       <View
         style={[
           styles.chip,
+          size === "small" && styles.chipSmall,
           { backgroundColor: colors.card, borderColor: colors.border },
           compact && styles.chipCompact,
           selected && styles.chipSelected,
@@ -406,9 +448,13 @@ export function Chip({
     );
   return (
     <Pressable
+      accessibilityLabel={translate ? t(label) : label}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => [
         styles.chip,
+        size === "small" && styles.chipSmall,
         { backgroundColor: colors.card, borderColor: colors.border },
         compact && styles.chipCompact,
         selected && styles.chipSelected,
@@ -452,6 +498,7 @@ export function Avatar({
         />
       ) : (
         <Text
+          translate={false}
           preserveColor
           style={[
             styles.avatarText,
@@ -646,11 +693,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   chipCompact: { minHeight: 30, paddingHorizontal: 10 },
+  chipSmall: { minHeight: 27, paddingHorizontal: 8, paddingVertical: 4 },
   chipSelected: {
     backgroundColor: palette.primarySoft,
     borderColor: "#B9DFC9",
   },
   chipText: { color: palette.muted, fontSize: 13, fontWeight: "700" },
+  chipTextSmall: { fontSize: 9, fontWeight: "800" },
   chipTextSelected: { color: palette.primary },
   avatar: {
     alignItems: "center",

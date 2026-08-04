@@ -1,7 +1,13 @@
-import { User } from "@supabase/supabase-js";
+import { SupabaseClient, User } from "@supabase/supabase-js";
 
 import { DEFAULT_METRICS } from "@/src/data/seed";
-import { dateKey } from "@/src/domain/date";
+import {
+  calendarWeekRange,
+  dateKey,
+  dateRangeEnding,
+  dateWithOffsetFrom,
+  monthDateRange,
+} from "@/src/domain/date";
 import {
   effectiveGoalTarget,
   displayGoalProgress,
@@ -10,10 +16,10 @@ import {
   isMetricTrackedOnDate,
   metricApplicableOnDate,
   metricVisualProgress,
-  rankedMembers,
   safeMetricValue,
   scheduledGoalReached,
 } from "@/src/domain/metrics";
+import { leaderboardRows } from "@/src/domain/leaderboard";
 import { normalizeEnergyProfile } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
@@ -23,7 +29,9 @@ import {
   isVacationDate,
   vacationDates,
 } from "@/src/domain/vacation";
+import { metricEntryKey } from "@/src/domain/metricEntry";
 import { supabase } from "@/src/lib/supabase";
+import { translateUiText } from "@/src/i18n";
 import {
   AppState,
   ChatMessage,
@@ -40,10 +48,19 @@ const MEDIA_BUCKET = "paceboard-media";
 // history remains in their private snapshot, while older shared rows already
 // on this device are preserved below.
 const SHARED_ACTIVITY_CACHE_DAYS = 120;
+const SHARED_SUMMARY_HISTORY_START = "2000-01-01";
 const SHARED_MESSAGE_CACHE_LIMIT = 200;
 const SHARED_PHOTO_CACHE_LIMIT = 120;
+// Push is an arrival alert, not a history-import side effect. Keeping this
+// window bounded prevents an offline/history repair from releasing a burst of
+// old chat notifications when the sender next opens the app.
+const CHAT_PUSH_FRESHNESS_MS = 15 * 60 * 1000;
+const METRIC_PUSH_FRESHNESS_MS = 30 * 60 * 1000;
+const attemptedWinnerEvents = new Set<string>();
 const COLORS = [
-  "#176B4D",
+  "#0FBFB8",
+  "#FF5750",
+  "#081B49",
   "#3478D4",
   "#7756D9",
   "#E9A23B",
@@ -51,6 +68,107 @@ const COLORS = [
   "#2A8F86",
   "#9B6B43",
 ];
+
+function withLocalizedPushCopy<T extends { title: string; body: string }>(
+  payload: T,
+) {
+  return {
+    ...payload,
+    titles: localizedUiText(payload.title),
+    bodies: localizedUiText(payload.body),
+  };
+}
+
+function localizedUiText(source: string) {
+  return Object.fromEntries(
+    (["en", "ar", "es", "zh-Hans", "sv", "de", "ru", "fr"] as const).map(
+      (language) => [language, translateUiText(language, source)],
+    ),
+  );
+}
+
+function literalPushCopy(source: string) {
+  return Object.fromEntries(
+    (["en", "ar", "es", "zh-Hans", "sv", "de", "ru", "fr"] as const).map(
+      (language) => [language, source],
+    ),
+  );
+}
+
+type CloudActivityEntryRow = {
+  client_generated_id: string;
+  metric_id: string;
+  user_id: string;
+  value: MetricEntry["value"];
+  local_date: string;
+  recorded_at: string;
+  visibility: MetricEntry["visibility"];
+  source: MetricEntry["source"];
+  label?: string | null;
+  note?: string | null;
+  nutrition?: MetricEntry["nutrition"] | null;
+  submetric_values?: MetricEntry["submetricValues"] | null;
+  source_provider?: MetricEntry["sourceProvider"] | null;
+  source_record_id?: string | null;
+  source_origin?: string | null;
+  source_updated_at?: string | null;
+  image_path?: string | null;
+};
+
+type CloudActivityStatusRow = {
+  metric_id: string;
+  user_id: string;
+  local_date: string;
+  goal_reached: boolean;
+  score_contribution?: number | string | null;
+  goal_progress?: number | string | null;
+  goal_kind?: DailyMetricStatus["goalKind"] | null;
+  goal_target?: number | string | null;
+  visibility?: DailyMetricStatus["visibility"] | null;
+  goal_eligible?: boolean | null;
+  exact_value?: number | string | null;
+  has_data?: boolean | null;
+  updated_at?: string | null;
+};
+
+type CloudDailyStatusUpsertRow = {
+  group_id: string;
+  metric_id: string | undefined;
+  user_id: string;
+  local_date: string;
+  goal_reached: boolean;
+  score_contribution: number;
+  goal_progress: number;
+  goal_kind: MetricDefinition["goal"]["kind"];
+  goal_target: number;
+  visibility: MetricEntry["visibility"];
+  goal_eligible: boolean;
+  exact_value: number | null;
+  has_data: boolean;
+};
+
+type GroupActivitySnapshot = {
+  version?: number;
+  updated_at?: string | null;
+  since_date?: string | null;
+  entries_since_date?: string | null;
+  statuses_since_date?: string | null;
+  metrics?: { id: string; slug: string }[];
+  entries?: CloudActivityEntryRow[];
+  statuses?: CloudActivityStatusRow[];
+  tombstones?: {
+    user_id: string;
+    client_generated_id: string;
+    local_date: string;
+    deleted_at: string;
+  }[];
+};
+
+export type CloudActivityMetadata = {
+  version?: number;
+  updatedAt?: string;
+  sinceDate?: string;
+};
 
 function batches<T>(items: T[], size = 500) {
   const result: T[][] = [];
@@ -86,6 +204,277 @@ export function isCloudGroupId(id: string) {
 function requireCloud() {
   if (!supabase) throw new Error("Cloud is not configured.");
   return supabase;
+}
+
+function buildCloudDailyStatusRows(
+  state: AppState,
+  idBySlug: Map<string, string>,
+  ownedEntries: MetricEntry[],
+  statusDates: string[],
+): CloudDailyStatusUpsertRow[] {
+  const exactSharedEntryDays = new Set<string>();
+  const statusSharedEntryDays = new Set<string>();
+  const privateEntryDays = new Set<string>();
+  ownedEntries.forEach((entry) => {
+    const key = `${entry.metricId}:${entry.localDate}`;
+    if (entry.visibility === "group") exactSharedEntryDays.add(key);
+    else if (entry.visibility === "status") statusSharedEntryDays.add(key);
+    else privateEntryDays.add(key);
+  });
+  return statusDates.flatMap((localDate) =>
+    (state.group.metricConfiguration ?? [])
+      .filter((groupMetric) => {
+        const personalMetric =
+          state.metrics.find((metric) => metric.id === groupMetric.id) ??
+          groupMetric;
+        return (
+          groupMetric.dataType !== "text" &&
+          idBySlug.has(groupMetric.id) &&
+          metricApplicableOnDate(
+            state,
+            personalMetric,
+            state.currentUserId,
+            localDate,
+          )
+        );
+      })
+      .map((groupMetric) => {
+        const metric =
+          state.metrics.find((candidate) => candidate.id === groupMetric.id) ??
+          groupMetric;
+        const value = safeMetricValue(
+          state,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const entryDayKey = `${metric.id}:${localDate}`;
+        const hasExactSharedEntry = exactSharedEntryDays.has(entryDayKey);
+        const hasStatusSharedEntry = statusSharedEntryDays.has(entryDayKey);
+        const hasPrivateEntry = privateEntryDays.has(entryDayKey);
+        const exactShared =
+          !isVacationDate(state, state.currentUserId, localDate) &&
+          (hasExactSharedEntry ||
+            (metric.defaultVisibility === "group" &&
+              (metric.dataType === "calculated" ||
+                (Boolean(metric.gymMapping) &&
+                  (state.gymSessions ?? []).some(
+                    (session) =>
+                      session.userId === state.currentUserId &&
+                      session.localDate === localDate &&
+                      session.visibility === "group",
+                  )) ||
+                metric.stepFallback === true)));
+        const hasData = hasMetricData(
+          state,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const statusVisibility = hasExactSharedEntry
+          ? ("group" as const)
+          : hasStatusSharedEntry
+            ? ("status" as const)
+            : hasPrivateEntry
+              ? ("private" as const)
+              : metric.defaultVisibility;
+        return {
+          group_id: state.group.id,
+          metric_id: idBySlug.get(groupMetric.id),
+          user_id: state.currentUserId,
+          local_date: localDate,
+          goal_reached: scheduledGoalReached(
+            state,
+            metric,
+            state.currentUserId,
+            localDate,
+          ),
+          score_contribution:
+            Math.min(
+              metricVisualProgress(
+                state,
+                metric,
+                state.currentUserId,
+                localDate,
+                value,
+                effectiveGoalTarget(
+                  state,
+                  metric,
+                  state.currentUserId,
+                  localDate,
+                ),
+              ),
+              1,
+            ) * 100,
+          goal_progress: Math.max(
+            0,
+            Math.min(
+              300,
+              (metric.goalProgressMode === "journey"
+                ? metricVisualProgress(
+                    state,
+                    metric,
+                    state.currentUserId,
+                    localDate,
+                    value,
+                  )
+                : displayGoalProgress(
+                    metric,
+                    value,
+                    effectiveGoalTarget(
+                      state,
+                      metric,
+                      state.currentUserId,
+                      localDate,
+                    ),
+                  )) * 100,
+            ),
+          ),
+          goal_kind: metric.goal.kind,
+          goal_target: effectiveGoalTarget(
+            state,
+            metric,
+            state.currentUserId,
+            localDate,
+          ),
+          visibility: statusVisibility,
+          goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
+          exact_value: exactShared ? value : null,
+          has_data: hasData,
+        };
+      }),
+  );
+}
+
+async function upsertCloudDailyStatusRows(
+  client: SupabaseClient,
+  rows: CloudDailyStatusUpsertRow[],
+) {
+  if (!rows.length) return;
+  // Upsert before deleting anything. A transient server failure must not make
+  // a member disappear from the leaderboard on other devices.
+  for (const batch of batches(rows)) {
+    let { error } = await client.from("daily_metric_status").upsert(batch, {
+      onConflict: "group_id,metric_id,user_id,local_date",
+    });
+    if (
+      error &&
+      /goal_progress|goal_kind|goal_target|visibility|goal_eligible|exact_value|has_data/i.test(
+        `${error.code ?? ""} ${error.message ?? ""}`,
+      )
+    ) {
+      const legacyStatuses = batch.map(
+        ({
+          goal_progress: _progress,
+          goal_kind: _kind,
+          goal_target: _target,
+          visibility: _visibility,
+          goal_eligible: _eligible,
+          exact_value: _exact,
+          has_data: _hasData,
+          ...status
+        }) => status,
+      );
+      ({ error } = await client.from("daily_metric_status").upsert(
+        legacyStatuses,
+        { onConflict: "group_id,metric_id,user_id,local_date" },
+      ));
+    }
+    if (error) throw error;
+  }
+}
+
+async function commitCloudActivityCheckpoint(
+  client: SupabaseClient,
+  groupId: string,
+  dates: string[],
+  fallbackSince: string,
+) {
+  const commit = await client.rpc("commit_group_activity_version", {
+    p_group_id: groupId,
+    p_since_date: [...dates].sort()[0] ?? fallbackSince,
+  });
+  if (
+    commit.error &&
+    commit.error.code !== "PGRST202" &&
+    commit.error.code !== "42883"
+  )
+    throw commit.error;
+
+  const checkpoint = await client
+    .from("group_activity_versions")
+    .select("version, updated_at")
+    .eq("group_id", groupId)
+    .maybeSingle();
+  if (!checkpoint.error && checkpoint.data?.updated_at) {
+    const version = Number(checkpoint.data.version);
+    return {
+      version: Number.isFinite(version) ? version : undefined,
+      updatedAt: checkpoint.data.updated_at as string,
+    };
+  }
+
+  // Older schemas have no version row. The daily status trigger still owns a
+  // server timestamp, which is safer than presenting the phone clock as proof
+  // that the server accepted the data.
+  const latestStatus = await client
+    .from("daily_metric_status")
+    .select("updated_at")
+    .eq("group_id", groupId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const committedVersion = Number(commit.data);
+  return {
+    version: Number.isFinite(committedVersion)
+      ? committedVersion
+      : undefined,
+    updatedAt:
+      !latestStatus.error && latestStatus.data?.updated_at
+        ? (latestStatus.data.updated_at as string)
+        : undefined,
+  };
+}
+
+function normalizedGroupConversationId(
+  conversationId: string | null | undefined,
+  groupId: string,
+) {
+  return !conversationId || conversationId === "group"
+    ? `group:${groupId}`
+    : conversationId;
+}
+
+function messageBelongsToGroup(
+  state: AppState,
+  message: ChatMessage,
+  groupId: string,
+) {
+  if (message.groupId) return message.groupId === groupId;
+  if (message.conversationId?.startsWith("group:"))
+    return message.conversationId === `group:${groupId}`;
+  // Messages persisted before group ownership was introduced can only be
+  // safely attached to the workspace that was active with that local cache.
+  return state.group.id === groupId;
+}
+
+function cloudOwnedMessage(message: ChatMessage, groupId: string) {
+  if (message.groupId) return message.groupId === groupId;
+  return message.conversationId === `group:${groupId}`;
+}
+
+function messageForGroup(
+  message: ChatMessage,
+  groupId: string,
+): ChatMessage {
+  return {
+    ...message,
+    groupId,
+    conversationId: normalizedGroupConversationId(
+      message.conversationId,
+      groupId,
+    ),
+  };
 }
 
 function memberColor(id: string) {
@@ -155,6 +544,8 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     submetrics: configuration.submetrics ?? preset?.submetrics,
     submetricDisplay:
       configuration.submetricDisplay ?? preset?.submetricDisplay,
+    visualization:
+      configuration.visualization ?? preset?.visualization,
     scoreWeight: Number(row.score_weight ?? 0),
     formula: row.formula ?? undefined,
     defaultVisibility: row.default_visibility,
@@ -202,12 +593,13 @@ function metricRow(groupId: string, metric: MetricDefinition) {
       timerEnabled: metric.timerEnabled,
       submetrics: metric.submetrics,
       submetricDisplay: metric.submetricDisplay,
+      visualization: metric.visualization,
       sections: metric.sections,
       order: metric.order,
       activeFrom: metric.activeFrom,
-      goalSchedule: metric.goalSchedule,
-      reminder: metric.reminder,
-      reminders: metric.reminders,
+      // Reminder cadence and tracking dates are personal preferences. They
+      // stay in each member's private snapshot and must not be overwritten by
+      // the admin's copy of a shared tracker.
     },
   };
 }
@@ -232,12 +624,24 @@ export async function loadCloudMessages(
   groupId: string,
 ): Promise<ChatMessage[]> {
   const client = requireCloud();
-  const { data, error } = await client
+  const localGroupMessages = state.messages
+    .filter((message) => messageBelongsToGroup(state, message, groupId))
+    .map((message) => messageForGroup(message, groupId));
+  const latestCachedAt = localGroupMessages
+    .map((message) => message.createdAt)
+    .sort()
+    .at(-1);
+  let query = client
     .from("messages")
     .select("*")
     .eq("group_id", groupId)
-    .order("created_at", { ascending: false })
-    .limit(SHARED_MESSAGE_CACHE_LIMIT);
+    .order("created_at", { ascending: false });
+  if (latestCachedAt) {
+    const overlap = new Date(latestCachedAt);
+    overlap.setMinutes(overlap.getMinutes() - 5);
+    query = query.gte("created_at", overlap.toISOString());
+  }
+  const { data, error } = await query.limit(SHARED_MESSAGE_CACHE_LIMIT);
   if (error) throw error;
   const rows = data ?? [];
   const urls = await signedUrls(
@@ -245,41 +649,29 @@ export async function loadCloudMessages(
   );
   const remote: ChatMessage[] = rows.map((message) => ({
     id: message.client_generated_id ?? message.id,
+    groupId,
     senderId: message.sender_id ?? "system",
     text: message.content,
     createdAt: message.created_at,
     kind: message.kind,
-    conversationId: message.conversation_id ?? `group:${groupId}`,
+    conversationId: normalizedGroupConversationId(
+      message.conversation_id,
+      groupId,
+    ),
     recipientId: message.recipient_id ?? undefined,
     imageStoragePath: message.image_path ?? undefined,
     imageUri: message.image_path
       ? (urls.get(message.image_path) ?? undefined)
       : undefined,
   }));
-  const byId = new Map(state.messages.map((message) => [message.id, message]));
+  const otherGroupMessages = state.messages.filter(
+    (message) => !messageBelongsToGroup(state, message, groupId),
+  );
+  const byId = new Map(
+    localGroupMessages.map((message) => [message.id, message]),
+  );
   remote.forEach((message) => byId.set(message.id, message));
-  state.messages
-    .filter(
-      (message) =>
-        message.senderId === state.currentUserId &&
-        (message.conversationId === `group:${groupId}` ||
-          Boolean(
-            message.recipientId &&
-              state.group.members.some(
-                (member) => member.id === message.recipientId,
-              ),
-          )),
-    )
-    .forEach((message) => {
-      const matched = remote.some(
-        (candidate) =>
-          candidate.senderId === message.senderId &&
-          candidate.text === message.text &&
-          candidate.createdAt === message.createdAt,
-      );
-      if (!matched && !byId.has(message.id)) byId.set(message.id, message);
-    });
-  return [...byId.values()].sort((a, b) =>
+  return [...otherGroupMessages, ...byId.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }
@@ -289,43 +681,89 @@ export async function loadCloudGroupActivity(
   state: AppState,
   groupId: string,
   sinceDate?: string,
-): Promise<Pick<AppState, "entries" | "dailyMetricStatuses">> {
+): Promise<
+  Pick<AppState, "entries" | "dailyMetricStatuses"> & {
+    version?: number;
+    updatedAt?: string;
+    deletedEntryKeys?: string[];
+    authoritativeEntrySinceDate?: string;
+    authoritativeStatusSinceDate?: string;
+  }
+> {
   const client = requireCloud();
-  const { data: metricRows, error: metricError } = await client
-    .from("metric_definitions")
-    .select("id, slug")
-    .eq("group_id", groupId);
-  if (metricError) throw metricError;
-  const metricIds = (metricRows ?? []).map((row) => row.id);
-  const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
-  const [entryRows, statusRows] = await Promise.all([
-    metricIds.length
-      ? loadAllPages((from, to) =>
-          {
-            let query = client
-            .from("metric_entries")
-            .select("*")
-            .in("metric_id", metricIds)
-            .order("recorded_at");
-            if (sinceDate) query = query.gte("local_date", sinceDate);
-            return query.range(from, to);
-          },
-        )
-      : Promise.resolve([]),
-    loadAllPages((from, to) =>
-      {
-        let query = client
-        .from("daily_metric_status")
-        .select("*")
-        .eq("group_id", groupId)
-        .order("local_date");
-        if (sinceDate) query = query.gte("local_date", sinceDate);
-        return query.range(from, to);
-      },
+  const activityStart = new Date();
+  activityStart.setDate(
+    activityStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS,
+  );
+  const requestedSince = sinceDate ?? dateKey(activityStart);
+  const recentEntrySince = dateKey(activityStart);
+  const requestedEntrySince =
+    requestedSince > recentEntrySince ? requestedSince : recentEntrySince;
+  const snapshotResult = await client.rpc("get_group_activity_snapshot", {
+    p_group_id: groupId,
+    p_since_date: requestedSince,
+  });
+  const missingSnapshotRpc =
+    snapshotResult.error?.code === "PGRST202" ||
+    snapshotResult.error?.code === "42883";
+  if (snapshotResult.error && !missingSnapshotRpc)
+    throw snapshotResult.error;
+
+  const snapshot = snapshotResult.data as GroupActivitySnapshot | null;
+  const authoritativeSnapshot = !missingSnapshotRpc && snapshot !== null;
+  const deletedEntryKeys = new Set(
+    (snapshot?.tombstones ?? []).map(
+      (tombstone) =>
+        metricEntryKey(
+          tombstone.user_id,
+          tombstone.client_generated_id,
+        ),
     ),
-  ]);
+  );
+  let metricRows = snapshot?.metrics ?? [];
+  let entryRows = snapshot?.entries ?? [];
+  let statusRows = snapshot?.statuses ?? [];
+
+  // Backward compatibility while the migration is being rolled out. Once the
+  // RPC exists, entries and statuses are read from one MVCC-consistent server
+  // snapshot instead of two requests that can observe different write stages.
+  if (missingSnapshotRpc) {
+    const metricResult = await client
+      .from("metric_definitions")
+      .select("id, slug")
+      .eq("group_id", groupId);
+    if (metricResult.error) throw metricResult.error;
+    metricRows = metricResult.data ?? [];
+    const metricIds = metricRows.map((row) => row.id);
+    [entryRows, statusRows] = await Promise.all([
+      metricIds.length
+        ? loadAllPages((from, to) => {
+            let query = client
+              .from("metric_entries")
+              .select("*")
+              .in("metric_id", metricIds)
+              .order("recorded_at");
+            query = query.gte("local_date", requestedEntrySince);
+            return query.range(from, to);
+          })
+        : Promise.resolve([]),
+      loadAllPages((from, to) => {
+        let query = client
+          .from("daily_metric_status")
+          .select("*")
+          .eq("group_id", groupId)
+          .order("local_date");
+        if (requestedSince)
+          query = query.gte("local_date", requestedSince);
+        return query.range(from, to);
+      }),
+    ]);
+  }
+  const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
   const urls = await signedUrls(
-    entryRows.map((entry) => entry.image_path).filter(Boolean),
+    entryRows
+      .map((entry) => entry.image_path)
+      .filter((path): path is string => Boolean(path)),
   );
   const remoteEntries: MetricEntry[] = entryRows.map((entry) => ({
     id: entry.client_generated_id,
@@ -349,19 +787,51 @@ export async function loadCloudGroupActivity(
       ? (urls.get(entry.image_path) ?? undefined)
       : undefined,
   }));
-  const entriesById = new Map(remoteEntries.map((entry) => [entry.id, entry]));
+  const groupMetricSlugs = new Set(slugById.values());
+  const groupMemberIds = new Set(state.group.members.map((member) => member.id));
+  // A range response is a delta, not proof that an absent cached row was
+  // deleted. Seed the result with the matching local cache so an overlapping
+  // realtime/manual refresh cannot temporarily erase a friend's leaderboard
+  // value while related entry/status writes are still settling.
+  const entriesById = new Map(
+    state.entries
+      .filter(
+        (entry) =>
+          !deletedEntryKeys.has(metricEntryKey(entry.userId, entry.id)) &&
+          groupMetricSlugs.has(entry.metricId) &&
+          groupMemberIds.has(entry.userId) &&
+          (!authoritativeSnapshot ||
+            entry.userId === state.currentUserId) &&
+          (!authoritativeSnapshot ||
+            entry.localDate >=
+              (snapshot?.entries_since_date ?? requestedEntrySince)),
+      )
+      .map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
+  );
+  remoteEntries.forEach((entry) => {
+    const key = metricEntryKey(entry.userId, entry.id);
+    if (deletedEntryKeys.has(key)) return;
+    const cached = entriesById.get(key);
+    const cachedIsNewer =
+      Boolean(cached?.sourceUpdatedAt) &&
+      Boolean(entry.sourceUpdatedAt) &&
+      cached!.sourceUpdatedAt! > entry.sourceUpdatedAt!;
+    if (cached?.userId !== state.currentUserId && !cachedIsNewer)
+      entriesById.set(key, entry);
+    else if (!cached) entriesById.set(key, entry);
+  });
   state.entries
     .filter(
       (entry) =>
         entry.userId === state.currentUserId &&
-        (!sinceDate || entry.localDate >= sinceDate),
+        !deletedEntryKeys.has(metricEntryKey(entry.userId, entry.id)) &&
+        entry.localDate >= requestedEntrySince,
     )
     .forEach((entry) => {
-      if (!entriesById.has(entry.id)) entriesById.set(entry.id, entry);
+      const key = metricEntryKey(entry.userId, entry.id);
+      if (!entriesById.has(key)) entriesById.set(key, entry);
     });
-  const dailyMetricStatuses: DailyMetricStatus[] = (
-    statusRows
-  ).map((status) => ({
+  const remoteStatuses: DailyMetricStatus[] = statusRows.map((status) => ({
     groupId,
     metricId: slugById.get(status.metric_id) ?? status.metric_id,
     userId: status.user_id,
@@ -392,21 +862,115 @@ export async function loadCloudGroupActivity(
         : Boolean(status.has_data),
     syncedAt: status.updated_at ?? undefined,
   }));
+  const statusMap = new Map(
+    state.dailyMetricStatuses
+      .filter(
+        (status) =>
+          status.groupId === groupId &&
+          (!authoritativeSnapshot ||
+            status.userId === state.currentUserId) &&
+          (!authoritativeSnapshot ||
+            status.localDate >=
+              (snapshot?.statuses_since_date ?? requestedSince)),
+      )
+      .map((status) => [
+        `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`,
+        status,
+      ]),
+  );
+  remoteStatuses.forEach((status) => {
+    const key = `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`;
+    const cached = statusMap.get(key);
+    if (
+      !cached?.syncedAt ||
+      !status.syncedAt ||
+      status.syncedAt >= cached.syncedAt
+    )
+      statusMap.set(key, status);
+  });
   return {
     entries: [...entriesById.values()].sort((a, b) =>
       a.recordedAt.localeCompare(b.recordedAt),
     ),
-    dailyMetricStatuses,
+    dailyMetricStatuses: [...statusMap.values()],
+    version:
+      typeof snapshot?.version === "number" ? snapshot.version : undefined,
+    updatedAt: snapshot?.updated_at ?? undefined,
+    deletedEntryKeys: [...deletedEntryKeys],
+    authoritativeEntrySinceDate: authoritativeSnapshot
+      ? (snapshot?.entries_since_date ?? requestedEntrySince)
+      : undefined,
+    authoritativeStatusSinceDate: authoritativeSnapshot
+      ? (snapshot?.statuses_since_date ?? requestedSince)
+      : undefined,
   };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value))
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function metricStatusSemantics(row: Record<string, unknown>) {
+  const configuration =
+    row.configuration && typeof row.configuration === "object"
+      ? (row.configuration as Record<string, unknown>)
+      : {};
+  return canonicalJson({
+    slug: row.slug,
+    dataType: row.data_type,
+    aggregation: row.aggregation_method,
+    rankingDirection: row.ranking_direction,
+    formula: row.formula ?? null,
+    scoreWeight: row.score_weight,
+    defaultVisibility: row.default_visibility,
+    goal: configuration.goal,
+    goalProgressMode: configuration.goalProgressMode,
+    goalEnabled: configuration.goalEnabled,
+    goalRange: configuration.goalRange,
+    gymMapping: configuration.gymMapping,
+    stepFallback: configuration.stepFallback,
+    submetrics: configuration.submetrics,
+    submetricDisplay: configuration.submetricDisplay,
+    sections: configuration.sections,
+    activeFrom: configuration.activeFrom,
+  });
 }
 
 async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
   const client = requireCloud();
   const { data: existing, error: existingError } = await client
     .from("metric_definitions")
-    .select("id, slug")
+    .select(
+      "id, slug, data_type, aggregation_method, ranking_direction, formula, score_weight, default_visibility, configuration",
+    )
     .eq("group_id", groupId);
   if (existingError) throw existingError;
+  const existingSlugs = new Set((existing ?? []).map((row) => row.slug));
+  const nextSlugs = new Set(metrics.map((metric) => metric.id));
+  const metricSetChanged =
+    existingSlugs.size !== nextSlugs.size ||
+    [...nextSlugs].some((slug) => !existingSlugs.has(slug));
+  const existingBySlug = new Map(
+    (existing ?? []).map((row) => [row.slug, row as Record<string, unknown>]),
+  );
+  const metricSemanticsChanged = metrics.some((metric) => {
+    const previous = existingBySlug.get(metric.id);
+    return (
+      !previous ||
+      metricStatusSemantics(previous) !==
+        metricStatusSemantics(metricRow(groupId, metric))
+    );
+  });
   const removed = (existing ?? [])
     .filter((row) => !metrics.some((metric) => metric.id === row.slug))
     .map((row) => row.id);
@@ -424,6 +988,7 @@ async function upsertMetrics(groupId: string, metrics: MetricDefinition[]) {
     );
     if (error) throw error;
   }
+  return metricSetChanged || metricSemanticsChanged;
 }
 
 async function groupMembers(groupIds: string[]) {
@@ -432,19 +997,62 @@ async function groupMembers(groupIds: string[]) {
     return new Map<string, { active: Member[]; pending: Member[] }>();
   const currentMembership = await client
     .from("group_members")
-    .select("group_id, user_id, role, status")
+    .select(
+      "group_id, user_id, role, status, last_seen_at, last_data_synced_at",
+    )
     .in("group_id", groupIds);
-  let membership: { group_id: string; user_id: string; role: Member["role"]; status: string }[];
-  if (currentMembership.error && /status|column/i.test(currentMembership.error.message)) {
+  let membership: {
+    group_id: string;
+    user_id: string;
+    role: Member["role"];
+    status: string;
+    last_seen_at?: string | null;
+    last_data_synced_at?: string | null;
+  }[];
+  if (!currentMembership.error) {
+    membership = (currentMembership.data ?? []) as typeof membership;
+  } else if (/last_data_synced_at/i.test(currentMembership.error.message)) {
+    // Allow the app update to remain usable while the additive migration is
+    // being deployed. Approval status and presence must not regress merely
+    // because the new freshness column is not visible in the schema cache yet.
+    const compatible = await client
+      .from("group_members")
+      .select("group_id, user_id, role, status, last_seen_at")
+      .in("group_id", groupIds);
+    if (!compatible.error) {
+      membership = (compatible.data ?? []).map((row) => ({
+        ...row,
+        last_data_synced_at: null,
+      })) as typeof membership;
+    } else if (!/status|last_seen_at|column/i.test(compatible.error.message)) {
+      throw compatible.error;
+    } else {
+      const legacy = await client
+        .from("group_members")
+        .select("group_id, user_id, role")
+        .in("group_id", groupIds);
+      if (legacy.error) throw legacy.error;
+      membership = (legacy.data ?? []).map((row) => ({
+        ...row,
+        status: "active",
+        last_seen_at: null,
+        last_data_synced_at: null,
+      })) as typeof membership;
+    }
+  } else if (/status|last_seen_at|column/i.test(currentMembership.error.message)) {
     const legacy = await client
       .from("group_members")
       .select("group_id, user_id, role")
       .in("group_id", groupIds);
     if (legacy.error) throw legacy.error;
-    membership = (legacy.data ?? []).map((row) => ({ ...row, status: "active" })) as typeof membership;
+    membership = (legacy.data ?? []).map((row) => ({
+      ...row,
+      status: "active",
+      last_seen_at: null,
+      last_data_synced_at: null,
+    })) as typeof membership;
   } else {
-    if (currentMembership.error) throw currentMembership.error;
-    membership = (currentMembership.data ?? []) as typeof membership;
+    throw currentMembership.error;
   }
   const userIds = [...new Set((membership ?? []).map((row) => row.user_id))];
   const { data: profiles, error: profileError } = userIds.length
@@ -463,13 +1071,16 @@ async function groupMembers(groupIds: string[]) {
   const result = new Map<string, { active: Member[]; pending: Member[] }>();
   for (const membershipRow of membership ?? []) {
     const profile = profileMap.get(membershipRow.user_id);
-    const name = profile?.display_name || "MetricRally member";
+    const name = profile?.display_name || "HabHub member";
     const member: Member = {
       id: membershipRow.user_id,
       name,
       initials: initials(name),
       color: memberColor(membershipRow.user_id),
       role: membershipRow.role,
+      lastSeenAt: membershipRow.last_seen_at ?? undefined,
+      lastDataSyncedAt:
+        membershipRow.last_data_synced_at ?? undefined,
       avatarStoragePath: profile?.avatar_path ?? undefined,
       avatarUri: profile?.avatar_path
         ? (urls.get(profile.avatar_path) ?? undefined)
@@ -530,11 +1141,17 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
       requireMemberApproval: Boolean(
         (row.settings as Record<string, any>)?.requireMemberApproval,
       ),
-      streakRestDaysPerWeek: Number(
-        (row.settings as Record<string, any>)?.streakRestDaysPerWeek ?? 1,
+      streakRestDaysPerWeek: Math.max(
+        0,
+        Math.min(
+          4,
+          Number(
+            (row.settings as Record<string, any>)?.streakRestDaysPerWeek ?? 1,
+          ),
+        ),
       ),
       themeColor: String(
-        (row.settings as Record<string, any>)?.themeColor ?? "#176B4D",
+        (row.settings as Record<string, any>)?.themeColor ?? "#0FBFB8",
       ),
       gymPlans: Array.isArray(
         (row.settings as Record<string, any>)?.gymPlans,
@@ -554,7 +1171,7 @@ export async function createCloudGroup(
   metrics: MetricDefinition[],
   user: User,
   displayName?: string,
-  themeColor = "#176B4D",
+  themeColor = "#0FBFB8",
   requireMemberApproval = false,
 ) {
   const client = requireCloud();
@@ -655,8 +1272,8 @@ export async function sendMembershipPush(input: {
 }) {
   // Membership changes must remain successful even if the optional push
   // function is temporarily unavailable or not deployed yet.
-  await requireCloud().functions.invoke("send-push", {
-    body: {
+  const result = await requireCloud().functions.invoke("send-push", {
+    body: withLocalizedPushCopy({
       eventKey: input.eventKey,
       groupId: input.groupId,
       category: "membership",
@@ -668,8 +1285,9 @@ export async function sendMembershipPush(input: {
         route: input.route ?? "/groups",
         groupId: input.groupId,
       },
-    },
+    }),
   });
+  if (result.error) throw result.error;
 }
 
 export async function setCloudGroupApprovalRequired(
@@ -701,6 +1319,23 @@ export async function approveCloudGroupMember(groupId: string, userId: string) {
     .eq("group_id", groupId)
     .eq("user_id", userId);
   if (error) throw error;
+}
+
+export async function touchCloudGroupPresence(groupId: string) {
+  const client = requireCloud();
+  const { data, error } = await client.rpc("touch_group_member_presence", {
+    p_group_id: groupId,
+  });
+  if (error) {
+    if (
+      /touch_group_member_presence|schema cache|does not exist|last_seen_at/i.test(
+        error.message,
+      )
+    )
+      return new Date().toISOString();
+    throw error;
+  }
+  return typeof data === "string" ? data : new Date().toISOString();
 }
 
 export async function removeCloudGroupMember(groupId: string, userId: string) {
@@ -763,6 +1398,11 @@ export async function leaveCloudGroup(groupId: string) {
 export async function loadCloudWorkspace(
   state: AppState,
   groupId: string,
+  onActivityLoaded?: (metadata: CloudActivityMetadata) => void,
+  activitySinceDate = dateWithOffsetFrom(
+    dateKey(),
+    -(SHARED_ACTIVITY_CACHE_DAYS - 1),
+  ),
 ): Promise<AppState> {
   const client = requireCloud();
   const shells = await loadCloudGroupShells();
@@ -795,6 +1435,12 @@ export async function loadCloudWorkspace(
             goal: personal.goal,
             goalRange: personal.goalRange,
             goalEnabled: personal.goalEnabled,
+            // Schedules and reminder times belong to the person, not to the
+            // group's shared tracker definition. Keep them when the group
+            // workspace is reconstructed after a cold launch.
+            goalSchedule: personal.goalSchedule,
+            reminder: personal.reminder,
+            reminders: personal.reminders,
             defaultVisibility: personal.defaultVisibility,
             healthMapping: personal.healthMapping ?? shared.healthMapping,
             gymMapping: personal.gymMapping ?? shared.gymMapping,
@@ -823,40 +1469,19 @@ export async function loadCloudWorkspace(
       },
     })),
   ];
-  const { data: metricRows, error: metricError } = await client
-    .from("metric_definitions")
-    .select("id, slug")
-    .eq("group_id", groupId);
-  if (metricError) throw metricError;
-  const metricIds = (metricRows ?? []).map((row) => row.id);
-  const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
-  const activityStart = new Date();
-  activityStart.setHours(12, 0, 0, 0);
-  activityStart.setDate(
-    activityStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS,
-  );
-  const activitySinceDate = dateKey(activityStart);
-  const [entryRows, statusRows, messageRows, photoRows] =
+  // Render the cached/recent window first. Older compact summaries are loaded
+  // during idle time by the provider instead of blocking group navigation.
+  const [activity, messageRows, photoRows] =
     await Promise.all([
-      metricIds.length
-        ? loadAllPages((from, to) =>
-            client
-              .from("metric_entries")
-              .select("*")
-              .in("metric_id", metricIds)
-              .gte("local_date", activitySinceDate)
-              .order("recorded_at")
-              .range(from, to),
-          )
-        : Promise.resolve([]),
-      loadAllPages((from, to) =>
-        client
-          .from("daily_metric_status")
-          .select("*")
-          .eq("group_id", groupId)
-          .gte("local_date", activitySinceDate)
-          .order("local_date")
-          .range(from, to),
+      loadCloudGroupActivity(
+        {
+          ...state,
+          // Group activity scoping must use the shell we just loaded, not the
+          // previously-selected group's member list during a group switch.
+          group,
+        },
+        groupId,
+        activitySinceDate,
       ),
       (async () => {
         const { data, error } = await client
@@ -879,6 +1504,11 @@ export async function loadCloudWorkspace(
           return data ?? [];
       })(),
     ]);
+  onActivityLoaded?.({
+    version: activity.version,
+    updatedAt: activity.updatedAt,
+    sinceDate: activity.authoritativeStatusSinceDate,
+  });
   const mediaIds = photoRows.map(
     (photo) => photo.media_asset_id,
   );
@@ -891,145 +1521,65 @@ export async function loadCloudWorkspace(
   if (mediaError) throw mediaError;
   const mediaById = new Map((media ?? []).map((item) => [item.id, item]));
   const paths = [
-    ...entryRows
-      .map((entry) => entry.image_path)
-      .filter(Boolean),
     ...messageRows
       .map((message) => message.image_path)
       .filter(Boolean),
     ...(media ?? []).map((item) => item.storage_path).filter(Boolean),
   ];
   const urls = await signedUrls(paths);
-  const remoteEntries: MetricEntry[] = entryRows.map((entry) => ({
-    id: entry.client_generated_id,
-    metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
-    userId: entry.user_id,
-    value: entry.value as number | boolean | string,
-    localDate: entry.local_date,
-    recordedAt: entry.recorded_at,
-    visibility: entry.visibility,
-    source: entry.source,
-    label: entry.label ?? undefined,
-    note: entry.note ?? undefined,
-    nutrition: entry.nutrition ?? undefined,
-    submetricValues: entry.submetric_values ?? undefined,
-    sourceProvider: entry.source_provider ?? undefined,
-    sourceRecordId: entry.source_record_id ?? undefined,
-    sourceOrigin: entry.source_origin ?? undefined,
-    sourceUpdatedAt: entry.source_updated_at ?? undefined,
-    imageStoragePath: entry.image_path ?? undefined,
-    imageUri: entry.image_path
-      ? (urls.get(entry.image_path) ?? undefined)
-      : undefined,
-  }));
-  // Realtime group refreshes can arrive before a newly imported/corrected
-  // health row finishes its cloud upsert. Keep the newer owned local row so a
-  // chat message or membership event cannot roll health data backward.
+  // The activity RPC owns the bounded group window. Preserve unrelated and
+  // older local data, then overlay its collision-safe snapshot. This keeps
+  // pending owner rows and local image URIs while allowing an authoritative
+  // snapshot to remove stale friend rows from the active window.
+  const cloudMetricSlugs = new Set(groupMetrics.map((metric) => metric.id));
+  const groupMemberIds = new Set(group.members.map((member) => member.id));
   const entriesById = new Map(
-    remoteEntries.map((entry) => [entry.id, entry]),
-  );
-  const cloudMetricSlugs = new Set(slugById.values());
-  state.entries
-    .filter(
-      (entry) =>
-        entry.userId === state.currentUserId ||
-        (cloudMetricSlugs.has(entry.metricId) &&
-          entry.localDate < activitySinceDate),
-    )
-    .forEach((local) => {
-      const remote = entriesById.get(local.id);
-      const healthPayloadChanged =
-        Boolean(local.sourceProvider) &&
-        Boolean(remote) &&
-        JSON.stringify({
-          value: local.value,
-          label: local.label,
-          note: local.note,
-          nutrition: local.nutrition,
-          submetricValues: local.submetricValues,
-          recordedAt: local.recordedAt,
-        }) !==
-          JSON.stringify({
-            value: remote?.value,
-            label: remote?.label,
-            note: remote?.note,
-            nutrition: remote?.nutrition,
-            submetricValues: remote?.submetricValues,
-            recordedAt: remote?.recordedAt,
-          });
-      const localIsNewer =
-        Boolean(local.sourceUpdatedAt) &&
-        (!remote?.sourceUpdatedAt ||
-          local.sourceUpdatedAt! > remote.sourceUpdatedAt);
-      if (
-        !cloudMetricSlugs.has(local.metricId) ||
-        !remote ||
-        localIsNewer ||
-        healthPayloadChanged
+    state.entries
+      .filter(
+        (entry) =>
+          entry.localDate <
+            (activity.authoritativeEntrySinceDate ?? activitySinceDate) ||
+          !cloudMetricSlugs.has(entry.metricId) ||
+          !groupMemberIds.has(entry.userId),
       )
-        entriesById.set(local.id, local);
-    });
+      .map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
+  );
+  activity.entries.forEach((entry) => {
+    entriesById.set(metricEntryKey(entry.userId, entry.id), entry);
+  });
   const entries = [...entriesById.values()].sort((a, b) =>
     a.recordedAt.localeCompare(b.recordedAt),
   );
-  const remoteStatuses: DailyMetricStatus[] = statusRows.map((status) => ({
-    groupId,
-    metricId: slugById.get(status.metric_id) ?? status.metric_id,
-    userId: status.user_id,
-    localDate: status.local_date,
-    goalReached: status.goal_reached,
-    scoreContribution: Number(status.score_contribution ?? 0),
-  goalProgress:
-      status.goal_progress === null || status.goal_progress === undefined
-        ? undefined
-        : Number(status.goal_progress),
-    goalKind: status.goal_kind ?? undefined,
-    goalTarget:
-      status.goal_target === null || status.goal_target === undefined
-        ? undefined
-        : Number(status.goal_target),
-    visibility: status.visibility ?? undefined,
-    goalEligible:
-      status.goal_eligible === null || status.goal_eligible === undefined
-        ? undefined
-        : Boolean(status.goal_eligible),
-    exactValue:
-      status.exact_value === null || status.exact_value === undefined
-        ? undefined
-        : Number(status.exact_value),
-    hasData:
-      status.has_data === null || status.has_data === undefined
-        ? undefined
-        : Boolean(status.has_data),
-    syncedAt: status.updated_at ?? undefined,
-  }));
   const statusMap = new Map(
     state.dailyMetricStatuses
       .filter(
         (status) =>
           status.groupId !== groupId ||
-          status.localDate < activitySinceDate,
+          status.localDate <
+            (activity.authoritativeStatusSinceDate ?? activitySinceDate),
       )
       .map((status) => [
         `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`,
         status,
       ]),
   );
-  remoteStatuses.forEach((status) =>
-    statusMap.set(
-      `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`,
-      status,
-    ),
-  );
+  activity.dailyMetricStatuses.forEach((status) => {
+    const key = `${status.groupId}:${status.metricId}:${status.userId}:${status.localDate}`;
+    statusMap.set(key, status);
+  });
   const dailyMetricStatuses = [...statusMap.values()];
   const remoteMessages: ChatMessage[] = messageRows.map(
     (message) => ({
       id: message.client_generated_id ?? message.id,
+      groupId,
       senderId: message.sender_id ?? "system",
       text: message.content,
       createdAt: message.created_at,
       kind: message.kind,
-      conversationId: message.conversation_id ?? `group:${groupId}`,
+      conversationId: normalizedGroupConversationId(
+        message.conversation_id,
+        groupId,
+      ),
       recipientId: message.recipient_id ?? undefined,
       imageStoragePath: message.image_path ?? undefined,
       imageUri: message.image_path
@@ -1039,31 +1589,17 @@ export async function loadCloudWorkspace(
   );
   // Keep locally-created messages until their cloud upsert is visible. A realtime
   // refresh must never make a just-sent message (or offline history) disappear.
+  const localGroupMessages = state.messages
+    .filter((message) => messageBelongsToGroup(state, message, groupId))
+    .map((message) => messageForGroup(message, groupId));
+  const otherGroupMessages = state.messages.filter(
+    (message) => !messageBelongsToGroup(state, message, groupId),
+  );
   const messagesById = new Map(
-    state.messages.map((message) => [message.id, message]),
+    localGroupMessages.map((message) => [message.id, message]),
   );
   remoteMessages.forEach((message) => messagesById.set(message.id, message));
-  state.messages
-    .filter(
-      (message) =>
-        message.senderId === state.currentUserId &&
-        (message.conversationId === `group:${groupId}` ||
-          Boolean(
-            message.recipientId &&
-              group.members.some((member) => member.id === message.recipientId),
-          )),
-    )
-    .forEach((message) => {
-      const alreadyRemote = remoteMessages.some(
-        (remote) =>
-          remote.senderId === message.senderId &&
-          remote.text === message.text &&
-          remote.createdAt === message.createdAt,
-      );
-      if (!alreadyRemote && !messagesById.has(message.id))
-        messagesById.set(message.id, message);
-    });
-  const messages = [...messagesById.values()].sort((a, b) =>
+  const messages = [...otherGroupMessages, ...messagesById.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
   const remotePhotos: PhotoUpdate[] = photoRows.map((photo) => {
@@ -1107,18 +1643,79 @@ export async function loadCloudWorkspace(
   };
 }
 
-/** Fast chat-only upload used before the heavier account/workspace backup. */
-export async function pushCloudMessagesNow(state: AppState) {
+function freshChatPushCandidate(message: ChatMessage, now = Date.now()) {
+  const createdAt = new Date(message.createdAt).getTime();
+  return Number.isFinite(createdAt) && now - createdAt <= CHAT_PUSH_FRESHNESS_MS;
+}
+
+/**
+ * Fast chat-only outbox used independently from the heavier account/workspace
+ * backup. A message id targets the newly-created row without scanning or
+ * waiting for any health/group sync work.
+ */
+export async function pushCloudMessagesNow(
+  state: AppState,
+  messageId?: string,
+) {
   if (!isCloudGroupId(state.group.id)) return;
   const client = requireCloud();
   const sender = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
   if (!sender) return;
+  const membership = await client
+    .from("group_members")
+    .select("status")
+    .eq("group_id", state.group.id)
+    .eq("user_id", state.currentUserId)
+    .maybeSingle();
+  if (membership.error) throw membership.error;
+  if (membership.data?.status !== "active") return;
+  const activeMemberIds = new Set(
+    state.group.members.map((member) => member.id),
+  );
+  const now = Date.now();
   const owned = state.messages
-    .filter((message) => message.senderId === state.currentUserId)
+    .filter(
+      (message) =>
+        message.senderId === state.currentUserId &&
+        cloudOwnedMessage(message, state.group.id) &&
+        (!messageId || message.id === messageId) &&
+        freshChatPushCandidate(message, now) &&
+        (!message.recipientId || activeMemberIds.has(message.recipientId)),
+    )
+    .map((message) => messageForGroup(message, state.group.id))
     .slice(-30);
   if (!owned.length) return;
+  // For a just-created message, one idempotent upsert followed by one
+  // idempotent Edge Function invocation is both faster and more reliable than
+  // first waiting on a status query. The generic recovery path below still
+  // queries pending delivery state when no id was supplied.
+  if (messageId) {
+    const message = owned[owned.length - 1];
+    const upsert = await client.from("messages").upsert(
+      {
+        group_id: state.group.id,
+        sender_id: state.currentUserId,
+        client_generated_id: message.id,
+        kind: message.kind,
+        content: message.text,
+        conversation_id:
+          message.conversationId ?? `group:${state.group.id}`,
+        recipient_id: message.recipientId ?? null,
+        image_path: message.imageStoragePath ?? null,
+        metadata: {},
+        created_at: message.createdAt,
+      },
+      { onConflict: "sender_id,client_generated_id" },
+    );
+    if (upsert.error) throw upsert.error;
+    const result = await client.functions.invoke("send-push", {
+      body: chatPushPayload(state, sender, message),
+    });
+    if (result.error) throw result.error;
+    return;
+  }
   const current = await client
     .from("messages")
     .select("client_generated_id, push_dispatched_at")
@@ -1137,8 +1734,10 @@ export async function pushCloudMessagesNow(state: AppState) {
       !rows.has(message.id) || !rows.get(message.id)?.push_dispatched_at,
   );
   if (!pending.length) return;
+  const missing = pending.filter((message) => !rows.has(message.id));
+  if (missing.length) {
   const upsert = await client.from("messages").upsert(
-    pending.map((message) => ({
+    missing.map((message) => ({
       group_id: state.group.id,
       sender_id: state.currentUserId,
       client_generated_id: message.id,
@@ -1153,44 +1752,165 @@ export async function pushCloudMessagesNow(state: AppState) {
     { onConflict: "sender_id,client_generated_id" },
   );
   if (upsert.error) throw upsert.error;
-  await Promise.allSettled(
+  }
+  const dispatches = await Promise.allSettled(
     pending.map(async (message) => {
       const result = await client.functions.invoke("send-push", {
-        body: {
-          eventKey: `message:${state.group.id}:${message.id}`,
-          clientMessageId: message.id,
-          groupId: state.group.id,
-          category: "chat",
-          recipientId: message.recipientId,
-          title: message.recipientId
-            ? `Private message from ${sender.name}`
-            : `${sender.name} in ${state.group.name}`,
-          body: message.text || "Sent an image",
-          data: {
-            route: "/chat",
-            messageId: message.id,
-            senderName: sender.name,
-            conversationId:
-              message.conversationId ?? `group:${state.group.id}`,
-          },
-        },
+        body: chatPushPayload(state, sender, message),
       });
       if (result.error) throw result.error;
     }),
   );
+  const failed = dispatches.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) throw failed.reason;
+}
+
+function chatPushPayload(
+  state: AppState,
+  sender: Member,
+  message: ChatMessage,
+) {
+  const hasUserText = Boolean(message.text);
+  const body = message.recipientId
+    ? message.text || "Sent an image"
+    : `${state.group.name}: ${message.text || "Sent an image"}`;
+  const payload = withLocalizedPushCopy({
+    eventKey: `message:${state.group.id}:${message.id}`,
+    clientMessageId: message.id,
+    groupId: state.group.id,
+    category: "chat" as const,
+    recipientId: message.recipientId,
+    title: message.recipientId
+      ? `Direct message from ${sender.name}`
+      : `Group message from ${sender.name}`,
+    body,
+    data: {
+      route: "/chat",
+      category: "chat",
+      groupId: state.group.id,
+      messageId: message.id,
+      senderId: state.currentUserId,
+      senderName: sender.name,
+      conversationId:
+        message.conversationId ?? `group:${state.group.id}`,
+    },
+  });
+  if (hasUserText) {
+    // Chat text is user-authored content. Never run it through the app-owned
+    // phrase catalog, even when it happens to match a built-in label.
+    return { ...payload, bodies: literalPushCopy(body) };
+  }
+  const imageCopy = localizedUiText("Sent an image");
+  return {
+    ...payload,
+    bodies: Object.fromEntries(
+      Object.entries(imageCopy).map(([language, value]) => [
+        language,
+        message.recipientId ? value : `${state.group.name}: ${value}`,
+      ]),
+    ),
+  };
+}
+
+/**
+ * Publish only compact recent leaderboard summaries. Native background health
+ * imports use this path so group freshness can improve while the app is closed
+ * without uploading photos, chat, detailed logs, or historical backfills.
+ */
+export async function pushCloudRecentActivity(
+  state: AppState,
+  days = 2,
+): Promise<{ published: boolean; version?: number; updatedAt?: string }> {
+  if (!isCloudGroupId(state.group.id) || days < 1)
+    return { published: false };
+  const client = requireCloud();
+  const [membership, metricRows] = await Promise.all([
+    client
+      .from("group_members")
+      .select("status")
+      .eq("group_id", state.group.id)
+      .eq("user_id", state.currentUserId)
+      .maybeSingle(),
+    client
+      .from("metric_definitions")
+      .select("id, slug")
+      .eq("group_id", state.group.id),
+  ]);
+  if (membership.error) throw membership.error;
+  if (metricRows.error) throw metricRows.error;
+  if (membership.data?.status !== "active") return { published: false };
+  const idBySlug = new Map(
+    (metricRows.data ?? []).map((row) => [row.slug, row.id]),
+  );
+  const ownedEntries = state.entries.filter(
+    (entry) =>
+      entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
+  );
+  const dates = dateRangeEnding(dateKey(), Math.min(30, Math.ceil(days)));
+  const rows = buildCloudDailyStatusRows(
+    state,
+    idBySlug,
+    ownedEntries,
+    dates,
+  );
+  await upsertCloudDailyStatusRows(client, rows);
+  const checkpoint = await commitCloudActivityCheckpoint(
+    client,
+    state.group.id,
+    dates,
+    dates[0] ?? dateKey(),
+  );
+  return {
+    published: true,
+    version: checkpoint.version,
+    updatedAt: checkpoint.updatedAt,
+  };
 }
 
 export async function pushCloudWorkspace(
   state: AppState,
   pushGroupConfiguration = true,
+  onRecentActivityCommitted?: (checkpoint: {
+    syncedAt: string;
+    localDates: string[];
+  }) => void,
 ) {
-  if (!isCloudGroupId(state.group.id)) return;
+  if (!isCloudGroupId(state.group.id))
+    return {
+      deletedEntryIds: [],
+      activityVersion: undefined,
+      workspacePushed: false,
+      groupConfigurationPushed: false,
+    };
   const client = requireCloud();
   const current = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
-  if (!current) return;
+  if (!current)
+    return {
+      deletedEntryIds: [],
+      activityVersion: undefined,
+      workspacePushed: false,
+      groupConfigurationPushed: false,
+    };
+  const membership = await client
+    .from("group_members")
+    .select("status")
+    .eq("group_id", state.group.id)
+    .eq("user_id", state.currentUserId)
+    .maybeSingle();
+  if (membership.error) throw membership.error;
+  if (membership.data?.status !== "active")
+    return {
+      deletedEntryIds: [],
+      activityVersion: undefined,
+      workspacePushed: false,
+      groupConfigurationPushed: false,
+    };
   const canManage = current.role === "owner" || current.role === "admin";
+  const groupConfigurationPushed = canManage && pushGroupConfiguration;
   const { error: profileError } = await client
     .from("profiles")
     .update({
@@ -1214,7 +1934,8 @@ export async function pushCloudWorkspace(
     desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
   });
   if (energyError) throw energyError;
-  if (canManage && pushGroupConfiguration) {
+  let groupMetricSetChanged = false;
+  if (groupConfigurationPushed) {
     const { error: groupError } = await client
       .from("groups")
       .update({
@@ -1222,14 +1943,17 @@ export async function pushCloudWorkspace(
         template_name: state.group.templateName,
         settings: {
           streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
-          themeColor: state.group.themeColor ?? "#176B4D",
+          themeColor: state.group.themeColor ?? "#0FBFB8",
           requireMemberApproval: state.group.requireMemberApproval ?? false,
           gymPlans: state.group.gymPlans ?? [],
         },
       })
       .eq("id", state.group.id);
     if (groupError) throw groupError;
-    await upsertMetrics(state.group.id, state.group.metricConfiguration ?? []);
+    groupMetricSetChanged = await upsertMetrics(
+      state.group.id,
+      state.group.metricConfiguration ?? [],
+    );
     if (current.role === "owner") {
       for (const member of state.group.members.filter(
         (member) => member.role !== "owner",
@@ -1249,47 +1973,184 @@ export async function pushCloudWorkspace(
     .eq("group_id", state.group.id);
   if (metricError) throw metricError;
   const idBySlug = new Map((metricRows ?? []).map((row) => [row.slug, row.id]));
+  const explicitDeletedEntryIds = [
+    ...new Set(state.settings.pendingDeletedEntryIds ?? []),
+  ];
+  const explicitlyDeletedLocalDates: string[] = [];
+  for (const batch of batches(explicitDeletedEntryIds)) {
+    const deleted = await client.rpc("delete_group_metric_entries", {
+      p_client_generated_ids: batch,
+    });
+    if (
+      deleted.error?.code === "PGRST202" ||
+      deleted.error?.code === "42883"
+    ) {
+      const legacyDelete = await client
+        .from("metric_entries")
+        .delete()
+        .eq("user_id", state.currentUserId)
+        .in("client_generated_id", batch);
+      if (legacyDelete.error) throw legacyDelete.error;
+    } else if (deleted.error) {
+      throw deleted.error;
+    } else {
+      (
+        (deleted.data ?? []) as {
+          deleted_client_generated_id?: string;
+          deleted_local_date?: string;
+        }[]
+      ).forEach((row) => {
+        if (
+          typeof row.deleted_local_date === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(row.deleted_local_date)
+        )
+          explicitlyDeletedLocalDates.push(row.deleted_local_date);
+      });
+    }
+  }
   const ownedEntries = state.entries.filter(
     (entry) =>
       entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
   );
-  const { data: oldEntries, error: oldEntryError } = await client
-    .from("metric_entries")
-    .select("client_generated_id, source_updated_at, image_path")
-    .eq("user_id", state.currentUserId)
-    .in("metric_id", [...idBySlug.values()]);
-  if (oldEntryError) throw oldEntryError;
-  const oldEntriesById = new Map(
-    (oldEntries ?? []).map((entry) => [entry.client_generated_id, entry]),
+  const recentCommitSinceDate = dateWithOffsetFrom(dateKey(), -29);
+  const fastRecentDates = dateRangeEnding(dateKey(), 30);
+  const fastRecentStatuses = buildCloudDailyStatusRows(
+    state,
+    idBySlug,
+    ownedEntries,
+    fastRecentDates,
   );
-  const entriesToUpsert = ownedEntries.filter((entry) => {
+  // Publish the current leaderboard window before comparing/uploading detailed
+  // food, workout, message, photo, and historical rows. This keeps a manual or
+  // Health Connect refresh responsive even for accounts with a large history.
+  await upsertCloudDailyStatusRows(client, fastRecentStatuses);
+  const fastRecentCheckpoint = await commitCloudActivityCheckpoint(
+    client,
+    state.group.id,
+    fastRecentDates,
+    recentCommitSinceDate,
+  );
+  if (fastRecentCheckpoint.updatedAt)
+    onRecentActivityCommitted?.({
+      syncedAt: fastRecentCheckpoint.updatedAt,
+      localDates: fastRecentDates,
+    });
+  const detailedOwnedEntries = ownedEntries.filter((entry) => {
+    const metric =
+      state.metrics.find((candidate) => candidate.id === entry.metricId) ??
+      state.group.metricConfiguration?.find(
+        (candidate) => candidate.id === entry.metricId,
+      );
+    if (entry.source !== "imported") return true;
+    // Imported high-frequency sensor records are represented by one compact
+    // exact daily status. Retain only imported rows whose item-level detail is
+    // useful in a shared log (meals, named workouts, notes or images).
+    return Boolean(
+      entry.imageStoragePath ||
+        entry.note ||
+        entry.nutrition ||
+      (entry.label &&
+          ["food", "workout", "gym"].includes(metric?.category ?? "")),
+    );
+  });
+  const rawOwnedEntries = detailedOwnedEntries.filter(
+    (entry) => entry.visibility === "group",
+  );
+  const oldEntries: {
+    client_generated_id: string;
+    metric_id: string;
+    source_updated_at?: string | null;
+    image_path?: string | null;
+    visibility: MetricEntry["visibility"];
+    source?: MetricEntry["source"] | null;
+    label?: string | null;
+    note?: string | null;
+    nutrition?: MetricEntry["nutrition"] | null;
+  }[] = [];
+  // Diff only stable ids that can actually be uploaded. The previous routine
+  // scanned every historical metric row on every color/name/log change, which
+  // left Cloud pending for minutes on accounts with long Health Connect
+  // histories. Compact sensor data is represented by daily status rows and
+  // therefore never belongs in this raw-entry lookup.
+  const candidateIds = detailedOwnedEntries.map((entry) => entry.id);
+  for (const ids of batches(candidateIds, 250)) {
+    if (!ids.length) continue;
+    const result = await client
+      .from("metric_entries")
+      .select(
+        "client_generated_id, metric_id, source_updated_at, image_path, visibility, source, label, note, nutrition",
+      )
+      .eq("user_id", state.currentUserId)
+      .in("client_generated_id", ids);
+    if (result.error) throw result.error;
+    oldEntries.push(...(result.data ?? []));
+  }
+  const oldEntriesById = new Map(
+    oldEntries
+      .map((entry) => [entry.client_generated_id, entry]),
+  );
+  const rawCandidateById = new Map(
+    rawOwnedEntries.map((entry) => [entry.id, entry]),
+  );
+  ownedEntries.forEach((entry) => {
+    const remote = oldEntriesById.get(entry.id);
+    if (remote && remote.visibility !== entry.visibility)
+      rawCandidateById.set(entry.id, entry);
+  });
+  const entriesToUpsert = [...rawCandidateById.values()].filter((entry) => {
     const remote = oldEntriesById.get(entry.id);
     return (
       !remote ||
+      remote.visibility !== entry.visibility ||
       Boolean(
         entry.sourceUpdatedAt &&
           (!remote.source_updated_at ||
             entry.sourceUpdatedAt > remote.source_updated_at),
       ) ||
-      Boolean(entry.imageStoragePath && !remote.image_path)
+      Boolean(
+        entry.visibility === "group" &&
+          entry.imageStoragePath &&
+          !remote.image_path,
+      )
     );
   });
+  const updatedEntryIds = entriesToUpsert
+    .filter((entry) => oldEntriesById.has(entry.id))
+    .map((entry) => entry.id);
+  const priorRowResults = await Promise.all(
+    batches(updatedEntryIds, 250).map((entryIds) =>
+      client
+        .from("metric_entries")
+        .select(
+          "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
+        )
+        .eq("user_id", state.currentUserId)
+        .in("client_generated_id", entryIds),
+    ),
+  );
+  const priorRowError = priorRowResults.find((result) => result.error)?.error;
+  if (priorRowError) throw priorRowError;
+  const priorRowsById = new Map(
+    priorRowResults.flatMap((result) => result.data ?? []).map((entry) => [
+      entry.client_generated_id,
+      entry,
+    ]),
+  );
   const newSharedEntries = entriesToUpsert.filter(
     (entry) =>
-      !oldEntriesById.has(entry.id) && entry.visibility !== "private",
+      !oldEntriesById.has(entry.id) &&
+      entry.visibility !== "private" &&
+      Date.now() - new Date(entry.recordedAt).getTime() <=
+        METRIC_PUSH_FRESHNESS_MS,
   );
-  const currentEntryIds = new Set(ownedEntries.map((entry) => entry.id));
-  const deletedEntryIds = (oldEntries ?? [])
-    .map((entry) => entry.client_generated_id)
-    .filter((id) => !currentEntryIds.has(id));
-  if (deletedEntryIds.length) {
-    const { error } = await client
-      .from("metric_entries")
-      .delete()
-      .eq("user_id", state.currentUserId)
-      .in("client_generated_id", deletedEntryIds);
-    if (error) throw error;
-  }
+  const changedSharedEntries = entriesToUpsert.filter((entry) => {
+    const previous = oldEntriesById.get(entry.id);
+    return (
+      entry.visibility !== "private" || previous?.visibility !== "private"
+    );
+  });
+  // Never infer deletion from absence in the device cache. Only the explicit
+  // tombstones processed above may remove a server row.
   await Promise.allSettled(
     newSharedEntries.map((entry) => {
       const metric =
@@ -1297,7 +2158,7 @@ export async function pushCloudWorkspace(
           (item) => item.id === entry.metricId,
         ) ?? state.metrics.find((item) => item.id === entry.metricId);
       return client.functions.invoke("send-push", {
-        body: {
+        body: withLocalizedPushCopy({
           eventKey: `entry:${state.group.id}:${entry.id}`,
           groupId: state.group.id,
           category: "metric",
@@ -1310,45 +2171,173 @@ export async function pushCloudWorkspace(
               ? formatMetricValue(metric, Number(entry.value))
               : `A shared ${metric?.name ?? "metric"} update was added.`,
           data: { route: `/day/${entry.localDate}`, metricId: entry.metricId },
-        },
+        }),
       });
     }),
   );
+  const leadEntriesByMetric = new Map<string, MetricEntry[]>();
+  const today = dateKey();
+  const sharedCompetitionState = (source: AppState): AppState => ({
+    ...source,
+    // Ranking alerts must be evaluated exactly as another group member sees
+    // them. Keeping the owner's private rows here could announce a private
+    // value merely because the syncing device can see its own data.
+    entries: source.entries.filter(
+      (entry) =>
+        entry.userId !== source.currentUserId ||
+        entry.visibility !== "private",
+    ),
+    dailyMetricStatuses: source.dailyMetricStatuses.filter(
+      (status) =>
+        status.userId !== source.currentUserId ||
+        status.visibility !== "private",
+    ),
+  });
+  changedSharedEntries.forEach((entry) => {
+    const entries = leadEntriesByMetric.get(entry.metricId);
+    if (entries) entries.push(entry);
+    else leadEntriesByMetric.set(entry.metricId, [entry]);
+  });
   await Promise.allSettled(
-    newSharedEntries.map((entry) => {
+    [...leadEntriesByMetric.entries()].flatMap(([metricId, changedEntries]) => {
       const metric = (state.group.metricConfiguration ?? []).find(
-        (item) => item.id === entry.metricId,
+        (item) => item.id === metricId,
       );
       if (!metric || (!metric.sections.group && metric.scoreWeight <= 0))
-        return Promise.resolve();
-      const currentLeader = rankedMembers(state, metric, entry.localDate)[0]
-        ?.member;
+        return [];
+      const changedEntryIds = new Set(changedEntries.map((entry) => entry.id));
+      const priorEntries = changedEntries.flatMap((entry): MetricEntry[] => {
+        const previous = priorRowsById.get(entry.id);
+        if (!previous) return [];
+        return [
+          {
+            ...entry,
+            value: previous.value as MetricEntry["value"],
+            localDate: previous.local_date,
+            recordedAt: previous.recorded_at,
+            visibility: previous.visibility as MetricEntry["visibility"],
+            source: previous.source as MetricEntry["source"],
+            label: previous.label ?? undefined,
+            note: previous.note ?? undefined,
+            nutrition:
+              (previous.nutrition as MetricEntry["nutrition"]) ?? undefined,
+            submetricValues:
+              (previous.submetric_values as MetricEntry["submetricValues"]) ??
+              undefined,
+            sourceProvider:
+              (previous.source_provider as MetricEntry["sourceProvider"]) ??
+              undefined,
+            sourceRecordId: previous.source_record_id ?? undefined,
+            sourceOrigin: previous.source_origin ?? undefined,
+            sourceUpdatedAt: previous.source_updated_at ?? undefined,
+            imageUri: undefined,
+            imageStoragePath: previous.image_path ?? undefined,
+          },
+        ];
+      });
       const previousState = {
         ...state,
-        entries: state.entries.filter((item) => item.id !== entry.id),
+        entries: [
+          ...state.entries.filter(
+            (item) =>
+              item.userId !== state.currentUserId ||
+              !changedEntryIds.has(item.id),
+          ),
+          ...priorEntries,
+        ],
       };
-      const previousLeader = rankedMembers(
-        previousState,
-        metric,
-        entry.localDate,
-      )[0]?.member;
-      if (
-        !currentLeader ||
-        currentLeader.id !== state.currentUserId ||
-        !previousLeader ||
-        previousLeader.id === currentLeader.id
-      )
-        return Promise.resolve();
-      return client.functions.invoke("send-push", {
-        body: {
-          eventKey: `lead:${state.group.id}:${entry.id}`,
-          groupId: state.group.id,
-          category: "lead",
-          metricId: metric.id,
-          title: `${current.name} took the lead`,
-          body: `${current.name} passed ${previousLeader.name} in ${metric.name}.`,
-          data: { route: "/group", metricId: metric.id },
+      const currentCompetitionState = sharedCompetitionState(state);
+      const previousCompetitionState = sharedCompetitionState(previousState);
+      const candidateDates = new Set([
+        ...changedEntries.map((entry) => entry.localDate),
+        ...priorEntries.map((entry) => entry.localDate),
+      ]);
+      const ranges: { label: string; dates: string[] }[] = [
+        { label: "today", dates: [today] },
+        {
+          label: "this week",
+          dates: calendarWeekRange(
+            today,
+            state.settings.weekStartsOn ?? 1,
+          ).filter((date) => date <= today),
         },
+        {
+          label: "this month",
+          dates: monthDateRange(today).filter((date) => date <= today),
+        },
+      ].filter(({ dates }) =>
+        dates.some((date) => candidateDates.has(date)),
+      );
+      const changed = ranges.flatMap(({ label, dates }) => {
+        const currentRow = leaderboardRows(
+          currentCompetitionState,
+          [metric],
+          dates,
+          "__shared_group_view__",
+          false,
+        )[0];
+        const previousRow = leaderboardRows(
+          previousCompetitionState,
+          [metric],
+          dates,
+          "__shared_group_view__",
+          false,
+        )[0];
+        const currentResult = currentRow?.metrics[0]?.result;
+        const previousResult = previousRow?.metrics[0]?.result;
+        const currentLeader =
+          currentResult &&
+          currentResult.mode !== "private" &&
+          currentResult.visibleDays > 0
+            ? currentRow.member
+            : undefined;
+        const previousLeader =
+          previousResult &&
+          previousResult.mode !== "private" &&
+          previousResult.visibleDays > 0
+            ? previousRow.member
+            : undefined;
+        return currentLeader && previousLeader?.id !== currentLeader.id
+          ? [{ label, previousLeader, currentLeader }]
+          : [];
+      });
+      if (!changed.length) return [];
+      const latestChange = changedEntries
+        .map((entry) => entry.sourceUpdatedAt ?? entry.recordedAt)
+        .sort()
+        .at(-1);
+      const firstChangedId = changedEntries
+        .map((entry) => entry.id)
+        .sort()[0];
+      const byLeader = new Map<string, typeof changed>();
+      changed.forEach((change) => {
+        const changes = byLeader.get(change.currentLeader.id);
+        if (changes) changes.push(change);
+        else byLeader.set(change.currentLeader.id, [change]);
+      });
+      return [...byLeader.entries()].map(([leaderId, leaderChanges]) => {
+        const leaderName = leaderChanges[0].currentLeader.name;
+        const passed = [
+          ...new Set(
+            leaderChanges
+              .map((change) => change.previousLeader?.name)
+              .filter((name): name is string => Boolean(name)),
+          ),
+        ];
+        return client.functions.invoke("send-push", {
+          body: withLocalizedPushCopy({
+            eventKey: `lead:${state.group.id}:${metric.id}:${leaderId}:${firstChangedId}:${latestChange ?? today}`,
+            groupId: state.group.id,
+            category: "lead",
+            audience: "group_including_sender",
+            metricId: metric.id,
+            title: `${leaderName} took the lead`,
+            body: passed.length
+              ? `${leaderName} passed ${passed.join(", ")} in ${metric.name} for ${leaderChanges.map((change) => change.label).join(", ")}.`
+              : `${leaderName} is the new ${metric.name} leader for ${leaderChanges.map((change) => change.label).join(", ")}.`,
+            data: { route: "/group", metricId: metric.id },
+          }),
+        });
       });
     }),
   );
@@ -1378,191 +2367,312 @@ export async function pushCloudWorkspace(
       });
       if (error) throw error;
     }
+    // Re-importing a native record after an explicit deletion intentionally
+    // resurrects that client id. Remove its old tombstone only after the new
+    // row is durable, otherwise peers would keep filtering the replacement.
+    for (const batch of batches(entriesToUpsert.map((entry) => entry.id))) {
+      const cleared = await client
+        .from("metric_entry_tombstones")
+        .delete()
+        .eq("user_id", state.currentUserId)
+        .in("client_generated_id", batch);
+      if (
+        cleared.error &&
+        cleared.error.code !== "42P01" &&
+        cleared.error.code !== "PGRST205"
+      )
+        throw cleared.error;
+    }
   }
 
   const statusStart = new Date();
   statusStart.setHours(12, 0, 0, 0);
   statusStart.setDate(statusStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS);
-  const statusSinceDate = dateKey(statusStart);
+  const recentStatusSinceDate = dateKey(statusStart);
+  const localSharedHistoryStart = [
+    ...ownedEntries
+      .filter((entry) => entry.visibility !== "private")
+      .map((entry) => entry.localDate),
+    ...state.dailyMetricStatuses
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.userId === state.currentUserId &&
+          status.visibility !== "private",
+      )
+      .map((status) => status.localDate),
+  ].sort()[0];
+  let remoteSharedHistoryStart: string | undefined;
+  let latestRemoteStatusUpdatedAt: string | undefined;
+  if (localSharedHistoryStart) {
+    const [coverage, latest] = await Promise.all([
+      client
+        .from("daily_metric_status")
+        .select("local_date")
+        .eq("group_id", state.group.id)
+        .eq("user_id", state.currentUserId)
+        .order("local_date", { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      client
+        .from("daily_metric_status")
+        .select("updated_at")
+        .eq("group_id", state.group.id)
+        .eq("user_id", state.currentUserId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    if (coverage.error) throw coverage.error;
+    if (latest.error) throw latest.error;
+    remoteSharedHistoryStart = coverage.data?.local_date;
+    latestRemoteStatusUpdatedAt = latest.data?.updated_at;
+  }
+  const needsHistoricalSummaryRepair = Boolean(
+    localSharedHistoryStart &&
+      (groupMetricSetChanged ||
+        !remoteSharedHistoryStart ||
+        localSharedHistoryStart < remoteSharedHistoryStart),
+  );
+  const statusSinceDate = needsHistoricalSummaryRepair
+    ? SHARED_SUMMARY_HISTORY_START
+    : recentStatusSinceDate;
+  const rebuildStatusHistory =
+    needsHistoricalSummaryRepair ||
+    explicitDeletedEntryIds.length > 0;
+  const changedActivityDates = [
+    ...ownedEntries
+      .filter(
+        (entry) =>
+          !latestRemoteStatusUpdatedAt ||
+          (entry.sourceUpdatedAt ?? entry.recordedAt) >
+            latestRemoteStatusUpdatedAt,
+      )
+      .map((entry) => entry.localDate),
+    ...(state.gymSessions ?? [])
+      .filter(
+        (session) =>
+          session.userId === state.currentUserId &&
+          (!latestRemoteStatusUpdatedAt ||
+            session.recordedAt > latestRemoteStatusUpdatedAt),
+      )
+      .map((session) => session.localDate),
+  ];
+  // Source timestamps describe when Health Connect recorded a measurement,
+  // not when this device imported it. A newly backfilled/corrected row can be
+  // older than the latest server status timestamp and must still refresh the
+  // bounded recent leaderboard window.
+  const boundedRecentActivityDates = [
+    ...ownedEntries
+      .filter((entry) => entry.localDate >= recentCommitSinceDate)
+      .map((entry) => entry.localDate),
+    ...(state.gymSessions ?? [])
+      .filter(
+        (session) =>
+          session.userId === state.currentUserId &&
+          session.localDate >= recentCommitSinceDate,
+      )
+      .map((session) => session.localDate),
+    ...state.dailyMetricStatuses
+      .filter(
+        (status) =>
+          status.groupId === state.group.id &&
+          status.userId === state.currentUserId &&
+          status.localDate >= recentCommitSinceDate,
+      )
+      .map((status) => status.localDate),
+    ...vacationDates(state, state.currentUserId).filter(
+      (localDate) => localDate >= recentCommitSinceDate,
+    ),
+  ];
   const statusDates = [
     ...new Set([
-      ...ownedEntries
-        .filter((entry) => entry.localDate >= statusSinceDate)
-        .map((entry) => entry.localDate),
+      ...(rebuildStatusHistory
+        ? ownedEntries
+            .filter((entry) => entry.localDate >= statusSinceDate)
+            .map((entry) => entry.localDate)
+        : []),
       ...entriesToUpsert.map((entry) => entry.localDate),
-      ...(state.gymSessions ?? [])
-        .filter(
-          (session) =>
-            session.userId === state.currentUserId &&
-            session.localDate >= statusSinceDate,
-        )
-        .map((session) => session.localDate),
-      ...state.dailyMetricStatuses
-        .filter(
-          (status) =>
-            status.groupId === state.group.id &&
-            status.userId === state.currentUserId &&
-            status.localDate >= statusSinceDate,
-        )
-        .map((status) => status.localDate),
-      ...vacationDates(state, state.currentUserId).filter(
-        (localDate) => localDate >= statusSinceDate,
-      ),
+      ...changedActivityDates,
+      ...boundedRecentActivityDates,
+      ...explicitlyDeletedLocalDates,
+      ...(rebuildStatusHistory
+        ? (state.gymSessions ?? [])
+            .filter(
+              (session) =>
+                session.userId === state.currentUserId &&
+                session.localDate >= statusSinceDate,
+            )
+            .map((session) => session.localDate)
+        : []),
+      ...(rebuildStatusHistory
+        ? state.dailyMetricStatuses
+            .filter(
+              (status) =>
+                status.groupId === state.group.id &&
+                status.userId === state.currentUserId &&
+                status.localDate >= statusSinceDate,
+            )
+            .map((status) => status.localDate)
+        : []),
+      ...(rebuildStatusHistory
+        ? vacationDates(state, state.currentUserId).filter(
+            (localDate) => localDate >= statusSinceDate,
+          )
+        : []),
       dateKey(),
     ]),
   ];
-  const statuses = statusDates.flatMap((localDate) =>
-    (state.group.metricConfiguration ?? [])
-      .filter((groupMetric) => {
-        const personalMetric =
-          state.metrics.find((metric) => metric.id === groupMetric.id) ??
-          groupMetric;
-        return (
-          groupMetric.dataType !== "text" &&
-          idBySlug.has(groupMetric.id) &&
-          metricApplicableOnDate(
-            state,
-            personalMetric,
-            state.currentUserId,
-            localDate,
-          )
-        );
-      })
-      .map((groupMetric) => {
-        const metric =
-          state.metrics.find((candidate) => candidate.id === groupMetric.id) ??
-          groupMetric;
-        const value = safeMetricValue(
-          state,
-          metric,
-          state.currentUserId,
-          localDate,
-        );
-        const hasExactSharedEntry = ownedEntries.some(
-          (entry) =>
-            entry.metricId === metric.id &&
-            entry.localDate === localDate &&
-            entry.visibility === "group",
-        );
-        const exactShared =
-          !isVacationDate(state, state.currentUserId, localDate) &&
-          (hasExactSharedEntry ||
-            (metric.defaultVisibility === "group" &&
-              (metric.dataType === "calculated" ||
-                (Boolean(metric.gymMapping) &&
-                  (state.gymSessions ?? []).some(
-                    (session) =>
-                      session.userId === state.currentUserId &&
-                      session.localDate === localDate &&
-                      session.visibility === "group",
-                  )) ||
-                metric.stepFallback === true)));
-        const hasData = hasMetricData(
-          state,
-          metric,
-          state.currentUserId,
-          localDate,
-        );
-        return {
-          group_id: state.group.id,
-          metric_id: idBySlug.get(groupMetric.id),
-          user_id: state.currentUserId,
-          local_date: localDate,
-          goal_reached: scheduledGoalReached(
-            state,
-            metric,
-            state.currentUserId,
-            localDate,
-          ),
-          score_contribution:
-            Math.min(
-              metricVisualProgress(
-                state,
-                metric,
-                state.currentUserId,
-                localDate,
-                value,
-                effectiveGoalTarget(
-                  state,
-                  metric,
-                  state.currentUserId,
-                  localDate,
-                ),
-              ),
-              1,
-            ) * 100,
-          goal_progress:
-            (metric.goalProgressMode === "journey"
-              ? metricVisualProgress(
-                  state,
-                  metric,
-                  state.currentUserId,
-                  localDate,
-                  value,
-                )
-              : displayGoalProgress(
-                  metric,
-                  value,
-                  effectiveGoalTarget(
-                    state,
-                    metric,
-                    state.currentUserId,
-                    localDate,
-                  ),
-                )) * 100,
-          goal_kind: metric.goal.kind,
-          goal_target: effectiveGoalTarget(
-            state,
-            metric,
-            state.currentUserId,
-            localDate,
-          ),
-          visibility: metric.defaultVisibility,
-          goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
-          exact_value: exactShared ? value : null,
-          has_data: hasData,
-        };
-      }),
+  const statuses = buildCloudDailyStatusRows(
+    state,
+    idBySlug,
+    ownedEntries,
+    statusDates,
   );
-  if (statuses.length) {
-    // Never delete the last good group snapshot before its replacement is
-    // accepted. A transient Edge Function/schema failure must not make a
-    // member's values disappear from everyone else's leaderboard.
-    for (const batch of batches(statuses)) {
-      let { error } = await client.from("daily_metric_status").upsert(batch, {
-        onConflict: "group_id,metric_id,user_id,local_date",
+  const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) =>
+    upsertCloudDailyStatusRows(client, rows);
+  const commitActivity = (dates: string[]) =>
+    commitCloudActivityCheckpoint(
+      client,
+      state.group.id,
+      dates,
+      statusSinceDate,
+    );
+
+  // Publish the newest month first. A large first-time history backfill can
+  // continue afterwards, while peers already receive today's values and an
+  // honest recent-sync timestamp instead of seeing "No data" for minutes.
+  const recentSince = recentCommitSinceDate;
+  const recentStatuses = statuses.filter(
+    (status) => status.local_date >= recentSince,
+  );
+  const olderStatuses = statuses.filter(
+    (status) => status.local_date < recentSince,
+  );
+  await upsertStatuses(recentStatuses);
+  await upsertStatuses(olderStatuses);
+
+  const activityCommitDates = [
+    ...statusDates,
+    ...explicitlyDeletedLocalDates,
+  ];
+  const needsHistoricalCommit = activityCommitDates.some(
+    (localDate) => localDate < recentSince,
+  );
+  // The fast checkpoint above already published and stamped the current
+  // leaderboard window. Reuse it for routine saves; only commit a second
+  // version when this request genuinely widened historical coverage or
+  // propagated an older correction/deletion.
+  const activityCommit = needsHistoricalCommit
+    ? await commitActivity(activityCommitDates)
+    : fastRecentCheckpoint;
+
+  // Period-winner alerts are distinct from live lead-change alerts: they only
+  // announce a period that has finished. Stable event keys plus the server's
+  // push_events claim make this safe when several members sync at once.
+  if (state.group.members.length > 1) {
+    const winnerState = sharedCompetitionState(state);
+    const winnerMetrics = (state.group.metricConfiguration ?? []).filter(
+      (metric) =>
+        metric.scoreWeight > 0 &&
+        metric.sections.group &&
+        metric.dataType !== "text" &&
+        metric.dataType !== "photo",
+    );
+    const yesterday = dateWithOffsetFrom(today, -1);
+    const currentWeek = calendarWeekRange(
+      today,
+      state.settings.weekStartsOn ?? 1,
+    );
+    const finalizedPeriods: {
+      key: "day" | "week" | "month";
+      anchor: string;
+      title: string;
+      dates: string[];
+    }[] = [
+      {
+        key: "day",
+        anchor: yesterday,
+        title: "Yesterday's group winners",
+        dates: [yesterday],
+      },
+    ];
+    if (currentWeek[0] === today) {
+      const priorWeekAnchor = dateWithOffsetFrom(today, -1);
+      const priorWeek = calendarWeekRange(
+        priorWeekAnchor,
+        state.settings.weekStartsOn ?? 1,
+      );
+      finalizedPeriods.push({
+        key: "week",
+        anchor: priorWeek[0],
+        title: "Last week's group winners",
+        dates: priorWeek,
       });
-      if (
-        error &&
-        /goal_progress|goal_kind|goal_target|visibility|goal_eligible|exact_value|has_data/i.test(
-          `${error.code ?? ""} ${error.message ?? ""}`,
-        )
-      ) {
-        const legacyStatuses = batch.map(
-          ({
-            goal_progress: _progress,
-            goal_kind: _kind,
-            goal_target: _target,
-            visibility: _visibility,
-            goal_eligible: _eligible,
-            exact_value: _exact,
-            has_data: _hasData,
-            ...status
-          }) => status,
-        );
-        ({ error } = await client
-          .from("daily_metric_status")
-          .upsert(legacyStatuses, {
-          onConflict: "group_id,metric_id,user_id,local_date",
-          }));
-      }
-      if (error) throw error;
     }
+    if (today.endsWith("-01")) {
+      const priorMonthAnchor = dateWithOffsetFrom(today, -1);
+      finalizedPeriods.push({
+        key: "month",
+        anchor: priorMonthAnchor.slice(0, 7),
+        title: "Last month's group winners",
+        dates: monthDateRange(priorMonthAnchor),
+      });
+    }
+    await Promise.allSettled(
+      finalizedPeriods.map(async (period) => {
+        const eventKey = `winner:${state.group.id}:${period.key}:${period.anchor}`;
+        if (attemptedWinnerEvents.has(eventKey)) return;
+        const winners = winnerMetrics.flatMap((metric) => {
+          const row = leaderboardRows(
+            winnerState,
+            [metric],
+            period.dates,
+            "__shared_group_view__",
+            false,
+          )[0];
+          const result = row?.metrics[0]?.result;
+          return result &&
+            result.mode !== "private" &&
+            result.visibleDays > 0
+            ? [{ metric: metric.name, member: row.member.name }]
+            : [];
+        });
+        if (!winners.length) return;
+        attemptedWinnerEvents.add(eventKey);
+        const preview = winners
+          .slice(0, 3)
+          .map((winner) => `${winner.member}: ${winner.metric}`)
+          .join("; ");
+        const remaining = winners.length - 3;
+        const result = await client.functions.invoke("send-push", {
+          body: withLocalizedPushCopy({
+            eventKey,
+            groupId: state.group.id,
+            category: "winner",
+            audience: "group_including_sender",
+            title: period.title,
+            body: `${preview}${remaining > 0 ? `; +${remaining} more` : ""}.`,
+            data: { route: "/badges", groupId: state.group.id },
+          }),
+        });
+        if (result.error) {
+          attemptedWinnerEvents.delete(eventKey);
+          throw result.error;
+        }
+      }),
+    );
   }
 
-  const ownedMessages = state.messages.filter(
-    (message) => message.senderId === state.currentUserId,
+  const activeMemberIds = new Set(
+    state.group.members.map((member) => member.id),
   );
+  const ownedMessages = state.messages.filter(
+    (message) =>
+      message.senderId === state.currentUserId &&
+      cloudOwnedMessage(message, state.group.id) &&
+      (!message.recipientId || activeMemberIds.has(message.recipientId)),
+  ).map((message) => messageForGroup(message, state.group.id));
   const currentMessageRows = await client
     .from("messages")
     .select("client_generated_id, push_dispatched_at")
@@ -1606,9 +2716,9 @@ export async function pushCloudWorkspace(
   );
   // Chat is append-preserving. Missing local rows may simply be an older or
   // partially loaded snapshot, so absence must not be interpreted as deletion.
-  if (ownedMessages.length && !legacyMessages) {
+  if (newMessages.length && !legacyMessages) {
     const currentUpsert = await client.from("messages").upsert(
-      ownedMessages.map((message) => ({
+      newMessages.map((message) => ({
         group_id: state.group.id,
         sender_id: state.currentUserId,
         client_generated_id: message.id,
@@ -1649,32 +2759,17 @@ export async function pushCloudWorkspace(
     }
   }
   const pushCandidates = legacyMessages
-    ? newMessages
+    ? newMessages.filter((message) => freshChatPushCandidate(message))
     : ownedMessages.filter(
         (message) =>
-          newMessages.some((candidate) => candidate.id === message.id) ||
-          pendingPushIds.has(message.id),
+          freshChatPushCandidate(message) &&
+          (newMessages.some((candidate) => candidate.id === message.id) ||
+            pendingPushIds.has(message.id)),
       );
   const pushResults = await Promise.allSettled(
     pushCandidates.map(async (message) => {
       const result = await client.functions.invoke("send-push", {
-        body: {
-          eventKey: `message:${state.group.id}:${message.id}`,
-          clientMessageId: message.id,
-          groupId: state.group.id,
-          category: "chat",
-          recipientId: message.recipientId,
-          title: message.recipientId
-            ? `Private message from ${current.name}`
-            : `${current.name} in ${state.group.name}`,
-          body: message.text || "Sent an image",
-          data: {
-            route: "/chat",
-            messageId: message.id,
-            senderName: current.name,
-            conversationId: message.conversationId ?? `group:${state.group.id}`,
-          },
-        },
+        body: chatPushPayload(state, current, message),
       });
       if (result.error) throw result.error;
       return result.data;
@@ -1752,4 +2847,10 @@ export async function pushCloudWorkspace(
       .insert(aliasRows);
     if (error) throw error;
   }
+  return {
+    deletedEntryIds: explicitDeletedEntryIds,
+    activityVersion: activityCommit.version,
+    workspacePushed: true,
+    groupConfigurationPushed,
+  };
 }

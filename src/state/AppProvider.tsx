@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
 import React, {
   createContext,
   PropsWithChildren,
@@ -12,6 +13,7 @@ import React, {
 } from "react";
 import {
   ActivityIndicator,
+  AppState as NativeAppState,
   InteractionManager,
   StyleSheet,
   Text,
@@ -20,6 +22,13 @@ import {
 
 import { createInitialState } from "@/src/data/seed";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import {
+  applyImportedFoodFastBreaks,
+  endManualFast,
+  reconcileAutomaticFasting,
+  startManualFast,
+} from "@/src/domain/fasting";
+import { metricEntryKey } from "@/src/domain/metricEntry";
 import {
   normalizeEnergyProfile,
   recommendedDailyDeficit,
@@ -39,14 +48,22 @@ import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { completedGymSets } from "@/src/domain/gym";
 import {
+  createPersonalSetupGroup,
   DEFAULT_GROUP_THEME,
   groupMetricDefinitions,
+  isPersonalSetupGroup,
+  personalSetupMetricConfiguration,
 } from "@/src/domain/groupSetup";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import {
   isBloodPressureDiastolic,
   isBloodPressureSystolic,
 } from "@/src/domain/trackerCatalog";
 import { palette } from "@/src/theme";
+import { isCloudSyncPaused } from "@/src/cloud/syncGate";
+import { HEALTH_STATUS_STORAGE_KEY } from "@/src/health/constants";
+import { PersistedHealthStatus } from "@/src/health/types";
+import { notifyProgressMilestones } from "@/src/notifications/push";
 import {
   ActivityTimer,
   AppState,
@@ -71,8 +88,162 @@ import {
 
 export const APP_STORAGE_KEY = "paceboard-state-v1";
 
+function stateForLocalPersistence(state: AppState): AppState {
+  if (!isCloudGroupId(state.group.id)) return state;
+  // Shared member history has its own bounded, per-group cache. Persisting it
+  // again inside the monolithic app snapshot made JSON serialization grow with
+  // every member and could block Android's JS thread after app switching.
+  return {
+    ...state,
+    entries: state.entries.filter(
+      (entry) => entry.userId === state.currentUserId,
+    ),
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => status.userId === state.currentUserId,
+    ),
+  };
+}
+
+export function persistAppStateNow(state: AppState) {
+  return AsyncStorage.setItem(
+    APP_STORAGE_KEY,
+    JSON.stringify({
+      ...stateForLocalPersistence(state),
+      lastSavedAt: new Date().toISOString(),
+    }),
+  );
+}
+
+/**
+ * The native background task writes Health Connect rows directly to storage.
+ * If the JS process stayed alive, merge those device-owned rows into memory on
+ * resume before the foreground snapshot can overwrite them.
+ */
+function mergeBackgroundHealthRows(
+  live: AppState,
+  stored: AppState,
+  importFromDate?: string,
+) {
+  if (stored.currentUserId !== live.currentUserId) return live;
+  const storedHealth = stored.entries.filter(
+    (entry) =>
+      entry.userId === live.currentUserId &&
+      // Step-fallback energy/distance/duration rows are calculated locally but
+      // still carry the native provider. They are part of the same background
+      // Health Connect transaction and must resume with the imported rows.
+      Boolean(entry.sourceProvider),
+  );
+  const replacesBackgroundWindow = Boolean(
+    importFromDate && /^\d{4}-\d{2}-\d{2}$/.test(importFromDate),
+  );
+  if (!storedHealth.length && !replacesBackgroundWindow) return live;
+  const retainedLiveEntries = replacesBackgroundWindow
+    ? live.entries.filter(
+        (entry) =>
+          !(
+            entry.userId === live.currentUserId &&
+            Boolean(entry.sourceProvider) &&
+            entry.localDate >= importFromDate!
+          ),
+      )
+    : live.entries;
+  const byId = new Map(
+    retainedLiveEntries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
+  );
+  let changed = retainedLiveEntries.length !== live.entries.length;
+  storedHealth.forEach((entry) => {
+    const key = `${entry.userId}:${entry.id}`;
+    const current = byId.get(key);
+    const currentRevision = current?.sourceUpdatedAt ?? current?.recordedAt ?? "";
+    const storedRevision = entry.sourceUpdatedAt ?? entry.recordedAt;
+    if (!current || storedRevision > currentRevision) {
+      byId.set(key, entry);
+      changed = true;
+    }
+  });
+  return changed
+    ? {
+        ...live,
+        entries: [...byId.values()].sort((left, right) =>
+          left.recordedAt.localeCompare(right.recordedAt),
+        ),
+      }
+    : live;
+}
+
+function sameOwnedRowsByReference<T extends { userId: string }>(
+  left: T[],
+  right: T[],
+  userId: string,
+) {
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (true) {
+    while (leftIndex < left.length && left[leftIndex].userId !== userId)
+      leftIndex += 1;
+    while (rightIndex < right.length && right[rightIndex].userId !== userId)
+      rightIndex += 1;
+    const leftRow = left[leftIndex];
+    const rightRow = right[rightIndex];
+    if (!leftRow || !rightRow) return leftRow === rightRow;
+    if (leftRow !== rightRow) return false;
+    leftIndex += 1;
+    rightIndex += 1;
+  }
+}
+
+/**
+ * Friend activity is cached separately by CloudSyncProvider. Avoid scheduling
+ * a second monolithic app snapshot when only those transient rows changed.
+ */
+function localPersistenceChanged(previous: AppState, next: AppState) {
+  if (
+    previous.version !== next.version ||
+    previous.currentUserId !== next.currentUserId ||
+    previous.group !== next.group ||
+    previous.groups !== next.groups ||
+    previous.energyProfiles !== next.energyProfiles ||
+    previous.metrics !== next.metrics ||
+    previous.photos !== next.photos ||
+    previous.messages !== next.messages ||
+    previous.gymPlans !== next.gymPlans ||
+    previous.gymSessions !== next.gymSessions ||
+    previous.gymExerciseGoals !== next.gymExerciseGoals ||
+    previous.todos !== next.todos ||
+    previous.journalNotes !== next.journalNotes ||
+    previous.calendarReminders !== next.calendarReminders ||
+    previous.activityTimers !== next.activityTimers ||
+    previous.activeTimer !== next.activeTimer ||
+    previous.settings !== next.settings ||
+    previous.trackedGoalPeriods !== next.trackedGoalPeriods ||
+    previous.selectedGroupMetricId !== next.selectedGroupMetricId
+  )
+    return true;
+  return !(
+    sameOwnedRowsByReference(
+      previous.entries,
+      next.entries,
+      next.currentUserId,
+    ) &&
+    sameOwnedRowsByReference(
+      previous.dailyMetricStatuses,
+      next.dailyMetricStatuses,
+      next.currentUserId,
+    )
+  );
+}
+
 type Action =
-  | { type: "hydrate"; state: AppState }
+  | {
+      /** Internal: commit an already-reduced local state without re-running effects. */
+      type: "replaceLocal";
+      state: AppState;
+    }
+  | {
+      type: "hydrate";
+      state: AppState;
+      preserveDeviceHealthSync?: boolean;
+    }
   | {
       type: "log";
       metricId: string;
@@ -80,6 +251,12 @@ type Action =
       visibility: Visibility;
       details?: EntryDetails;
       mode: "add" | "replace";
+    }
+  | {
+      type: "deviceScreenTime";
+      localDate: string;
+      minutes: number;
+      recordedAt: string;
     }
   | { type: "addMetric"; metric: NewMetric }
   | {
@@ -145,7 +322,9 @@ type Action =
   | { type: "deleteJournalNote"; noteId: string }
   | { type: "saveCalendarReminder"; reminder: CalendarReminder }
   | { type: "deleteCalendarReminder"; reminderId: string }
-  | { type: "activityTimer"; timer?: ActivityTimer }
+  | { type: "activityTimer"; timer?: ActivityTimer; timerId?: string }
+  | { type: "startFast"; metricId: string; at: string }
+  | { type: "endFast"; metricId: string; at: string }
   | { type: "settings"; changes: Partial<AppState["settings"]> }
   | { type: "energyProfile"; changes: Partial<EnergyProfile> }
   | { type: "createGroup"; name: string; options?: GroupCreationOptions }
@@ -153,6 +332,7 @@ type Action =
   | { type: "switchGroup"; groupId: string }
   | { type: "leaveGroup"; groupId: string }
   | { type: "nickname"; memberId: string; nickname: string }
+  | { type: "groupName"; name: string }
   | { type: "groupRestDays"; value: number }
   | { type: "groupTheme"; color: string }
   | { type: "groupApproval"; value: boolean }
@@ -174,6 +354,10 @@ type Action =
       provider: NonNullable<MetricEntry["sourceProvider"]>;
       metricIds: string[];
       fromDate: string;
+      /** Final chunk lets onboarding history update goal starts exactly once. */
+      finalizeInitialImport?: boolean;
+      /** Manual history repair imports values without changing goal periods. */
+      preserveTrackedGoalHistory?: boolean;
     }
   | { type: "reset" };
 
@@ -233,6 +417,7 @@ function withoutMetricSelections(
     ...settings,
     progressMetricIds: remove(settings.progressMetricIds),
     progressMetricOrderIds: remove(settings.progressMetricOrderIds ?? []),
+    progressPinnedMetricIds: remove(settings.progressPinnedMetricIds ?? []),
     performanceMetricIds: settings.performanceMetricIds
       ? remove(settings.performanceMetricIds)
       : undefined,
@@ -247,6 +432,13 @@ function withoutMetricSelections(
         ([groupId, ids]) => [groupId, remove(ids)],
       ),
     ),
+    leaderboardPinnedMetricIdsByGroup: settings.leaderboardPinnedMetricIdsByGroup
+      ? Object.fromEntries(
+          Object.entries(settings.leaderboardPinnedMetricIdsByGroup).map(
+            ([groupId, ids]) => [groupId, remove(ids)],
+          ),
+        )
+      : undefined,
     comparisonMetricIdsByGroup: Object.fromEntries(
       Object.entries(settings.comparisonMetricIdsByGroup).map(
         ([groupId, ids]) => [groupId, remove(ids)],
@@ -329,7 +521,39 @@ function withPersonalMetrics(
   state: AppState,
   metrics: MetricDefinition[],
 ): AppState {
-  return { ...state, metrics };
+  return syncPersonalSetupGroup({ ...state, metrics });
+}
+
+function syncPersonalSetupGroup(state: AppState): AppState {
+  const activeIsPersonal = isPersonalSetupGroup(state.group);
+  if (
+    !activeIsPersonal &&
+    !state.groups.some((group) => isPersonalSetupGroup(group))
+  )
+    return state;
+  const metricConfiguration = personalSetupMetricConfiguration(
+    state.metrics,
+    state.trackedGoalPeriods,
+  );
+  const group = activeIsPersonal
+    ? { ...state.group, metricConfiguration }
+    : state.group;
+  return {
+    ...state,
+    group,
+    groups: state.groups.map((candidate) =>
+      isPersonalSetupGroup(candidate)
+        ? { ...candidate, metricConfiguration }
+        : candidate,
+    ),
+    selectedGroupMetricId: activeIsPersonal
+      ? metricConfiguration.some(
+          (metric) => metric.id === state.selectedGroupMetricId,
+        )
+        ? state.selectedGroupMetricId
+        : (metricConfiguration[0]?.id ?? "__score")
+      : state.selectedGroupMetricId,
+  };
 }
 
 function hasShareableGoalEvidence(
@@ -385,6 +609,7 @@ function finalizeEndOfDayGoals(state: AppState, localDate: string): AppState {
     )
     .map((metric) => ({
       id: `auto-goal:${state.group.id}:${state.currentUserId}:${localDate}:${metric.id}`,
+      groupId: state.group.id,
       senderId: "system",
       conversationId: `group:${state.group.id}`,
       kind: "cheer" as const,
@@ -396,29 +621,66 @@ function finalizeEndOfDayGoals(state: AppState, localDate: string): AppState {
     : state;
 }
 
+function markGroupConfigurationPending(
+  previous: AppState,
+  next: AppState,
+): AppState {
+  if (!isCloudGroupId(next.group.id)) return next;
+  const pending = new Set(
+    previous.settings.pendingGroupConfigurationIds ?? [],
+  );
+  pending.add(next.group.id);
+  return {
+    ...next,
+    settings: {
+      ...next.settings,
+      pendingGroupConfigurationIds: [...pending],
+    },
+  };
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
+    case "replaceLocal":
+      return action.state;
     case "hydrate": {
-      // Completing onboarding is monotonic for the current account. A delayed
-      // cloud snapshot must never send a user back into the startup flow.
-      const hydrated =
-        action.state.currentUserId === state.currentUserId &&
-        state.settings.onboardingComplete &&
-        !action.state.settings.onboardingComplete
+      // Health Connect authorization and its import cursor belong to this
+      // physical device. A delayed cloud/group refresh for the same account
+      // must never replace them with the deliberately disconnected values in
+      // the portable cloud snapshot.
+      const incoming =
+        action.preserveDeviceHealthSync &&
+        action.state.currentUserId === state.currentUserId
           ? {
               ...action.state,
               settings: {
                 ...action.state.settings,
-                onboardingComplete: true,
-                tutorialComplete:
-                  state.settings.tutorialComplete ||
-                  action.state.settings.tutorialComplete,
-                advancedTutorialComplete:
-                  state.settings.advancedTutorialComplete ||
-                  action.state.settings.advancedTutorialComplete,
+                healthSync: state.settings.healthSync,
+                healthHistoryDays: state.settings.healthHistoryDays,
+                syncMode: state.settings.syncMode,
               },
             }
           : action.state;
+      // Completing onboarding is monotonic for the current account. A delayed
+      // cloud snapshot must never send a user back into the startup flow.
+      const hydrated =
+        incoming.currentUserId === state.currentUserId &&
+        state.settings.onboardingComplete &&
+        !incoming.settings.onboardingComplete
+          ? {
+              ...incoming,
+              settings: {
+                ...incoming.settings,
+                onboardingComplete: true,
+                tutorialComplete:
+                  state.settings.tutorialComplete ||
+                  incoming.settings.tutorialComplete,
+                advancedTutorialComplete:
+                  state.settings.advancedTutorialComplete ||
+                  incoming.settings.advancedTutorialComplete,
+              },
+            }
+          : incoming;
       return finalizeEndOfDayGoals(
         hydrated,
         dateWithOffsetFrom(dateKey(), -1),
@@ -444,8 +706,31 @@ function reducer(state: AppState, action: Action): AppState {
                 ),
             )
           : state.entries;
+      const replacedEntryIds =
+        action.mode === "replace"
+          ? state.entries
+              .filter(
+                (entry) =>
+                  entry.userId === state.currentUserId &&
+                  entry.metricId === action.metricId &&
+                  entry.localDate === localDate,
+              )
+              .map((entry) => entry.id)
+          : [];
+      const changedAt = new Date().toISOString();
       let nextState: AppState = {
         ...state,
+        settings: replacedEntryIds.length
+          ? {
+              ...state.settings,
+              pendingDeletedEntryIds: [
+                ...new Set([
+                  ...(state.settings.pendingDeletedEntryIds ?? []),
+                  ...replacedEntryIds,
+                ]),
+              ],
+            }
+          : state.settings,
         entries: [
           ...cleanedEntries,
           {
@@ -458,13 +743,19 @@ function reducer(state: AppState, action: Action): AppState {
             label: action.details?.label,
             imageUri: action.details?.imageUri,
             localDate,
-            recordedAt: action.details?.recordedAt ?? new Date().toISOString(),
+            recordedAt: action.details?.recordedAt ?? changedAt,
             source: "manual",
+            sourceUpdatedAt: changedAt,
             nutrition: action.details?.nutrition,
             submetricValues: action.details?.submetricValues,
           },
         ],
       };
+      const addedEntry = nextState.entries.at(-1)!;
+      if (metric?.id === "food")
+        nextState = reconcileAutomaticFasting(nextState, [addedEntry]);
+      else if (metric?.id === "intermittent_fasting")
+        nextState = reconcileAutomaticFasting(nextState);
       if (
         metric?.id === "weight" &&
         typeof action.value === "number" &&
@@ -512,6 +803,7 @@ function reducer(state: AppState, action: Action): AppState {
           ...nextState.messages,
           {
             id: uniqueId("auto"),
+            groupId: state.group.id,
             senderId: "system",
             conversationId: `group:${state.group.id}`,
             kind: "cheer",
@@ -523,6 +815,39 @@ function reducer(state: AppState, action: Action): AppState {
       return localDate < dateKey()
         ? finalizeEndOfDayGoals(nextState, localDate)
         : nextState;
+    }
+    case "deviceScreenTime": {
+      const metric = state.metrics.find((candidate) => candidate.id === "screen_time");
+      if (!metric || !Number.isFinite(action.minutes)) return state;
+      const id = `screen-time:${state.currentUserId}:${action.localDate}`;
+      const entry: MetricEntry = {
+        id,
+        metricId: metric.id,
+        userId: state.currentUserId,
+        value: Math.max(0, action.minutes),
+        localDate: action.localDate,
+        recordedAt: action.recordedAt,
+        visibility: "private",
+        source: "imported",
+        sourceOrigin: "android_usage_stats",
+        sourceRecordId: id,
+        sourceUpdatedAt: action.recordedAt,
+      };
+      return {
+        ...state,
+        entries: [
+          ...state.entries.filter(
+            (candidate) =>
+              !(
+                candidate.userId === state.currentUserId &&
+                candidate.metricId === metric.id &&
+                candidate.localDate === action.localDate &&
+                candidate.sourceOrigin === "android_usage_stats"
+              ),
+          ),
+          entry,
+        ],
+      };
     }
     case "addMetric": {
       const {
@@ -624,12 +949,17 @@ function reducer(state: AppState, action: Action): AppState {
           ),
       );
       if (action.changes.defaultVisibility) {
+        const changedAt = new Date().toISOString();
         next = {
           ...next,
           entries: next.entries.map((entry) =>
             entry.userId === state.currentUserId &&
             entry.metricId === action.metricId
-              ? { ...entry, visibility: action.changes.defaultVisibility! }
+              ? {
+                  ...entry,
+                  visibility: action.changes.defaultVisibility!,
+                  sourceUpdatedAt: changedAt,
+                }
               : entry,
           ),
           photos:
@@ -645,6 +975,8 @@ function reducer(state: AppState, action: Action): AppState {
               : next.photos,
         };
       }
+      if (action.metricId === "intermittent_fasting")
+        next = reconcileAutomaticFasting(next);
       if (!action.changes.activeFrom || !(state.trackedGoalPeriods[action.metricId]?.length))
         return next;
       return {
@@ -660,6 +992,13 @@ function reducer(state: AppState, action: Action): AppState {
         state.metrics,
         action.metricId,
       );
+      const removedEntryIds = state.entries
+        .filter(
+          (entry) =>
+            entry.userId === state.currentUserId &&
+            removedIds.has(entry.metricId),
+        )
+        .map((entry) => entry.id);
       return {
         ...withPersonalMetrics(
           state,
@@ -668,14 +1007,24 @@ function reducer(state: AppState, action: Action): AppState {
             .map((metric, order) => ({ ...metric, order })),
         ),
         entries: state.entries.filter(
-          (entry) => !removedIds.has(entry.metricId),
+          (entry) =>
+            entry.userId !== state.currentUserId ||
+            !removedIds.has(entry.metricId),
         ),
         trackedGoalPeriods: Object.fromEntries(
           Object.entries(state.trackedGoalPeriods).filter(
             ([metricId]) => !removedIds.has(metricId),
           ),
         ),
-        settings: withoutMetricSelections(state.settings, removedIds),
+        settings: {
+          ...withoutMetricSelections(state.settings, removedIds),
+          pendingDeletedEntryIds: [
+            ...new Set([
+              ...(state.settings.pendingDeletedEntryIds ?? []),
+              ...removedEntryIds,
+            ]),
+          ],
+        },
         selectedGroupMetricId: removedIds.has(state.selectedGroupMetricId)
             ? "steps"
             : state.selectedGroupMetricId,
@@ -687,18 +1036,36 @@ function reducer(state: AppState, action: Action): AppState {
           (entry) => entry.id === action.entryId && entry.userId === state.currentUserId,
         );
         if (!target || target.source === "calculated") return state;
-        return {
+        const next: AppState = {
           ...state,
-          entries: state.entries.filter((entry) => entry.id !== action.entryId),
-          settings: target.source === "imported"
-            ? {
-                ...state.settings,
-                dismissedHealthEntryIds: [
-                  ...new Set([...(state.settings.dismissedHealthEntryIds ?? []), target.id]),
-                ],
-              }
-            : state.settings,
+          entries: state.entries.filter(
+            (entry) =>
+              metricEntryKey(entry.userId, entry.id) !==
+              metricEntryKey(state.currentUserId, action.entryId),
+          ),
+          settings: {
+            ...state.settings,
+            pendingDeletedEntryIds: [
+              ...new Set([
+                ...(state.settings.pendingDeletedEntryIds ?? []),
+                target.id,
+              ]),
+            ],
+            dismissedHealthEntryIds:
+              target.source === "imported"
+                ? [
+                    ...new Set([
+                      ...(state.settings.dismissedHealthEntryIds ?? []),
+                      target.id,
+                    ]),
+                  ]
+                : state.settings.dismissedHealthEntryIds,
+          },
         };
+        return target.metricId === "food" ||
+          target.metricId === "intermittent_fasting"
+          ? reconcileAutomaticFasting(next, [target])
+          : next;
       }
     case "skipGoal": {
       const metric = state.metrics.find((item) => item.id === action.metricId);
@@ -707,7 +1074,11 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         entries: [
-          ...state.entries.filter((entry) => entry.id !== id),
+          ...state.entries.filter(
+            (entry) =>
+              metricEntryKey(entry.userId, entry.id) !==
+              metricEntryKey(state.currentUserId, id),
+          ),
           {
             id,
             metricId: metric.id,
@@ -776,7 +1147,7 @@ function reducer(state: AppState, action: Action): AppState {
             : action.historyMode === "history"
             ? [{ from: historyStart }]
             : [{ from: dateKey() }];
-        return {
+        return syncPersonalSetupGroup({
           ...state,
           metrics: metrics.map((candidate) =>
             candidate.id === metric.id
@@ -799,13 +1170,13 @@ function reducer(state: AppState, action: Action): AppState {
             ...state.trackedGoalPeriods,
             [metric.id]: periods,
           },
-        };
+        });
       }
       if (action.historyMode === "history") {
-        return {
+        return syncPersonalSetupGroup({
           ...state,
           trackedGoalPeriods: { ...state.trackedGoalPeriods, [metric.id]: [] },
-        };
+        });
       }
       const yesterday = dateWithOffsetFrom(dateKey(), -1);
       const periods = existing.flatMap((period) =>
@@ -815,13 +1186,13 @@ function reducer(state: AppState, action: Action): AppState {
             : []
           : [period],
       );
-      return {
+      return syncPersonalSetupGroup({
         ...state,
         trackedGoalPeriods: {
           ...state.trackedGoalPeriods,
           [metric.id]: periods,
         },
-      };
+      });
     }
     case "configurePersonalMetrics": {
       const today = dateKey();
@@ -833,7 +1204,7 @@ function reducer(state: AppState, action: Action): AppState {
           ? goalHistoryStart(configuredState, metric)
           : today,
       }));
-      return {
+      return syncPersonalSetupGroup({
         ...state,
         metrics,
         trackedGoalPeriods: Object.fromEntries(
@@ -845,7 +1216,7 @@ function reducer(state: AppState, action: Action): AppState {
           ]),
         ),
         selectedGroupMetricId: state.selectedGroupMetricId,
-      };
+      });
     }
     case "updateGroupMetric": {
       const configuration = (state.group.metricConfiguration ?? []).map(
@@ -883,6 +1254,9 @@ function reducer(state: AppState, action: Action): AppState {
               goal: personal.goal,
               goalRange: personal.goalRange,
               goalEnabled: personal.goalEnabled,
+              goalSchedule: personal.goalSchedule,
+              reminder: personal.reminder,
+              reminders: personal.reminders,
               defaultVisibility: personal.defaultVisibility,
               sections: personal.sections,
               scoreWeight: personal.scoreWeight,
@@ -907,14 +1281,14 @@ function reducer(state: AppState, action: Action): AppState {
           },
         ];
       }
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         metrics,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
     }
     case "addGroupMetric": {
       const { trackGoal: _trackGoal, ...definition } = action.metric;
@@ -972,7 +1346,7 @@ function reducer(state: AppState, action: Action): AppState {
       const metrics = state.metrics.some((item) => item.id === id)
         ? state.metrics
         : [...state.metrics, { ...metric, order: state.metrics.length }];
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         metrics,
         group,
@@ -980,7 +1354,7 @@ function reducer(state: AppState, action: Action): AppState {
           candidate.id === group.id ? group : candidate,
         ),
         trackedGoalPeriods: { ...state.trackedGoalPeriods, [id]: [] },
-      };
+      });
     }
     case "deleteGroupMetric": {
       const existing = state.group.metricConfiguration ?? [];
@@ -991,7 +1365,7 @@ function reducer(state: AppState, action: Action): AppState {
           .filter((metric) => !removedIds.has(metric.id))
           .map((metric, order) => ({ ...metric, order })),
       };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         settings: withoutMetricSelections(state.settings, removedIds),
         selectedGroupMetricId: removedIds.has(state.selectedGroupMetricId)
@@ -1001,7 +1375,7 @@ function reducer(state: AppState, action: Action): AppState {
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
     }
     case "moveMetric": {
       const ordered = [...state.metrics].sort((a, b) => a.order - b.order);
@@ -1077,13 +1451,13 @@ function reducer(state: AppState, action: Action): AppState {
           ),
         ],
       };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((item) =>
           item.id === group.id ? group : item,
         ),
-      };
+      });
     }
     case "deleteGroupGymPlan": {
       const group = {
@@ -1092,13 +1466,13 @@ function reducer(state: AppState, action: Action): AppState {
           (item) => item.id !== action.planId,
         ),
       };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((item) =>
           item.id === group.id ? group : item,
         ),
-      };
+      });
     }
     case "saveGymSession": {
       const session = action.session;
@@ -1129,7 +1503,7 @@ function reducer(state: AppState, action: Action): AppState {
                   ?.defaultVisibility ?? "group"),
           source: "manual",
           label: session.name,
-          note: `Gym session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
+          note: `Workout session · ${completedSets} sets${session.notes ? ` · ${session.notes}` : ""}`,
         }));
       return {
         ...state,
@@ -1139,7 +1513,9 @@ function reducer(state: AppState, action: Action): AppState {
         ],
         entries: [
           ...state.entries.filter(
-            (entry) => !entry.id.startsWith(`gym-sync:${session.id}:`),
+            (entry) =>
+              entry.userId !== state.currentUserId ||
+              !entry.id.startsWith(`gym-sync:${session.id}:`),
           ),
           ...synced,
         ],
@@ -1152,7 +1528,9 @@ function reducer(state: AppState, action: Action): AppState {
           (item) => item.id !== action.sessionId,
         ),
         entries: state.entries.filter(
-          (entry) => !entry.id.startsWith(`gym-sync:${action.sessionId}:`),
+          (entry) =>
+            entry.userId !== state.currentUserId ||
+            !entry.id.startsWith(`gym-sync:${action.sessionId}:`),
         ),
       };
     case "gymExerciseGoal":
@@ -1192,6 +1570,7 @@ function reducer(state: AppState, action: Action): AppState {
           ...state.messages,
           {
             id: uniqueId("message"),
+            groupId: state.group.id,
             senderId: state.currentUserId,
             text: action.text.trim(),
             conversationId: action.conversationId,
@@ -1321,7 +1700,34 @@ function reducer(state: AppState, action: Action): AppState {
         ),
       };
     case "activityTimer":
-      return { ...state, activeTimer: action.timer };
+      {
+        const current =
+          state.activityTimers?.length
+            ? state.activityTimers
+            : state.activeTimer
+              ? [state.activeTimer]
+              : [];
+        if (action.timer) {
+          const timers = [
+            ...current.filter((timer) => timer.id !== action.timer!.id),
+            action.timer,
+          ];
+          return { ...state, activityTimers: timers, activeTimer: action.timer };
+        }
+        const removeId = action.timerId ?? state.activeTimer?.id;
+        const timers = removeId
+          ? current.filter((timer) => timer.id !== removeId)
+          : current;
+        return {
+          ...state,
+          activityTimers: timers,
+          activeTimer: timers[0],
+        };
+      }
+    case "startFast":
+      return startManualFast(state, action.metricId, new Date(action.at));
+    case "endFast":
+      return endManualFast(state, action.metricId, new Date(action.at));
     case "settings": {
       const next = { ...state, settings: { ...state.settings, ...action.changes } };
       return action.changes.weightDirection
@@ -1341,7 +1747,11 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...next,
         entries: [
-          ...next.entries.filter((entry) => entry.id !== id),
+          ...next.entries.filter(
+            (entry) =>
+              metricEntryKey(entry.userId, entry.id) !==
+              metricEntryKey(state.currentUserId, id),
+          ),
           {
             id,
             metricId: "weight",
@@ -1442,16 +1852,34 @@ function reducer(state: AppState, action: Action): AppState {
         (candidate) => candidate.id === action.groupId,
       );
       if (!group) return state;
-      return { ...state, group };
+      return syncPersonalSetupGroup({ ...state, group });
     }
     case "leaveGroup": {
-      if (state.groups.length <= 1) return state;
-      const groups = state.groups.filter(
+      const leavingGroup = state.groups.find(
+        (group) => group.id === action.groupId,
+      );
+      if (!leavingGroup || isPersonalSetupGroup(leavingGroup)) return state;
+      let groups = state.groups.filter(
         (group) => group.id !== action.groupId,
       );
+      if (!groups.length) {
+        const currentMember = leavingGroup.members.find(
+          (member) => member.id === state.currentUserId,
+        );
+        if (!currentMember) return state;
+        groups = [
+          createPersonalSetupGroup(
+            currentMember,
+            personalSetupMetricConfiguration(
+              state.metrics,
+              state.trackedGoalPeriods,
+            ),
+          ),
+        ];
+      }
       if (state.group.id !== action.groupId) return { ...state, groups };
       const group = groups[0];
-      return { ...state, groups, group };
+      return syncPersonalSetupGroup({ ...state, groups, group });
     }
     case "nickname": {
       const groupAliases =
@@ -1470,36 +1898,52 @@ function reducer(state: AppState, action: Action): AppState {
         },
       };
     }
-    case "groupRestDays": {
-      const value = Math.max(0, Math.min(6, Math.round(action.value)));
-      const group = { ...state.group, streakRestDaysPerWeek: value };
-      return {
+    case "groupName": {
+      const current = state.group.members.find(
+        (member) => member.id === state.currentUserId,
+      );
+      if (current?.role !== "owner" && current?.role !== "admin") return state;
+      const name = action.name.trim().replace(/\s+/g, " ").slice(0, 80);
+      if (!name || name === state.group.name) return state;
+      const group = { ...state.group, name };
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
+    }
+    case "groupRestDays": {
+      const value = Math.max(0, Math.min(4, Math.round(action.value)));
+      const group = { ...state.group, streakRestDaysPerWeek: value };
+      return markGroupConfigurationPending(state, {
+        ...state,
+        group,
+        groups: state.groups.map((candidate) =>
+          candidate.id === group.id ? group : candidate,
+        ),
+      });
     }
     case "groupTheme": {
       const group = { ...state.group, themeColor: action.color };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
     }
     case "groupApproval": {
       const group = { ...state.group, requireMemberApproval: action.value };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
     }
     case "approveMember": {
       const pending = state.group.pendingMembers ?? [];
@@ -1593,35 +2037,94 @@ function reducer(state: AppState, action: Action): AppState {
             : member,
         ),
       };
-      return {
+      return markGroupConfigurationPending(state, {
         ...state,
         group,
         groups: state.groups.map((candidate) =>
           candidate.id === group.id ? group : candidate,
         ),
-      };
+      });
     }
     case "importHealth": {
       // Health Connect/HealthKit can briefly return an incomplete page while
       // another writer is updating. Upsert stable source ids without clearing
       // the overlap first, so a routine refresh never makes readings flash out.
-      const byId = new Map(state.entries.map((entry) => [entry.id, entry]));
+      const byId = new Map(
+        state.entries.map((entry) => [
+          metricEntryKey(entry.userId, entry.id),
+          entry,
+        ]),
+      );
       const dismissed = new Set(state.settings.dismissedHealthEntryIds ?? []);
       for (const entry of action.entries)
-        if (!dismissed.has(entry.id)) byId.set(entry.id, entry);
-      const importedState = { ...state, entries: [...byId.values()] };
+        if (!dismissed.has(entry.id))
+          byId.set(metricEntryKey(entry.userId, entry.id), entry);
+      const importedState = applyImportedFoodFastBreaks(
+        { ...state, entries: [...byId.values()] },
+        action.entries,
+      );
+      if (action.preserveTrackedGoalHistory) return importedState;
       const withOnboardingGoalHistory = (next: AppState): AppState => {
-        if (next.settings.onboardingComplete) return next;
+        const pendingFirstImport =
+          next.settings.healthSync.backfillTrackedGoalsOnFirstImport === true;
+        const initialHistoryPending =
+          next.settings.healthSync.initialHistoryImportPending === true;
+        // Historical chunks are deliberately applied incrementally for a
+        // responsive UI. Goal dates are recalculated only after the final
+        // chunk, when every selected tracker has had a chance to import data.
+        if (initialHistoryPending && !action.finalizeInitialImport) return next;
+        if (
+          next.settings.onboardingComplete &&
+          !pendingFirstImport &&
+          !initialHistoryPending
+        )
+          return next;
+        if (
+          pendingFirstImport &&
+          !initialHistoryPending &&
+          action.entries.length === 0
+        ) {
+          const emptyReadCount =
+            next.settings.healthSync.backfillTrackedGoalsEmptyReadCount ?? 0;
+          const allowOneRetry = emptyReadCount < 1;
+          return {
+            ...next,
+            settings: {
+              ...next.settings,
+              healthSync: {
+                ...next.settings.healthSync,
+                backfillTrackedGoalsOnFirstImport: allowOneRetry,
+                backfillTrackedGoalsEmptyReadCount: allowOneRetry
+                  ? emptyReadCount + 1
+                  : undefined,
+              },
+            },
+          };
+        }
         const starts = new Map<string, string>();
-        next.metrics.forEach((metric) => {
-          const periods = next.trackedGoalPeriods[metric.id] ?? [];
-          if (!periods.length) return;
-          const start = goalHistoryStart(next, metric);
-          if (start < periods[0].from) starts.set(metric.id, start);
-        });
-        if (!starts.size) return next;
+        if (pendingFirstImport)
+          next.metrics.forEach((metric) => {
+            const periods = next.trackedGoalPeriods[metric.id] ?? [];
+            if (!periods.length) return;
+            const start = goalHistoryStart(next, metric);
+            if (start < periods[0].from) starts.set(metric.id, start);
+          });
+        const settings = pendingFirstImport || initialHistoryPending
+          ? {
+              ...next.settings,
+              healthSync: {
+                ...next.settings.healthSync,
+                backfillTrackedGoalsOnFirstImport: false,
+                backfillTrackedGoalsEmptyReadCount: undefined,
+                initialHistoryImportPending: false,
+              },
+            }
+          : next.settings;
+        if (!starts.size)
+          return settings === next.settings ? next : { ...next, settings };
         return {
           ...next,
+          settings,
           metrics: next.metrics.map((metric) =>
             starts.has(metric.id)
               ? { ...metric, activeFrom: starts.get(metric.id)! }
@@ -1691,6 +2194,11 @@ type AppContextValue = {
     mode?: "add" | "replace",
     details?: EntryDetails,
   ) => void;
+  setDeviceScreenTime: (
+    localDate: string,
+    minutes: number,
+    recordedAt: string,
+  ) => void;
   addMetric: (metric: NewMetric) => void;
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
@@ -1745,7 +2253,9 @@ type AppContextValue = {
   deleteJournalNote: (noteId: string) => void;
   saveCalendarReminder: (reminder: CalendarReminder) => void;
   deleteCalendarReminder: (reminderId: string) => void;
-  setActivityTimer: (timer?: ActivityTimer) => void;
+  setActivityTimer: (timer?: ActivityTimer, timerId?: string) => void;
+  startFast: (metricId?: string) => void;
+  endFast: (metricId?: string) => void;
   updateSettings: (changes: Partial<AppState["settings"]>) => void;
   updateEnergyProfile: (changes: Partial<EnergyProfile>) => void;
   createGroup: (name: string, options?: GroupCreationOptions) => void;
@@ -1753,6 +2263,7 @@ type AppContextValue = {
   switchGroup: (groupId: string) => void;
   leaveGroup: (groupId: string) => void;
   updateNickname: (memberId: string, nickname: string) => void;
+  setGroupName: (name: string) => void;
   setGroupRestDays: (value: number) => void;
   setGroupTheme: (color: string) => void;
   setGroupApprovalRequired: (value: boolean) => void;
@@ -1773,7 +2284,11 @@ type AppContextValue = {
     provider: NonNullable<MetricEntry["sourceProvider"]>,
     metricIds: string[],
     fromDate: string,
-  ) => void;
+    finalizeInitialImport?: boolean,
+    preserveTrackedGoalHistory?: boolean,
+  ) => Promise<void>;
+  /** Flush the latest reducer state to this device before a route exits. */
+  flushLocalPersistence: () => Promise<void>;
   replaceState: (state: AppState) => void;
   resetDemo: () => void;
 };
@@ -1790,11 +2305,46 @@ export function AppProvider({ children }: PropsWithChildren) {
   const persistenceTaskRef = useRef<
     ReturnType<typeof InteractionManager.runAfterInteractions> | null
   >(null);
+  const persistenceWriteRef = useRef<Promise<void> | null>(null);
+  const persistenceResumeTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const persistenceDirtyRef = useRef(false);
+  const persistenceRevisionRef = useRef(0);
+  const persistenceObservedStateRef = useRef<AppState | null>(null);
   persistenceStateRef.current = state;
+
+  const persistLatestState = useCallback((): Promise<void> => {
+    // AppState may emit inactive and background in quick succession, while a
+    // resume can overlap the tail of the background write. JSON.stringify is
+    // synchronous, so coalescing here prevents duplicate full-state
+    // serialization from blocking the first taps after returning to the app.
+    if (persistenceWriteRef.current) return persistenceWriteRef.current;
+    // Begin from a microtask so the pressed control can paint before a large
+    // owned Health Connect history is serialized. The write is still queued in
+    // the same event turn and coalesces rapid keystrokes/taps into one latest
+    // durable snapshot.
+    const write = Promise.resolve()
+      .then(async () => {
+        while (persistenceDirtyRef.current) {
+          const revision = persistenceRevisionRef.current;
+          const latest = persistenceStateRef.current;
+          await persistAppStateNow(latest);
+          if (revision === persistenceRevisionRef.current)
+            persistenceDirtyRef.current = false;
+        }
+      })
+      .finally(() => {
+        if (persistenceWriteRef.current === write)
+          persistenceWriteRef.current = null;
+      });
+    persistenceWriteRef.current = write;
+    return write;
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(APP_STORAGE_KEY)
-      .then((saved) => {
+      .then(async (saved) => {
         if (saved) {
           const restored = JSON.parse(saved) as AppState;
           const defaults = createInitialState();
@@ -1919,6 +2469,10 @@ export function AppProvider({ children }: PropsWithChildren) {
             settings: {
               ...defaults.settings,
               ...restored.settings,
+              streakRestDaysPerWeek: Math.max(
+                0,
+                Math.min(4, restored.settings?.streakRestDaysPerWeek ?? 1),
+              ),
               progressMetricIds:
                 restoredVersion < 19
                   ? [
@@ -2094,11 +2648,30 @@ export function AppProvider({ children }: PropsWithChildren) {
                     target: recommendedDailyIntake(profile),
                   },
                 };
+              if (upgraded.id === "intermittent_fasting" && preset)
+                return {
+                  ...upgraded,
+                  fastingSettings: {
+                    startTime:
+                      upgraded.fastingSettings?.startTime ??
+                      preset.fastingSettings?.startTime ??
+                      "20:00",
+                    fastingMinutes:
+                      upgraded.fastingSettings?.fastingMinutes ??
+                      preset.fastingSettings?.fastingMinutes ??
+                      16 * 60,
+                    automaticFoodBreak:
+                      upgraded.fastingSettings?.automaticFoodBreak ?? true,
+                  },
+                };
               return upgraded;
             }),
             group: {
               ...(restored.group ?? defaults.group),
-              streakRestDaysPerWeek: restored.group?.streakRestDaysPerWeek ?? 1,
+              streakRestDaysPerWeek: Math.max(
+                0,
+                Math.min(4, restored.group?.streakRestDaysPerWeek ?? 1),
+              ),
               metricConfiguration:
                 restoredVersion < 13 && isDefaultDemo
                   ? restoredMetrics
@@ -2109,7 +2682,10 @@ export function AppProvider({ children }: PropsWithChildren) {
               : [restored.group ?? defaults.group]
             ).map((group) => ({
               ...group,
-              streakRestDaysPerWeek: group.streakRestDaysPerWeek ?? 1,
+              streakRestDaysPerWeek: Math.max(
+                0,
+                Math.min(4, group.streakRestDaysPerWeek ?? 1),
+              ),
               metricConfiguration:
                 restoredVersion < 13 && group.id === defaults.group.id
                   ? restoredMetrics
@@ -2128,17 +2704,65 @@ export function AppProvider({ children }: PropsWithChildren) {
                 normalizeEnergyProfile(profile),
               ]),
             ),
-            messages: (restored.messages ?? defaults.messages).map(
-              (message) => ({
+            messages: (restored.messages ?? defaults.messages).map((message) => {
+              const restoredGroupId =
+                message.groupId ??
+                (message.conversationId?.startsWith("group:")
+                  ? message.conversationId.slice("group:".length)
+                  : (restored.group?.id ?? defaults.group.id));
+              return {
                 ...message,
-                conversationId: message.conversationId ?? "group",
-              }),
-            ),
+                groupId: restoredGroupId,
+                conversationId:
+                  !message.conversationId || message.conversationId === "group"
+                    ? `group:${restoredGroupId}`
+                    : message.conversationId,
+              };
+            }),
             dailyMetricStatuses: restored.dailyMetricStatuses ?? [],
           };
+          // Health authorization belongs to this installation, not the cloud
+          // snapshot. Restore it before the first hydrated render so a quick
+          // close/reopen cannot show (or persist) the cloud's sanitized "off"
+          // value while HealthSyncProvider is still loading its device record.
+          const savedHealthStatus = await AsyncStorage.getItem(
+            `${HEALTH_STATUS_STORAGE_KEY}:${restoredState.currentUserId}`,
+          ).catch(() => null);
+          let stateWithDeviceHealth = restoredState;
+          if (savedHealthStatus) {
+            try {
+              const deviceStatus = JSON.parse(
+                savedHealthStatus,
+              ) as PersistedHealthStatus;
+              if (typeof deviceStatus.connectionEnabled === "boolean") {
+                const enabled = deviceStatus.connectionEnabled;
+                stateWithDeviceHealth = {
+                  ...restoredState,
+                  settings: {
+                    ...restoredState.settings,
+                    healthSync: {
+                      ...restoredState.settings.healthSync,
+                      enabled,
+                      backgroundAccess: enabled
+                        ? (deviceStatus.backgroundAccess ??
+                          restoredState.settings.healthSync.backgroundAccess)
+                        : false,
+                    },
+                  },
+                };
+              }
+            } catch {
+              // A damaged status record must not block the rest of the local
+              // account from loading. HealthSyncProvider can repair it later.
+            }
+          }
           dispatch({
             type: "hydrate",
-            state: upgradeStateV21(restoredState, defaults, restoredVersion),
+            state: upgradeStateV21(
+              stateWithDeviceHealth,
+              defaults,
+              restoredVersion,
+            ),
           });
         }
       })
@@ -2148,64 +2772,230 @@ export function AppProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!hydrated) return;
+    const previous = persistenceObservedStateRef.current;
+    persistenceObservedStateRef.current = state;
+    if (previous && !localPersistenceChanged(previous, state)) return;
+    persistenceDirtyRef.current = true;
+    persistenceRevisionRef.current += 1;
+    if (NativeAppState.currentState !== "active") return;
     // Persist the newest state at most once per short burst. The old effect
     // repeatedly cancelled/recreated timers and serialized the full offline
     // cache after nearly every cloud/health update.
     if (persistenceTimerRef.current || persistenceTaskRef.current) return;
-    persistenceTimerRef.current = setTimeout(() => {
+    const persistWhenIdle = () => {
       persistenceTimerRef.current = null;
+      // Edit/drag modes deliberately pause cloud work. They should also avoid
+      // serializing the full offline cache while a gesture is in flight.
+      if (isCloudSyncPaused()) {
+        persistenceTimerRef.current = setTimeout(persistWhenIdle, 650);
+        return;
+      }
       persistenceTaskRef.current = InteractionManager.runAfterInteractions(
         () => {
           persistenceTaskRef.current = null;
-          const latest = persistenceStateRef.current;
-        AsyncStorage.setItem(
-          APP_STORAGE_KEY,
-            JSON.stringify({
-              ...latest,
-              lastSavedAt: new Date().toISOString(),
-            }),
-        ).catch(() => undefined);
+          const revision = persistenceRevisionRef.current;
+          persistLatestState()
+            .then(() => {
+              if (
+                revision !== persistenceRevisionRef.current &&
+                NativeAppState.currentState === "active" &&
+                !persistenceTimerRef.current &&
+                !persistenceTaskRef.current
+              ) {
+                // Changes that arrived while the snapshot was being written
+                // still need one trailing save.
+                persistenceTimerRef.current = setTimeout(
+                  persistWhenIdle,
+                  3000,
+                );
+              }
+            })
+            .catch(() => undefined);
         },
       );
-    }, 1800);
-  }, [hydrated, state]);
+    };
+    persistenceTimerRef.current = setTimeout(persistWhenIdle, 3000);
+  }, [hydrated, persistLatestState, state]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const clearQueuedPersistence = () => {
+      if (persistenceTimerRef.current) {
+        clearTimeout(persistenceTimerRef.current);
+        persistenceTimerRef.current = null;
+      }
+      persistenceTaskRef.current?.cancel();
+      persistenceTaskRef.current = null;
+      if (persistenceResumeTimerRef.current) {
+        clearTimeout(persistenceResumeTimerRef.current);
+        persistenceResumeTimerRef.current = null;
+      }
+    };
+    const subscription = NativeAppState.addEventListener("change", (next) => {
+      clearQueuedPersistence();
+      if (next !== "active") {
+        // Flush while leaving the foreground. This prevents a queued
+        // InteractionManager task from waking up with the UI and blocking the
+        // first taps after app switching.
+        if (persistenceDirtyRef.current) {
+          void persistLatestState().catch(() => undefined);
+        }
+        return;
+      }
+      // A native background Health Connect task may have updated storage while
+      // this JS process remained suspended. Reconcile that small device-owned
+      // delta before any queued foreground save can overwrite it.
+      void (async () => {
+        await persistenceWriteRef.current?.catch(() => undefined);
+        const currentUserId = persistenceStateRef.current.currentUserId;
+        const [saved, savedHealthStatus] = await Promise.all([
+          AsyncStorage.getItem(APP_STORAGE_KEY).catch(() => null),
+          AsyncStorage.getItem(
+            `${HEALTH_STATUS_STORAGE_KEY}:${currentUserId}`,
+          ).catch(() => null),
+        ]);
+        if (saved) {
+          try {
+            let importFromDate: string | undefined;
+            if (savedHealthStatus) {
+              const healthStatus = JSON.parse(
+                savedHealthStatus,
+              ) as PersistedHealthStatus;
+              if (
+                healthStatus.lastReason === "background" &&
+                !healthStatus.error
+              )
+                importFromDate = healthStatus.lastImportFromDate;
+            }
+            const merged = mergeBackgroundHealthRows(
+              persistenceStateRef.current,
+              JSON.parse(saved) as AppState,
+              importFromDate,
+            );
+            if (merged !== persistenceStateRef.current) {
+              const committed = {
+                ...merged,
+                lastSavedAt: new Date().toISOString(),
+              };
+              persistenceStateRef.current = committed;
+              persistenceObservedStateRef.current = committed;
+              persistenceDirtyRef.current = true;
+              persistenceRevisionRef.current += 1;
+              dispatch({ type: "replaceLocal", state: committed });
+            }
+          } catch {
+            // Keep the last valid in-memory snapshot if storage was interrupted.
+          }
+        }
+        if (!persistenceDirtyRef.current) return;
+        // Let navigation paint and resume-time subscriptions settle first.
+        persistenceResumeTimerRef.current = setTimeout(() => {
+          persistenceResumeTimerRef.current = null;
+          persistenceTaskRef.current = InteractionManager.runAfterInteractions(
+            () => {
+              persistenceTaskRef.current = null;
+              void persistLatestState().catch(() => undefined);
+            },
+          );
+        }, 4000);
+      })();
+    });
+    return () => {
+      subscription.remove();
+      clearQueuedPersistence();
+    };
+  }, [hydrated, persistLatestState]);
 
   useEffect(
     () => () => {
       if (persistenceTimerRef.current)
         clearTimeout(persistenceTimerRef.current);
       persistenceTaskRef.current?.cancel();
+      if (persistenceResumeTimerRef.current)
+        clearTimeout(persistenceResumeTimerRef.current);
     },
     [],
   );
 
+  const commitReducedState = useCallback(
+    (next: AppState) => {
+      if (next === persistenceStateRef.current) return Promise.resolve();
+      const committed = { ...next, lastSavedAt: new Date().toISOString() };
+      persistenceStateRef.current = committed;
+      persistenceObservedStateRef.current = committed;
+      persistenceDirtyRef.current = true;
+      persistenceRevisionRef.current += 1;
+      dispatch({ type: "replaceLocal", state: committed });
+      return persistLatestState();
+    },
+    [persistLatestState],
+  );
+
+  const commitAction = useCallback(
+    (action: Exclude<Action, { type: "hydrate" } | { type: "replaceLocal" }>) =>
+      commitReducedState(reducer(persistenceStateRef.current, action)).catch(
+        () => undefined,
+      ),
+    [commitReducedState],
+  );
+
   const replaceState = useCallback(
-    (nextState: AppState) => dispatch({ type: "hydrate", state: nextState }),
-    [],
+    (nextState: AppState) => {
+      const next = reducer(persistenceStateRef.current, {
+        type: "hydrate",
+        state: nextState,
+        preserveDeviceHealthSync: true,
+      });
+      void commitReducedState(next).catch(() => undefined);
+    },
+    [commitReducedState],
   );
 
   const value = useMemo<AppContextValue>(
     () => ({
       state,
       hydrated,
-      logMetric: (metricId, entryValue, visibility, mode = "add", details) =>
-        dispatch({
+      logMetric: (metricId, entryValue, visibility, mode = "add", details) => {
+        const previous = persistenceStateRef.current;
+        const next = reducer(previous, {
           type: "log",
           metricId,
           value: entryValue,
           visibility,
           mode,
           details,
-        }),
-      addMetric: (metric) => dispatch({ type: "addMetric", metric }),
+        });
+        void commitReducedState(next)
+          .then(() =>
+            notifyProgressMilestones(
+              previous,
+              next,
+              details?.localDate ?? dateKey(),
+            ),
+          )
+          .catch(() => undefined);
+      },
+      setDeviceScreenTime: (localDate, minutes, recordedAt) => {
+        const previous = persistenceStateRef.current;
+        const next = reducer(previous, {
+          type: "deviceScreenTime",
+          localDate,
+          minutes,
+          recordedAt,
+        });
+        void commitReducedState(next)
+          .then(() => notifyProgressMilestones(previous, next, localDate))
+          .catch(() => undefined);
+      },
+      addMetric: (metric) => void commitAction({ type: "addMetric", metric }),
       updateMetric: (metricId, changes) =>
-        dispatch({ type: "updateMetric", metricId, changes }),
-      deleteMetric: (metricId) => dispatch({ type: "deleteMetric", metricId }),
-      deleteEntry: (entryId) => dispatch({ type: "deleteEntry", entryId }),
-      skipGoal: (metricId, localDate) => dispatch({ type: "skipGoal", metricId, localDate }),
-      deletePhoto: (photoId) => dispatch({ type: "deletePhoto", photoId }),
+        void commitAction({ type: "updateMetric", metricId, changes }),
+      deleteMetric: (metricId) => void commitAction({ type: "deleteMetric", metricId }),
+      deleteEntry: (entryId) => void commitAction({ type: "deleteEntry", entryId }),
+      skipGoal: (metricId, localDate) => void commitAction({ type: "skipGoal", metricId, localDate }),
+      deletePhoto: (photoId) => void commitAction({ type: "deletePhoto", photoId }),
       setMetricSection: (metricId, section, value, historyMode) =>
-        dispatch({
+        void commitAction({
           type: "setMetricSection",
           metricId,
           section,
@@ -2213,7 +3003,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           historyMode,
         }),
       setTrackedGoal: (metricId, value, historyMode, startDate) =>
-        dispatch({
+        void commitAction({
           type: "setTrackedGoal",
           metricId,
           value,
@@ -2221,31 +3011,31 @@ export function AppProvider({ children }: PropsWithChildren) {
           startDate,
         }),
       configurePersonalMetrics: (metrics, trackedGoalIds) =>
-        dispatch({ type: "configurePersonalMetrics", metrics, trackedGoalIds }),
+        void commitAction({ type: "configurePersonalMetrics", metrics, trackedGoalIds }),
       updateGroupMetric: (metricId, changes) =>
-        dispatch({ type: "updateGroupMetric", metricId, changes }),
-      addGroupMetric: (metric) => dispatch({ type: "addGroupMetric", metric }),
+        void commitAction({ type: "updateGroupMetric", metricId, changes }),
+      addGroupMetric: (metric) => void commitAction({ type: "addGroupMetric", metric }),
       deleteGroupMetric: (metricId) =>
-        dispatch({ type: "deleteGroupMetric", metricId }),
+        void commitAction({ type: "deleteGroupMetric", metricId }),
       moveMetric: (metricId, direction) =>
-        dispatch({ type: "moveMetric", metricId, direction }),
+        void commitAction({ type: "moveMetric", metricId, direction }),
       reorderMetric: (metricId, targetIndex) =>
-        dispatch({ type: "reorderMetric", metricId, targetIndex }),
+        void commitAction({ type: "reorderMetric", metricId, targetIndex }),
       selectGroupMetric: (metricId) =>
-        dispatch({ type: "selectGroupMetric", metricId }),
-      saveGymPlan: (plan) => dispatch({ type: "saveGymPlan", plan }),
-      deleteGymPlan: (planId) => dispatch({ type: "deleteGymPlan", planId }),
+        void commitAction({ type: "selectGroupMetric", metricId }),
+      saveGymPlan: (plan) => void commitAction({ type: "saveGymPlan", plan }),
+      deleteGymPlan: (planId) => void commitAction({ type: "deleteGymPlan", planId }),
       saveGroupGymPlan: (plan) =>
-        dispatch({ type: "saveGroupGymPlan", plan }),
+        void commitAction({ type: "saveGroupGymPlan", plan }),
       deleteGroupGymPlan: (planId) =>
-        dispatch({ type: "deleteGroupGymPlan", planId }),
-      saveGymSession: (session) => dispatch({ type: "saveGymSession", session }),
+        void commitAction({ type: "deleteGroupGymPlan", planId }),
+      saveGymSession: (session) => void commitAction({ type: "saveGymSession", session }),
       deleteGymSession: (sessionId) =>
-        dispatch({ type: "deleteGymSession", sessionId }),
+        void commitAction({ type: "deleteGymSession", sessionId }),
       setGymExerciseGoal: (exerciseKey, goal) =>
-        dispatch({ type: "gymExerciseGoal", exerciseKey, goal }),
+        void commitAction({ type: "gymExerciseGoal", exerciseKey, goal }),
       addPhoto: (uri, caption, visibility, localDate, capturedAt) =>
-        dispatch({
+        void commitAction({
           type: "addPhoto",
           uri,
           caption,
@@ -2254,80 +3044,123 @@ export function AppProvider({ children }: PropsWithChildren) {
           capturedAt,
         }),
       setPhotoVisibility: (photoId, visibility) =>
-        dispatch({ type: "setPhotoVisibility", photoId, visibility }),
+        void commitAction({ type: "setPhotoVisibility", photoId, visibility }),
       sendMessage: (text, conversationId = "group", recipientId, imageUri) =>
-        dispatch({
+        void commitAction({
           type: "sendMessage",
           text,
           conversationId,
           recipientId,
           imageUri,
         }),
-      saveTodo: (todo) => dispatch({ type: "saveTodo", todo }),
-      deleteTodo: (todoId) => dispatch({ type: "deleteTodo", todoId }),
+      saveTodo: (todo) => void commitAction({ type: "saveTodo", todo }),
+      deleteTodo: (todoId) => void commitAction({ type: "deleteTodo", todoId }),
       toggleTodo: (todoId, localDate) =>
-        dispatch({ type: "toggleTodo", todoId, localDate }),
+        void commitAction({ type: "toggleTodo", todoId, localDate }),
       skipTodo: (todoId, localDate) =>
-        dispatch({ type: "skipTodo", todoId, localDate }),
+        void commitAction({ type: "skipTodo", todoId, localDate }),
       reorderTodo: (todoId, targetIndex) =>
-        dispatch({ type: "reorderTodo", todoId, targetIndex }),
+        void commitAction({ type: "reorderTodo", todoId, targetIndex }),
       saveJournalNote: (note) =>
-        dispatch({ type: "saveJournalNote", note }),
+        void commitAction({ type: "saveJournalNote", note }),
       deleteJournalNote: (noteId) =>
-        dispatch({ type: "deleteJournalNote", noteId }),
+        void commitAction({ type: "deleteJournalNote", noteId }),
       saveCalendarReminder: (reminder) =>
-        dispatch({ type: "saveCalendarReminder", reminder }),
+        void commitAction({ type: "saveCalendarReminder", reminder }),
       deleteCalendarReminder: (reminderId) =>
-        dispatch({ type: "deleteCalendarReminder", reminderId }),
-      setActivityTimer: (timer) => dispatch({ type: "activityTimer", timer }),
-      updateSettings: (changes) => dispatch({ type: "settings", changes }),
+        void commitAction({ type: "deleteCalendarReminder", reminderId }),
+      setActivityTimer: (timer, timerId) =>
+        void commitAction({ type: "activityTimer", timer, timerId }),
+      startFast: (metricId = "intermittent_fasting") =>
+        void commitAction({
+          type: "startFast",
+          metricId,
+          at: new Date().toISOString(),
+        }),
+      endFast: (metricId = "intermittent_fasting") =>
+        void commitAction({
+          type: "endFast",
+          metricId,
+          at: new Date().toISOString(),
+        }),
+      updateSettings: (changes) => void commitAction({ type: "settings", changes }),
       updateEnergyProfile: (changes) =>
-        dispatch({ type: "energyProfile", changes }),
+        void commitAction({ type: "energyProfile", changes }),
       createGroup: (name, options) =>
-        dispatch({ type: "createGroup", name, options }),
-      joinGroup: (code) => dispatch({ type: "joinGroup", code }),
-      switchGroup: (groupId) => dispatch({ type: "switchGroup", groupId }),
-      leaveGroup: (groupId) => dispatch({ type: "leaveGroup", groupId }),
+        void commitAction({ type: "createGroup", name, options }),
+      joinGroup: (code) => void commitAction({ type: "joinGroup", code }),
+      switchGroup: (groupId) => void commitAction({ type: "switchGroup", groupId }),
+      leaveGroup: (groupId) => void commitAction({ type: "leaveGroup", groupId }),
       updateNickname: (memberId, nickname) =>
-        dispatch({ type: "nickname", memberId, nickname }),
-      setGroupRestDays: (value) => dispatch({ type: "groupRestDays", value }),
-      setGroupTheme: (color) => dispatch({ type: "groupTheme", color }),
+        void commitAction({ type: "nickname", memberId, nickname }),
+      setGroupName: (name) => void commitAction({ type: "groupName", name }),
+      setGroupRestDays: (value) => void commitAction({ type: "groupRestDays", value }),
+      setGroupTheme: (color) => void commitAction({ type: "groupTheme", color }),
       setGroupApprovalRequired: (value) =>
-        dispatch({ type: "groupApproval", value }),
+        void commitAction({ type: "groupApproval", value }),
       approveMember: (memberId) =>
-        dispatch({ type: "approveMember", memberId }),
+        void commitAction({ type: "approveMember", memberId }),
       removeMember: (memberId) =>
-        dispatch({ type: "removeMember", memberId }),
+        void commitAction({ type: "removeMember", memberId }),
       updateMemberAvatar: (memberId, avatarUri) =>
-        dispatch({ type: "memberAvatar", memberId, avatarUri }),
+        void commitAction({ type: "memberAvatar", memberId, avatarUri }),
       updateMemberName: (memberId, name) =>
-        dispatch({ type: "memberName", memberId, name }),
+        void commitAction({ type: "memberName", memberId, name }),
       setMemberRole: (memberId, role) =>
-        dispatch({ type: "memberRole", memberId, role }),
-      importHealthEntries: (entries, provider, metricIds, fromDate) =>
-        dispatch({
+        void commitAction({ type: "memberRole", memberId, role }),
+      importHealthEntries: (
+        entries,
+        provider,
+        metricIds,
+        fromDate,
+        finalizeInitialImport,
+        preserveTrackedGoalHistory,
+      ) => {
+        const previous = persistenceStateRef.current;
+        const next = reducer(previous, {
           type: "importHealth",
           entries,
           provider,
           metricIds,
           fromDate,
-        }),
+          finalizeInitialImport,
+          preserveTrackedGoalHistory,
+        });
+        return commitReducedState(next).then(async () => {
+          // Historical repairs must remain silent. Only a current-day value
+          // crossing a configured threshold can emit an immediate milestone.
+          if (entries.some((entry) => entry.localDate === dateKey())) {
+            await notifyProgressMilestones(previous, next, dateKey());
+          }
+        });
+      },
+      flushLocalPersistence: persistLatestState,
       replaceState,
-      resetDemo: () => dispatch({ type: "reset" }),
+      resetDemo: () => void commitAction({ type: "reset" }),
     }),
-    [hydrated, replaceState, state],
+    [
+      commitAction,
+      commitReducedState,
+      hydrated,
+      persistLatestState,
+      replaceState,
+      state,
+    ],
   );
 
   if (!hydrated) {
     return (
       <View style={styles.loadingScreen}>
-        <View style={styles.loadingMark}>
-          <Text style={styles.loadingInitial}>N</Text>
-        </View>
-        <Text style={styles.loadingTitle}>MetricRally</Text>
+        <Image
+          source={require("../../assets/images/habhub-icon.png")}
+          style={styles.loadingLogo}
+          contentFit="cover"
+          accessibilityLabel="HabHub logo"
+        />
+        <Text style={styles.loadingTitle}>HabHub</Text>
         <Text style={styles.loadingText}>Your goals, one clear direction.</Text>
         <ActivityIndicator
-          color={palette.primary}
+          color="#0FBFB8"
           style={styles.loadingSpinner}
         />
       </View>
@@ -2349,25 +3182,23 @@ const styles = StyleSheet.create({
     minHeight: "100%",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: palette.canvas,
+    backgroundColor: palette.ink,
     padding: 24,
   },
-  loadingMark: {
+  loadingLogo: {
     width: 62,
     height: 62,
     borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: palette.ink,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
   },
-  loadingInitial: { color: palette.lime, fontSize: 30, fontWeight: "900" },
   loadingTitle: {
-    color: palette.ink,
+    color: palette.white,
     fontSize: 24,
     fontWeight: "900",
     letterSpacing: -0.6,
   },
-  loadingText: { color: palette.muted, fontSize: 13, marginTop: 5 },
+  loadingText: { color: "#B1BED2", fontSize: 13, marginTop: 5 },
   loadingSpinner: { marginTop: 22 },
 });

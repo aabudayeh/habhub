@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
@@ -48,6 +49,15 @@ const FREQUENCIES: {
     sublabel: "For example, the 1st and 15th",
   },
 ];
+
+function addMinutes(localDate: string, localTime: string, minutes: number) {
+  const value = new Date(`${localDate}T${localTime}:00`);
+  value.setMinutes(value.getMinutes() + minutes);
+  return {
+    date: `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`,
+    time: `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`,
+  };
+}
 
 export default function ReminderEditor() {
   const { id, date, time: routeTime } = useLocalSearchParams<{
@@ -95,6 +105,53 @@ export default function ReminderEditor() {
   const [monthDays, setMonthDays] = useState(
     (existing?.schedule.daysOfMonth ?? [1]).join(", "),
   );
+  const defaultPlannedEnd = addMinutes(
+    existing?.schedule.anchorDate ?? date ?? dateKey(),
+    existing?.time ?? routeTime ?? "19:00",
+    existing?.durationMinutes ?? 60,
+  );
+  const [plannedSession, setPlannedSession] = useState(
+    Boolean(existing?.durationMinutes),
+  );
+  const [plannedEndDate, setPlannedEndDate] = useState(defaultPlannedEnd.date);
+  const [plannedEndTime, setPlannedEndTime] = useState(defaultPlannedEnd.time);
+  const [repeatUntilEnabled, setRepeatUntilEnabled] = useState(
+    Boolean(existing?.schedule.endDate),
+  );
+  const [repeatUntilDate, setRepeatUntilDate] = useState(
+    existing?.schedule.endDate ?? scheduledDate,
+  );
+  const [extraCalendar, setExtraCalendar] = useState<"planned" | "until" | null>(null);
+  const chosenTracker = trackers.find((metric) => metric.id === metricId);
+  const timerTracker = kind === "tracker" && chosenTracker?.timerEnabled;
+
+  const plannedDuration = () => {
+    const starts = new Date(`${scheduledDate}T${time}:00`);
+    let ends = new Date(`${plannedEndDate}T${plannedEndTime}:00`);
+    if (plannedEndDate === scheduledDate && ends <= starts)
+      ends = new Date(ends.getTime() + 86400000);
+    const minutes = Math.round((ends.getTime() - starts.getTime()) / 60000);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes : 60;
+  };
+  const changeStartTime = (next: string) => {
+    const duration = plannedDuration();
+    setTime(next);
+    if (!plannedSession) return;
+    const nextEnd = addMinutes(scheduledDate, next, duration);
+    setPlannedEndDate(nextEnd.date);
+    setPlannedEndTime(nextEnd.time);
+  };
+  const changeStartDate = (next: string) => {
+    const duration = plannedDuration();
+    setScheduledDate(next);
+    if (!plannedSession) {
+      setPlannedEndDate(next);
+      return;
+    }
+    const nextEnd = addMinutes(next, time, duration);
+    setPlannedEndDate(nextEnd.date);
+    setPlannedEndTime(nextEnd.time);
+  };
 
   const save = () => {
     const selectedTracker = trackers.find((metric) => metric.id === metricId);
@@ -132,9 +189,37 @@ export default function ReminderEditor() {
             ].sort((a, b) => a - b)
           : undefined,
       anchorDate: scheduledDate,
+      endDate:
+        mode !== "once" && repeatUntilEnabled ? repeatUntilDate : undefined,
     };
+    if (
+      mode !== "once" &&
+      repeatUntilEnabled &&
+      repeatUntilDate < scheduledDate
+    ) {
+      return Alert.alert(
+        "Check the repeat dates",
+        "The final repeat date cannot be before the first date.",
+      );
+    }
+    let durationMinutes: number | undefined;
+    if (plannedSession) {
+      const starts = new Date(`${scheduledDate}T${time}:00`);
+      let ends = new Date(`${plannedEndDate}T${plannedEndTime}:00`);
+      if (plannedEndDate === scheduledDate && ends <= starts)
+        ends = new Date(ends.getTime() + 86400000);
+      durationMinutes = Math.round((ends.getTime() - starts.getTime()) / 60000);
+      if (!Number.isFinite(durationMinutes) || durationMinutes <= 0)
+        return Alert.alert("Check the planned session", "The end must be after the start.");
+    }
     if (kind === "tracker" && selectedTracker) {
-      const reminder = { enabled: true, time, schedule };
+      const reminder = {
+        enabled: true,
+        time,
+        schedule,
+        durationMinutes,
+        label: title.trim() || undefined,
+      };
       const previous = selectedTracker.reminders ?? [];
       const reminders = [
         ...previous.filter(
@@ -161,6 +246,7 @@ export default function ReminderEditor() {
       metricId: kind === "tracker" ? metricId : undefined,
       todoId: kind === "todo" ? todoId : undefined,
       time,
+      durationMinutes,
       enabled: true,
       schedule,
     });
@@ -283,14 +369,60 @@ export default function ReminderEditor() {
             selectedDate={scheduledDate}
             onMonthChange={setScheduledDate}
             onSelect={(next) => {
-              setScheduledDate(next);
+              changeStartDate(next);
               setCalendarOpen(false);
             }}
           />
         ) : null}
-        <TimeInput value={time} onChange={setTime} label="Time" />
-        <SelectionMenu
-          title="Frequency"
+        <TimeInput value={time} onChange={changeStartTime} label="Time" wheelPicker />
+        <Pressable
+          onPress={() => {
+            if (!plannedSession) {
+              const nextEnd = addMinutes(scheduledDate, time, 60);
+              setPlannedEndDate(nextEnd.date);
+              setPlannedEndTime(nextEnd.time);
+            }
+            setPlannedSession((value) => !value);
+          }}
+          style={[styles.optionRow, { borderColor: colors.border }]}
+        >
+          <View style={styles.grow}>
+            <Text style={[styles.label, { color: colors.ink }]}>Add end time</Text>
+            <Text style={[styles.suffix, { color: colors.muted }]}>
+              {timerTracker
+                ? "Shows a time block and opens the timer ready to start."
+                : "Shows this reminder as a time block in Schedule."}
+            </Text>
+          </View>
+          <Ionicons name={plannedSession ? "checkbox" : "square-outline"} size={20} color={plannedSession ? accent : colors.faint} />
+        </Pressable>
+        {plannedSession ? (
+          <>
+            <View style={styles.plannedRow}>
+              <Pressable
+                onPress={() => setExtraCalendar(extraCalendar === "planned" ? null : "planned")}
+                style={[styles.plannedDate, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={15} color={accent} />
+                <Text style={[styles.dateText, { color: colors.ink }]}>{plannedEndDate}</Text>
+              </Pressable>
+              <TimeInput value={plannedEndTime} onChange={setPlannedEndTime} label="Ends" wheelPicker />
+            </View>
+            {extraCalendar === "planned" ? (
+              <MonthCalendar
+                monthDate={plannedEndDate}
+                selectedDate={plannedEndDate}
+                onSelect={(next) => {
+                  setPlannedEndDate(next);
+                  setExtraCalendar(null);
+                }}
+              />
+            ) : null}
+          </>
+        ) : null}
+          <SelectionMenu
+            title="Frequency"
+            searchable={false}
           items={FREQUENCIES.map((item) => ({
             ...item,
             icon: "repeat-outline" as const,
@@ -301,6 +433,42 @@ export default function ReminderEditor() {
           }
           multiple={false}
         />
+        {mode !== "once" ? (
+          <>
+            <Pressable
+              onPress={() => setRepeatUntilEnabled((value) => !value)}
+              style={[styles.optionRow, { borderColor: colors.border }]}
+            >
+              <View style={styles.grow}>
+                <Text style={[styles.label, { color: colors.ink }]}>Schedule end date</Text>
+                <Text style={[styles.suffix, { color: colors.muted }]}>Optional final day for this repeating session.</Text>
+              </View>
+              <Ionicons name={repeatUntilEnabled ? "checkbox" : "square-outline"} size={20} color={repeatUntilEnabled ? accent : colors.faint} />
+            </Pressable>
+            {repeatUntilEnabled ? (
+              <>
+                <Pressable
+                  onPress={() => setExtraCalendar(extraCalendar === "until" ? null : "until")}
+                  style={[styles.dateButton, { borderColor: colors.border }]}
+                >
+                  <Ionicons name="calendar-outline" size={17} color={accent} />
+                  <Text style={[styles.dateText, styles.grow, { color: colors.ink }]}>{repeatUntilDate}</Text>
+                  <Ionicons name={extraCalendar === "until" ? "chevron-up" : "chevron-down"} size={16} color={colors.muted} />
+                </Pressable>
+                {extraCalendar === "until" ? (
+                  <MonthCalendar
+                    monthDate={repeatUntilDate}
+                    selectedDate={repeatUntilDate}
+                    onSelect={(next) => {
+                      setRepeatUntilDate(next);
+                      setExtraCalendar(null);
+                    }}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </>
+        ) : null}
         {mode === "selected_days" ? (
           <SelectionMenu
             title="Weekdays"
@@ -408,6 +576,25 @@ const styles = StyleSheet.create({
   },
   dateText: { fontSize: 10, fontWeight: "900" },
   inline: { flexDirection: "row", alignItems: "center", gap: 8 },
+  optionRow: {
+    minHeight: 52,
+    borderTopWidth: 1,
+    paddingTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  plannedRow: { flexDirection: "row", alignItems: "flex-end", gap: 7 },
+  plannedDate: {
+    flex: 1,
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   shortInput: {
     width: 76,
     minHeight: 42,

@@ -2,14 +2,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
-  Alert,
   Pressable,
-  Share,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
@@ -23,8 +24,13 @@ import {
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
-import { groupInviteMessage } from "@/src/domain/invites";
+import {
+  groupInviteMessage,
+  validGroupInviteCode,
+} from "@/src/domain/invites";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 import { useApp } from "@/src/state/AppProvider";
+import { shareText } from "@/src/lib/shareText";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function GroupsScreen() {
@@ -42,12 +48,39 @@ export default function GroupsScreen() {
   );
   const canManage =
     activeMember?.role === "owner" || activeMember?.role === "admin";
+  const activeIsPersonal = isPersonalSetupGroup(state.group);
+  const inviteReady = validGroupInviteCode(state.group.inviteCode);
+
+  async function shareInvite() {
+    if (activeIsPersonal) return;
+    if (!inviteReady) {
+      await cloud.refreshGroup().catch(() => undefined);
+      Alert.alert(
+        "Invite is still preparing",
+        "The group was refreshed. Try sharing again in a moment.",
+      );
+      return;
+    }
+    try {
+      const result = await shareText(
+        groupInviteMessage(state.group.name, state.group.inviteCode),
+        `Join ${state.group.name} on HabHub`,
+      );
+      if (result === "copied")
+        Alert.alert("Invite copied", "The invite link is ready to paste.");
+    } catch (error) {
+      Alert.alert(
+        "Could not share invite",
+        error instanceof Error ? error.message : "Copy the group code instead.",
+      );
+    }
+  }
 
   async function join() {
-    if (!code.trim())
+    if (!validGroupInviteCode(code))
       return Alert.alert(
-        "Invite code needed",
-        "Enter the code a friend shared.",
+        "Valid invite code needed",
+        "Enter the group code a friend shared.",
       );
     setBusy("join");
     try {
@@ -77,10 +110,11 @@ export default function GroupsScreen() {
     }
   }
   function confirmLeave(groupId: string, groupName: string) {
-    if (state.groups.length <= 1)
+    const leavingGroup = state.groups.find((group) => group.id === groupId);
+    if (!leavingGroup || isPersonalSetupGroup(leavingGroup))
       return Alert.alert(
-        "Keep one group",
-        "Create or join another group first.",
+        "Personal setup stays private",
+        "It is your non-shareable home group and cannot be left.",
       );
     Alert.alert(
       `Leave ${groupName}?`,
@@ -145,6 +179,7 @@ export default function GroupsScreen() {
         ) : null}
         {state.groups.map((group) => {
           const active = group.id === state.group.id;
+          const personal = isPersonalSetupGroup(group);
           const member = group.members.find(
             (item) => item.id === state.currentUserId,
           );
@@ -181,9 +216,11 @@ export default function GroupsScreen() {
                     {group.name}
                   </Text>
                   <Text style={[styles.meta, { color: colors.muted }]}>
-                    {group.members.length} members ·{" "}
-                    {member?.role === "owner" ? "Admin" : "Member"} ·{" "}
-                    {group.inviteCode}
+                    {personal
+                      ? "Private personal setup"
+                      : `${group.members.length} members · ${
+                          member?.role === "owner" ? "Admin" : "Member"
+                        } · ${group.inviteCode}`}
                   </Text>
                 </View>
                 {active ? (
@@ -195,13 +232,15 @@ export default function GroupsScreen() {
                     color={colors.faint}
                   />
                 )}
-                <Pressable
-                  accessibilityLabel={`Leave ${group.name}`}
-                  onPress={() => confirmLeave(group.id, group.name)}
-                  style={styles.leave}
-                >
-                  <Ionicons name="exit-outline" size={18} color={palette.red} />
-                </Pressable>
+                {!personal ? (
+                  <Pressable
+                    accessibilityLabel={`Leave ${group.name}`}
+                    onPress={() => confirmLeave(group.id, group.name)}
+                    style={styles.leave}
+                  >
+                    <Ionicons name="exit-outline" size={18} color={palette.red} />
+                  </Pressable>
+                ) : null}
               </Card>
             </Pressable>
           );
@@ -214,31 +253,30 @@ export default function GroupsScreen() {
             color={accent}
           />
           <View style={styles.copy}>
-            <Text style={[styles.title, { color: colors.ink }]}>
+            <Text translate={false} style={[styles.title, { color: colors.ink }]}>
               {state.group.name}
             </Text>
             <Text style={[styles.meta, { color: colors.muted }]}>
-              Invite code {state.group.inviteCode}
+              {activeIsPersonal
+                ? "Private to you · invite sharing is off"
+                : inviteReady
+                ? `Invite code ${state.group.inviteCode}`
+                : "Preparing secure invite…"}
             </Text>
           </View>
         </View>
         <View style={styles.buttons}>
-          <View style={styles.actionButton}>
-            <Button
-              label="Share invite"
-              icon="share-outline"
-              variant="secondary"
-              size="small"
-              onPress={() =>
-                Share.share({
-                  message: groupInviteMessage(
-                    state.group.name,
-                    state.group.inviteCode,
-                  ),
-                })
-              }
-            />
-          </View>
+          {!activeIsPersonal ? (
+            <View style={styles.actionButton}>
+              <Button
+                label="Share invite"
+                icon="share-outline"
+                variant="secondary"
+                size="small"
+                onPress={shareInvite}
+              />
+            </View>
+          ) : null}
           {canManage ? (
             <View style={styles.actionButton}>
               <Button

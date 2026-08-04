@@ -118,49 +118,64 @@ function Inline({
   style?: TextStyle | TextStyle[];
   numberOfLines?: number;
 }) {
-  const parts = value.split(
-    /(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g,
-  );
   return (
     <Text
+      translate={false}
       numberOfLines={numberOfLines}
       style={[styles.text, { color }, style]}
     >
-      {parts.map((part, index) => {
-        if (/^\*\*.*\*\*$|^__.*__$/.test(part))
-          return (
-            <Text key={index} style={styles.bold}>
-              {part.slice(2, -2)}
-            </Text>
-          );
-        if (/^~~.*~~$/.test(part))
-          return (
-            <Text key={index} style={styles.strike}>
-              {part.slice(2, -2)}
-            </Text>
-          );
-        if (/^\*.*\*$|^_.*_$/.test(part))
-          return (
-            <Text key={index} style={styles.italic}>
-              {part.slice(1, -1)}
-            </Text>
-          );
-        const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-        if (link)
-          return (
-            <Text
-              key={index}
-              accessibilityRole="link"
-              onPress={() => void Linking.openURL(link[2])}
-              style={styles.link}
-            >
-              {link[1]}
-            </Text>
-          );
-        return part;
-      })}
+      {renderInlineParts(value)}
     </Text>
   );
+}
+
+function renderInlineParts(value: string): React.ReactNode[] {
+  const parts = value.split(
+    /(\[color=#[0-9a-fA-F]{6}\][^\n]*?\[\/color\]|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g,
+  );
+  return parts.map((part, index) => {
+    const colored = part.match(
+      /^\[color=(#[0-9a-fA-F]{6})\]([^\n]*?)\[\/color\]$/,
+    );
+    if (colored)
+      return (
+        <Text key={index} translate={false} preserveColor style={{ color: colored[1] }}>
+          {renderInlineParts(colored[2])}
+        </Text>
+      );
+    if (/^\*\*.*\*\*$|^__.*__$/.test(part))
+      return (
+        <Text key={index} translate={false} style={styles.bold}>
+          {part.slice(2, -2)}
+        </Text>
+      );
+    if (/^~~.*~~$/.test(part))
+      return (
+        <Text key={index} translate={false} style={styles.strike}>
+          {part.slice(2, -2)}
+        </Text>
+      );
+    if (/^\*.*\*$|^_.*_$/.test(part))
+      return (
+        <Text key={index} translate={false} style={styles.italic}>
+          {part.slice(1, -1)}
+        </Text>
+      );
+    const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (link)
+      return (
+        <Text
+          key={index}
+          translate={false}
+          accessibilityRole="link"
+          onPress={() => void Linking.openURL(link[2])}
+          style={styles.link}
+        >
+          {link[1]}
+        </Text>
+      );
+    return part;
+  });
 }
 
 const styles = StyleSheet.create({

@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
-  Alert,
   InteractionManager,
   PanResponder,
   Platform,
@@ -13,6 +12,8 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -31,7 +32,12 @@ import {
   ProgressBar,
   Screen,
 } from "@/src/components/ui";
-import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
+import {
+  dateKey,
+  dateWithOffsetFrom,
+  friendlyDate,
+  relativeTime,
+} from "@/src/domain/date";
 import {
   allTimePeriodDates,
   leaderboardRows,
@@ -42,6 +48,7 @@ import {
   periodTitle,
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
+import { latestMemberActivityPublishedAt } from "@/src/domain/leaderboardSync";
 import {
   memberDisplayName,
   memberOriginalLabel,
@@ -69,6 +76,7 @@ export default function LeaderboardDetail() {
     metrics?: string;
   }>();
   const { state } = useApp();
+  const { language } = useLocalization();
   const calculationStateRef = useRef(state);
   calculationStateRef.current = state;
   const colors = useAppColors();
@@ -77,6 +85,7 @@ export default function LeaderboardDetail() {
     (params.period as LeaderboardPeriod) || "today",
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
+  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [showCalendar, setShowCalendar] = useState(false);
   const [openLogs, setOpenLogs] = useState<Record<string, boolean>>({});
   const [detailsReady, setDetailsReady] = useState(false);
@@ -284,6 +293,10 @@ export default function LeaderboardDetail() {
     if (period === "today" || period === "yesterday") setPeriod("custom");
     setAnchor(next);
   }
+  function toggleDateNavigator() {
+    if (dateNavigatorOpen) setShowCalendar(false);
+    setDateNavigatorOpen((open) => !open);
+  }
   const pageSwipeResponder = useMemo(
     () =>
       PanResponder.create({
@@ -318,16 +331,22 @@ export default function LeaderboardDetail() {
         }
       />
       <View {...pageSwipeResponder.panHandlers}>
-        <PeriodChoiceBar period={period} onChange={setRange} />
-        <DateRangeNavigator
+        <PeriodChoiceBar
           period={period}
-          anchor={anchor}
-          dates={dates}
-          calendarOpen={showCalendar}
-          onToggleCalendar={() => setShowCalendar((value) => !value)}
-          onShift={shift}
-        >
-          <MonthCalendar
+          onChange={setRange}
+          dateViewOpen={dateNavigatorOpen}
+          onToggleDateView={toggleDateNavigator}
+        />
+        {period !== "overall" && dateNavigatorOpen ? (
+          <DateRangeNavigator
+            period={period}
+            anchor={anchor}
+            dates={dates}
+            calendarOpen={showCalendar}
+            onToggleCalendar={() => setShowCalendar((value) => !value)}
+            onShift={shift}
+          >
+            <MonthCalendar
                 monthDate={anchor}
                 selectedDate={anchor}
                 onSelect={(date) => {
@@ -402,7 +421,8 @@ export default function LeaderboardDetail() {
                   );
                 }}
               />
-        </DateRangeNavigator>
+          </DateRangeNavigator>
+        ) : null}
       {false ? (
         <View style={styles.range}>
           <Ionicons name="calendar-outline" size={15} color={accent} />
@@ -421,6 +441,12 @@ export default function LeaderboardDetail() {
           </Card>
         ) : null}
         {rows.map((row, index) => {
+          const memberSyncedAt = latestMemberActivityPublishedAt(
+            state.dailyMetricStatuses,
+            state.group.id,
+            row.member.id,
+            row.member.lastDataSyncedAt,
+          );
           const entries = entriesByMember.get(row.member.id) ?? [];
           const expanded = Boolean(openLogs[row.member.id]);
           const weightDay =
@@ -473,13 +499,18 @@ export default function LeaderboardDetail() {
                 />
                 <View style={styles.copy}>
                   <Text style={[styles.name, { color: colors.ink }]}>
-                    {memberDisplayName(state, row.member)}
+                    <Text translate={false}>{memberDisplayName(state, row.member)}</Text>
                     {row.member.id === state.currentUserId ? " · You" : ""}
                   </Text>
                   <Text style={[styles.role, { color: colors.muted }]}>
                     {memberOriginalLabel(state, row.member) ??
                       memberRoleLabel(row.member)}
                   </Text>
+                  {memberSyncedAt ? (
+                    <Text style={[styles.role, { color: colors.muted }]}>
+                      Synced {relativeTime(memberSyncedAt)}
+                    </Text>
+                  ) : null}
                 </View>
                 {includeScore ? (
                   <View>
@@ -557,8 +588,8 @@ export default function LeaderboardDetail() {
                       />
                     </View>
                     <View style={styles.copy}>
-                      <Text style={[styles.metricName, { color: colors.ink }]}>
-                        {metric.name}
+                      <Text translate={false} style={[styles.metricName, { color: colors.ink }]}>
+                        {localizeMetricName(language, metric)}
                       </Text>
                       <Text style={[styles.metricSub, { color: colors.muted }]}>
                         {result.averageLabel ??
@@ -663,7 +694,11 @@ export default function LeaderboardDetail() {
                           b.recordedAt.localeCompare(a.recordedAt),
                         )
                         .map((entry) => (
-                          <LogRow key={entry.id} entry={entry} state={state} />
+                          <LogRow
+                            key={`${entry.userId}:${entry.id}`}
+                            entry={entry}
+                            state={state}
+                          />
                         ))
                     : null}
                 </View>
@@ -710,6 +745,7 @@ function personalGoalProgressCopy(
 
 function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
   const colors = useAppColors();
+  const { language } = useLocalization();
   const metric =
     (state.group.metricConfiguration ?? []).find(
       (item) => item.id === entry.metricId,
@@ -740,8 +776,8 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
             size={13}
             color={metric.color}
           />
-          <Text style={[styles.logMetricText, { color: metric.color }]}>
-            {metric.name}
+          <Text translate={false} style={[styles.logMetricText, { color: metric.color }]}>
+            {localizeMetricName(language, metric)}
           </Text>
         </View>
         <View style={styles.logTop}>
@@ -756,7 +792,7 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
           </Text>
         </View>
         {entry.note ? (
-          <Text style={[styles.note, { color: colors.muted }]}>{entry.note}</Text>
+          <Text translate={false} style={[styles.note, { color: colors.muted }]}>{entry.note}</Text>
         ) : null}
         {entry.nutrition ? (
           <Text style={[styles.nutrition, { color: colors.primary }]}>
@@ -864,7 +900,7 @@ function PhotoCompare({
     if (photos.length < 2) return;
     if (Platform.OS !== "web") {
       await Share.share({
-        message: `MetricRally comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join("\n")}`,
+        message: `HabHub comparison\n${photos.map((photo) => `${photo.localDate} · ${weight(photo.localDate)}`).join("\n")}`,
       });
       return;
     }
@@ -878,7 +914,7 @@ function PhotoCompare({
       context.fillRect(0, 0, 1200, 850);
       context.fillStyle = "#17211B";
       context.font = "bold 34px sans-serif";
-      context.fillText("MetricRally progress comparison", 45, 55);
+      context.fillText("HabHub progress comparison", 45, 55);
       const images = await Promise.all(
         photos.map(
           (photo) =>
@@ -939,7 +975,7 @@ function PhotoCompare({
             style={styles.capture}
           >
             <Text preserveColor style={styles.captureTitle}>
-              MetricRally progress comparison
+              HabHub progress comparison
             </Text>
             <View style={styles.photoGrid}>
               {[primary, comparison].filter(Boolean).map((photo) => (

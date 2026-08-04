@@ -122,7 +122,7 @@ export default function RecapScreen() {
             <Text style={styles.stat}>{story.stat}</Text>
             <Text style={styles.body}>{story.body}</Text>
           </View>
-          <Text style={styles.brand}>METRICRALLY</Text>
+          <Text style={styles.brand}>HABHUB</Text>
         </Card>
       </View>
       <Text style={styles.note}>

@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "HabHub 只读取你选择的健康数据类别，以更新你的私人目标和你允许共享的群组进度。",
+    "NSHealthUpdateUsageDescription": "除非你明确选择未来的导出功能，否则 HabHub 不会写入健康数据。",
+    "NSCameraUsageDescription": "HabHub 仅在你选择拍摄进度照片时使用相机。",
+    "NSPhotoLibraryUsageDescription": "HabHub 仅在你选择添加进度更新时使用你的照片。",
+    "NSPhotoLibraryAddUsageDescription": "HabHub 仅在你选择导出或分享图片时保存图片。"
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

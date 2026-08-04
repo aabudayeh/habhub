@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
@@ -47,21 +48,35 @@ export default function ViewFilters() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  const [includeTodos, setIncludeTodos] = useState(true);
+  const [selectedTodoIds, setSelectedTodoIds] = useState<string[]>([]);
   const begin = (filter?: TrackerViewFilter) => {
     setEditingId(filter?.id ?? "new");
     setName(filter?.name ?? "");
     setSelected(filter?.metricIds ?? []);
+    setIncludeTodos(scope === "today" ? filter?.includeTodos !== false : false);
+    setSelectedTodoIds(
+      scope === "today"
+        ? filter?.todoIds ?? (state.todos ?? []).map((todo) => todo.id)
+        : [],
+    );
   };
   const close = () => {
     setEditingId(null);
     setName("");
     setSelected([]);
+    setIncludeTodos(true);
+    setSelectedTodoIds([]);
   };
   const save = () => {
-    if (!name.trim() || !selected.length)
+    if (
+      !name.trim() ||
+      (!selected.length &&
+        !(scope === "today" && includeTodos && selectedTodoIds.length))
+    )
       return Alert.alert(
         "Complete this view",
-        "Add a name and choose at least one tracker.",
+        "Add a name and choose at least one tracker or To-Do.",
       );
     const id =
       editingId === "new"
@@ -74,6 +89,11 @@ export default function ViewFilters() {
         id,
         name: name.trim(),
         metricIds: selected,
+        includeTodos: scope === "today" ? includeTodos : existing?.includeTodos,
+        todoIds:
+          scope === "today" && includeTodos
+            ? selectedTodoIds
+            : existing?.todoIds,
         visible: existing?.visible ?? true,
       },
     ];
@@ -174,6 +194,83 @@ export default function ViewFilters() {
               );
             })}
           </View>
+          {scope === "today" ? (
+            <View style={[styles.todoSection, { borderColor: colors.border }]}>
+              <Pressable
+                onPress={() => setIncludeTodos((current) => !current)}
+                style={styles.todoHeading}
+              >
+                <Ionicons
+                  name={includeTodos ? "checkbox" : "square-outline"}
+                  size={17}
+                  color={includeTodos ? accent : colors.faint}
+                />
+                <View style={styles.copy}>
+                  <Text style={[styles.filterName, { color: colors.ink }]}>To-Dos</Text>
+                  <Text style={[styles.filterMeta, { color: colors.muted }]}>
+                    Show selected To-Dos in this view
+                  </Text>
+                </View>
+              </Pressable>
+              {includeTodos ? (
+                <>
+                  <Pressable
+                    onPress={() =>
+                      setSelectedTodoIds(
+                        selectedTodoIds.length === (state.todos ?? []).length
+                          ? []
+                          : (state.todos ?? []).map((todo) => todo.id),
+                      )
+                    }
+                    style={styles.todoSelectAll}
+                  >
+                    <Text style={[styles.link, { color: accent }]}>
+                      {selectedTodoIds.length === (state.todos ?? []).length
+                        ? "Deselect all"
+                        : "Select all"}
+                    </Text>
+                  </Pressable>
+                  <View style={styles.trackerList}>
+                    {(state.todos ?? []).map((todo) => {
+                      const checked = selectedTodoIds.includes(todo.id);
+                      return (
+                        <Pressable
+                          key={todo.id}
+                          onPress={() =>
+                            setSelectedTodoIds((current) =>
+                              checked
+                                ? current.filter((id) => id !== todo.id)
+                                : [...current, todo.id],
+                            )
+                          }
+                          style={[
+                            styles.tracker,
+                            {
+                              borderColor: checked ? accent : colors.border,
+                              backgroundColor: checked ? colors.primarySoft : colors.card,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={checked ? "checkmark-circle" : "ellipse-outline"}
+                            size={16}
+                            color={checked ? accent : colors.muted}
+                          />
+                          <Text
+                            translate={false}
+                            numberOfLines={1}
+                            style={[styles.trackerName, { color: colors.ink }]}
+                          >
+                            {todo.title}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : null}
+            </View>
+          ) : null}
           <View style={styles.editorButtons}>
             <Pressable
               onPress={close}
@@ -243,6 +340,9 @@ export default function ViewFilters() {
                   </Text>
                   <Text style={[styles.filterMeta, { color: colors.muted }]}>
                     {filter.metricIds.length} trackers
+                    {scope === "today" && filter.includeTodos !== false
+                      ? ` · ${filter.todoIds?.length ?? (state.todos ?? []).length} to-dos`
+                      : ""}
                   </Text>
                 </View>
                 {state.settings[activeSetting] === filter.id ? (
@@ -323,6 +423,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   trackerName: { flex: 1, fontSize: 8, fontWeight: "800" },
+  todoSection: { borderTopWidth: 1, paddingTop: 9, gap: 7 },
+  todoHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
+  todoSelectAll: { alignSelf: "flex-end" },
   editorButtons: { flexDirection: "row", gap: 8 },
   secondaryButton: {
     flex: 1,

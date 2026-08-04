@@ -1,28 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Linking, Platform, StyleSheet, View } from 'react-native';
+import { Linking, Platform, StyleSheet, View } from 'react-native';
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 
 import { useAuth } from '@/src/auth/AuthProvider';
-import { useCloudSync } from '@/src/cloud/CloudSyncProvider';
+import { useCloudSyncActions } from '@/src/cloud/CloudSyncProvider';
 import { Button, Card, Screen } from '@/src/components/ui';
 import { useApp } from '@/src/state/AppProvider';
 import { palette } from '@/src/theme';
-import { clearPendingInvite, rememberPendingInvite } from '@/src/domain/invites';
+import {
+  clearPendingInvite,
+  rememberPendingInvite,
+  validGroupInviteCode,
+} from '@/src/domain/invites';
 
 export default function JoinGroupScreen() {
   const params = useLocalSearchParams<{ code?: string | string[] }>();
   const code = (Array.isArray(params.code) ? params.code[0] : params.code ?? '').trim().toUpperCase();
   const auth = useAuth();
-  const cloud = useCloudSync();
+  const cloud = useCloudSyncActions();
   const app = useApp();
   const [busy, setBusy] = useState(false);
   const attempted = useRef(false);
   const appLink = `paceboard://join?code=${encodeURIComponent(code)}`;
+  const inviteValid = validGroupInviteCode(code);
 
   const join = useCallback(async () => {
-    if (!code) return Alert.alert('Invalid invitation', 'This invitation is missing its group code.');
+    if (!inviteValid) return Alert.alert('Invalid invitation', 'This invitation is missing a valid group code.');
     if (auth.status === 'signedOut') {
       await rememberPendingInvite(code);
       return router.replace({ pathname: '/sign-in', params: { invite: code } });
@@ -40,35 +46,26 @@ export default function JoinGroupScreen() {
       const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : 'Check that the invitation is still valid.';
       Alert.alert('Could not join group', message);
     } finally { setBusy(false); }
-  }, [app, auth.status, cloud, code]);
+  }, [app, auth.status, cloud, code, inviteValid]);
 
   useEffect(() => {
     if (
-      Platform.OS === "web" ||
-      !code ||
+      !inviteValid ||
       attempted.current ||
       (auth.status !== 'signedIn' && auth.status !== 'demo')
     ) return;
     attempted.current = true;
     void join();
-  }, [auth.status, code, join]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !code || attempted.current) return;
-    attempted.current = true;
-    void Linking.openURL(appLink);
-  }, [appLink, code]);
+  }, [auth.status, inviteValid, join]);
 
   return <Screen contentContainerStyle={styles.screen}><Card style={styles.card}>
     <View style={styles.icon}><Ionicons name="people" size={30} color={palette.white}/></View>
     <Text style={styles.title}>You’re invited</Text>
-    <Text style={styles.body}>Join this MetricRally group to share the progress you choose, chat, and compete.</Text>
+    <Text style={styles.body}>Join this HabHub group to share the progress you choose, chat, and compete.</Text>
     <View style={styles.code}><Text style={styles.codeLabel}>INVITE CODE</Text><Text style={styles.codeValue}>{code || 'Missing'}</Text></View>
     <Button
       label={
-        Platform.OS === "web"
-          ? "Open MetricRally"
-          : auth.status === "signedOut"
+        auth.status === "signedOut"
             ? "Sign in to join"
             : busy
               ? "Joining…"
@@ -76,17 +73,29 @@ export default function JoinGroupScreen() {
       }
       icon="enter-outline"
       loading={busy}
-      onPress={() =>
-        Platform.OS === "web" ? Linking.openURL(appLink) : join()
-      }
+      onPress={join}
     />
-    {Platform.OS !== "web" ? (
+    {Platform.OS === "web" ? (
+      <Button
+        label="Open installed app"
+        variant="ghost"
+        icon="phone-portrait-outline"
+        onPress={() =>
+          void Linking.openURL(appLink).catch(() =>
+            Alert.alert(
+              "Could not open the app",
+              "You can join this group directly in the browser instead.",
+            ),
+          )
+        }
+      />
+    ) : (
       <Button
         label="Not now"
         variant="ghost"
         onPress={() => router.replace("/")}
       />
-    ) : null}
+    )}
   </Card></Screen>;
 }
 

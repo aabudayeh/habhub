@@ -23,13 +23,15 @@ declare module 'react-native-health-connect' {
   export type Permission = { accessType: 'read' | 'write'; recordType: string };
   export function initialize(providerPackageName?: string): Promise<boolean>;
   export function requestPermission(permissions: Permission[]): Promise<Permission[]>;
+  export function getGrantedPermissions(): Promise<Permission[]>;
   export function readRecords(recordType: string, options: Record<string, unknown>): Promise<{ records: Record<string, unknown>[]; pageToken?: string }>;
   export function openHealthConnectSettings(): Promise<void>;
 }
 
 declare module 'expo-background-task' {
+  export type BackgroundTaskOptions = { minimumInterval?: number };
   export enum BackgroundTaskResult { Success = 1, Failed = 2 }
-  export function registerTaskAsync(name: string, options?: { minimumInterval?: number }): Promise<void>;
+  export function registerTaskAsync(name: string, options?: BackgroundTaskOptions): Promise<void>;
   export function unregisterTaskAsync(name: string): Promise<void>;
   export function getStatusAsync(): Promise<number>;
 }
@@ -41,4 +43,5 @@ declare module 'expo-task-manager' {
   ): void;
   export function isTaskDefined(name: string): boolean;
   export function isTaskRegisteredAsync(name: string): Promise<boolean>;
+  export function getTaskOptionsAsync<T>(name: string): Promise<T>;
 }

@@ -8,6 +8,7 @@ import {
   trackedGoalSummary,
 } from "./metrics";
 import { performanceOverview } from "./performance";
+import { estimateLevelWalkingFromSteps } from "./health";
 
 export type RecapScope = "personal" | "group";
 
@@ -110,7 +111,12 @@ function personalStories(
     const priorAverage = average(state, steps, userId, previous);
     const stepTotal = total(state, steps, userId, current);
     const change = signedChange(stepAverage, priorAverage);
-    const km = stepTotal * 0.000762;
+    const walkingProfile =
+      state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+    const km = estimateLevelWalkingFromSteps(
+      stepTotal,
+      walkingProfile,
+    ).distanceKm;
     stories.push({
       id: "personal-steps",
       scope: "personal",
@@ -151,7 +157,7 @@ function personalStories(
     eyebrow: "BEST DAY",
     title: friendlyDate(scores[0]?.day ?? current[6]),
     stat: `${Math.round(scores[0]?.value ?? 0)}/100`,
-    body: "Your highest configured MetricRally score in this recap window.",
+    body: "Your highest configured HabHub score in this recap window.",
     icon: "sparkles-outline",
     color: "#6A5ACD",
   });
@@ -293,13 +299,17 @@ function groupStories(
       (sum, member) => sum + total(state, steps, member.id, current),
       0,
     );
+    const groupDistanceKm = estimateLevelWalkingFromSteps(
+      groupSteps,
+      70,
+    ).distanceKm;
     stories.push({
       id: "group-distance",
       scope: "group",
       eyebrow: "TOGETHER",
       title: "The group went far",
       stat: `${Math.round(groupSteps).toLocaleString()} steps`,
-      body: `Roughly ${(groupSteps * 0.000762).toFixed(1)} km combined—about ${((groupSteps * 0.000762) / 42.195).toFixed(1)} marathons.`,
+      body: `Roughly ${groupDistanceKm.toFixed(1)} km combined—about ${(groupDistanceKm / 42.195).toFixed(1)} marathons.`,
       icon: "people-outline",
       color: steps.color,
     });

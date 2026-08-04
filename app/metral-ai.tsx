@@ -2,12 +2,13 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import React, { useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { supabase } from "@/src/lib/supabase";
@@ -95,7 +96,7 @@ export default function MetRalAiScreen() {
         reminders: [],
         addToToday: true,
       });
-      return `Created ${create[1].trim()} with a target of ${target}. You can refine it in Advanced settings.`;
+      return `Created ${create[1].trim()} with a target of ${target}. You can refine it in Customize trackers.`;
     }
     const reminder = text.match(
       /^remind me (?:at\s+)?(\d{1,2}:\d{2})\s+(?:to\s+)?(.+)$/i,

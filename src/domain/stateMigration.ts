@@ -3,6 +3,7 @@ import {
   isBloodPressureDiastolic,
   isBloodPressureSystolic,
 } from "@/src/domain/trackerCatalog";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -20,7 +21,11 @@ function upgradeMetric(
         category: metric.category ?? preset.category,
         manualEntry: metric.manualEntry ?? preset.manualEntry,
         timerEnabled: metric.timerEnabled ?? preset.timerEnabled,
-        submetrics: metric.submetrics ?? preset.submetrics,
+        submetrics:
+          metric.id === "blood_pressure_systolic" &&
+          !metric.submetrics?.length
+            ? preset.submetrics
+            : (metric.submetrics ?? preset.submetrics),
         submetricDisplay: metric.submetricDisplay ?? preset.submetricDisplay,
         goalProgressMode:
           metric.goalProgressMode ?? preset.goalProgressMode,
@@ -103,31 +108,47 @@ function repairedMetricList(metrics: MetricDefinition[]) {
 }
 
 function repairOrphanedGroupMetrics(state: AppState): AppState {
-  const groups = state.groups.map((group) => ({
+  const trackedIds = new Set(
+    Object.entries(state.trackedGoalPeriods ?? {})
+      .filter(([, periods]) => periods.some((period) => !period.to))
+      .map(([metricId]) => metricId),
+  );
+  const personalSetupMetrics = repairedMetricList(state.metrics)
+    .filter((metric) => trackedIds.has(metric.id))
+    .map((metric, order) => ({
+      ...metric,
+      sections: { ...metric.sections, group: true },
+      order,
+    }));
+  const repairGroup = (group: AppState["group"]) => ({
     ...group,
-    metricConfiguration: group.metricConfiguration
-      ? repairedMetricList(group.metricConfiguration)
-      : group.metricConfiguration,
-  }));
-  const group = {
-    ...state.group,
-    metricConfiguration: state.group.metricConfiguration
-      ? repairedMetricList(state.group.metricConfiguration)
-      : state.group.metricConfiguration,
+    metricConfiguration: isPersonalSetupGroup(group)
+      ? personalSetupMetrics
+      : group.metricConfiguration
+        ? repairedMetricList(group.metricConfiguration)
+        : group.metricConfiguration,
+  });
+  const groups = state.groups.map(repairGroup);
+  const group = repairGroup(state.group);
+  const repairedSettings: AppState["settings"] = {
+    ...state.settings,
+    language: state.settings.language ?? "en",
+    scheduleStartHour: state.settings.scheduleStartHour ?? 7,
+    timeFormat: state.settings.timeFormat ?? "24h",
+    showGym: state.settings.showGym !== false,
+    showCalendar: state.settings.showCalendar !== false,
+    showJournal: state.settings.showJournal !== false,
+    showPerformance: state.settings.showPerformance !== false,
+    healthHistoryDays: state.settings.healthHistoryDays ?? 90,
+    todayHistoryCollapsed: state.settings.todayHistoryCollapsed ?? true,
+    tabOrder: state.settings.tabOrder?.includes("performance")
+      ? state.settings.tabOrder
+      : [...(state.settings.tabOrder ?? []), "performance"],
   };
   return {
     ...state,
     metrics: repairedMetricList(state.metrics),
-    settings: {
-      ...state.settings,
-      scheduleStartHour: state.settings.scheduleStartHour ?? 7,
-      timeFormat: state.settings.timeFormat ?? "24h",
-      showPerformance: state.settings.showPerformance ?? false,
-      healthHistoryDays: state.settings.healthHistoryDays ?? 90,
-      tabOrder: state.settings.tabOrder?.includes("performance")
-        ? state.settings.tabOrder
-        : [...(state.settings.tabOrder ?? []), "performance"],
-    },
+    settings: repairedSettings,
     group,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
   };
@@ -139,7 +160,30 @@ export function upgradeStateV21(
   defaults: AppState,
   sourceVersion = Number(state.version ?? 1),
 ): AppState {
-  if (sourceVersion >= 23) return repairOrphanedGroupMetrics(state);
+  // Preset-backed repairs are deliberately idempotent. Earlier v23 builds
+  // could persist the BP parent without its compound SYS/DIA definition, so
+  // version alone is not proof that the repair is present.
+  if (sourceVersion >= 23) {
+    const metrics = upgradeMetricList(state.metrics, defaults);
+    const groups = state.groups.map((group) => ({
+      ...group,
+      metricConfiguration: group.metricConfiguration
+        ? upgradeMetricList(group.metricConfiguration, defaults)
+        : group.metricConfiguration,
+    }));
+    const group = {
+      ...state.group,
+      metricConfiguration: state.group.metricConfiguration
+        ? upgradeMetricList(state.group.metricConfiguration, defaults)
+        : state.group.metricConfiguration,
+    };
+    return repairOrphanedGroupMetrics({
+      ...state,
+      metrics,
+      groups: groups.map((item) => (item.id === group.id ? group : item)),
+      group,
+    });
+  }
   const metrics = upgradeMetricList(state.metrics, defaults);
   const withTodo =
     sourceVersion < 22 &&

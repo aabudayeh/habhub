@@ -1,7 +1,13 @@
 import { dateWithOffsetFrom } from "@/src/domain/date";
-import { exerciseKey, MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
+import {
+  catalogExercise,
+  exerciseKey,
+  MUSCLE_LABELS,
+} from "@/src/domain/exerciseCatalog";
 import {
   AppState,
+  EnergyProfile,
+  GymCalorieCalculationMode,
   GymExercise,
   GymExerciseGoal,
   GymIntensity,
@@ -14,7 +20,9 @@ import { gymSessionsForDay } from "@/src/domain/dataIndex";
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
     (total, exercise) =>
-      total + exercise.sets.filter((set) => set.completed).length,
+      total +
+      exercise.sets.filter((set) => set.completed).length +
+      exercise.sets.filter((set) => set.completed && set.superset).length,
     0,
   );
 }
@@ -54,13 +62,46 @@ export function gymSessionMetricValue(
     return completedGymSets(session.exercises);
   if (
     mapping.kind === "exercise_one_rep_max" ||
-    mapping.kind === "exercise_volume"
+    mapping.kind === "exercise_volume" ||
+    mapping.kind === "exercise_reps" ||
+    mapping.kind === "exercise_duration"
   ) {
-    const exercises = session.exercises.filter(
+    const expanded = expandedGymExercises(session.exercises);
+    const exercises = expanded.filter(
       (exercise) => exerciseIdentity(exercise) === mapping.exerciseKey,
     );
     if (mapping.kind === "exercise_volume")
       return trainingVolumeKg(exercises);
+    if (mapping.kind === "exercise_reps")
+      return exercises.reduce(
+        (total, exercise) =>
+          total +
+          exercise.sets.reduce(
+            (sets, set) => sets + (set.completed ? Math.max(0, set.reps) : 0),
+            0,
+          ),
+        0,
+      );
+    if (mapping.kind === "exercise_duration") {
+      const measuredSeconds = exercises.reduce(
+        (total, exercise) =>
+          total +
+          exercise.sets.reduce(
+            (sets, set) =>
+              sets + (set.completed ? Math.max(0, set.workSeconds ?? 0) : 0),
+            0,
+          ),
+        0,
+      );
+      if (measuredSeconds > 0) return measuredSeconds / 60;
+      const completedExerciseCount = expanded.filter((exercise) =>
+        exercise.sets.some((set) => set.completed),
+      ).length;
+      return completedExerciseCount > 0
+        ? (Math.max(0, session.durationMinutes) * exercises.length) /
+            completedExerciseCount
+        : 0;
+    }
     return Math.max(
       0,
       ...exercises.flatMap((exercise) =>
@@ -71,10 +112,40 @@ export function gymSessionMetricValue(
     );
   }
   return trainingVolumeKg(
-    session.exercises.filter((exercise) =>
+    expandedGymExercises(session.exercises).filter((exercise) =>
       (exercise.muscleGroups ?? ["full_body"]).includes(mapping.muscleGroup),
     ),
   );
+}
+
+/**
+ * Returns a stable clock range for a saved workout. Guided sessions retain
+ * their exact timestamps; older/manual sessions fall back to their recorded
+ * completion time and saved duration.
+ */
+export function gymSessionClockBounds(session: GymSession) {
+  const completedCandidate = session.completedAt ?? session.recordedAt;
+  const completedMs = new Date(completedCandidate).getTime();
+  if (!Number.isFinite(completedMs)) {
+    return {
+      startedAt: session.startedAt,
+      completedAt: session.completedAt,
+    };
+  }
+
+  const explicitStartMs = session.startedAt
+    ? new Date(session.startedAt).getTime()
+    : Number.NaN;
+  const fallbackStartMs =
+    completedMs - Math.max(0, session.durationMinutes) * 60_000;
+  const startedMs = Number.isFinite(explicitStartMs)
+    ? Math.min(explicitStartMs, completedMs)
+    : fallbackStartMs;
+
+  return {
+    startedAt: new Date(startedMs).toISOString(),
+    completedAt: new Date(completedMs).toISOString(),
+  };
 }
 
 export function hasGymMetricData(
@@ -90,10 +161,12 @@ export function hasGymMetricData(
     return sessions.some((session) => session.durationMinutes > 0);
   if (
     mapping.kind === "exercise_one_rep_max" ||
-    mapping.kind === "exercise_volume"
+    mapping.kind === "exercise_volume" ||
+    mapping.kind === "exercise_reps" ||
+    mapping.kind === "exercise_duration"
   )
     return sessions.some((session) =>
-      session.exercises.some(
+      expandedGymExercises(session.exercises).some(
         (exercise) =>
           exerciseIdentity(exercise) === mapping.exerciseKey &&
           exercise.sets.some((set) => set.completed),
@@ -101,7 +174,7 @@ export function hasGymMetricData(
     );
   if (mapping.kind === "muscle_volume")
     return sessions.some((session) =>
-      session.exercises.some(
+      expandedGymExercises(session.exercises).some(
         (exercise) =>
           (exercise.muscleGroups ?? ["full_body"]).includes(
             mapping.muscleGroup,
@@ -120,7 +193,11 @@ export function trainingVolumeKg(exercises: GymExercise[]) {
         (exerciseTotal, set) =>
           exerciseTotal +
           (set.completed
-            ? Math.max(0, set.reps) * Math.max(0, set.weightKg)
+            ? Math.max(0, set.reps) * Math.max(0, set.weightKg) +
+              (set.superset
+                ? Math.max(0, set.superset.reps) *
+                  Math.max(0, set.superset.weightKg)
+                : 0)
             : 0),
         0,
       ),
@@ -137,6 +214,46 @@ export function estimatedOneRepMax(weightKg: number, reps: number) {
 
 export function exerciseIdentity(exercise: Pick<GymExercise, "name" | "exerciseKey">) {
   return exerciseKey(exercise.name, exercise.exerciseKey);
+}
+
+/**
+ * Presents paired superset movements as normal exercise observations without
+ * duplicating them in the editable workout structure.
+ */
+export function expandedGymExercises(exercises: GymExercise[]) {
+  const primary = exercises.map((exercise) => ({
+    ...exercise,
+    sets: exercise.sets.map((set) => ({ ...set, superset: undefined })),
+  }));
+  const paired = new Map<string, GymExercise>();
+  exercises.forEach((exercise) => {
+    exercise.sets.forEach((set) => {
+      if (!set.completed || !set.superset) return;
+      const key = exerciseKey(set.superset.name, set.superset.exerciseKey);
+      const existing = paired.get(key);
+      const pairedSet = {
+        id: `${set.id}:superset`,
+        reps: set.superset.reps,
+        weightKg: set.superset.weightKg,
+        completed: true,
+        workSeconds:
+          set.superset.workSeconds ??
+          (set.workSeconds ? Math.max(1, Math.round(set.workSeconds / 2)) : undefined),
+      };
+      if (existing) existing.sets.push(pairedSet);
+      else
+        paired.set(key, {
+          id: `${exercise.id}:superset:${key}`,
+          exerciseKey: key,
+          name: set.superset.name,
+          muscleGroups: set.superset.muscleGroups,
+          customMet: set.superset.customMet,
+          completed: true,
+          sets: [pairedSet],
+        });
+    });
+  });
+  return [...primary, ...paired.values()];
 }
 
 export type ExerciseObservation = {
@@ -160,7 +277,7 @@ export function exerciseHistory(
   return sessions
     .filter((session) => session.userId === userId)
     .flatMap((session) =>
-      session.exercises
+      expandedGymExercises(session.exercises)
         .filter((exercise) => exerciseIdentity(exercise) === key)
         .map((exercise): ExerciseObservation => {
           const sets = exercise.sets.filter((set) => set.completed);
@@ -295,7 +412,7 @@ export function muscleGroupStats(sessions: GymSession[], userId: string) {
     }
   >();
   for (const session of sessions.filter((item) => item.userId === userId)) {
-    for (const exercise of session.exercises) {
+    for (const exercise of expandedGymExercises(session.exercises)) {
       const muscles = exercise.muscleGroups?.length
         ? exercise.muscleGroups
         : ["full_body" as const];
@@ -377,7 +494,10 @@ export function totalGymSetWorkSeconds(exercises: GymExercise[]) {
     (total, exercise) =>
       total +
       exercise.sets.reduce(
-        (sum, set) => sum + Math.max(0, set.workSeconds ?? 0),
+        (sum, set) =>
+          sum +
+          Math.max(0, set.workSeconds ?? 0) +
+          Math.max(0, set.superset?.workSeconds ?? 0),
         0,
       ),
     0,
@@ -465,21 +585,37 @@ export function recommendedRestSeconds(intensity: GymIntensity) {
   return intensity === "vigorous" ? 150 : intensity === "light" ? 60 : 90;
 }
 
-/**
- * Net active-energy estimate from the 2024 Adult Compendium.
- * Subtracting 1 MET avoids counting resting energy already represented by BMR.
- * Compendium resistance-training METs describe a whole session, including
- * normal between-set rest. Completed reps, external load and set density make
- * a deliberately bounded adjustment rather than pretending lifted kg converts
- * directly to calories.
- */
-export function estimateGymActiveCalories(
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function intensityAdjustedMet(
+  catalogMet: number,
+  intensity: GymIntensity,
+) {
+  return intensity === "light"
+    ? Math.min(catalogMet, METS.light)
+    : intensity === "vigorous"
+      ? Math.max(catalogMet, METS.vigorous)
+      : catalogMet;
+}
+
+function netMetCalories(
+  met: number,
+  weightKg: number,
+  durationMinutes: number,
+) {
+  return ((Math.max(1, met) - 1) * 3.5 * weightKg * durationMinutes) / 200;
+}
+
+/** Standard whole-session estimate from the selected Compendium MET. */
+function estimateSessionMetCalories(
   weightKg: number,
   durationMinutes: number,
   intensity: GymIntensity,
   exercises: GymExercise[] = [],
 ) {
-  const completed = exercises
+  const completed = expandedGymExercises(exercises)
     .map((exercise) => ({
       met: exercise.customMet ?? METS[intensity],
       sets: exercise.sets.filter((set) => set.completed).length,
@@ -489,55 +625,299 @@ export function estimateGymActiveCalories(
   const catalogMet = totalSets
     ? completed.reduce((sum, item) => sum + item.met * item.sets, 0) / totalSets
     : METS[intensity];
-  const met =
-    intensity === "light"
-      ? Math.min(catalogMet, METS.light)
-      : intensity === "vigorous"
-        ? Math.max(catalogMet, METS.vigorous)
-        : catalogMet;
-  const completedSets = exercises.flatMap((exercise) =>
-    exercise.sets.filter((set) => set.completed),
+  const met = intensityAdjustedMet(catalogMet, intensity);
+  // This mode deliberately remains the plain, reproducible Compendium
+  // estimate. Load, reps and set timing belong to the optional set-aware mode.
+  return Math.max(0, Math.round(netMetCalories(met, weightKg, durationMinutes)));
+}
+
+type GymEnergyProfile = Pick<EnergyProfile, "heightCm" | "weightKg">;
+
+function normalizeGymProfile(profileOrWeight: GymEnergyProfile | number) {
+  const profile =
+    typeof profileOrWeight === "number"
+      ? { weightKg: profileOrWeight, heightCm: 172 }
+      : profileOrWeight;
+  return {
+    weightKg: clamp(Number(profile.weightKg) || 70, 35, 300),
+    heightM: clamp((Number(profile.heightCm) || 172) / 100, 1.3, 2.2),
+  };
+}
+
+type MechanicalMovement = {
+  /** Approximate positive vertical travel as a share of stature. */
+  travelHeightRatio: number;
+  /** Share of body mass whose centre of mass is appreciably raised. */
+  bodyMassFraction: number;
+  /** Machine/cable stacks do not map one-to-one to moved external mass. */
+  externalLoadFactor: number;
+};
+
+function mechanicalMovement(exercise: GymExercise): MechanicalMovement {
+  const key = exerciseIdentity(exercise);
+  const equipment = catalogExercise(key)?.equipment;
+  const externalLoadFactor =
+    equipment === "machine" || equipment === "cable" ? 0.75 : 1;
+
+  // Isometric and horizontal-resistance work cannot be represented by m*g*h;
+  // their catalog MET remains the set-aware estimate's anchor.
+  if (/(plank|farmer_carry|sled_push|battle_ropes)/.test(key))
+    return { travelHeightRatio: 0, bodyMassFraction: 0, externalLoadFactor: 0 };
+  if (key === "assisted_pull_up")
+    return { travelHeightRatio: 0.25, bodyMassFraction: 1, externalLoadFactor: -1 };
+  if (/(pull_up|chest_dip)/.test(key))
+    return { travelHeightRatio: 0.25, bodyMassFraction: 1, externalLoadFactor: 1 };
+  if (key === "push_up")
+    return { travelHeightRatio: 0.18, bodyMassFraction: 0.69, externalLoadFactor: 1 };
+  if (/(back_squat|front_squat|goblet_squat|hack_squat|bulgarian_split_squat|walking_lunge)/.test(key))
+    return { travelHeightRatio: 0.28, bodyMassFraction: 0.65, externalLoadFactor };
+  if (/(deadlift|good_morning)/.test(key))
+    return { travelHeightRatio: 0.28, bodyMassFraction: 0.25, externalLoadFactor };
+  if (key === "leg_press")
+    return { travelHeightRatio: 0.22, bodyMassFraction: 0, externalLoadFactor };
+  if (/(hip_thrust|glute_bridge)/.test(key))
+    return { travelHeightRatio: 0.14, bodyMassFraction: 0.45, externalLoadFactor };
+  if (/(calf_raise)/.test(key))
+    return { travelHeightRatio: 0.06, bodyMassFraction: 0.65, externalLoadFactor };
+  if (/(bench_press|close_grip_bench)/.test(key))
+    return { travelHeightRatio: 0.25, bodyMassFraction: 0.08, externalLoadFactor };
+  if (/(overhead_press|shoulder_press|arnold_press)/.test(key))
+    return { travelHeightRatio: 0.24, bodyMassFraction: 0.08, externalLoadFactor };
+  if (/(row|pulldown|pull|face_pull)/.test(key))
+    return { travelHeightRatio: 0.21, bodyMassFraction: 0.05, externalLoadFactor };
+  if (/(burpee|mountain_climber)/.test(key))
+    return { travelHeightRatio: 0.25, bodyMassFraction: 0.7, externalLoadFactor: 1 };
+  if (/(leg_raise|back_extension|ab_wheel|russian_twist)/.test(key))
+    return { travelHeightRatio: 0.14, bodyMassFraction: 0.3, externalLoadFactor };
+  if (key === "kettlebell_swing")
+    return { travelHeightRatio: 0.25, bodyMassFraction: 0.1, externalLoadFactor: 1 };
+  if (equipment === "bodyweight")
+    return { travelHeightRatio: 0.18, bodyMassFraction: 0.55, externalLoadFactor: 1 };
+  if (/(curl|extension|fly|raise|pushdown|kickback|abduction|crunch)/.test(key))
+    return { travelHeightRatio: 0.15, bodyMassFraction: 0.03, externalLoadFactor };
+  return { travelHeightRatio: 0.18, bodyMassFraction: 0.08, externalLoadFactor };
+}
+
+function positiveSetWorkJoules(
+  exercise: GymExercise,
+  set: GymExercise["sets"][number],
+  weightKg: number,
+  heightM: number,
+) {
+  const movement = mechanicalMovement(exercise);
+  if (movement.travelHeightRatio <= 0 || set.reps <= 0) return 0;
+  const externalMass = Math.max(0, set.weightKg);
+  const effectiveMass =
+    movement.externalLoadFactor < 0
+      ? Math.max(0, weightKg * movement.bodyMassFraction - externalMass)
+      : weightKg * movement.bodyMassFraction +
+        externalMass * movement.externalLoadFactor;
+  return (
+    effectiveMass *
+    9.80665 *
+    heightM *
+    movement.travelHeightRatio *
+    Math.max(0, set.reps)
   );
-  const completedReps = completedSets.reduce(
-    (sum, set) => sum + Math.max(0, set.reps),
+}
+
+/**
+ * Set-aware resistance-training estimate.
+ *
+ * The Compendium MET is still the evidence-based anchor because lifted kg and
+ * reps do not directly determine energy expenditure. Exercise METs are
+ * weighted by recorded active-set time (or a conservative 3 seconds per rep
+ * fallback). A bounded mechanical-work signal (effective mass x gravity x
+ * estimated vertical travel x reps) makes load and repetitions meaningful
+ * without pretending that external work converts directly to human calories.
+ * Body mass, workout duration and measured time remain the main drivers.
+ *
+ * References:
+ * https://pacompendium.com/conditioning-exercise/
+ * https://doi.org/10.1519/00124278-200702000-00023
+ * https://doi.org/10.3390/sports6040137
+ * https://doi.org/10.1111/cpf.12604
+ */
+function estimateSetAwareCalories(
+  profileOrWeight: GymEnergyProfile | number,
+  durationMinutes: number,
+  intensity: GymIntensity,
+  exercises: GymExercise[],
+) {
+  const { weightKg, heightM } = normalizeGymProfile(profileOrWeight);
+  const completed = exercises.flatMap((exercise) =>
+    exercise.sets
+      .filter((set) => set.completed)
+      .flatMap((set) => {
+        const primary = {
+          exercise,
+          set,
+          met: intensityAdjustedMet(
+            exercise.customMet ?? METS[intensity],
+            intensity,
+          ),
+          reps: Math.max(0, set.reps),
+          weightKg: Math.max(0, set.weightKg),
+          measuredWorkSeconds: Math.max(0, set.workSeconds ?? 0),
+        };
+        if (!set.superset) return [primary];
+        const pairedExercise: GymExercise = {
+          id: `${exercise.id}:superset:${set.id}`,
+          exerciseKey: set.superset.exerciseKey,
+          name: set.superset.name,
+          muscleGroups: set.superset.muscleGroups,
+          customMet: set.superset.customMet,
+          sets: [],
+        };
+        const pairedSet = {
+          ...set,
+          reps: set.superset.reps,
+          weightKg: set.superset.weightKg,
+          workSeconds:
+            set.superset.workSeconds ??
+            (set.workSeconds ? Math.max(1, Math.round(set.workSeconds / 2)) : undefined),
+          superset: undefined,
+        };
+        return [
+          primary,
+          {
+            exercise: pairedExercise,
+            set: pairedSet,
+            met: intensityAdjustedMet(
+              set.superset.customMet ?? METS[intensity],
+              intensity,
+            ),
+            reps: Math.max(0, pairedSet.reps),
+            weightKg: Math.max(0, pairedSet.weightKg),
+            measuredWorkSeconds: Math.max(0, pairedSet.workSeconds ?? 0),
+          },
+        ];
+      }),
+  );
+  if (!completed.length || weightKg <= 0 || durationMinutes <= 0) return 0;
+
+  const hasMeasuredWork = completed.some(
+    (set) => set.measuredWorkSeconds > 0,
+  );
+  const setWork = completed.map((set) => ({
+    ...set,
+    workSeconds:
+      set.measuredWorkSeconds > 0
+        ? set.measuredWorkSeconds
+        : clamp(set.reps * 3, 12, 60),
+  }));
+  const sessionSeconds = Math.max(1, durationMinutes * 60);
+  const rawWorkSeconds = setWork.reduce(
+    (sum, set) => sum + set.workSeconds,
     0,
   );
-  const volume = trainingVolumeKg(exercises);
-  const setDensity = completedSets.length / Math.max(durationMinutes, 1);
-  const loadPerRepRatio =
-    completedReps > 0 && weightKg > 0
-      ? volume / completedReps / weightKg
-      : 0;
-  const workloadModifier = Math.min(
-    1.16,
-    Math.max(
-      0.94,
-      0.96 +
-        Math.min(0.1, setDensity * 0.25) +
-        Math.min(0.1, loadPerRepRatio * 0.12),
-    ),
+  // Erroneous or overlapping timer records must not exceed session duration.
+  const workScale = Math.min(1, sessionSeconds / Math.max(rawWorkSeconds, 1));
+  const workSeconds = rawWorkSeconds * workScale;
+  const timeWeightedMet =
+    setWork.reduce(
+      (sum, set) => sum + set.met * set.workSeconds * workScale,
+      0,
+    ) / Math.max(workSeconds, 1);
+
+  const activeShare = clamp(workSeconds / sessionSeconds, 0, 1);
+  const rawTimingModifier = clamp(
+    1 + (activeShare - 0.25) * 0.55,
+    0.86,
+    1.12,
   );
-  const restRatio =
-    totalGymRestSeconds(exercises) /
-    Math.max(durationMinutes * 60, 1);
-  const hasPreciseTiming = totalGymSetWorkSeconds(exercises) > 0;
-  /*
-   * Compendium resistance-training METs describe a complete session and
-   * therefore already contain ordinary rests. Exact timer data adjusts that
-   * session estimate conservatively around a typical rest-heavy lifting
-   * pattern instead of applying the lifting MET to every resting minute.
-   */
-  const timingModifier = hasPreciseTiming
-    ? Math.min(1.08, Math.max(0.82, 1 + (0.55 - restRatio) * 0.35))
-    : restRatio > 0.65
-      ? Math.max(0.9, 1 - (restRatio - 0.65) * 0.2)
+  // Heuristic rep timing carries less weight than an actual guided timer.
+  const timingModifier = hasMeasuredWork
+    ? rawTimingModifier
+    : 1 + (rawTimingModifier - 1) * 0.35;
+
+  const totalReps = setWork.reduce((sum, set) => sum + set.reps, 0);
+  const averageReps = totalReps / completed.length;
+  const positiveWorkJoules = completed.reduce(
+    (sum, item) =>
+      sum +
+      positiveSetWorkJoules(
+        item.exercise,
+        item.set,
+        weightKg,
+        heightM,
+      ),
+    0,
+  );
+  // A reference set is ten repetitions raising body mass through 12% of
+  // stature. Its only purpose is to normalize mechanical work; joules are not
+  // presented as measured metabolic calories. This makes load and reps matter
+  // without claiming a universal lifting efficiency that research does not
+  // support across exercise types.
+  const referenceSetWorkJoules =
+    weightKg * 9.80665 * heightM * 0.12 * 10;
+  const mechanicalDemand =
+    positiveWorkJoules > 0
+      ? positiveWorkJoules /
+        Math.max(referenceSetWorkJoules * completed.length, 1)
+      : 0;
+  // Log scaling keeps load/repetition changes visible at ordinary training
+  // weights without letting very heavy sets dominate the session estimate.
+  // At equal duration, common load or rep progressions produce a noticeable
+  // correction, while the Compendium MET remains the physiological anchor.
+  const mechanicalModifier =
+    mechanicalDemand > 0
+      ? clamp(0.78 + 0.24 * Math.log2(1 + mechanicalDemand), 0.8, 1.35)
       : 1;
-  const sessionCalories =
-    ((met - 1) * 3.5 * weightKg * durationMinutes) / 200;
+
+  // Retain a small density signal for exercises where displacement is unknown
+  // (isometrics, carries and sled work). For mechanically modeled movements,
+  // reps already contribute directly through positive work.
+  const fallbackDensityModifier =
+    mechanicalDemand > 0
+      ? 1
+      : clamp(0.96 + Math.min(0.08, averageReps * 0.005), 0.96, 1.04);
+  const workloadModifier = mechanicalModifier * fallbackDensityModifier;
+
+  const compendiumAnchor = netMetCalories(
+    timeWeightedMet,
+    weightKg,
+    durationMinutes,
+  );
+  const adjusted = compendiumAnchor * timingModifier * workloadModifier;
   return Math.max(
     0,
-    Math.round(sessionCalories * workloadModifier * timingModifier),
+    Math.round(
+      clamp(
+        adjusted,
+        compendiumAnchor * 0.7,
+        compendiumAnchor * 1.4,
+      ),
+    ),
   );
+}
+
+/**
+ * Net active energy: 1 MET is subtracted so resting energy already represented
+ * by BMR is not counted a second time. The default is the plain whole-session
+ * MET estimate; set-aware is an explicit opt-in.
+ */
+export function estimateGymActiveCalories(
+  profileOrWeight: GymEnergyProfile | number,
+  durationMinutes: number,
+  intensity: GymIntensity,
+  exercises: GymExercise[] = [],
+  mode: GymCalorieCalculationMode = "session_met",
+) {
+  const { weightKg } = normalizeGymProfile(profileOrWeight);
+  return mode === "set_aware"
+    ? estimateSetAwareCalories(
+        profileOrWeight,
+        durationMinutes,
+        intensity,
+        exercises,
+      )
+    : estimateSessionMetCalories(
+        weightKg,
+        durationMinutes,
+        intensity,
+        exercises,
+      );
 }
 
 export function sessionPersonalRecord(session: GymSession) {

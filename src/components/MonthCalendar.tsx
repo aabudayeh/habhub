@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
 
 import { dateKey } from "@/src/domain/date";
 import { palette, useAppColors } from "@/src/theme";
@@ -13,9 +14,13 @@ export function MonthCalendar({
   dayStatus,
   dayVisuals,
   allTrackedGoalsMet,
+  trackedGoalColor,
   vacationDay,
   monthDate,
   onMonthChange,
+  rangeStart,
+  rangeEnd,
+  rangeAccent,
 }: {
   selectedDate: string;
   onSelect: (date: string) => void;
@@ -25,11 +30,17 @@ export function MonthCalendar({
     date: string,
   ) => { color: string; progress: number; goalReached?: boolean }[];
   allTrackedGoalsMet?: (date: string) => boolean;
+  trackedGoalColor?: string;
   vacationDay?: (date: string) => boolean;
   monthDate?: string;
   onMonthChange?: (date: string) => void;
+  /** Optional range endpoints, used by two-date pickers. */
+  rangeStart?: string;
+  rangeEnd?: string;
+  rangeAccent?: string;
 }) {
   const colors = useAppColors();
+  const locale = useLocale();
   const initial = new Date(`${monthDate ?? selectedDate}T12:00:00`);
   const [cursor, setCursor] = useState(
     new Date(initial.getFullYear(), initial.getMonth(), 1, 12),
@@ -54,7 +65,7 @@ export function MonthCalendar({
       };
     });
   }, [cursor]);
-  const title = new Intl.DateTimeFormat(undefined, {
+  const title = new Intl.DateTimeFormat(locale, {
     month: "long",
     year: "numeric",
   }).format(cursor);
@@ -114,6 +125,8 @@ export function MonthCalendar({
           const visuals = dayVisuals?.(day.key) ?? [];
           const allTrackedMet = allTrackedGoalsMet?.(day.key) ?? false;
           const vacation = vacationDay?.(day.key) ?? false;
+          const isRangeStart = Boolean(rangeStart && day.key === rangeStart);
+          const isRangeEnd = Boolean(rangeEnd && day.key === rangeEnd);
           return (
             <Pressable
               key={day.key}
@@ -128,6 +141,10 @@ export function MonthCalendar({
                   borderWidth: 2,
                   borderColor: colors.primary,
                 },
+                (isRangeStart || isRangeEnd) && {
+                  borderWidth: 2,
+                  borderColor: rangeAccent ?? colors.primary,
+                },
               ]}
             >
               <Text
@@ -140,6 +157,20 @@ export function MonthCalendar({
               >
                 {day.number}
               </Text>
+              {isRangeStart || isRangeEnd ? (
+                <Text
+                  style={[
+                    styles.rangeBadge,
+                    { color: rangeAccent ?? colors.primary },
+                  ]}
+                >
+                  {isRangeStart && isRangeEnd
+                    ? "S/E"
+                    : isRangeStart
+                      ? "S"
+                      : "E"}
+                </Text>
+              ) : null}
               {visuals.length ? (
                 <View style={styles.visuals}>
                   {visuals.slice(0, 6).map((visual, index) => (
@@ -191,7 +222,7 @@ export function MonthCalendar({
                 <Ionicons
                   name="checkmark-circle"
                   size={12}
-                  color="#9B6BDB"
+                  color={trackedGoalColor ?? "#9B6BDB"}
                   style={styles.goalBadge}
                 />
               ) : null}
@@ -272,4 +303,11 @@ const styles = StyleSheet.create({
     borderColor: palette.card,
   },
   goalBadge: { position: "absolute", top: 1, right: 1 },
+  rangeBadge: {
+    position: "absolute",
+    top: 1,
+    left: 3,
+    fontSize: 6,
+    fontWeight: "900",
+  },
 });

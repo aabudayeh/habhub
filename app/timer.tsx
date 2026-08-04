@@ -2,12 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Notifications from "expo-notifications";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import {
@@ -21,7 +23,7 @@ import { useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityTimer } from "@/src/types";
 
 async function cancelTimerNotifications(timer?: ActivityTimer) {
-  if (!timer) return;
+  if (!timer || Platform.OS === "web") return;
   const ids = [
     timer.notificationId,
     ...(timer.notificationIds ?? []),
@@ -41,13 +43,17 @@ async function scheduleTimerNotifications({
   targetSeconds,
   elapsedSeconds,
   alertMinutes,
+  translate,
 }: {
   title: string;
   mode: ActivityTimer["mode"];
   targetSeconds?: number;
   elapsedSeconds: number;
   alertMinutes: number[];
+  translate: (source: string) => string;
 }) {
+  if (Platform.OS === "web")
+    return { notificationId: undefined, notificationIds: [] };
   const permission = await Notifications.requestPermissionsAsync();
   if (!permission.granted)
     return { notificationId: undefined, notificationIds: [] };
@@ -63,8 +69,8 @@ async function scheduleTimerNotifications({
       .map((minutes) =>
         Notifications.scheduleNotificationAsync({
           content: {
-            title: `${title} · ${minutes} min`,
-            body: "Your timed activity is still running.",
+            title: translate(`${title} · ${minutes} min`),
+            body: translate("Your timed activity is still running."),
             data: { route: "/timer" },
           },
           trigger: {
@@ -82,8 +88,8 @@ async function scheduleTimerNotifications({
     mode === "countdown" && remaining >= 1
       ? await Notifications.scheduleNotificationAsync({
           content: {
-            title: `${title} complete`,
-            body: "Your activity timer has finished.",
+            title: translate(`${title} complete`),
+            body: translate("Your activity timer has finished."),
             sound: "default",
             data: { route: "/timer" },
           },
@@ -97,7 +103,12 @@ async function scheduleTimerNotifications({
 }
 
 export default function ActivityTimerPage() {
-  const params = useLocalSearchParams<{ metric?: string }>();
+  const params = useLocalSearchParams<{
+    metric?: string;
+    date?: string;
+    duration?: string;
+    timer?: string;
+  }>();
   const {
     state,
     setActivityTimer,
@@ -106,7 +117,23 @@ export default function ActivityTimerPage() {
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const timer = state.activeTimer;
+  const { language, t } = useLocalization();
+  const timers = useMemo(
+    () =>
+      state.activityTimers?.length
+        ? state.activityTimers
+        : state.activeTimer
+          ? [state.activeTimer]
+          : [],
+    [state.activeTimer, state.activityTimers],
+  );
+  const [selectedTimerId, setSelectedTimerId] = useState(
+    params.timer ?? state.activeTimer?.id ?? timers[0]?.id ?? "",
+  );
+  const [creatingNew, setCreatingNew] = useState(timers.length === 0);
+  const timer = creatingNew
+    ? undefined
+    : timers.find((item) => item.id === selectedTimerId) ?? timers[0];
   const metrics = useMemo(
     () =>
       state.metrics.filter(
@@ -127,7 +154,12 @@ export default function ActivityTimerPage() {
   const [mode, setMode] = useState<ActivityTimer["mode"]>(
     timer?.mode ?? "stopwatch",
   );
-  const [targetMinutes, setTargetMinutes] = useState(25);
+  const plannedDate = /^\d{4}-\d{2}-\d{2}$/.test(params.date ?? "")
+    ? params.date!
+    : dateKey();
+  const [targetMinutes, setTargetMinutes] = useState(
+    Math.max(1, Math.round(Number(params.duration) || 25)),
+  );
   const [autoLog, setAutoLog] = useState(timer?.autoLog ?? false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [customAlert, setCustomAlert] = useState("");
@@ -138,29 +170,37 @@ export default function ActivityTimerPage() {
     return () => clearInterval(interval);
   }, []);
   useEffect(() => {
-    if (
-      timer?.mode === "countdown" &&
-      timer.status === "running" &&
-      activityTimerDisplaySeconds(timer, now) <= 0
-    )
-      finish(timer);
-    // finish is intentionally driven only when the persisted timer reaches 0.
+    if (creatingNew || !timers.length) return;
+    if (!timers.some((item) => item.id === selectedTimerId))
+      setSelectedTimerId(timers[0].id);
+  }, [creatingNew, selectedTimerId, timers]);
+  useEffect(() => {
+    const expired = timers.find(
+      (item) =>
+        item.mode === "countdown" &&
+        item.status === "running" &&
+        activityTimerDisplaySeconds(item, now) <= 0,
+    );
+    if (expired) void finish(expired);
+    // finish is intentionally driven only when a persisted timer reaches 0.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [now, timer]);
+  }, [now, timers]);
   const metric = state.metrics.find((item) => item.id === (timer?.metricId ?? metricId));
   const start = async () => {
     if (!metric)
       return Alert.alert("Choose a timed tracker", "Add one first if needed.");
     const targetSeconds = mode === "countdown" ? targetMinutes * 60 : undefined;
     const notifications = await scheduleTimerNotifications({
-      title: metric.name,
+      title: localizeMetricName(language, metric),
       mode,
       targetSeconds,
       elapsedSeconds: 0,
       alertMinutes,
+      translate: t,
     });
+    const id = `timer-${Date.now().toString(36)}`;
     setActivityTimer({
-      id: `timer-${Date.now().toString(36)}`,
+      id,
       metricId: metric.id,
       mode,
       targetSeconds,
@@ -171,6 +211,8 @@ export default function ActivityTimerPage() {
       laps: [],
       ...notifications,
     });
+    setSelectedTimerId(id);
+    setCreatingNew(false);
   };
   const pause = async () => {
     if (!timer) return;
@@ -187,11 +229,12 @@ export default function ActivityTimerPage() {
   const resume = async () => {
     if (!timer || !metric) return;
     const notifications = await scheduleTimerNotifications({
-      title: metric.name,
+      title: localizeMetricName(language, metric),
       mode: timer.mode,
       targetSeconds: timer.targetSeconds,
       elapsedSeconds: timer.accumulatedSeconds,
       alertMinutes,
+      translate: t,
     });
     setActivityTimer({
       ...timer,
@@ -229,7 +272,7 @@ export default function ActivityTimerPage() {
       (item) => item.id === target.metricId,
     );
     if (!targetMetric) {
-      setActivityTimer(undefined);
+      setActivityTimer(undefined, target.id);
       return;
     }
     const value = /hour|hr/i.test(targetMetric.unit)
@@ -237,10 +280,10 @@ export default function ActivityTimerPage() {
       : /sec/i.test(targetMetric.unit)
         ? seconds
         : seconds / 60;
-    setActivityTimer(undefined);
+    setActivityTimer(undefined, target.id);
     if (target.autoLog) {
       logMetric(target.metricId, value, targetMetric.defaultVisibility, "add", {
-        localDate: dateKey(),
+        localDate: plannedDate,
         label: "Activity timer",
         note: `${target.laps.length} lap${target.laps.length === 1 ? "" : "s"}`,
       });
@@ -250,7 +293,7 @@ export default function ActivityTimerPage() {
         pathname: "/log",
         params: {
           metric: target.metricId,
-          date: dateKey(),
+          date: plannedDate,
           value: String(Math.round(value * 100) / 100),
           note: `${target.laps.length} timer lap${target.laps.length === 1 ? "" : "s"}`,
         },
@@ -265,10 +308,92 @@ export default function ActivityTimerPage() {
         showMenu={false}
         action={<IconButton icon="close" label="Close" onPress={() => router.back()} />}
       />
+      {timers.length ? (
+        <Card style={styles.timerList}>
+          <View style={styles.timerListHeading}>
+            <View style={styles.grow}>
+              <Text style={[styles.label, { color: colors.ink }]}>Active timers</Text>
+              <Text style={[styles.helper, { color: colors.muted }]}>
+                {timers.length} running or paused
+              </Text>
+            </View>
+            <IconButton
+              icon={
+                state.settings.showActivityTimerOverlay === false
+                  ? "eye-off-outline"
+                  : "eye-outline"
+              }
+              label={
+                state.settings.showActivityTimerOverlay === false
+                  ? "Show floating timer"
+                  : "Hide floating timer"
+              }
+              onPress={() =>
+                updateSettings({
+                  showActivityTimerOverlay:
+                    state.settings.showActivityTimerOverlay === false,
+                })
+              }
+            />
+            <IconButton
+              icon="add"
+              label="Start another timer"
+              onPress={() => setCreatingNew(true)}
+            />
+          </View>
+          <View style={styles.timerChoices}>
+            {timers.map((item) => {
+              const itemMetric = state.metrics.find(
+                (metricItem) => metricItem.id === item.metricId,
+              );
+              if (!itemMetric) return null;
+              const selected = !creatingNew && timer?.id === item.id;
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => {
+                    setSelectedTimerId(item.id);
+                    setCreatingNew(false);
+                  }}
+                  style={[
+                    styles.timerChoice,
+                    {
+                      borderColor: selected ? accent : colors.border,
+                      backgroundColor: selected
+                        ? colors.primarySoft
+                        : colors.canvas,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={item.status === "paused" ? "pause" : "timer-outline"}
+                    size={15}
+                    color={selected ? accent : colors.muted}
+                  />
+                  <View style={styles.grow}>
+                    <Text
+                      translate={false}
+                      numberOfLines={1}
+                      style={[styles.timerChoiceName, { color: colors.ink }]}
+                    >
+                      {localizeMetricName(language, itemMetric)}
+                    </Text>
+                    <Text style={[styles.timerChoiceTime, { color: colors.muted }]}>
+                      {formatActivityTimer(activityTimerDisplaySeconds(item, now))}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
+      ) : null}
       {timer && metric ? (
         <>
           <Card style={styles.live}>
-            <Text style={[styles.metric, { color: accent }]}>{metric.name}</Text>
+            <Text translate={false} style={[styles.metric, { color: accent }]}>
+              {localizeMetricName(language, metric)}
+            </Text>
             <Text style={[styles.clock, { color: colors.ink }]}>
               {formatActivityTimer(
                 activityTimerDisplaySeconds(timer, now),
@@ -318,6 +443,9 @@ export default function ActivityTimerPage() {
       ) : (
         <>
           <Card style={styles.setup}>
+            {params.date ? (
+              <Text style={[styles.helper, { color: colors.muted }]}>Planned for {plannedDate}. Confirm Start when you are ready.</Text>
+            ) : null}
             <MetricSelector
               title="Choose a timed tracker"
               items={metrics.map((item) => ({
@@ -474,6 +602,26 @@ export default function ActivityTimerPage() {
 }
 
 const styles = StyleSheet.create({
+  grow: { flex: 1, minWidth: 0 },
+  timerList: { gap: 8, marginBottom: 8 },
+  timerListHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  timerChoices: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  timerChoice: {
+    width: "48.8%",
+    minHeight: 43,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  timerChoiceName: { fontSize: 8, fontWeight: "900" },
+  timerChoiceTime: { fontSize: 8, fontWeight: "800", marginTop: 1 },
   setup: { gap: 10 },
   label: { fontSize: 10, fontWeight: "900" },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },

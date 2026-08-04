@@ -15,19 +15,51 @@ export const cloudConfigured = Boolean(url && publishableKey);
 export const supabase = cloudConfigured
   ? createClient(url!, publishableKey!, {
       auth: {
-        ...(Platform.OS !== 'web' ? { storage: AsyncStorage } : {}),
+        ...(Platform.OS !== 'web'
+          ? { storage: AsyncStorage, lock: processLock }
+          : {}),
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: Platform.OS === 'web',
-        lock: processLock,
+        // Auth callback routes consume the URL exactly once. Leaving Supabase's
+        // automatic URL detector enabled as well can race the explicit PKCE
+        // exchange and intermittently discard a valid web login.
+        detectSessionInUrl: false,
       },
     })
   : null;
 
 if (supabase && Platform.OS !== 'web') {
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  supabase.realtime.onHeartbeat((status) => {
+    if (
+      status !== 'disconnected' ||
+      NativeAppState.currentState !== 'active' ||
+      reconnectTimer
+    ) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (
+        NativeAppState.currentState === 'active' &&
+        !supabase.realtime.isConnected()
+      )
+        supabase.realtime.connect();
+    }, 1200);
+  });
   NativeAppState.addEventListener('change', (status) => {
-    if (status === 'active') supabase.auth.startAutoRefresh();
-    else supabase.auth.stopAutoRefresh();
+    if (status === 'active') {
+      supabase.auth.startAutoRefresh();
+      if (!supabase.realtime.isConnected()) supabase.realtime.connect();
+    } else {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      supabase.auth.stopAutoRefresh();
+      // Native background execution is suspended unpredictably. Push
+      // notifications carry remote events while backgrounded; closing the
+      // websocket avoids a stale connection and unnecessary radio wakeups.
+      supabase.realtime.disconnect();
+    }
   });
 }
 

@@ -12,6 +12,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import {
   isAllowedTrackerColor,
   isAllowedThemeColor,
+  readableTextColor,
   THEME_COLOR_CHOICES,
   TRACKER_COLOR_CHOICES,
 } from "@/src/domain/colors";
@@ -145,7 +146,11 @@ export function ColorSpectrumPicker({
             ]}
           >
             {value.toUpperCase() === color ? (
-              <Ionicons name="checkmark" size={15} color="#FFFFFF" />
+              <Ionicons
+                name="checkmark"
+                size={15}
+                color={readableTextColor(color)}
+              />
             ) : null}
           </Pressable>
         ))}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "52278393693",
+    "project_id": "paceboard-92551",
+    "storage_bucket": "paceboard-92551.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:52278393693:android:f4440579c3f1c4a0fb86b4",
+        "android_client_info": {
+          "package_name": "app.paceboard.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBmm3qzogd1VRzmzlvVnWINEmp5zivULpo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

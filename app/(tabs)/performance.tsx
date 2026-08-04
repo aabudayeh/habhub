@@ -10,19 +10,26 @@ import React, {
 import {
   Animated,
   BackHandler,
-  PanResponder,
   Pressable,
   StyleSheet,
   View,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 
 import {
   AddTrackerItem,
   AddTrackerModal,
 } from "@/src/components/AddTrackerModal";
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale } from "@/src/i18n";
+import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
-import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
+import { useEditWiggle } from "@/src/components/useEditWiggle";
+import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
+import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { dateKey } from "@/src/domain/date";
 import {
@@ -30,7 +37,10 @@ import {
   isMetricTrackedOnDate,
 } from "@/src/domain/metrics";
 import {
+  customPerformancePeriod,
+  overallPerformancePeriod,
   PerformanceRange,
+  performancePeriod,
   performanceOverview,
   TrackerPerformance,
 } from "@/src/domain/performance";
@@ -52,6 +62,28 @@ const RANGES: { id: PerformanceRange; label: string }[] = [
   { id: "day", label: "Daily" },
   { id: "week", label: "Weekly" },
   { id: "month", label: "Monthly" },
+  { id: "year", label: "Yearly" },
+];
+
+const COMPARISON_OPTIONS = [
+  {
+    id: "previous",
+    label: "Previous period",
+    icon: "play-back-outline" as const,
+    group: "Comparison",
+  },
+  {
+    id: "overall",
+    label: "Overall average",
+    icon: "analytics-outline" as const,
+    group: "Comparison",
+  },
+  {
+    id: "custom",
+    label: "Custom ranges",
+    icon: "calendar-outline" as const,
+    group: "Comparison",
+  },
 ];
 
 type PerformancePriority =
@@ -81,13 +113,17 @@ function metricDisplay(row: TrackerPerformance, range: PerformanceRange) {
   return range === "day" ? value : `${value} avg`;
 }
 
-function comparisonText(row: TrackerPerformance) {
+function comparisonText(
+  row: TrackerPerformance,
+  comparisonLabel = "previous",
+) {
   if (!row.currentLoggedDays) return "No data this period";
   if (!row.previousLoggedDays) return "First comparable period";
+  if (row.provisional) return "Current period still in progress";
   if (row.direction === "steady") return "Holding steady";
   const change = Math.min(999, Math.round(Math.abs(row.changePercent)));
   return row.improving
-    ? `${change}% better vs previous`
+    ? `${change}% better vs ${comparisonLabel}`
     : `${change}% further from goal`;
 }
 
@@ -143,6 +179,7 @@ function PerformanceTile({
   onRemove,
   pinned,
   onPin,
+  comparisonLabel,
 }: {
   row: TrackerPerformance;
   range: PerformanceRange;
@@ -154,54 +191,18 @@ function PerformanceTile({
   onRemove: () => void;
   pinned: boolean;
   onPin: () => void;
+  comparisonLabel: string;
 }) {
   const colors = useAppColors();
-  const [dragging, setDragging] = useState(false);
-  const dragY = useRef(new Animated.Value(0)).current;
   const step = useRef(113);
-  const origin = useRef(index);
-  const target = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onMoveShouldSetPanResponder: () => editing,
-        onPanResponderGrant: () => {
-          origin.current = indexRef.current;
-          target.current = indexRef.current;
-          setDragging(true);
-        },
-        onPanResponderMove: (_event, gesture) => {
-          dragY.setValue(gesture.dy);
-          target.current = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              origin.current + Math.round(gesture.dy / step.current),
-            ),
-          );
-        },
-        onPanResponderTerminationRequest: () => false,
-        onShouldBlockNativeResponder: () => true,
-        onPanResponderRelease: () => {
-          dragY.setValue(0);
-          setDragging(false);
-          if (target.current !== origin.current)
-            onMoveRef.current(target.current);
-        },
-        onPanResponderTerminate: () => {
-          dragY.setValue(0);
-          setDragging(false);
-        },
-      }),
-    [dragY, editing],
-  );
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: step.current,
+    onMove,
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   const statusColor =
     row.direction === "missing"
       ? palette.amber
@@ -211,16 +212,31 @@ function PerformanceTile({
         ? palette.lime
         : palette.red;
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         step.current = event.nativeEvent.layout.height + 12;
+        smoothDrag.setStep(step.current);
       }}
-      style={{
-        zIndex: dragging ? 30 : 0,
-        elevation: dragging ? 12 : 0,
-        transform: [{ translateY: dragY }, { scale: dragging ? 1.015 : 1 }],
-      }}
+      style={[
+        smoothDrag.animatedStyle,
+        {
+          zIndex: smoothDrag.dragging ? 30 : 0,
+          elevation: smoothDrag.dragging ? 12 : 0,
+        },
+      ]}
     >
+      <Animated.View
+        style={{
+          transform: [
+            {
+              rotate: wiggle.interpolate({
+                inputRange: [-1, 1],
+                outputRange: ["-0.35deg", "0.35deg"],
+              }),
+            },
+          ],
+        }}
+      >
       <Pressable
         onLongPress={onEdit}
         onPress={
@@ -236,20 +252,22 @@ function PerformanceTile({
                         ? "today"
                         : range === "week"
                           ? "week"
-                          : "month",
+                          : range === "month"
+                            ? "month"
+                            : "year",
                   },
                 } as never)
         }
       >
         <Card style={[styles.tile, editing && { borderColor: row.metric.color }]}>
           {editing ? (
+            <GestureDetector gesture={smoothDrag.gesture}>
             <View
               accessibilityLabel={`Reorder ${row.metric.name}`}
               style={[
                 styles.drag,
                 { backgroundColor: colors.card, borderColor: colors.border },
               ]}
-              {...responder.panHandlers}
             >
               <Ionicons
                 name="reorder-three-outline"
@@ -257,6 +275,7 @@ function PerformanceTile({
                 color={colors.muted}
               />
             </View>
+            </GestureDetector>
           ) : null}
           {editing ? (
             <View style={styles.editActions}>
@@ -333,7 +352,7 @@ function PerformanceTile({
                   color={statusColor}
                 />
                 <Text style={[styles.changeText, { color: statusColor }]}>
-                  {comparisonText(row)}
+                  {comparisonText(row, comparisonLabel)}
                 </Text>
               </View>
             </View>
@@ -380,15 +399,48 @@ function PerformanceTile({
           ) : null}
         </Card>
       </Pressable>
-    </Animated.View>
+      </Animated.View>
+    </Reanimated.View>
   );
 }
 
-export default function PerformancePage() {
+function PerformancePage() {
   const { state, updateSettings } = useApp();
+  const locale = useLocale();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const range = state.settings.performanceRange ?? "week";
+  const defaultPeriod = useMemo(
+    () =>
+      performancePeriod(
+        range,
+        dateKey(),
+        state.settings.weekStartsOn ?? 1,
+        locale,
+      ),
+    [locale, range, state.settings.weekStartsOn],
+  );
+  const [comparisonMode, setComparisonMode] = useState<
+    "previous" | "overall" | "custom"
+  >("previous");
+  const [customCurrentStart, setCustomCurrentStart] = useState(
+    defaultPeriod.currentDates[0] ?? dateKey(),
+  );
+  const [customCurrentEnd, setCustomCurrentEnd] = useState(
+    defaultPeriod.currentDates.at(-1) ?? dateKey(),
+  );
+  const [customPreviousStart, setCustomPreviousStart] = useState(
+    defaultPeriod.previousDates[0] ?? dateKey(),
+  );
+  const [customPreviousEnd, setCustomPreviousEnd] = useState(
+    defaultPeriod.previousDates.at(-1) ?? dateKey(),
+  );
+  const [rangePicker, setRangePicker] = useState<"current" | "previous" | null>(
+    null,
+  );
+  const [rangePickerStep, setRangePickerStep] = useState<"start" | "end">(
+    "start",
+  );
   const [editing, setEditing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -464,9 +516,38 @@ export default function PerformancePage() {
       ...visibleIds.filter((id) => !order.includes(id)),
     ];
   }, [draftIds, editing, order, visibleIds]);
+  const selectedPeriod = useMemo(() => {
+    if (comparisonMode === "overall")
+      return overallPerformancePeriod(state, defaultPeriod);
+    if (comparisonMode === "custom")
+      return customPerformancePeriod(
+        customCurrentStart,
+        customCurrentEnd,
+        customPreviousStart,
+        customPreviousEnd,
+        locale,
+      );
+    return defaultPeriod;
+  }, [
+    comparisonMode,
+    customCurrentEnd,
+    customCurrentStart,
+    customPreviousEnd,
+    customPreviousStart,
+    defaultPeriod,
+    locale,
+    state,
+  ]);
   const overview = useMemo(
-    () => performanceOverview(state, range, visibleOrder),
-    [range, state, visibleOrder],
+    () =>
+      performanceOverview(
+        state,
+        selectedPeriod.range,
+        visibleOrder,
+        dateKey(),
+        selectedPeriod,
+      ),
+    [selectedPeriod, state, visibleOrder],
   );
   const baseRows = useMemo(() => {
     const byId = new Map(overview.rows.map((row) => [row.metric.id, row]));
@@ -610,46 +691,195 @@ export default function PerformancePage() {
     });
   }
 
+  const selectRange = useCallback(
+    (nextRange: PerformanceRange) => {
+      setComparisonMode((current) => (current === "custom" ? "previous" : current));
+      setRangePicker(null);
+      updateSettings({ performanceRange: nextRange });
+    },
+    [updateSettings],
+  );
+  const moveBetweenRanges = useCallback(
+    (direction: -1 | 1) => {
+      const currentIndex = RANGES.findIndex((item) => item.id === range);
+      const next = RANGES[currentIndex + direction];
+      if (next) selectRange(next.id);
+    },
+    [range, selectRange],
+  );
+  const pageSwipe = usePageSwipeGesture({
+    enabled: !editing && !rangePicker,
+    onPrevious: () => moveBetweenRanges(-1),
+    onNext: () => moveBetweenRanges(1),
+  });
+
   return (
+    <GestureDetector gesture={pageSwipe}>
+    <View style={styles.pageGesture}>
     <Screen refreshEnabled={!editing}>
       <PageHeader
         title="Performance"
         tutorialId="performance-header"
-        subtitle="Compare momentum, consistency, and goal progress."
         action={
-          <View style={styles.headerActions}>
-            {editing ? (
-              <Pressable onPress={finishEditing} style={styles.doneEdit}>
-                <Text style={[styles.doneEditText, { color: accent }]}>Done</Text>
-              </Pressable>
-            ) : (
-              <>
-                <IconButton
-                  icon="funnel-outline"
-                  label="Choose a saved view"
-                  onPress={() => setShowFilters(true)}
-                />
-                <IconButton
-                  icon="create-outline"
-                  label="Edit Performance"
-                  onPress={beginEditing}
-                />
-              </>
-            )}
-          </View>
+          editing ? (
+            <Pressable onPress={finishEditing} style={styles.doneEdit}>
+              <Text style={[styles.doneEditText, { color: accent }]}>Done</Text>
+            </Pressable>
+          ) : undefined
         }
       />
 
-      <View style={[styles.rangeBar, { backgroundColor: colors.card }]}>
+      <Card style={styles.rangeCard}>
+      <View style={styles.rangeBar}>
         {RANGES.map((item) => (
-          <Chip
+          <Pressable
             key={item.id}
-            label={item.label}
-            selected={range === item.id}
-            onPress={() => updateSettings({ performanceRange: item.id })}
-          />
+            onPress={() => selectRange(item.id)}
+            style={[
+              styles.rangeChoice,
+              {
+                borderColor: range === item.id ? accent : "transparent",
+                backgroundColor:
+                  range === item.id ? colors.primarySoft : "transparent",
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.rangeText,
+                { color: range === item.id ? accent : colors.muted },
+              ]}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
         ))}
       </View>
+      </Card>
+      <SelectionMenu
+        title="Compare with"
+        items={COMPARISON_OPTIONS}
+        selectedIds={[comparisonMode]}
+        multiple={false}
+        searchable={false}
+        onChange={(ids) => {
+          const next = ids[0] as "previous" | "overall" | "custom" | undefined;
+          if (!next) return;
+          setComparisonMode(next);
+          setRangePicker(null);
+        }}
+      />
+      {comparisonMode === "custom" ? (
+        <Card style={styles.customRanges}>
+          <View style={styles.customRangeRow}>
+            {(
+              [
+                [
+                  "current",
+                  "Range A",
+                  customCurrentStart,
+                  customCurrentEnd,
+                ],
+                [
+                  "previous",
+                  "Range B",
+                  customPreviousStart,
+                  customPreviousEnd,
+                ],
+              ] as const
+            ).map(([id, label, start, end]) => (
+              <Pressable
+                key={id}
+                onPress={() => {
+                  setRangePicker(id);
+                  setRangePickerStep("start");
+                }}
+                style={[
+                  styles.customRangeButton,
+                  {
+                    borderColor: rangePicker === id ? accent : colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
+              >
+                <Text style={[styles.customRangeLabel, { color: accent }]}>
+                  {label}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.customRangeDate, { color: colors.ink }]}
+                >
+                  {start} – {end}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          {rangePicker ? (
+            <>
+              <Text style={[styles.pickerHelp, { color: colors.muted }]}>
+                Select {rangePicker === "current" ? "Range A" : "Range B"}{" "}
+                {rangePickerStep === "start" ? "start" : "end"} date
+              </Text>
+              <MonthCalendar
+                monthDate={
+                  rangePicker === "current"
+                    ? customCurrentEnd
+                    : customPreviousEnd
+                }
+                selectedDate={
+                  rangePicker === "current"
+                    ? rangePickerStep === "start"
+                      ? customCurrentStart
+                      : customCurrentEnd
+                    : rangePickerStep === "start"
+                      ? customPreviousStart
+                      : customPreviousEnd
+                }
+                rangeStart={
+                  rangePicker === "current"
+                    ? customCurrentStart
+                    : customPreviousStart
+                }
+                rangeEnd={
+                  rangePicker === "current"
+                    ? customCurrentEnd
+                    : customPreviousEnd
+                }
+                rangeAccent={accent}
+                onSelect={(date) => {
+                  if (rangePicker === "current") {
+                    if (rangePickerStep === "start") {
+                      setCustomCurrentStart(date);
+                      setCustomCurrentEnd(date);
+                      setRangePickerStep("end");
+                    } else {
+                      if (date < customCurrentStart) {
+                        setCustomCurrentEnd(customCurrentStart);
+                        setCustomCurrentStart(date);
+                      } else {
+                        setCustomCurrentEnd(date);
+                      }
+                      setRangePicker(null);
+                    }
+                  } else if (rangePickerStep === "start") {
+                    setCustomPreviousStart(date);
+                    setCustomPreviousEnd(date);
+                    setRangePickerStep("end");
+                  } else {
+                    if (date < customPreviousStart) {
+                      setCustomPreviousEnd(customPreviousStart);
+                      setCustomPreviousStart(date);
+                    } else {
+                      setCustomPreviousEnd(date);
+                    }
+                    setRangePicker(null);
+                  }
+                }}
+              />
+            </>
+          ) : null}
+        </Card>
+      ) : null}
       <View style={styles.periodLine}>
         <Text style={[styles.period, { color: colors.muted }]}>
           {overview.period.currentLabel} vs {overview.period.previousLabel}
@@ -846,7 +1076,7 @@ export default function PerformancePage() {
           <PerformanceTile
             key={row.metric.id}
             row={row}
-            range={range}
+            range={overview.period.range}
             editing={editing}
             index={index}
             count={rows.length}
@@ -861,6 +1091,7 @@ export default function PerformancePage() {
             }}
             pinned={pinnedIds.includes(row.metric.id)}
             onPin={() => togglePin(row.metric.id)}
+            comparisonLabel={overview.period.previousLabel.toLowerCase()}
           />
         ))}
       </View>
@@ -903,20 +1134,48 @@ export default function PerformancePage() {
         }}
       />
     </Screen>
+    </View>
+    </GestureDetector>
   );
 }
 
+export default PerformancePage;
+
 const styles = StyleSheet.create({
+  pageGesture: { flex: 1 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
   doneEdit: { minHeight: 36, justifyContent: "center", paddingHorizontal: 8 },
   doneEditText: { fontSize: 9, fontWeight: "900" },
+  rangeCard: { padding: 5, marginBottom: 7 },
   rangeBar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    borderRadius: 15,
-    padding: 5,
+    gap: 3,
   },
+  rangeChoice: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 33,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 2,
+  },
+  rangeText: { fontSize: 9, fontWeight: "900" },
+  customRanges: { gap: 8 },
+  customRangeRow: { flexDirection: "row", gap: 7 },
+  customRangeButton: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  customRangeLabel: { fontSize: 7, fontWeight: "900" },
+  customRangeDate: { fontSize: 7, fontWeight: "800", marginTop: 2 },
+  pickerHelp: { fontSize: 8, fontWeight: "800", textAlign: "center" },
   periodLine: {
     minHeight: 31,
     flexDirection: "row",

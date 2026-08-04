@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { router } from "expo-router";
 import React from "react";
 import { PanResponder, Pressable, StyleSheet, View } from "react-native";
@@ -43,7 +44,7 @@ const items = [
     path: "/quick-guide" as const,
   },
   {
-    label: "Advanced settings",
+    label: "Customize trackers",
     detail: "Trackers, calculations, layouts and scoring",
     icon: "options-outline" as const,
     path: "/customize" as const,
@@ -81,7 +82,15 @@ export default function MenuScreen() {
         edges={["top", "bottom"]}
       >
         <View style={styles.topRow}>
-          <Text style={[styles.brand, { color: accent }]}>METRICRALLY</Text>
+          <View style={styles.brandLockup}>
+            <Image
+              source={require("../assets/images/habhub-icon.png")}
+              style={styles.brandLogo}
+              contentFit="cover"
+              accessibilityLabel="HabHub logo"
+            />
+            <Text style={[styles.brand, { color: colors.ink }]}>HabHub</Text>
+          </View>
           <Pressable
             onPress={() => router.back()}
             style={[styles.close, { backgroundColor: colors.canvas }]}
@@ -109,7 +118,7 @@ export default function MenuScreen() {
               </Text>
             ) : null}
             <Text style={[styles.meta, { color: colors.muted }]}>
-              My profile · {state.group.name}
+              My profile · <Text translate={false}>{state.group.name}</Text>
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={19} color={colors.faint} />
@@ -180,11 +189,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingVertical: 14,
   },
+  brandLockup: { flexDirection: "row", alignItems: "center", gap: 9 },
+  brandLogo: { width: 34, height: 34, borderRadius: 10 },
   brand: {
-    color: palette.primary,
-    fontSize: 11,
+    color: palette.ink,
+    fontSize: 15,
     fontWeight: "900",
-    letterSpacing: 1.8,
+    letterSpacing: -0.2,
   },
   close: {
     width: 42,

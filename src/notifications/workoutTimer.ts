@@ -35,6 +35,7 @@ type StoredWorkoutFlow = {
 };
 
 let configured = false;
+let pendingFlowAction = Promise.resolve();
 
 async function readFlow() {
   const stored = await AsyncStorage.getItem(WORKOUT_TIMER_FLOW_KEY);
@@ -73,9 +74,9 @@ async function presentFlow(flow: StoredWorkoutFlow) {
   const phaseLabel =
     phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
   const hasNext = !flow.paused && flow.index < flow.steps.length - 1;
-  await Notifications.dismissNotificationAsync(
-    WORKOUT_TIMER_NOTIFICATION,
-  ).catch(() => undefined);
+  // Reusing the same identifier updates the phone notification in place. Do
+  // not dismiss/repost: that introduces visible gaps and delays Wear OS
+  // notification bridging.
   await Notifications.scheduleNotificationAsync({
     identifier: WORKOUT_TIMER_NOTIFICATION,
     content: {
@@ -85,8 +86,11 @@ async function presentFlow(flow: StoredWorkoutFlow) {
       categoryIdentifier: hasNext
         ? WORKOUT_TIMER_CATEGORY
         : WORKOUT_TIMER_LAST_CATEGORY,
-      sticky: Platform.OS === "android",
+      // Ongoing/sticky phone notifications are not bridged to paired Wear OS
+      // devices. A normal notification preserves the standard action bridge.
+      sticky: false,
       autoDismiss: false,
+      priority: Notifications.AndroidNotificationPriority.HIGH,
       color:
         phase === "work"
           ? "#A7F432"
@@ -94,8 +98,41 @@ async function presentFlow(flow: StoredWorkoutFlow) {
             ? "#D95852"
             : "#E9A23B",
     },
-    trigger: null,
+    trigger: Platform.OS === "android" ? { channelId: "workout-timer" } : null,
   });
+}
+
+function sameSteps(
+  left: WorkoutNotificationStep[],
+  right: WorkoutNotificationStep[],
+) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (step, index) =>
+        step.title === right[index]?.title &&
+        step.body === right[index]?.body &&
+        step.phase === right[index]?.phase,
+    )
+  );
+}
+
+async function applyFlowAction(action: QueuedWorkoutTimerAction["action"]) {
+  const flow = await readFlow();
+  if (!flow) return;
+  if (action === WORKOUT_TIMER_FINISH) {
+    await queueAction(action);
+    return;
+  }
+  if (action === WORKOUT_TIMER_PAUSE) flow.paused = !flow.paused;
+  else if (!flow.paused && flow.index < flow.steps.length - 1)
+    flow.index += 1;
+
+  // Commit before rendering so the lock-screen notification and replay queue
+  // always describe the same transition, including the first background tap.
+  await saveFlow(flow);
+  await queueAction(action);
+  await presentFlow(flow);
 }
 
 if (
@@ -110,16 +147,17 @@ if (
         ? (payload.data as Record<string, unknown>)
         : payload;
     const action = nested.actionIdentifier;
-    if (action !== WORKOUT_TIMER_NEXT && action !== WORKOUT_TIMER_PAUSE)
+    if (
+      action !== WORKOUT_TIMER_NEXT &&
+      action !== WORKOUT_TIMER_PAUSE &&
+      action !== WORKOUT_TIMER_FINISH
+    )
       return;
-    const flow = await readFlow();
-    if (!flow) return;
-    await queueAction(action);
-    if (action === WORKOUT_TIMER_PAUSE) flow.paused = !flow.paused;
-    else if (!flow.paused && flow.index < flow.steps.length - 1)
-      flow.index += 1;
-    await saveFlow(flow);
-    await presentFlow(flow);
+    const actionRun = pendingFlowAction.then(() => applyFlowAction(action));
+    // Keep rapid lock-screen actions ordered even if one notification update
+    // fails, so the next tap still starts from the committed flow.
+    pendingFlowAction = actionRun.catch(() => undefined);
+    await actionRun;
   });
 }
 
@@ -128,10 +166,11 @@ export async function configureWorkoutTimerNotification() {
   if (Platform.OS === "android")
     await Notifications.setNotificationChannelAsync("workout-timer", {
       name: "Live workout timer",
-      importance: Notifications.AndroidImportance.LOW,
+      importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0],
       sound: null,
       showBadge: false,
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
     });
   await Notifications.setNotificationCategoryAsync(WORKOUT_TIMER_CATEGORY, [
     {
@@ -190,8 +229,13 @@ export async function showWorkoutTimerNotification({
     index: 0,
     paused: phase === "paused",
   };
-  await saveFlow(flow);
-  await presentFlow(flow);
+  const storedFlow = await readFlow();
+  // Android can emit inactive and background in quick succession. A late
+  // duplicate must not reset a flow already advanced by a headless action.
+  const nextFlow =
+    storedFlow && sameSteps(storedFlow.steps, flow.steps) ? storedFlow : flow;
+  await saveFlow(nextFlow);
+  await presentFlow(nextFlow);
 }
 
 export async function consumeWorkoutTimerActions() {

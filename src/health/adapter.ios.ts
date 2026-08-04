@@ -16,14 +16,14 @@ export const nativeHealthAdapter: HealthAdapter = expoGo
         provider: null,
         title: "Apple Health",
         detail:
-          "Health syncing needs the installed MetricRally app; Expo Go can still run the rest of the app.",
+          "Health syncing needs the installed HabHub app; Expo Go can still run the rest of the app.",
       }),
       requestPermissions: async () => {
-        throw new Error("Install a MetricRally development or preview build to connect Apple Health.");
+        throw new Error("Install a HabHub development or preview build to connect Apple Health.");
       },
       read: async () => [],
       openSettings: async () => {
-        throw new Error("Apple Health settings require an installed MetricRally build.");
+        throw new Error("Apple Health settings require an installed HabHub build.");
       },
     }
   : {

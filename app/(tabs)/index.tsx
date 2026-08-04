@@ -11,7 +11,6 @@ import React, {
 } from "react";
 import {
   Animated,
-  Alert,
   BackHandler,
   Modal,
   PanResponder,
@@ -24,8 +23,13 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 import { GoalHeatmap } from "@/src/components/GoalHeatmap";
+import { FastingProgressBar } from "@/src/components/FastingProgressBar";
+import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
@@ -37,6 +41,8 @@ import {
   GOAL_COMPLETE_COLOR,
 } from "@/src/domain/colors";
 import { ReorderItem } from "@/src/components/ReorderItem";
+import { useEditWiggle } from "@/src/components/useEditWiggle";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -69,13 +75,22 @@ import {
   submetricAsMetric,
 } from "@/src/domain/submetrics";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import {
+  useCloudSyncActions,
+  useCloudSyncStatus,
+} from "@/src/cloud/CloudSyncProvider";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { HistoryRange, MetricDefinition } from "@/src/types";
+import {
+  CompletionFillMode,
+  HistoryRange,
+  MetricDefinition,
+} from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { orderTodayMetrics } from "@/src/domain/todayOrdering";
+import { metricVisualization } from "@/src/domain/visualization";
+import { fastingProgressForDate } from "@/src/domain/fasting";
 import {
   activeTrackerViewLabel,
   activeTrackerViewId,
@@ -99,10 +114,19 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-export default function Today() {
-  const { state, reorderMetric, setMetricSection, deleteMetric, updateMetric, updateSettings } = useApp();
+function Today() {
+  const {
+    state,
+    reorderMetric,
+    setMetricSection,
+    setTrackedGoal,
+    deleteMetric,
+    updateMetric,
+    updateSettings,
+  } = useApp();
   const health = useHealthSync();
-  const cloud = useCloudSync();
+  const cloud = useCloudSyncActions();
+  const cloudStatus = useCloudSyncStatus();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
@@ -166,6 +190,11 @@ export default function Today() {
   )!;
   const goals = trackedGoalSummary(state, state.currentUserId, today);
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
+  const activeTodayView = (state.settings.trackerViewFilters ?? []).find(
+    (filter) => filter.id === state.settings.activeTodayTrackerViewFilterId,
+  );
+  const customTodoVisible = activeTodayView?.includeTodos !== false;
+  const customTodoIds = activeTodayView?.todoIds;
   const visible = useMemo(() => {
     const ordered = state.metrics
         .filter(
@@ -187,8 +216,8 @@ export default function Today() {
     const completedBehavior =
       state.settings.completedTodayBehavior ?? "bottom";
     return orderTodayMetrics(ordered, completedBehavior, (item) => {
-      if (!isMetricTrackedOnDate(state, item, today)) return false;
       return (
+        item.goalEnabled !== false &&
         metricApplicableOnDate(
           state,
           item,
@@ -206,6 +235,16 @@ export default function Today() {
   const primary = editing || state.settings.showAllTodayTiles
     ? visible
     : visible.slice(0, tileLimit);
+  useEffect(() => {
+    if (state.settings.todayHistoryCollapsed === true) return;
+    setExpandedHistoryIds((current) => {
+      const next = primary.map((metric) => metric.id);
+      return current.length === next.length &&
+        current.every((id, index) => id === next[index])
+        ? current
+        : next;
+    });
+  }, [primary, state.settings.todayHistoryCollapsed]);
   const goldGoalOrder = primary
     .filter((item) => isMetricTrackedOnDate(state, item, today))
     .map((item) => item.id);
@@ -266,9 +305,13 @@ export default function Today() {
     )
     .map((todo) => `todo:${todo.id}`);
   const todayTodos =
-    state.settings.showTodosToday === false
+    state.settings.showTodosToday === false || !customTodoVisible
       ? []
-      : (state.todos ?? []).filter((todo) => todoAppearsOnDate(todo, today));
+      : (state.todos ?? []).filter(
+          (todo) =>
+            (customTodoIds === undefined || customTodoIds.includes(todo.id)) &&
+            todoAppearsOnDate(todo, today),
+        );
   const completedTodayTodos = todayTodos.filter((todo) =>
     todoResolvedOnDate(todo, today),
   ).length;
@@ -416,7 +459,7 @@ export default function Today() {
     <SafeAreaView
       {...todaySwipeResponder.panHandlers}
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top"]}
+      edges={["top", "bottom"]}
     >
       {confettiVisible ? (
         <ConfettiBurst progress={celebration} special={celebrationSpecial} />
@@ -427,15 +470,18 @@ export default function Today() {
             enabled={!editing}
             refreshing={
               !editing &&
-              (health.status === "syncing" || cloud.status === "syncing")
+              (health.status === "syncing" || cloudStatus === "syncing")
             }
             onRefresh={async () => {
-              // Save local changes first, refresh shared rows, then import the
-              // newest device health records. The health import is persisted by
-              // the normal local-first cloud debounce without being overwritten.
-              await cloud.syncNow().catch(() => undefined);
-              await cloud.refreshGroup().catch(() => undefined);
+              // Health updates become local immediately. Upload the resulting
+              // snapshot once, then reconcile shared summaries without ever
+              // clearing the cached leaderboard first.
               await health.syncNow("pull").catch(() => undefined);
+              await new Promise<void>((resolve) =>
+                setTimeout(resolve, 0),
+              );
+              await cloud.syncNow().catch(() => undefined);
+              await cloud.refreshActivity().catch(() => undefined);
             }}
             tintColor={accent}
           />
@@ -486,6 +532,24 @@ export default function Today() {
                   colors={colors}
                   accent={accent}
                 />
+                {state.settings.showCalendarShortcut ? (
+                  <HeaderIcon
+                    icon="calendar-outline"
+                    label="Open schedule"
+                    onPress={() => router.navigate("/calendar" as never)}
+                    colors={colors}
+                    accent={accent}
+                  />
+                ) : null}
+                {state.settings.showJournalShortcut ? (
+                  <HeaderIcon
+                    icon="book-outline"
+                    label="Open journal"
+                    onPress={() => router.navigate("/journal" as never)}
+                    colors={colors}
+                    accent={accent}
+                  />
+                ) : null}
                 <HeaderIcon
                   icon="notifications-outline"
                   label="Open notifications"
@@ -559,6 +623,9 @@ export default function Today() {
                   "ellipse-outline") as keyof typeof Ionicons.glyphMap
               }
               progress={goals.total ? goals.met / goals.total : 0}
+              fillMode={
+                state.settings.completionIndicatorFillMode ?? "auto"
+              }
               color={
                 goals.allMet
                   ? ALL_GOALS_COMPLETE_COLOR
@@ -601,6 +668,12 @@ export default function Today() {
                   unavailable={unavailable}
                   allMet={goals.allMet}
                   sequenceRun={goldSequenceRun}
+                  onPress={() =>
+                    router.navigate({
+                      pathname: "/metric-detail",
+                      params: { metric: item.id, date: today },
+                    } as never)
+                  }
                 />
               );
             })}
@@ -631,6 +704,8 @@ export default function Today() {
             onComplete={celebrateTodo}
             editing={editing}
             onRequestEdit={beginEditing}
+            visibleOverride={customTodoVisible}
+            todoIds={customTodoIds}
           />
         ) : null}
         <View style={styles.sectionRow}>
@@ -677,12 +752,7 @@ export default function Today() {
                 goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
                 goldSequenceRun={goldSequenceRun}
                 celebrating={celebratingGoalIds.includes(item.id)}
-                historyRange={
-                  (state.settings.todayHistoryByMetric?.[item.id] ?? "off") ===
-                  "off"
-                    ? "off"
-                    : todayHistoryRange
-                }
+                historyRange={todayHistoryRange}
                 historyExpanded={expandedHistoryIds.includes(item.id)}
                 onEdit={beginEditing}
                 onMove={(target) =>
@@ -690,23 +760,53 @@ export default function Today() {
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
-                onHistoryToggle={() => {
-                  const currentlyEnabled =
-                    (state.settings.todayHistoryByMetric?.[item.id] ??
-                      "off") !== "off";
-                  updateSettings({
-                    todayHistoryByMetric: {
-                      ...(state.settings.todayHistoryByMetric ?? {}),
-                      [item.id]:
-                        !currentlyEnabled
-                          ? todayHistoryRange
-                          : "off",
-                    },
-                  });
-                  if (currentlyEnabled)
-                    setExpandedHistoryIds((current) =>
-                      current.filter((id) => id !== item.id),
+                onTrackedToggle={() => {
+                  if (isMetricTrackedOnDate(state, item, today)) {
+                    Alert.alert(
+                      `Stop tracking ${item.name}?`,
+                      "Choose whether earlier goal history should remain.",
+                      [
+                        { text: "Cancel", style: "cancel" },
+                        {
+                          text: "From today",
+                          onPress: () =>
+                            setTrackedGoal(item.id, false, "today"),
+                        },
+                        {
+                          text: "Remove history",
+                          style: "destructive",
+                          onPress: () =>
+                            setTrackedGoal(item.id, false, "history"),
+                        },
+                      ],
                     );
+                    return;
+                  }
+                  Alert.alert(
+                    `Track ${item.name}?`,
+                    "When should this goal begin counting?",
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Apply to history",
+                        onPress: () =>
+                          setTrackedGoal(item.id, true, "history"),
+                      },
+                      {
+                        text: "Start today",
+                        onPress: () =>
+                          setTrackedGoal(item.id, true, "today"),
+                      },
+                      {
+                        text: "Choose date",
+                        onPress: () =>
+                          router.navigate({
+                            pathname: "/metric-editor",
+                            params: { id: item.id, focus: "goal-start" },
+                          } as never),
+                      },
+                    ],
+                  );
                 }}
                 onHistoryExpandToggle={() =>
                   setExpandedHistoryIds((current) =>
@@ -750,6 +850,8 @@ export default function Today() {
             onComplete={celebrateTodo}
             editing={editing}
             onRequestEdit={beginEditing}
+            visibleOverride={customTodoVisible}
+            todoIds={customTodoIds}
           />
         ) : null}
         {editing ? (
@@ -1043,15 +1145,8 @@ export default function Today() {
             <View style={styles.historyBulkRow}>
               <Pressable
                 onPress={() => {
-                  setExpandedHistoryIds(
-                    primary
-                      .filter(
-                        (metric) =>
-                          (state.settings.todayHistoryByMetric?.[metric.id] ??
-                            "off") !== "off",
-                      )
-                      .map((metric) => metric.id),
-                  );
+                  setExpandedHistoryIds(primary.map((metric) => metric.id));
+                  updateSettings({ todayHistoryCollapsed: false });
                   setShowHistoryOptions(false);
                 }}
                 style={[
@@ -1067,6 +1162,7 @@ export default function Today() {
               <Pressable
                 onPress={() => {
                   setExpandedHistoryIds([]);
+                  updateSettings({ todayHistoryCollapsed: true });
                   setShowHistoryOptions(false);
                 }}
                 style={[
@@ -1206,12 +1302,14 @@ function GoalCompletionDot({
   unavailable,
   allMet,
   sequenceRun,
+  onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   met: boolean;
   unavailable: boolean;
   allMet: boolean;
   sequenceRun: number;
+  onPress: () => void;
 }) {
   const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
   useEffect(() => {
@@ -1240,15 +1338,23 @@ function GoalCompletionDot({
       })
     : "rgba(255,255,255,.16)";
   return (
-    <Animated.View style={[styles.dot, { backgroundColor }]}>
-      <Ionicons
-        name={unavailable ? "remove" : met ? "checkmark" : icon}
-        size={11}
-        color={met && allMet ? "#654900" : met ? "#214218" : palette.white}
-      />
-    </Animated.View>
+    <Pressable
+      accessibilityLabel="Open tracked goal"
+      onPress={onPress}
+      hitSlop={5}
+    >
+      <Animated.View style={[styles.dot, { backgroundColor }]}>
+        <Ionicons
+          name={unavailable ? "remove" : met ? "checkmark" : icon}
+          size={11}
+          color={met && allMet ? "#654900" : met ? "#214218" : palette.white}
+        />
+      </Animated.View>
+    </Pressable>
   );
 }
+
+export default Today;
 
 function HeaderIcon({
   icon,
@@ -1298,7 +1404,7 @@ function TrackerRow({
   onMove,
   onRemove,
   onPin,
-  onHistoryToggle,
+  onTrackedToggle,
   onHistoryExpandToggle,
   onDragStart,
   onDragHover,
@@ -1326,33 +1432,29 @@ function TrackerRow({
   onMove: (target: number) => void;
   onRemove: () => void;
   onPin: () => void;
-  onHistoryToggle: () => void;
+  onTrackedToggle: () => void;
   onHistoryExpandToggle: () => void;
   onDragStart: () => void;
   onDragHover: (target: number) => void;
   onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
-  const dragOrigin = useRef(index);
-  const liveTarget = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  const onDragStartRef = useRef(onDragStart);
-  const onDragHoverRef = useRef(onDragHover);
-  const onDragCancelRef = useRef(onDragCancel);
-  const onDragEndRef = useRef(onDragEnd);
-  const dragY = useRef(new Animated.Value(0)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
+  const locale = useLocale();
   const arrival = useRef(new Animated.Value(1)).current;
   const dragStep = height + 6;
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  onDragStartRef.current = onDragStart;
-  onDragHoverRef.current = onDragHover;
-  onDragCancelRef.current = onDragCancel;
-  onDragEndRef.current = onDragEnd;
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: editing,
+    index,
+    count,
+    initialStep: dragStep,
+    onMove,
+    onStart: onDragStart,
+    onTargetChange: onDragHover,
+    onCancel: onDragCancel,
+    onEnd: onDragEnd,
+  });
+  const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
+  useEffect(() => smoothDrag.setStep(dragStep), [dragStep, smoothDrag]);
   useEffect(() => {
     if (!celebrating) return;
     arrival.setValue(0);
@@ -1363,81 +1465,6 @@ function TrackerRow({
       useNativeDriver: true,
     }).start();
   }, [arrival, celebrating]);
-  useEffect(() => {
-    if (!editing) {
-      wiggle.stopAnimation();
-      wiggle.setValue(0);
-      dragY.setValue(0);
-      return;
-    }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, { toValue: 1, duration: 130, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: -1, duration: 260, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0, duration: 130, useNativeDriver: true }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [dragY, editing, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => editing,
-        onStartShouldSetPanResponderCapture: () => editing,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 3,
-        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-          editing && Math.abs(gesture.dy) > 3,
-        onPanResponderGrant: () => {
-          onDragStartRef.current();
-          dragOrigin.current = indexRef.current;
-          liveTarget.current = indexRef.current;
-        },
-        onPanResponderMove: (_event, gesture) => {
-          const target = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / dragStep),
-            ),
-          );
-          dragY.setValue(gesture.dy);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onDragHoverRef.current(target);
-          }
-        },
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: () => {
-          const target = liveTarget.current;
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 24,
-            stiffness: 220,
-            mass: 0.72,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start();
-          if (target !== dragOrigin.current) onMoveRef.current(target);
-          onDragEndRef.current();
-        },
-        onPanResponderTerminate: () => {
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 240,
-            mass: 0.75,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => {
-            onDragCancelRef.current();
-            onDragEndRef.current();
-          });
-        },
-      }),
-    [dragY, editing, dragStep],
-  );
   const actualValue =
     item.id === "weekly_deficit_balance"
       ? weekly.balance
@@ -1513,6 +1540,10 @@ function TrackerRow({
     item.name.trim().toLowerCase() === "blood pressure" ||
     (item.healthMapping?.dataType === "blood_pressure" &&
       item.healthMapping.field !== "diastolic");
+  const isFasting = item.id === "intermittent_fasting";
+  const fastingProgress = isFasting
+    ? fastingProgressForDate(state, state.currentUserId, day)
+    : undefined;
   const diastolic = isBloodPressure
     ? state.metrics.find(
         (candidate) =>
@@ -1545,7 +1576,22 @@ function TrackerRow({
   const progressSubmetrics = (item.submetrics ?? [])
     .filter((submetric) => submetric.showProgressBar)
     .slice(0, 4);
-  const content = mergedCompoundValue
+  const content = isFasting
+    ? {
+        primary: fastingProgress?.active
+          ? "Fast in progress"
+          : fastingProgress?.startedAt
+            ? `${formatMetricValue(item, fastingProgress.minutes / 60)} fast`
+            : "Ready to start",
+        secondary: fastingProgress?.active
+          ? `${formatMetricValue(item, fastingProgress.minutes / 60)} elapsed · ${formatMetricValue(item, fastingProgress.targetMinutes / 60)} target`
+          : fastingProgress?.startedAt
+            ? fastingProgress.endedOutsideEatingWindow
+              ? "Ended outside the eating window"
+              : "Ended in the eating window"
+            : `${formatMetricValue(item, (fastingProgress?.targetMinutes ?? 16 * 60) / 60)} fast · ${formatMetricValue(item, (1440 - (fastingProgress?.targetMinutes ?? 16 * 60)) / 60)} eating window`,
+      }
+    : mergedCompoundValue
     ? {
         primary: mergedCompoundValue,
         secondary: "",
@@ -1566,18 +1612,25 @@ function TrackerRow({
         target,
         applicable,
         weekly,
+        locale,
       );
   return (
+    <Reanimated.View
+      style={[
+        smoothDrag.animatedStyle,
+        {
+          zIndex: smoothDrag.dragging ? 20 : editing ? 4 : 0,
+          elevation: smoothDrag.dragging ? 12 : 0,
+        },
+      ]}
+    >
     <Animated.View style={{
       transform: [
         {
-          translateY: Animated.add(
-            dragY,
-            arrival.interpolate({
-              inputRange: [0, 1],
-              outputRange: [-34, 0],
-            }),
-          ),
+          translateY: arrival.interpolate({
+            inputRange: [0, 1],
+            outputRange: [-34, 0],
+          }),
         },
         {
           scale: arrival.interpolate({
@@ -1587,7 +1640,6 @@ function TrackerRow({
         },
         { rotate: wiggle.interpolate({ inputRange: [-1, 1], outputRange: ["-0.35deg", "0.35deg"] }) },
       ],
-      zIndex: editing ? 4 : 0,
     }}>
     <AnimatedPressable
       onLongPress={onEdit}
@@ -1617,13 +1669,15 @@ function TrackerRow({
       ]}
     >
       {editing ? (
-        <View {...responder.panHandlers} style={styles.drag}>
+        <GestureDetector gesture={smoothDrag.gesture}>
+        <View collapsable={false} style={styles.drag}>
           <Ionicons
             name="reorder-three-outline"
             size={24}
             color={colors.faint}
           />
         </View>
+        </GestureDetector>
       ) : (
         <View style={[styles.icon, { backgroundColor: `${item.color}18` }]}>
           {photo ? (
@@ -1700,7 +1754,7 @@ function TrackerRow({
               color:
                 item.id === "weekly_deficit_balance"
                   ? colors.ink
-                  : item.goal.kind === "at_most" && value > target
+                  : applicable && item.goal.kind === "at_most" && value > target
                   ? palette.red
                   : colors.ink,
             },
@@ -1719,15 +1773,31 @@ function TrackerRow({
         ) : null}
       </View>
       {(item.goalEnabled !== false || progressSubmetrics.length > 0) &&
-      applicable ? (
+      applicable &&
+      (!isFasting || Boolean(fastingProgress?.startedAt)) ? (
         <View
           style={
-            progressSubmetrics.length > 1 || diastolic
+            isFasting
+              ? styles.fastingProgress
+              : progressSubmetrics.length > 1 || diastolic
               ? styles.bpProgress
               : styles.progress
           }
         >
-          {progressSubmetrics.length ? (
+          {isFasting && fastingProgress?.startedAt ? (
+            <FastingProgressBar
+              startedAt={fastingProgress.startedAt}
+              endedAt={fastingProgress.endedAt}
+              active={fastingProgress.active}
+              targetMinutes={fastingProgress.targetMinutes}
+              metricColor={item.color}
+              endedOutsideEatingWindow={
+                fastingProgress.endedOutsideEatingWindow
+              }
+              compact
+              style={styles.todayFastingProgressBar}
+            />
+          ) : progressSubmetrics.length ? (
             progressSubmetrics.map((submetric) => {
               const submetricDefinition = submetricAsMetric(item, submetric);
               const subValue = compoundValues[submetric.id] ?? 0;
@@ -1745,15 +1815,25 @@ function TrackerRow({
                     {submetric.name.slice(0, 3).toUpperCase()}
                   </Text>
                   <View style={styles.submetricProgressBar}>
-                    <ProgressBar
-                      progress={goalProgress(
-                        submetricDefinition,
-                        subValue,
-                        submetric.goal.target,
-                      )}
-                      color={subMet ? palette.lime : item.color}
-                      layered={submetric.goal.kind === "at_least"}
-                    />
+                    {isBloodPressure && submetric.goalRange ? (
+                      <RangeGoalProgressBar
+                        value={subValue}
+                        range={submetric.goalRange}
+                        color={subMet ? palette.lime : palette.red}
+                        unit={submetric.unit}
+                        compact
+                      />
+                    ) : (
+                      <ProgressBar
+                        progress={goalProgress(
+                          submetricDefinition,
+                          subValue,
+                          submetric.goal.target,
+                        )}
+                        color={subMet ? palette.lime : item.color}
+                        layered={submetric.goal.kind === "at_least"}
+                      />
+                    )}
                   </View>
                 </View>
               );
@@ -1819,20 +1899,21 @@ function TrackerRow({
           </Pressable>
           <Pressable
             accessibilityLabel={
-              historyRange === "off"
-                ? `Show ${item.name} history`
-                : `Hide ${item.name} history`
+              trackedGoal
+                ? `Remove ${item.name} from tracked goals`
+                : `Add ${item.name} to tracked goals`
             }
-            onPress={() => {
-              onHistoryToggle();
-            }}
+            onPress={onTrackedToggle}
             hitSlop={8}
-            style={[styles.editTracker, { borderColor: accent }]}
+            style={[
+              styles.editTracker,
+              { borderColor: trackedGoal ? item.color : accent },
+            ]}
           >
             <Ionicons
-              name={historyRange === "off" ? "calendar-outline" : "calendar"}
+              name={trackedGoal ? "flag" : "flag-outline"}
               size={14}
-              color={accent}
+              color={trackedGoal ? item.color : accent}
             />
           </Pressable>
           <Pressable onPress={onRemove} hitSlop={10} style={styles.remove}>
@@ -1866,10 +1947,13 @@ function TrackerRow({
       )}
     </AnimatedPressable>
     {!editing && historyRange !== "off" && historyExpanded ? (
-      <View
+      <Animated.View
         style={[
           styles.todayHistory,
-          { backgroundColor: colors.card, borderColor: colors.border },
+          {
+            backgroundColor: cardComplete ? completedBackground : colors.card,
+            borderColor: cardComplete ? completedBorder : colors.border,
+          },
         ]}
       >
         <GoalHeatmap
@@ -1882,6 +1966,9 @@ function TrackerRow({
           )}
           range={historyRange}
           compact
+          completionOnly={
+            metricVisualization(item).progressGrid === "completion"
+          }
           onSelect={(selectedDate) =>
             router.navigate({
               pathname: "/metric-detail",
@@ -1889,9 +1976,10 @@ function TrackerRow({
             })
           }
         />
-      </View>
+      </Animated.View>
     ) : null}
     </Animated.View>
+    </Reanimated.View>
   );
 }
 
@@ -2045,6 +2133,7 @@ function trackerCopy(
   target: number,
   applicable: boolean,
   weekly: ReturnType<typeof weeklyDeficitBalance>,
+  locale: string,
 ) {
   if (!applicable) {
     const secondary =
@@ -2059,7 +2148,7 @@ function trackerCopy(
   }
   if (item.id === "weekly_deficit_balance")
     return {
-      primary: `${Math.abs(Math.round(weekly.balance)).toLocaleString()} kcal ${weekly.balance >= 0 ? "ahead" : "behind"}`,
+      primary: `${Math.abs(Math.round(weekly.balance)).toLocaleString(locale)} kcal ${weekly.balance >= 0 ? "ahead" : "behind"}`,
       secondary: `${weekly.days} logged day${weekly.days === 1 ? "" : "s"} count this week`,
     };
   if (item.id === "food") {
@@ -2067,9 +2156,9 @@ function trackerCopy(
     return {
       primary:
         left >= 0
-          ? `${Math.round(left).toLocaleString()} kcal left`
-          : `${Math.abs(Math.round(left)).toLocaleString()} kcal over`,
-      secondary: `${Math.round(value).toLocaleString()} consumed · allowance ${Math.round(target).toLocaleString()}`,
+          ? `${Math.round(left).toLocaleString(locale)} kcal left`
+          : `${Math.abs(Math.round(left)).toLocaleString(locale)} kcal over`,
+      secondary: `${Math.round(value).toLocaleString(locale)} consumed · allowance ${Math.round(target).toLocaleString(locale)}`,
     };
   }
   if (item.id === "weight") {
@@ -2175,13 +2264,41 @@ function CompletionShapeIndicator({
   icon,
   progress,
   color,
+  fillMode,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   progress: number;
   color: string;
+  fillMode: CompletionFillMode;
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
   const label = `${Math.round(normalized * 100)}%`;
+  const resolvedFill =
+    fillMode !== "auto"
+      ? fillMode
+      : icon === "ellipse-outline" || icon === "square-outline"
+        ? "clockwise"
+        : icon === "heart-outline" ||
+            icon === "star-outline" ||
+            icon === "happy-outline"
+          ? "center_out"
+          : "bottom_up";
+  const coloredIcon = (style?: object) => (
+    <Ionicons
+      name={icon}
+      size={COMPLETION_INDICATOR_SIZE}
+      color={color}
+      style={[
+        styles.completionShapeIcon,
+        {
+          textShadowColor: color,
+          textShadowOffset: { width: 0, height: 0 },
+          textShadowRadius: 1.15,
+        },
+        style,
+      ]}
+    />
+  );
   return (
     <View
       accessibilityLabel={`${label} of today's tracked goals complete`}
@@ -2196,33 +2313,125 @@ function CompletionShapeIndicator({
           styles.completionShapeTrackIcon,
         ]}
       />
-      <View
-        pointerEvents="none"
-        style={[
-          styles.completionReveal,
-          { width: `${normalized * 100}%` },
-        ]}
-      >
-        <Ionicons
-          name={icon}
-          size={COMPLETION_INDICATOR_SIZE}
-          color={color}
+      {resolvedFill === "clockwise" ? (
+        <ClockwiseIconReveal progress={normalized}>
+          {coloredIcon()}
+        </ClockwiseIconReveal>
+      ) : (
+        <View
+          pointerEvents="none"
           style={[
-            styles.completionShapeIcon,
-            {
-              textShadowColor: color,
-              textShadowOffset: { width: 0, height: 0 },
-              textShadowRadius: 1.15,
-            },
+            styles.completionReveal,
+            resolvedFill === "bottom_up"
+              ? {
+                  top: (1 - normalized) * COMPLETION_INDICATOR_SIZE,
+                  height: normalized * COMPLETION_INDICATOR_SIZE,
+                  width: COMPLETION_INDICATOR_SIZE,
+                }
+              : {
+                  left:
+                    ((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
+                  width: normalized * COMPLETION_INDICATOR_SIZE,
+                  height: COMPLETION_INDICATOR_SIZE,
+                },
           ]}
-        />
-      </View>
+        >
+          {coloredIcon(
+            resolvedFill === "bottom_up"
+              ? { top: -(1 - normalized) * COMPLETION_INDICATOR_SIZE }
+              : {
+                  left:
+                    -((1 - normalized) * COMPLETION_INDICATOR_SIZE) / 2,
+                },
+          )}
+        </View>
+      )}
       <View pointerEvents="none" style={styles.completionShapeLabelCenter}>
         <Text preserveColor style={styles.completionShapeLabel}>
           {label}
         </Text>
       </View>
     </View>
+  );
+}
+
+function ClockwiseIconReveal({
+  progress,
+  children,
+}: React.PropsWithChildren<{ progress: number }>) {
+  const half = COMPLETION_INDICATOR_SIZE / 2;
+  const segment = (index: number) =>
+    Math.max(0, Math.min(1, progress * 4 - index));
+  const top = segment(0);
+  const right = segment(1);
+  const bottom = segment(2);
+  const left = segment(3);
+  const pieces = [
+    {
+      left: half,
+      top: 0,
+      width: half * top,
+      height: half,
+      icon: { left: -half, top: 0 },
+    },
+    {
+      left: half,
+      top: half,
+      width: half,
+      height: half * right,
+      icon: { left: -half, top: -half },
+    },
+    {
+      left: half - half * bottom,
+      top: half,
+      width: half * bottom,
+      height: half,
+      icon: { left: -(half - half * bottom), top: -half },
+    },
+    {
+      left: 0,
+      top: half - half * left,
+      width: half,
+      height: half * left,
+      icon: {
+        left: 0,
+        top: -(half - half * left),
+      },
+    },
+  ];
+  return (
+    <>
+      {pieces.map((piece, index) =>
+        piece.width > 0 && piece.height > 0 ? (
+          <View
+            key={index}
+            pointerEvents="none"
+            style={[
+              styles.completionReveal,
+              {
+                left: piece.left,
+                top: piece.top,
+                width: piece.width,
+                height: piece.height,
+              },
+            ]}
+          >
+            {React.isValidElement(children)
+              ? React.cloneElement(
+                  children as React.ReactElement<{ style?: object }>,
+                  {
+                    style: [
+                      (children as React.ReactElement<{ style?: object }>).props
+                        .style,
+                      piece.icon,
+                    ],
+                  },
+                )
+              : children}
+          </View>
+        ) : null,
+      )}
+    </>
   );
 }
 
@@ -2454,6 +2663,15 @@ const styles = StyleSheet.create({
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },
   progress: { width: 108 },
+  fastingProgress: {
+    width: 108,
+    alignSelf: "stretch",
+    justifyContent: "center",
+  },
+  todayFastingProgressBar: {
+    flex: 0,
+    width: "100%",
+  },
   goalProgressTrack: {
     position: "relative",
     height: 6,

@@ -1,14 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
+import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import {
   Card,
   Chip,
@@ -27,7 +30,17 @@ type ReminderDraft = {
   date: string;
   time: string;
   daysBeforeDue?: number;
+  repeatDailyUntilDue?: boolean;
 };
+
+function plusMinutes(localDate: string, localTime: string, minutes: number) {
+  const value = new Date(`${localDate}T${localTime}:00`);
+  value.setMinutes(value.getMinutes() + minutes);
+  return {
+    date: `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`,
+    time: `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`,
+  };
+}
 
 export default function TodoEditor() {
   const { id, date, time } = useLocalSearchParams<{
@@ -63,10 +76,25 @@ export default function TodoEditor() {
     Boolean(existing?.dueAt || date || time),
   );
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const initialBlockStartDate = existing?.scheduledStartAt?.slice(0, 10) ?? date ?? dateKey();
+  const initialBlockStartTime = existing?.scheduledStartAt?.slice(11, 16) ?? time ?? "09:00";
+  const initialBlockEnd = existing?.scheduledEndAt
+    ? {
+        date: existing.scheduledEndAt.slice(0, 10),
+        time: existing.scheduledEndAt.slice(11, 16),
+      }
+    : plusMinutes(initialBlockStartDate, initialBlockStartTime, 60);
+  const [hasTimeBlock, setHasTimeBlock] = useState(
+    Boolean(existing?.scheduledStartAt || time),
+  );
+  const [blockStartDate, setBlockStartDate] = useState(initialBlockStartDate);
+  const [blockStartTime, setBlockStartTime] = useState(initialBlockStartTime);
+  const [blockEndDate, setBlockEndDate] = useState(initialBlockEnd.date);
+  const [blockEndTime, setBlockEndTime] = useState(initialBlockEnd.time);
+  const [blockCalendar, setBlockCalendar] = useState<"start" | "end" | null>(null);
   const [repeat, setRepeat] = useState<RepeatMode>(
     existing?.recurrence?.mode ?? "none",
   );
-  const [repeatOpen, setRepeatOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [customDaysBefore, setCustomDaysBefore] = useState("2");
@@ -96,7 +124,11 @@ export default function TodoEditor() {
         existing.dueAt?.slice(11, 16) ??
         "09:00",
       daysBeforeDue: reminder.daysBeforeDue,
+      repeatDailyUntilDue: reminder.repeatDailyUntilDue,
     })) ?? [],
+  );
+  const dailyUntilDeadline = reminders.some(
+    (reminder) => reminder.repeatDailyUntilDue,
   );
   const [reminderCalendarIndex, setReminderCalendarIndex] = useState<
     number | null
@@ -110,6 +142,11 @@ export default function TodoEditor() {
         dueDate,
         dueTime,
         hasDeadline,
+        hasTimeBlock,
+        blockStartDate,
+        blockStartTime,
+        blockEndDate,
+        blockEndTime,
         repeat,
         days,
         interval,
@@ -122,6 +159,11 @@ export default function TodoEditor() {
       dueDate,
       dueTime,
       hasDeadline,
+      hasTimeBlock,
+      blockStartDate,
+      blockStartTime,
+      blockEndDate,
+      blockEndTime,
       interval,
       monthDays,
       priority,
@@ -133,6 +175,7 @@ export default function TodoEditor() {
   const initialSignature = useRef(signature);
   const allowExit = useRef(false);
   const dirty = signature !== initialSignature.current;
+  useWebBeforeUnload(() => dirty && !allowExit.current);
   const addReminder = (daysBeforeDue?: number) => {
     const date =
       daysBeforeDue !== undefined
@@ -235,6 +278,20 @@ export default function TodoEditor() {
     if (!title.trim())
       return Alert.alert("Add a title", "What needs to be done?");
     const now = new Date().toISOString();
+    if (hasTimeBlock) {
+      const starts = new Date(`${blockStartDate}T${blockStartTime}:00`);
+      const ends = new Date(`${blockEndDate}T${blockEndTime}:00`);
+      if (Number.isNaN(starts.getTime()) || Number.isNaN(ends.getTime()) || ends <= starts)
+        return Alert.alert("Check the planned time", "The end must be after the start. Overnight blocks can end on the next date.");
+    }
+    const recurrenceAnchor = hasTimeBlock
+      ? blockStartDate
+      : hasDeadline
+        ? dueDate
+        : existing?.recurrence?.anchorDate ??
+          existing?.createdAt.slice(0, 10) ??
+          date ??
+          dateKey();
     const recurrence: GoalSchedule | undefined =
       repeat === "none"
         ? undefined
@@ -257,10 +314,7 @@ export default function TodoEditor() {
                       ),
                   )].sort((a, b) => a - b)
                 : undefined,
-            anchorDate:
-              repeat === "every_other_day" || repeat === "interval_days"
-                ? dueDate
-                : undefined,
+            anchorDate: recurrenceAnchor,
           };
     saveTodo({
       id: existing?.id ?? `todo-${Date.now().toString(36)}`,
@@ -268,6 +322,12 @@ export default function TodoEditor() {
       description: description.trim() || undefined,
       createdAt: existing?.createdAt ?? now,
       dueAt: hasDeadline ? `${dueDate}T${dueTime}:00` : undefined,
+      scheduledStartAt: hasTimeBlock
+        ? `${blockStartDate}T${blockStartTime}:00`
+        : undefined,
+      scheduledEndAt: hasTimeBlock
+        ? `${blockEndDate}T${blockEndTime}:00`
+        : undefined,
       priority,
       recurrence,
       reminders: reminders.map((reminder) => ({
@@ -275,6 +335,7 @@ export default function TodoEditor() {
         at: `${reminder.date}T${reminder.time}:00`,
         time: reminder.time,
         daysBeforeDue: reminder.daysBeforeDue,
+        repeatDailyUntilDue: reminder.repeatDailyUntilDue,
       })),
       completedDates: existing?.completedDates ?? [],
       skippedDates: existing?.skippedDates ?? [],
@@ -410,47 +471,87 @@ export default function TodoEditor() {
               value={dueTime}
               onChange={setDueTime}
               label="Time"
+              wheelPicker
             />
           </>
         ) : null}
       </Card>
       <Card style={styles.form}>
         <Pressable
-          onPress={() => setRepeatOpen((open) => !open)}
-          style={styles.collapseHeading}
+          onPress={() => setHasTimeBlock((value) => !value)}
+          style={styles.switchLine}
         >
           <View style={styles.copy}>
-            <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
-            <Text style={[styles.help, { color: colors.muted }]}>
-              {repeat === "none" ? "Once" : repeat.replaceAll("_", " ")}
-            </Text>
+            <Text style={[styles.label, { color: colors.ink }]}>Planned time</Text>
+            <Text style={[styles.help, { color: colors.muted }]}>Optional start and end; the deadline stays separate.</Text>
           </View>
           <Ionicons
-            name={repeatOpen ? "chevron-up" : "chevron-down"}
-            size={17}
-            color={colors.muted}
+            name={hasTimeBlock ? "checkbox" : "square-outline"}
+            size={21}
+            color={hasTimeBlock ? accent : colors.faint}
           />
         </Pressable>
-        {repeatOpen ? <>
-        <View style={styles.wrap}>
-          {(
-            [
-              ["none", "Once"],
-              ["daily", "Daily"],
-              ["selected_days", "Chosen days"],
-              ["every_other_day", "Every other day"],
-              ["interval_days", "Every N days"],
-              ["days_of_month", "Dates monthly"],
-            ] as const
-          ).map(([value, label]) => (
-            <Chip
-              key={value}
-              label={label}
-              selected={repeat === value}
-              onPress={() => setRepeat(value)}
-            />
-          ))}
-        </View>
+        {hasTimeBlock ? (
+          <>
+            <View style={styles.blockRow}>
+              <Pressable
+                onPress={() => setBlockCalendar(blockCalendar === "start" ? null : "start")}
+                style={[styles.blockDate, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={15} color={accent} />
+                <Text style={[styles.reminderDateText, { color: colors.ink }]}>{blockStartDate}</Text>
+              </Pressable>
+              <TimeInput value={blockStartTime} onChange={setBlockStartTime} label="Starts" wheelPicker />
+            </View>
+            {blockCalendar === "start" ? (
+              <MonthCalendar
+                monthDate={blockStartDate}
+                selectedDate={blockStartDate}
+                onSelect={(next) => {
+                  setBlockStartDate(next);
+                  setBlockCalendar(null);
+                }}
+              />
+            ) : null}
+            <View style={styles.blockRow}>
+              <Pressable
+                onPress={() => setBlockCalendar(blockCalendar === "end" ? null : "end")}
+                style={[styles.blockDate, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={15} color={accent} />
+                <Text style={[styles.reminderDateText, { color: colors.ink }]}>{blockEndDate}</Text>
+              </Pressable>
+              <TimeInput value={blockEndTime} onChange={setBlockEndTime} label="Ends" wheelPicker />
+            </View>
+            {blockCalendar === "end" ? (
+              <MonthCalendar
+                monthDate={blockEndDate}
+                selectedDate={blockEndDate}
+                onSelect={(next) => {
+                  setBlockEndDate(next);
+                  setBlockCalendar(null);
+                }}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </Card>
+      <Card style={styles.form}>
+        <SelectionMenu
+          title="Repeat"
+          searchable={false}
+          multiple={false}
+          items={[
+            { id: "none", label: "Once", sublabel: "Do not repeat", icon: "calendar-outline" },
+            { id: "daily", label: "Daily", sublabel: "Every day", icon: "repeat-outline" },
+            { id: "selected_days", label: "Chosen days", sublabel: "Specific weekdays", icon: "calendar-number-outline" },
+            { id: "every_other_day", label: "Every other day", sublabel: "Alternating days", icon: "swap-horizontal-outline" },
+            { id: "interval_days", label: "Custom interval", sublabel: "Every chosen number of days", icon: "options-outline" },
+            { id: "days_of_month", label: "Dates monthly", sublabel: "Specific dates each month", icon: "calendar-clear-outline" },
+          ]}
+          selectedIds={[repeat]}
+          onChange={(ids) => ids[0] && setRepeat(ids[0] as RepeatMode)}
+        />
         {repeat === "selected_days" ? (
           <View style={styles.wrap}>
             {["S", "M", "T", "W", "T", "F", "S"].map((label, day) => (
@@ -494,7 +595,6 @@ export default function TodoEditor() {
             ]}
           />
         ) : null}
-        </> : null}
       </Card>
       <Card style={styles.form}>
         <Pressable
@@ -518,6 +618,47 @@ export default function TodoEditor() {
         {remindersOpen ? <>
         {hasDeadline ? (
           <View style={styles.presetSection}>
+            <Pressable
+              onPress={() =>
+                setReminders((current) => {
+                  const withoutDaily = current.filter(
+                    (item) => !item.repeatDailyUntilDue,
+                  );
+                  return dailyUntilDeadline
+                    ? withoutDaily
+                    : [
+                        ...withoutDaily,
+                        {
+                          id: `reminder-daily-until-${Date.now().toString(36)}`,
+                          date: existing?.createdAt.slice(0, 10) ?? dateKey(),
+                          time: "09:00",
+                          repeatDailyUntilDue: true,
+                        },
+                      ];
+                })
+              }
+              style={[
+                styles.presetHeading,
+                {
+                  borderColor: dailyUntilDeadline ? accent : colors.border,
+                  backgroundColor: colors.canvas,
+                },
+              ]}
+            >
+              <Ionicons
+                name={dailyUntilDeadline ? "checkbox" : "square-outline"}
+                size={19}
+                color={dailyUntilDeadline ? accent : colors.faint}
+              />
+              <View style={styles.copy}>
+                <Text style={[styles.label, { color: colors.ink }]}>
+                  Remind me daily until the deadline
+                </Text>
+                <Text style={[styles.help, { color: colors.muted }]}>
+                  Once each day at 09:00 until completed, skipped, or due
+                </Text>
+              </View>
+            </Pressable>
             <Pressable
               onPress={() => setPresetsOpen((open) => !open)}
               style={[
@@ -658,7 +799,22 @@ export default function TodoEditor() {
         {reminders.map((reminder, index) => (
           <View key={reminder.id} style={styles.reminderBlock}>
             <View style={styles.reminder}>
-            <Pressable
+            {reminder.repeatDailyUntilDue ? (
+              <View
+                style={[
+                  styles.reminderDate,
+                  { borderColor: colors.border },
+                ]}
+              >
+                <Ionicons name="repeat-outline" size={15} color={accent} />
+                <Text
+                  style={[styles.reminderDateText, { color: colors.ink }]}
+                >
+                  Daily until due
+                </Text>
+              </View>
+            ) : (
+              <Pressable
               onPress={() =>
                 setReminderCalendarIndex(
                   reminderCalendarIndex === index ? null : index,
@@ -673,7 +829,8 @@ export default function TodoEditor() {
               <Text style={[styles.reminderDateText, { color: colors.ink }]}>
                 {reminder.date}
               </Text>
-            </Pressable>
+              </Pressable>
+            )}
             <TimeInput
               value={reminder.time}
               onChange={(value) =>
@@ -683,6 +840,7 @@ export default function TodoEditor() {
                   ),
                 )
               }
+              wheelPicker
             />
             <IconButton
               icon="trash-outline"
@@ -782,6 +940,18 @@ export default function TodoEditor() {
 
 const styles = StyleSheet.create({
   form: { gap: 9, marginBottom: 8 },
+  blockRow: { flexDirection: "row", alignItems: "flex-end", gap: 7 },
+  blockDate: {
+    minHeight: 42,
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
   titleInput: {
     minHeight: 45,
     borderWidth: 1,

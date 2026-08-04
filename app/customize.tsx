@@ -1,10 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Animated,
-  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -12,8 +10,14 @@ import {
   UIManager,
   View,
 } from "react-native";
+import { GestureDetector } from "react-native-gesture-handler";
+import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 import { ReorderItem } from "@/src/components/ReorderItem";
+import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
+import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import {
@@ -26,19 +30,17 @@ import {
 } from "@/src/components/ui";
 import { formatMetricValue, isMetricTrackedOnDate } from "@/src/domain/metrics";
 import { formulaIdentifiers } from "@/src/domain/formula";
-import { messageLibrary } from "@/src/domain/social";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { BanterTone, DashboardSection, MetricDefinition } from "@/src/types";
+import { DashboardSection, MetricDefinition } from "@/src/types";
 
-type Tab = "trackers" | "goals" | "today" | "insights" | "social";
+type Tab = "today" | "insights" | "trackers" | "goals";
 const tabs: { id: Tab; label: string }[] = [
-  { id: "trackers", label: "Trackers" },
+  { id: "trackers", label: "All Trackers" },
   { id: "goals", label: "Tracked goals" },
   { id: "today", label: "Today" },
   { id: "insights", label: "Progress" },
-  { id: "social", label: "Social" },
 ];
 
 if (
@@ -60,10 +62,22 @@ export default function Customize() {
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
+  const { language } = useLocalization();
   const initial = tabs.some((item) => item.id === params.tab)
     ? (params.tab as Tab)
     : "trackers";
   const [tab, setTab] = useState<Tab>(initial);
+  const swipeGesture = usePageSwipeGesture({
+    onPrevious: () => {
+      const index = tabs.findIndex((item) => item.id === tab);
+      setTab(tabs[Math.max(0, index - 1)].id);
+    },
+    onNext: () => {
+      const index = tabs.findIndex((item) => item.id === tab);
+      setTab(tabs[Math.min(tabs.length - 1, index + 1)].id);
+    },
+  });
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
   useEffect(() => {
     setCloudSyncPaused("customize-reorder", Boolean(draggingMetricId));
@@ -194,6 +208,8 @@ export default function Customize() {
   }
 
   return (
+    <GestureDetector gesture={swipeGesture}>
+    <View style={styles.pageGesture}>
     <Screen refreshEnabled={false}>
       <PageHeader
         title="Customize"
@@ -207,16 +223,34 @@ export default function Customize() {
           />
         }
       />
-      <View style={styles.tabs}>
+      <Card style={styles.tabs}>
         {tabs.map((item) => (
-          <Chip
+          <Pressable
             key={item.id}
-            label={item.label}
-            selected={tab === item.id}
             onPress={() => setTab(item.id)}
-          />
+            style={[
+              styles.tab,
+              {
+                borderColor: tab === item.id ? accent : "transparent",
+                backgroundColor:
+                  tab === item.id ? colors.primarySoft : "transparent",
+              },
+            ]}
+          >
+            <Text
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.72}
+              style={[
+                styles.tabText,
+                { color: tab === item.id ? accent : colors.muted },
+              ]}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
         ))}
-      </View>
+      </Card>
 
       {tab === "trackers" ? (
         <>
@@ -255,8 +289,8 @@ export default function Customize() {
               >
                 <TrackerIcon metric={metric} />
                 <View style={styles.copy}>
-                  <Text style={[styles.name, { color: colors.ink }]}>
-                    {metric.name}
+                  <Text translate={false} style={[styles.name, { color: colors.ink }]}>
+                    {localizeMetricName(language, metric)}
                   </Text>
                   <Text style={[styles.meta, { color: colors.muted }]}>
                     {metric.dataType === "calculated"
@@ -324,14 +358,14 @@ export default function Customize() {
                   >
                     <TrackerIcon metric={metric} />
                     <View style={styles.copy}>
-                      <Text style={[styles.name, { color: colors.ink }]}>
-                        {metric.name}
+                      <Text translate={false} style={[styles.name, { color: colors.ink }]}>
+                        {localizeMetricName(language, metric)}
                       </Text>
                       <Text style={[styles.meta, { color: colors.muted }]}>
                         {metric.goalEnabled === false
                           ? "Informational by default; selecting it enables its configured target"
                           : selected
-                            ? `Included since ${new Date(`${(state.trackedGoalPeriods[metric.id]?.find((period) => !period.to)?.from ?? metric.activeFrom)}T12:00:00`).toLocaleDateString()}`
+                            ? `Included since ${new Date(`${(state.trackedGoalPeriods[metric.id]?.find((period) => !period.to)?.from ?? metric.activeFrom)}T12:00:00`).toLocaleDateString(locale)}`
                             : "Not counted"}
                       </Text>
                     </View>
@@ -500,64 +534,9 @@ export default function Customize() {
         </>
       ) : null}
 
-      {tab === "social" ? (
-        <>
-          <SectionHeader title="Message tone" />
-          <Card style={styles.list}>
-            {(
-              ["supportive", "friendly", "ruthless", "off"] as BanterTone[]
-            ).map((tone) => (
-              <Pressable
-                key={tone}
-                onPress={() => updateSettings({ banterTone: tone })}
-                style={[
-                  styles.row,
-                  state.settings.banterTone === tone && {
-                    backgroundColor: colors.primarySoft,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name={
-                    state.settings.banterTone === tone
-                      ? "radio-button-on"
-                      : "radio-button-off"
-                  }
-                  size={20}
-                  color={
-                    state.settings.banterTone === tone ? accent : colors.faint
-                  }
-                />
-                <View style={styles.copy}>
-                  <Text style={[styles.name, { color: colors.ink }]}>
-                    {tone[0].toUpperCase() + tone.slice(1)}
-                  </Text>
-                  <Text style={[styles.meta, { color: colors.muted }]}>
-                    {tone === "off"
-                      ? "No automatic suggestions"
-                      : `${messageLibrary("cheer", tone).length} cheers · ${messageLibrary("taunt", tone).length} taunts · ${messageLibrary("reminder", tone).length} reminders`}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
-          </Card>
-          <Card style={styles.switchCard}>
-            <View style={styles.copy}>
-              <Text style={[styles.name, { color: colors.ink }]}>
-                Automatic goal messages
-              </Text>
-              <Text style={[styles.meta, { color: colors.muted }]}>
-                Post a randomized group cheer when a shared goal is reached.
-              </Text>
-            </View>
-            <Switch
-              value={state.settings.autoMessages}
-              onValueChange={(value) => updateSettings({ autoMessages: value })}
-            />
-          </Card>
-        </>
-      ) : null}
     </Screen>
+    </View>
+    </GestureDetector>
   );
 }
 
@@ -622,127 +601,70 @@ function VisibilityRow({
   onDragCancel: () => void;
   onDragEnd: () => void;
 }) {
-  const dragY = useRef(new Animated.Value(0)).current;
+  const { language, t } = useLocalization();
+  const metricName = localizeMetricName(language, metric);
   const wiggle = useRef(new Animated.Value(0)).current;
-  const [dragging, setDragging] = useState(false);
-  const dragOrigin = useRef(index);
-  const liveTarget = useRef(index);
-  const indexRef = useRef(index);
-  const countRef = useRef(count);
-  const onMoveRef = useRef(onMove);
-  const onDragStartRef = useRef(onDragStart);
-  const onDragHoverRef = useRef(onDragHover);
-  const onDragCancelRef = useRef(onDragCancel);
-  const onDragEndRef = useRef(onDragEnd);
-  const lastDragY = useRef(0);
   const dragStep = useRef(56);
-  indexRef.current = index;
-  countRef.current = count;
-  onMoveRef.current = onMove;
-  onDragStartRef.current = onDragStart;
-  onDragHoverRef.current = onDragHover;
-  onDragCancelRef.current = onDragCancel;
-  onDragEndRef.current = onDragEnd;
+  const smoothDrag = useSmoothReorderGesture({
+    enabled: true,
+    index,
+    count,
+    initialStep: dragStep.current,
+    onMove,
+    onStart: () => onDragStart(dragStep.current),
+    onTargetChange: onDragHover,
+    onCancel: onDragCancel,
+    onEnd: onDragEnd,
+  });
   useEffect(() => {
-    if (!dragging) {
+    if (!smoothDrag.dragging) {
       wiggle.stopAnimation();
       wiggle.setValue(0);
       return;
     }
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(wiggle, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-        Animated.timing(wiggle, {
-          toValue: -1,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-        Animated.timing(wiggle, {
-          toValue: 0,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
+    const animation = Animated.sequence([
+      Animated.timing(wiggle, {
+        toValue: 1,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+      Animated.timing(wiggle, {
+        toValue: -1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.timing(wiggle, {
+        toValue: 0,
+        duration: 150,
+        useNativeDriver: true,
+      }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [dragging, wiggle]);
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          Math.abs(gesture.dy) > 2,
-        onPanResponderGrant: () => {
-          onDragStartRef.current(dragStep.current);
-          setDragging(true);
-          dragOrigin.current = indexRef.current;
-          liveTarget.current = indexRef.current;
-          lastDragY.current = 0;
-        },
-        onPanResponderMove: (_event, gesture) => {
-          lastDragY.current = gesture.dy;
-          const target = Math.max(
-            0,
-            Math.min(
-              countRef.current - 1,
-              dragOrigin.current + Math.round(gesture.dy / dragStep.current),
-            ),
-          );
-          dragY.setValue(gesture.dy);
-          if (target !== liveTarget.current) {
-            liveTarget.current = target;
-            onDragHoverRef.current(target);
-          }
-        },
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderRelease: () => {
-          const target = liveTarget.current;
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 24,
-            stiffness: 220,
-            mass: 0.72,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start();
-          if (target !== dragOrigin.current) onMoveRef.current(target);
-          setDragging(false);
-          onDragEndRef.current();
-        },
-        onPanResponderTerminate: () => {
-          Animated.spring(dragY, {
-            toValue: 0,
-            damping: 22,
-            stiffness: 240,
-            mass: 0.75,
-            overshootClamping: true,
-            useNativeDriver: true,
-          }).start(() => {
-            onDragCancelRef.current();
-            setDragging(false);
-            onDragEndRef.current();
-          });
-        },
-      }),
-    [dragY],
-  );
+  }, [smoothDrag.dragging, wiggle]);
   return (
-    <Animated.View
+    <Reanimated.View
       onLayout={(event) => {
         dragStep.current = event.nativeEvent.layout.height;
+        smoothDrag.setStep(dragStep.current);
       }}
       style={[
         styles.row,
         !last && { borderBottomColor: colors.border, borderBottomWidth: 1 },
+        smoothDrag.animatedStyle,
         {
-          zIndex: dragging ? 4 : 1,
+          zIndex: smoothDrag.dragging ? 12 : 1,
+          elevation: smoothDrag.dragging ? 8 : 0,
+        },
+      ]}
+    >
+      <Animated.View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          flex: 1,
+          gap: 9,
           transform: [
-            { translateY: dragY },
             {
               rotate: wiggle.interpolate({
                 inputRange: [-1, 1],
@@ -750,19 +672,22 @@ function VisibilityRow({
               }),
             },
           ],
-        },
-      ]}
-    >
+        }}
+      >
+      <GestureDetector gesture={smoothDrag.gesture}>
       <View
-        {...responder.panHandlers}
-        accessibilityLabel={`Reorder ${metric.name}`}
+        collapsable={false}
+        accessibilityLabel={t(`Reorder ${metricName}`)}
         style={styles.dragHandle}
       >
         <Ionicons name="reorder-three-outline" size={22} color={accent} />
       </View>
+      </GestureDetector>
       <TrackerIcon metric={metric} />
       <View style={styles.copy}>
-        <Text style={[styles.name, { color: colors.ink }]}>{metric.name}</Text>
+        <Text translate={false} style={[styles.name, { color: colors.ink }]}>
+          {metricName}
+        </Text>
         <Text style={[styles.meta, { color: colors.muted }]}>
           {metric.sections[section] ? "Visible" : "Hidden"}
         </Text>
@@ -773,7 +698,8 @@ function VisibilityRow({
         trackColor={{ false: colors.border, true: `${accent}88` }}
         thumbColor={metric.sections[section] ? accent : colors.faint}
       />
-    </Animated.View>
+      </Animated.View>
+    </Reanimated.View>
   );
 }
 
@@ -781,7 +707,25 @@ const styles = StyleSheet.create({
   bulkActions: { flexDirection: "row", alignItems: "center", gap: 5 },
   bulkLink: { fontSize: 9, fontWeight: "900" },
   bulkDot: { fontSize: 9 },
-  tabs: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  pageGesture: { flex: 1 },
+  tabs: {
+    minHeight: 42,
+    padding: 4,
+    flexDirection: "row",
+    gap: 3,
+    marginBottom: 6,
+  },
+  tab: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 32,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 3,
+  },
+  tabText: { fontSize: 8, fontWeight: "900" },
   list: { paddingVertical: 2, paddingHorizontal: 11 },
   row: {
     minHeight: 56,

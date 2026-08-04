@@ -4,6 +4,8 @@ import React, { useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useLocale, useLocalization } from "@/src/i18n";
+import { localizeExerciseName, localizeMuscleLabel } from "@/src/i18n/domain";
 import { DraftNumberInput } from "@/src/components/DraftNumberInput";
 import {
   Button,
@@ -16,7 +18,6 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
-import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import {
   averageGymRestSeconds,
   ExerciseObservation,
@@ -36,6 +37,8 @@ export default function GymExerciseScreen() {
   const key = String(params.key ?? "");
   const fallbackName = String(params.name ?? "Exercise");
   const { state, setGymExerciseGoal } = useApp();
+  const locale = useLocale();
+  const { language } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [period, setPeriod] = useState<Period>(30);
@@ -61,6 +64,7 @@ export default function GymExerciseScreen() {
     state.gymExerciseGoals?.[key],
   );
   const name = fullHistory.at(-1)?.name ?? fallbackName;
+  const localizedName = localizeExerciseName(language, { key, name });
   const muscles = [
     ...new Set(fullHistory.flatMap((item) => item.muscles)),
   ];
@@ -91,7 +95,7 @@ export default function GymExerciseScreen() {
         ? "No clear new estimated-strength best in at least four weeks."
         : stats.trend === "regressing"
           ? "Two recent estimates average at least 5% below the prior baseline. Recovery or technique may deserve attention."
-          : "Complete at least four sessions across three weeks before MetricRally labels a trend.";
+          : "Complete at least four sessions across three weeks before HabHub labels a trend.";
   const trendColor =
     stats.trend === "building"
       ? palette.lime
@@ -115,11 +119,12 @@ export default function GymExerciseScreen() {
   return (
     <Screen keyboardShouldPersistTaps="handled">
       <PageHeader
-        eyebrow="Gym progress"
-        title={name}
+        eyebrow="Workout progress"
+        title={localizedName}
+        translateTitle={false}
         subtitle={
           muscles.length
-            ? muscles.map((muscle) => MUSCLE_LABELS[muscle]).join(" · ")
+            ? muscles.map((muscle) => localizeMuscleLabel(language, muscle)).join(" · ")
             : "Personal training history"
         }
         showMenu={false}
@@ -145,7 +150,7 @@ export default function GymExerciseScreen() {
             <Text style={[styles.copy, { color: colors.muted }]}>{trendCopy}</Text>
           </View>
         </View>
-        <ExerciseLineChart history={history} color={accent} />
+        <ExerciseLineChart history={history} color={accent} locale={locale} />
       </Card>
 
       <View style={styles.stats}>
@@ -244,8 +249,8 @@ export default function GymExerciseScreen() {
               >
                 <View style={styles.entryHeading}>
                   <View style={styles.grow}>
-                    <Text style={[styles.entryDate, { color: colors.ink }]}>
-                      {friendlyDate(session.localDate)} · {session.name}
+                    <Text translate={false} style={[styles.entryDate, { color: colors.ink }]}>
+                      {friendlyDate(session.localDate, locale)} · {session.name}
                     </Text>
                     <Text style={[styles.small, { color: colors.muted }]}>
                       {completed.length} completed set
@@ -293,7 +298,7 @@ export default function GymExerciseScreen() {
                   </Text>
                 ) : null}
                 {exercise.notes ? (
-                  <Text style={[styles.copy, { color: colors.muted }]}>
+                  <Text translate={false} style={[styles.copy, { color: colors.muted }]}>
                     {exercise.notes}
                   </Text>
                 ) : null}
@@ -313,9 +318,11 @@ export default function GymExerciseScreen() {
 function ExerciseLineChart({
   history,
   color,
+  locale,
 }: {
   history: ExerciseObservation[];
   color: string;
+  locale: string;
 }) {
   const colors = useAppColors();
   const [width, setWidth] = useState(0);
@@ -391,13 +398,13 @@ function ExerciseLineChart({
       {history.length ? (
         <View style={styles.chartLabels}>
           <Text style={[styles.small, { color: colors.muted }]}>
-            {friendlyDate(history[0].localDate)}
+            {friendlyDate(history[0].localDate, locale)}
           </Text>
           <Text style={[styles.smallStrong, { color }]}>
             {values.at(-1)?.toFixed(1)} kg estimated
           </Text>
           <Text style={[styles.small, { color: colors.muted }]}>
-            {friendlyDate(history.at(-1)!.localDate)}
+            {friendlyDate(history.at(-1)!.localDate, locale)}
           </Text>
         </View>
       ) : null}

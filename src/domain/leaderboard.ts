@@ -12,6 +12,7 @@ import {
   displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
+  goalProgress,
   goalReached,
   hasMetricData,
   isMetricTrackedOnDate,
@@ -32,6 +33,10 @@ import {
   photosForDay,
   statusForDay,
 } from "@/src/domain/dataIndex";
+import {
+  latestMemberActivityPublishedAt,
+  latestMetricSourceTimestamp,
+} from "@/src/domain/leaderboardSync";
 
 export type LeaderboardPeriod =
   | "today"
@@ -42,7 +47,47 @@ export type LeaderboardPeriod =
   | "overall"
   | "custom";
 
-const allTimeDatesCache = new WeakMap<AppState, Map<string, string[]>>();
+type AllTimeDatesCacheBucket = {
+  statuses: AppState["dailyMetricStatuses"];
+  gymSessions: AppState["gymSessions"];
+  groupId: string;
+  results: Map<string, string[]>;
+};
+
+/*
+ * AppState is replaced for every store update, including unrelated UI changes.
+ * Key this cache by the entry array that actually defines the range, then verify
+ * the other relevant collection identities before reusing it.
+ */
+const allTimeDatesCache = new WeakMap<
+  AppState["entries"],
+  AllTimeDatesCacheBucket[]
+>();
+
+function allTimeDatesResults(state: AppState) {
+  let buckets = allTimeDatesCache.get(state.entries);
+  if (!buckets) {
+    buckets = [];
+    allTimeDatesCache.set(state.entries, buckets);
+  }
+  let bucket = buckets.find(
+    (candidate) =>
+      candidate.statuses === state.dailyMetricStatuses &&
+      candidate.gymSessions === state.gymSessions &&
+      candidate.groupId === state.group.id,
+  );
+  if (!bucket) {
+    bucket = {
+      statuses: state.dailyMetricStatuses,
+      gymSessions: state.gymSessions,
+      groupId: state.group.id,
+      results: new Map(),
+    };
+    if (buckets.length >= 4) buckets.shift();
+    buckets.push(bucket);
+  }
+  return bucket.results;
+}
 
 export function periodDates(
   period: LeaderboardPeriod,
@@ -69,11 +114,7 @@ export function allTimePeriodDates(
   metricIds?: string[],
   userIds?: string[],
 ) {
-  let stateCache = allTimeDatesCache.get(state);
-  if (!stateCache) {
-    stateCache = new Map();
-    allTimeDatesCache.set(state, stateCache);
-  }
+  const stateCache = allTimeDatesResults(state);
   const cacheKey = [
     anchorDate,
     [...(metricIds ?? [])].sort().join(","),
@@ -129,21 +170,22 @@ export function allTimePeriodDates(
 export function periodTitle(
   period: LeaderboardPeriod,
   anchorDate: string,
+  locale?: string,
 ): string {
   if (period === "today") return "Today";
   if (period === "yesterday") return "Yesterday";
   if (period === "week") return "Week";
   if (period === "month")
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(locale, {
       month: "long",
       year: "numeric",
     }).format(new Date(`${anchorDate}T12:00:00`));
   if (period === "year")
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(locale, {
       year: "numeric",
     }).format(new Date(`${anchorDate}T12:00:00`));
   if (period === "overall") return "All time";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -199,6 +241,8 @@ export type PeriodMetricResult = {
   streak?: number;
   bestStreak?: number;
   lastRecordedAt?: string;
+  /** Latest update from this tracker's own imported/manual source entries. */
+  lastSourceUpdatedAt?: string;
   lastSyncedAt?: string;
 };
 
@@ -206,6 +250,118 @@ const periodResultCache = new WeakMap<
   AppState,
   WeakMap<MetricDefinition, Map<string, PeriodMetricResult>>
 >();
+
+type StreakStats = { current: number; best: number };
+type StreakCacheBucket = {
+  statuses: AppState["dailyMetricStatuses"];
+  trackedGoalPeriods: AppState["trackedGoalPeriods"];
+  metrics: AppState["metrics"];
+  gymSessions: AppState["gymSessions"];
+  photos: AppState["photos"];
+  todos: AppState["todos"];
+  energyProfiles: AppState["energyProfiles"];
+  groupId: string;
+  groupMetrics: AppState["group"]["metricConfiguration"];
+  groupRestDays: number;
+  currentUserId: string;
+  energyProfile: AppState["settings"]["energyProfile"];
+  baselineCalories: number;
+  foodGoalMode: AppState["settings"]["foodGoalMode"];
+  weightDirection: AppState["settings"]["weightDirection"];
+  vacationPeriods: AppState["settings"]["vacationPeriods"];
+  personalRestDays: AppState["settings"]["streakRestDaysPerWeek"];
+  dayEndTime: AppState["settings"]["dayEndTime"];
+  results: WeakMap<MetricDefinition, Map<string, StreakStats>>;
+};
+
+/*
+ * A leaderboard result for each selected range still needs the same all-time
+ * streak. Reuse that work across ranges and across AppState wrappers while all
+ * calculation-bearing collections/settings retain their identities.
+ */
+const streakStatsCache = new WeakMap<
+  AppState["entries"],
+  StreakCacheBucket[]
+>();
+
+function streakResults(state: AppState) {
+  let buckets = streakStatsCache.get(state.entries);
+  if (!buckets) {
+    buckets = [];
+    streakStatsCache.set(state.entries, buckets);
+  }
+  let bucket = buckets.find(
+    (candidate) =>
+      candidate.statuses === state.dailyMetricStatuses &&
+      candidate.trackedGoalPeriods === state.trackedGoalPeriods &&
+      candidate.metrics === state.metrics &&
+      candidate.gymSessions === state.gymSessions &&
+      candidate.photos === state.photos &&
+      candidate.todos === state.todos &&
+      candidate.energyProfiles === state.energyProfiles &&
+      candidate.groupId === state.group.id &&
+      candidate.groupMetrics === state.group.metricConfiguration &&
+      candidate.groupRestDays === state.group.streakRestDaysPerWeek &&
+      candidate.currentUserId === state.currentUserId &&
+      candidate.energyProfile === state.settings.energyProfile &&
+      candidate.baselineCalories === state.settings.baselineCalories &&
+      candidate.foodGoalMode === state.settings.foodGoalMode &&
+      candidate.weightDirection === state.settings.weightDirection &&
+      candidate.vacationPeriods === state.settings.vacationPeriods &&
+      candidate.personalRestDays === state.settings.streakRestDaysPerWeek &&
+      candidate.dayEndTime === state.settings.dayEndTime,
+  );
+  if (!bucket) {
+    bucket = {
+      statuses: state.dailyMetricStatuses,
+      trackedGoalPeriods: state.trackedGoalPeriods,
+      metrics: state.metrics,
+      gymSessions: state.gymSessions,
+      photos: state.photos,
+      todos: state.todos,
+      energyProfiles: state.energyProfiles,
+      groupId: state.group.id,
+      groupMetrics: state.group.metricConfiguration,
+      groupRestDays: state.group.streakRestDaysPerWeek,
+      currentUserId: state.currentUserId,
+      energyProfile: state.settings.energyProfile,
+      baselineCalories: state.settings.baselineCalories,
+      foodGoalMode: state.settings.foodGoalMode,
+      weightDirection: state.settings.weightDirection,
+      vacationPeriods: state.settings.vacationPeriods,
+      personalRestDays: state.settings.streakRestDaysPerWeek,
+      dayEndTime: state.settings.dayEndTime,
+      results: new WeakMap(),
+    };
+    if (buckets.length >= 4) buckets.shift();
+    buckets.push(bucket);
+  }
+  return bucket.results;
+}
+
+function allTimeMetricStreakStats(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+): StreakStats {
+  const cache = streakResults(state);
+  let byUser = cache.get(metric);
+  if (!byUser) {
+    byUser = new Map();
+    cache.set(metric, byUser);
+  }
+  const scope = userId === state.currentUserId ? "personal" : "group";
+  const throughDate = dateKey();
+  const key = `${scope}|${userId}|${throughDate}`;
+  const cached = byUser.get(key);
+  if (cached) return cached;
+  const result =
+    scope === "personal"
+      ? metricStreakStats(state, metric, userId, throughDate)
+      : sharedMetricStreakStats(state, metric, userId);
+  byUser.set(key, result);
+  return result;
+}
 
 /** Whether the member's period average satisfies their own goal. */
 export function periodAverageGoalReached(result: PeriodMetricResult): boolean {
@@ -240,19 +396,30 @@ function metGoalOnDate(
           userId,
           date,
         );
-  if (status) return sharedStatusGoalReached(status, metric);
   const goalMetric =
     userId === state.currentUserId
       ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
       : metric;
-  const result = sharedMetricResult(state, metric, userId, userId, date);
-  if (result.mode === "status") return result.label === "Goal met";
-  if (result.mode === "exact")
+  const result = sharedMetricResult(
+    state,
+    metric,
+    userId,
+    state.currentUserId,
+    date,
+  );
+  // Prefer a visible exact value over a possibly stale derived status. Keep
+  // the owner's shared goal kind/target so different personal goals remain
+  // comparable without exposing anything beyond their chosen exact value.
+  if (result.mode === "exact") {
+    const personalizedMetric = sharedGoalMetric(goalMetric, status);
     return goalReached(
-      goalMetric,
+      personalizedMetric,
       result.value,
-      effectiveGoalTarget(state, goalMetric, userId, date),
+      sharedGoalTarget(personalizedMetric, status),
     );
+  }
+  if (status) return sharedStatusGoalReached(status, metric);
+  if (result.mode === "status") return result.label === "Goal met";
   return false;
 }
 
@@ -275,6 +442,30 @@ function sharedStatusGoalReached(
   )
     return goalReached(metric, status.exactValue, metric.goal.target);
   return false;
+}
+
+/**
+ * Exact shared values can reach a peer before the owner's derived daily row is
+ * refreshed (most visibly after a new account imports Health Connect history).
+ * Use the member-specific goal metadata from that row, but derive progress
+ * from the exact value already on the device instead of waiting for a second
+ * network round trip. Status-only privacy still uses the status row verbatim.
+ */
+function sharedGoalMetric(
+  metric: MetricDefinition,
+  status?: NonNullable<AppState["dailyMetricStatuses"]>[number],
+) {
+  const kind = status?.goalKind;
+  if (!kind || kind === metric.goal.kind) return metric;
+  return { ...metric, goal: { ...metric.goal, kind } };
+}
+
+function sharedGoalTarget(
+  metric: MetricDefinition,
+  status?: NonNullable<AppState["dailyMetricStatuses"]>[number],
+) {
+  const target = Number(status?.goalTarget);
+  return Number.isFinite(target) ? target : metric.goal.target;
 }
 
 export function periodMetricResult(
@@ -315,6 +506,13 @@ function calculatePeriodMetricResult(
   viewerUserId: string,
   dates: string[],
 ): PeriodMetricResult {
+  const lastSyncedAt = latestMemberActivityPublishedAt(
+    state.dailyMetricStatuses,
+    state.group.id,
+    subjectUserId,
+    state.group.members.find((member) => member.id === subjectUserId)
+      ?.lastDataSyncedAt,
+  );
   const goalMetric =
     subjectUserId === state.currentUserId
       ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
@@ -365,6 +563,26 @@ function calculatePeriodMetricResult(
         );
   const progressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
+    if (
+      result.mode === "exact" &&
+      hasPeriodData(state, goalMetric, subjectUserId, date) &&
+      goalMetric.goalProgressMode !== "journey"
+    ) {
+      const personalizedMetric = sharedGoalMetric(goalMetric, status);
+      return [
+        Math.min(
+          1,
+          Math.max(
+            0,
+            goalProgress(
+              personalizedMetric,
+              result.value,
+              sharedGoalTarget(personalizedMetric, status),
+            ),
+          ),
+        ),
+      ];
+    }
     if (status)
       return [Math.min(1, Math.max(0, status.scoreContribution / 100))];
     if (result.mode === "status")
@@ -394,6 +612,20 @@ function calculatePeriodMetricResult(
     : undefined;
   const displayProgressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
+    if (
+      result.mode === "exact" &&
+      hasPeriodData(state, goalMetric, subjectUserId, date) &&
+      goalMetric.goalProgressMode !== "journey"
+    ) {
+      const statusMetric = sharedGoalMetric(goalMetric, status);
+      return [
+        displayGoalProgress(
+          statusMetric,
+          result.value,
+          sharedGoalTarget(statusMetric, status),
+        ),
+      ];
+    }
     if (status?.goalProgress !== undefined)
       return [Math.max(0, Math.min(3, status.goalProgress / 100))];
     if (
@@ -426,15 +658,11 @@ function calculatePeriodMetricResult(
     goalResults
       .map(({ date }) => statusForDate(date)?.goalKind)
       .find((kind): kind is GoalKind => Boolean(kind)) ?? goalMetric.goal.kind;
-  const streaks =
-    subjectUserId === state.currentUserId
-      ? metricStreakStats(
-          state,
-          goalMetric,
-          subjectUserId,
-          dateKey(),
-        )
-      : sharedMetricStreakStats(state, metric, subjectUserId);
+  const streaks = allTimeMetricStreakStats(
+    state,
+    subjectUserId === state.currentUserId ? goalMetric : metric,
+    subjectUserId,
+  );
   if (!exact.length && !statuses.length) {
     const hasUnsharedData = results.some(({ date }) =>
       hasPeriodData(state, goalMetric, subjectUserId, date),
@@ -447,6 +675,7 @@ function calculatePeriodMetricResult(
       visibleDays: 0,
       streak: streaks.current,
       bestStreak: streaks.best,
+      lastSyncedAt,
       label:
         subjectUserId === viewerUserId || !hasUnsharedData
           ? "No data"
@@ -495,10 +724,7 @@ function calculatePeriodMetricResult(
     b.recordedAt.localeCompare(a.recordedAt),
   )[0];
   const lastRecordedAt = latestEntry?.recordedAt;
-  const lastSyncedAt = results
-    .map(({ date }) => statusForDate(date)?.syncedAt)
-    .filter((value): value is string => Boolean(value))
-    .sort((a, b) => b.localeCompare(a))[0];
+  const lastSourceUpdatedAt = latestMetricSourceTimestamp(matchingEntries);
   if (!exact.length) {
     return {
       mode: "status",
@@ -509,6 +735,7 @@ function calculatePeriodMetricResult(
       streak: streaks.current,
       bestStreak: streaks.best,
       lastRecordedAt,
+      lastSourceUpdatedAt,
       lastSyncedAt,
       label: `${resolvedCompletedDays}/${goalResults.length} goal days`,
       averageLabel: `${statuses.length}/${results.length} days shared as status`,
@@ -548,6 +775,7 @@ function calculatePeriodMetricResult(
       streak: streaks.current,
       bestStreak: streaks.best,
       lastRecordedAt,
+      lastSourceUpdatedAt,
       lastSyncedAt,
       averageGoalProgress,
       averageDisplayProgress,
@@ -569,6 +797,7 @@ function calculatePeriodMetricResult(
       streak: streaks.current,
       bestStreak: streaks.best,
       lastRecordedAt,
+      lastSourceUpdatedAt,
       lastSyncedAt,
       averageGoalProgress,
       averageDisplayProgress,
@@ -587,6 +816,7 @@ function calculatePeriodMetricResult(
     streak: streaks.current,
     bestStreak: streaks.best,
     lastRecordedAt,
+    lastSourceUpdatedAt,
     lastSyncedAt,
     averageGoalProgress,
     averageDisplayProgress,

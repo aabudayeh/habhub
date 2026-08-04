@@ -1,24 +1,25 @@
 import React, { PropsWithChildren, createContext, useContext } from "react";
+import { accessibleThemeAccent } from "@/src/domain/colors";
 
 export const palette = {
-  ink: "#17211B",
-  muted: "#68756D",
-  faint: "#93A098",
-  canvas: "#F5F7F2",
+  ink: "#081B49",
+  muted: "#61708A",
+  faint: "#8B98AB",
+  canvas: "#F4F7FB",
   card: "#FFFFFF",
-  border: "#E2E8E1",
-  primary: "#176B4D",
-  primarySoft: "#DDF2E7",
+  border: "#DFE6F0",
+  primary: "#081B49",
+  primarySoft: "#E0E8F7",
   lime: "#B8E45C",
   amber: "#E9A23B",
-  red: "#D95852",
+  red: "#FF5750",
   purple: "#7756D9",
   blue: "#3478D4",
   white: "#FFFFFF",
 };
 
 export const shadow = {
-  shadowColor: "#17211B",
+  shadowColor: "#081B49",
   shadowOffset: { width: 0, height: 4 },
   shadowOpacity: 0.06,
   shadowRadius: 12,
@@ -40,7 +41,9 @@ export function GroupAccentProvider({
   );
 }
 export function useGroupAccent() {
-  return useContext(GroupAccentContext);
+  const accent = useContext(GroupAccentContext);
+  const dark = useContext(DarkModeContext);
+  return accessibleThemeAccent(accent, dark);
 }
 export function CompactModeProvider({
   compact,
@@ -84,23 +87,30 @@ export function useFontScale() {
 export function useAppColors() {
   const dark = useDarkMode();
   const accent = useGroupAccent();
-  return dark
-    ? {
-        ...palette,
-        isDark: true,
-        canvas: "#0F1411",
-        card: "#18201B",
-        border: "#2B3730",
-        ink: "#F1F5F2",
-        muted: "#AAB6AE",
-        faint: "#7F8C84",
-        primary: accent,
-        primarySoft: `${accent}30`,
-      }
-    : {
-        ...palette,
-        isDark: false,
-        primary: accent,
-        primarySoft: `${accent}20`,
-      };
+  // Color tokens are consumed by virtually every screen. A stable object
+  // prevents unrelated data updates from invalidating memoized styles and
+  // navigator options throughout the retained navigation tree.
+  return React.useMemo(
+    () =>
+      dark
+        ? {
+            ...palette,
+            isDark: true,
+            canvas: "#071127",
+            card: "#101D39",
+            border: "#283654",
+            ink: "#F5F8FF",
+            muted: "#B1BED2",
+            faint: "#8090AA",
+            primary: accent,
+            primarySoft: `${accent}30`,
+          }
+        : {
+            ...palette,
+            isDark: false,
+            primary: accent,
+            primarySoft: `${accent}20`,
+          },
+    [accent, dark],
+  );
 }

@@ -1,10 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { Redirect, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   StyleSheet,
@@ -14,11 +15,11 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 
 import { Button, Card, Screen } from "@/src/components/ui";
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
-  palette,
   useAppColors,
   useGroupAccent,
 } from "@/src/theme";
@@ -99,7 +100,7 @@ export default function SignInScreen() {
         await auth.sendMagicLink(email);
         Alert.alert(
           "Check your inbox",
-          "Open the secure MetricRally link on this device.",
+          "Open the secure HabHub link on this device.",
         );
       });
       return;
@@ -110,7 +111,7 @@ export default function SignInScreen() {
         if (result === "verification-required")
           Alert.alert(
             "Verify your email",
-            "Use the link we sent, then return to MetricRally.",
+            "Use the link we sent, then return to HabHub.",
           );
       });
       return;
@@ -128,10 +129,13 @@ export default function SignInScreen() {
         contentContainerStyle={styles.screen}
       >
         <View style={styles.brand}>
-          <View style={[styles.mark, { backgroundColor: colors.ink }]}>
-            <Text style={styles.markText}>M</Text>
-          </View>
-          <Text style={[styles.name, { color: colors.ink }]}>MetricRally</Text>
+          <Image
+            source={require("../assets/images/habhub-icon.png")}
+            style={[styles.mark, { borderColor: colors.border }]}
+            contentFit="cover"
+            accessibilityLabel="HabHub logo"
+          />
+          <Text style={[styles.name, { color: colors.ink }]}>HabHub</Text>
           <Text style={[styles.tagline, { color: colors.muted }]}>
             Track anything. Progress together.
           </Text>
@@ -309,6 +313,15 @@ export default function SignInScreen() {
           By continuing, you agree to the app’s privacy policy and terms
           configured by its operator.
         </Text>
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => void Linking.openURL("https://platform.fatsecret.com")}
+          style={styles.attribution}
+        >
+          <Text style={[styles.attributionText, { color: colors.faint }]}>
+            Nutrition search may be powered by fatsecret Platform API
+          </Text>
+        </Pressable>
       </Screen>
     </KeyboardAvoidingView>
   );
@@ -360,10 +373,8 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
+    borderWidth: 1,
   },
-  markText: { color: palette.lime, fontSize: 28, fontWeight: "900" },
   name: {
     fontSize: 25,
     fontWeight: "900",
@@ -433,4 +444,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 24,
     marginTop: 14,
   },
+  attribution: { alignSelf: "center", paddingHorizontal: 12, paddingVertical: 7 },
+  attributionText: { fontSize: 8, textAlign: "center", textDecorationLine: "underline" },
 });

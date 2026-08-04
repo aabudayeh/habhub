@@ -1,20 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import React, { useState } from "react";
+import { router, useNavigation } from "expo-router";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Pressable,
   StyleSheet,
   Switch,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 import { useAuth } from "@/src/auth/AuthProvider";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import {
   isCloudGroupId,
-  setCloudGroupApprovalRequired,
 } from "@/src/cloud/groupCloud";
 
 import {
@@ -26,6 +28,7 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
+import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import {
   memberDisplayName,
   memberOriginalLabel,
@@ -35,6 +38,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { formulaIdentifiers } from "@/src/domain/formula";
+import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 
 export default function GroupSettings() {
   const {
@@ -43,20 +47,25 @@ export default function GroupSettings() {
     deleteGroupMetric,
     setMemberRole,
     updateNickname,
+    setGroupName,
     setGroupRestDays,
     setGroupTheme,
     setGroupApprovalRequired,
+    flushLocalPersistence,
     approveMember,
     removeMember,
   } = useApp();
   const auth = useAuth();
-  const cloud = useCloudSync();
+  const cloud = useCloudSyncActions();
+  const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { language } = useLocalization();
   const me = state.group.members.find(
     (member) => member.id === state.currentUserId,
   )!;
   const canEdit = me.role === "owner" || me.role === "admin";
+  const personalSetup = isPersonalSetupGroup(state.group);
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => !isInternalTracker(metric),
   );
@@ -75,6 +84,11 @@ export default function GroupSettings() {
     0,
   );
   const aliases = state.settings.memberNicknamesByGroup?.[state.group.id] ?? {};
+  const [groupNameDraft, setGroupNameDraft] = useState(state.group.name);
+  const observedGroupId = useRef(state.group.id);
+  const observedGroupName = useRef(state.group.name);
+  const allowExit = useRef(false);
+  const closing = useRef(false);
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       state.group.members.map((member) => [
@@ -82,6 +96,120 @@ export default function GroupSettings() {
         aliases[member.id] ?? "",
       ]),
     ),
+  );
+  const normalizedGroupName = groupNameDraft
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+  const currentGroupName = state.group.name
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+  const groupNameDirty =
+    canEdit && normalizedGroupName !== currentGroupName;
+  const nicknameDraftsDirty = state.group.members.some(
+    (member) =>
+      (drafts[member.id] ?? "").trim() !==
+      (aliases[member.id] ?? "").trim(),
+  );
+  const canSaveGroupName = groupNameDirty && Boolean(normalizedGroupName);
+  useWebBeforeUnload(
+    () =>
+      !allowExit.current && (groupNameDirty || nicknameDraftsDirty),
+  );
+
+  useEffect(() => {
+    const groupChanged = observedGroupId.current !== state.group.id;
+    const previousName = observedGroupName.current;
+    observedGroupId.current = state.group.id;
+    observedGroupName.current = state.group.name;
+    setGroupNameDraft((current) =>
+      groupChanged || current === previousName ? state.group.name : current,
+    );
+  }, [state.group.id, state.group.name]);
+
+  function persistNicknameDrafts() {
+    state.group.members.forEach((member) => {
+      const next = (drafts[member.id] ?? "").trim();
+      const current = (aliases[member.id] ?? "").trim();
+      if (next !== current) updateNickname(member.id, next);
+    });
+  }
+
+  async function flushAndExit(exit: () => void) {
+    if (closing.current) return;
+    closing.current = true;
+    persistNicknameDrafts();
+    try {
+      // Group changes are reducer-first. Await the device snapshot before the
+      // route disappears; cloud upload may safely happen later or offline.
+      await flushLocalPersistence();
+      allowExit.current = true;
+      exit();
+    } catch {
+      closing.current = false;
+      Alert.alert(
+        "Could not save on this device",
+        "Your changes are still open. Try closing Group settings again.",
+      );
+    }
+  }
+
+  async function saveName(exit?: () => void) {
+    if (!canEdit) return;
+    if (!normalizedGroupName) {
+      Alert.alert("Name your group", "Enter a group name before saving.");
+      return;
+    }
+    if (groupNameDirty) setGroupName(normalizedGroupName);
+    setGroupNameDraft(normalizedGroupName);
+    if (exit) {
+      await flushAndExit(exit);
+      return;
+    }
+    try {
+      await flushLocalPersistence();
+    } catch {
+      Alert.alert(
+        "Could not save on this device",
+        "The name is still shown here. Tap Save to retry.",
+      );
+    }
+  }
+
+  function requestClose(exit: () => void = () => router.back()) {
+    if (!groupNameDirty) {
+      void flushAndExit(exit);
+      return;
+    }
+    Alert.alert("Save group name?", "The new group name has not been saved.", [
+      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Discard",
+        style: "destructive",
+        onPress: () => void flushAndExit(exit),
+      },
+      { text: "Save", onPress: () => void saveName(exit) },
+    ]);
+  }
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", (event) => {
+        if (allowExit.current) return;
+        event.preventDefault();
+        requestCloseRef.current(() => navigation.dispatch(event.data.action));
+      }),
+    [navigation],
+  );
+  useEffect(
+    () =>
+      navigation.addListener("focus", () => {
+        allowExit.current = false;
+        closing.current = false;
+      }),
+    [navigation],
   );
 
   function toggleRole(memberId: string, current: "owner" | "admin" | "member") {
@@ -103,18 +231,10 @@ export default function GroupSettings() {
     else approveMember(memberId);
   }
 
-  async function updateApprovalRequirement(required: boolean) {
+  function updateApprovalRequirement(required: boolean) {
+    // Group configuration is local-first. CloudSyncProvider observes the
+    // workspace hash and retries this change when connectivity returns.
     setGroupApprovalRequired(required);
-    if (auth.status !== "signedIn" || !isCloudGroupId(state.group.id)) return;
-    try {
-      await setCloudGroupApprovalRequired(state.group.id, required);
-    } catch (error) {
-      setGroupApprovalRequired(!required);
-      Alert.alert(
-        "Could not update approval",
-        error instanceof Error ? error.message : "Try again.",
-      );
-    }
   }
 
   async function remove(memberId: string) {
@@ -160,6 +280,7 @@ export default function GroupSettings() {
     <Screen>
       <PageHeader
         eyebrow={state.group.name}
+        translateEyebrow={false}
         title="Group settings"
         subtitle="Competition rules belong to this group and apply to every member."
         showMenu={false}
@@ -167,7 +288,7 @@ export default function GroupSettings() {
           <IconButton
             icon="close"
             label="Close"
-            onPress={() => router.back()}
+            onPress={() => requestClose()}
           />
         }
       />
@@ -181,6 +302,72 @@ export default function GroupSettings() {
             {memberRoleLabel(me)} · changes stay with this group
           </Text>
         </View>
+      </Card>
+
+      <SectionHeader title="Group name" />
+      <Card style={styles.groupNameCard}>
+        <View style={styles.groupNameRow}>
+          <TextInput
+            value={groupNameDraft}
+            editable={canEdit}
+            maxLength={80}
+            onChangeText={setGroupNameDraft}
+            onSubmitEditing={() => void saveName()}
+            placeholder="Group name"
+            placeholderTextColor={colors.faint}
+            returnKeyType="done"
+            selectTextOnFocus={canEdit}
+            style={[
+              styles.groupNameInput,
+              {
+                backgroundColor: colors.canvas,
+                borderColor: groupNameDirty ? accent : colors.border,
+                color: colors.ink,
+              },
+            ]}
+          />
+          {canEdit ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={!canSaveGroupName}
+              onPress={() => void saveName()}
+              style={[
+                styles.nameSave,
+                {
+                  backgroundColor: canSaveGroupName
+                    ? colors.primarySoft
+                    : "transparent",
+                  borderColor: canSaveGroupName ? accent : colors.border,
+                },
+              ]}
+            >
+              <Ionicons
+                name="checkmark"
+                size={14}
+                color={canSaveGroupName ? accent : colors.faint}
+              />
+              <Text
+                style={[
+                  styles.nameSaveText,
+                  { color: canSaveGroupName ? accent : colors.faint },
+                ]}
+              >
+                Save
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <Text
+          style={[styles.meta, { color: colors.muted }]}
+        >
+          {canEdit
+            ? groupNameDirty
+              ? normalizedGroupName
+                ? "Unsaved name"
+                : "A group name is required"
+              : "Shown to everyone in this group"
+            : "Only the group owner or an admin can rename this group"}
+        </Text>
       </Card>
 
       <SectionHeader title="Group color" />
@@ -281,8 +468,8 @@ export default function GroupSettings() {
                   />
                 </View>
                 <View style={styles.copy}>
-                  <Text style={[styles.name, { color: colors.ink }]}>
-                    {metric.name}
+                  <Text translate={false} style={[styles.name, { color: colors.ink }]}>
+                    {localizeMetricName(language, metric)}
                   </Text>
                   <Text style={[styles.meta, { color: colors.muted }]}>
                     {!competitive
@@ -393,7 +580,7 @@ export default function GroupSettings() {
           </Text>
         </View>
         <Pressable
-          disabled={!canEdit}
+          disabled={!canEdit || state.group.streakRestDaysPerWeek <= 0}
           onPress={() =>
             setGroupRestDays(state.group.streakRestDaysPerWeek - 1)
           }
@@ -405,7 +592,7 @@ export default function GroupSettings() {
           {state.group.streakRestDaysPerWeek}
         </Text>
         <Pressable
-          disabled={!canEdit}
+          disabled={!canEdit || state.group.streakRestDaysPerWeek >= 4}
           onPress={() =>
             setGroupRestDays(state.group.streakRestDaysPerWeek + 1)
           }
@@ -416,7 +603,7 @@ export default function GroupSettings() {
       </Card>
 
       <SectionHeader title="Names in this group" />
-      {canEdit ? (
+      {canEdit && !personalSetup ? (
         <Card style={styles.status}>
           <View style={styles.copy}>
             <Text style={[styles.name, { color: colors.ink }]}>Allow members to join immediately</Text>
@@ -432,14 +619,21 @@ export default function GroupSettings() {
           />
         </Card>
       ) : null}
-      {canEdit && (state.group.pendingMembers?.length ?? 0) > 0 ? (
+      {canEdit &&
+      !personalSetup &&
+      (state.group.pendingMembers?.length ?? 0) > 0 ? (
         <>
           <SectionHeader title="Join requests" />
           <Card style={styles.list}>
             {state.group.pendingMembers!.map((member) => (
               <View key={member.id} style={styles.person}>
                 <Avatar initials={member.initials} color={accent} size={36} uri={member.avatarUri} />
-                <Text style={[styles.name, styles.copy, { color: colors.ink }]}>{member.name}</Text>
+                <Text
+                  translate={false}
+                  style={[styles.name, styles.copy, { color: colors.ink }]}
+                >
+                  {member.name}
+                </Text>
                 <Pressable onPress={() => void approve(member.id)}><Text style={[styles.role, { color: accent }]}>Approve</Text></Pressable>
                 <Pressable onPress={() => void remove(member.id)}><Text style={[styles.role, { color: palette.red }]}>Decline</Text></Pressable>
               </View>
@@ -473,7 +667,7 @@ export default function GroupSettings() {
               <Pressable
                 onPress={() => router.navigate(`/member/${member.id}` as never)}
               >
-                <Text style={[styles.name, { color: colors.ink }]}>
+                <Text translate={false} style={[styles.name, { color: colors.ink }]}>
                   {member.name}
                   {member.id === state.currentUserId ? " · You" : ""}
                 </Text>
@@ -501,7 +695,7 @@ export default function GroupSettings() {
                 </Text>
               </Pressable>
             ) : (
-              <Text style={[styles.role, { color: colors.muted }]}>
+              <Text translate={false} style={[styles.role, { color: colors.muted }]}>
                 {memberDisplayName(state, member) !== member.name
                   ? memberOriginalLabel(state, member)
                   : memberRoleLabel(member)}
@@ -526,6 +720,29 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", alignItems: "center", gap: 9 },
   smallLink: { fontSize: 9, fontWeight: "900" },
   status: { flexDirection: "row", alignItems: "center", gap: 10 },
+  groupNameCard: { gap: 5 },
+  groupNameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  groupNameInput: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 38,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  nameSave: {
+    minHeight: 38,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  nameSaveText: { fontSize: 9, fontWeight: "900" },
   copy: { flex: 1 },
   name: { fontSize: 11, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },

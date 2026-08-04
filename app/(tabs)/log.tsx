@@ -2,21 +2,25 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import { useNavigation } from "@react-navigation/native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
   Platform,
   Pressable,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 
 import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
+import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import { dateKey } from "@/src/domain/date";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
@@ -40,7 +44,7 @@ const privacyOptions: {
   { value: "group", label: "Share with group", icon: "people-outline" },
 ];
 
-export default function LogScreen() {
+function LogScreen() {
   const params = useLocalSearchParams<{
     metric?: string;
     date?: string;
@@ -65,6 +69,7 @@ export default function LogScreen() {
     vitaminB12?: string;
   }>();
   const { state, logMetric, addPhoto } = useApp();
+  const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const metrics = useMemo(() => {
@@ -73,6 +78,7 @@ export default function LogScreen() {
         (metric) =>
           metric.dataType !== "calculated" &&
           metric.id !== "steps" &&
+          metric.id !== "intermittent_fasting" &&
           metric.id !== "blood_pressure_diastolic" &&
           !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
           metric.manualEntry !== false,
@@ -82,13 +88,17 @@ export default function LogScreen() {
   const trackerChoices = useMemo(
     () =>
       [...state.metrics]
-        .filter((metric) => !isInternalTracker(metric))
+        .filter(
+          (metric) =>
+            !isInternalTracker(metric) &&
+            metric.id !== "intermittent_fasting",
+        )
         .sort((a, b) => a.order - b.order),
     [state.metrics],
   );
   const [selectedId, setSelectedId] = useState(metrics[0]?.id ?? "");
   const selected =
-    state.metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
+    metrics.find((metric) => metric.id === selectedId) ?? metrics[0];
   const submetricVisibleCount = selected?.submetricDisplay?.collapsible
     ? Math.min(
         selected.submetrics?.length ?? 0,
@@ -104,6 +114,9 @@ export default function LogScreen() {
     selected?.submetrics?.slice(0, submetricVisibleCount) ?? [];
   const collapsedSubmetrics =
     selected?.submetrics?.slice(submetricVisibleCount) ?? [];
+  const mainValueEnabled =
+    !selected?.submetrics?.length ||
+    selected.submetricDisplay?.mainValueEnabled !== false;
   const [value, setValue] = useState("");
   const [label, setLabel] = useState("");
   const [note, setNote] = useState("");
@@ -152,17 +165,58 @@ export default function LogScreen() {
           ? "dinner"
           : "snack",
   );
+  const hasDraft = Boolean(
+    value.trim() ||
+      label.trim() ||
+      note.trim() ||
+      entryImage ||
+      protein ||
+      fat ||
+      carbs ||
+      fiber ||
+      sodium ||
+      sugar ||
+      saturatedFat ||
+      cholesterol ||
+      potassium ||
+      calcium ||
+      iron ||
+      magnesium ||
+      vitaminC ||
+      vitaminD ||
+      vitaminB12 ||
+      workoutDuration ||
+      workoutCalories ||
+      workoutDistance ||
+      bpDiastolic ||
+      bpPulse ||
+      Object.values(submetricValues).some((raw) => raw.trim()),
+  );
+  const hasDraftRef = useRef(hasDraft);
+  const allowLeaveRef = useRef(false);
+  const internalNavigationRef = useRef(false);
+  const promptOpenRef = useRef(false);
+  const clearEntryRef = useRef<() => void>(() => undefined);
+  const saveEntryRef = useRef<(afterSave?: () => void) => boolean>(
+    () => false,
+  );
+  hasDraftRef.current = hasDraft;
+  useWebBeforeUnload(
+    () => hasDraftRef.current && !allowLeaveRef.current,
+  );
+
+  function openLogChild(work: () => void) {
+    internalNavigationRef.current = true;
+    work();
+    setTimeout(() => {
+      internalNavigationRef.current = false;
+    }, 800);
+  }
 
   useEffect(() => {
-    if (
-      params.metric &&
-      state.metrics.some(
-        (metric) =>
-          metric.id === params.metric && metric.dataType !== "calculated",
-      )
-    )
+    if (params.metric && metrics.some((metric) => metric.id === params.metric))
       setSelectedId(params.metric);
-  }, [params.metric, state.metrics]);
+  }, [metrics, params.metric]);
   useEffect(() => {
     if (/^\d{4}-\d{2}-\d{2}$/.test(params.date ?? ""))
       setLogDate(params.date!);
@@ -283,14 +337,16 @@ export default function LogScreen() {
       recordedAt,
     });
   }
-  function saveEntry() {
-    if (!selected) return;
+  function saveEntry(afterSave?: () => void): boolean {
+    if (!selected) return false;
     const recordedAt = entryTimestamp();
-    if (!recordedAt)
-      return Alert.alert(
+    if (!recordedAt) {
+      Alert.alert(
         "Check the date",
         "Use YYYY-MM-DD and a 24-hour time such as 18:30.",
       );
+      return false;
+    }
     const nutrition = {
       mealType,
       proteinG: Number(protein) || undefined,
@@ -316,18 +372,35 @@ export default function LogScreen() {
       localDate: logDate,
       recordedAt,
       nutrition: selected.id === "food" ? nutrition : undefined,
-      submetricValues: Object.fromEntries(
-        Object.entries(submetricValues)
-          .map(([id, raw]) => [id, Number(raw.replace(",", "."))] as const)
-          .filter(([, amount]) => Number.isFinite(amount)),
-      ),
+      submetricValues:
+        selected.id === "blood_pressure_systolic"
+          ? Object.fromEntries(
+              [
+                ["systolic", value],
+                ["diastolic", bpDiastolic],
+                ["pulse", bpPulse],
+              ]
+                .map(([id, raw]) =>
+                  [id, Number(raw.replace(",", "."))] as const,
+                )
+                .filter(([, amount]) => Number.isFinite(amount)),
+            )
+          : Object.fromEntries(
+              Object.entries(submetricValues)
+                .map(([id, raw]) =>
+                  [id, Number(raw.replace(",", "."))] as const,
+                )
+                .filter(([, amount]) => Number.isFinite(amount)),
+            ),
     };
     if (selected.dataType === "photo") {
-      if (!entryImage)
-        return Alert.alert(
+      if (!entryImage) {
+        Alert.alert(
           "Choose a photo",
           "Attach the progress photo you want to save.",
         );
+        return false;
+      }
       addPhoto(
         entryImage,
         label.trim() || note.trim(),
@@ -351,7 +424,8 @@ export default function LogScreen() {
           ? "The photo and matching weight were saved."
           : "The progress photo was saved.",
       );
-      return;
+      afterSave?.();
+      return true;
     }
     if (selected.dataType === "boolean") {
       logMetric(selected.id, true, visibility, "replace", details);
@@ -369,31 +443,48 @@ export default function LogScreen() {
         });
       clearEntry();
       Alert.alert("Logged", `${selected.name} marked complete.`);
-      return;
+      afterSave?.();
+      return true;
     }
     if (selected.dataType === "text") {
-      if (!value.trim())
-        return Alert.alert(
+      if (!value.trim()) {
+        Alert.alert(
           "Add some text",
           "Write the entry you want to save.",
         );
+        return false;
+      }
       logMetric(selected.id, value.trim(), visibility, "add", details);
       clearEntry();
       Alert.alert("Saved", `${selected.name} was added.`);
-      return;
+      afterSave?.();
+      return true;
     }
-    const number = Number(value.replace(",", "."));
-    if (!Number.isFinite(number) || number < 0)
-      return Alert.alert("Check the value", "Enter a positive number.");
+    const derivedMainValue = selected.submetrics
+      ?.map((submetric) =>
+        Number((submetricValues[submetric.id] ?? "").replace(",", ".")),
+      )
+      .find((amount) => Number.isFinite(amount));
+    const number = selected.id === "blood_pressure_systolic"
+      ? Number(value.replace(",", "."))
+      : mainValueEnabled
+      ? Number(value.replace(",", "."))
+      : (derivedMainValue ?? Number.NaN);
+    if (!Number.isFinite(number) || number < 0) {
+      Alert.alert("Check the value", "Enter a positive number.");
+      return false;
+    }
     if (
       selected.id === "blood_pressure_systolic" &&
       (!Number.isFinite(Number(bpDiastolic.replace(",", "."))) ||
         Number(bpDiastolic.replace(",", ".")) <= 0)
-    )
-      return Alert.alert(
+    ) {
+      Alert.alert(
         "Add diastolic pressure",
         "A blood pressure reading needs both systolic and diastolic values.",
       );
+      return false;
+    }
     logMetric(
       selected.id,
       number,
@@ -478,7 +569,108 @@ export default function LogScreen() {
       "Saved",
       `${selected.name} was added to ${logDate === dateKey() ? "today" : logDate}.`,
     );
+    afterSave?.();
+    return true;
   }
+  clearEntryRef.current = clearEntry;
+  saveEntryRef.current = saveEntry;
+
+  useEffect(
+    () =>
+      navigation.addListener("beforeRemove", (event) => {
+        if (
+          allowLeaveRef.current ||
+          promptOpenRef.current ||
+          !hasDraftRef.current
+        )
+          return;
+        event.preventDefault();
+        promptOpenRef.current = true;
+        const leave = () => {
+          allowLeaveRef.current = true;
+          promptOpenRef.current = false;
+          navigation.dispatch(event.data.action);
+          setTimeout(() => {
+            allowLeaveRef.current = false;
+          }, 0);
+        };
+        Alert.alert(
+          "Keep this log?",
+          "You have data that has not been saved yet.",
+          [
+            {
+              text: "Continue editing",
+              style: "cancel",
+              onPress: () => {
+                promptOpenRef.current = false;
+              },
+            },
+            {
+              text: "Discard",
+              style: "destructive",
+              onPress: () => {
+                clearEntryRef.current();
+                leave();
+              },
+            },
+            {
+              text: "Save & leave",
+              onPress: () => {
+                if (!saveEntryRef.current(leave))
+                  promptOpenRef.current = false;
+              },
+            },
+          ],
+        );
+      }),
+    [navigation],
+  );
+  useEffect(
+    () =>
+      navigation.addListener("blur", () => {
+        if (
+          allowLeaveRef.current ||
+          internalNavigationRef.current ||
+          promptOpenRef.current ||
+          !hasDraftRef.current
+        )
+          return;
+        promptOpenRef.current = true;
+        const continueEditing = () => {
+          promptOpenRef.current = false;
+          router.navigate("/log" as never);
+        };
+        Alert.alert(
+          "Keep this log?",
+          "You have data that has not been saved yet.",
+          [
+            {
+              text: "Continue editing",
+              style: "cancel",
+              onPress: continueEditing,
+            },
+            {
+              text: "Discard",
+              style: "destructive",
+              onPress: () => {
+                clearEntryRef.current();
+                promptOpenRef.current = false;
+              },
+            },
+            {
+              text: "Save",
+              onPress: () => {
+                const saved = saveEntryRef.current(() => {
+                  promptOpenRef.current = false;
+                });
+                if (!saved) promptOpenRef.current = false;
+              },
+            },
+          ],
+        );
+      }),
+    [navigation],
+  );
   const privacyCopy =
     visibility === "private"
       ? "Only you can read this entry, its note, and image."
@@ -496,7 +688,9 @@ export default function LogScreen() {
         tutorialId="log-header"
         action={
           <Pressable
-            onPress={() => router.navigate("/timer" as never)}
+            onPress={() =>
+              openLogChild(() => router.navigate("/timer" as never))
+            }
             style={[styles.timerShortcut, { borderColor: accent }]}
           >
             <Ionicons name="timer-outline" size={17} color={accent} />
@@ -525,10 +719,12 @@ export default function LogScreen() {
             if (metrics.some((metric) => metric.id === next))
               setSelectedId(next);
             else
-              router.navigate({
-                pathname: "/metric-detail",
-                params: { metric: next, date: logDate },
-              } as never);
+              openLogChild(() =>
+                router.navigate({
+                  pathname: "/metric-detail",
+                  params: { metric: next, date: logDate },
+                } as never),
+              );
           }}
           multiple={false}
         />
@@ -604,6 +800,14 @@ export default function LogScreen() {
                   color={colors.muted}
                 />
               </Pressable>
+              <View style={styles.timeField}>
+                <TimeInput
+                  value={logTime}
+                  onChange={setLogTime}
+                  label="Time"
+                  wheelPicker
+                />
+              </View>
               <Pressable
                 onPress={() => {
                   const current = new Date();
@@ -625,12 +829,6 @@ export default function LogScreen() {
                 />
                 <Text style={styles.nowText}>Now</Text>
               </Pressable>
-            </View>
-            <View style={styles.timeField}>
-              <Text style={[styles.fieldLabel, { color: colors.muted }]}>
-                Time
-              </Text>
-              <TimeInput value={logTime} onChange={setLogTime} />
             </View>
             {logCalendarOpen ? (
               <View style={styles.miniCalendar}>
@@ -675,10 +873,12 @@ export default function LogScreen() {
                 <Pressable
                   accessibilityLabel="Search foods"
                   onPress={() =>
-                    router.navigate({
-                      pathname: "/food-search",
-                      params: { q: label },
-                    })
+                    openLogChild(() =>
+                      router.navigate({
+                        pathname: "/food-search",
+                        params: { q: label },
+                      }),
+                    )
                   }
                   style={[styles.foodSearchButton, { backgroundColor: accent }]}
                 >
@@ -687,10 +887,12 @@ export default function LogScreen() {
                 <Pressable
                   accessibilityLabel="Scan barcode"
                   onPress={() =>
-                    router.navigate({
-                      pathname: "/food-search",
-                      params: { mode: "scan" },
-                    })
+                    openLogChild(() =>
+                      router.navigate({
+                        pathname: "/food-search",
+                        params: { mode: "scan" },
+                      }),
+                    )
                   }
                   style={[
                     styles.foodScanButton,
@@ -782,7 +984,7 @@ export default function LogScreen() {
                 ))}
               </View>
             </>
-          ) : (
+          ) : mainValueEnabled ? (
             <View style={styles.numberWrap}>
               <TextInput
                 accessibilityLabel={`${selected.name} value`}
@@ -795,7 +997,7 @@ export default function LogScreen() {
               />
               <Text style={styles.unit}>{selected.unit}</Text>
             </View>
-          )}
+          ) : null}
           {selected.submetrics?.length &&
           selected.id !== "food" &&
           selected.id !== "blood_pressure_systolic" ? (
@@ -1210,11 +1412,21 @@ export default function LogScreen() {
                 : `Add ${selected.name.toLowerCase()}`
             }
             icon="checkmark"
-            onPress={saveEntry}
+            onPress={() => saveEntry()}
             disabled={
               selected.dataType === "photo"
                 ? !entryImage
-                : selected.dataType !== "boolean" && !value.trim()
+                : selected.id === "blood_pressure_systolic"
+                  ? !value.trim() || !bpDiastolic.trim()
+                : selected.dataType !== "boolean" &&
+                  mainValueEnabled &&
+                  !value.trim()
+                  ? true
+                  : selected.dataType !== "boolean" &&
+                      !mainValueEnabled &&
+                      !Object.values(submetricValues).some((raw) =>
+                        Number.isFinite(Number(raw.replace(",", "."))),
+                      )
             }
           />
         </Card>
@@ -1222,6 +1434,8 @@ export default function LogScreen() {
     </Screen>
   );
 }
+
+export default LogScreen;
 
 const styles = StyleSheet.create({
   timerShortcut: {
@@ -1244,21 +1458,22 @@ const styles = StyleSheet.create({
   compactTitle: { fontSize: 13, fontWeight: "900", color: palette.ink },
   selector: { marginBottom: 8 },
   dateCard: { marginBottom: 8 },
-  dateTopRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  dateTopRow: { flexDirection: "row", alignItems: "flex-end", gap: 5 },
   calendarButton: {
-    flex: 1,
-    minHeight: 40,
+    flex: 1.45,
+    minWidth: 0,
+    minHeight: 42,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 5,
     borderWidth: 1,
     borderColor: palette.border,
     borderRadius: 12,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
   },
   calendarText: {
     color: palette.ink,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "900",
     marginTop: -5,
   },
@@ -1268,7 +1483,7 @@ const styles = StyleSheet.create({
     paddingTop: 11,
     marginTop: 10,
   },
-  timeField: { width: "100%", marginTop: 7 },
+  timeField: { flex: 1, minWidth: 0 },
   dateInput: {
     borderWidth: 1,
     borderColor: palette.border,
@@ -1280,11 +1495,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   nowButton: {
-    height: 40,
+    height: 42,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: 9,
+    paddingHorizontal: 7,
     borderRadius: 11,
     backgroundColor: palette.primarySoft,
   },

@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import React, { useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
-import { EnergyProfileEditor, MetricGoalsEditor } from '@/src/components/ProfileEditors';
+import { EnergyProfileEditor, MetricGoalsEditor, StreakSettingsEditor } from '@/src/components/ProfileEditors';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { Avatar, Button, Card, IconButton, PageHeader, Screen } from '@/src/components/ui';
 import { memberDisplayName, memberOriginalLabel, memberRoleLabel } from '@/src/domain/members';
@@ -28,13 +28,14 @@ export default function ProfileScreen(){
     <PageHeader eyebrow="Personal" title="My profile" subtitle="Your photo, body and energy profile, and personal metric goals." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
     <Card style={styles.identity}>
       <View><Avatar initials={me.initials} color={accent} size={72} uri={me.avatarUri}/><Pressable onPress={choosePhoto} style={[styles.camera,{backgroundColor:accent,borderColor:colors.card}]}><Ionicons name="camera" size={15} color={palette.white}/></Pressable></View>
-      <View style={styles.copy}><Text style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text style={[styles.original,{color:colors.faint}]}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in {state.group.name}</Text></View>
+      <View style={styles.copy}><Text translate={false} style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text translate={false} style={[styles.original,{color:colors.faint}]}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in <Text translate={false}>{state.group.name}</Text></Text></View>
       {me.avatarUri?<Pressable accessibilityLabel="Remove profile photo" onPress={()=>updateMemberAvatar(me.id,undefined)} style={styles.remove}><Ionicons name="trash-outline" size={18} color={palette.red}/></Pressable>:null}
     </Card>
     <Card style={styles.nameCard}><View style={styles.copy}><Text style={[styles.fieldLabel,{color:colors.muted}]}>Account display name</Text><TextInput value={name} onChangeText={setName} maxLength={40} placeholder="Your name" placeholderTextColor={colors.faint} style={[styles.input,{color:colors.ink,borderColor:colors.border}]}/></View><Button label="Save" variant="ghost" onPress={()=>updateMemberName(me.id,name)}/></Card>
     <Text style={[styles.note,{color:colors.muted}]}>Your account name comes from your profile. Friend nicknames are set separately inside each group.</Text>
     <EnergyProfileEditor/>
     <MetricGoalsEditor/>
+    <StreakSettingsEditor/>
     <Pressable onPress={()=>router.push('/vacation')} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:vacationActive?'#E76FA8':colors.border}]}><View style={[styles.linkIcon,{backgroundColor:vacationActive?'#E76FA81C':colors.primarySoft}]}><Ionicons name="airplane-outline" size={21} color={vacationActive?'#E76FA8':accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Vacation mode</Text><Text style={[styles.meta,{color:colors.muted}]}>{vacationActive?'Active · your streaks are protected':'Pause goal streaks without changing logged measurements.'}</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
     <Pressable onPress={()=>router.push(`/member/${me.id}` as never)} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.linkIcon,{backgroundColor:colors.primarySoft}]}><Ionicons name="trophy-outline" size={21} color={accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Public profile & badge showcase</Text><Text style={[styles.meta,{color:colors.muted}]}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
   </Screen>;

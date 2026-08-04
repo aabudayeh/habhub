@@ -5,11 +5,19 @@ import { AppText as Text } from "@/src/components/AppText";
 
 import { formatMetricValue, goalProgress, goalReached } from '@/src/domain/metrics';
 import { MetricDefinition } from '@/src/types';
+import { useLocale, useLocalization } from '@/src/i18n';
+import { localizeMetricName, localizeMetricUnit } from '@/src/i18n/domain';
 import { palette, shadow, useAppColors, useCompactMode, useGroupAccent } from '@/src/theme';
 import { ProgressBar } from './ui';
 
 export function MetricCard({ metric, value, displayText, rankLabel, goalTarget, remainingLabel, onPress }: { metric: MetricDefinition; value: number; displayText?: string; rankLabel?: string; goalTarget?: number; remainingLabel?: string; onPress?: () => void }) {
   const compact=useCompactMode();const colors=useAppColors();const accent=useGroupAccent();
+  const { language } = useLocalization();
+  const locale = useLocale();
+  const localizedMetric = React.useMemo(
+    () => ({ ...metric, unit: localizeMetricUnit(language, metric) }),
+    [language, metric],
+  );
   const progress = goalProgress(metric, value, goalTarget);
   const reached = goalReached(metric, value, goalTarget);
   const progressLabel = metric.goal.kind === 'at_most'
@@ -33,8 +41,8 @@ export function MetricCard({ metric, value, displayText, rankLabel, goalTarget, 
           {!compact?<Text style={[styles.statusText,{color:colors.faint}, reached && {color:accent}]}>{reached ? 'Goal met' : 'In progress'}</Text>:null}
         </View> : <View style={styles.status}><Ionicons name="document-text-outline" size={13} color={palette.faint}/><Text style={styles.statusText}>Journal</Text></View>}
       </View>
-      <Text style={[styles.name,{color:colors.muted},compact&&styles.nameCompact]}>{metric.name}</Text>
-      <Text style={[styles.value,{color:colors.ink},compact&&styles.valueCompact]} numberOfLines={1}>{metric.dataType === 'text' ? displayText || 'No entry yet' : formatMetricValue(metric, value)}</Text>
+      <Text translate={false} style={[styles.name,{color:colors.muted},compact&&styles.nameCompact]}>{localizeMetricName(language, metric)}</Text>
+      <Text style={[styles.value,{color:colors.ink},compact&&styles.valueCompact]} numberOfLines={1}>{metric.dataType === 'text' ? displayText || 'No entry yet' : formatMetricValue(localizedMetric, value, locale)}</Text>
       {remainingLabel ? <Text numberOfLines={1} style={[styles.remainingText,{color:colors.muted},compact&&styles.detailCompact]}>{remainingLabel}</Text> : null}
       {rankLabel&&!compact ? <Text style={[styles.rankText,{color:accent}]}>{rankLabel}</Text> : null}
       {metric.dataType !== 'text' ? <View style={[styles.progressRow,compact&&styles.progressRowCompact]}>

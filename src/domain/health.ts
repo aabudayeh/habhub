@@ -1,6 +1,7 @@
 import { dateKey } from '@/src/domain/date';
+import { metricEntryKey } from '@/src/domain/metricEntry';
 import { HealthImportRecord } from '@/src/health/types';
-import { AppState, HealthDataType, HealthMetricField, HealthProvider, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
+import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
 
 const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   steps: ['steps'],
@@ -32,6 +33,25 @@ export function metricIdsForHealthDataTypes(dataTypes: HealthDataType[],metrics?
 
 const NUTRITION_FIELDS:Partial<Record<HealthMetricField,keyof NutritionDetails>>={protein:'proteinG',fat:'fatG',carbs:'carbsG',fiber:'fiberG',sodium:'sodiumMg',sugar:'sugarG',saturated_fat:'saturatedFatG',cholesterol:'cholesterolMg',potassium:'potassiumMg',calcium:'calciumMg',iron:'ironMg',magnesium:'magnesiumMg',vitamin_c:'vitaminCMg',vitamin_d:'vitaminDMcg',vitamin_b12:'vitaminB12Mcg'};
 function mappedValue(record:HealthImportRecord,metric:MetricDefinition){const field=metric.healthMapping?.field;if(!field)return undefined;if(field==='value')return metric.dataType==='boolean'?Number(record.value)>0:Number(record.value);if(field==='duration_minutes'){const minutes=record.measurements?.durationMinutes;if(minutes===undefined)return undefined;return metric.unit.toLowerCase().startsWith('hr')?minutes/60:minutes;}if(field==='active_calories')return record.measurements?.activeCalories;if(field==='distance_km')return record.measurements?.distanceKm;if(field==='systolic')return record.measurements?.systolic;if(field==='diastolic')return record.measurements?.diastolic;const nutritionField=NUTRITION_FIELDS[field];const value=nutritionField?record.nutrition?.[nutritionField]:undefined;return typeof value==='number'?value:undefined;}
+
+function healthMappingMatchesRecord(
+  mapping: HealthMetricMapping | undefined,
+  record: HealthImportRecord,
+) {
+  if (!mapping || mapping.dataType !== record.type) return false;
+  if (
+    mapping.activityKeys?.length &&
+    (!record.activityKey || !mapping.activityKeys.includes(record.activityKey))
+  )
+    return false;
+  if (record.type !== "workouts") return true;
+  const recordKind = record.workoutRecordKind ?? "session";
+  if (mapping.workoutRecordKind && mapping.workoutRecordKind !== recordKind)
+    return false;
+  // A legacy/unfiltered workout mapping means the overall session. Movement
+  // segments only populate trackers that explicitly opt into segment data.
+  return recordKind !== "segment" || mapping.workoutRecordKind === "segment";
+}
 
 function importedId(record: HealthImportRecord, metricId: string) {
   return `health:${record.provider}:${record.type}:${record.id}:${metricId}`;
@@ -72,21 +92,21 @@ export function mapHealthRecordsToEntries(
   userId: string,
   visibility: Visibility = 'group',
   metrics?:MetricDefinition[],
-  weightKg=70,
+  profileOrWeight: StepActivityProfile | number = 70,
 ) {
   const entries: MetricEntry[] = [];
   for (const record of normalizeStepRecords(records)) {
     if(metrics){
-      for(const metric of metrics.filter((item)=>item.healthMapping?.dataType===record.type)){
+      for(const metric of metrics.filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
         entries.push(entryFor(record,userId,metric.id,value,visibility,record.nutrition));
       }
       for(const metric of metrics.filter((item)=>
-        item.submetrics?.some((field)=>field.healthMapping?.dataType===record.type)
+        item.submetrics?.some((field)=>healthMappingMatchesRecord(field.healthMapping,record))
       )){
         const submetricValues=Object.fromEntries(
           (metric.submetrics??[]).flatMap((field)=>{
-            if(field.healthMapping?.dataType!==record.type)return [];
+            if(!healthMappingMatchesRecord(field.healthMapping,record))return [];
             const value=mappedValue(record,{
               ...metric,
               dataType:"number",
@@ -129,7 +149,7 @@ export function mapHealthRecordsToEntries(
     if (record.type === 'active_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'exercise', Number(record.value), visibility));
     if (record.type === 'weight' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'weight', Number(record.value), visibility));
     if (record.type === 'water' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'water', Number(record.value), visibility));
-    if (record.type === 'workouts' && Number(record.value)>0) {
+    if (record.type === 'workouts' && record.workoutRecordKind !== 'segment' && Number(record.value)>0) {
       entries.push(entryFor(record, userId, 'workout', true, visibility));
       entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, visibility));
       if((record.measurements?.activeCalories??0)>0)entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),visibility));
@@ -155,7 +175,7 @@ export function mapHealthRecordsToEntries(
       if (typeof value === 'number' && value > 0) entries.push(entryFor(record, userId, metricId, ['sodium','cholesterol','potassium','calcium','magnesium'].includes(metricId)?Math.round(value):Math.round(value*10)/10, visibility));
     }
   }
-  return appendStepFallbackEntries(entries,userId,visibility,metrics,weightKg);
+  return appendStepFallbackEntries(entries,userId,visibility,metrics,profileOrWeight);
 }
 
 export type UnrecordedStepActivity = {
@@ -166,6 +186,98 @@ export type UnrecordedStepActivity = {
   estimatedCalories: number;
   knownWorkoutCalories: number;
 };
+
+export type StepActivityProfile = Pick<
+  EnergyProfile,
+  "age" | "sex" | "heightCm" | "weightKg"
+>;
+
+const DEFAULT_WALKING_SPEED_MPS = 1.34;
+const LEGACY_STEP_LENGTH_M = 0.762;
+const LEGACY_WALKING_KCAL_PER_KG_KM = 0.53;
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function stepProfile(profileOrWeight: StepActivityProfile | number) {
+  return typeof profileOrWeight === "number"
+    ? {
+        age: 35,
+        sex: "unspecified" as const,
+        heightCm: 0,
+        weightKg: profileOrWeight,
+      }
+    : profileOrWeight;
+}
+
+/**
+ * Estimate ordinary level walking represented by an otherwise-unexplained
+ * step count.
+ *
+ * Distance uses Lee et al.'s healthy-adult step-length regression when a
+ * usable profile is available. Net walking oxygen cost then follows Ludlow et
+ * al.'s height-weight-speed model. We intentionally assume one conservative
+ * habitual speed because a daily aggregate step record contains no cadence;
+ * measured workout distance/duration always takes precedence elsewhere.
+ *
+ * Sources:
+ * https://doi.org/10.1080/1091367X.2026.2634091
+ * https://doi.org/10.1152/japplphysiol.00864.2015
+ */
+export function estimateLevelWalkingFromSteps(
+  steps: number,
+  profileOrWeight: StepActivityProfile | number,
+) {
+  const profile = stepProfile(profileOrWeight);
+  const safeSteps = Math.max(0, steps);
+  const weightKg = clamp(Number(profile.weightKg) || 70, 35, 300);
+  const heightCm = Number(profile.heightCm) || 0;
+  const age = clamp(Number(profile.age) || 35, 18, 90);
+  const hasProfileHeight = heightCm >= 130 && heightCm <= 220;
+  const speedMps = DEFAULT_WALKING_SPEED_MPS;
+
+  // Regression inputs are centimetres, kilograms and centimetres/second.
+  // The published sex coefficient is negligible (0.02 cm) but retained.
+  // The published model encodes male = 0 and female = 1. Unspecified keeps
+  // the neutral baseline; the coefficient is only 0.02 cm either way.
+  const sexTerm = profile.sex === "female" ? 1 : 0;
+  const predictedStepLengthM = hasProfileHeight
+    ? (-16.14 -
+        0.06 * age +
+        0.31 * heightCm -
+        0.04 * weightKg +
+        0.02 * sexTerm +
+        0.3 * (speedMps * 100)) /
+      100
+    : LEGACY_STEP_LENGTH_M;
+  const stepLengthM = hasProfileHeight
+    ? clamp(predictedStepLengthM, 0.4, 1.05)
+    : LEGACY_STEP_LENGTH_M;
+  const distanceKm = (safeSteps * stepLengthM) / 1000;
+  const durationMinutes = distanceKm
+    ? (distanceKm * 1000) / speedMps / 60
+    : 0;
+
+  const estimatedCalories = hasProfileHeight
+    ? // Walking-only oxygen cost in ml O2/kg/min; resting metabolism is
+      // excluded because this value feeds the app's active-energy tracker.
+      ((3.85 + (5.97 * speedMps ** 2) / (heightCm / 100)) *
+        weightKg *
+        durationMinutes *
+        5) /
+      1000
+    : distanceKm * LEGACY_WALKING_KCAL_PER_KG_KM * weightKg;
+
+  return {
+    steps: safeSteps,
+    stepLengthM,
+    speedMps,
+    distanceKm,
+    durationMinutes,
+    estimatedCalories,
+  };
+}
 
 const MOVEMENT_WORKOUT = /(walk|run|hike|treadmill)/i;
 const RUNNING_WORKOUT = /(run|treadmill)/i;
@@ -182,8 +294,12 @@ export function unrecordedStepActivity(
   dayEntries: MetricEntry[],
   metrics: MetricDefinition[],
   steps: number,
-  weightKg: number,
+  profileOrWeight: StepActivityProfile | number,
 ): UnrecordedStepActivity {
+  const walkingEstimate = estimateLevelWalkingFromSteps(
+    steps,
+    profileOrWeight,
+  );
   const workoutMetricIds = new Set(
     metrics
       .filter((metric) => metric.healthMapping?.dataType === "workouts")
@@ -260,7 +376,9 @@ export function unrecordedStepActivity(
     );
     const estimatedDistanceKm =
       distanceKm || (durationMinutes / 60) * (running ? 9 : 5);
-    coveredSteps += estimatedDistanceKm * (running ? 1000 : 1312);
+    coveredSteps +=
+      (estimatedDistanceKm * 1000) /
+      (running ? 1 : walkingEstimate.stepLengthM);
   }
   // Non-movement workouts still contribute their known calories, but must not
   // subtract steps. Count each native workout once even when custom trackers
@@ -280,21 +398,21 @@ export function unrecordedStepActivity(
     0,
   );
   const uncoveredSteps = Math.max(0, steps - coveredSteps);
-  const distanceKm = uncoveredSteps * 0.000762;
-  const durationMinutes = (distanceKm / 5) * 60;
-  const estimatedCalories =
-    distanceKm * 0.53 * Math.max(35, weightKg);
+  const uncovered = estimateLevelWalkingFromSteps(
+    uncoveredSteps,
+    profileOrWeight,
+  );
   return {
     coveredSteps,
     uncoveredSteps,
-    distanceKm,
-    durationMinutes,
-    estimatedCalories,
+    distanceKm: uncovered.distanceKm,
+    durationMinutes: uncovered.durationMinutes,
+    estimatedCalories: uncovered.estimatedCalories,
     knownWorkoutCalories,
   };
 }
 
-function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:Visibility,metrics:MetricDefinition[]|undefined,weightKg:number){
+function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:Visibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number){
   if(!metrics)return entries;
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
@@ -305,7 +423,7 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     const dayEntries=entries.filter((entry)=>entry.localDate===day);
     const steps=Math.max(0,...dayEntries.filter((entry)=>stepIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));
     if(steps<=0)continue;
-    const estimate=unrecordedStepActivity(dayEntries,metrics,steps,weightKg);
+    const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
     const stepEntry=dayEntries.find((entry)=>stepIds.includes(entry.metricId))!;
     const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
@@ -358,9 +476,14 @@ export function mergeHealthEntries(
         targetMetrics.has(entry.metricId) &&
         entry.localDate >= fromDate
       ))
-      .map((entry) => [entry.id, entry]),
+      .map((entry) => [
+        metricEntryKey(entry.userId, entry.id),
+        entry,
+      ]),
   );
-  entries.forEach((entry) => byId.set(entry.id, entry));
+  entries.forEach((entry) =>
+    byId.set(metricEntryKey(entry.userId, entry.id), entry),
+  );
   return [...byId.values()];
 }
 

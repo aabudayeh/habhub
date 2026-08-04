@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="habhub_widget_description">Progression du jour et historique du suivi</string>
+  <string name="habhub_widget_open_to_update">Ouvrez HabHub pour actualiser</string>
+  <string name="habhub_widget_featured_progress">Progression à la une</string>
+  <string name="habhub_widget_choose">Choisissez le contenu du widget</string>
+  <string name="habhub_widget_tracker">Suivi</string>
+  <string name="habhub_widget_history">Historique</string>
+  <string name="habhub_widget_week">Semaine</string>
+  <string name="habhub_widget_month">Mois</string>
+  <string name="habhub_widget_year">Année</string>
+  <string name="habhub_widget_add">Ajouter le widget</string>
+</resources>

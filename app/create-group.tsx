@@ -2,18 +2,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import {
-  Alert,
   Pressable,
   StyleSheet,
   Switch,
-  TextInput,
   View,
 } from "react-native";
 
-import { AppText as Text } from "@/src/components/AppText";
+import {
+  AppText as Text,
+  AppTextInput as TextInput,
+} from "@/src/components/AppText";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import { useAuth } from "@/src/auth/AuthProvider";
-import { useCloudSync } from "@/src/cloud/CloudSyncProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import {
   Button,
   Card,
@@ -38,7 +40,7 @@ import { NewMetric } from "@/src/types";
 export default function CreateGroup() {
   const { state, createGroup } = useApp();
   const auth = useAuth();
-  const cloud = useCloudSync();
+  const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [name, setName] = useState("");

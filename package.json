@@ -16,13 +16,15 @@
     "lint": "node node_modules/eslint/bin/eslint.js app src",
     "validate:env": "node scripts/validate-release-env.cjs",
     "validate:cloud": "node scripts/validate-release-env.cjs --cloud",
-    "check": "pnpm typecheck && pnpm lint",
-    "check:release": "pnpm validate:cloud && pnpm typecheck && pnpm lint && pnpm export:web"
+    "validate:i18n": "node scripts/validate-i18n.mjs",
+    "check": "pnpm validate:i18n && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
     "@kingstinct/react-native-healthkit": "14.0.2",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/netinfo": "11.4.1",
     "@react-native-firebase/app": "^25.1.0",
     "@react-native-firebase/messaging": "^25.1.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
@@ -34,6 +36,7 @@
     "expo-build-properties": "~1.0.10",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.13",
+    "expo-dev-client": "^6.0.21",
     "expo-device": "~8.0.10",
     "expo-font": "~14.0.12",
     "expo-haptics": "~15.0.8",
@@ -47,6 +50,7 @@
     "expo-router": "~6.0.24",
     "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
+    "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "expo-symbols": "~1.0.8",
     "expo-system-ui": "~6.0.9",
@@ -72,5 +76,14 @@
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "expo-health-connect"
+        ]
+      }
+    }
   }
 }
