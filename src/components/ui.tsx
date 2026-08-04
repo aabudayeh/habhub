@@ -199,13 +199,19 @@ export function PageHeader({
  * Only this tiny refresh control updates while a background sync changes
  * status, so navigating and typing do not cause every Screen to re-render.
  */
-function DefaultRefreshControl() {
+function DefaultRefreshControl(
+  props: Partial<React.ComponentProps<typeof RefreshControl>>,
+) {
   const cloud = useCloudSyncActions();
   const cloudStatus = useCloudSyncStatus();
   const health = useHealthSync();
   const accent = useGroupAccent();
   return (
     <RefreshControl
+      // Android ScrollView clones this element and injects the native scroll
+      // view as its child. Forward every injected prop so page content is not
+      // discarded by this context-isolating wrapper.
+      {...props}
       refreshing={cloudStatus === "syncing" || health.status === "syncing"}
       onRefresh={async () => {
         await health.syncNow("pull").catch(() => undefined);
