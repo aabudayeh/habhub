@@ -70,6 +70,7 @@ export default function ReminderEditor() {
     saveCalendarReminder,
     deleteCalendarReminder,
     updateMetric,
+    saveTodo,
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -239,12 +240,30 @@ export default function ReminderEditor() {
       router.back();
       return;
     }
+    if (kind === "todo" && selectedTodo) {
+      const reminderId = existing?.id ?? `todo-reminder-${Date.now().toString(36)}`;
+      saveTodo({
+        ...selectedTodo,
+        reminders: [
+          ...selectedTodo.reminders.filter((item) => item.id !== reminderId),
+          {
+            id: reminderId,
+            at: `${scheduledDate}T${time}:00`,
+            time,
+            schedule,
+          },
+        ],
+      });
+      if (existing) deleteCalendarReminder(existing.id);
+      router.back();
+      return;
+    }
     saveCalendarReminder({
       id: existing?.id ?? `calendar-${Date.now().toString(36)}`,
       title: resolvedTitle,
       kind,
       metricId: kind === "tracker" ? metricId : undefined,
-      todoId: kind === "todo" ? todoId : undefined,
+      todoId: undefined,
       time,
       durationMinutes,
       enabled: true,

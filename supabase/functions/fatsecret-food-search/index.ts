@@ -102,13 +102,18 @@ Deno.serve(async (request) => {
       throw new Error(`FatSecret search returned ${response.status}`);
     const raw = (await response.json()) as {
       foods?: { food?: RawFood | RawFood[] };
+      error?: { code?: unknown; message?: unknown };
     };
+    if (raw.error) {
+      const code = cleanText(String(raw.error.code ?? ""), 24) ?? "unknown";
+      throw new Error(`FatSecret API error ${code}`);
+    }
     const foods = raw.foods?.food
       ? Array.isArray(raw.foods.food)
         ? raw.foods.food
         : [raw.foods.food]
       : [];
-    const payload = {
+    const payload: SearchPayload = {
       market,
       products: foods.flatMap((food) => normalizeFood(food, market)),
     };

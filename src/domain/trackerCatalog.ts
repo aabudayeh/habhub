@@ -383,7 +383,7 @@ function presetDescription(id: string) {
   if (id === 'pulse') return 'Daily average pulse; no target until you choose a personal range.';
   if (id.startsWith('blood_pressure')) return 'One combined systolic/diastolic reading with editable preferred ranges.';
   if (id === 'sleep') return 'Sleep duration with a ready-made 7–9 hour target range.';
-  if (id === 'screen_time') return 'Private Android screen and app usage from system Usage Access.';
+  if (id === 'screen_time') return 'Private device screen use. Android can import app usage; iOS supports manual logs until Family Controls is provisioned.';
   if (id === 'intermittent_fasting') return 'A configurable fasting/eating window with manual or optional first-food completion.';
   return 'Ready-made logging, goals, sharing and health mapping.';
 }

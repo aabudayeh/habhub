@@ -11,6 +11,7 @@ import {
 } from "@/src/i18n/domain";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { FastingClockEditor } from "@/src/components/FastingClockEditor";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
@@ -953,6 +954,27 @@ export default function TrackerDetail() {
       ) : null}
       {tracker.id === "screen_time" ? (
         <ScreenTimeBreakdownCard dates={dates} />
+      ) : null}
+      {isFasting ? (
+        <FastingClockEditor
+          startTime={tracker.fastingSettings?.startTime ?? "20:00"}
+          fastingMinutes={
+            tracker.fastingSettings?.fastingMinutes ?? 16 * 60
+          }
+          metricColor={tracker.color}
+          timeFormat={state.settings.timeFormat ?? "24h"}
+          locale={locale}
+          onChange={(startTime, fastingMinutes) =>
+            updateMetric(tracker.id, {
+              fastingSettings: {
+                startTime,
+                fastingMinutes,
+                automaticFoodBreak:
+                  tracker.fastingSettings?.automaticFoodBreak ?? true,
+              },
+            })
+          }
+        />
       ) : null}
       <Card style={styles.summary}>
         <View style={styles.summaryTop}>
@@ -2272,6 +2294,7 @@ function Trend({
   dense?: boolean;
   chartStyle?: MetricChartStyle;
 }) {
+  const locale = useLocale();
   if (secondaryValues)
     return (
       <TrendFrame
@@ -2291,7 +2314,7 @@ function Trend({
         />
       </TrendFrame>
     );
-  if (chartStyle === "line")
+  if (chartStyle === "line" || chartStyle === "both")
     return (
       <TrendFrame
         dates={dates}
@@ -2306,6 +2329,7 @@ function Trend({
           target={target}
           unit={tracker.unit}
           colors={colors}
+          showBars={chartStyle === "both"}
         />
       </TrendFrame>
     );
@@ -2345,8 +2369,45 @@ function Trend({
     1,
   );
   return (
-    <TrendFrame dates={dates} range={axisRange} colors={colors}>
+    <TrendFrame
+      dates={dates}
+      range={axisRange}
+      colors={colors}
+      axisInsetLeft={40}
+      axisInsetRight={4}
+    >
     <View style={[styles.chart, dense && styles.denseChart]}>
+      {[max, max / 2, 0].map((tick, index) => (
+        <React.Fragment key={`bar-axis-${index}`}>
+          <View
+            style={[
+              styles.lineGrid,
+              {
+                left: 0,
+                right: 0,
+                top: `${index * 50}%`,
+                borderTopColor: colors.border,
+              },
+            ]}
+          />
+          <Text
+            style={[
+              styles.barAxisLabel,
+              { top: index === 2 ? "100%" : `${index * 50}%`, color: colors.muted },
+            ]}
+          >
+            {Math.abs(tick) >= 100
+              ? Math.round(tick).toLocaleString(locale)
+              : (Math.round(tick * 10) / 10).toLocaleString(locale)}
+          </Text>
+        </React.Fragment>
+      ))}
+      <View
+        style={[
+          styles.lineYAxis,
+          { left: 0, top: 0, bottom: 0, backgroundColor: colors.border },
+        ]}
+      />
       <View
         style={[
           styles.goalLine,
@@ -2541,12 +2602,14 @@ function SingleLineTrend({
   target,
   unit,
   colors,
+  showBars = false,
 }: {
   values: (number | null)[];
   color: string;
   target: number;
   unit: string;
   colors: ReturnType<typeof useAppColors>;
+  showBars?: boolean;
 }) {
   const locale = useLocale();
   const [width, setWidth] = useState(0);
@@ -2655,6 +2718,30 @@ function SingleLineTrend({
       >
         Target {formatAxisValue(safeTarget)}{unit ? ` ${unit}` : ""}
       </Text>
+      {showBars && width > 0
+        ? points.map((current, index) => {
+            if (current.y === null) return null;
+            const barWidth = Math.max(
+              2,
+              Math.min(14, (plotWidth / Math.max(1, series.length)) * 0.58),
+            );
+            return (
+              <View
+                key={`overlay-bar-${index}`}
+                style={[
+                  styles.lineOverlayBar,
+                  {
+                    left: current.x - barWidth / 2,
+                    top: current.y,
+                    width: barWidth,
+                    height: Math.max(2, plotBottom - current.y),
+                    backgroundColor: `${color}3D`,
+                  },
+                ]}
+              />
+            );
+          })
+        : null}
       {width > 0
         ? connectedPoints.slice(1).map((current, index) => {
             const previous = connectedPoints[index];
@@ -3077,10 +3164,22 @@ const styles = StyleSheet.create({
   chart: {
     height: 92,
     marginTop: 16,
+    marginLeft: 40,
+    marginRight: 4,
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 3,
     position: "relative",
+  },
+  lineOverlayBar: { position: "absolute", borderRadius: 3, zIndex: 1 },
+  barAxisLabel: {
+    position: "absolute",
+    left: -40,
+    width: 34,
+    marginTop: -5,
+    textAlign: "right",
+    fontSize: 7,
+    fontWeight: "800",
   },
   trendFrame: { width: "100%" },
   trendXAxis: {

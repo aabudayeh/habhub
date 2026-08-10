@@ -112,7 +112,7 @@ export type MetricSubmetricDisplay = {
   mainValueEnabled?: boolean;
 };
 
-export type MetricChartStyle = "auto" | "bar" | "line" | "completion";
+export type MetricChartStyle = "auto" | "bar" | "line" | "both" | "completion";
 export type MetricVisualization = {
   /** A single selected day in the tracker detail page. */
   detailDay?: "progress" | "completion" | "none";
@@ -352,7 +352,8 @@ export type LandingPage =
   | "gym"
   | "calendar"
   | "journal"
-  | "performance";
+  | "performance"
+  | "status";
 export type ProgressViewMode = "overview" | "goal_maps" | "compact";
 export type ProgressLayoutAvailability = "overview" | "goal_maps" | "both";
 export type HistoryRange = "week" | "month" | "year";
@@ -393,6 +394,8 @@ export type TodoReminder = {
   daysBeforeDue?: number;
   /** Remind once per day from creation until the deadline or completion. */
   repeatDailyUntilDue?: boolean;
+  /** Optional recurrence for this reminder, independent from task recurrence. */
+  schedule?: GoalSchedule;
 };
 export type TodoItem = {
   id: string;
@@ -730,7 +733,11 @@ export type UserSettings = {
   showCalendarShortcut?: boolean;
   showJournalShortcut?: boolean;
   showPerformance?: boolean;
+  /** Optional daily avatar-and-goal status tab; Today's hero always opens it. */
+  showStatus?: boolean;
   showTodosToday?: boolean;
+  /** Hide tracked-goal tiles from Today without changing tracking history. */
+  showGoalsToday?: boolean;
   /** Elapsed stopwatch/countdown thresholds that trigger local alerts. */
   activityTimerAlertMinutes?: number[];
   /** Floating timer stays hidden while timers continue running. */

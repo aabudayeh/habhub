@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  AppState as NativeAppState,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -18,6 +19,11 @@ import {
   activityTimerDisplaySeconds,
   formatActivityTimer,
 } from "@/src/domain/activityTimer";
+import {
+  dismissLiveActivityTimerNotifications,
+  LiveActivityTimerNotification,
+  syncLiveActivityTimerNotifications,
+} from "@/src/notifications/liveTimer";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -27,11 +33,15 @@ const OVERLAY_HEIGHT = 46;
 export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   const { state, updateSettings } = useApp();
   const { language, t } = useLocalization();
-  const timers = state.activityTimers?.length
-    ? state.activityTimers
-    : state.activeTimer
-      ? [state.activeTimer]
-      : [];
+  const timers = useMemo(
+    () =>
+      state.activityTimers?.length
+        ? state.activityTimers
+        : state.activeTimer
+          ? [state.activeTimer]
+          : [],
+    [state.activeTimer, state.activityTimers],
+  );
   const timer =
     timers.find((item) => item.id === state.activeTimer?.id) ?? timers[0];
   const colors = useAppColors();
@@ -46,6 +56,47 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   const metric = timer
     ? state.metrics.find((item) => item.id === timer.metricId)
     : undefined;
+  const notificationDescriptors = useMemo(
+    () =>
+      timers.flatMap((item): LiveActivityTimerNotification[] => {
+        const itemMetric = state.metrics.find(
+          (metricItem) => metricItem.id === item.metricId,
+        );
+        if (!itemMetric) return [];
+        const itemName = localizeMetricName(language, itemMetric);
+        const paused = item.status === "paused";
+        const countdown = item.mode === "countdown";
+        const runStartedAt = new Date(item.startedAt).getTime();
+        const referenceTime = paused
+          ? Date.now()
+          : countdown
+            ? runStartedAt +
+              Math.max(
+                0,
+                (item.targetSeconds ?? 0) - item.accumulatedSeconds,
+              ) *
+                1000
+            : runStartedAt - item.accumulatedSeconds * 1000;
+        return [
+          {
+            id: item.id,
+            title: itemName,
+            body: paused
+              ? t(`${formatActivityTimer(activityTimerDisplaySeconds(item))} paused`)
+              : t(countdown ? "Countdown running" : "Stopwatch running"),
+            mode: paused ? "paused" : countdown ? "countdown" : "elapsed",
+            referenceTime,
+            timeoutAt:
+              !paused && countdown ? referenceTime : undefined,
+            route: `/timer?timer=${encodeURIComponent(item.id)}`,
+            color: itemMetric.color ?? accent,
+          },
+        ];
+      }),
+    [accent, language, state.metrics, t, timers],
+  );
+  const notificationDescriptorsRef = useRef(notificationDescriptors);
+  notificationDescriptorsRef.current = notificationDescriptors;
   const clamp = (x: number, y: number) => ({
     x: Math.max(8, Math.min(width - OVERLAY_WIDTH - 8, x)),
     y: Math.max(
@@ -70,6 +121,27 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     if (!timer) initialized.current = false;
   }, [timer]);
+  useEffect(() => {
+    if (NativeAppState.currentState === "active")
+      void dismissLiveActivityTimerNotifications();
+    else
+      void syncLiveActivityTimerNotifications(
+        notificationDescriptorsRef.current,
+      );
+    const subscription = NativeAppState.addEventListener("change", (next) => {
+      if (next === "active")
+        void dismissLiveActivityTimerNotifications();
+      else
+        void syncLiveActivityTimerNotifications(
+          notificationDescriptorsRef.current,
+        );
+    });
+    return () => subscription.remove();
+  }, []);
+  useEffect(() => {
+    if (NativeAppState.currentState === "active") return;
+    void syncLiveActivityTimerNotifications(notificationDescriptors);
+  }, [notificationDescriptors]);
   useEffect(() => {
     if (!initialized.current) return;
     const next = clamp(positionRef.current.x, positionRef.current.y);

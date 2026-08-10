@@ -3,6 +3,8 @@ import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
 import { Platform } from "react-native";
 
+import { enhanceAndroidTimerNotification } from "@/src/notifications/liveTimer";
+
 export const WORKOUT_TIMER_CATEGORY = "metricrally-workout-timer";
 const WORKOUT_TIMER_LAST_CATEGORY = "metricrally-workout-timer-last";
 export const WORKOUT_TIMER_NOTIFICATION = "metricrally-workout-timer-live";
@@ -32,6 +34,8 @@ type StoredWorkoutFlow = {
   steps: WorkoutNotificationStep[];
   index: number;
   paused: boolean;
+  phaseStartedAt: number;
+  phaseElapsedMs: number;
 };
 
 let configured = false;
@@ -41,8 +45,16 @@ async function readFlow() {
   const stored = await AsyncStorage.getItem(WORKOUT_TIMER_FLOW_KEY);
   if (!stored) return null;
   try {
-    const parsed = JSON.parse(stored) as StoredWorkoutFlow;
-    return parsed.steps?.length ? parsed : null;
+    const parsed = JSON.parse(stored) as Partial<StoredWorkoutFlow>;
+    return parsed.steps?.length
+      ? {
+          steps: parsed.steps,
+          index: parsed.index ?? 0,
+          paused: parsed.paused ?? false,
+          phaseStartedAt: parsed.phaseStartedAt ?? Date.now(),
+          phaseElapsedMs: parsed.phaseElapsedMs ?? 0,
+        }
+      : null;
   } catch {
     return null;
   }
@@ -77,11 +89,13 @@ async function presentFlow(flow: StoredWorkoutFlow) {
   // Reusing the same identifier updates the phone notification in place. Do
   // not dismiss/repost: that introduces visible gaps and delays Wear OS
   // notification bridging.
-  await Notifications.scheduleNotificationAsync({
+  const identifier = await Notifications.scheduleNotificationAsync({
     identifier: WORKOUT_TIMER_NOTIFICATION,
     content: {
       title: `${phaseLabel} · ${step.title}`,
-      body: step.body,
+      body: flow.paused
+        ? `Paused at ${formatElapsedMs(flow.phaseElapsedMs)} · ${step.body}`
+        : step.body,
       data: { route: "/gym", workoutTimer: true },
       categoryIdentifier: hasNext
         ? WORKOUT_TIMER_CATEGORY
@@ -100,6 +114,20 @@ async function presentFlow(flow: StoredWorkoutFlow) {
     },
     trigger: Platform.OS === "android" ? { channelId: "workout-timer" } : null,
   });
+  if (Platform.OS === "android") {
+    const phaseOrigin = flow.phaseStartedAt - flow.phaseElapsedMs;
+    await enhanceAndroidTimerNotification(
+      identifier,
+      flow.paused ? "paused" : "elapsed",
+      phaseOrigin,
+    );
+  }
+}
+
+function formatElapsedMs(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function sameSteps(
@@ -120,13 +148,25 @@ function sameSteps(
 async function applyFlowAction(action: QueuedWorkoutTimerAction["action"]) {
   const flow = await readFlow();
   if (!flow) return;
+  const occurredAt = Date.now();
   if (action === WORKOUT_TIMER_FINISH) {
     await queueAction(action);
     return;
   }
-  if (action === WORKOUT_TIMER_PAUSE) flow.paused = !flow.paused;
-  else if (!flow.paused && flow.index < flow.steps.length - 1)
+  if (action === WORKOUT_TIMER_PAUSE) {
+    if (flow.paused) {
+      flow.paused = false;
+      flow.phaseStartedAt = occurredAt;
+    } else {
+      flow.phaseElapsedMs += Math.max(0, occurredAt - flow.phaseStartedAt);
+      flow.paused = true;
+      flow.phaseStartedAt = occurredAt;
+    }
+  } else if (!flow.paused && flow.index < flow.steps.length - 1) {
     flow.index += 1;
+    flow.phaseStartedAt = occurredAt;
+    flow.phaseElapsedMs = 0;
+  }
 
   // Commit before rendering so the lock-screen notification and replay queue
   // always describe the same transition, including the first background tap.
@@ -211,11 +251,15 @@ export async function showWorkoutTimerNotification({
   body,
   phase,
   steps,
+  phaseStartedAt,
+  phaseElapsedSeconds = 0,
 }: {
   title: string;
   body: string;
   phase: "work" | "rest" | "paused";
   steps?: WorkoutNotificationStep[];
+  phaseStartedAt?: number;
+  phaseElapsedSeconds?: number;
 }) {
   if (Platform.OS === "web") return;
   const permission = await Notifications.getPermissionsAsync();
@@ -228,6 +272,8 @@ export async function showWorkoutTimerNotification({
         : [{ title, body, phase: phase === "work" ? "work" : "rest" }],
     index: 0,
     paused: phase === "paused",
+    phaseStartedAt: phaseStartedAt ?? Date.now(),
+    phaseElapsedMs: Math.max(0, phaseElapsedSeconds * 1000),
   };
   const storedFlow = await readFlow();
   // Android can emit inactive and background in quick succession. A late
@@ -240,7 +286,13 @@ export async function showWorkoutTimerNotification({
 
 export async function consumeWorkoutTimerActions() {
   const stored = await AsyncStorage.getItem(WORKOUT_TIMER_ACTIONS_KEY);
-  await AsyncStorage.removeItem(WORKOUT_TIMER_ACTIONS_KEY);
+  // Once the foreground workout has replayed the queued actions, its own
+  // timestamped state is authoritative. Clear the background flow so a later
+  // app pause/resume cannot resurrect an older notification phase.
+  await AsyncStorage.multiRemove([
+    WORKOUT_TIMER_ACTIONS_KEY,
+    WORKOUT_TIMER_FLOW_KEY,
+  ]);
   if (!stored) return [];
   try {
     return JSON.parse(stored) as QueuedWorkoutTimerAction[];

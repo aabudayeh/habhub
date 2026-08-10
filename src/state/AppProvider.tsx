@@ -87,6 +87,22 @@ import {
 } from "@/src/types";
 
 export const APP_STORAGE_KEY = "paceboard-state-v1";
+const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
+
+export function appAccountStorageKey(accountId: string) {
+  return `${APP_ACCOUNT_STORAGE_KEY_PREFIX}${accountId}`;
+}
+
+export async function readPersistedAccountState(accountId: string) {
+  try {
+    const saved = await AsyncStorage.getItem(appAccountStorageKey(accountId));
+    if (!saved) return null;
+    const parsed = JSON.parse(saved) as AppState;
+    return parsed.currentUserId === accountId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function stateForLocalPersistence(state: AppState): AppState {
   if (!isCloudGroupId(state.group.id)) return state;
@@ -105,13 +121,18 @@ function stateForLocalPersistence(state: AppState): AppState {
 }
 
 export function persistAppStateNow(state: AppState) {
-  return AsyncStorage.setItem(
-    APP_STORAGE_KEY,
-    JSON.stringify({
-      ...stateForLocalPersistence(state),
-      lastSavedAt: new Date().toISOString(),
-    }),
-  );
+  const serialized = JSON.stringify({
+    ...stateForLocalPersistence(state),
+    lastSavedAt: new Date().toISOString(),
+  });
+  // The legacy key remains the pointer used by the native background task.
+  // The account-scoped copy is the recovery boundary that prevents signing
+  // into another account (or a transient empty cloud read) from overwriting a
+  // user's tracker/page/goal preferences with a clean starter shell.
+  return AsyncStorage.multiSet([
+    [APP_STORAGE_KEY, serialized],
+    [appAccountStorageKey(state.currentUserId), serialized],
+  ]);
 }
 
 /**
@@ -2472,6 +2493,8 @@ type AppContextValue = {
   ) => Promise<void>;
   /** Flush the latest reducer state to this device before a route exits. */
   flushLocalPersistence: () => Promise<void>;
+  /** Swap an account boundary in memory without persisting a clean placeholder. */
+  stageState: (state: AppState) => void;
   replaceState: (state: AppState) => void;
   resetDemo: () => void;
 };
@@ -3138,6 +3161,28 @@ export function AppProvider({ children }: PropsWithChildren) {
     [commitReducedState],
   );
 
+  const stageState = useCallback((nextState: AppState) => {
+    if (persistenceTimerRef.current) {
+      clearTimeout(persistenceTimerRef.current);
+      persistenceTimerRef.current = null;
+    }
+    persistenceTaskRef.current?.cancel();
+    persistenceTaskRef.current = null;
+    if (persistenceResumeTimerRef.current) {
+      clearTimeout(persistenceResumeTimerRef.current);
+      persistenceResumeTimerRef.current = null;
+    }
+    const next = reducer(persistenceStateRef.current, {
+      type: "hydrate",
+      state: nextState,
+      preserveDeviceHealthSync: false,
+    });
+    persistenceStateRef.current = next;
+    persistenceObservedStateRef.current = next;
+    persistenceDirtyRef.current = false;
+    dispatch({ type: "replaceLocal", state: next });
+  }, []);
+
   const value = useMemo<AppContextValue>(
     () => ({
       state,
@@ -3331,6 +3376,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         });
       },
       flushLocalPersistence: persistLatestState,
+      stageState,
       replaceState,
       resetDemo: () => void commitAction({ type: "reset" }),
     }),
@@ -3339,6 +3385,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       commitReducedState,
       hydrated,
       persistLatestState,
+      stageState,
       replaceState,
       state,
     ],

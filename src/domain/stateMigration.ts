@@ -90,6 +90,13 @@ function repairKnownMetricDefaults(metric: MetricDefinition) {
       goalEnabled: metric.goalEnabled ?? false,
       goalProgressMode: metric.goalProgressMode ?? "journey",
     };
+  if (metric.id === "screen_time")
+    return {
+      ...metric,
+      // Preserve automatic Android imports while offering a functional iOS
+      // fallback until the Apple Family Controls entitlement is provisioned.
+      manualEntry: true,
+    };
   if (
     ["exercise", "workout_duration", "workout_distance"].includes(metric.id)
   )

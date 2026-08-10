@@ -73,7 +73,11 @@ const USDA_KEY = process.env.EXPO_PUBLIC_USDA_FDC_API_KEY?.trim();
 const CACHE_TTL = 30 * 60 * 1000;
 const STALE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 18;
-const FATSECRET_CLIENT_TIMEOUT_MS = 1800;
+// A cold FatSecret request may first acquire an OAuth token and then perform
+// the search. The old 1.8 s deadline routinely cancelled that valid first
+// request before either round trip could complete.
+const FATSECRET_CLIENT_TIMEOUT_MS = 8500;
+const FOOD_PROVIDER_DEADLINE_MS = 9000;
 const CACHE_STORAGE_KEY = "habhub-food-search-cache-v3";
 type FoodCacheEntry = { at: number; products: FoodProduct[] };
 const cache = new Map<string, FoodCacheEntry>();
@@ -454,6 +458,20 @@ async function openFoodFactsSearch(term: string) {
   }
 }
 
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function usdaSearch(term: string): Promise<FoodProduct[]> {
   if (!USDA_KEY) return [];
   const parameters = new URLSearchParams({
@@ -634,13 +652,20 @@ export async function searchFoods(
   const cached = await cachedProducts(key);
   if (cached.fresh)
     return rankFoods([...cached.fresh, ...OFFLINE], term, options);
-  const searches: Promise<FoodProduct[]>[] = [openFoodFactsSearch(term)];
+  const searches: Promise<FoodProduct[] | undefined>[] = [
+    settleWithin(openFoodFactsSearch(term), FOOD_PROVIDER_DEADLINE_MS),
+  ];
   // FoodData Central keys are free, but must not be embedded in source. It is a
   // useful second provider when a deployment supplies its public search key.
-  if (USDA_KEY) searches.push(usdaSearch(term));
-  searches.push(fatSecretSearch(term));
+  if (USDA_KEY)
+    searches.push(settleWithin(usdaSearch(term), FOOD_PROVIDER_DEADLINE_MS));
+  searches.push(
+    settleWithin(fatSecretSearch(term), FOOD_PROVIDER_DEADLINE_MS),
+  );
   const settled = await Promise.allSettled(searches);
-  const remote = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const remote = settled.flatMap((result) =>
+    result.status === "fulfilled" && result.value ? result.value : [],
+  );
   const candidates = remote.length ? remote : (cached.stale ?? []);
   const products = rankFoods([...candidates, ...OFFLINE], term, options);
   if (!products.length && settled.some((result) => result.status === "rejected"))

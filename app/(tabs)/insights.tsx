@@ -170,6 +170,7 @@ if (
 
 function Insights() {
   const { state, updateSettings } = useApp();
+  const locale = useLocale();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const today = dateKey();
@@ -831,7 +832,7 @@ function Insights() {
                     ))}
                 </View>
                 <Text style={[styles.dayLabel, { color: colors.muted }]}>
-                  {shortDay(day).slice(0, 1)}
+                  {shortDay(day, locale).slice(0, 1)}
                 </Text>
                 <Text style={[styles.dayNumber, { color: colors.ink }]}>
                   {Number(day.slice(-2))}

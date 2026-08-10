@@ -89,8 +89,24 @@ function todoTimeBlocksForDate(
 function fastingBlocksForDate(state: AppState, localDate: string): ScheduleEvent[] {
   const metric = state.metrics.find((item) => item.id === "intermittent_fasting");
   if (!metric) return [];
-  const dayStart = new Date(`${localDate}T00:00:00`);
-  const dayEnd = new Date(`${localDate}T24:00:00`);
+  const endpoint = (
+    id: string,
+    title: string,
+    value: Date,
+    color: string,
+    completed = false,
+  ): ScheduleEvent[] =>
+    dateKey(value) === localDate
+      ? [{
+          id,
+          title,
+          time: localClock(value.toISOString()),
+          kind: "fasting",
+          metricId: metric.id,
+          color,
+          completed,
+        }]
+      : [];
   const logged = state.entries
     .filter(
       (entry) =>
@@ -102,37 +118,27 @@ function fastingBlocksForDate(state: AppState, localDate: string): ScheduleEvent
       if (!startedAtMs || !endedAtMs) return [];
       const startedAt = new Date(startedAtMs);
       const endedAt = new Date(endedAtMs);
-      const result: ScheduleEvent[] = [];
-      const fastingStart = new Date(Math.max(startedAt.getTime(), dayStart.getTime()));
-      const fastingEnd = new Date(Math.min(endedAt.getTime(), dayEnd.getTime()));
-      if (fastingStart < fastingEnd)
-        result.push({
-          id: `fast:${entry.id}:${localDate}`,
-          title: `Fasting · ${Number(entry.value).toFixed(1)} hr`,
-          time: localClock(fastingStart.toISOString()),
-          durationMinutes: Math.max(1, (fastingEnd.getTime() - fastingStart.getTime()) / 60000),
-          kind: "fasting",
-          metricId: metric.id,
-          color: metric.color,
-          completed: true,
-        });
-      const eatingMinutes = entry.submetricValues?.eating_window_minutes;
-      if (eatingMinutes && eatingMinutes > 0) {
-        const eatingEnd = new Date(endedAt.getTime() + eatingMinutes * 60000);
-        const visibleStart = new Date(Math.max(endedAt.getTime(), dayStart.getTime()));
-        const visibleEnd = new Date(Math.min(eatingEnd.getTime(), dayEnd.getTime()));
-        if (visibleStart < visibleEnd)
-          result.push({
-            id: `eat:${entry.id}:${localDate}`,
-            title: `Eating window · ${(eatingMinutes / 60).toFixed(1)} hr`,
-            time: localClock(visibleStart.toISOString()),
-            durationMinutes: Math.max(1, (visibleEnd.getTime() - visibleStart.getTime()) / 60000),
-            kind: "fasting",
-            metricId: metric.id,
-            color: "#E58A3B",
-          });
-      }
-      return result;
+      if (
+        Number.isNaN(startedAt.getTime()) ||
+        Number.isNaN(endedAt.getTime())
+      )
+        return [];
+      return [
+        ...endpoint(
+          `fast:start:${entry.id}`,
+          "Fast started",
+          startedAt,
+          metric.color,
+          true,
+        ),
+        ...endpoint(
+          `fast:end:${entry.id}`,
+          "Fast ended",
+          endedAt,
+          "#E58A3B",
+          true,
+        ),
+      ];
     });
   if (logged.length) return logged;
   const startTime = metric.fastingSettings?.startTime ?? "20:00";
@@ -140,54 +146,21 @@ function fastingBlocksForDate(state: AppState, localDate: string): ScheduleEvent
     15,
     Math.min(1425, metric.fastingSettings?.fastingMinutes ?? 16 * 60),
   );
-  const eatingMinutes = 1440 - fastingMinutes;
-  const dayStartMs = dayStart.getTime();
-  const dayEndMs = dayEnd.getTime();
-  const visibleBlock = (
-    id: string,
-    title: string,
-    start: Date,
-    end: Date,
-    color: string,
-  ): ScheduleEvent[] => {
-    const visibleStart = new Date(Math.max(start.getTime(), dayStartMs));
-    const visibleEnd = new Date(Math.min(end.getTime(), dayEndMs));
-    if (visibleStart >= visibleEnd) return [];
-    return [{
-      id,
-      title,
-      time: localClock(visibleStart.toISOString()),
-      durationMinutes: (visibleEnd.getTime() - visibleStart.getTime()) / 60000,
-      kind: "fasting",
-      metricId: metric.id,
-      color,
-    }];
-  };
   return [dateWithOffsetFrom(localDate, -1), localDate].flatMap(
     (occurrenceDate) => {
       const fastStart = new Date(`${occurrenceDate}T${startTime}:00`);
-      const nextFastStart = new Date(
-        `${dateWithOffsetFrom(occurrenceDate, 1)}T${startTime}:00`,
-      );
-      const fastEnd = new Date(
-        Math.min(
-          fastStart.getTime() + fastingMinutes * 60000,
-          nextFastStart.getTime(),
-        ),
-      );
+      const fastEnd = new Date(fastStart.getTime() + fastingMinutes * 60000);
       return [
-        ...visibleBlock(
-          `fast:planned:${occurrenceDate}:${localDate}`,
-          `Planned fast · ${(fastingMinutes / 60).toFixed(1)} hr`,
+        ...endpoint(
+          `fast:planned:start:${occurrenceDate}`,
+          "Fast starts",
           fastStart,
-          fastEnd,
           metric.color,
         ),
-        ...visibleBlock(
-          `eat:planned:${occurrenceDate}:${localDate}`,
-          `Eating window · ${(eatingMinutes / 60).toFixed(1)} hr`,
+        ...endpoint(
+          `fast:planned:end:${occurrenceDate}`,
+          "Fast ends",
           fastEnd,
-          nextFastStart,
           "#E58A3B",
         ),
       ];
@@ -232,6 +205,14 @@ export function scheduleEventsForDate(
           reminder.repeatDailyUntilDue
             ? localDate >= todo.createdAt.slice(0, 10) &&
               (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10))
+            : reminder.schedule
+              ? scheduleAppliesOnDate(
+                  reminder.schedule,
+                  reminder.schedule.anchorDate ??
+                    reminder.at?.slice(0, 10) ??
+                    todo.createdAt.slice(0, 10),
+                  localDate,
+                )
             : !reminder.at || reminder.at.slice(0, 10) === localDate,
       )
       .map(({ reminder, index }) => ({

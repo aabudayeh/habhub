@@ -50,7 +50,10 @@ import {
 } from "@/src/domain/groupSetup";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
-import { useApp } from "@/src/state/AppProvider";
+import {
+  readPersistedAccountState,
+  useApp,
+} from "@/src/state/AppProvider";
 import {
   readGroupActivityCache,
   writeGroupActivityCache,
@@ -2014,7 +2017,7 @@ function friendlySyncError(error: unknown) {
 }
 
 export function CloudSyncProvider({ children }: PropsWithChildren) {
-  const { state, hydrated, replaceState } = useApp();
+  const { state, hydrated, replaceState, stageState } = useApp();
   const auth = useAuth();
   const network = useNetInfo();
   const networkAvailable =
@@ -2030,6 +2033,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const [pendingGroup, setPendingGroup] =
     useState<PendingGroupRequest | null>(null);
   const [devices, setDevices] = useState<AccountDevice[]>([]);
+  const [accountBoundaryReadyUserId, setAccountBoundaryReadyUserId] =
+    useState<string | null>(null);
   const stateRef = useRef(state);
   const lastSyncedAtRef = useRef<string | null>(null);
   const revisionRef = useRef(0);
@@ -2280,12 +2285,19 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   // theme/group state in a layout effect so it cannot flash on screen or be
   // persisted while the signed-in account snapshot is still loading.
   useLayoutEffect(() => {
-    if (!hydrated || auth.status !== "signedIn" || !auth.user) return;
+    if (!hydrated || auth.status !== "signedIn" || !auth.user) {
+      setAccountBoundaryReadyUserId(null);
+      return;
+    }
     if (
       stateRef.current.currentUserId === auth.user.id &&
       !isDemoBoundState(stateRef.current)
-    )
+    ) {
+      setAccountBoundaryReadyUserId(auth.user.id);
       return;
+    }
+    let cancelled = false;
+    const user = auth.user;
     const clean = createCleanAccountState(auth.user);
     stateRef.current = clean;
     revisionRef.current = 0;
@@ -2300,8 +2312,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     historicalHydrationStartedRef.current.clear();
     lastSyncedAtRef.current = null;
     setLastSyncedAt(null);
-    replaceState(clean);
-  }, [auth.status, auth.user, hydrated, replaceState]);
+    setAccountBoundaryReadyUserId(null);
+    // Clear the previous account from rendered memory immediately, but do not
+    // persist the clean placeholder over this user's durable scoped cache.
+    stageState(clean);
+    void readPersistedAccountState(user.id).then((cached) => {
+      if (cancelled || auth.user?.id !== user.id) return;
+      const recovered = cached ? bindStateToAccount(cached, user) : clean;
+      stateRef.current = recovered;
+      stageState(recovered);
+      setAccountBoundaryReadyUserId(user.id);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.status, auth.user, hydrated, stageState]);
 
   const touchPresence = useCallback(
     async (force = false) => {
@@ -3184,9 +3209,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [auth.status, auth.user, recordServerSyncedAt, replaceState]);
 
   useEffect(() => {
-    if (!hydrated || auth.status !== "signedIn" || !auth.user || !supabase) {
+    if (
+      !hydrated ||
+      auth.status !== "signedIn" ||
+      !auth.user ||
+      !supabase ||
+      accountBoundaryReadyUserId !== auth.user.id
+    ) {
       initializedUserRef.current = null;
-      setStatus("disabled");
+      setStatus(auth.status === "signedIn" ? "initializing" : "disabled");
       return;
     }
     let cancelled = false;
@@ -3291,13 +3322,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // A persisted acknowledgement distinguishes an offline local edit
           // from an older-but-clean cache. Clean clients accept newer website,
           // extension, or phone changes; dirty clients preserve their outbox.
-          let resolved = localWasDirty
-            ? mergeStates(
-                remoteWithDeviceState,
-                stateRef.current,
-                mergeBaseRef.current,
-              )
-            : acceptCleanRemoteState(remoteWithDeviceState, stateRef.current);
+          let resolved = correctedAccountState
+            ? stateRef.current
+            : localWasDirty
+              ? mergeStates(
+                  remoteWithDeviceState,
+                  stateRef.current,
+                  mergeBaseRef.current,
+                )
+              : acceptCleanRemoteState(
+                  remoteWithDeviceState,
+                  stateRef.current,
+                );
           if (onboardingComplete && !resolved.settings.onboardingComplete)
             resolved = {
               ...resolved,
@@ -3327,7 +3363,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               : null;
             replaceState(resolved);
             stateRef.current = resolved;
-            rememberCloudMergeBase(user.id, bound);
+            if (!correctedAccountState)
+              rememberCloudMergeBase(user.id, bound);
             recordServerSyncedAt(remote.updated_at);
             const resolvedHash = stableHash(resolved);
             setPendingChanges(hasUnsyncedLocalChanges());
@@ -3468,6 +3505,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    accountBoundaryReadyUserId,
     hydrated,
     hasUnsyncedLocalChanges,
     initializationAttempt,

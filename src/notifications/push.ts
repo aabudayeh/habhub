@@ -712,14 +712,24 @@ export async function syncProductivityNotifications(state: AppState) {
           reminder.repeatDailyUntilDue &&
           localDate >= todo.createdAt.slice(0, 10) &&
           (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10));
+        const recurring =
+          reminder.schedule &&
+          scheduleAppliesOnDate(
+            reminder.schedule,
+            reminder.schedule.anchorDate ??
+              reminder.at?.slice(0, 10) ??
+              todo.createdAt.slice(0, 10),
+            localDate,
+          );
         if (
           !dailyUntilDue &&
+          !recurring &&
           reminder.at &&
           reminder.at.slice(0, 10) !== localDate
         )
           continue;
         await schedule(
-          dailyUntilDue
+          dailyUntilDue || recurring
             ? localDate
             : (reminder.at?.slice(0, 10) ?? localDate),
           reminder.time ?? todo.dueAt?.slice(11, 16) ?? '09:00',

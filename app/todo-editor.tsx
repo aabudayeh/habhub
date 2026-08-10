@@ -31,7 +31,49 @@ type ReminderDraft = {
   time: string;
   daysBeforeDue?: number;
   repeatDailyUntilDue?: boolean;
+  schedule?: GoalSchedule;
+  intervalText?: string;
 };
+type ReminderRepeatMode =
+  | "once"
+  | "daily"
+  | "weekly"
+  | "every_other_day"
+  | "custom"
+  | "monthly";
+
+function reminderRepeatMode(reminder: Pick<ReminderDraft, "schedule">): ReminderRepeatMode {
+  if (!reminder.schedule) return "once";
+  if (reminder.schedule.mode === "daily") return "daily";
+  if (reminder.schedule.mode === "selected_days") return "weekly";
+  if (reminder.schedule.mode === "every_other_day") return "every_other_day";
+  if (reminder.schedule.mode === "interval_days") return "custom";
+  if (reminder.schedule.mode === "days_of_month") return "monthly";
+  return "once";
+}
+
+function reminderSchedule(
+  mode: ReminderRepeatMode,
+  anchorDate: string,
+): GoalSchedule | undefined {
+  if (mode === "once") return undefined;
+  if (mode === "daily") return { mode: "daily", anchorDate };
+  if (mode === "every_other_day")
+    return { mode: "every_other_day", anchorDate };
+  if (mode === "custom")
+    return { mode: "interval_days", anchorDate, intervalDays: 7 };
+  if (mode === "weekly")
+    return {
+      mode: "selected_days",
+      anchorDate,
+      daysOfWeek: [new Date(`${anchorDate}T12:00:00`).getDay()],
+    };
+  return {
+    mode: "days_of_month",
+    anchorDate,
+    daysOfMonth: [Number(anchorDate.slice(-2))],
+  };
+}
 
 function plusMinutes(localDate: string, localTime: string, minutes: number) {
   const value = new Date(`${localDate}T${localTime}:00`);
@@ -108,24 +150,40 @@ export default function TodoEditor() {
     (existing?.recurrence?.daysOfMonth ?? [1]).join(", "),
   );
   const [reminders, setReminders] = useState<ReminderDraft[]>(
-    existing?.reminders.map((reminder, index) => ({
-      id: reminder.id ?? `reminder-${index}`,
-      date:
-        reminder.at?.slice(0, 10) ??
-        (reminder.daysBeforeDue !== undefined && existing.dueAt
-          ? dateWithOffsetFrom(
-              existing.dueAt.slice(0, 10),
-              -reminder.daysBeforeDue,
-            )
-          : existing.dueAt?.slice(0, 10) ?? dateKey()),
-      time:
-        reminder.time ??
-        reminder.at?.slice(11, 16) ??
-        existing.dueAt?.slice(11, 16) ??
-        "09:00",
-      daysBeforeDue: reminder.daysBeforeDue,
-      repeatDailyUntilDue: reminder.repeatDailyUntilDue,
-    })) ?? [],
+    existing
+      ? existing.reminders.map((reminder, index) => ({
+          id: reminder.id ?? `reminder-${index}`,
+          date:
+            reminder.at?.slice(0, 10) ??
+            (reminder.daysBeforeDue !== undefined && existing.dueAt
+              ? dateWithOffsetFrom(
+                  existing.dueAt.slice(0, 10),
+                  -reminder.daysBeforeDue,
+                )
+              : existing.dueAt?.slice(0, 10) ?? dateKey()),
+          time:
+            reminder.time ??
+            reminder.at?.slice(11, 16) ??
+            existing.dueAt?.slice(11, 16) ??
+            "09:00",
+          daysBeforeDue: reminder.daysBeforeDue,
+          repeatDailyUntilDue: reminder.repeatDailyUntilDue,
+          schedule: reminder.schedule,
+          intervalText:
+            reminder.schedule?.mode === "interval_days"
+              ? String(reminder.schedule.intervalDays ?? 7)
+              : undefined,
+        }))
+      : date || time
+        ? [
+            {
+              id: `reminder-daily-until-${Date.now().toString(36)}`,
+              date: date ?? dateKey(),
+              time: "09:00",
+              repeatDailyUntilDue: true,
+            },
+          ]
+        : [],
   );
   const dailyUntilDeadline = reminders.some(
     (reminder) => reminder.repeatDailyUntilDue,
@@ -199,6 +257,45 @@ export default function TodoEditor() {
         daysBeforeDue,
       },
     ]);
+  };
+  const setReminderRepeat = (index: number, mode: ReminderRepeatMode) =>
+    setReminders((current) =>
+      current.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              schedule: reminderSchedule(mode, item.date),
+              intervalText: mode === "custom" ? item.intervalText ?? "7" : undefined,
+            }
+          : item,
+      ),
+    );
+  const toggleDeadline = () => {
+    if (hasDeadline) {
+      setHasDeadline(false);
+      setReminders((current) =>
+        current.filter(
+          (item) =>
+            !item.repeatDailyUntilDue && item.daysBeforeDue === undefined,
+        ),
+      );
+      return;
+    }
+    setHasDeadline(true);
+    setRepeat("none");
+    setReminders((current) =>
+      current.some((item) => item.repeatDailyUntilDue)
+        ? current
+        : [
+            ...current,
+            {
+              id: `reminder-daily-until-${Date.now().toString(36)}`,
+              date: existing?.createdAt.slice(0, 10) ?? dateKey(),
+              time: "09:00",
+              repeatDailyUntilDue: true,
+            },
+          ],
+    );
   };
   const isWeeklyReminder = (reminder: ReminderDraft) =>
     reminder.id.startsWith("reminder-weekly-");
@@ -293,7 +390,7 @@ export default function TodoEditor() {
           date ??
           dateKey();
     const recurrence: GoalSchedule | undefined =
-      repeat === "none"
+      hasDeadline || repeat === "none"
         ? undefined
         : {
             mode: repeat,
@@ -336,6 +433,16 @@ export default function TodoEditor() {
         time: reminder.time,
         daysBeforeDue: reminder.daysBeforeDue,
         repeatDailyUntilDue: reminder.repeatDailyUntilDue,
+        schedule:
+          reminder.schedule?.mode === "interval_days"
+            ? {
+                ...reminder.schedule,
+                intervalDays: Math.max(
+                  1,
+                  Math.round(Number(reminder.intervalText) || 1),
+                ),
+              }
+            : reminder.schedule,
       })),
       completedDates: existing?.completedDates ?? [],
       skippedDates: existing?.skippedDates ?? [],
@@ -426,7 +533,7 @@ export default function TodoEditor() {
       </Card>
       <Card style={styles.form}>
         <Pressable
-          onPress={() => setHasDeadline((value) => !value)}
+          onPress={toggleDeadline}
           style={styles.switchLine}
         >
           <View style={styles.copy}>
@@ -536,7 +643,7 @@ export default function TodoEditor() {
           </>
         ) : null}
       </Card>
-      <Card style={styles.form}>
+      {!hasDeadline ? <Card style={styles.form}>
         <SelectionMenu
           title="Repeat"
           searchable={false}
@@ -595,7 +702,7 @@ export default function TodoEditor() {
             ]}
           />
         ) : null}
-      </Card>
+      </Card> : null}
       <Card style={styles.form}>
         <Pressable
           onPress={() => setRemindersOpen((open) => !open)}
@@ -860,13 +967,92 @@ export default function TodoEditor() {
                   setReminders((current) =>
                     current.map((item, itemIndex) =>
                       itemIndex === index
-                        ? { ...item, date, daysBeforeDue: undefined }
+                        ? {
+                            ...item,
+                            date,
+                            daysBeforeDue: undefined,
+                            schedule:
+                              reminderRepeatMode(item) === "custom"
+                                ? {
+                                    mode: "interval_days",
+                                    anchorDate: date,
+                                    intervalDays: Math.max(
+                                      1,
+                                      Math.round(Number(item.intervalText) || 1),
+                                    ),
+                                  }
+                                : reminderSchedule(
+                                    reminderRepeatMode(item),
+                                    date,
+                                  ),
+                          }
                         : item,
                     ),
                   );
                   setReminderCalendarIndex(null);
                 }}
               />
+            ) : null}
+            {!reminder.repeatDailyUntilDue ? (
+              <SelectionMenu
+                title="Repeat reminder"
+                searchable={false}
+                multiple={false}
+                items={[
+                  { id: "once", label: "Once", sublabel: "Only on this date", icon: "calendar-outline" },
+                  { id: "daily", label: "Daily", sublabel: "Every day from this date", icon: "repeat-outline" },
+                  { id: "weekly", label: "Weekly", sublabel: "On this weekday", icon: "calendar-number-outline" },
+                  { id: "every_other_day", label: "Every other day", sublabel: "Alternating days", icon: "swap-horizontal-outline" },
+                  { id: "custom", label: "Custom interval", sublabel: "Every chosen number of days", icon: "options-outline" },
+                  { id: "monthly", label: "Monthly", sublabel: "On this date each month", icon: "calendar-clear-outline" },
+                ]}
+                selectedIds={[reminderRepeatMode(reminder)]}
+                onChange={(ids) =>
+                  ids[0] &&
+                  setReminderRepeat(index, ids[0] as ReminderRepeatMode)
+                }
+              />
+            ) : null}
+            {reminderRepeatMode(reminder) === "custom" ? (
+              <View style={styles.reminderIntervalRow}>
+                <Text style={[styles.help, { color: colors.muted }]}>Repeat every</Text>
+                <TextInput
+                  value={
+                    reminder.intervalText ??
+                    String(reminder.schedule?.intervalDays ?? 7)
+                  }
+                  onChangeText={(value) =>
+                    setReminders((current) =>
+                      current.map((item, itemIndex) =>
+                        itemIndex === index
+                          ? {
+                              ...item,
+                              intervalText: value,
+                              schedule: {
+                                mode: "interval_days",
+                                anchorDate: item.date,
+                                intervalDays: Math.max(
+                                  1,
+                                  Math.round(
+                                    Number(value) ||
+                                      item.schedule?.intervalDays ||
+                                      1,
+                                  ),
+                                ),
+                              },
+                            }
+                          : item,
+                      ),
+                    )
+                  }
+                  keyboardType="number-pad"
+                  style={[
+                    styles.reminderIntervalInput,
+                    { color: colors.ink, borderColor: colors.border },
+                  ]}
+                />
+                <Text style={[styles.help, { color: colors.muted }]}>days</Text>
+              </View>
             ) : null}
           </View>
         ))}
@@ -999,6 +1185,22 @@ const styles = StyleSheet.create({
   },
   reminder: { flexDirection: "row", alignItems: "center", gap: 7 },
   reminderBlock: { gap: 6 },
+  reminderIntervalRow: {
+    minHeight: 34,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  reminderIntervalInput: {
+    width: 58,
+    minHeight: 34,
+    borderWidth: 1,
+    borderRadius: 9,
+    paddingHorizontal: 8,
+    textAlign: "center",
+    fontSize: 9,
+    fontWeight: "900",
+  },
   reminderDate: {
     flex: 1.35,
     minHeight: 40,

@@ -20,6 +20,7 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   calendar: "calendar-outline",
   journal: "book-outline",
   performance: "speedometer-outline",
+  status: "accessibility-outline",
 };
 
 export default function TabLayout() {
@@ -74,6 +75,7 @@ export default function TabLayout() {
     "calendar",
     "journal",
     "performance",
+    "status",
   ];
   const savedOrder = state.settings.tabOrder ?? [];
   const showLog = state.settings.showLog !== false;
@@ -83,6 +85,7 @@ export default function TabLayout() {
   const showCalendar = state.settings.showCalendar !== false;
   const showJournal = state.settings.showJournal !== false;
   const showPerformance = state.settings.showPerformance !== false;
+  const showStatus = state.settings.showStatus === true;
   const tabOrder = [
     ...savedOrder.filter(
       (id, index) =>
@@ -117,6 +120,10 @@ export default function TabLayout() {
     performance: {
       title: t("Performance"),
       href: showPerformance ? "/performance" : null,
+    },
+    status: {
+      title: t("Status"),
+      href: showStatus ? ("/status" as Href) : null,
     },
   };
   const isVisible = (name: LandingPage) => tabOptions[name].href !== null;
@@ -157,9 +164,9 @@ export default function TabLayout() {
               }
             : undefined,
         tabBarStyle: {
-          height: 76 + insets.bottom,
-          paddingTop: 8,
-          paddingBottom: 11 + insets.bottom,
+          height: 66 + insets.bottom,
+          paddingTop: 6,
+          paddingBottom: Math.max(6, insets.bottom),
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },

@@ -141,6 +141,11 @@ object HabHubWidgetRenderer {
     R.id.widget_history_row_4,
     R.id.widget_history_row_5,
   )
+  private val goalIds = intArrayOf(
+    R.id.widget_goal_1,
+    R.id.widget_goal_2,
+    R.id.widget_goal_3,
+  )
 
   fun updateAll(context: Context) {
     val manager = AppWidgetManager.getInstance(context)
@@ -178,7 +183,10 @@ object HabHubWidgetRenderer {
     val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 105)
     val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
     val oneRow = minHeight < 90
-    views.setViewVisibility(R.id.widget_history, if (oneRow) View.GONE else View.VISIBLE)
+    if (oneRow) {
+      views.setViewVisibility(R.id.widget_history, View.GONE)
+      views.setViewVisibility(R.id.widget_goal_details, View.GONE)
+    }
     views.setViewVisibility(R.id.widget_subtitle, if (oneRow) View.GONE else View.VISIBLE)
     views.setViewVisibility(R.id.widget_range, if (minWidth < 150) View.GONE else View.VISIBLE)
     views.setTextViewTextSize(
@@ -207,6 +215,7 @@ object HabHubWidgetRenderer {
     views.setTextViewText(R.id.widget_range, "")
     views.setProgressBar(R.id.widget_progress, 100, 0, false)
     clearHistory(views)
+    clearGoalDetails(views)
     views.setOnClickPendingIntent(
       R.id.widget_root,
       deepLinkIntent(context, widgetId, "paceboard://"),
@@ -236,8 +245,15 @@ object HabHubWidgetRenderer {
     val progress = (item.optDouble("progress", 0.0).coerceIn(0.0, 1.0) * 100).toInt()
     views.setProgressBar(R.id.widget_progress, 100, progress, false)
     val metricColor = parseColor(item.optString("color"), Color.rgb(88, 225, 212))
-    val points = item.optJSONObject("history")?.optJSONArray(range) ?: JSONArray()
-    renderHistory(context, views, points, metricColor)
+    val goals = item.optJSONArray("goals") ?: JSONArray()
+    if (goals.length() > 0) {
+      renderGoalDetails(views, goals)
+      clearHistory(views)
+    } else {
+      clearGoalDetails(views)
+      val points = item.optJSONObject("history")?.optJSONArray(range) ?: JSONArray()
+      renderHistory(context, views, points, metricColor)
+    }
     views.setOnClickPendingIntent(
       R.id.widget_root,
       deepLinkIntent(
@@ -278,6 +294,31 @@ object HabHubWidgetRenderer {
     rowIds.forEach { rowId ->
       views.removeAllViews(rowId)
       views.setViewVisibility(rowId, View.GONE)
+    }
+  }
+
+  private fun renderGoalDetails(views: RemoteViews, goals: JSONArray) {
+    views.setViewVisibility(R.id.widget_goal_details, View.VISIBLE)
+    goalIds.forEachIndexed { index, viewId ->
+      val goal = goals.optJSONObject(index)
+      if (goal == null) {
+        views.setViewVisibility(viewId, View.GONE)
+      } else {
+        val percent = (goal.optDouble("progress", 0.0).coerceIn(0.0, 1.0) * 100).toInt()
+        views.setTextViewText(
+          viewId,
+          "${goal.optString("title")}  ${goal.optString("value")}  •  $percent%",
+        )
+        views.setViewVisibility(viewId, View.VISIBLE)
+      }
+    }
+  }
+
+  private fun clearGoalDetails(views: RemoteViews) {
+    views.setViewVisibility(R.id.widget_goal_details, View.GONE)
+    goalIds.forEach { viewId ->
+      views.setTextViewText(viewId, "")
+      views.setViewVisibility(viewId, View.GONE)
     }
   }
 

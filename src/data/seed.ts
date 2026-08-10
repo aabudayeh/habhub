@@ -850,7 +850,10 @@ const BASE_METRICS: MetricDefinition[] = [
     progressReminderPercentages: [50, 75, 90, 100],
     scoreWeight: 0,
     defaultVisibility: "private",
-    manualEntry: false,
+    // Android imports foreground usage automatically. Manual entry keeps the
+    // tracker usable on iOS, where Apple exposes Screen Time only through the
+    // separately approved Family Controls entitlement and report extension.
+    manualEntry: true,
     sections: { today: false, group: false, insights: true },
     order: 44,
     activeFrom: dateKey(),
@@ -1407,7 +1410,9 @@ export function createInitialState(): AppState {
       showCalendarShortcut: true,
       showJournalShortcut: true,
       showPerformance: true,
+      showStatus: false,
       showTodosToday: true,
+      showGoalsToday: true,
       activityTimerAlertMinutes: [30, 60],
       showAiAssistant: false,
       onboardingComplete: false,

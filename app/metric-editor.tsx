@@ -2026,6 +2026,7 @@ export default function TrackerEditor() {
                     ["auto", "Automatic"],
                     ["line", "Line"],
                     ["bar", "Bars"],
+                    ["both", "Line and bars"],
                     ["completion", "Goal status"],
                   ]}
                   onChange={(value) =>
@@ -2276,8 +2277,9 @@ export default function TrackerEditor() {
                           }
                           options={[
                             { id: "auto", label: "Follow tracker" },
-                            { id: "line", label: "Line" },
-                            { id: "bar", label: "Bars" },
+                          { id: "line", label: "Line" },
+                          { id: "bar", label: "Bars" },
+                          { id: "both", label: "Line and bars" },
                             { id: "completion", label: "Goal status" },
                           ]}
                           onChange={(value) =>

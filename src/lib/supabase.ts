@@ -76,22 +76,54 @@ export async function sendMagicLink(email: string) {
   if (error) throw error;
 }
 
-export async function consumeAuthUrl(authUrl: string) {
-  if (!supabase) return;
+const authUrlExchanges = new Map<string, Promise<void>>();
+
+function authExchangeKey(authUrl: string) {
   const parsed = new URL(authUrl);
   const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
-  const accessToken = hash.get('access_token');
-  const refreshToken = hash.get('refresh_token');
-  if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-    if (error) throw error;
-    return;
-  }
   const code = parsed.searchParams.get('code');
-  if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (error) throw error;
-  }
+  const accessToken = hash.get('access_token');
+  return code
+    ? `code:${code}`
+    : accessToken
+      ? `token:${accessToken}`
+      : `url:${authUrl}`;
+}
+
+/**
+ * Android delivers an OAuth callback both through Linking and through the
+ * WebBrowser result. A PKCE code is single-use, so share the same exchange
+ * promise instead of racing two exchangeCodeForSession calls.
+ */
+export async function consumeAuthUrl(authUrl: string) {
+  if (!supabase) return;
+  const key = authExchangeKey(authUrl);
+  const existing = authUrlExchanges.get(key);
+  if (existing) return existing;
+  const exchange = (async () => {
+    const parsed = new URL(authUrl);
+    const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+    const accessToken = hash.get('access_token');
+    const refreshToken = hash.get('refresh_token');
+    if (accessToken && refreshToken) {
+      const { error } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+      if (error) throw error;
+      return;
+    }
+    const code = parsed.searchParams.get('code');
+    if (code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) throw error;
+    }
+  })();
+  authUrlExchanges.set(key, exchange);
+  // Keep successful exchanges idempotent for the lifetime of this JS process.
+  // Failed exchanges may be retried after a transient browser/network error.
+  exchange.catch(() => authUrlExchanges.delete(key));
+  return exchange;
 }
 
 export async function saveSnapshot(state: AppState) {

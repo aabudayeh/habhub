@@ -1,6 +1,10 @@
 async function configureCompanion() {
   // Opening the side panel directly keeps the toolbar action useful instead of
   // making the user pass through a redirect-only popup first.
+  await chrome.sidePanel?.setOptions({
+    path: "panel.html",
+    enabled: true,
+  });
   await chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true });
 }
 

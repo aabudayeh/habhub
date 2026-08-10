@@ -467,6 +467,8 @@ function GymScreen() {
     body: string;
     phase: "work" | "rest" | "paused";
     steps: WorkoutNotificationStep[];
+    phaseStartedAt: number;
+    phaseElapsedSeconds: number;
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
@@ -2002,6 +2004,8 @@ function GymScreen() {
               ? "paused"
               : "rest",
         steps: notificationSteps,
+        phaseStartedAt: workoutTimer.phaseStartedAt,
+        phaseElapsedSeconds: workoutTimer.phaseElapsedSeconds,
       }
     : null;
 
@@ -2059,6 +2063,8 @@ function GymScreen() {
             ? "paused"
             : "rest",
       steps: notificationSteps,
+      phaseStartedAt: workoutTimer.phaseStartedAt,
+      phaseElapsedSeconds: workoutTimer.phaseElapsedSeconds,
     }).catch(() => undefined);
   }, [
     appActivity,

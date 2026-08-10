@@ -15,7 +15,10 @@ import {
 } from '@/src/health/schedule';
 import { PersistedHealthStatus } from '@/src/health/types';
 import { supabase } from '@/src/lib/supabase';
-import { APP_STORAGE_KEY } from '@/src/state/AppProvider';
+import {
+  APP_STORAGE_KEY,
+  appAccountStorageKey,
+} from '@/src/state/AppProvider';
 import { AppState, HealthSyncSettings, SyncMode } from '@/src/types';
 
 const TASK_NAME = 'paceboard-health-background-sync';
@@ -93,7 +96,11 @@ TaskManager.defineTask(TASK_NAME, async () => {
     // Commit rows first and the status/checkpoint last. Foreground resume uses
     // that checkpoint as the proof that the stored replacement window is
     // complete, so these writes must not race each other.
-    await AsyncStorage.setItem(APP_STORAGE_KEY, JSON.stringify(nextState));
+    const serializedState = JSON.stringify(nextState);
+    await AsyncStorage.multiSet([
+      [APP_STORAGE_KEY, serializedState],
+      [appAccountStorageKey(nextState.currentUserId), serializedState],
+    ]);
     await AsyncStorage.setItem(
       `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
       JSON.stringify(nextStatus),

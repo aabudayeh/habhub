@@ -136,6 +136,8 @@ function trackerSnapshot(
 function featuredSnapshot(
   state: AppState,
   today: string,
+  language: AppState["settings"]["language"],
+  locale: string,
   t: (source: string) => string,
 ): WidgetTrackerSnapshot {
   const tracked = state.metrics.filter(
@@ -183,6 +185,32 @@ function featuredSnapshot(
         : ("missed" as const),
     };
   });
+  const goalRows = tracked.slice(0, 3).map((metric) => {
+    const available = hasMetricData(state, metric, state.currentUserId, today);
+    const value = available
+      ? safeMetricValue(state, metric, state.currentUserId, today)
+      : 0;
+    const target = effectiveGoalTarget(
+      state,
+      metric,
+      state.currentUserId,
+      today,
+    );
+    const localizedMetric = {
+      ...metric,
+      name: localizeMetricName(language, metric),
+      unit: localizeMetricUnit(language, metric),
+    };
+    return {
+      title: localizedMetric.name,
+      value: available
+        ? `${formatMetricValue(localizedMetric, value, locale)} / ${formatMetricValue(localizedMetric, target, locale)}`
+        : t("Not yet available"),
+      progress: available
+        ? Math.max(0, Math.min(1, displayGoalProgress(metric, value, target)))
+        : 0,
+    };
+  });
   return {
     id: "__featured__",
     title: "HabHub",
@@ -191,6 +219,7 @@ function featuredSnapshot(
     progress: todayPoint.progress,
     color: todayPoint.status === "met" ? GOAL_COMPLETE_COLOR : "#58E1D4",
     deepLink: "paceboard://",
+    goals: goalRows,
     history: {
       week: Array.from({ length: 7 }, (_, offset) =>
         pointsFor(dateWithOffsetFrom(today, offset - 6)),
@@ -247,7 +276,13 @@ export function WidgetSnapshotBridge() {
             : selectableMetrics.filter((metric) => configuredIds.has(metric.id));
         const snapshot: WidgetSnapshot = {
           updatedAt: new Date().toISOString(),
-          featured: featuredSnapshot(currentState, today, t),
+          featured: featuredSnapshot(
+            currentState,
+            today,
+            currentState.settings.language,
+            locale,
+            t,
+          ),
           catalog: selectableMetrics.map((metric) => ({
             id: metric.id,
             title: localizeMetricName(currentState.settings.language, metric),

@@ -26,6 +26,26 @@ export const shadow = {
   elevation: 2,
 };
 
+/**
+ * Shared semantic type scale. Screens may still opt into a display number,
+ * but ordinary page titles, section headings, body copy and supporting copy
+ * should use these tokens so navigation no longer changes the perceived text
+ * scale from page to page.
+ */
+export const typography = {
+  pageTitle: { fontSize: 20, lineHeight: 24, fontWeight: "900" as const },
+  sectionTitle: { fontSize: 14, lineHeight: 18, fontWeight: "900" as const },
+  cardTitle: { fontSize: 12, lineHeight: 16, fontWeight: "900" as const },
+  body: { fontSize: 11, lineHeight: 16, fontWeight: "600" as const },
+  supporting: { fontSize: 9, lineHeight: 13, fontWeight: "700" as const },
+  eyebrow: {
+    fontSize: 9,
+    lineHeight: 12,
+    fontWeight: "900" as const,
+    letterSpacing: 1.1,
+  },
+};
+
 const GroupAccentContext = createContext(palette.primary);
 const CompactModeContext = createContext(false);
 const DarkModeContext = createContext(false);

@@ -207,6 +207,22 @@ function requireCloud() {
   return supabase;
 }
 
+function cloudErrorText(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const parts = ["message", "details", "hint", "code"]
+      .map((key) =>
+        typeof record[key] === "string" ? String(record[key]) : "",
+      )
+      .filter(Boolean);
+    if (parts.length) return [...new Set(parts)].join(" · ");
+  }
+  return typeof error === "string" && error
+    ? error
+    : "The cloud did not return an error description.";
+}
+
 function buildCloudDailyStatusRows(
   state: AppState,
   idBySlug: Map<string, string>,
@@ -1128,13 +1144,14 @@ export async function createCloudGroup(
     },
   );
   if (atomicError) {
+    const message = cloudErrorText(atomicError);
     if (/schema cache|function.*does not exist|create_group_with_metrics_v2/i.test(
-      atomicError.message,
+      message,
     ))
       throw new Error(
         "Group creation needs the latest Supabase migration. Apply it and try again.",
       );
-    throw atomicError;
+    throw new Error(message);
   }
   if (!atomicGroupId)
     throw new Error("The group could not be created. Try again.");

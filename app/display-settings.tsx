@@ -35,6 +35,7 @@ const pages: {
   { id: "calendar", label: "Schedule", icon: "calendar-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
   { id: "performance", label: "Performance", icon: "speedometer-outline" },
+  { id: "status", label: "Status", icon: "accessibility-outline" },
 ];
 
 const languages = supportedLanguages.map(({ id, label, nativeLabel }) => ({
@@ -56,7 +57,9 @@ type ToggleKey =
   | "showCalendarShortcut"
   | "showJournalShortcut"
   | "showPerformance"
+  | "showStatus"
   | "showTodosToday"
+  | "showGoalsToday"
   | "showAiAssistant";
 
 export default function DisplaySettings() {
@@ -86,7 +89,8 @@ export default function DisplaySettings() {
       (page.id !== "gym" || state.settings.showGym) &&
       (page.id !== "calendar" || state.settings.showCalendar) &&
       (page.id !== "journal" || state.settings.showJournal) &&
-      (page.id !== "performance" || state.settings.showPerformance),
+      (page.id !== "performance" || state.settings.showPerformance) &&
+      (page.id !== "status" || state.settings.showStatus),
   );
   const navigationOrder = React.useMemo(() => {
     const saved = state.settings.tabOrder ?? [];
@@ -129,6 +133,7 @@ export default function DisplaySettings() {
       showCalendar: "calendar",
       showJournal: "journal",
       showPerformance: "performance",
+      showStatus: "status",
     };
     if (
       !value &&
@@ -344,6 +349,7 @@ export default function DisplaySettings() {
               ["showCalendar", "Schedule", "Reminders, tasks, and prompts", "calendar-outline"],
               ["showJournal", "Journal", "Notes collected across the app", "book-outline"],
               ["showPerformance", "Performance", "Strengths, trends, and focus areas", "speedometer-outline"],
+              ["showStatus", "Status", "A visual dashboard around your tracked goals", "accessibility-outline"],
               ["showAiAssistant", "MetRal AI", "Floating logging and setup assistant", "sparkles-outline"],
             ] as [ToggleKey, string, string, keyof typeof Ionicons.glyphMap][]
           ).map(([key, title, copy, icon]) => (
@@ -469,6 +475,13 @@ export default function DisplaySettings() {
             onChange={([value]) => value && updateSettings({ todosBelowGoals: value === "below" })}
             multiple={false}
             searchable={false}
+          />
+          <ToggleRow
+            icon="flag-outline"
+            title="Show goals"
+            copy="Hide tracked-goal tiles without changing goal history"
+            enabled={state.settings.showGoalsToday !== false}
+            onChange={(value) => toggle("showGoalsToday", value)}
           />
           <ToggleRow
             icon="checkbox-outline"

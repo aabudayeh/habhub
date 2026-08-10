@@ -29,6 +29,7 @@ import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   palette,
   shadow,
+  typography,
   useAppColors,
   useCompactMode,
   useGroupAccent,
@@ -596,19 +597,15 @@ const styles = StyleSheet.create({
   eyebrow: {
     color: palette.primary,
     textTransform: "uppercase",
-    letterSpacing: 1.5,
-    fontSize: 11,
-    fontWeight: "800",
-    marginBottom: 6,
+    ...typography.eyebrow,
+    marginBottom: 4,
   },
   title: {
     color: palette.ink,
-    fontSize: 28,
-    lineHeight: 33,
-    fontWeight: "800",
-    letterSpacing: -0.6,
+    ...typography.pageTitle,
+    letterSpacing: -0.35,
   },
-  titleCompact: { fontSize: 21, lineHeight: 25, letterSpacing: -0.35 },
+  titleCompact: { fontSize: 18, lineHeight: 22, letterSpacing: -0.25 },
   subtitle: {
     color: palette.muted,
     fontSize: 13,
@@ -626,8 +623,7 @@ const styles = StyleSheet.create({
   sectionHeaderCompact: { marginTop: 5, marginBottom: 7 },
   sectionTitle: {
     color: palette.ink,
-    fontSize: 17,
-    fontWeight: "800",
+    ...typography.sectionTitle,
     letterSpacing: -0.2,
   },
   card: {
@@ -681,7 +677,7 @@ const styles = StyleSheet.create({
   },
   button_ghost: { backgroundColor: "transparent", borderColor: palette.border },
   button_danger: { backgroundColor: "#FFF1F0", borderColor: "#F3C6C3" },
-  buttonText: { color: palette.primary, fontSize: 15, fontWeight: "800" },
+  buttonText: { color: palette.primary, fontSize: 13, fontWeight: "800" },
   buttonTextSmall: { fontSize: 11 },
   buttonTextPrimary: { color: palette.white },
   disabled: { opacity: 0.45 },
@@ -704,7 +700,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.primarySoft,
     borderColor: "#B9DFC9",
   },
-  chipText: { color: palette.muted, fontSize: 13, fontWeight: "700" },
+  chipText: { color: palette.muted, fontSize: 11, fontWeight: "800" },
   chipTextSmall: { fontSize: 9, fontWeight: "800" },
   chipTextSelected: { color: palette.primary },
   avatar: {

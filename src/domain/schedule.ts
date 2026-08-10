@@ -50,6 +50,14 @@ export function todoAppearsOnDate(todo: TodoItem, localDate: string) {
     todo.reminders.some(
       (reminder) =>
         reminder.at?.slice(0, 10) === localDate ||
+        (reminder.schedule &&
+          scheduleAppliesOnDate(
+            reminder.schedule,
+            reminder.schedule.anchorDate ??
+              reminder.at?.slice(0, 10) ??
+              createdDate,
+            localDate,
+          )) ||
         (reminder.repeatDailyUntilDue &&
           localDate >= createdDate &&
           (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10))),

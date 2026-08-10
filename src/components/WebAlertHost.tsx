@@ -15,6 +15,7 @@ import {
 } from "@/src/components/webAlertStore";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { useTranslation } from "@/src/i18n";
+import { readableTextColor } from "@/src/domain/colors";
 
 /** Renders multi-action alerts as real in-page dialogs on Expo web. */
 export function WebAlertHost() {
@@ -98,6 +99,11 @@ export function WebAlertHost() {
             {buttons.map((button, index) => {
               const destructive = button.style === "destructive";
               const cancel = button.style === "cancel";
+              const buttonBackground = destructive
+                ? "#C93F49"
+                : cancel
+                  ? colors.canvas
+                  : accent;
               return (
                 <Pressable
                   key={`${button.text ?? "OK"}-${index}`}
@@ -109,8 +115,8 @@ export function WebAlertHost() {
                   style={({ pressed }) => [
                     styles.button,
                     {
-                      backgroundColor: cancel ? colors.canvas : accent,
-                      borderColor: cancel ? colors.border : accent,
+                      backgroundColor: buttonBackground,
+                      borderColor: cancel ? colors.border : buttonBackground,
                       opacity: pressed ? 0.78 : 1,
                     },
                   ]}
@@ -120,10 +126,10 @@ export function WebAlertHost() {
                       styles.buttonText,
                       {
                         color: destructive
-                          ? "#FF6B6B"
+                          ? readableTextColor(buttonBackground)
                           : cancel
                             ? colors.ink
-                            : "#071127",
+                            : readableTextColor(buttonBackground),
                       },
                     ]}
                   >

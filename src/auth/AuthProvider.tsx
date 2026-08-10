@@ -88,6 +88,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const acceptUrl = (url: string | null) => {
       if (!url) return;
+      // Android Custom Tabs do not dismiss themselves when Linking receives a
+      // deep link. Close the browser first so a successful Google login cannot
+      // strand the user on the provider's blank/grey redirect page.
+      if (Platform.OS === 'android')
+        WebBrowser.dismissBrowser().catch(() => undefined);
       consumeAuthUrl(url).catch(() => undefined);
     };
     if (Platform.OS !== 'web')

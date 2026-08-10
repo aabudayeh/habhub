@@ -69,6 +69,16 @@ export function MonthCalendar({
     month: "long",
     year: "numeric",
   }).format(cursor);
+  const weekdayLabels = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, index) => {
+        const day = new Date(2024, 0, 7 + index, 12);
+        return new Intl.DateTimeFormat(locale, { weekday: "narrow" }).format(
+          day,
+        );
+      }),
+    [locale],
+  );
   function shift(delta: number) {
     const next = new Date(
       cursor.getFullYear(),
@@ -111,7 +121,7 @@ export function MonthCalendar({
         </Pressable>
       </View>
       <View style={styles.grid}>
-        {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => (
+        {weekdayLabels.map((day, index) => (
           <Text
             key={`${day}-${index}`}
             style={[styles.weekday, { color: colors.faint }]}

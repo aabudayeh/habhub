@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HabHub Live Companion",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A live HabHub Today dashboard with to-dos, trackers, timers and schedule in your browser side panel.",
   "minimum_chrome_version": "114",
   "icons": {

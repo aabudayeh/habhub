@@ -130,6 +130,7 @@ function Today() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
+  const locale = useLocale();
   const [editing, setEditing] = useState(false);
   const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
   const exitingEditMode = useRef(false);
@@ -189,12 +190,29 @@ function Today() {
     (item) => item.id === state.currentUserId,
   )!;
   const goals = trackedGoalSummary(state, state.currentUserId, today);
+  const showGoalsToday = state.settings.showGoalsToday !== false;
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
   const activeTodayView = (state.settings.trackerViewFilters ?? []).find(
     (filter) => filter.id === state.settings.activeTodayTrackerViewFilterId,
   );
   const customTodoVisible = activeTodayView?.includeTodos !== false;
   const customTodoIds = activeTodayView?.todoIds;
+  const todayTodos =
+    state.settings.showTodosToday === false || !customTodoVisible
+      ? []
+      : (state.todos ?? []).filter(
+          (todo) =>
+            (customTodoIds === undefined || customTodoIds.includes(todo.id)) &&
+            todoAppearsOnDate(todo, today),
+        );
+  const completedTodayTodos = todayTodos.filter((todo) =>
+    todoResolvedOnDate(todo, today),
+  ).length;
+  const heroUsesGoals = showGoalsToday;
+  const heroMet = heroUsesGoals ? goals.met : completedTodayTodos;
+  const heroTotal = heroUsesGoals ? goals.total : todayTodos.length;
+  const heroProgress = heroTotal ? heroMet / heroTotal : 0;
+  const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
     const ordered = state.metrics
         .filter(
@@ -209,7 +227,10 @@ function Today() {
               activeTrackerViewId(state, "today") !==
                 ALL_TRACKERS_FILTER
             ) &&
-            metricMatchesActiveView(state, item, today, "today"),
+            metricMatchesActiveView(state, item, today, "today") &&
+            (editing ||
+              showGoalsToday ||
+              !isMetricTrackedOnDate(state, item, today)),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
@@ -227,7 +248,7 @@ function Today() {
         scheduledGoalReached(state, item, state.currentUserId, today)
       );
     });
-  }, [completionSortEnabled, editing, state, today]);
+  }, [completionSortEnabled, editing, showGoalsToday, state, today]);
   const tileLimit = Math.max(
     3,
     Math.min(8, state.settings.todayTileLimit ?? 5),
@@ -260,7 +281,7 @@ function Today() {
     )
     .sort((a, b) => a.order - b.order);
   const [goldSequenceRun, setGoldSequenceRun] = useState(0);
-  const heroGold = useRef(new Animated.Value(goals.allMet ? 1 : 0)).current;
+  const heroGold = useRef(new Animated.Value(heroAllMet ? 1 : 0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
     outputRange: [palette.lime, "#FFD166"],
@@ -270,13 +291,13 @@ function Today() {
     outputRange: [accent, colors.isDark ? "#806018" : "#B98212"],
   });
   useEffect(() => {
-    if (!goals.allMet) {
+    if (!heroAllMet) {
       heroGold.stopAnimation();
       heroGold.setValue(0);
     }
-  }, [goals.allMet, heroGold]);
+  }, [heroAllMet, heroGold]);
   useEffect(() => {
-    if (!goals.allMet || goldSequenceRun === 0) return;
+    if (!heroAllMet || goldSequenceRun === 0) return;
     heroGold.stopAnimation();
     heroGold.setValue(0);
     const animation = Animated.timing(heroGold, {
@@ -287,7 +308,7 @@ function Today() {
     });
     animation.start();
     return () => animation.stop();
-  }, [goals.allMet, goldSequenceRun, heroGold]);
+  }, [goldSequenceRun, heroAllMet, heroGold]);
   const celebration = useRef(new Animated.Value(0)).current;
   const [confettiVisible, setConfettiVisible] = useState(false);
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
@@ -304,17 +325,6 @@ function Today() {
         todo.completedDates.includes(today),
     )
     .map((todo) => `todo:${todo.id}`);
-  const todayTodos =
-    state.settings.showTodosToday === false || !customTodoVisible
-      ? []
-      : (state.todos ?? []).filter(
-          (todo) =>
-            (customTodoIds === undefined || customTodoIds.includes(todo.id)) &&
-            todoAppearsOnDate(todo, today),
-        );
-  const completedTodayTodos = todayTodos.filter((todo) =>
-    todoResolvedOnDate(todo, today),
-  ).length;
   const goalCelebrationKey = [...completedGoalIds, ...completedTodoIds]
     .sort()
     .join("|");
@@ -492,7 +502,7 @@ function Today() {
         <View style={styles.header}>
           <View style={styles.headerIdentity}>
             <Text style={[styles.eyebrow, { color: accent }]}>
-              {compactDayDate(today)}
+              {compactDayDate(today, locale)}
             </Text>
             <Text
               numberOfLines={1}
@@ -572,7 +582,10 @@ function Today() {
           </View>
         </View>
         <TutorialTarget id="today-hero">
-        <Animated.View
+        <AnimatedPressable
+          accessibilityRole="button"
+          accessibilityLabel="Open daily status"
+          onPress={() => router.navigate("/status" as never)}
           style={[
             styles.hero,
             {
@@ -589,8 +602,12 @@ function Today() {
                   { color: "rgba(255,255,255,.76)" },
                 ]}
               >
-                {goals.allMet ? "DAY COMPLETE" : "TODAY'S FOCUS"}
-                {todayTodos.length
+                {heroAllMet
+                  ? "DAY COMPLETE"
+                  : heroUsesGoals
+                    ? "TODAY'S FOCUS"
+                    : "TO-DOS"}
+                {heroUsesGoals && todayTodos.length
                   ? ` · ${completedTodayTodos}/${todayTodos.length} TO-DOS`
                   : ""}
               </Text>
@@ -601,7 +618,7 @@ function Today() {
                   { color: palette.white },
                 ]}
               >
-                {goals.met} of {goals.total}
+                {`${heroMet} of ${heroTotal}`}
               </Text>
               <Text
                 preserveColor
@@ -610,11 +627,19 @@ function Today() {
                   { color: palette.white },
                 ]}
               >
-                {goals.allMet
-                  ? "Every goal reached"
-                  : goals.total
-                    ? `${goals.total - goals.met} goal${goals.total - goals.met === 1 ? "" : "s"} left`
-                    : "Choose your first goal"}
+                {heroAllMet
+                  ? heroUsesGoals
+                    ? "Every goal reached"
+                    : "Every to-do complete"
+                  : heroTotal
+                    ? `${heroTotal - heroMet} ${
+                        heroUsesGoals
+                          ? `goal${heroTotal - heroMet === 1 ? "" : "s"}`
+                          : `to-do${heroTotal - heroMet === 1 ? "" : "s"}`
+                      } left`
+                    : heroUsesGoals
+                      ? "Choose your first goal"
+                      : "No to-dos today"}
               </Text>
             </View>
             <CompletionShapeIndicator
@@ -622,12 +647,12 @@ function Today() {
                 (state.settings.completionIndicatorIcon ??
                   "ellipse-outline") as keyof typeof Ionicons.glyphMap
               }
-              progress={goals.total ? goals.met / goals.total : 0}
+              progress={heroProgress}
               fillMode={
                 state.settings.completionIndicatorFillMode ?? "auto"
               }
               color={
-                goals.allMet
+                heroAllMet
                   ? ALL_GOALS_COMPLETE_COLOR
                   : GOAL_COMPLETE_COLOR
               }
@@ -644,43 +669,57 @@ function Today() {
                 styles.heroProgressFill,
                 {
                   backgroundColor: heroCompletionColor,
-                  width: `${goals.total ? (goals.met / goals.total) * 100 : 0}%`,
+                  width: `${heroProgress * 100}%`,
                 },
               ]}
             />
           </View>
-          <View style={styles.goalDots}>
-            {goals.metrics.map((item) => {
-              const unavailable = goals.unavailable.some(
-                (metric) => metric.id === item.id,
-              );
-              const met = scheduledGoalReached(
-                state,
-                item,
-                state.currentUserId,
-                today,
-              );
-              return (
-                <GoalCompletionDot
-                  key={item.id}
-                  icon={item.icon as keyof typeof Ionicons.glyphMap}
-                  met={met}
-                  unavailable={unavailable}
-                  allMet={goals.allMet}
-                  sequenceRun={goldSequenceRun}
-                  onPress={() =>
-                    router.navigate({
-                      pathname: "/metric-detail",
-                      params: { metric: item.id, date: today },
-                    } as never)
-                  }
-                />
-              );
-            })}
-          </View>
-        </Animated.View>
+          {heroUsesGoals && todayTodos.length ? (
+            <View style={styles.heroTodoProgressTrack}>
+              <View
+                style={[
+                  styles.heroTodoProgressFill,
+                  {
+                    width: `${(completedTodayTodos / todayTodos.length) * 100}%`,
+                  },
+                ]}
+              />
+            </View>
+          ) : null}
+          {heroUsesGoals ? (
+            <View style={styles.goalDots}>
+              {goals.metrics.map((item) => {
+                const unavailable = goals.unavailable.some(
+                  (metric) => metric.id === item.id,
+                );
+                const met = scheduledGoalReached(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                );
+                return (
+                  <GoalCompletionDot
+                    key={item.id}
+                    icon={item.icon as keyof typeof Ionicons.glyphMap}
+                    met={met}
+                    unavailable={unavailable}
+                    allMet={goals.allMet}
+                    sequenceRun={goldSequenceRun}
+                    onPress={() =>
+                      router.navigate({
+                        pathname: "/metric-detail",
+                        params: { metric: item.id, date: today },
+                      } as never)
+                    }
+                  />
+                );
+              })}
+            </View>
+          ) : null}
+        </AnimatedPressable>
         </TutorialTarget>
-        {goals.allMet ? (
+        {showGoalsToday && goals.allMet ? (
           <Celebration
             title="All goals complete"
             copy="Perfect Day badge earned for completing every tracked goal today."
@@ -710,21 +749,41 @@ function Today() {
         ) : null}
         <View style={styles.sectionRow}>
           <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
-          <Pressable
-            onPress={() => setShowViewFilters(true)}
-            style={[
-              styles.filterButton,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Ionicons name="funnel-outline" size={12} color={accent} />
-            <Text
-              numberOfLines={1}
-              style={[styles.filterButtonText, { color: accent }]}
+          <View style={styles.sectionActions}>
+            {editing ? (
+              <Pressable
+                accessibilityLabel={showGoalsToday ? "Hide goals" : "Show goals"}
+                onPress={() =>
+                  updateSettings({ showGoalsToday: !showGoalsToday })
+                }
+                style={[
+                  styles.sectionVisibility,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Ionicons
+                  name={showGoalsToday ? "eye-outline" : "eye-off-outline"}
+                  size={15}
+                  color={accent}
+                />
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => setShowViewFilters(true)}
+              style={[
+                styles.filterButton,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
             >
-              {activeTrackerViewLabel(state, "today")}
-            </Text>
-          </Pressable>
+              <Ionicons name="funnel-outline" size={12} color={accent} />
+              <Text
+                numberOfLines={1}
+                style={[styles.filterButtonText, { color: accent }]}
+              >
+                {activeTrackerViewLabel(state, "today")}
+              </Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.list}>
           {primary.map((item, index) => (
@@ -1340,7 +1399,10 @@ function GoalCompletionDot({
   return (
     <Pressable
       accessibilityLabel="Open tracked goal"
-      onPress={onPress}
+      onPress={(event) => {
+        event.stopPropagation();
+        onPress();
+      }}
       hitSlop={5}
     >
       <Animated.View style={[styles.dot, { backgroundColor }]}>
@@ -2584,6 +2646,18 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   heroProgressFill: { height: "100%", borderRadius: 999 },
+  heroTodoProgressTrack: {
+    height: 3,
+    marginTop: 5,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,.18)",
+  },
+  heroTodoProgressFill: {
+    height: "100%",
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,.72)",
+  },
   goalDots: { flexDirection: "row", gap: 4, marginTop: 10, overflow: "hidden" },
   dot: {
     width: 23,
@@ -2608,6 +2682,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+  },
+  sectionActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  sectionVisibility: {
+    width: 28,
+    height: 28,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
   section: { fontSize: 13, fontWeight: "900" },
   hint: { fontSize: 8, fontWeight: "700" },

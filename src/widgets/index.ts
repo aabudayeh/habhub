@@ -15,6 +15,8 @@ export type WidgetTrackerSnapshot = {
   progress: number;
   color: string;
   deepLink: string;
+  /** Featured widgets use the available history area for at-a-glance goals. */
+  goals?: { title: string; value: string; progress: number }[];
   history: {
     week: WidgetHistoryPoint[];
     month: WidgetHistoryPoint[];

@@ -73,6 +73,19 @@
     <LinearLayout android:id="@+id/widget_history_row_5" android:layout_width="match_parent" android:layout_height="7dp" android:layout_marginTop="2dp" android:orientation="horizontal" />
   </LinearLayout>
 
+  <LinearLayout
+    android:id="@+id/widget_goal_details"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="5dp"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <TextView android:id="@+id/widget_goal_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView android:id="@+id/widget_goal_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView android:id="@+id/widget_goal_3" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+  </LinearLayout>
+
   <TextView
     android:id="@+id/widget_subtitle"
     android:layout_width="match_parent"

@@ -374,6 +374,7 @@ function RootNavigator() {
       calendar: state.settings.showCalendar !== false,
       journal: state.settings.showJournal !== false,
       performance: state.settings.showPerformance !== false,
+      status: state.settings.showStatus === true,
     } as const;
     return visible[target] ? target : "index";
   }, [
@@ -385,6 +386,7 @@ function RootNavigator() {
     state.settings.showLeaderboard,
     state.settings.showLog,
     state.settings.showPerformance,
+    state.settings.showStatus,
   ]);
   useEffect(() => {
     if (

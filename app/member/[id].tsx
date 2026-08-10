@@ -143,6 +143,7 @@ export default function MemberProfile() {
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const comparisonReady = true;
   // Keep selector/date presses responsive. The previous comparison remains
   // visible while React prepares the newly requested range at low priority.
@@ -518,6 +519,10 @@ export default function MemberProfile() {
     if (!next) return;
     if (period === "today" || period === "yesterday") setPeriod("custom");
     setAnchor(next);
+  }
+  function toggleDateNavigator() {
+    if (dateNavigatorOpen) setCalendarOpen(false);
+    setDateNavigatorOpen((open) => !open);
   }
   const pageSwipeResponder = useMemo(
     () =>
@@ -957,7 +962,7 @@ export default function MemberProfile() {
               }}
             />
           ) : null}
-          <Card>
+          <Card style={styles.badgeShowcaseCard}>
             <View style={styles.badgeList}>
               {displayedBadges.map((badge) => (
                 <View
@@ -1009,26 +1014,35 @@ export default function MemberProfile() {
           ))}
         </Card>
       ) : null}
-      <PeriodChoiceBar period={period} onChange={choosePeriod} />
-      <DateRangeNavigator
-        period={period}
-        anchor={anchor}
-        dates={navigationDates}
-        calendarOpen={calendarOpen}
-        onToggleCalendar={() => setCalendarOpen((open) => !open)}
-        onShift={shiftRange}
-      >
-        <MonthCalendar
-          monthDate={anchor}
-          selectedDate={anchor}
-          onSelect={(date) => {
-            setAnchor(date);
-            setPeriod("custom");
-            setCalendarOpen(false);
-          }}
-          onMonthChange={setAnchor}
+      <View style={styles.dateSection}>
+        <PeriodChoiceBar
+          period={period}
+          onChange={choosePeriod}
+          dateViewOpen={dateNavigatorOpen}
+          onToggleDateView={toggleDateNavigator}
         />
-      </DateRangeNavigator>
+        {period !== "overall" && dateNavigatorOpen ? (
+          <DateRangeNavigator
+            period={period}
+            anchor={anchor}
+            dates={navigationDates}
+            calendarOpen={calendarOpen}
+            onToggleCalendar={() => setCalendarOpen((open) => !open)}
+            onShift={shiftRange}
+          >
+            <MonthCalendar
+              monthDate={anchor}
+              selectedDate={anchor}
+              onSelect={(date) => {
+                setAnchor(date);
+                setPeriod("custom");
+                setCalendarOpen(false);
+              }}
+              onMonthChange={setAnchor}
+            />
+          </DateRangeNavigator>
+        ) : null}
+      </View>
       <View style={styles.selectors}>
         <MetricSelector
           title="What to show"
@@ -1437,7 +1451,7 @@ const styles = StyleSheet.create({
     gap: 9,
     overflow: "hidden",
   },
-  metricCards: { gap: 12, marginTop: 18 },
+  metricCards: { gap: 12, marginTop: 14 },
   chartCard: { padding: 15 },
   chartHeading: {
     flexDirection: "row",
@@ -1452,7 +1466,7 @@ const styles = StyleSheet.create({
   },
   chartTitle: {
     color: palette.ink,
-    fontSize: 21,
+    fontSize: 16,
     fontWeight: "900",
     marginTop: 3,
   },
@@ -1497,13 +1511,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   badgeLink: { color: palette.primary, fontSize: 10, fontWeight: "900" },
-  badgeList: { gap: 7 },
+  badgeShowcaseCard: { paddingVertical: 14 },
+  badgeList: { gap: 12 },
   badge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
+    gap: 10,
     borderLeftWidth: 3,
-    paddingLeft: 8,
+    paddingLeft: 10,
+    paddingVertical: 3,
   },
   badgeIcon: {
     width: 36,
@@ -1516,9 +1532,10 @@ const styles = StyleSheet.create({
   badgeCaption: {
     color: palette.muted,
     fontSize: 8,
-    lineHeight: 12,
+    lineHeight: 13,
     marginTop: 2,
   },
+  dateSection: { marginTop: 16 },
   photoPerson: { paddingVertical: 9, gap: 7 },
   photoName: { color: palette.ink, fontSize: 11, fontWeight: "900" },
   photos: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

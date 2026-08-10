@@ -17,6 +17,7 @@ export type ScreenTimeReport = {
   /** Android app-foreground totals are the closest public proxy for screen use. */
   screenTimeMs: number;
   approximate: true;
+  calculationMethod?: "foreground_events" | "aggregate_fallback";
   apps: ScreenTimeAppUsage[];
 };
 

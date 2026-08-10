@@ -1,6 +1,6 @@
 import { Redirect } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 
 import { useAuth } from "@/src/auth/AuthProvider";
 import { AppText as Text } from "@/src/components/AppText";
@@ -15,7 +15,9 @@ export default function AuthCallbackScreen() {
 
   useEffect(() => {
     let active = true;
-    if (typeof window === "undefined") {
+    // React Native exposes a `window` global, but it has no browser location.
+    // Native callbacks are consumed by AuthProvider's Linking listener.
+    if (Platform.OS !== "web") {
       setProcessed(true);
       return () => {
         active = false;
