@@ -12,7 +12,8 @@ import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { isAllowedThemeColor, normalizeHexColor } from "@/src/domain/colors";
-import { supportedLanguages } from "@/src/i18n";
+import { COMPLETION_INDICATOR_OPTIONS } from "@/src/domain/completionIndicators";
+import { supportedLanguages, useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -64,6 +65,7 @@ type ToggleKey =
 
 export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
+  const { t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [customColor, setCustomColor] = React.useState(
@@ -389,20 +391,16 @@ export default function DisplaySettings() {
           {indicatorOpen ? (
             <View style={[styles.symbolBody, { borderTopColor: colors.border }]}>
               <View style={styles.symbolGrid}>
-                {[
-                  "ellipse-outline",
-                  "square-outline",
-                  "flash-outline",
-                  "happy-outline",
-                  "beer-outline",
-                  "cafe-outline",
-                  "heart-outline",
-                  "star-outline",
-                ].map((icon) => {
-                  const selected = (state.settings.completionIndicatorIcon ?? "ellipse-outline") === icon;
+                {COMPLETION_INDICATOR_OPTIONS.map(({ icon, label }) => {
+                  const selected =
+                    (state.settings.completionIndicatorIcon ??
+                      "ellipse-outline") === icon;
                   return (
                     <Pressable
                       key={icon}
+                      accessibilityLabel={t(label)}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
                       onPress={() => updateSettings({ completionIndicatorIcon: icon })}
                       style={[
                         styles.symbol,

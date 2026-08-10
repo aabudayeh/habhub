@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "Añadir rastreadores seleccionados",
+  "Add selected to group": "Añadir seleccionados al grupo",
+  "Nothing new to add": "No hay nada nuevo que añadir",
+  "Those ready-made trackers are already available.": "Esos rastreadores prediseñados ya están disponibles.",
+  "ready-made trackers selected": "rastreadores prediseñados seleccionados",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "Se añadirán juntos con sus valores predeterminados recomendados. Selecciona solo un rastreador si quieres editarlo primero.",
   "Daily limit for {app}": "Límite diario para {app}",
   "{minutes} min daily limit": "Límite diario de {minutes} min",
   "App limits stay on this device.": "Los límites de las aplicaciones permanecen en este dispositivo.",

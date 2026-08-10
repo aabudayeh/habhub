@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "Добавить выбранные трекеры",
+  "Add selected to group": "Добавить выбранное в группу",
+  "Nothing new to add": "Нечего добавлять",
+  "Those ready-made trackers are already available.": "Эти готовые трекеры уже доступны.",
+  "ready-made trackers selected": "готовых трекеров выбрано",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "Они будут добавлены вместе с рекомендуемыми настройками по умолчанию. Выберите только один трекер, если хотите сначала его изменить.",
   "Daily limit for {app}": "Дневной лимит для {app}",
   "{minutes} min daily limit": "Дневной лимит: {minutes} мин",
   "App limits stay on this device.": "Лимиты приложений хранятся на этом устройстве.",

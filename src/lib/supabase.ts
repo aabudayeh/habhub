@@ -92,17 +92,61 @@ export async function sendMagicLink(email: string) {
   if (error) throw error;
 }
 
-const authUrlExchanges = new Map<string, Promise<void>>();
+const authUrlExchanges = new Map<string, Promise<boolean>>();
+
+type AuthCallbackPayload = {
+  accessToken: string | null;
+  refreshToken: string | null;
+  code: string | null;
+  error: string | null;
+  errorDescription: string | null;
+};
+
+function parseAuthCallback(authUrl: string): AuthCallbackPayload | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(authUrl);
+  } catch {
+    return null;
+  }
+
+  const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+  const route = [parsed.hostname, parsed.pathname]
+    .filter(Boolean)
+    .join('/')
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase();
+  const nativeCallback =
+    scheme === 'paceboard' &&
+    (route === 'auth-callback' || route === 'auth/callback');
+  const webCallback =
+    (scheme === 'http' || scheme === 'https') &&
+    (parsed.pathname.replace(/\/+$/, '') === '/auth-callback' ||
+      parsed.pathname.replace(/\/+$/, '') === '/auth/callback');
+  if (!nativeCallback && !webCallback) return null;
+
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  const fromEither = (name: string) =>
+    parsed.searchParams.get(name) ?? hash.get(name);
+  return {
+    accessToken: fromEither('access_token'),
+    refreshToken: fromEither('refresh_token'),
+    code: fromEither('code'),
+    error: fromEither('error') ?? fromEither('error_code'),
+    errorDescription: fromEither('error_description'),
+  };
+}
+
+export function isAuthCallbackUrl(authUrl: string) {
+  return parseAuthCallback(authUrl) !== null;
+}
 
 function authExchangeKey(authUrl: string) {
-  const parsed = new URL(authUrl);
-  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
-  const code = parsed.searchParams.get('code');
-  const accessToken = hash.get('access_token');
-  return code
-    ? `code:${code}`
-    : accessToken
-      ? `token:${accessToken}`
+  const payload = parseAuthCallback(authUrl);
+  return payload?.code
+    ? `code:${payload.code}`
+    : payload?.accessToken
+      ? `token:${payload.accessToken}`
       : `url:${authUrl}`;
 }
 
@@ -111,34 +155,45 @@ function authExchangeKey(authUrl: string) {
  * WebBrowser result. A PKCE code is single-use, so share the same exchange
  * promise instead of racing two exchangeCodeForSession calls.
  */
-export async function consumeAuthUrl(authUrl: string) {
-  if (!supabase) return;
+export async function consumeAuthUrl(authUrl: string): Promise<boolean> {
+  if (!supabase) return false;
+  const payload = parseAuthCallback(authUrl);
+  if (!payload) return false;
   const key = authExchangeKey(authUrl);
   const existing = authUrlExchanges.get(key);
   if (existing) return existing;
   const exchange = (async () => {
-    const parsed = new URL(authUrl);
-    const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
-    const accessToken = hash.get('access_token');
-    const refreshToken = hash.get('refresh_token');
-    if (accessToken && refreshToken) {
+    if (payload.error) {
+      const detail = payload.errorDescription?.replace(/\+/g, ' ').trim();
+      throw new Error(detail || `Authentication failed (${payload.error}).`);
+    }
+    if (payload.accessToken && payload.refreshToken) {
       const { error } = await supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
+        access_token: payload.accessToken,
+        refresh_token: payload.refreshToken,
       });
       if (error) throw error;
-      return;
+      return true;
     }
-    const code = parsed.searchParams.get('code');
-    if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
+    if (payload.code) {
+      const { error } = await supabase.auth.exchangeCodeForSession(payload.code);
       if (error) throw error;
+      return true;
     }
+    throw new Error(
+      'The sign-in provider returned to HabHub without a session. Please try again.',
+    );
   })();
   authUrlExchanges.set(key, exchange);
-  // Keep successful exchanges idempotent for the lifetime of this JS process.
-  // Failed exchanges may be retried after a transient browser/network error.
-  exchange.catch(() => authUrlExchanges.delete(key));
+  // Android can deliver the same callback through Expo WebBrowser and Linking.
+  // Keep the shared promise briefly so both consumers observe one exchange,
+  // then release the OAuth URL (which can contain tokens) from memory.
+  const release = () => {
+    setTimeout(() => {
+      if (authUrlExchanges.get(key) === exchange) authUrlExchanges.delete(key);
+    }, 60_000);
+  };
+  exchange.then(release, () => authUrlExchanges.delete(key));
   return exchange;
 }
 

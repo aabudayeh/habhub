@@ -1,31 +1,37 @@
 # HabHub Live Companion for Chrome and Edge
 
-Clicking the HabHub toolbar icon opens a real side-panel companion rather than
-redirecting you to another tab. The panel contains the synced Today hero,
-to-dos, filterable/reorderable trackers, active timers with start/pause controls,
-and today's schedule.
+Version 0.3.0 opens as a normal 400 x 560 toolbar popup. It contains HabHub's
+live Today surface: the featured card, to-dos, filterable/reorderable trackers,
+active timers, and today's schedule. The expand button in the popup opens the
+same dashboard in a full-height browser side panel, and the external-link
+button opens the complete HabHub website.
 
-The panel embeds HabHub's dedicated `/extension` app surface. That surface
-uses the same authenticated, offline-first snapshot merge and Supabase realtime
-subscription as the mobile app and website. Keeping one shared data layer is
-important: the extension does not carry a service key, duplicate account data,
-or perform a second competing snapshot write. It also does not keep hidden
-mobile pages mounted. The dashboard runs only while its browser panel is open.
-An explicit route-ready handshake prevents a generic Expo error page from being
-shown as a successfully loaded companion.
+The popup and side panel embed HabHub's dedicated `/extension` app surface.
+That surface uses the same authenticated, offline-first snapshot merge and
+Supabase realtime subscription as the mobile app and website. The extension
+does not carry a service key, duplicate account data, or perform a second
+competing snapshot write. It runs only while its popup or side panel is open.
+
+The companion uses a nonce-bound, origin-checked readiness handshake. It only
+reveals the live dashboard after the route confirms a signed-in account and a
+hydrated local workspace. Signed-out, onboarding, loading, offline, and route
+errors are shown explicitly; a generic document load is never reported as a
+ready companion.
 
 ## Install locally
 
-1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked** and select this `browser-extension` folder.
-4. Pin **HabHub Companion** to the browser toolbar.
-5. Click the HabHub icon. The live companion opens in the browser side panel.
+1. Extract `habhub-companion-extension.zip` to a permanent folder.
+2. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
+3. Enable **Developer mode**.
+4. Choose **Load unpacked** and select the extracted `browser-extension`
+   folder (the folder containing `manifest.json`).
+5. Pin **HabHub Live Companion** to the browser toolbar.
+6. Click the HabHub icon to open the normal popup.
 
-Sign in to `https://habhub.expo.app` with the same account used on the phone.
-Chrome and Edge share that HabHub web session with the companion when host
-access is allowed. If the panel asks you to sign in, use its **Open HabHub sign
-in** action once, then press refresh in the panel.
+Use the middle toolbar button to expand into the side panel. Use the right-hand
+button to open the full website. Sign in to `https://habhub.expo.app` with the
+same account used on the phone. If the companion asks you to sign in, open the
+sign-in page once, then click refresh or reopen the popup.
 
 The production companion page is `https://habhub.expo.app/extension`.
 

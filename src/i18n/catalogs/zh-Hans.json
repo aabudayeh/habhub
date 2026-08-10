@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "添加所选追踪器",
+  "Add selected to group": "将所选项目添加到群组",
+  "Nothing new to add": "没有可添加的新项目",
+  "Those ready-made trackers are already available.": "这些预设追踪器已可用。",
+  "ready-made trackers selected": "个已选择的预设追踪器",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "它们将使用推荐的默认设置一起添加。如果想先编辑，请只选择一个追踪器。",
   "Daily limit for {app}": "{app} 的每日限制",
   "{minutes} min daily limit": "每日限制 {minutes} 分钟",
   "App limits stay on this device.": "应用限制仅保存在此设备上。",

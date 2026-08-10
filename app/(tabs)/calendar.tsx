@@ -560,22 +560,7 @@ function SchedulePage() {
         <View
           style={[
             styles.allDayRow,
-            {
-              borderBottomColor: colors.border,
-              minHeight: expandedRows.has("all")
-                ? Math.max(
-                    44,
-                    ...dates.map(
-                      (date) =>
-                        (eventsByDate[date] ?? []).filter(
-                          (event) => !event.time,
-                        ).length *
-                          18 +
-                        8,
-                    ),
-                  )
-                : 44,
-            },
+            { borderBottomColor: colors.border },
           ]}
         >
           <Pressable
@@ -617,24 +602,7 @@ function SchedulePage() {
             key={hour}
             style={[
               styles.hourRow,
-              {
-                borderBottomColor: colors.border,
-                minHeight: expandedRows.has(String(hour))
-                  ? Math.max(
-                      48,
-                      ...dates.map(
-                        (date) =>
-                          (eventsByDate[date] ?? []).filter(
-                            (event) =>
-                              event.time &&
-                              Number(event.time.slice(0, 2)) === hour,
-                          ).length *
-                            18 +
-                          8,
-                      ),
-                    )
-                  : 48,
-              },
+              { borderBottomColor: colors.border },
             ]}
           >
             <Pressable
@@ -1359,6 +1327,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   hourRow: {
+    minHeight: 48,
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
   },

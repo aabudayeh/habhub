@@ -1,9 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { Modal, Pressable, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from "react-native";
 
 import TodayPage from "./(tabs)/index";
+import { useAuth } from "@/src/auth/AuthProvider";
 import { AppText as Text } from "@/src/components/AppText";
 import {
   activityTimerDisplaySeconds,
@@ -24,9 +32,11 @@ type Panel = "timers" | "schedule" | null;
 
 export default function ExtensionDashboard() {
   const { state, hydrated, setActivityTimer } = useApp();
+  const auth = useAuth();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
+  const { height } = useWindowDimensions();
   const [panel, setPanel] = useState<Panel>(null);
   const [now, setNow] = useState(Date.now());
   const timers = state.activityTimers?.length
@@ -35,6 +45,13 @@ export default function ExtensionDashboard() {
       ? [state.activeTimer]
       : [];
   const hasRunningTimer = timers.some((timer) => timer.status === "running");
+  const setupRequired =
+    auth.status === "signedIn" && !state.settings.onboardingComplete;
+  const dataReady =
+    hydrated &&
+    auth.status === "signedIn" &&
+    !setupRequired &&
+    state.group.members.some((member) => member.id === state.currentUserId);
 
   useEffect(() => {
     if (!hasRunningTimer) return;
@@ -43,35 +60,40 @@ export default function ExtensionDashboard() {
   }, [hasRunningTimer]);
 
   useEffect(() => {
-    if (
-      !hydrated ||
-      typeof window === "undefined" ||
-      window.parent === window
-    )
-      return;
+    if (typeof window === "undefined" || window.parent === window) return;
 
-    // The browser extension must distinguish this mounted dashboard from a
-    // generic document load (including Expo's Unmatched Route page). The
-    // message deliberately contains no account data and the parent validates
-    // both this frame and the deployed HabHub origin before accepting it.
-    const announceReady = () => {
+    // Do not announce readiness with a wildcard. The extension begins the
+    // handshake with a one-time nonce; this frame only responds to its actual
+    // chrome-extension parent and sends no account data across the boundary.
+    const respondToProbe = (event: MessageEvent) => {
+      const nonce = event.data?.nonce;
+      if (
+        event.source !== window.parent ||
+        !event.origin.startsWith("chrome-extension://") ||
+        event.data?.type !== "habhub:companion-ping" ||
+        event.data?.version !== 2 ||
+        typeof nonce !== "string" ||
+        nonce.length < 8 ||
+        nonce.length > 160
+      ) return;
+
       window.parent.postMessage(
-        { type: "habhub:companion-ready", version: 1 },
-        "*",
+        {
+          type: "habhub:companion-state",
+          version: 2,
+          nonce,
+          authStatus: auth.status,
+          hydrated,
+          setupRequired,
+          dataReady,
+        },
+        event.origin,
       );
     };
-    const respondToProbe = (event: MessageEvent) => {
-      if (
-        event.source === window.parent &&
-        event.data?.type === "habhub:companion-ping"
-      )
-        announceReady();
-    };
 
-    announceReady();
     window.addEventListener("message", respondToProbe);
     return () => window.removeEventListener("message", respondToProbe);
-  }, [hydrated]);
+  }, [auth.status, dataReady, hydrated, setupRequired]);
 
   const events = useMemo(
     () =>
@@ -108,8 +130,50 @@ export default function ExtensionDashboard() {
     );
   };
 
+  if (auth.status !== "signedIn") {
+    return (
+      <ExtensionState
+        height={height}
+        icon="person-circle-outline"
+        title="Sign in to HabHub"
+        copy="Use the same HabHub account as your phone to load your live Today view, to-dos, timers and schedule."
+        action="Open sign in"
+        onPress={() => router.navigate("/sign-in" as never)}
+      />
+    );
+  }
+
+  if (setupRequired) {
+    return (
+      <ExtensionState
+        height={height}
+        icon="sparkles-outline"
+        title="Finish HabHub setup"
+        copy="Complete onboarding once, then this companion will use your saved trackers and settings."
+        action="Finish setup"
+        onPress={() => router.navigate("/onboarding" as never)}
+      />
+    );
+  }
+
+  if (!dataReady) {
+    return (
+      <View
+        style={[
+          styles.stateRoot,
+          { minHeight: height, backgroundColor: colors.canvas },
+        ]}
+      >
+        <ActivityIndicator size="small" color={accent} />
+        <Text style={[styles.stateCopy, { color: colors.muted }]}>
+          Loading your HabHub data...
+        </Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { minHeight: height }]}>
       <TodayPage />
       <View
         style={[
@@ -257,6 +321,52 @@ export default function ExtensionDashboard() {
   );
 }
 
+function ExtensionState({
+  height,
+  icon,
+  title,
+  copy,
+  action,
+  onPress,
+}: {
+  height: number;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  copy: string;
+  action: string;
+  onPress: () => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  return (
+    <View
+      style={[
+        styles.stateRoot,
+        { minHeight: height, backgroundColor: colors.canvas },
+      ]}
+    >
+      <View
+        style={[
+          styles.stateIcon,
+          { backgroundColor: `${accent}1F`, borderColor: `${accent}66` },
+        ]}
+      >
+        <Ionicons name={icon} size={27} color={accent} />
+      </View>
+      <Text style={[styles.stateTitle, { color: colors.ink }]}>{title}</Text>
+      <Text style={[styles.stateCopy, { color: colors.muted }]}>{copy}</Text>
+      <Pressable
+        onPress={onPress}
+        style={[styles.stateAction, { backgroundColor: accent }]}
+      >
+        <Text preserveColor style={styles.stateActionText}>
+          {action}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function DockButton({
   icon,
   label,
@@ -316,7 +426,42 @@ function ScheduleRow({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1 },
+  root: { flex: 1, width: "100%" },
+  stateRoot: {
+    flex: 1,
+    width: "100%",
+    paddingHorizontal: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  stateIcon: {
+    width: 52,
+    height: 52,
+    marginBottom: 2,
+    borderWidth: 1,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stateTitle: { fontSize: 16, fontWeight: "900", textAlign: "center" },
+  stateCopy: {
+    maxWidth: 310,
+    fontSize: 11,
+    lineHeight: 17,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  stateAction: {
+    minWidth: 170,
+    minHeight: 43,
+    marginTop: 7,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stateActionText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   dock: {
     position: "absolute",
     right: 12,

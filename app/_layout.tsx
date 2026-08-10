@@ -458,7 +458,8 @@ function RootNavigator() {
     rootSegment === "auth" ||
     rootSegment === "update-password" ||
     rootSegment === "join" ||
-    rootSegment === "onboarding";
+    rootSegment === "onboarding" ||
+    rootSegment === "extension";
 
   const accountStateMismatch =
     auth.status === "signedIn" &&
@@ -497,6 +498,7 @@ function RootNavigator() {
     !onboardingDone &&
     onboardingMarker?.accountId === onboardingAccountId &&
     rootSegment !== "onboarding" &&
+    rootSegment !== "extension" &&
     !(auth.configured && auth.status === "signedOut")
   )
     return <Redirect href={"/onboarding" as never} />;

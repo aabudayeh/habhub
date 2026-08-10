@@ -59,6 +59,16 @@
         <button id="retry" class="primary-button" type="button">Try again</button>
         <button id="sign-in" class="secondary-button" type="button">Open HabHub sign in</button>
       </section>
+
+      <section id="auth-required" class="load-error" hidden>
+        <div class="account-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5.5 20c.7-4 2.9-6 6.5-6s5.8 2 6.5 6"/></svg>
+        </div>
+        <h1 id="auth-title">Sign in to HabHub</h1>
+        <p id="auth-copy">Open HabHub once in this browser, sign in, then refresh the companion.</p>
+        <button id="auth-sign-in" class="primary-button" type="button">Open HabHub sign in</button>
+        <button id="auth-retry" class="secondary-button" type="button">I have signed in - retry</button>
+      </section>
     </main>
 
     <script type="module" src="panel.js"></script>

@@ -98,6 +98,10 @@ export function TodoTodayList({
               params: { metric: "todo_completion", date: localDate },
             } as never)
           }
+          delayLongPress={325}
+          onLongPress={() => {
+            if (!editing) onRequestEdit?.();
+          }}
           style={styles.titleButton}
         >
           <Text style={[styles.title, { color: colors.ink }]}>To-Dos</Text>
@@ -162,6 +166,10 @@ export function TodoTodayList({
       {visible && !items.length ? (
         <Pressable
           onPress={() => router.navigate("/todo-editor" as never)}
+          delayLongPress={325}
+          onLongPress={() => {
+            if (!editing) onRequestEdit?.();
+          }}
           style={[styles.empty, { borderColor: colors.border }]}
         >
           <Ionicons name="checkmark-circle-outline" size={16} color={accent} />

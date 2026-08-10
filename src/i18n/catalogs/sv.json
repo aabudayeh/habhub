@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "Lägg till valda spårare",
+  "Add selected to group": "Lägg till valda i gruppen",
+  "Nothing new to add": "Inget nytt att lägga till",
+  "Those ready-made trackers are already available.": "De färdiga spårarna är redan tillgängliga.",
+  "ready-made trackers selected": "valda färdiga spårare",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "De läggs till tillsammans med sina rekommenderade standardinställningar. Välj bara en spårare om du vill redigera den först.",
   "Daily limit for {app}": "Daglig gräns för {app}",
   "{minutes} min daily limit": "Daglig gräns: {minutes} min",
   "App limits stay on this device.": "Appgränser lagras på den här enheten.",

@@ -97,6 +97,10 @@ import { orderTodayMetrics } from "@/src/domain/todayOrdering";
 import { metricVisualization } from "@/src/domain/visualization";
 import { fastingProgressForDate } from "@/src/domain/fasting";
 import {
+  completionIndicatorFillMode,
+  completionIndicatorOption,
+} from "@/src/domain/completionIndicators";
+import {
   activeTrackerViewLabel,
   activeTrackerViewId,
   ALL_AVAILABLE_TRACKERS_FILTER,
@@ -289,6 +293,7 @@ function Today() {
     )
     .sort((a, b) => a.order - b.order);
   const [goldSequenceRun, setGoldSequenceRun] = useState(0);
+  const goalLiquidMotion = useRef(new Animated.Value(0)).current;
   const heroGold = useRef(new Animated.Value(heroAllMet ? 1 : 0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
@@ -317,6 +322,26 @@ function Today() {
     animation.start();
     return () => animation.stop();
   }, [goldSequenceRun, heroAllMet, heroGold]);
+  useEffect(() => {
+    if (!goals.metrics.length || !showGoalsToday) return;
+    goalLiquidMotion.setValue(0);
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(goalLiquidMotion, {
+          toValue: 1,
+          duration: 1700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(goalLiquidMotion, {
+          toValue: 0,
+          duration: 1700,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [goalLiquidMotion, goals.metrics.length, showGoalsToday]);
   const celebration = useRef(new Animated.Value(0)).current;
   const [confettiVisible, setConfettiVisible] = useState(false);
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
@@ -651,10 +676,7 @@ function Today() {
               </Text>
             </View>
             <CompletionShapeIndicator
-              icon={
-                (state.settings.completionIndicatorIcon ??
-                  "ellipse-outline") as keyof typeof Ionicons.glyphMap
-              }
+              icon={state.settings.completionIndicatorIcon}
               progress={heroProgress}
               fillMode={
                 state.settings.completionIndicatorFillMode ?? "auto"
@@ -706,14 +728,48 @@ function Today() {
                   state.currentUserId,
                   today,
                 );
+                const value = unavailable
+                  ? 0
+                  : safeMetricValue(
+                      state,
+                      item,
+                      state.currentUserId,
+                      today,
+                    );
+                const progress = unavailable
+                  ? 0
+                  : met
+                    ? 1
+                    : Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          metricVisualProgress(
+                            state,
+                            item,
+                            state.currentUserId,
+                            today,
+                            value,
+                            effectiveGoalTarget(
+                              state,
+                              item,
+                              state.currentUserId,
+                              today,
+                            ),
+                          ),
+                        ),
+                      );
                 return (
                   <GoalCompletionDot
                     key={item.id}
                     icon={item.icon as keyof typeof Ionicons.glyphMap}
+                    name={item.name}
                     met={met}
+                    progress={progress}
                     unavailable={unavailable}
                     allMet={goals.allMet}
                     sequenceRun={goldSequenceRun}
+                    liquidMotion={goalLiquidMotion}
                     onPress={() =>
                       router.navigate({
                         pathname: "/metric-detail",
@@ -756,7 +812,15 @@ function Today() {
           />
         ) : null}
         <View style={styles.sectionRow}>
-          <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
+          <Pressable
+            accessibilityLabel="Customize Today"
+            delayLongPress={325}
+            onLongPress={() => {
+              if (!editing) beginEditing();
+            }}
+          >
+            <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
+          </Pressable>
           <View style={styles.sectionActions}>
             {editing ? (
               <Pressable
@@ -780,6 +844,10 @@ function Today() {
             ) : null}
             <Pressable
               onPress={() => setShowViewFilters(true)}
+              delayLongPress={325}
+              onLongPress={() => {
+                if (!editing) beginEditing();
+              }}
               style={[
                 styles.filterButton,
                 { backgroundColor: colors.card, borderColor: colors.border },
@@ -1367,17 +1435,23 @@ function ConfettiBurst({
 
 function GoalCompletionDot({
   icon,
+  name,
   met,
+  progress,
   unavailable,
   allMet,
   sequenceRun,
+  liquidMotion,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
+  name: string;
   met: boolean;
+  progress: number;
   unavailable: boolean;
   allMet: boolean;
   sequenceRun: number;
+  liquidMotion: Animated.Value;
   onPress: () => void;
 }) {
   const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
@@ -1400,28 +1474,57 @@ function GoalCompletionDot({
     animation.start();
     return () => animation.stop();
   }, [allMet, gold, met, sequenceRun]);
-  const backgroundColor = met
+  const fillColor = met
     ? gold.interpolate({
         inputRange: [0, 1],
         outputRange: [palette.lime, "#FFD166"],
       })
-    : "rgba(255,255,255,.16)";
+    : palette.lime;
+  const normalized = unavailable
+    ? 0
+    : Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+  const waveTranslateX = liquidMotion.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-5, 5],
+  });
   return (
     <Pressable
-      accessibilityLabel="Open tracked goal"
+      accessibilityLabel={`Open ${name}, ${Math.round(normalized * 100)}% complete`}
       onPress={(event) => {
         event.stopPropagation();
         onPress();
       }}
       hitSlop={5}
     >
-      <Animated.View style={[styles.dot, { backgroundColor }]}>
+      <View style={styles.dot}>
+        {normalized > 0 ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.dotLiquid,
+              {
+                backgroundColor: fillColor,
+                height: `${normalized * 100}%`,
+              },
+            ]}
+          >
+            {normalized < 1 ? (
+              <Animated.View
+                style={[
+                  styles.dotWave,
+                  { transform: [{ translateX: waveTranslateX }] },
+                ]}
+              />
+            ) : null}
+          </Animated.View>
+        ) : null}
         <Ionicons
           name={unavailable ? "remove" : met ? "checkmark" : icon}
           size={11}
-          color={met && allMet ? "#654900" : met ? "#214218" : palette.white}
+          color={met && allMet ? "#654900" : palette.white}
+          style={styles.dotIcon}
         />
-      </Animated.View>
+      </View>
     </Pressable>
   );
 }
@@ -2373,26 +2476,40 @@ function CompletionShapeIndicator({
   color,
   fillMode,
 }: {
-  icon: keyof typeof Ionicons.glyphMap;
+  icon?: string;
   progress: number;
   color: string;
   fillMode: CompletionFillMode;
 }) {
   const normalized = Math.max(0, Math.min(1, progress));
   const label = `${Math.round(normalized * 100)}%`;
-  const resolvedFill =
-    fillMode !== "auto"
-      ? fillMode
-      : icon === "ellipse-outline" || icon === "square-outline"
-        ? "clockwise"
-        : icon === "heart-outline" ||
-            icon === "star-outline" ||
-            icon === "happy-outline"
-          ? "center_out"
-          : "bottom_up";
+  const resolvedOption = completionIndicatorOption(icon);
+  const resolvedIcon = resolvedOption.icon as keyof typeof Ionicons.glyphMap;
+  const resolvedFill = completionIndicatorFillMode(
+    resolvedOption.icon,
+    fillMode,
+  );
+  const progressMotion = useRef(new Animated.Value(1)).current;
+  const previousProgress = useRef(normalized);
+
+  useEffect(() => {
+    if (normalized > previousProgress.current) {
+      progressMotion.stopAnimation();
+      progressMotion.setValue(0.94);
+      Animated.spring(progressMotion, {
+        toValue: 1,
+        speed: 24,
+        bounciness: normalized >= 1 ? 9 : 5,
+        useNativeDriver: true,
+      }).start();
+    }
+    previousProgress.current = normalized;
+    return () => progressMotion.stopAnimation();
+  }, [normalized, progressMotion]);
+
   const coloredIcon = (style?: object) => (
     <Ionicons
-      name={icon}
+      name={resolvedIcon}
       size={COMPLETION_INDICATOR_SIZE}
       color={color}
       style={[
@@ -2407,12 +2524,15 @@ function CompletionShapeIndicator({
     />
   );
   return (
-    <View
+    <Animated.View
       accessibilityLabel={`${label} of today's tracked goals complete`}
-      style={styles.completionShape}
+      style={[
+        styles.completionShape,
+        { transform: [{ scale: progressMotion }] },
+      ]}
     >
       <Ionicons
-        name={icon}
+        name={resolvedIcon}
         size={COMPLETION_INDICATOR_SIZE}
         color="rgba(255,255,255,.28)"
         style={[
@@ -2458,7 +2578,7 @@ function CompletionShapeIndicator({
           {label}
         </Text>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -2708,8 +2828,33 @@ const styles = StyleSheet.create({
     width: 23,
     height: 23,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,.2)",
+    backgroundColor: "rgba(255,255,255,.14)",
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+  },
+  dotLiquid: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  dotWave: {
+    position: "absolute",
+    left: -9,
+    top: -2,
+    width: 40,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,.34)",
+  },
+  dotIcon: {
+    zIndex: 1,
+    textShadowColor: "rgba(0,0,0,.42)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
   },
   celebration: {
     minHeight: 52,

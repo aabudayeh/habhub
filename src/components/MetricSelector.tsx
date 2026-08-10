@@ -29,6 +29,7 @@ export function MetricSelector({
   emptyLabel = "No logged metrics",
   collapsibleGroups = [],
   searchable = true,
+  showSelectAll = true,
 }: {
   items: MetricSelectorItem[];
   selectedIds: string[];
@@ -39,6 +40,7 @@ export function MetricSelector({
   emptyLabel?: string;
   collapsibleGroups?: string[];
   searchable?: boolean;
+  showSelectAll?: boolean;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -143,14 +145,16 @@ export function MetricSelector({
         >
           {multiple && items.length ? (
             <View style={[styles.bulk, { borderBottomColor: colors.border }]}>
-              <Pressable
-                onPress={() => onChange(items.map((item) => item.id))}
-                style={styles.bulkButton}
-              >
-                <Text style={[styles.bulkText, { color: accent }]}>
-                  Select all
-                </Text>
-              </Pressable>
+              {showSelectAll ? (
+                <Pressable
+                  onPress={() => onChange(items.map((item) => item.id))}
+                  style={styles.bulkButton}
+                >
+                  <Text style={[styles.bulkText, { color: accent }]}>
+                    Select all
+                  </Text>
+                </Pressable>
+              ) : null}
               <Pressable onPress={() => onChange([])} style={styles.bulkButton}>
                 <Text style={[styles.bulkText, { color: accent }]}>Clear</Text>
               </Pressable>

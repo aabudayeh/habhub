@@ -12,6 +12,7 @@
     },
     "preview": {
       "node": "22.13.0",
+      "autoIncrement": true,
       "distribution": "internal",
       "environment": "preview",
       "channel": "preview"

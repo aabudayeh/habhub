@@ -33,8 +33,68 @@ export type StatusAvatarProgression = {
   muscleProgress: number;
 };
 
+export type StatusBodyShape = "thin" | "average" | "full";
+
+export type StatusBodyAppearance = {
+  /** A continuous -1..1 value so body changes do not jump between presets. */
+  bodyMass: number;
+  bodyShape: StatusBodyShape;
+  heightScale: number;
+  muscleTier: 0 | 1 | 2 | 3;
+};
+
 function bounded(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Converts profile/body history into restrained avatar proportions. BMI is
+ * used only as a visual interpolation input; the UI never presents it as a
+ * diagnosis or assumes that one body shape is better than another.
+ */
+export function statusBodyAppearance(
+  heightCm: number,
+  weightKg: number,
+  muscleProgress: number,
+): StatusBodyAppearance {
+  const safeHeightCm = bounded(
+    Number.isFinite(heightCm) ? heightCm : 170,
+    135,
+    215,
+  );
+  const safeWeightKg = bounded(
+    Number.isFinite(weightKg) ? weightKg : 70,
+    35,
+    250,
+  );
+  const heightM = safeHeightCm / 100;
+  const bmi = safeWeightKg / (heightM * heightM);
+  const bodyMass =
+    bmi < 22
+      ? bounded((bmi - 22) / 5, -1, 0)
+      : bounded((bmi - 22) / 12, 0, 1);
+  const bodyShape: StatusBodyShape =
+    bmi < 19.5 ? "thin" : bmi > 27.5 ? "full" : "average";
+  const boundedMuscle = bounded(
+    Number.isFinite(muscleProgress) ? muscleProgress : 0,
+    0,
+    1,
+  );
+  const muscleTier: 0 | 1 | 2 | 3 =
+    boundedMuscle >= 0.72
+      ? 3
+      : boundedMuscle >= 0.4
+        ? 2
+        : boundedMuscle >= 0.14
+          ? 1
+          : 0;
+
+  return {
+    bodyMass,
+    bodyShape,
+    heightScale: bounded(0.97 + (safeHeightCm - 170) / 600, 0.94, 1.04),
+    muscleTier,
+  };
 }
 
 /** Includes scheduled goal opportunities even when a day has no data row. */

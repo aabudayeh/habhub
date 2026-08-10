@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "إضافة أدوات التتبع المحددة",
+  "Add selected to group": "إضافة المحدد إلى المجموعة",
+  "Nothing new to add": "لا توجد عناصر جديدة لإضافتها",
+  "Those ready-made trackers are already available.": "أدوات التتبع الجاهزة هذه متاحة بالفعل.",
+  "ready-made trackers selected": "متتبعات جاهزة محددة",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "ستتم إضافتها معًا بإعداداتها الافتراضية الموصى بها. حدد متتبعًا واحدًا فقط إذا كنت تريد تعديله أولًا.",
   "Daily limit for {app}": "الحد اليومي لـ {app}",
   "{minutes} min daily limit": "حد يومي {minutes} دقيقة",
   "App limits stay on this device.": "تبقى حدود التطبيقات على هذا الجهاز.",

@@ -254,9 +254,11 @@ export default function TrackerEditor() {
   const {
     state,
     addMetric,
+    addMetrics,
     updateMetric,
     deleteMetric,
     addGroupMetric,
+    addGroupMetrics,
     updateGroupMetric,
     deleteGroupMetric,
     updateSettings,
@@ -297,6 +299,8 @@ export default function TrackerEditor() {
       (preset.category !== "gym" || state.settings.showGym),
   );
   const [presetId, setPresetId] = useState("");
+  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
+  const bulkPresetMode = !tracker && selectedPresetIds.length > 1;
   const [name, setName] = useState(tracker?.name ?? "");
   const [color, setColor] = useState(() => {
     if (tracker?.color && isAllowedTrackerColor(tracker.color))
@@ -628,6 +632,7 @@ export default function TrackerEditor() {
   const [validation, setValidation] = useState<string | null>(null);
   const draftSignature = JSON.stringify({
     presetId,
+    selectedPresetIds,
     name,
     color,
     category,
@@ -898,7 +903,63 @@ export default function TrackerEditor() {
       return false;
     }
   }
+  function savePresetSelection(onSaved: () => void) {
+    const presetById = new Map(
+      trackerPresets(state, true).map((preset) => [preset.templateId, preset]),
+    );
+    const requestedIds = [...selectedPresetIds];
+    if (requestedIds.includes("blood_pressure_systolic")) {
+      requestedIds.push("blood_pressure_diastolic", "pulse");
+    }
+    const existingIds = new Set(sourceMetrics.map((metric) => metric.id));
+    const queuedIds = new Set<string>();
+    const metrics = requestedIds.flatMap((templateId): NewMetric[] => {
+      if (existingIds.has(templateId) || queuedIds.has(templateId)) return [];
+      const preset = presetById.get(templateId);
+      if (!preset) return [];
+      queuedIds.add(templateId);
+      const { description: _description, ...definition } = preset;
+      const common: NewMetric = {
+        ...definition,
+        templateId,
+        activeFrom: dateKey(),
+        trackGoal: false,
+        addToToday: !groupScope,
+      };
+      if (!groupScope) return [common];
+      const {
+        trackGoal: _trackGoal,
+        addToToday: _addToToday,
+        ...sharedDefinition
+      } = common;
+      return [
+        {
+          ...sharedDefinition,
+          goalSchedule: undefined,
+          reminder: undefined,
+          reminders: undefined,
+          progressRemindersEnabled: undefined,
+          progressReminderPercentages: undefined,
+        },
+      ];
+    });
+    if (!metrics.length) {
+      Alert.alert(
+        "Nothing new to add",
+        "Those ready-made trackers are already available.",
+      );
+      return;
+    }
+    if (groupScope) addGroupMetrics(metrics);
+    else addMetrics(metrics);
+    allowExit.current = true;
+    onSaved();
+  }
   function save(onSaved: () => void = () => router.back()) {
+    if (bulkPresetMode) {
+      savePresetSelection(onSaved);
+      return;
+    }
     const target = isFastingTracker
       ? fastingDurationMinutes / 60
       : Number(goal.replace(",", "."));
@@ -1423,17 +1484,25 @@ export default function TrackerEditor() {
             sublabel: preset.description,
             group: preset.category === "gym" ? "Workout" : "Ready-made",
           }))}
-          selectedIds={presetId ? [presetId] : []}
+          selectedIds={selectedPresetIds}
           onChange={(ids) => {
+            setSelectedPresetIds(ids);
             if (!ids.length) {
               clearPreset();
               return;
             }
-            const preset = presets.find((item) => item.templateId === ids[0]);
-            if (preset) applyPreset(preset);
+            if (ids.length === 1) {
+              const preset = presets.find(
+                (item) => item.templateId === ids[0],
+              );
+              if (preset) applyPreset(preset);
+              return;
+            }
+            setPresetId("");
           }}
-          multiple={false}
+          multiple
           allowClear
+          showSelectAll={false}
           collapsibleGroups={
             state.settings.showGym &&
             presets.some((preset) => preset.category === "gym")
@@ -1443,6 +1512,60 @@ export default function TrackerEditor() {
           emptyLabel="Or create your own below"
         />
       ) : null}
+      {bulkPresetMode ? (
+        <Card>
+          <View style={styles.bulkPresetIntro}>
+            <View
+              style={[
+                styles.bulkPresetIcon,
+                { backgroundColor: colors.primarySoft },
+              ]}
+            >
+              <Ionicons name="layers-outline" size={22} color={accent} />
+            </View>
+            <View style={styles.grow}>
+              <Text style={[styles.label, { color: colors.ink }]}>
+                {selectedPresetIds.length} ready-made trackers selected
+              </Text>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                They will be added together with their recommended defaults.
+                Select only one tracker if you want to edit it first.
+              </Text>
+            </View>
+          </View>
+          <View style={styles.bulkPresetList}>
+            {selectedPresetIds.map((selectedId) => {
+              const selectedPreset = presets.find(
+                (preset) => preset.templateId === selectedId,
+              );
+              if (!selectedPreset) return null;
+              return (
+                <View
+                  key={selectedPreset.templateId}
+                  style={[
+                    styles.bulkPresetRow,
+                    { borderColor: colors.border },
+                  ]}
+                >
+                  <Ionicons
+                    name={selectedPreset.icon as keyof typeof Ionicons.glyphMap}
+                    size={16}
+                    color={selectedPreset.color}
+                  />
+                  <Text
+                    translate={false}
+                    style={[styles.bulkPresetName, { color: colors.ink }]}
+                  >
+                    {selectedPreset.name}
+                  </Text>
+                  <Ionicons name="checkmark-circle" size={17} color={accent} />
+                </View>
+              );
+            })}
+          </View>
+        </Card>
+      ) : (
+        <>
       <Card>
         <Text style={[styles.label, { color: colors.ink }]}>
           What do you want to track?
@@ -3393,6 +3516,8 @@ export default function TrackerEditor() {
         </Card>
         </View>
       ) : null}
+        </>
+      )}
       <View style={styles.actions}>
         {tracker ? (
           <View style={styles.delete}>
@@ -3402,7 +3527,15 @@ export default function TrackerEditor() {
         <View style={styles.grow}>
           <Button
             label={
-              tracker ? "Save" : groupScope ? "Add to group" : "Add tracker"
+              tracker
+                ? "Save"
+                : bulkPresetMode
+                  ? groupScope
+                    ? "Add selected to group"
+                    : "Add selected trackers"
+                  : groupScope
+                    ? "Add to group"
+                    : "Add tracker"
             }
             icon="checkmark"
             onPress={() => save()}
@@ -3912,6 +4045,29 @@ const styles = StyleSheet.create({
   progressReminderPanel: { borderTopWidth: 1, paddingTop: 8, gap: 7 },
   progressReminderCustom: { flexDirection: "row", alignItems: "center", gap: 6 },
   grow: { flex: 1 },
+  bulkPresetIntro: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+  },
+  bulkPresetIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bulkPresetList: { gap: 6, marginTop: 12 },
+  bulkPresetRow: {
+    minHeight: 38,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  bulkPresetName: { flex: 1, fontSize: 10, fontWeight: "800" },
   choicePicker: {
     borderWidth: 1,
     borderRadius: 13,

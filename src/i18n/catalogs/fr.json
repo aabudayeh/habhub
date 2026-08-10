@@ -1,4 +1,10 @@
 {
+  "Add selected trackers": "Ajouter les suivis sélectionnés",
+  "Add selected to group": "Ajouter la sélection au groupe",
+  "Nothing new to add": "Aucun nouvel élément à ajouter",
+  "Those ready-made trackers are already available.": "Ces suivis prêts à l’emploi sont déjà disponibles.",
+  "ready-made trackers selected": "suivis prêts à l’emploi sélectionnés",
+  "They will be added together with their recommended defaults. Select only one tracker if you want to edit it first.": "Ils seront ajoutés ensemble avec leurs réglages recommandés par défaut. Sélectionnez un seul suivi si vous souhaitez d’abord le modifier.",
   "Daily limit for {app}": "Limite quotidienne pour {app}",
   "{minutes} min daily limit": "Limite quotidienne de {minutes} min",
   "App limits stay on this device.": "Les limites des applications restent sur cet appareil.",

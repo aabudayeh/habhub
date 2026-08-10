@@ -286,6 +286,31 @@ export default function SignInScreen() {
               </View>
             ) : null}
           </View>
+          {auth.authError ? (
+            <View
+              accessibilityLiveRegion="polite"
+              style={[
+                styles.authError,
+                {
+                  backgroundColor: `${colors.red}14`,
+                  borderColor: `${colors.red}55`,
+                },
+              ]}
+            >
+              <Ionicons name="alert-circle-outline" size={17} color={colors.red} />
+              <Text style={[styles.authErrorText, { color: colors.ink }]}>
+                {auth.authError}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss sign-in error"
+                hitSlop={8}
+                onPress={auth.clearAuthError}
+              >
+                <Ionicons name="close" size={17} color={colors.muted} />
+              </Pressable>
+            </View>
+          ) : null}
         </Card>
         <Pressable
           onPress={() => run("demo", auth.continueInDemo)}
@@ -425,6 +450,17 @@ const styles = StyleSheet.create({
   or: { fontSize: 8, fontWeight: "900" },
   providers: { flexDirection: "row", gap: 8 },
   provider: { flex: 1 },
+  authError: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  authErrorText: { flex: 1, fontSize: 10, lineHeight: 14, fontWeight: "700" },
   demo: {
     flexDirection: "row",
     alignItems: "center",

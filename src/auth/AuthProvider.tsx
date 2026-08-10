@@ -2,10 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Session, User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
-import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { cloudConfigured, consumeAuthUrl, supabase } from '@/src/lib/supabase';
+import { cloudConfigured, consumeAuthUrl, isAuthCallbackUrl, supabase } from '@/src/lib/supabase';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
 
@@ -17,6 +17,8 @@ type AuthContextValue = {
   session: Session | null;
   user: User | null;
   passwordRecovery: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<'confirmed' | 'verification-required'>;
   sendMagicLink: (email: string) => Promise<void>;
@@ -34,7 +36,8 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 WebBrowser.maybeCompleteAuthSession();
 
 function callbackUrl() {
-  if (Platform.OS !== 'web') return 'paceboard://auth-callback';
+  if (Platform.OS !== 'web')
+    return Linking.createURL('auth-callback', { scheme: 'paceboard' });
   const configuredOrigin = process.env.EXPO_PUBLIC_APP_URL?.trim().replace(/\/$/, '');
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/auth-callback`;
@@ -42,10 +45,24 @@ function callbackUrl() {
   return `${configuredOrigin || 'https://habhub.expo.app'}/auth-callback`;
 }
 
+function readableAuthError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : 'The sign-in attempt did not finish.';
+  if (/network request failed|failed to fetch|networkerror/i.test(message))
+    return 'HabHub could not reach the account service. Check your connection and try again.';
+  if (/code verifier|flow state|expired/i.test(message))
+    return 'This sign-in attempt expired. Start Google sign-in again.';
+  if (/cancel/i.test(message))
+    return 'Google sign-in was cancelled before HabHub received your account.';
+  return message;
+}
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthStatus>(cloudConfigured ? 'loading' : 'demo');
   const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const oauthAttemptRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (!supabase) {
@@ -77,6 +94,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
       setSession(nextSession);
       if (nextSession) {
+        setAuthError(null);
         AsyncStorage.removeItem(DEMO_MODE_KEY).catch(() => undefined);
         setStatus('signedIn');
       } else {
@@ -87,13 +105,22 @@ export function AuthProvider({ children }: PropsWithChildren) {
     });
 
     const acceptUrl = (url: string | null) => {
-      if (!url) return;
-      // Android Custom Tabs do not dismiss themselves when Linking receives a
-      // deep link. Close the browser first so a successful Google login cannot
-      // strand the user on the provider's blank/grey redirect page.
-      if (Platform.OS === 'android')
-        WebBrowser.dismissBrowser().catch(() => undefined);
-      consumeAuthUrl(url).catch(() => undefined);
+      if (!url || !isAuthCallbackUrl(url)) return;
+      // openAuthSessionAsync owns its Android Custom Tab and installs its own
+      // Linking listener. Do not call dismissBrowser here: that API is iOS-only
+      // and can be undefined on Android, while Expo closes the tab after its
+      // redirect listener resolves. consumeAuthUrl is single-flight, so this
+      // cold-start fallback and WebBrowser can safely observe the same URL.
+      consumeAuthUrl(url).catch((error: unknown) => {
+        if (!oauthAttemptRef.current) {
+          const message = readableAuthError(error);
+          setAuthError(message);
+          console.warn(
+            '[auth] Could not restore a session from the OAuth callback:',
+            message,
+          );
+        }
+      });
     };
     if (Platform.OS !== 'web')
       Linking.getInitialURL().then(acceptUrl).catch(() => undefined);
@@ -121,6 +148,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     session,
     user: session?.user ?? null,
     passwordRecovery,
+    authError,
+    clearAuthError: () => setAuthError(null),
     signInWithPassword: async (email, password) => {
       const client = requireClient();
       const { error } = await client.auth.signInWithPassword({ email: email.trim(), password });
@@ -144,18 +173,58 @@ export function AuthProvider({ children }: PropsWithChildren) {
       });
       if (error) throw error;
     },
-    signInWithProvider: async (provider) => {
-      const client = requireClient();
-      const redirectTo = callbackUrl();
-      const { data, error } = await client.auth.signInWithOAuth({
-        provider,
-        options: { redirectTo, skipBrowserRedirect: Platform.OS !== 'web' },
-      });
-      if (error) throw error;
-      if (Platform.OS !== 'web' && data.url) {
+    signInWithProvider: (provider) => {
+      if (oauthAttemptRef.current) return oauthAttemptRef.current;
+      setAuthError(null);
+      const providerName = provider === 'google' ? 'Google' : 'Apple';
+      const rawAttempt = (async () => {
+        const client = requireClient();
+        const redirectTo = callbackUrl();
+        const { data, error } = await client.auth.signInWithOAuth({
+          provider,
+          options: { redirectTo, skipBrowserRedirect: Platform.OS !== 'web' },
+        });
+        if (error) throw error;
+        if (Platform.OS === 'web') return;
+        if (!data.url)
+          throw new Error('The sign-in provider did not return a login URL.');
+
         const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-        if (result.type === 'success') await consumeAuthUrl(result.url);
-      }
+        if (result.type === 'success') {
+          const consumed = await consumeAuthUrl(result.url);
+          if (!consumed)
+            throw new Error(
+              'HabHub received an unexpected sign-in callback. Please try again.',
+            );
+        } else {
+          // Some Android browsers report the Custom Tab as dismissed just
+          // before their Linking event reaches JavaScript. Give that event a
+          // short opportunity to finish before reporting a cancellation.
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+
+        const { data: sessionData, error: sessionError } =
+          await client.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!sessionData.session)
+          throw new Error(
+            result.type === 'success'
+              ? `${providerName} sign-in completed, but no HabHub session was created. Please try again.`
+              : `${providerName} sign-in was cancelled before HabHub received your account.`,
+          );
+      })();
+      const attempt = rawAttempt.catch((error: unknown) => {
+        const message = readableAuthError(error);
+        setAuthError(message);
+        console.warn(`[auth] ${providerName} sign-in failed:`, message);
+        throw new Error(message);
+      });
+      oauthAttemptRef.current = attempt;
+      const release = () => {
+        if (oauthAttemptRef.current === attempt) oauthAttemptRef.current = null;
+      };
+      attempt.then(release, release);
+      return attempt;
     },
     requestPasswordReset: async (email) => {
       const client = requireClient();
@@ -197,7 +266,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setSession(null);
       setStatus('signedOut');
     },
-  }), [passwordRecovery, requireClient, session, status]);
+  }), [authError, passwordRecovery, requireClient, session, status]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

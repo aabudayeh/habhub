@@ -281,6 +281,7 @@ type Action =
       recordedAt: string;
     }
   | { type: "addMetric"; metric: NewMetric }
+  | { type: "addMetrics"; metrics: NewMetric[] }
   | {
       type: "updateMetric";
       metricId: string;
@@ -315,6 +316,7 @@ type Action =
       changes: Partial<MetricDefinition>;
     }
   | { type: "addGroupMetric"; metric: NewMetric }
+  | { type: "addGroupMetrics"; metrics: NewMetric[] }
   | { type: "deleteGroupMetric"; metricId: string }
   | { type: "moveMetric"; metricId: string; direction: -1 | 1 }
   | { type: "reorderMetric"; metricId: string; targetIndex: number }
@@ -1284,6 +1286,39 @@ function reducer(state: AppState, action: Action): AppState {
         ),
       };
     }
+    case "addMetrics": {
+      // Apply the whole ready-made selection to one in-memory snapshot. The
+      // provider persists and renders only the final result, so a bulk add can
+      // never leave a partially-created tracker list behind.
+      const next = action.metrics.reduce(
+        (current, metric) => reducer(current, { type: "addMetric", metric }),
+        state,
+      );
+      const healthTypes = action.metrics.flatMap((metric) => [
+        ...(metric.healthMapping?.dataType
+          ? [metric.healthMapping.dataType]
+          : []),
+        ...(metric.submetrics ?? []).flatMap((submetric) =>
+          submetric.healthMapping?.dataType
+            ? [submetric.healthMapping.dataType]
+            : [],
+        ),
+      ]);
+      if (!healthTypes.length) return next;
+      return {
+        ...next,
+        settings: {
+          ...next.settings,
+          healthSync: {
+            ...next.settings.healthSync,
+            dataTypes: {
+              ...next.settings.healthSync.dataTypes,
+              ...Object.fromEntries(healthTypes.map((type) => [type, true])),
+            },
+          },
+        },
+      };
+    }
     case "setMetricSection": {
       const metric = state.metrics.find(
         (candidate) => candidate.id === action.metricId,
@@ -1538,6 +1573,15 @@ function reducer(state: AppState, action: Action): AppState {
         trackedGoalPeriods: { ...state.trackedGoalPeriods, [id]: [] },
       });
     }
+    case "addGroupMetrics":
+      // Group configuration uses the same atomic bulk boundary as personal
+      // trackers. Each item still passes through the established normalization
+      // and duplicate-id logic in addGroupMetric.
+      return action.metrics.reduce(
+        (current, metric) =>
+          reducer(current, { type: "addGroupMetric", metric }),
+        state,
+      );
     case "deleteGroupMetric": {
       const existing = state.group.metricConfiguration ?? [];
       const removedIds = linkedBloodPressureIds(existing, action.metricId);
@@ -2431,6 +2475,7 @@ type AppContextValue = {
     recordedAt: string,
   ) => void;
   addMetric: (metric: NewMetric) => void;
+  addMetrics: (metrics: NewMetric[]) => void;
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
   deleteEntry: (entryId: string) => void;
@@ -2457,6 +2502,7 @@ type AppContextValue = {
     changes: Partial<MetricDefinition>,
   ) => void;
   addGroupMetric: (metric: NewMetric) => void;
+  addGroupMetrics: (metrics: NewMetric[]) => void;
   deleteGroupMetric: (metricId: string) => void;
   moveMetric: (metricId: string, direction: -1 | 1) => void;
   reorderMetric: (metricId: string, targetIndex: number) => void;
@@ -3291,6 +3337,8 @@ export function AppProvider({ children }: PropsWithChildren) {
           .catch(() => undefined);
       },
       addMetric: (metric) => void commitAction({ type: "addMetric", metric }),
+      addMetrics: (metrics) =>
+        void commitAction({ type: "addMetrics", metrics }),
       updateMetric: (metricId, changes) =>
         void commitAction({ type: "updateMetric", metricId, changes }),
       deleteMetric: (metricId) => void commitAction({ type: "deleteMetric", metricId }),
@@ -3318,6 +3366,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       updateGroupMetric: (metricId, changes) =>
         void commitAction({ type: "updateGroupMetric", metricId, changes }),
       addGroupMetric: (metric) => void commitAction({ type: "addGroupMetric", metric }),
+      addGroupMetrics: (metrics) =>
+        void commitAction({ type: "addGroupMetrics", metrics }),
       deleteGroupMetric: (metricId) =>
         void commitAction({ type: "deleteGroupMetric", metricId }),
       moveMetric: (metricId, direction) =>
