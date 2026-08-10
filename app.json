@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "HabHub",
-    "slug": "habhub",
+    "slug": "metrally",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
@@ -146,13 +146,13 @@
       "reactCompiler": true
     },
     "updates": {
-      "url": "https://u.expo.dev/5dc65e73-0957-4441-b14c-4550d78a8bb7"
+      "url": "https://u.expo.dev/f7411fe5-5319-4476-b70b-d7e3a4252a5c"
     },
     "owner": "sethypoo",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "5dc65e73-0957-4441-b14c-4550d78a8bb7"
+        "projectId": "f7411fe5-5319-4476-b70b-d7e3a4252a5c"
       }
     }
   }

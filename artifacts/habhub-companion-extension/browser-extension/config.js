@@ -1,6 +1,6 @@
-export const DEFAULT_APP_URL = "https://sethypoo-habhub.expo.app";
+export const DEFAULT_APP_URL = "https://habhub.expo.app";
 
-const LEGACY_APP_URLS = new Set(["https://habhub.expo.app"]);
+const LEGACY_APP_URLS = new Set(["https://sethypoo-habhub.expo.app"]);
 
 function normalizeAppUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
