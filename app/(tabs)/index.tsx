@@ -219,6 +219,12 @@ function Today() {
   const heroProgress = heroTotal ? heroMet / heroTotal : 0;
   const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
+    // This is the section-level visibility switch, so it must fence every
+    // metric-card path rather than only ordinary goal rows. Derived metrics
+    // (for example Weekly balance), calculated/food/fasting trackers and the
+    // compact "More" sheet all flow from this same collection. Keep the edit
+    // header visible below so the eye control can reveal the section again.
+    if (!showGoalsToday) return [];
     const ordered = state.metrics
         .filter(
           (item) =>
@@ -232,8 +238,7 @@ function Today() {
               activeTrackerViewId(state, "today") !==
                 ALL_TRACKERS_FILTER
             ) &&
-            metricMatchesActiveView(state, item, today, "today") &&
-            (editing || showGoalsToday),
+            metricMatchesActiveView(state, item, today, "today"),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
