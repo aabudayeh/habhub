@@ -233,9 +233,7 @@ function Today() {
                 ALL_TRACKERS_FILTER
             ) &&
             metricMatchesActiveView(state, item, today, "today") &&
-            (editing ||
-              showGoalsToday ||
-              item.goalEnabled === false),
+            (editing || showGoalsToday),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
@@ -757,7 +755,9 @@ function Today() {
           <View style={styles.sectionActions}>
             {editing ? (
               <Pressable
-                accessibilityLabel={showGoalsToday ? "Hide goals" : "Show goals"}
+                accessibilityLabel={
+                  showGoalsToday ? "Hide trackers" : "Show trackers"
+                }
                 onPress={() =>
                   updateSettings({ showGoalsToday: !showGoalsToday })
                 }

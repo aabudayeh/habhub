@@ -14,6 +14,7 @@ import {
   GymMetricMapping,
   GymSession,
   MuscleGroup,
+  WorkoutExerciseTrackingMode,
 } from "@/src/types";
 import { gymSessionsForDay } from "@/src/domain/dataIndex";
 
@@ -395,6 +396,131 @@ export function exerciseStats(
         )
       : 0,
     goalProgress: target > 0 ? Math.min(1, bestOneRepMax / target) : 0,
+  };
+}
+
+export type GymExercisePerformanceScore =
+  | "strength"
+  | "reps"
+  | "duration"
+  | "volume";
+
+export type GymExercisePerformanceComparison = {
+  currentHistory: ExerciseObservation[];
+  previousHistory: ExerciseObservation[];
+  currentScore: number;
+  previousScore: number;
+  currentVolumeKg: number;
+  previousVolumeKg: number;
+  currentBestOneRepMaxKg: number;
+  previousBestOneRepMaxKg: number;
+  currentSessions: number;
+  previousSessions: number;
+  improvement: number;
+  provisional: boolean;
+  scoreKind: GymExercisePerformanceScore;
+  trend: GymTrend;
+};
+
+function averageObservationScore(
+  history: ExerciseObservation[],
+  scoreKind: GymExercisePerformanceScore,
+) {
+  if (!history.length) return 0;
+  const values = history.map((observation) => {
+    if (scoreKind === "strength") return observation.estimatedOneRepMaxKg;
+    if (scoreKind === "reps") return observation.repsAtMax;
+    if (scoreKind === "duration") return observation.workSeconds;
+    return observation.volumeKg;
+  });
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Compares two explicit workout periods without treating an unfinished current
+ * day/week/month/year as a regression. The score follows the exercise's own
+ * logging mode, so bodyweight repetitions and timed activities remain useful
+ * even when an estimated one-rep max is not meaningful.
+ */
+export function exercisePerformanceComparison(
+  sessions: GymSession[],
+  userId: string,
+  key: string,
+  currentDates: readonly string[],
+  previousDates: readonly string[],
+  trackingMode: WorkoutExerciseTrackingMode = "load_reps",
+  currentPeriodInProgress = false,
+): GymExercisePerformanceComparison {
+  const currentDateSet = new Set(currentDates);
+  const previousDateSet = new Set(previousDates);
+  const history = exerciseHistory(sessions, userId, key);
+  const currentHistory = history.filter((item) =>
+    currentDateSet.has(item.localDate),
+  );
+  const previousHistory = history.filter((item) =>
+    previousDateSet.has(item.localDate),
+  );
+  const hasStrength = [...currentHistory, ...previousHistory].some(
+    (item) => item.estimatedOneRepMaxKg > 0,
+  );
+  const hasDuration = [...currentHistory, ...previousHistory].some(
+    (item) => item.workSeconds > 0,
+  );
+  const scoreKind: GymExercisePerformanceScore =
+    trackingMode === "duration" || (!hasStrength && hasDuration)
+      ? "duration"
+      : trackingMode === "reps" || !hasStrength
+        ? "reps"
+        : "strength";
+  const currentScore = averageObservationScore(currentHistory, scoreKind);
+  const previousScore = averageObservationScore(previousHistory, scoreKind);
+  const rawImprovement = previousHistory.length && previousScore > 0
+    ? ((currentScore - previousScore) / previousScore) * 100
+    : 0;
+  const provisional = Boolean(
+    currentPeriodInProgress &&
+      currentHistory.length &&
+      previousHistory.length &&
+      rawImprovement < 0,
+  );
+  const improvement = provisional ? 0 : rawImprovement;
+  const trend: GymTrend =
+    !currentHistory.length || !previousHistory.length
+      ? "learning"
+      : provisional || Math.abs(improvement) < 2
+        ? "steady"
+        : improvement >= 2
+          ? "building"
+          : improvement <= -5
+            ? "regressing"
+            : "steady";
+  return {
+    currentHistory,
+    previousHistory,
+    currentScore,
+    previousScore,
+    currentVolumeKg: currentHistory.reduce(
+      (sum, item) => sum + item.volumeKg,
+      0,
+    ),
+    previousVolumeKg: previousHistory.reduce(
+      (sum, item) => sum + item.volumeKg,
+      0,
+    ),
+    currentBestOneRepMaxKg: Math.max(
+      0,
+      ...currentHistory.map((item) => item.estimatedOneRepMaxKg),
+    ),
+    previousBestOneRepMaxKg: Math.max(
+      0,
+      ...previousHistory.map((item) => item.estimatedOneRepMaxKg),
+    ),
+    currentSessions: currentHistory.length,
+    previousSessions: previousHistory.length,
+    improvement,
+    provisional,
+    scoreKind,
+    trend,
   };
 }
 

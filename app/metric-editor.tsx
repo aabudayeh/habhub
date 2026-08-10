@@ -1421,10 +1421,7 @@ export default function TrackerEditor() {
             icon: preset.icon as keyof typeof Ionicons.glyphMap,
             color: preset.color,
             sublabel: preset.description,
-            group:
-              preset.category === "gym"
-                ? preset.grouping?.trim() || "Workout"
-                : "Ready-made",
+            group: preset.category === "gym" ? "Workout" : "Ready-made",
           }))}
           selectedIds={presetId ? [presetId] : []}
           onChange={(ids) => {
@@ -1438,14 +1435,9 @@ export default function TrackerEditor() {
           multiple={false}
           allowClear
           collapsibleGroups={
-            state.settings.showGym
-              ? [
-                  ...new Set(
-                    presets
-                      .filter((preset) => preset.category === "gym")
-                      .map((preset) => preset.grouping?.trim() || "Workout"),
-                  ),
-                ]
+            state.settings.showGym &&
+            presets.some((preset) => preset.category === "gym")
+              ? ["Workout"]
               : []
           }
           emptyLabel="Or create your own below"

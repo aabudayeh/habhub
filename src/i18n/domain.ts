@@ -721,7 +721,7 @@ const templates: Template[] = [
     ru: ([name]) => `Нет данных «${localizeCaptured("ru", name)}» за этот день`,
     fr: ([name]) => `Aucune donnée de ${localizeCaptured("fr", name)} pour ce jour`,
   }),
-  template(/^([\d.,]+(?:\s+[^\s]+)*) left$/, {
+  template(/^([\p{N}\d.,٬،]+(?:\s+[^\s]+)*) left$/u, {
     ar: ([value]) => `متبقٍ ${localizeCaptured("ar", value)}`,
     es: ([value]) => `Quedan ${localizeCaptured("es", value)}`,
     "zh-Hans": ([value]) => `还剩 ${localizeCaptured("zh-Hans", value)}`,

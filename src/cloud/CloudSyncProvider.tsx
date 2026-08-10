@@ -83,8 +83,19 @@ const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
 const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v2:";
 const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
+const MAX_GROUP_READ_RETRY_MS = 2 * 60 * 1000;
+const MAX_SURFACE_READ_RETRY_MS = 60 * 1000;
 const CHAT_OUTBOX_FRESHNESS_MS = 15 * 60 * 1000;
 const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
+
+function mergeQueuedActivitySince(
+  current: string | null | undefined,
+  failed: string | null,
+) {
+  if (current === undefined || failed === null) return failed;
+  if (current === null) return null;
+  return failed < current ? failed : current;
+}
 
 export type CloudSyncStatus =
   | "disabled"
@@ -2018,11 +2029,24 @@ function errorText(error: unknown) {
 
 function friendlySyncError(error: unknown) {
   const message = errorText(error);
-  if (/network|fetch|offline|timeout/i.test(message))
+  if (isTransientCloudError(message))
     return "Offline changes are safe on this device and will retry automatically.";
   if (/column.*revision|sync_user_snapshot|schema cache/i.test(message))
     return "Apply the latest Supabase migrations before enabling cloud sync.";
   return message || "Cloud sync failed. Your local data is still safe.";
+}
+
+/**
+ * PostgREST reports an exhausted/temporarily busy connection pool as PGRST003.
+ * It is recoverable in the same way as a network timeout: keep the durable
+ * device outbox, back off, and retry. Treating it as a permanent schema error
+ * left otherwise healthy accounts stuck at Connecting/Needs attention.
+ */
+function isTransientCloudError(error: unknown) {
+  const message = typeof error === "string" ? error : errorText(error);
+  return /network|fetch|offline|timeout|timed out|PGRST003|connection pool|too many connections/i.test(
+    message,
+  );
 }
 
 export function CloudSyncProvider({ children }: PropsWithChildren) {
@@ -2071,6 +2095,30 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   >(null);
   const pullRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pullRetryAttemptRef = useRef(0);
+  const groupReadRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const groupReadRetryAttemptRef = useRef(0);
+  const groupReadRetryGroupIdRef = useRef<string | null>(null);
+  const groupReadRetryRunnerRef = useRef<
+    ((groupId: string) => void) | null
+  >(null);
+  const messageReadRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const messageReadRetryAttemptRef = useRef(0);
+  const messageReadRetryGroupIdRef = useRef<string | null>(null);
+  const messageReadRetryRunnerRef = useRef<
+    ((groupId: string) => void) | null
+  >(null);
+  const activityReadRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const activityReadRetryAttemptRef = useRef(0);
+  const activityReadRetryGroupIdRef = useRef<string | null>(null);
+  const activityReadRetryRunnerRef = useRef<
+    ((groupId: string) => void) | null
+  >(null);
   const snapshotWriteTargetRevisionRef = useRef(0);
   const syncIsForcedRef = useRef(false);
   const performSyncRef = useRef<
@@ -2090,6 +2138,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const suppressGroupRefreshUntilRef = useRef(0);
   const groupLoadSequenceRef = useRef(0);
   const activityLoadSequenceRef = useRef(0);
+  const messageRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const activityRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const activityVersionByGroupRef = useRef(new Map<string, number>());
   const activityCoverageSinceByGroupRef = useRef(new Map<string, string>());
@@ -2288,6 +2337,174 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       }
     },
     [],
+  );
+
+  const clearGroupReadRetry = useCallback((groupId?: string) => {
+    if (
+      groupId &&
+      groupReadRetryGroupIdRef.current &&
+      groupReadRetryGroupIdRef.current !== groupId
+    )
+      return;
+    if (groupReadRetryTimerRef.current)
+      clearTimeout(groupReadRetryTimerRef.current);
+    groupReadRetryTimerRef.current = null;
+    groupReadRetryAttemptRef.current = 0;
+    groupReadRetryGroupIdRef.current = null;
+  }, []);
+
+  const markGroupReadSucceeded = useCallback(
+    (groupId: string) => {
+      clearGroupReadRetry(groupId);
+      setErrorMessage((current) =>
+        /group (?:refresh|history).*will retry/i.test(current ?? "")
+          ? null
+          : current,
+      );
+    },
+    [clearGroupReadRetry],
+  );
+
+  const scheduleGroupReadRetry = useCallback(
+    (groupId: string) => {
+      if (
+        auth.status !== "signedIn" ||
+        !auth.user ||
+        initializedUserRef.current !== auth.user.id ||
+        stateRef.current.group.id !== groupId
+      )
+        return;
+      if (
+        groupReadRetryGroupIdRef.current &&
+        groupReadRetryGroupIdRef.current !== groupId
+      )
+        clearGroupReadRetry();
+      groupReadRetryGroupIdRef.current = groupId;
+      if (
+        groupReadRetryTimerRef.current ||
+        !networkAvailableRef.current ||
+        NativeAppState.currentState !== "active"
+      )
+        return;
+      const attempt = Math.min(7, groupReadRetryAttemptRef.current + 1);
+      groupReadRetryAttemptRef.current = attempt;
+      groupReadRetryTimerRef.current = setTimeout(() => {
+        groupReadRetryTimerRef.current = null;
+        if (
+          !networkAvailableRef.current ||
+          NativeAppState.currentState !== "active" ||
+          initializedUserRef.current !== auth.user?.id ||
+          stateRef.current.group.id !== groupId
+        )
+          return;
+        groupReadRetryRunnerRef.current?.(groupId);
+      }, Math.min(MAX_GROUP_READ_RETRY_MS, 3_000 * 2 ** (attempt - 1)));
+    },
+    [auth.status, auth.user, clearGroupReadRetry],
+  );
+
+  const clearMessageReadRetry = useCallback((groupId?: string) => {
+    if (
+      groupId &&
+      messageReadRetryGroupIdRef.current &&
+      messageReadRetryGroupIdRef.current !== groupId
+    )
+      return;
+    if (messageReadRetryTimerRef.current)
+      clearTimeout(messageReadRetryTimerRef.current);
+    messageReadRetryTimerRef.current = null;
+    messageReadRetryAttemptRef.current = 0;
+    messageReadRetryGroupIdRef.current = null;
+  }, []);
+
+  const scheduleMessageReadRetry = useCallback(
+    (groupId: string) => {
+      if (
+        auth.status !== "signedIn" ||
+        !auth.user ||
+        initializedUserRef.current !== auth.user.id ||
+        stateRef.current.group.id !== groupId
+      )
+        return;
+      if (
+        messageReadRetryGroupIdRef.current &&
+        messageReadRetryGroupIdRef.current !== groupId
+      )
+        clearMessageReadRetry();
+      messageReadRetryGroupIdRef.current = groupId;
+      if (
+        messageReadRetryTimerRef.current ||
+        !networkAvailableRef.current ||
+        NativeAppState.currentState !== "active"
+      )
+        return;
+      const attempt = Math.min(6, messageReadRetryAttemptRef.current + 1);
+      messageReadRetryAttemptRef.current = attempt;
+      messageReadRetryTimerRef.current = setTimeout(() => {
+        messageReadRetryTimerRef.current = null;
+        if (
+          !networkAvailableRef.current ||
+          NativeAppState.currentState !== "active" ||
+          initializedUserRef.current !== auth.user?.id ||
+          stateRef.current.group.id !== groupId
+        )
+          return;
+        messageReadRetryRunnerRef.current?.(groupId);
+      }, Math.min(MAX_SURFACE_READ_RETRY_MS, 2_000 * 2 ** (attempt - 1)));
+    },
+    [auth.status, auth.user, clearMessageReadRetry],
+  );
+
+  const clearActivityReadRetry = useCallback((groupId?: string) => {
+    if (
+      groupId &&
+      activityReadRetryGroupIdRef.current &&
+      activityReadRetryGroupIdRef.current !== groupId
+    )
+      return;
+    if (activityReadRetryTimerRef.current)
+      clearTimeout(activityReadRetryTimerRef.current);
+    activityReadRetryTimerRef.current = null;
+    activityReadRetryAttemptRef.current = 0;
+    activityReadRetryGroupIdRef.current = null;
+  }, []);
+
+  const scheduleActivityReadRetry = useCallback(
+    (groupId: string) => {
+      if (
+        auth.status !== "signedIn" ||
+        !auth.user ||
+        initializedUserRef.current !== auth.user.id ||
+        stateRef.current.group.id !== groupId
+      )
+        return;
+      if (
+        activityReadRetryGroupIdRef.current &&
+        activityReadRetryGroupIdRef.current !== groupId
+      )
+        clearActivityReadRetry();
+      activityReadRetryGroupIdRef.current = groupId;
+      if (
+        activityReadRetryTimerRef.current ||
+        !networkAvailableRef.current ||
+        NativeAppState.currentState !== "active"
+      )
+        return;
+      const attempt = Math.min(6, activityReadRetryAttemptRef.current + 1);
+      activityReadRetryAttemptRef.current = attempt;
+      activityReadRetryTimerRef.current = setTimeout(() => {
+        activityReadRetryTimerRef.current = null;
+        if (
+          !networkAvailableRef.current ||
+          NativeAppState.currentState !== "active" ||
+          initializedUserRef.current !== auth.user?.id ||
+          stateRef.current.group.id !== groupId
+        )
+          return;
+        activityReadRetryRunnerRef.current?.(groupId);
+      }, Math.min(MAX_SURFACE_READ_RETRY_MS, 2_000 * 2 ** (attempt - 1)));
+    },
+    [auth.status, auth.user, clearActivityReadRetry],
   );
 
   // Account identity is a hard cache boundary. Clear another account's local
@@ -2505,20 +2722,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               workspaceHashRef.current =
                 workspaceAckHashesRef.current.get(groupId) ?? null;
               replaceState(next);
+              markGroupReadSucceeded(groupId);
             })
-            .catch((groupError) =>
+            .catch((groupError) => {
               setErrorMessage(
                 `Account synced; group refresh will retry: ${errorText(groupError)}`,
-              ),
-            );
+              );
+              scheduleGroupReadRetry(groupId);
+            });
         });
       }
     } catch (error) {
       if (!operationIsCurrent()) return;
       setStatus(
-        /network|fetch|offline|timeout/i.test(errorText(error))
-          ? "offline"
-          : "error",
+        isTransientCloudError(error) ? "offline" : "error",
       );
       setErrorMessage(friendlySyncError(error));
       throw error;
@@ -2527,10 +2744,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.user,
     hasUnsyncedLocalChanges,
     mergeRemoteWorkspace,
+    markGroupReadSucceeded,
     recordActivityMetadata,
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,
+    scheduleGroupReadRetry,
   ]);
 
   const pullLatest = useCallback((expectedRevision?: number): Promise<void> => {
@@ -3116,7 +3335,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             return;
           }
         }
-        const offline = /network|fetch|offline|timeout/i.test(syncErrorText);
+        const offline = isTransientCloudError(syncErrorText);
         const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
         cloudRetryAttemptRef.current = attempt;
         const retryAt =
@@ -3231,6 +3450,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
     let cancelled = false;
     const user = auth.user;
+    let settleInitialNetworkWork: () => void = () => undefined;
+    const initialNetworkWorkSettled = new Promise<void>((resolve) => {
+      settleInitialNetworkWork = resolve;
+    });
     remoteInitializationPendingRef.current = true;
     setStatus("initializing");
     setErrorMessage(null);
@@ -3256,10 +3479,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           setLastSyncedAt(savedCheckpoint);
         }
         if (cancelled) return;
-        // Local state is authoritative and usable before the first network
-        // request. Mark the account initialized now so offline edits enter the
-        // outbox instead of being silently ignored until a relaunch.
-        initializedUserRef.current = user.id;
         const onboardingComplete = await onboardingCompletedLocally(user.id);
         if (cancelled) return;
         if (
@@ -3278,6 +3497,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           replaceState(markedComplete);
         }
         if (!networkAvailableRef.current) {
+          // Local reducers and persistence stay fully usable offline. Mark the
+          // outbox owner here, but keep initialization pending so reconnect
+          // fetches/merges the server revision before it publishes this outbox.
+          initializedUserRef.current = user.id;
           setStatus("offline");
           setPendingChanges(hasUnsyncedLocalChanges());
           setErrorMessage(
@@ -3287,6 +3510,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
         const remote = await fetchSnapshot(user.id);
         if (cancelled) return;
+        // A successful account read ends the previous startup backoff. Group
+        // publication below may establish its own fresh retry, but stale delay
+        // from an earlier PGRST003 must not suppress deferred group hydration.
+        cloudRetryAttemptRef.current = 0;
+        nextRetryAtRef.current = 0;
+        setNextRetryAt(0);
+        initializedUserRef.current = user.id;
         remoteInitializationPendingRef.current = false;
         let correctedAccountState = false;
         if (remote) {
@@ -3388,6 +3618,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // then merge these server-owned rows without regressing local writes.
           InteractionManager.runAfterInteractions(() => {
             (async () => {
+              // The first account write and the heavier group workspace read
+              // used to start together. On small Supabase projects that burst
+              // could exhaust PostgREST's pool (PGRST003) and strand startup at
+              // Connecting. Serialize the cache hydration behind the account
+              // outbox while keeping the already-rendered local cache usable.
+              await initialNetworkWorkSettled;
+              if (cancelled) return;
+              if (nextRetryAtRef.current > Date.now()) {
+                const groupId = stateRef.current.group.id;
+                if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
+                return;
+              }
               let hydratedState = stateRef.current;
               try {
                 hydratedState = mergePrivateMediaUrls(
@@ -3409,6 +3651,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                   targetGroup.id,
                   (metadata) =>
                     recordActivityMetadata(targetGroup.id, metadata),
+                  undefined,
+                  existingGroups,
                 );
               if (cancelled) return;
               const next = mergeRemoteWorkspace(
@@ -3417,11 +3661,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
               stateRef.current = next;
               replaceState(next);
+              if (targetGroup) markGroupReadSucceeded(targetGroup.id);
             })().catch((groupError) => {
-              if (!cancelled)
+              if (!cancelled) {
                 setErrorMessage(
                   `Account restored; group refresh will retry: ${errorText(groupError)}`,
                 );
+                const groupId = stateRef.current.group.id;
+                if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
+              }
             });
           });
         } else {
@@ -3439,6 +3687,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           setPendingChanges(true);
           InteractionManager.runAfterInteractions(() => {
             (async () => {
+              await initialNetworkWorkSettled;
+              if (cancelled) return;
+              if (nextRetryAtRef.current > Date.now()) {
+                const groupId = stateRef.current.group.id;
+                if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
+                return;
+              }
               const existingGroups = await loadCloudGroupShells();
               if (!existingGroups.length || cancelled) return;
               const targetGroup = existingGroups[0];
@@ -3447,6 +3702,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 targetGroup.id,
                 (metadata) =>
                   recordActivityMetadata(targetGroup.id, metadata),
+                undefined,
+                existingGroups,
               );
               if (cancelled) return;
               const next = mergeRemoteWorkspace(
@@ -3459,22 +3716,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               if (!workspaceHashRef.current)
                 workspaceUploadRequiredGroupsRef.current.add(targetGroup.id);
               replaceState(next);
+              markGroupReadSucceeded(targetGroup.id);
             })().catch((groupError) => {
-              if (!cancelled)
+              if (!cancelled) {
                 setErrorMessage(
                   `Account ready; group refresh will retry: ${errorText(groupError)}`,
                 );
+                const groupId = stateRef.current.group.id;
+                if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
+              }
             });
           });
         }
         if (cancelled) return;
         identityResetUserRef.current = null;
-        supabase!.rpc("register_account_device", {
-          client_device_id: deviceId,
-          client_platform: Platform.OS,
-          client_label: null,
-        }).then(() => undefined, () => undefined);
-        deviceHeartbeatAtRef.current = Date.now();
         if (
           !remote ||
           correctedAccountState ||
@@ -3482,13 +3737,27 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         )
           await performSync(false, true);
         else setStatus("synced");
-        loadDevices().catch(() => undefined);
+        settleInitialNetworkWork();
+        // Device bookkeeping is not on the critical startup path. Stagger it
+        // behind the account/group work rather than adding two more concurrent
+        // PostgREST requests during a cold launch.
+        setTimeout(() => {
+          if (cancelled || nextRetryAtRef.current > Date.now()) return;
+          supabase!
+            .rpc("register_account_device", {
+              client_device_id: deviceId,
+              client_platform: Platform.OS,
+              client_label: null,
+            })
+            .then(() => undefined, () => undefined);
+          deviceHeartbeatAtRef.current = Date.now();
+          loadDevices().catch(() => undefined);
+        }, 1200);
       } catch (error) {
         if (!cancelled) {
+          settleInitialNetworkWork();
           setStatus(
-            /network|fetch|offline|timeout/i.test(errorText(error))
-              ? "offline"
-              : "error",
+            isTransientCloudError(error) ? "offline" : "error",
           );
           setErrorMessage(friendlySyncError(error));
           setPendingChanges(hasUnsyncedLocalChanges());
@@ -3507,6 +3776,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     })();
     return () => {
       cancelled = true;
+      settleInitialNetworkWork();
       initializedUserRef.current = null;
       remoteInitializationPendingRef.current = false;
       mergeBaseRef.current = null;
@@ -3519,12 +3789,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     hasUnsyncedLocalChanges,
     initializationAttempt,
     loadDevices,
+    markGroupReadSucceeded,
     mergeRemoteWorkspace,
     performSync,
     recordActivityMetadata,
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,
+    scheduleGroupReadRetry,
   ]);
 
   useEffect(() => {
@@ -3586,10 +3858,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   );
 
   useEffect(() => {
+    const initializationPending = remoteInitializationPendingRef.current;
     if (
       !nextRetryAt ||
       !networkAvailable ||
-      !pendingChanges ||
+      (!pendingChanges && !initializationPending) ||
       auth.status !== "signedIn"
     )
       return;
@@ -3731,12 +4004,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             workspaceHashRef.current =
               workspaceAckHashesRef.current.get(groupId) ?? null;
             replaceState(merged);
+            markGroupReadSucceeded(groupId);
           })
-          .catch((error) =>
+          .catch((error) => {
             setErrorMessage(
               `Group history will retry: ${errorText(error)}`,
-            ),
-          );
+            );
+            scheduleGroupReadRetry(groupId);
+          });
       } finally {
         approvalCheckInFlight = false;
       }
@@ -3802,9 +4077,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    markGroupReadSucceeded,
     mergeRemoteWorkspace,
     recordActivityMetadata,
     replaceState,
+    scheduleGroupReadRetry,
   ]);
 
   const refreshGroup = useCallback(async () => {
@@ -3812,11 +4089,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     const groupId = stateRef.current.group.id;
     const sequence = ++groupLoadSequenceRef.current;
     activityLoadSequenceRef.current += 1;
-    const loaded = await loadCloudWorkspace(
-      stateRef.current,
-      groupId,
-      (metadata) => recordActivityMetadata(groupId, metadata),
-    );
+    let loaded: AppState;
+    try {
+      loaded = await loadCloudWorkspace(
+        stateRef.current,
+        groupId,
+        (metadata) => recordActivityMetadata(groupId, metadata),
+      );
+    } catch (error) {
+      scheduleGroupReadRetry(groupId);
+      throw error;
+    }
     if (
       sequence !== groupLoadSequenceRef.current ||
       stateRef.current.group.id !== groupId
@@ -3830,20 +4113,46 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     workspaceHashRef.current =
       workspaceAckHashesRef.current.get(groupId) ?? null;
     replaceState(refreshed);
-  }, [mergeRemoteWorkspace, recordActivityMetadata, replaceState]);
+    markGroupReadSucceeded(groupId);
+  }, [
+    markGroupReadSucceeded,
+    mergeRemoteWorkspace,
+    recordActivityMetadata,
+    replaceState,
+    scheduleGroupReadRetry,
+  ]);
 
-  const refreshMessages = useCallback(async () => {
-    if (!isCloudGroupId(stateRef.current.group.id)) return;
-    const messages = await loadCloudMessages(
-      stateRef.current,
-      stateRef.current.group.id,
-    );
-    if (messagesEquivalent(stateRef.current.messages, messages)) return;
-    const next = { ...stateRef.current, messages };
-    stateRef.current = next;
-    // Do not hash or reload the full group workspace for a chat-only update.
-    replaceState(next);
-  }, [replaceState]);
+  const refreshMessages = useCallback((): Promise<void> => {
+    if (!isCloudGroupId(stateRef.current.group.id)) return Promise.resolve();
+    if (messageRefreshPromiseRef.current)
+      return messageRefreshPromiseRef.current;
+    const groupId = stateRef.current.group.id;
+    let operation: Promise<void>;
+    operation = (async () => {
+      try {
+        const messages = await loadCloudMessages(stateRef.current, groupId);
+        if (stateRef.current.group.id !== groupId) return;
+        clearMessageReadRetry(groupId);
+        if (messagesEquivalent(stateRef.current.messages, messages)) return;
+        const next = { ...stateRef.current, messages };
+        stateRef.current = next;
+        // Do not hash or reload the full group workspace for a chat-only update.
+        replaceState(next);
+      } catch (error) {
+        scheduleMessageReadRetry(groupId);
+        throw error;
+      }
+    })().finally(() => {
+      if (messageRefreshPromiseRef.current === operation)
+        messageRefreshPromiseRef.current = null;
+    });
+    messageRefreshPromiseRef.current = operation;
+    return operation;
+  }, [clearMessageReadRetry, replaceState, scheduleMessageReadRetry]);
+  messageReadRetryRunnerRef.current = (groupId) => {
+    if (stateRef.current.group.id !== groupId) return;
+    void refreshMessages().catch(() => undefined);
+  };
 
   const refreshGroupActivity = useCallback(
     (sinceDate?: string): Promise<void> => {
@@ -3871,11 +4180,24 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           const groupId = stateRef.current.group.id;
           if (!isCloudGroupId(groupId)) continue;
           const sequence = ++activityLoadSequenceRef.current;
-          const activity = await loadCloudGroupActivity(
-            stateRef.current,
-            groupId,
-            queuedSince ?? undefined,
-          );
+          let activity: Awaited<ReturnType<typeof loadCloudGroupActivity>>;
+          try {
+            activity = await loadCloudGroupActivity(
+              stateRef.current,
+              groupId,
+              queuedSince ?? undefined,
+            );
+          } catch (error) {
+            // The request was removed from the queue before its network read.
+            // Restore that exact coverage (merging any newer invalidation that
+            // arrived in flight) so a transient failure cannot lose history.
+            queuedActivitySinceRef.current = mergeQueuedActivitySince(
+              queuedActivitySinceRef.current,
+              queuedSince,
+            );
+            scheduleActivityReadRetry(groupId);
+            throw error;
+          }
           if (
             sequence !== activityLoadSequenceRef.current ||
             stateRef.current.group.id !== groupId
@@ -3971,6 +4293,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             }).catch(() => undefined);
           });
         }
+        clearActivityReadRetry(stateRef.current.group.id);
       })();
       activityRefreshPromiseRef.current = operation;
       void operation
@@ -3981,8 +4304,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         .catch(() => undefined);
       return operation;
     },
-    [replaceState],
+    [clearActivityReadRetry, replaceState, scheduleActivityReadRetry],
   );
+  activityReadRetryRunnerRef.current = (groupId) => {
+    if (stateRef.current.group.id !== groupId) return;
+    const queuedSince = queuedActivitySinceRef.current;
+    if (queuedSince === undefined) return;
+    void refreshGroupActivity(queuedSince ?? undefined).catch(() => undefined);
+  };
 
   useEffect(() => {
     const wasAvailable = previousNetworkAvailableRef.current;
@@ -4012,6 +4341,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       refreshGroupActivity(
         dateWithOffsetFrom(dateKey(), -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1)),
       ).catch(() => undefined);
+      const retryGroupId = groupReadRetryGroupIdRef.current;
+      if (retryGroupId) scheduleGroupReadRetry(retryGroupId);
+      const retryActivityGroupId = activityReadRetryGroupIdRef.current;
+      if (retryActivityGroupId)
+        scheduleActivityReadRetry(retryActivityGroupId);
     }, 150);
     return () => clearTimeout(timer);
   }, [
@@ -4022,6 +4356,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     performSync,
     refreshGroupActivity,
     refreshMessages,
+    scheduleActivityReadRetry,
+    scheduleGroupReadRetry,
   ]);
 
   useEffect(() => {
@@ -4148,6 +4484,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             ? null
             : (workspaceAckHashesRef.current.get(groupId) ?? null);
           replaceState(next);
+          markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
           const cachePayload = cachedGroupActivity(next, groupId);
           InteractionManager.runAfterInteractions(() => {
@@ -4158,15 +4495,35 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             }).catch(() => undefined);
           });
         })
-        .catch((error) =>
-          setErrorMessage(`Group refresh will retry: ${errorText(error)}`),
-        );
+        .catch((error) => {
+          setErrorMessage(`Group refresh will retry: ${errorText(error)}`);
+          scheduleGroupReadRetry(groupId);
+        });
     },
     [
       hasUnsyncedLocalChanges,
+      markGroupReadSucceeded,
       mergeRemoteWorkspace,
       recordActivityMetadata,
       replaceState,
+      scheduleGroupReadRetry,
+    ],
+  );
+  groupReadRetryRunnerRef.current = hydrateGroupInBackground;
+
+  useEffect(
+    () => () => {
+      clearGroupReadRetry();
+      clearMessageReadRetry();
+      clearActivityReadRetry();
+      queuedActivitySinceRef.current = undefined;
+    },
+    [
+      auth.user?.id,
+      clearActivityReadRetry,
+      clearGroupReadRetry,
+      clearMessageReadRetry,
+      state.group.id,
     ],
   );
 
@@ -4314,6 +4671,28 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         {
           event: "*",
           schema: "public",
+          table: "groups",
+          filter: `id=eq.${state.group.id}`,
+        },
+        queueRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+        },
+        // Profile RLS limits this stream to the signed-in account and people
+        // who share a group. Display-name/avatar changes can therefore refresh
+        // the member shell without polling or waiting for unrelated activity.
+        queueRefresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
           table: "group_members",
           filter: `group_id=eq.${state.group.id}`,
         },
@@ -4435,6 +4814,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         void readCloudSyncCheckpoint(auth.user.id)
           .then(recordServerSyncedAt)
           .catch(() => undefined);
+      const initializationPending = remoteInitializationPendingRef.current;
+      if (initializationPending) {
+        cloudRetryAttemptRef.current = 0;
+        nextRetryAtRef.current = 0;
+        setNextRetryAt(0);
+        setInitializationAttempt((value) => value + 1);
+      }
+      const retryGroupId = groupReadRetryGroupIdRef.current;
+      if (retryGroupId) scheduleGroupReadRetry(retryGroupId);
+      const retryActivityGroupId = activityReadRetryGroupIdRef.current;
+      if (retryActivityGroupId)
+        scheduleActivityReadRetry(retryActivityGroupId);
       void touchPresence(true).catch(() => undefined);
       // Resume cached UI first, then recover chat and pending writes in
       // separate turns. The activity subscription checks its lightweight
@@ -4449,7 +4840,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       later(450, () => {
         publishLeaderboardFreshness().catch(() => undefined);
       });
-      if (pendingChanges || status === "offline")
+      if (!initializationPending && (pendingChanges || status === "offline"))
         later(900, () => performSync().catch(() => undefined));
     });
     return () => {
@@ -4465,6 +4856,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     publishLeaderboardFreshness,
     recordServerSyncedAt,
     refreshMessages,
+    scheduleActivityReadRetry,
+    scheduleGroupReadRetry,
     status,
     touchPresence,
   ]);

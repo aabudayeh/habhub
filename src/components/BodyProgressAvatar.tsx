@@ -1,3 +1,4 @@
+import { FontAwesome6 } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useRef } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 
@@ -11,151 +12,6 @@ const BODY_HEIGHT = 190;
 
 type BodyVariant = BiologicalSex;
 
-type Shape = {
-  borderRadius: number;
-  height: number;
-  left: number;
-  rotate?: string;
-  top: number;
-  width: number;
-};
-
-function bodyShapes(variant: BodyVariant, muscleProgress: number): Shape[] {
-  const female = variant === "female";
-  const male = variant === "male";
-  const muscle = Math.max(0, Math.min(1, muscleProgress));
-  const shoulderLeft = female ? 26 : male ? 20 : 23;
-  const shoulderWidth = female ? 64 : male ? 76 : 70;
-  const chestLeft = female ? 34 : male ? 30 : 32;
-  const chestWidth = female ? 48 : male ? 56 : 52;
-  const waistLeft = female ? 39 : male ? 35 : 37;
-  const waistWidth = female ? 38 : male ? 46 : 42;
-  const hipLeft = female ? 29 : male ? 34 : 32;
-  const hipWidth = female ? 58 : male ? 48 : 52;
-  const armLeft = male ? 19 : 22;
-  const armRight = male ? 84 : 81;
-
-  return [
-    // An overlapping set of soft ovals creates one organic silhouette while
-    // remaining fully code-native on Android, iOS, and web.
-    { left: 44, top: 1, width: 28, height: 34, borderRadius: 16 },
-    { left: 42, top: 13, width: 5, height: 10, borderRadius: 4 },
-    { left: 69, top: 13, width: 5, height: 10, borderRadius: 4 },
-    { left: 48, top: 22, width: 20, height: 15, borderRadius: 9 },
-    { left: 52, top: 30, width: 12, height: 15, borderRadius: 7 },
-    {
-      left: shoulderLeft - muscle * 3,
-      top: 42,
-      width: shoulderWidth + muscle * 6,
-      height: 22,
-      borderRadius: 12,
-    },
-    {
-      left: chestLeft - muscle * 3,
-      top: 40,
-      width: chestWidth + muscle * 6,
-      height: female ? 64 : 67,
-      borderRadius: female ? 20 : 18,
-    },
-    {
-      left: waistLeft,
-      top: 78,
-      width: waistWidth,
-      height: 39,
-      borderRadius: 18,
-    },
-    {
-      left: hipLeft,
-      top: 101,
-      width: hipWidth,
-      height: female ? 29 : 27,
-      borderRadius: female ? 16 : 14,
-    },
-    {
-      left: armLeft,
-      top: 47,
-      width: 13 + muscle * 4,
-      height: 49,
-      borderRadius: 9,
-      rotate: "11deg",
-    },
-    {
-      left: armRight,
-      top: 47,
-      width: 13 + muscle * 4,
-      height: 49,
-      borderRadius: 9,
-      rotate: "-11deg",
-    },
-    {
-      left: male ? 15 : 18,
-      top: 86,
-      width: 11,
-      height: 45,
-      borderRadius: 8,
-      rotate: "5deg",
-    },
-    {
-      left: male ? 89 : 86,
-      top: 86,
-      width: 11,
-      height: 45,
-      borderRadius: 8,
-      rotate: "-5deg",
-    },
-    { left: male ? 14 : 17, top: 124, width: 11, height: 16, borderRadius: 8 },
-    { left: male ? 90 : 87, top: 124, width: 11, height: 16, borderRadius: 8 },
-    {
-      left: female ? 32 : 34,
-      top: 116,
-      width: female ? 21 : 20,
-      height: 48,
-      borderRadius: 12,
-      rotate: "2deg",
-    },
-    {
-      left: female ? 63 : 62,
-      top: 116,
-      width: female ? 21 : 20,
-      height: 48,
-      borderRadius: 12,
-      rotate: "-2deg",
-    },
-    {
-      left: female ? 34 : 35,
-      top: 153,
-      width: female ? 17 : 18,
-      height: 31,
-      borderRadius: 10,
-      rotate: "2deg",
-    },
-    {
-      left: female ? 65 : 63,
-      top: 153,
-      width: female ? 17 : 18,
-      height: 31,
-      borderRadius: 10,
-      rotate: "-2deg",
-    },
-    {
-      left: female ? 30 : 31,
-      top: 178,
-      width: 24,
-      height: 9,
-      borderRadius: 7,
-      rotate: "-2deg",
-    },
-    {
-      left: female ? 62 : 61,
-      top: 178,
-      width: 24,
-      height: 9,
-      borderRadius: 7,
-      rotate: "2deg",
-    },
-  ];
-}
-
 function BodyLayer({
   color,
   muscleProgress,
@@ -165,29 +21,27 @@ function BodyLayer({
   muscleProgress: number;
   variant: BodyVariant;
 }) {
-  const shapes = useMemo(
-    () => bodyShapes(variant, muscleProgress),
-    [muscleProgress, variant],
-  );
+  const presentation = useMemo(() => {
+    const muscle = Math.max(0, Math.min(1, muscleProgress));
+    return {
+      icon: variant === "female" ? "person-dress" : "person",
+      size: variant === "female" ? 154 : 164,
+      scaleX:
+        (variant === "female" ? 0.98 : variant === "male" ? 1.03 : 1) +
+        muscle * 0.06,
+    } as const;
+  }, [muscleProgress, variant]);
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {shapes.map((shape, index) => (
-        <View
-          key={index}
-          style={[
-            styles.shape,
-            {
-              backgroundColor: color,
-              borderRadius: shape.borderRadius,
-              height: shape.height,
-              left: shape.left,
-              top: shape.top,
-              transform: shape.rotate ? [{ rotate: shape.rotate }] : undefined,
-              width: shape.width,
-            },
-          ]}
-        />
-      ))}
+      <FontAwesome6
+        name={presentation.icon}
+        size={presentation.size}
+        color={color}
+        style={[
+          styles.bodyGlyph,
+          { transform: [{ scaleX: presentation.scaleX }] },
+        ]}
+      />
     </View>
   );
 }
@@ -313,7 +167,15 @@ const styles = StyleSheet.create({
     width: BODY_WIDTH,
     height: BODY_HEIGHT,
   },
-  shape: { position: "absolute" },
+  bodyGlyph: {
+    position: "absolute",
+    left: 0,
+    top: 12,
+    width: BODY_WIDTH,
+    height: BODY_HEIGHT,
+    lineHeight: BODY_HEIGHT - 12,
+    textAlign: "center",
+  },
   fillClip: {
     position: "absolute",
     bottom: 0,

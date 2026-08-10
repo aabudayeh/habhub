@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -24,7 +24,6 @@ import { useAuth } from "@/src/auth/AuthProvider";
 import {
   disablePushNotifications,
   enablePushNotifications,
-  updatePushPreferences,
 } from "@/src/notifications/push";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { NotificationSettings } from "@/src/types";
@@ -40,7 +39,6 @@ export default function NotificationsScreen() {
   const [otherOpen, setOtherOpen] = useState(false);
   const [trackersOpen, setTrackersOpen] = useState(false);
   const [quietOpen, setQuietOpen] = useState(false);
-  const registrationAttempted = useRef(false);
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => metric.scoreWeight > 0 && metric.dataType !== "text",
   );
@@ -88,27 +86,6 @@ export default function NotificationsScreen() {
         defaultProgressReminderPercentages(metric),
     });
   }
-  useEffect(() => {
-    if (!auth.user || !value.pushEnabled) return;
-    if (registrationAttempted.current) {
-      updatePushPreferences(auth.user.id, value, state.settings.language);
-      return;
-    }
-    registrationAttempted.current = true;
-    enablePushNotifications(auth.user.id, value, state.settings.language)
-      .then(() =>
-        setPermissionNote("This phone is registered for HabHub notifications."),
-      )
-      .catch((error) => {
-        setPermissionNote(
-          error instanceof Error
-            ? error.message
-            : "This phone could not be registered.",
-        );
-        // Keep the user's preference enabled when system permission exists;
-        // registration is retried on the next settings/foreground visit.
-      });
-  }, [auth.user, state.settings.language, updateSettings, value]);
   async function togglePush() {
     const next = !value.pushEnabled;
     if (!next) {

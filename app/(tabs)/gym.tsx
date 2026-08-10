@@ -49,7 +49,8 @@ import {
   expandedGymExercises,
   exerciseHistory,
   exerciseIdentity,
-  exerciseStats,
+  exercisePerformanceComparison,
+  type GymExercisePerformanceComparison,
   exerciseTrend,
   formatGymDuration,
   gymSessionClockBounds,
@@ -61,6 +62,12 @@ import {
   totalGymSetWorkSeconds,
   trainingVolumeKg,
 } from "@/src/domain/gym";
+import {
+  customPerformancePeriod,
+  overallPerformancePeriod,
+  performancePeriod,
+  type PerformanceRange,
+} from "@/src/domain/performance";
 import {
   consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
@@ -105,8 +112,35 @@ type WorkoutTimer = {
 };
 
 type GymMode = "workout" | "progress" | "performance";
-type GymPerformanceRange = "week" | "month" | "year" | "all" | "custom";
 type GymPerformancePriority = "all" | "gaining" | "steady" | "focus" | "learning";
+
+const GYM_PERFORMANCE_RANGES: { id: PerformanceRange; label: string }[] = [
+  { id: "day", label: "Daily" },
+  { id: "week", label: "Weekly" },
+  { id: "month", label: "Monthly" },
+  { id: "year", label: "Yearly" },
+];
+
+const GYM_COMPARISON_OPTIONS = [
+  {
+    id: "previous",
+    label: "Previous period",
+    icon: "play-back-outline" as const,
+    group: "Comparison",
+  },
+  {
+    id: "overall",
+    label: "Overall average",
+    icon: "analytics-outline" as const,
+    group: "Comparison",
+  },
+  {
+    id: "custom",
+    label: "Custom ranges",
+    icon: "calendar-outline" as const,
+    group: "Comparison",
+  },
+];
 
 type StoredWorkoutDraft = {
   savedAt: number;
@@ -244,6 +278,20 @@ function workoutNotificationSteps(
 
 function blankSet(reps = 10, weightKg = 0): GymSet {
   return { id: uniqueId("set"), reps, weightKg, completed: false };
+}
+
+function gymPerformanceScoreText(
+  comparison: GymExercisePerformanceComparison,
+  locale: string,
+) {
+  const rounded = Math.round(comparison.currentScore * 10) / 10;
+  if (comparison.scoreKind === "strength")
+    return `${rounded.toLocaleString(locale)} kg avg e1RM`;
+  if (comparison.scoreKind === "duration")
+    return `${formatGymDuration(Math.round(comparison.currentScore))} avg active`;
+  if (comparison.scoreKind === "reps")
+    return `${rounded.toLocaleString(locale)} avg reps`;
+  return `${rounded.toLocaleString(locale)} kg avg volume`;
 }
 
 function fromCatalog(item: ExerciseCatalogItem, previous?: GymExercise): GymExercise {
@@ -473,14 +521,38 @@ function GymScreen() {
   const initializedDate = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
   const [performanceRange, setPerformanceRange] =
-    useState<GymPerformanceRange>("all");
-  const [performanceCustomStart, setPerformanceCustomStart] = useState(
-    dateWithOffsetFrom(dateKey(), -29),
+    useState<PerformanceRange>("week");
+  const defaultPerformancePeriod = useMemo(
+    () =>
+      performancePeriod(
+        performanceRange,
+        dateKey(),
+        state.settings.weekStartsOn ?? 1,
+        locale,
+      ),
+    [locale, performanceRange, state.settings.weekStartsOn],
   );
-  const [performanceCustomEnd, setPerformanceCustomEnd] = useState(dateKey());
-  const [performanceCustomPicker, setPerformanceCustomPicker] = useState<
-    "start" | "end" | null
+  const [performanceComparisonMode, setPerformanceComparisonMode] = useState<
+    "previous" | "overall" | "custom"
+  >("previous");
+  const [performanceCurrentStart, setPerformanceCurrentStart] = useState(
+    defaultPerformancePeriod.currentDates[0] ?? dateKey(),
+  );
+  const [performanceCurrentEnd, setPerformanceCurrentEnd] = useState(
+    defaultPerformancePeriod.currentDates.at(-1) ?? dateKey(),
+  );
+  const [performancePreviousStart, setPerformancePreviousStart] = useState(
+    defaultPerformancePeriod.previousDates[0] ?? dateKey(),
+  );
+  const [performancePreviousEnd, setPerformancePreviousEnd] = useState(
+    defaultPerformancePeriod.previousDates.at(-1) ?? dateKey(),
+  );
+  const [performanceRangePicker, setPerformanceRangePicker] = useState<
+    "current" | "previous" | null
   >(null);
+  const [performanceRangePickerStep, setPerformanceRangePickerStep] = useState<
+    "start" | "end"
+  >("start");
   const [performanceFilters, setPerformanceFilters] = useState<string[]>([]);
   const [performancePriority, setPerformancePriority] =
     useState<GymPerformancePriority>("all");
@@ -521,7 +593,7 @@ function GymScreen() {
       !performanceEditMode &&
       !pickerOpen &&
       !recapOpen &&
-      !performanceCustomPicker,
+      !performanceRangePicker,
     onPrevious: () => {
       const modes: GymMode[] = ["workout", "progress", "performance"];
       selectMode(modes[Math.max(0, modes.indexOf(mode) - 1)]);
@@ -617,6 +689,20 @@ function GymScreen() {
   );
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
+  const gymReminderMetric = useMemo(
+    () =>
+      state.metrics.find(
+        (metric) => metric.gymMapping?.kind === "session_completed",
+      ) ?? state.metrics.find((metric) => metric.id === "workout"),
+    [state.metrics],
+  );
+  const openGymReminders = useCallback(() => {
+    if (!gymReminderMetric) return;
+    router.push({
+      pathname: "/metric-editor",
+      params: { id: gymReminderMetric.id, focus: "notifications" },
+    } as never);
+  }, [gymReminderMetric]);
   const sessions = useMemo(
     () =>
       (state.gymSessions ?? [])
@@ -628,35 +714,28 @@ function GymScreen() {
         ),
     [state.currentUserId, state.gymSessions],
   );
-  const performanceDates = useMemo(() => {
-    const end = dateKey();
-    if (performanceRange === "week")
-      return { start: dateWithOffsetFrom(end, -6), end };
-    if (performanceRange === "month")
-      return { start: dateWithOffsetFrom(end, -29), end };
-    if (performanceRange === "year")
-      return { start: `${end.slice(0, 4)}-01-01`, end };
-    if (performanceRange === "custom")
-      return {
-        start: performanceCustomStart <= performanceCustomEnd
-          ? performanceCustomStart
-          : performanceCustomEnd,
-        end: performanceCustomStart <= performanceCustomEnd
-          ? performanceCustomEnd
-          : performanceCustomStart,
-      };
-    return { start: undefined, end };
-  }, [performanceCustomEnd, performanceCustomStart, performanceRange]);
-  const performanceSessions = useMemo(
-    () =>
-      sessions.filter(
-        (session) =>
-          (!performanceDates.start ||
-            session.localDate >= performanceDates.start) &&
-          session.localDate <= performanceDates.end,
-      ),
-    [performanceDates.end, performanceDates.start, sessions],
-  );
+  const selectedPerformancePeriod = useMemo(() => {
+    if (performanceComparisonMode === "overall")
+      return overallPerformancePeriod(state, defaultPerformancePeriod);
+    if (performanceComparisonMode === "custom")
+      return customPerformancePeriod(
+        performanceCurrentStart,
+        performanceCurrentEnd,
+        performancePreviousStart,
+        performancePreviousEnd,
+        locale,
+      );
+    return defaultPerformancePeriod;
+  }, [
+    defaultPerformancePeriod,
+    locale,
+    performanceComparisonMode,
+    performanceCurrentEnd,
+    performanceCurrentStart,
+    performancePreviousEnd,
+    performancePreviousStart,
+    state,
+  ]);
   const performanceExerciseMap = useMemo(
     () =>
       new Map(
@@ -690,7 +769,7 @@ function GymScreen() {
     ],
     [accent, language, performanceExerciseMap],
   );
-  const performanceRows = useMemo(() => {
+  const performanceBaseRows = useMemo(() => {
     const selectedExercises = new Set(
       performanceFilters
         .filter((id) => id.startsWith("exercise:"))
@@ -701,7 +780,7 @@ function GymScreen() {
         .filter((id) => id.startsWith("muscle:"))
         .map((id) => id.slice("muscle:".length) as MuscleGroup),
     );
-    const rows = [...performanceExerciseMap.entries()]
+    return [...performanceExerciseMap.entries()]
       .filter(([key, exercise]) => {
         if (!performanceFilters.length) return true;
         return (
@@ -712,24 +791,39 @@ function GymScreen() {
         );
       })
       .map(([key, exercise]) => {
-        const stats = exerciseStats(
-          performanceSessions,
+        const trackingMode =
+          exercise.trackingMode ??
+          catalogExercise(exercise.exerciseKey)?.trackingMode ??
+          "load_reps";
+        const comparison = exercisePerformanceComparison(
+          sessions,
           state.currentUserId,
           key,
-          state.gymExerciseGoals?.[key],
+          selectedPerformancePeriod.currentDates,
+          selectedPerformancePeriod.previousDates,
+          trackingMode,
+          selectedPerformancePeriod.inProgress,
         );
-        const volume = stats.history.reduce(
-          (sum, observation) => sum + observation.volumeKg,
-          0,
-        );
-        return { key, exercise, stats, volume };
+        return { key, exercise, comparison };
       });
+  }, [
+    performanceExerciseMap,
+    performanceFilters,
+    selectedPerformancePeriod,
+    sessions,
+    state.currentUserId,
+  ]);
+  const performanceRows = useMemo(() => {
+    const rows = performanceBaseRows;
     const priorityMatches = (row: (typeof rows)[number]) => {
       if (performancePriority === "all") return true;
-      if (performancePriority === "gaining") return row.stats.trend === "building";
-      if (performancePriority === "steady") return row.stats.trend === "steady";
-      if (performancePriority === "focus") return row.stats.trend === "regressing";
-      return row.stats.trend === "learning";
+      if (performancePriority === "gaining")
+        return row.comparison.trend === "building";
+      if (performancePriority === "steady")
+        return row.comparison.trend === "steady";
+      if (performancePriority === "focus")
+        return row.comparison.trend === "regressing";
+      return row.comparison.trend === "learning";
     };
     const visible = rows.filter(
       (row) => !performanceHidden.includes(row.key) && priorityMatches(row),
@@ -740,18 +834,14 @@ function GymScreen() {
       if (pin) return pin;
       const ordered = (orderIndex.get(a.key) ?? 9999) - (orderIndex.get(b.key) ?? 9999);
       if (ordered) return ordered;
-      return b.stats.improvement - a.stats.improvement;
+      return b.comparison.improvement - a.comparison.improvement;
     });
   }, [
-    performanceExerciseMap,
-    performanceFilters,
+    performanceBaseRows,
     performanceHidden,
     performanceOrder,
     performancePinned,
     performancePriority,
-    performanceSessions,
-    state.currentUserId,
-    state.gymExerciseGoals,
   ]);
   useEffect(() => {
     const keys = [...performanceExerciseMap.keys()];
@@ -762,36 +852,39 @@ function GymScreen() {
   }, [performanceExerciseMap]);
   const performanceTrendCounts = useMemo(() => {
     const counts = { gaining: 0, steady: 0, focus: 0, learning: 0 };
-    performanceExerciseMap.forEach((_exercise, key) => {
-      const trend = exerciseStats(
-        performanceSessions,
-        state.currentUserId,
-        key,
-      ).trend;
-      if (trend === "building") counts.gaining += 1;
-      else if (trend === "steady") counts.steady += 1;
-      else if (trend === "regressing") counts.focus += 1;
-      else counts.learning += 1;
-    });
+    performanceBaseRows
+      .filter((row) => !performanceHidden.includes(row.key))
+      .forEach((row) => {
+        const trend = row.comparison.trend;
+        if (trend === "building") counts.gaining += 1;
+        else if (trend === "steady") counts.steady += 1;
+        else if (trend === "regressing") counts.focus += 1;
+        else counts.learning += 1;
+      });
     return counts;
-  }, [performanceExerciseMap, performanceSessions, state.currentUserId]);
+  }, [performanceBaseRows, performanceHidden]);
   const performanceHighlights = useMemo(() => {
-    const candidates = [...performanceExerciseMap.entries()]
-      .map(([key, exercise]) => ({
-        key,
-        exercise,
-        stats: exerciseStats(performanceSessions, state.currentUserId, key),
-      }))
-      .filter((row) => row.stats.sessions >= 2);
+    const candidates = performanceBaseRows.filter(
+      (row) =>
+        !performanceHidden.includes(row.key) &&
+        row.comparison.currentSessions > 0 &&
+        row.comparison.previousSessions > 0,
+    );
     return {
       strongest: [...candidates].sort(
-        (a, b) => b.stats.improvement - a.stats.improvement,
+        (a, b) => b.comparison.improvement - a.comparison.improvement,
       )[0],
       focus: [...candidates]
-        .filter((row) => row.stats.trend === "regressing" || row.stats.trend === "steady")
-        .sort((a, b) => a.stats.improvement - b.stats.improvement)[0],
+        .filter(
+          (row) =>
+            row.comparison.trend === "regressing" ||
+            row.comparison.trend === "steady",
+        )
+        .sort(
+          (a, b) => a.comparison.improvement - b.comparison.improvement,
+        )[0],
     };
-  }, [performanceExerciseMap, performanceSessions, state.currentUserId]);
+  }, [performanceBaseRows, performanceHidden]);
 
   const movePerformanceRow = useCallback((key: string, target: number) => {
     setPerformanceOrder((current) => {
@@ -803,6 +896,13 @@ function GymScreen() {
       next.splice(bounded, 0, moved);
       return next;
     });
+  }, []);
+  const selectPerformanceRange = useCallback((next: PerformanceRange) => {
+    setPerformanceRange(next);
+    setPerformanceComparisonMode((current) =>
+      current === "custom" ? "previous" : current,
+    );
+    setPerformanceRangePicker(null);
   }, []);
   const sessionsForDate = useMemo(
     () => sessions.filter((session) => session.localDate === localDate),
@@ -2155,49 +2255,70 @@ function GymScreen() {
           title="Workout"
           tutorialId="gym-header"
           action={
-            <View
-              accessibilityRole="tablist"
-              style={[
-                styles.modeSegment,
-                { backgroundColor: colors.card, borderColor: colors.border },
-              ]}
-            >
-              {(["workout", "progress", "performance"] as const).map((item) => {
-                const selected = mode === item;
-                const label =
-                  item === "workout"
-                    ? "Workout"
-                    : item === "progress"
-                      ? "Progress"
-                      : "Performance";
-                return (
-                  <Pressable
-                    key={item}
-                    accessibilityLabel={t(label)}
-                    accessibilityRole="tab"
-                    accessibilityState={{ selected }}
-                    onPress={() => selectMode(item)}
-                    style={({ pressed }) => [
-                      styles.modeChoice,
-                      selected && { backgroundColor: accent },
-                      pressed && styles.modeChoicePressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.modeChoiceText,
-                        {
-                          color: selected
-                            ? readableTextColor(accent)
-                            : colors.muted,
-                        },
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+            <View style={styles.headerTools}>
+              {gymReminderMetric ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t("Reminders")}: ${gymReminderMetric.name}`}
+                  onPress={openGymReminders}
+                  style={({ pressed }) => [
+                    styles.reminderShortcut,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                    },
+                    pressed && styles.modeChoicePressed,
+                  ]}
+                >
+                  <Ionicons name="alarm-outline" size={15} color={accent} />
+                </Pressable>
+              ) : null}
+              <View
+                accessibilityRole="tablist"
+                style={[
+                  styles.modeSegment,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                {(["workout", "progress", "performance"] as const).map(
+                  (item) => {
+                    const selected = mode === item;
+                    const label =
+                      item === "workout"
+                        ? "Workout"
+                        : item === "progress"
+                          ? "Progress"
+                          : "Performance";
+                    return (
+                      <Pressable
+                        key={item}
+                        accessibilityLabel={t(label)}
+                        accessibilityRole="tab"
+                        accessibilityState={{ selected }}
+                        onPress={() => selectMode(item)}
+                        style={({ pressed }) => [
+                          styles.modeChoice,
+                          selected && { backgroundColor: accent },
+                          pressed && styles.modeChoicePressed,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.modeChoiceText,
+                            {
+                              color: selected
+                                ? readableTextColor(accent)
+                                : colors.muted,
+                            },
+                          ]}
+                        >
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  },
+                )}
+              </View>
             </View>
           }
         />
@@ -3305,18 +3426,10 @@ function GymScreen() {
           <View style={styles.performanceStack}>
             <Card style={styles.performanceControls}>
               <View style={styles.performanceRangeBar}>
-                {(
-                  [
-                    ["week", "Week"],
-                    ["month", "Month"],
-                    ["year", "Year"],
-                    ["all", "All time"],
-                    ["custom", "Custom"],
-                  ] as const
-                ).map(([id, label]) => (
+                {GYM_PERFORMANCE_RANGES.map(({ id, label }) => (
                   <Pressable
                     key={id}
-                    onPress={() => setPerformanceRange(id)}
+                    onPress={() => selectPerformanceRange(id)}
                     style={[
                       styles.performanceRangeChoice,
                       performanceRange === id && {
@@ -3336,58 +3449,146 @@ function GymScreen() {
                   </Pressable>
                 ))}
               </View>
-              {performanceRange === "custom" ? (
-                <>
+              <SelectionMenu
+                title="Compare with"
+                items={GYM_COMPARISON_OPTIONS}
+                selectedIds={[performanceComparisonMode]}
+                multiple={false}
+                searchable={false}
+                onChange={(ids) => {
+                  const next = ids[0] as
+                    | "previous"
+                    | "overall"
+                    | "custom"
+                    | undefined;
+                  if (!next) return;
+                  setPerformanceComparisonMode(next);
+                  setPerformanceRangePicker(null);
+                }}
+              />
+              {performanceComparisonMode === "custom" ? (
+                <View style={styles.customRanges}>
                   <View style={styles.customDateRow}>
-                    {(["start", "end"] as const).map((side) => {
-                      const date = side === "start" ? performanceCustomStart : performanceCustomEnd;
-                      return (
-                        <Pressable
-                          key={side}
-                          onPress={() => setPerformanceCustomPicker(side)}
-                          style={[
-                            styles.customDate,
-                            {
-                              borderColor:
-                                performanceCustomPicker === side ? accent : colors.border,
-                            },
-                          ]}
+                    {(
+                      [
+                        [
+                          "current",
+                          "Range A",
+                          performanceCurrentStart,
+                          performanceCurrentEnd,
+                        ],
+                        [
+                          "previous",
+                          "Range B",
+                          performancePreviousStart,
+                          performancePreviousEnd,
+                        ],
+                      ] as const
+                    ).map(([id, label, start, end]) => (
+                      <Pressable
+                        key={id}
+                        onPress={() => {
+                          setPerformanceRangePicker(id);
+                          setPerformanceRangePickerStep("start");
+                        }}
+                        style={[
+                          styles.customDate,
+                          {
+                            borderColor:
+                              performanceRangePicker === id
+                                ? accent
+                                : colors.border,
+                            backgroundColor: colors.canvas,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.customDateLabel, { color: accent }]}>
+                          {label}
+                        </Text>
+                        <Text
+                          numberOfLines={1}
+                          style={[styles.customDateValue, { color: colors.ink }]}
                         >
-                          <Text style={[styles.customDateLabel, { color: colors.muted }]}>
-                            {side === "start" ? "From" : "To"}
-                          </Text>
-                          <Text style={[styles.customDateValue, { color: colors.ink }]}>
-                            {friendlyDate(date)}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+                          {friendlyDate(start)} – {friendlyDate(end)}
+                        </Text>
+                      </Pressable>
+                    ))}
                   </View>
-                  {performanceCustomPicker ? (
-                    <MonthCalendar
-                      selectedDate={
-                        performanceCustomPicker === "start"
-                          ? performanceCustomStart
-                          : performanceCustomEnd
-                      }
-                      monthDate={
-                        performanceCustomPicker === "start"
-                          ? performanceCustomStart
-                          : performanceCustomEnd
-                      }
-                      rangeStart={performanceCustomStart}
-                      rangeEnd={performanceCustomEnd}
-                      rangeAccent={accent}
-                      onSelect={(date) => {
-                        if (performanceCustomPicker === "start")
-                          setPerformanceCustomStart(date);
-                        else setPerformanceCustomEnd(date);
-                        setPerformanceCustomPicker(null);
-                      }}
-                    />
+                  {performanceRangePicker ? (
+                    <>
+                      <Text style={[styles.performancePickerHelp, { color: colors.muted }]}>
+                        Select {performanceRangePicker === "current" ? "Range A" : "Range B"}{" "}
+                        {performanceRangePickerStep === "start" ? "start" : "end"} date
+                      </Text>
+                      <MonthCalendar
+                        monthDate={
+                          performanceRangePicker === "current"
+                            ? performanceCurrentEnd
+                            : performancePreviousEnd
+                        }
+                        selectedDate={
+                          performanceRangePicker === "current"
+                            ? performanceRangePickerStep === "start"
+                              ? performanceCurrentStart
+                              : performanceCurrentEnd
+                            : performanceRangePickerStep === "start"
+                              ? performancePreviousStart
+                              : performancePreviousEnd
+                        }
+                        rangeStart={
+                          performanceRangePicker === "current"
+                            ? performanceCurrentStart
+                            : performancePreviousStart
+                        }
+                        rangeEnd={
+                          performanceRangePicker === "current"
+                            ? performanceCurrentEnd
+                            : performancePreviousEnd
+                        }
+                        rangeAccent={accent}
+                        onSelect={(date) => {
+                          if (performanceRangePicker === "current") {
+                            if (performanceRangePickerStep === "start") {
+                              setPerformanceCurrentStart(date);
+                              setPerformanceCurrentEnd(date);
+                              setPerformanceRangePickerStep("end");
+                            } else {
+                              if (date < performanceCurrentStart) {
+                                setPerformanceCurrentEnd(performanceCurrentStart);
+                                setPerformanceCurrentStart(date);
+                              } else {
+                                setPerformanceCurrentEnd(date);
+                              }
+                              setPerformanceRangePicker(null);
+                            }
+                          } else if (performanceRangePickerStep === "start") {
+                            setPerformancePreviousStart(date);
+                            setPerformancePreviousEnd(date);
+                            setPerformanceRangePickerStep("end");
+                          } else {
+                            if (date < performancePreviousStart) {
+                              setPerformancePreviousEnd(performancePreviousStart);
+                              setPerformancePreviousStart(date);
+                            } else {
+                              setPerformancePreviousEnd(date);
+                            }
+                            setPerformanceRangePicker(null);
+                          }
+                        }}
+                      />
+                    </>
                   ) : null}
-                </>
+                </View>
               ) : null}
+              <View style={styles.performancePeriodLine}>
+                <Ionicons name="swap-horizontal-outline" size={13} color={accent} />
+                <Text
+                  numberOfLines={2}
+                  style={[styles.performancePeriodText, { color: colors.muted }]}
+                >
+                  {selectedPerformancePeriod.currentLabel} vs {selectedPerformancePeriod.previousLabel}
+                </Text>
+              </View>
               <SelectionMenu
                 title="Exercise and muscle filters"
                 items={performanceFilterItems}
@@ -3435,7 +3636,7 @@ function GymScreen() {
                     <View style={styles.grow}>
                       <Text style={[styles.label, { color: palette.lime }]}>Strongest improvement</Text>
                       <Text translate={false} style={[styles.exerciseName, { color: colors.ink }]}>
-                        {localizeExerciseName(language, performanceHighlights.strongest.exercise)} · {Math.round(performanceHighlights.strongest.stats.improvement)}%
+                        {localizeExerciseName(language, performanceHighlights.strongest.exercise)} · {Math.round(performanceHighlights.strongest.comparison.improvement)}%
                       </Text>
                     </View>
                   </View>
@@ -3473,13 +3674,20 @@ function GymScreen() {
             />
             {performanceRows.map((row, index) => {
               const trendColor =
-                row.stats.trend === "building"
+                row.comparison.trend === "building"
                   ? palette.lime
-                  : row.stats.trend === "regressing"
+                  : row.comparison.trend === "regressing"
                     ? palette.red
-                    : row.stats.trend === "steady"
+                    : row.comparison.trend === "steady"
                       ? palette.amber
                       : colors.muted;
+              const comparisonText = row.comparison.provisional
+                ? `${selectedPerformancePeriod.currentLabel} is still in progress; the downward comparison is withheld.`
+                : !row.comparison.currentSessions
+                  ? `No workout data in ${selectedPerformancePeriod.currentLabel}.`
+                  : !row.comparison.previousSessions
+                    ? `No comparable workout data in ${selectedPerformancePeriod.previousLabel}.`
+                    : `${row.comparison.improvement >= 0 ? "+" : ""}${Math.round(row.comparison.improvement)}% vs ${selectedPerformancePeriod.previousLabel} · ${row.comparison.trend}`;
               return (
                 <GymDraggableExercise
                   key={row.key}
@@ -3515,13 +3723,14 @@ function GymScreen() {
                             <Ionicons name="pin" size={12} color={accent} />
                           ) : null}
                         </View>
-                        <Text style={[styles.meta, { color: colors.muted }]}>
-                          {row.stats.sessions} sessions · {Math.round(row.volume).toLocaleString(locale)} kg volume · best {Math.round(row.stats.bestOneRepMax)} kg e1RM
+                        <Text translate={false} style={[styles.meta, { color: colors.muted }]}>
+                          {row.comparison.currentSessions} {t("sessions")}
+                          {row.comparison.currentSessions
+                            ? ` · ${gymPerformanceScoreText(row.comparison, locale)} · ${Math.round(row.comparison.currentVolumeKg).toLocaleString(locale)} ${t("kg volume")}`
+                            : ""}
                         </Text>
                         <Text style={[styles.performanceSignal, { color: trendColor }]}>
-                          {row.stats.trend === "learning"
-                            ? "Building a reliable baseline"
-                            : `${row.stats.improvement >= 0 ? "+" : ""}${Math.round(row.stats.improvement)}% strength change in this range · ${row.stats.trend}`}
+                          {comparisonText}
                         </Text>
                       </View>
                       {performanceEditMode ? (
@@ -3811,6 +4020,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
+  headerTools: { flexDirection: "row", alignItems: "center", gap: 4 },
+  reminderShortcut: {
+    width: 30,
+    height: 34,
+    borderWidth: 1,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   modeSegment: {
     height: 34,
     borderWidth: 1,
@@ -3820,10 +4038,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   modeChoice: {
-    minWidth: 56,
+    minWidth: 50,
     height: 28,
     borderRadius: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -4097,10 +4315,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   performanceRangeText: { fontSize: 7, fontWeight: "900" },
+  customRanges: { gap: 7 },
   customDateRow: { flexDirection: "row", gap: 7 },
   customDate: { flex: 1, borderWidth: 1, borderRadius: 10, padding: 7 },
   customDateLabel: { fontSize: 6, fontWeight: "900", textTransform: "uppercase" },
   customDateValue: { fontSize: 9, fontWeight: "900", marginTop: 2 },
+  performancePickerHelp: {
+    fontSize: 8,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  performancePeriodLine: {
+    minHeight: 26,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  performancePeriodText: { flex: 1, fontSize: 8, lineHeight: 11, fontWeight: "800" },
   performancePriorities: { flexDirection: "row", gap: 5 },
   performanceHighlights: { flexDirection: "row", gap: 8, paddingVertical: 8 },
   performanceHighlight: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 6 },

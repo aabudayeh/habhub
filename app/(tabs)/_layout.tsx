@@ -164,9 +164,9 @@ export default function TabLayout() {
               }
             : undefined,
         tabBarStyle: {
-          height: 66 + insets.bottom,
-          paddingTop: 6,
-          paddingBottom: Math.max(6, insets.bottom),
+          height: 58 + insets.bottom,
+          paddingTop: 3,
+          paddingBottom: Math.max(2, insets.bottom),
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },
@@ -211,7 +211,7 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabIcon: {
     width: 30,
-    height: 27,
+    height: 24,
     alignItems: "center",
     justifyContent: "center",
   },

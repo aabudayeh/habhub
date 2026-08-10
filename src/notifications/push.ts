@@ -69,30 +69,67 @@ function storedPreferences(preferences: NotificationSettings, language: AppLangu
 
 let pushRegistrationQueue: Promise<void> = Promise.resolve();
 const EXPO_TOKEN_CACHE_PREFIX = 'habhub-expo-push-token-v1:';
+const PUSH_REGISTRATION_CACHE_PREFIX = 'habhub-push-registration-v2:';
+const PUSH_REGISTRATION_TTL_MS = 24 * 60 * 60 * 1000;
+const PUSH_TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const pushRegistrationBySignature = new Map<string, Promise<void>>();
+const pushRegistrationMemory = new Map<
+  string,
+  { signature: string; registeredAt: number }
+>();
+const expoTokenFetchByProject = new Map<string, Promise<string>>();
+const pushTokenRefreshByAccount = new Map<string, Promise<void>>();
+const pushTokenRefreshAttemptAt = new Map<string, number>();
+const disabledPushRegistrationAccounts = new Set<string>();
 
 function tokenCacheKey(projectId: string) {
   return `${EXPO_TOKEN_CACHE_PREFIX}${projectId}`;
+}
+
+function pushProjectId() {
+  return (
+    Constants.expoConfig?.extra?.eas?.projectId ??
+    Constants.easConfig?.projectId
+  );
+}
+
+function registrationCacheKey(userId: string, projectId: string) {
+  return `${PUSH_REGISTRATION_CACHE_PREFIX}${projectId}:${userId}`;
+}
+
+function registrationAccountKey(userId: string, projectId: string) {
+  return `${projectId}:${userId}`;
 }
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchExpoPushToken(projectId: string) {
-  let lastError: unknown;
-  for (const delay of [0, 700, 1800]) {
-    if (delay) await wait(delay);
-    try {
-      const token = (
-        await Notifications.getExpoPushTokenAsync({ projectId })
-      ).data;
-      await AsyncStorage.setItem(tokenCacheKey(projectId), token);
-      return token;
-    } catch (error) {
-      lastError = error;
+function fetchExpoPushToken(projectId: string) {
+  const inFlight = expoTokenFetchByProject.get(projectId);
+  if (inFlight) return inFlight;
+  const operation = (async () => {
+    let lastError: unknown;
+    for (const delay of [0, 700, 1800]) {
+      if (delay) await wait(delay);
+      try {
+        const token = (
+          await Notifications.getExpoPushTokenAsync({ projectId })
+        ).data;
+        await AsyncStorage.setItem(tokenCacheKey(projectId), token);
+        return token;
+      } catch (error) {
+        lastError = error;
+      }
     }
-  }
-  throw lastError;
+    throw lastError;
+  })();
+  expoTokenFetchByProject.set(projectId, operation);
+  operation.then(
+    () => expoTokenFetchByProject.delete(projectId),
+    () => expoTokenFetchByProject.delete(projectId),
+  );
+  return operation;
 }
 
 async function cachedOrFreshExpoPushToken(projectId: string) {
@@ -105,21 +142,131 @@ async function cachedOrFreshExpoPushToken(projectId: string) {
 }
 
 async function registerPushToken(
+  userId: string,
+  projectId: string,
   token: string,
   preferences: NotificationSettings,
   language: AppLanguage,
+  force = false,
 ) {
   const client = supabase;
   if (!client) return;
-  const operation = pushRegistrationQueue.catch(() => undefined).then(async () => {
-    const { error } = await client.rpc('register_device_push_token', {
-      p_token: token,
-      p_platform: Platform.OS,
-      p_preferences: storedPreferences(preferences, language),
-    });
-    if (error) throw error;
+  const accountKey = registrationAccountKey(userId, projectId);
+  if (disabledPushRegistrationAccounts.has(accountKey)) return;
+  const stored = storedPreferences(preferences, language);
+  const cacheKey = registrationCacheKey(userId, projectId);
+  const signature = JSON.stringify({
+    userId,
+    projectId,
+    token,
+    platform: Platform.OS,
+    preferences: stored,
   });
+  const operationKey = `${force ? 'force' : 'normal'}:${signature}`;
+  const inFlight = pushRegistrationBySignature.get(operationKey);
+  if (inFlight) return inFlight;
+  const operation = pushRegistrationQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (disabledPushRegistrationAccounts.has(accountKey)) return;
+      if (!force) {
+        let prior = pushRegistrationMemory.get(cacheKey);
+        if (!prior) {
+          try {
+            const saved = await AsyncStorage.getItem(cacheKey);
+            if (saved)
+              prior = JSON.parse(saved) as {
+                signature: string;
+                registeredAt: number;
+              };
+          } catch {
+            // A damaged local acknowledgement should cause one safe upsert.
+          }
+        }
+        if (
+          prior?.signature === signature &&
+          Number.isFinite(prior.registeredAt) &&
+          Date.now() - prior.registeredAt < PUSH_REGISTRATION_TTL_MS
+        ) {
+          pushRegistrationMemory.set(cacheKey, prior);
+          return;
+        }
+      }
+      // A queued operation can outlive sign-out/account switching. Reading the
+      // locally persisted session here prevents an old account's preferences
+      // from registering this physical token under the newly signed-in user.
+      const { data } = await client.auth.getSession();
+      if (
+        disabledPushRegistrationAccounts.has(accountKey) ||
+        data.session?.user.id !== userId
+      )
+        return;
+      const { error } = await client.rpc('register_device_push_token', {
+        p_token: token,
+        p_platform: Platform.OS,
+        p_preferences: stored,
+      });
+      if (error) throw error;
+      const acknowledgement = {
+        signature,
+        registeredAt: Date.now(),
+      };
+      pushRegistrationMemory.set(cacheKey, acknowledgement);
+      await AsyncStorage.setItem(
+        cacheKey,
+        JSON.stringify(acknowledgement),
+      ).catch(() => undefined);
+    });
   pushRegistrationQueue = operation;
+  pushRegistrationBySignature.set(operationKey, operation);
+  operation.then(
+    () => pushRegistrationBySignature.delete(operationKey),
+    () => pushRegistrationBySignature.delete(operationKey),
+  );
+  return operation;
+}
+
+/**
+ * Refresh the Expo token after the native APNs/FCM token changes. The native
+ * listener can fire while getExpoPushTokenAsync is resolving, so coalesce and
+ * cool down this path instead of recursively fetching/registering forever.
+ */
+export function refreshPushTokenRegistration(
+  userId: string,
+  preferences: NotificationSettings,
+  language: AppLanguage = 'en',
+  shouldContinue: () => boolean = () => true,
+) {
+  if (!supabase || Platform.OS === 'web') return Promise.resolve();
+  const projectId = pushProjectId();
+  if (!projectId) return Promise.resolve();
+  const key = `${projectId}:${userId}`;
+  const inFlight = pushTokenRefreshByAccount.get(key);
+  if (inFlight) return inFlight;
+  if (
+    Date.now() - (pushTokenRefreshAttemptAt.get(key) ?? 0) <
+    PUSH_TOKEN_REFRESH_COOLDOWN_MS
+  )
+    return Promise.resolve();
+  pushTokenRefreshAttemptAt.set(key, Date.now());
+  const operation = fetchExpoPushToken(projectId)
+    .then((token) =>
+      shouldContinue()
+        ? registerPushToken(
+            userId,
+            projectId,
+            token,
+            preferences,
+            language,
+          )
+        : undefined,
+    )
+    .then(() => undefined);
+  pushTokenRefreshByAccount.set(key, operation);
+  operation.then(
+    () => pushTokenRefreshByAccount.delete(key),
+    () => pushTokenRefreshByAccount.delete(key),
+  );
   return operation;
 }
 
@@ -152,8 +299,11 @@ export async function enablePushNotifications(
   const granted = () => permission.granted || permission.status === Notifications.PermissionStatus.GRANTED;
   if (!granted()) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
   if (!granted()) throw new Error('Android/iOS has not granted notification permission. Enable it in system settings and retry.');
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+  const projectId = pushProjectId();
   if (!projectId) throw new Error('This build is missing its EAS project ID.');
+  disabledPushRegistrationAccounts.delete(
+    registrationAccountKey(userId, projectId),
+  );
   let tokenResult: { token: string; cached: boolean };
   try {
     tokenResult = await cachedOrFreshExpoPushToken(projectId);
@@ -165,7 +315,14 @@ export async function enablePushNotifications(
   const token = tokenResult.token;
   if (supabase) {
     try {
-      await registerPushToken(token, preferences, language);
+      await registerPushToken(
+        userId,
+        projectId,
+        token,
+        preferences,
+        language,
+        true,
+      );
     } catch (error) {
       throw new Error(
         `Permission is enabled, but cloud registration failed: ${notificationErrorMessage(error)}`,
@@ -176,13 +333,9 @@ export async function enablePushNotifications(
     // A cached project-scoped token lets account recreation recover even when
     // Expo's token endpoint is temporarily unavailable. Refresh it quietly so
     // a rotated token is registered without interrupting the user.
-    void fetchExpoPushToken(projectId)
-      .then((fresh) =>
-        fresh === token || !supabase
-          ? undefined
-          : registerPushToken(fresh, preferences, language),
-      )
-      .catch(() => undefined);
+    void refreshPushTokenRegistration(userId, preferences, language).catch(
+      () => undefined,
+    );
   }
   return token;
 }
@@ -200,30 +353,48 @@ export async function updatePushPreferences(
   userId: string,
   preferences: NotificationSettings,
   language: AppLanguage = 'en',
+  shouldContinue: () => boolean = () => true,
 ) {
   if (!supabase || Platform.OS === 'web') return;
+  const projectId = pushProjectId();
+  if (!projectId || !shouldContinue()) return;
+  // Only the explicit enable flow may clear an account's disable fence. A
+  // preferences effect can carry a stale pushEnabled=true value while the
+  // user's disable action is already deleting the token row.
   await ensureNotificationChannel(language);
   const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return;
-  const projectId = Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-  if (!projectId) return;
+  if (!permission.granted || !shouldContinue()) return;
   try {
-    const { token, cached } = await cachedOrFreshExpoPushToken(projectId);
-    await registerPushToken(token, preferences, language);
-    if (cached)
-      void fetchExpoPushToken(projectId)
-        .then((fresh) =>
-          fresh === token
-            ? undefined
-            : registerPushToken(fresh, preferences, language),
-        )
-        .catch(() => undefined);
+    const { token } = await cachedOrFreshExpoPushToken(projectId);
+    if (!shouldContinue()) return;
+    await registerPushToken(
+      userId,
+      projectId,
+      token,
+      preferences,
+      language,
+    );
   } catch { /* The next foreground/settings visit retries registration. */ }
 }
 
 export async function disablePushNotifications(userId: string) {
   if (!supabase || Platform.OS === 'web') return;
+  const projectId = pushProjectId();
+  const accountKey = projectId
+    ? registrationAccountKey(userId, projectId)
+    : null;
+  if (accountKey) disabledPushRegistrationAccounts.add(accountKey);
+  // A registration already queued before the switch was toggled off must
+  // finish (or observe the disabled fence) before the delete commits. Token
+  // refresh work is awaited first because it may append to that queue.
+  if (accountKey)
+    await pushTokenRefreshByAccount.get(accountKey)?.catch(() => undefined);
+  await pushRegistrationQueue.catch(() => undefined);
   await supabase.from('device_push_tokens').delete().eq('user_id', userId);
+  if (!projectId) return;
+  const key = registrationCacheKey(userId, projectId);
+  pushRegistrationMemory.delete(key);
+  await AsyncStorage.removeItem(key).catch(() => undefined);
 }
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';

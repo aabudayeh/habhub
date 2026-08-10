@@ -43,6 +43,7 @@ import {
   syncGoalNotifications,
   syncGymNotifications,
   syncProductivityNotifications,
+  refreshPushTokenRegistration,
   updatePushPreferences,
 } from "@/src/notifications/push";
 
@@ -264,10 +265,11 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [productivityNotificationKey]);
+  const pushRegistrationUserId = auth.user?.id;
   const pushRegistrationKey = useMemo(
     () =>
       JSON.stringify({
-        userId: auth.user?.id,
+        userId: pushRegistrationUserId,
         language: state.settings.language,
         notifications: {
           pushEnabled: state.settings.notifications.pushEnabled,
@@ -289,7 +291,7 @@ function RootNavigator() {
         },
       }),
     [
-      auth.user?.id,
+      pushRegistrationUserId,
       state.settings.language,
       state.settings.notifications.pushEnabled,
       state.settings.notifications.groupMetricActivity,
@@ -308,24 +310,35 @@ function RootNavigator() {
   useEffect(() => {
     if (
       Platform.OS === "web" ||
-      !auth.user ||
+      !pushRegistrationUserId ||
       !state.settings.notifications.pushEnabled
     )
       return;
-    const userId = auth.user.id;
+    const userId = pushRegistrationUserId;
+    let active = true;
     const refresh = () =>
       updatePushPreferences(
         userId,
         cycleStateRef.current.settings.notifications,
         cycleStateRef.current.settings.language,
+        () => active,
       ).catch(() => undefined);
     void refresh();
     const subscription = Notifications.addPushTokenListener(
-      () => void refresh(),
+      () =>
+        void refreshPushTokenRegistration(
+          userId,
+          cycleStateRef.current.settings.notifications,
+          cycleStateRef.current.settings.language,
+          () => active,
+        ).catch(() => undefined),
     );
-    return () => subscription.remove();
+    return () => {
+      active = false;
+      subscription.remove();
+    };
   }, [
-    auth.user,
+    pushRegistrationUserId,
     pushRegistrationKey,
     state.settings.notifications.pushEnabled,
   ]);

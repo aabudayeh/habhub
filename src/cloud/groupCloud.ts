@@ -1264,9 +1264,13 @@ export async function loadCloudWorkspace(
     dateKey(),
     -(SHARED_ACTIVITY_CACHE_DAYS - 1),
   ),
+  preloadedShells?: Group[],
 ): Promise<AppState> {
   const client = requireCloud();
-  const shells = await loadCloudGroupShells();
+  // Startup already loads the group shells to select the active workspace.
+  // Reuse that consistent snapshot instead of immediately issuing the same
+  // membership/profile/metric request set a second time.
+  const shells = preloadedShells ?? (await loadCloudGroupShells());
   const group = shells.find((candidate) => candidate.id === groupId);
   if (!group)
     throw new Error("This group is unavailable or you no longer have access.");
@@ -1353,7 +1357,7 @@ export async function loadCloudWorkspace(
           .limit(SHARED_MESSAGE_CACHE_LIMIT);
           if (error) throw error;
           return data ?? [];
-      })().catch(() => []),
+      })(),
       (async () => {
         const { data, error } = await client
           .from("photo_updates")
@@ -1990,17 +1994,26 @@ export async function pushCloudWorkspace(
   const updatedEntryIds = entriesToUpsert
     .filter((entry) => oldEntriesById.has(entry.id))
     .map((entry) => entry.id);
-  const priorRowResults = await Promise.all(
-    batches(updatedEntryIds, 250).map((entryIds) =>
-      client
-        .from("metric_entries")
-        .select(
-          "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
-        )
-        .eq("user_id", state.currentUserId)
-        .in("client_generated_id", entryIds),
-    ),
-  );
+  // Keep history diffs bounded and sequential. A large import can span dozens
+  // of batches; firing all of them together competes with the account snapshot
+  // and group hydration for PostgREST connections and can surface PGRST003 on
+  // smaller projects. This is background reconciliation, so bounded pressure
+  // is more important than a short burst of peak throughput.
+  const loadPriorRowsBatch = (entryIds: string[]) =>
+    client
+      .from("metric_entries")
+      .select(
+        "client_generated_id, value, local_date, recorded_at, visibility, source, label, note, nutrition, submetric_values, source_provider, source_record_id, source_origin, source_updated_at, image_path",
+      )
+      .eq("user_id", state.currentUserId)
+      .in("client_generated_id", entryIds);
+  const priorRowResults: Awaited<
+    ReturnType<typeof loadPriorRowsBatch>
+  >[] = [];
+  for (const entryIds of batches(updatedEntryIds, 250)) {
+    const result = await loadPriorRowsBatch(entryIds);
+    priorRowResults.push(result);
+  }
   const priorRowError = priorRowResults.find((result) => result.error)?.error;
   if (priorRowError) throw priorRowError;
   const priorRowsById = new Map(

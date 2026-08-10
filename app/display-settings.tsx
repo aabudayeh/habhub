@@ -477,9 +477,9 @@ export default function DisplaySettings() {
             searchable={false}
           />
           <ToggleRow
-            icon="flag-outline"
-            title="Show goals"
-            copy="Hide tracked-goal tiles without changing goal history"
+            icon="albums-outline"
+            title="Show trackers"
+            copy="Hide all tracker tiles without changing goals or history"
             enabled={state.settings.showGoalsToday !== false}
             onChange={(value) => toggle("showGoalsToday", value)}
           />

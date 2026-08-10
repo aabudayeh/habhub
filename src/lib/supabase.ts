@@ -5,6 +5,7 @@ import { AppState as NativeAppState, Platform } from 'react-native';
 import { createClient, processLock, Session } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 
+import { createPathBoundedFetch } from '@/src/lib/boundedFetch';
 import { AppState } from '@/src/types';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -12,8 +13,23 @@ const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 export const cloudConfigured = Boolean(url && publishableKey);
 
+// PostgREST uses a finite database connection pool. A cold account restore can
+// legitimately need snapshot, group shell, activity and preference requests at
+// once, but allowing every screen/effect to add unbounded parallel REST work
+// makes all of them fail together with PGRST003. Auth, Storage, Edge Functions
+// and Realtime are intentionally not queued, so login, media and chat transport
+// keep their independent latency/abort behaviour.
+const MAX_CONCURRENT_REST_REQUESTS = 3;
+const nativeFetch = globalThis.fetch.bind(globalThis);
+const boundedSupabaseFetch = createPathBoundedFetch(
+  nativeFetch,
+  MAX_CONCURRENT_REST_REQUESTS,
+  '/rest/v1/',
+);
+
 export const supabase = cloudConfigured
   ? createClient(url!, publishableKey!, {
+      global: { fetch: boundedSupabaseFetch },
       auth: {
         ...(Platform.OS !== 'web'
           ? { storage: AsyncStorage, lock: processLock }

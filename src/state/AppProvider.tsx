@@ -2539,6 +2539,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     ReturnType<typeof InteractionManager.runAfterInteractions> | null
   >(null);
   const persistenceWriteRef = useRef<Promise<void> | null>(null);
+  const persistenceDeferredTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const persistenceDeferredRunRef = useRef<(() => void) | null>(null);
   const persistenceResumeTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
@@ -2547,44 +2551,62 @@ export function AppProvider({ children }: PropsWithChildren) {
   const persistenceObservedStateRef = useRef<AppState | null>(null);
   persistenceStateRef.current = state;
 
-  const persistLatestState = useCallback((): Promise<void> => {
+  const persistLatestState = useCallback((immediate = false): Promise<void> => {
     // AppState may emit inactive and background in quick succession, while a
     // resume can overlap the tail of the background write. JSON.stringify is
     // synchronous, so coalescing here prevents duplicate full-state
     // serialization from blocking the first taps after returning to the app.
-    if (persistenceWriteRef.current) return persistenceWriteRef.current;
-    // JSON.stringify runs synchronously. A Promise microtask still runs before
-    // React Native gets a chance to paint the pressed state/navigation change,
-    // so a large owned Health Connect history could make a tap look ignored.
-    // Start foreground writes in the next task instead. Background flushes
-    // remain immediate because the OS can suspend timers while the app leaves.
-    let resolveWrite!: () => void;
-    let rejectWrite!: (reason?: unknown) => void;
-    const write = new Promise<void>((resolve, reject) => {
-      resolveWrite = resolve;
-      rejectWrite = reject;
-    });
-    const persist = async () => {
-      try {
-        while (persistenceDirtyRef.current) {
-          const revision = persistenceRevisionRef.current;
-          const latest = persistenceStateRef.current;
-          await persistAppStateNow(latest);
-          if (revision === persistenceRevisionRef.current)
-            persistenceDirtyRef.current = false;
+    if (persistenceWriteRef.current) {
+      if (immediate) persistenceDeferredRunRef.current?.();
+      return persistenceWriteRef.current;
+    }
+
+    const deferForegroundTurn = () => {
+      if (NativeAppState.currentState !== "active") return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        let completed = false;
+        const run = () => {
+          if (completed) return;
+          completed = true;
+          if (persistenceDeferredTimerRef.current) {
+            clearTimeout(persistenceDeferredTimerRef.current);
+            persistenceDeferredTimerRef.current = null;
+          }
+          if (persistenceDeferredRunRef.current === run)
+            persistenceDeferredRunRef.current = null;
+          resolve();
+        };
+        persistenceDeferredRunRef.current = run;
+        // Unlike a Promise microtask, this yields the current press/navigation
+        // frame to React Native before JSON.stringify runs. If the app starts
+        // backgrounding first, the AppState handler invokes `run` immediately,
+        // so Android cannot suspend an unresolved timer and lose the flush.
+        persistenceDeferredTimerRef.current = setTimeout(run, 0);
+      });
+    };
+
+    let write: Promise<void>;
+    write = (async () => {
+      if (!immediate) await deferForegroundTurn();
+      while (persistenceDirtyRef.current) {
+        const revision = persistenceRevisionRef.current;
+        const latest = persistenceStateRef.current;
+        await persistAppStateNow(latest);
+        if (revision === persistenceRevisionRef.current) {
+          persistenceDirtyRef.current = false;
+          continue;
         }
-        resolveWrite();
-      } catch (error) {
-        rejectWrite(error);
-      } finally {
+        // State changed while AsyncStorage was writing. Yield again before the
+        // trailing foreground serialization; a background transition can still
+        // force this same gate immediately via persistenceDeferredRunRef.
+        await deferForegroundTurn();
+      }
+    })()
+      .finally(() => {
         if (persistenceWriteRef.current === write)
           persistenceWriteRef.current = null;
-      }
-    };
+      });
     persistenceWriteRef.current = write;
-    if (NativeAppState.currentState === "active")
-      setTimeout(() => void persist(), 0);
-    else void persist();
     return write;
   }, []);
 
@@ -3084,7 +3106,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         // InteractionManager task from waking up with the UI and blocking the
         // first taps after app switching.
         if (persistenceDirtyRef.current) {
-          void persistLatestState().catch(() => undefined);
+          void persistLatestState(true).catch(() => undefined);
         }
         return;
       }
@@ -3159,6 +3181,9 @@ export function AppProvider({ children }: PropsWithChildren) {
       persistenceTaskRef.current?.cancel();
       if (persistenceResumeTimerRef.current)
         clearTimeout(persistenceResumeTimerRef.current);
+      // Do not leave a coalesced persistence promise waiting on a foreground
+      // timer when the provider/app is being torn down.
+      persistenceDeferredRunRef.current?.();
     },
     [],
   );
@@ -3415,7 +3440,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           }
         });
       },
-      flushLocalPersistence: persistLatestState,
+      flushLocalPersistence: () => persistLatestState(true),
       stageState,
       replaceState,
       resetDemo: () => void commitAction({ type: "reset" }),

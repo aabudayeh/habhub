@@ -1160,7 +1160,7 @@ function LogScreen() {
                   styles.nutritionDisclosure,
                   {
                     borderColor: colors.border,
-                    backgroundColor: colors.canvas,
+                    backgroundColor: "transparent",
                   },
                 ]}
               >
@@ -1656,7 +1656,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   nutritionDisclosureCopy: { flex: 1 },
-  nutritionDisclosureTitle: { ...typography.cardTitle },
+  nutritionDisclosureTitle: {
+    fontSize: typography.body.fontSize,
+    lineHeight: typography.body.lineHeight,
+    fontWeight: "400",
+  },
   nutritionDisclosureHint: { ...typography.supporting, marginTop: 1 },
   nutritionDetails: { marginBottom: 2 },
   nutritionGrid: {
