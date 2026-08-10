@@ -38,7 +38,7 @@ type BodySegment =
 
 const point = ([x, y]: Point) => `${x.toFixed(1)} ${y.toFixed(1)}`;
 
-function originalBodyPath(
+function humanBodyPath(
   variant: BodyVariant,
   bodyMass: number,
   muscleProgress: number,
@@ -47,188 +47,206 @@ function originalBodyPath(
   const positiveMass = Math.max(0, bodyMass);
   const muscle = Math.max(0, Math.min(1, muscleProgress));
   const headHalf =
-    (variant === "male" ? 18.5 : variant === "female" ? 17.3 : 17.9) +
-    positiveMass * 0.7;
+    (variant === "male" ? 17.5 : variant === "female" ? 16.8 : 17.2) +
+    positiveMass * 0.45;
   const neckHalf =
-    (variant === "male" ? 12.2 : variant === "female" ? 10.2 : 11.2) +
-    muscle * 1.2;
+    (variant === "male" ? 11.5 : variant === "female" ? 10.2 : 10.8) +
+    muscle * 0.8;
   const shoulderHalf =
-    (variant === "male" ? 41 : variant === "female" ? 36.5 : 38.8) +
-    muscle * 7 +
-    bodyMass * 2.4;
+    (variant === "male" ? 40 : variant === "female" ? 35.5 : 38) +
+    muscle * 3.8 +
+    bodyMass * 1.8;
   const waistHalf =
-    (variant === "male" ? 24.5 : variant === "female" ? 21.5 : 23) +
-    positiveMass * 10 +
-    Math.min(0, bodyMass) * 3.5 +
-    muscle * 0.7;
+    (variant === "male" ? 23.5 : variant === "female" ? 22 : 23) +
+    positiveMass * 7 +
+    Math.min(0, bodyMass) * 2 +
+    muscle * 0.5;
   const hipHalf =
-    (variant === "male" ? 28 : variant === "female" ? 33.5 : 30.5) +
-    positiveMass * 9 +
-    Math.min(0, bodyMass) * 4.5 +
-    muscle;
-  const chestHalf =
-    (variant === "male" ? 31 : variant === "female" ? 27.5 : 29.2) +
+    (variant === "male" ? 28 : variant === "female" ? 33 : 30.5) +
     positiveMass * 6 +
-    muscle * (variant === "female" ? 3.5 : 6);
-  const outerUpperArm =
-    center + shoulderHalf + 6 + muscle * 2 + positiveMass * 1.7;
-  const outerWrist = center + shoulderHalf + 1 + positiveMass * 1.2;
-  const kneeOuter = center + 22 + positiveMass * 3.5 + muscle * 1.2;
-  const calfOuter = center + 20 + positiveMass * 2.5 + muscle;
-  const ankleOuter = center + 13 + positiveMass * 1.7;
-  const start: Point = [center, 7];
+    Math.min(0, bodyMass) * 2.5 +
+    muscle * 0.6;
+  const chestHalf =
+    (variant === "male" ? 31.5 : variant === "female" ? 29 : 30) +
+    positiveMass * 4.5 +
+    muscle * (variant === "female" ? 2 : 3);
+  const upperArmOuter =
+    center + shoulderHalf + 6 + muscle * 1.5 + positiveMass;
+  const elbowOuter = center + shoulderHalf + 3 + muscle + positiveMass;
+  const wristOuter = center + shoulderHalf - 1 + positiveMass;
+  const upperArmInner = center + shoulderHalf - 10;
+  const kneeOuter = center + 21 + positiveMass * 2.8 + muscle;
+  const calfOuter = center + 23 + positiveMass * 2.3 + muscle;
+  const ankleOuter = center + 13 + positiveMass * 1.4;
+  const start: Point = [center, 10];
   const segments: BodySegment[] = [
     {
       kind: "curve",
-      control1: [center + headHalf * 0.72, 7],
+      control1: [center + headHalf * 0.58, 10],
       control2: [center + headHalf, 17],
-      end: [center + headHalf, 30],
+      end: [center + headHalf, 29],
     },
     {
       kind: "curve",
-      control1: [center + headHalf, 35],
-      control2: [center + headHalf + 5, 34],
-      end: [center + headHalf + 5, 41],
+      control1: [center + headHalf, 34],
+      control2: [center + headHalf + 3.8, 33],
+      end: [center + headHalf + 3.8, 39],
     },
     {
       kind: "curve",
-      control1: [center + headHalf + 5, 47],
-      control2: [center + headHalf + 2, 51],
-      end: [center + headHalf, 48],
+      control1: [center + headHalf + 3.8, 45],
+      control2: [center + headHalf + 1, 48],
+      end: [center + headHalf - 0.7, 45],
     },
     {
       kind: "curve",
-      control1: [center + headHalf - 1, 54],
-      control2: [center + neckHalf + 5, 57],
-      end: [center + neckHalf + 4, 61],
+      control1: [center + headHalf - 1.5, 53],
+      control2: [center + neckHalf + 1.5, 58],
+      end: [center + neckHalf + 1, 63],
     },
     {
       kind: "curve",
-      control1: [center + neckHalf + 4, 66],
-      control2: [center + neckHalf, 69],
+      control1: [center + neckHalf + 1, 67],
+      control2: [center + neckHalf, 70],
       end: [center + neckHalf, 73],
     },
     {
       kind: "curve",
-      control1: [center + neckHalf, 77],
-      control2: [center + shoulderHalf * 0.7, 78],
-      end: [center + shoulderHalf, 85],
+      control1: [center + neckHalf, 76],
+      control2: [center + shoulderHalf * 0.68, 77],
+      end: [center + shoulderHalf, 83],
     },
     {
       kind: "curve",
-      control1: [center + shoulderHalf + 7, 91],
-      control2: [outerUpperArm + 2, 104],
-      end: [outerUpperArm, 122],
+      control1: [center + shoulderHalf + 5, 88],
+      control2: [upperArmOuter + 1, 101],
+      end: [upperArmOuter, 113],
     },
     {
       kind: "curve",
-      control1: [outerUpperArm - 1, 130],
-      control2: [center + shoulderHalf + 4, 139],
-      end: [center + shoulderHalf + 3, 145],
-    },
-    { kind: "line", end: [outerWrist, 180] },
-    {
-      kind: "curve",
-      control1: [outerWrist + 5, 182],
-      control2: [outerWrist + 8, 187],
-      end: [outerWrist + 7, 192],
-    },
-    { kind: "line", end: [outerWrist + 10, 199] },
-    {
-      kind: "curve",
-      control1: [outerWrist + 12, 203],
-      control2: [outerWrist + 8, 206],
-      end: [outerWrist + 6, 202],
-    },
-    { kind: "line", end: [outerWrist + 4, 196] },
-    { kind: "line", end: [outerWrist + 6, 207] },
-    {
-      kind: "curve",
-      control1: [outerWrist + 7, 211],
-      control2: [outerWrist + 3, 212],
-      end: [outerWrist + 2, 207],
-    },
-    { kind: "line", end: [outerWrist, 198] },
-    { kind: "line", end: [outerWrist + 1, 209] },
-    {
-      kind: "curve",
-      control1: [outerWrist + 1, 213],
-      control2: [outerWrist - 3, 213],
-      end: [outerWrist - 4, 208],
-    },
-    { kind: "line", end: [outerWrist - 5, 198] },
-    { kind: "line", end: [outerWrist - 6, 206] },
-    {
-      kind: "curve",
-      control1: [outerWrist - 7, 210],
-      control2: [outerWrist - 10, 208],
-      end: [outerWrist - 10, 204],
-    },
-    { kind: "line", end: [outerWrist - 11, 190] },
-    {
-      kind: "curve",
-      control1: [outerWrist - 11, 185],
-      control2: [outerWrist - 9, 181],
-      end: [outerWrist - 6, 179],
-    },
-    { kind: "line", end: [center + shoulderHalf - 9, 143] },
-    { kind: "line", end: [center + chestHalf + 7, 114] },
-    {
-      kind: "curve",
-      control1: [center + chestHalf + 4, 123],
-      control2: [center + chestHalf, 130],
-      end: [center + chestHalf, 138],
+      control1: [upperArmOuter, 124],
+      control2: [elbowOuter + 1, 136],
+      end: [elbowOuter, 144],
     },
     {
       kind: "curve",
-      control1: [center + chestHalf, 148],
+      control1: [elbowOuter - 1, 154],
+      control2: [wristOuter + 2, 168],
+      end: [wristOuter, 180],
+    },
+    {
+      kind: "curve",
+      control1: [wristOuter + 4, 183],
+      control2: [wristOuter + 5, 188],
+      end: [wristOuter + 5, 192],
+    },
+    {
+      kind: "curve",
+      control1: [wristOuter + 5, 198],
+      control2: [wristOuter + 2, 202],
+      end: [wristOuter + 1, 207],
+    },
+    {
+      kind: "curve",
+      control1: [wristOuter, 211],
+      control2: [wristOuter - 4, 212],
+      end: [wristOuter - 6, 207],
+    },
+    {
+      kind: "curve",
+      control1: [wristOuter - 8, 201],
+      control2: [wristOuter - 7, 190],
+      end: [wristOuter - 7, 180],
+    },
+    {
+      kind: "curve",
+      control1: [upperArmInner + 4, 164],
+      control2: [upperArmInner + 2, 151],
+      end: [upperArmInner + 1, 143],
+    },
+    {
+      kind: "curve",
+      control1: [upperArmInner, 130],
+      control2: [center + chestHalf - 4, 114],
+      end: [center + chestHalf - 5, 105],
+    },
+    {
+      kind: "curve",
+      control1: [center + chestHalf - 1, 114],
+      control2: [center + chestHalf, 124],
+      end: [center + chestHalf, 134],
+    },
+    {
+      kind: "curve",
+      control1: [center + chestHalf - 1, 145],
       control2: [center + waistHalf, 151],
-      end: [center + waistHalf, 160],
+      end: [center + waistHalf, 159],
     },
     {
       kind: "curve",
-      control1: [center + waistHalf, 171],
-      control2: [center + hipHalf, 174],
-      end: [center + hipHalf, 184],
+      control1: [center + waistHalf, 169],
+      control2: [center + hipHalf, 176],
+      end: [center + hipHalf, 185],
     },
     {
       kind: "curve",
-      control1: [center + hipHalf + 1, 203],
-      control2: [kneeOuter + 4, 226],
-      end: [kneeOuter, 246],
+      control1: [center + hipHalf, 199],
+      control2: [kneeOuter + 6, 218],
+      end: [kneeOuter + 3, 235],
     },
     {
       kind: "curve",
-      control1: [kneeOuter - 1, 261],
-      control2: [calfOuter, 277],
-      end: [calfOuter, 289],
-    },
-    { kind: "line", end: [ankleOuter, 325] },
-    {
-      kind: "curve",
-      control1: [ankleOuter, 332],
-      control2: [ankleOuter + 11, 337],
-      end: [ankleOuter + 11, 343],
+      control1: [kneeOuter + 1, 244],
+      control2: [kneeOuter, 250],
+      end: [kneeOuter, 258],
     },
     {
       kind: "curve",
-      control1: [ankleOuter + 11, 348],
-      control2: [center + 13, 351],
-      end: [center + 7, 348],
+      control1: [kneeOuter, 270],
+      control2: [calfOuter + 1, 280],
+      end: [calfOuter - 1, 290],
     },
     {
       kind: "curve",
-      control1: [center + 4, 346],
-      control2: [center + 4, 337],
-      end: [center + 6, 329],
+      control1: [calfOuter - 3, 307],
+      control2: [ankleOuter + 2, 321],
+      end: [ankleOuter, 330],
     },
-    { kind: "line", end: [center + 10, 250] },
-    { kind: "line", end: [center + 5, 205] },
     {
       kind: "curve",
-      control1: [center + 5, 198],
-      control2: [center + 2, 193],
-      end: [center, 191],
+      control1: [ankleOuter, 335],
+      control2: [ankleOuter + 10, 339],
+      end: [ankleOuter + 10, 343],
+    },
+    {
+      kind: "curve",
+      control1: [ankleOuter + 10, 347],
+      control2: [center + 13, 349],
+      end: [center + 8, 349],
+    },
+    {
+      kind: "curve",
+      control1: [center + 3, 349],
+      control2: [center + 4, 339],
+      end: [center + 8, 329],
+    },
+    {
+      kind: "curve",
+      control1: [center + 7, 309],
+      control2: [center + 5, 278],
+      end: [center + 7, 257],
+    },
+    {
+      kind: "curve",
+      control1: [center + 8, 239],
+      control2: [center + 8, 220],
+      end: [center + 6, 204],
+    },
+    {
+      kind: "curve",
+      control1: [center + 5, 197],
+      control2: [center + 3, 192],
+      end: [center, 189],
     },
   ];
   const mirror = ([x, y]: Point): Point => [center * 2 - x, y];
@@ -375,8 +393,7 @@ export function BodyProgressAvatar({
   const { t } = useLocalization();
   const clipId = useId().replace(/:/g, "");
   const clamped = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
-  const animatedProgress = useRef(new Animated.Value(clamped)).current;
-  const ambientMotion = useRef(new Animated.Value(0)).current;
+  const animatedProgress = useRef(new Animated.Value(0)).current;
   const [reduceMotion, setReduceMotion] = useState(false);
 
   useEffect(() => {
@@ -395,34 +412,13 @@ export function BodyProgressAvatar({
   }, []);
 
   useEffect(() => {
+    animatedProgress.stopAnimation();
     Animated.timing(animatedProgress, {
-      duration: reduceMotion ? 0 : 720,
+      duration: reduceMotion ? 0 : 900,
       toValue: clamped,
       useNativeDriver: false,
     }).start();
   }, [animatedProgress, clamped, reduceMotion]);
-
-  useEffect(() => {
-    ambientMotion.stopAnimation();
-    ambientMotion.setValue(0);
-    if (reduceMotion) return;
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(ambientMotion, {
-          duration: 2600,
-          toValue: 1,
-          useNativeDriver: true,
-        }),
-        Animated.timing(ambientMotion, {
-          duration: 2600,
-          toValue: 0,
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [ambientMotion, reduceMotion]);
 
   const fillHeight = animatedProgress.interpolate({
     inputRange: [0, 1],
@@ -439,17 +435,10 @@ export function BodyProgressAvatar({
     [boundedMuscle, heightCm, weightKg],
   );
   const bodyPath = useMemo(
-    () => originalBodyPath(sex, appearance.bodyMass, boundedMuscle),
+    () => humanBodyPath(sex, appearance.bodyMass, boundedMuscle),
     [appearance.bodyMass, boundedMuscle, sex],
   );
-  const ambientTranslate = ambientMotion.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -1.5],
-  });
-  const ambientScale = ambientMotion.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.008],
-  });
+  const renderedHeight = Math.round(BODY_HEIGHT * appearance.heightScale);
 
   return (
     <View
@@ -457,56 +446,36 @@ export function BodyProgressAvatar({
       accessibilityRole="progressbar"
       accessibilityLabel={`${t("Tracked goals")}: ${percent}%`}
       accessibilityValue={{ min: 0, max: 100, now: percent, text: `${percent}%` }}
-      style={[
-        styles.frame,
-        {
-          backgroundColor: colors.primarySoft,
-          borderColor: colors.border,
-        },
-      ]}
+      style={styles.frame}
     >
-      <Animated.View
-        style={[
-          styles.body,
-          {
-            transform: [
-              { translateY: ambientTranslate },
-              { scale: ambientScale },
-              { scaleY: appearance.heightScale },
-            ],
-          },
-        ]}
+      <Svg
+        pointerEvents="none"
+        width={BODY_WIDTH}
+        height={renderedHeight}
+        viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
       >
-        <Svg
-          pointerEvents="none"
-          width={BODY_WIDTH}
-          height={BODY_HEIGHT}
-          viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
-        >
-          <Defs>
-            <ClipPath id={clipId}>
-              <Path d={bodyPath} />
-            </ClipPath>
-          </Defs>
-          <Path d={bodyPath} fill={colors.card} />
-          <AnimatedRect
-            clipPath={`url(#${clipId})`}
-            fill={GOAL_COMPLETE_COLOR}
-            height={fillHeight}
-            width={VIEWBOX_WIDTH}
-            x={0}
-            y={fillTop}
-          />
-          <BodyDetails
-            bodyPath={bodyPath}
-            color={colors.ink}
-            mindTier={mindTier}
-            muscleProgress={boundedMuscle}
-            muscleTier={appearance.muscleTier}
-            variant={sex}
-          />
-        </Svg>
-      </Animated.View>
+        <Defs>
+          <ClipPath id={clipId}>
+            <Path d={bodyPath} />
+          </ClipPath>
+        </Defs>
+        <AnimatedRect
+          clipPath={`url(#${clipId})`}
+          fill={GOAL_COMPLETE_COLOR}
+          height={fillHeight}
+          width={VIEWBOX_WIDTH}
+          x={0}
+          y={fillTop}
+        />
+        <BodyDetails
+          bodyPath={bodyPath}
+          color={colors.ink}
+          mindTier={mindTier}
+          muscleProgress={boundedMuscle}
+          muscleTier={appearance.muscleTier}
+          variant={sex}
+        />
+      </Svg>
       <View
         pointerEvents="none"
         style={[styles.percentPill, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -523,15 +492,8 @@ const styles = StyleSheet.create({
   frame: {
     width: 164,
     height: 282,
-    borderRadius: 82,
-    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
-  },
-  body: {
-    width: BODY_WIDTH,
-    height: BODY_HEIGHT,
-    overflow: "hidden",
   },
   percentPill: {
     position: "absolute",

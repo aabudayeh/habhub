@@ -1546,11 +1546,10 @@ export async function pushCloudMessagesNow(
         message.senderId === state.currentUserId &&
         cloudOwnedMessage(message, state.group.id) &&
         (!messageId || message.id === messageId) &&
-        freshChatPushCandidate(message, now) &&
         (!message.recipientId || activeMemberIds.has(message.recipientId)),
     )
     .map((message) => messageForGroup(message, state.group.id))
-    .slice(-30);
+    .slice(-SHARED_MESSAGE_CACHE_LIMIT);
   if (!owned.length) return;
   // For a just-created message, one idempotent upsert followed by one
   // idempotent Edge Function invocation is both faster and more reliable than
@@ -1575,49 +1574,63 @@ export async function pushCloudMessagesNow(
       { onConflict: "sender_id,client_generated_id" },
     );
     if (upsert.error) throw upsert.error;
+    // The relational chat row must always be recovered, even if the message
+    // spent hours offline. Push is only an arrival alert, so stale recovery
+    // rows are deliberately stored without waking the recipient.
+    if (!freshChatPushCandidate(message, now)) return;
     const result = await client.functions.invoke("send-push", {
       body: chatPushPayload(state, sender, message),
     });
     if (result.error) throw result.error;
     return;
   }
-  const current = await client
-    .from("messages")
-    .select("client_generated_id, push_dispatched_at")
-    .eq("group_id", state.group.id)
-    .eq("sender_id", state.currentUserId)
-    .in(
-      "client_generated_id",
-      owned.map((message) => message.id),
-    );
-  if (current.error) throw current.error;
-  const rows = new Map(
-    (current.data ?? []).map((row) => [row.client_generated_id, row]),
-  );
-  const pending = owned.filter(
-    (message) =>
-      !rows.has(message.id) || !rows.get(message.id)?.push_dispatched_at,
-  );
-  if (!pending.length) return;
-  const missing = pending.filter((message) => !rows.has(message.id));
-  if (missing.length) {
-  const upsert = await client.from("messages").upsert(
-    missing.map((message) => ({
-      group_id: state.group.id,
-      sender_id: state.currentUserId,
-      client_generated_id: message.id,
-      kind: message.kind,
-      content: message.text,
-      conversation_id: message.conversationId ?? `group:${state.group.id}`,
-      recipient_id: message.recipientId ?? null,
-      image_path: message.imageStoragePath ?? null,
-      metadata: {},
-      created_at: message.createdAt,
-    })),
-    { onConflict: "sender_id,client_generated_id" },
-  );
-  if (upsert.error) throw upsert.error;
+  const currentRows: {
+    client_generated_id: string;
+    push_dispatched_at: string | null;
+  }[] = [];
+  for (const ids of batches(
+    owned.map((message) => message.id),
+    80,
+  )) {
+    const current = await client
+      .from("messages")
+      .select("client_generated_id, push_dispatched_at")
+      .eq("group_id", state.group.id)
+      .eq("sender_id", state.currentUserId)
+      .in("client_generated_id", ids);
+    if (current.error) throw current.error;
+    currentRows.push(...(current.data ?? []));
   }
+  const rows = new Map(
+    currentRows.map((row) => [row.client_generated_id, row]),
+  );
+  const missing = owned.filter((message) => !rows.has(message.id));
+  for (const batch of batches(missing, 80)) {
+    const upsert = await client.from("messages").upsert(
+      batch.map((message) => ({
+        group_id: state.group.id,
+        sender_id: state.currentUserId,
+        client_generated_id: message.id,
+        kind: message.kind,
+        content: message.text,
+        conversation_id: message.conversationId ?? `group:${state.group.id}`,
+        recipient_id: message.recipientId ?? null,
+        image_path: message.imageStoragePath ?? null,
+        metadata: {},
+        created_at: message.createdAt,
+      })),
+      { onConflict: "sender_id,client_generated_id" },
+    );
+    if (upsert.error) throw upsert.error;
+  }
+  const pending = owned
+    .filter(
+      (message) =>
+        freshChatPushCandidate(message, now) &&
+        (!rows.has(message.id) || !rows.get(message.id)?.push_dispatched_at),
+    )
+    .slice(-30);
+  if (!pending.length) return;
   const dispatches = await Promise.allSettled(
     pending.map(async (message) => {
       const result = await client.functions.invoke("send-push", {

@@ -324,25 +324,9 @@ function ChatScreen() {
       hidden.remove();
     };
   }, [cancelPendingNewestScroll, scrollToNewestAfterLayout]);
-  const latestOwnedMessageId = [...messages]
-    .reverse()
-    .find((message) => message.senderId === state.currentUserId)?.id;
-  useEffect(() => {
-    if (!latestOwnedMessageId) return;
-    let delivered = false;
-    const timers = [180, 2500, 10000].map((delay) =>
-      setTimeout(() => {
-        if (delivered) return;
-        syncMessagesNow()
-          .then(() => {
-            delivered = true;
-            return refreshMessages();
-          })
-          .catch(() => undefined);
-      }, delay),
-    );
-    return () => timers.forEach(clearTimeout);
-  }, [latestOwnedMessageId, refreshMessages, syncMessagesNow]);
+  // CloudSyncProvider owns the immediate, idempotent message outbox globally.
+  // Do not start a second three-timer retry loop from this screen: it raced the
+  // provider and could upsert/invoke push twice for the same newly-sent row.
   useFocusEffect(
     useCallback(() => {
       // Every visit to Chat starts at the newest message. Only a drag made

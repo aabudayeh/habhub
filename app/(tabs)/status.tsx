@@ -36,7 +36,7 @@ import {
 import { localizeMetricName } from "@/src/i18n/domain";
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
-import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import { palette, useAppColors } from "@/src/theme";
 
 const SEGMENTS = 32;
 const RING_SIZE = 76;
@@ -130,7 +130,6 @@ function GoalOrbit({
 export default function StatusPage() {
   const { state } = useApp();
   const colors = useAppColors();
-  const accent = useGroupAccent();
   const { t } = useLocalization();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
@@ -319,7 +318,6 @@ export default function StatusPage() {
 
         <Card style={styles.statusCard}>
           <View style={styles.personWrap}>
-            <View style={[styles.halo, { borderColor: `${accent}55` }]} />
             <BodyProgressAvatar
               heightCm={state.settings.energyProfile.heightCm}
               mindTier={avatarProgression.mindTier}
@@ -369,14 +367,6 @@ export default function StatusPage() {
 const styles = StyleSheet.create({
   statusCard: { gap: 16, paddingVertical: 18 },
   personWrap: { alignItems: "center", justifyContent: "center", gap: 5 },
-  halo: {
-    position: "absolute",
-    top: -10,
-    width: 184,
-    height: 294,
-    borderRadius: 92,
-    borderWidth: 1,
-  },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
   summary: { fontSize: 12, fontWeight: "700" },
   goalGrid: {

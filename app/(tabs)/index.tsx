@@ -117,7 +117,23 @@ const GOLD_TILE_START_DELAY_MS = 1450;
 const GOLD_TILE_STAGGER_MS = 1050;
 const COMPLETION_INDICATOR_SIZE = 60;
 const GOAL_DOT_SIZE = 23;
-const GOAL_LIQUID_REVEAL_MS = 1800;
+const GOAL_LIQUID_REVEAL_MS = 2200;
+
+type GoalLiquidSnapshot = Record<
+  string,
+  { progress: number; signature: string }
+>;
+
+function parseGoalLiquidSnapshot(saved: string | null): GoalLiquidSnapshot {
+  if (!saved) return {};
+  try {
+    const parsed = JSON.parse(saved) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as GoalLiquidSnapshot;
+  } catch {
+    return {};
+  }
+}
 
 if (
   Platform.OS === "android" &&
@@ -298,7 +314,71 @@ function Today() {
   const [goldSequenceRun, setGoldSequenceRun] = useState(0);
   const goalLiquidReveal = useRef(new Animated.Value(0)).current;
   const goalLiquidMotion = useRef(new Animated.Value(0)).current;
+  const [liquidAnimatedGoalIds, setLiquidAnimatedGoalIds] = useState<string[]>(
+    [],
+  );
   const [reduceMotion, setReduceMotion] = useState(false);
+  const unavailableGoalIds = new Set(
+    goals.unavailable.map((metric) => metric.id),
+  );
+  const featuredGoalProgress = goals.metrics.map((item) => {
+    const unavailable = unavailableGoalIds.has(item.id);
+    const met = scheduledGoalReached(
+      state,
+      item,
+      state.currentUserId,
+      today,
+    );
+    const value = unavailable
+      ? 0
+      : safeMetricValue(state, item, state.currentUserId, today);
+    const progress = unavailable
+      ? 0
+      : met
+        ? 1
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              metricVisualProgress(
+                state,
+                item,
+                state.currentUserId,
+                today,
+                value,
+                effectiveGoalTarget(
+                  state,
+                  item,
+                  state.currentUserId,
+                  today,
+                ),
+              ),
+            ),
+          );
+    const roundedValue = Math.round(value * 10_000) / 10_000;
+    const roundedProgress = Math.round(progress * 10_000) / 10_000;
+    return {
+      id: item.id,
+      met,
+      progress,
+      unavailable,
+      snapshot: {
+        progress: roundedProgress,
+        signature: `${unavailable ? 1 : 0}:${met ? 1 : 0}:${roundedValue}:${roundedProgress}`,
+      },
+    };
+  });
+  const featuredGoalProgressById = new Map(
+    featuredGoalProgress.map((item) => [item.id, item]),
+  );
+  const goalLiquidSnapshot = Object.fromEntries(
+    featuredGoalProgress
+      .map((item) => [item.id, item.snapshot] as const)
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const goalLiquidSnapshotKey = JSON.stringify(goalLiquidSnapshot);
+  const goalLiquidStorageKey = `metric-rally-goal-liquid-v3:${state.currentUserId}:${today}`;
+  const liquidAnimatedGoalIdSet = new Set(liquidAnimatedGoalIds);
   const heroGold = useRef(new Animated.Value(heroAllMet ? 1 : 0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
@@ -343,56 +423,100 @@ function Today() {
   }, []);
   useFocusEffect(
     useCallback(() => {
+      let cancelled = false;
+      let animation: Animated.CompositeAnimation | undefined;
+      let animationFrame: number | undefined;
+
       goalLiquidReveal.stopAnimation();
       goalLiquidMotion.stopAnimation();
-      goalLiquidReveal.setValue(reduceMotion ? 1 : 0);
+      goalLiquidReveal.setValue(1);
       goalLiquidMotion.setValue(0);
-      if (
-        reduceMotion ||
-        !goals.metrics.length ||
-        !showGoalsToday
-      ) {
+
+      if (!showGoalsToday) {
+        setLiquidAnimatedGoalIds([]);
         return () => {
+          cancelled = true;
           goalLiquidReveal.stopAnimation();
           goalLiquidMotion.stopAnimation();
         };
       }
 
-      // A single JS-driven reveal controls every mini tracker while a finite
-      // native-driver ripple gives the surface a water-like motion. Both end
-      // after this entrance and are stopped immediately when Today loses focus.
-      const reveal = Animated.timing(goalLiquidReveal, {
-        toValue: 1,
-        duration: GOAL_LIQUID_REVEAL_MS,
-        delay: 80,
-        useNativeDriver: false,
-      });
-      const ripple = Animated.sequence([
-        Animated.timing(goalLiquidMotion, {
-          toValue: 1,
-          duration: GOAL_LIQUID_REVEAL_MS / 2,
-          useNativeDriver: true,
-        }),
-        Animated.timing(goalLiquidMotion, {
-          toValue: 0,
-          duration: GOAL_LIQUID_REVEAL_MS / 2,
-          useNativeDriver: true,
-        }),
-      ]);
-      reveal.start();
-      ripple.start();
+      AsyncStorage.getItem(goalLiquidStorageKey)
+        .then((saved) => {
+          if (cancelled) return;
+          const previous = parseGoalLiquidSnapshot(saved);
+          const current = parseGoalLiquidSnapshot(goalLiquidSnapshotKey);
+          const changedGoalIds = Object.entries(current)
+            .filter(([id, snapshot]) => {
+              if (snapshot.progress <= 0) return false;
+              return previous[id]?.signature !== snapshot.signature;
+            })
+            .map(([id]) => id);
+
+          AsyncStorage.setItem(
+            goalLiquidStorageKey,
+            JSON.stringify(current),
+          ).catch(() => undefined);
+
+          if (reduceMotion || !changedGoalIds.length) {
+            setLiquidAnimatedGoalIds([]);
+            return;
+          }
+
+          setLiquidAnimatedGoalIds(changedGoalIds);
+          goalLiquidReveal.setValue(0);
+          goalLiquidMotion.setValue(0);
+
+          // Wait one frame so the changed tiles mount at their empty position,
+          // then move their pre-sized liquid layers upward on the native thread.
+          // This avoids JS-thread layout animation stalls during hydration/sync.
+          animationFrame = requestAnimationFrame(() => {
+            if (cancelled) return;
+            animation = Animated.parallel([
+              Animated.timing(goalLiquidReveal, {
+                toValue: 1,
+                duration: GOAL_LIQUID_REVEAL_MS,
+                useNativeDriver: true,
+              }),
+              Animated.loop(
+                Animated.sequence([
+                  Animated.timing(goalLiquidMotion, {
+                    toValue: 1,
+                    duration: 275,
+                    useNativeDriver: true,
+                  }),
+                  Animated.timing(goalLiquidMotion, {
+                    toValue: 0,
+                    duration: 275,
+                    useNativeDriver: true,
+                  }),
+                ]),
+                { iterations: 4 },
+              ),
+            ]);
+            animation.start(({ finished }) => {
+              if (!cancelled && finished) setLiquidAnimatedGoalIds([]);
+            });
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setLiquidAnimatedGoalIds([]);
+        });
+
       return () => {
-        reveal.stop();
-        ripple.stop();
+        cancelled = true;
+        if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
+        animation?.stop();
         goalLiquidReveal.stopAnimation();
         goalLiquidMotion.stopAnimation();
-        goalLiquidReveal.setValue(0);
+        goalLiquidReveal.setValue(1);
         goalLiquidMotion.setValue(0);
       };
     }, [
       goalLiquidMotion,
       goalLiquidReveal,
-      goals.metrics.length,
+      goalLiquidSnapshotKey,
+      goalLiquidStorageKey,
       reduceMotion,
       showGoalsToday,
     ]),
@@ -774,46 +898,10 @@ function Today() {
           {heroUsesGoals ? (
             <View style={styles.goalDots}>
               {goals.metrics.map((item) => {
-                const unavailable = goals.unavailable.some(
-                  (metric) => metric.id === item.id,
-                );
-                const met = scheduledGoalReached(
-                  state,
-                  item,
-                  state.currentUserId,
-                  today,
-                );
-                const value = unavailable
-                  ? 0
-                  : safeMetricValue(
-                      state,
-                      item,
-                      state.currentUserId,
-                      today,
-                    );
-                const progress = unavailable
-                  ? 0
-                  : met
-                    ? 1
-                    : Math.max(
-                        0,
-                        Math.min(
-                          1,
-                          metricVisualProgress(
-                            state,
-                            item,
-                            state.currentUserId,
-                            today,
-                            value,
-                            effectiveGoalTarget(
-                              state,
-                              item,
-                              state.currentUserId,
-                              today,
-                            ),
-                          ),
-                        ),
-                      );
+                const featuredProgress = featuredGoalProgressById.get(item.id);
+                const unavailable = featuredProgress?.unavailable ?? true;
+                const met = featuredProgress?.met ?? false;
+                const progress = featuredProgress?.progress ?? 0;
                 return (
                   <GoalCompletionDot
                     key={item.id}
@@ -826,6 +914,7 @@ function Today() {
                     sequenceRun={goldSequenceRun}
                     liquidReveal={goalLiquidReveal}
                     liquidMotion={goalLiquidMotion}
+                    animateLiquid={liquidAnimatedGoalIdSet.has(item.id)}
                     onPress={() =>
                       router.navigate({
                         pathname: "/metric-detail",
@@ -1499,6 +1588,7 @@ function GoalCompletionDot({
   sequenceRun,
   liquidReveal,
   liquidMotion,
+  animateLiquid,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -1510,6 +1600,7 @@ function GoalCompletionDot({
   sequenceRun: number;
   liquidReveal: Animated.Value;
   liquidMotion: Animated.Value;
+  animateLiquid: boolean;
   onPress: () => void;
 }) {
   const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
@@ -1545,9 +1636,10 @@ function GoalCompletionDot({
     inputRange: [0, 1],
     outputRange: [-5, 5],
   });
-  const fillHeight = liquidReveal.interpolate({
+  const fillHeight = GOAL_DOT_SIZE * normalized;
+  const liquidTranslateY = liquidReveal.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, GOAL_DOT_SIZE * normalized],
+    outputRange: [fillHeight, 0],
   });
   return (
     <Pressable
@@ -1565,12 +1657,15 @@ function GoalCompletionDot({
             style={[
               styles.dotLiquid,
               {
-                backgroundColor: fillColor,
+                backgroundColor: animateLiquid ? palette.lime : fillColor,
                 height: fillHeight,
+                transform: animateLiquid
+                  ? [{ translateY: liquidTranslateY }]
+                  : undefined,
               },
             ]}
           >
-            {normalized < 1 ? (
+            {animateLiquid ? (
               <Animated.View
                 style={[
                   styles.dotWave,

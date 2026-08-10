@@ -68,7 +68,14 @@ import {
   MetricEntry,
   PhotoUpdate,
 } from "@/src/types";
-import { isCloudSyncPaused } from "@/src/cloud/syncGate";
+import {
+  isCloudSyncPaused,
+  subscribeCloudSyncPause,
+} from "@/src/cloud/syncGate";
+import {
+  AUTO_SYNC_MAX_INTERACTION_WAIT_MS,
+  nextAutoSyncDelay,
+} from "@/src/cloud/autoSyncTiming";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -85,7 +92,8 @@ const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
 const MAX_GROUP_READ_RETRY_MS = 2 * 60 * 1000;
 const MAX_SURFACE_READ_RETRY_MS = 60 * 1000;
-const CHAT_OUTBOX_FRESHNESS_MS = 15 * 60 * 1000;
+const CHAT_OUTBOX_RECOVERY_LIMIT = 200;
+const CHAT_OUTBOX_AUTOMATIC_RETRY_LIMIT = 5;
 const LEADERBOARD_FRESHNESS_INTERVAL_MS = 5 * 60 * 1000;
 
 function mergeQueuedActivitySince(
@@ -2135,6 +2143,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const idleSyncRef = useRef<
     ReturnType<typeof InteractionManager.runAfterInteractions> | null
   >(null);
+  const idleSyncFallbackTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const autoSyncFirstChangeAtRef = useRef<number | null>(null);
+  const autoSyncLastChangeAtRef = useRef<number | null>(null);
   const suppressGroupRefreshUntilRef = useRef(0);
   const groupLoadSequenceRef = useRef(0);
   const activityLoadSequenceRef = useRef(0);
@@ -2149,10 +2162,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   // undefined = no queued request, null = full activity refresh, string =
   // earliest local date requested by coalesced realtime events.
   const queuedActivitySinceRef = useRef<string | null | undefined>(undefined);
+  const chatOutboxBoundaryRef = useRef<string | null>(null);
   const chatOutboxSeenRef = useRef(new Set<string>());
+  const chatOutboxInitializedGroupRef = useRef<string | null>(null);
   const chatOutboxPendingRef = useRef(new Set<string>());
   const chatOutboxAttemptsRef = useRef(new Map<string, number>());
   const chatOutboxPromiseRef = useRef<Promise<void> | null>(null);
+  const chatRecoveryPromiseRef = useRef<Promise<void> | null>(null);
   const chatOutboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mergeBaseWriteRef = useRef<Promise<void>>(Promise.resolve());
   stateRef.current = state;
@@ -2226,7 +2242,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       !networkAvailableRef.current ||
       !isCloudGroupId(stateRef.current.group.id)
     ) return;
-    const pending = [...chatOutboxPendingRef.current].slice(0, 8);
+    const pending = [...chatOutboxPendingRef.current]
+      .filter(
+        (messageId) =>
+          (chatOutboxAttemptsRef.current.get(messageId) ?? 0) <
+          CHAT_OUTBOX_AUTOMATIC_RETRY_LIMIT,
+      )
+      .sort(
+        (left, right) =>
+          (chatOutboxAttemptsRef.current.get(left) ?? 0) -
+          (chatOutboxAttemptsRef.current.get(right) ?? 0),
+      )
+      .slice(0, 8);
     if (!pending.length) return;
     const operation = (async () => {
       let shouldRetry = false;
@@ -2238,8 +2265,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         } catch {
           const attempts = (chatOutboxAttemptsRef.current.get(messageId) ?? 0) + 1;
           chatOutboxAttemptsRef.current.set(messageId, attempts);
-          if (attempts < 5) shouldRetry = true;
-          else chatOutboxPendingRef.current.delete(messageId);
+          // Keep the local message as a durable outbox row after the bounded
+          // foreground retry burst. A later reconnect/resume/manual refresh
+          // gets another exact idempotent attempt instead of silently losing
+          // a message after five temporary failures.
+          if (attempts < CHAT_OUTBOX_AUTOMATIC_RETRY_LIMIT)
+            shouldRetry = true;
         }
       }
       if (shouldRetry && !chatOutboxTimerRef.current) {
@@ -2257,10 +2288,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // Messages can arrive while this batch is in flight, and a reconnect may
       // queue more than the bounded batch. Drain the remainder without waiting
       // for a page change or the heavier workspace sync.
-      if (
-        chatOutboxPendingRef.current.size &&
-        !chatOutboxTimerRef.current
-      ) {
+      const hasImmediatelyRetryableMessages = [
+        ...chatOutboxPendingRef.current,
+      ].some(
+        (messageId) =>
+          (chatOutboxAttemptsRef.current.get(messageId) ?? 0) <
+          CHAT_OUTBOX_AUTOMATIC_RETRY_LIMIT,
+      );
+      if (hasImmediatelyRetryableMessages && !chatOutboxTimerRef.current) {
         chatOutboxTimerRef.current = setTimeout(() => {
           chatOutboxTimerRef.current = null;
           flushChatOutbox();
@@ -2270,20 +2305,97 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     chatOutboxPromiseRef.current = operation;
   }, [auth.status]);
 
+  const recoverChatOutbox = useCallback(() => {
+    if (
+      chatRecoveryPromiseRef.current ||
+      auth.status !== "signedIn" ||
+      !networkAvailableRef.current ||
+      !isCloudGroupId(stateRef.current.group.id)
+    )
+      return chatRecoveryPromiseRef.current ?? Promise.resolve();
+    const boundary = chatOutboxBoundaryRef.current;
+    const queuedIds = [...chatOutboxPendingRef.current];
+    const operation = pushCloudMessagesNow(stateRef.current)
+      .then(() => {
+        if (chatOutboxBoundaryRef.current !== boundary) return;
+        queuedIds.forEach((messageId) => {
+          chatOutboxPendingRef.current.delete(messageId);
+          chatOutboxAttemptsRef.current.delete(messageId);
+        });
+      })
+      .catch(() => {
+        // The generic recovery query is the low-request path. If it fails,
+        // retain every durable id and fall back to the bounded targeted queue.
+        if (chatOutboxBoundaryRef.current === boundary) flushChatOutbox();
+      })
+      .finally(() => {
+        if (chatRecoveryPromiseRef.current === operation)
+          chatRecoveryPromiseRef.current = null;
+        if (
+          chatOutboxBoundaryRef.current === boundary &&
+          chatOutboxPendingRef.current.size
+        )
+          flushChatOutbox();
+      });
+    chatRecoveryPromiseRef.current = operation;
+    return operation;
+  }, [auth.status, flushChatOutbox]);
+
+  useEffect(() => {
+    const boundary = `${auth.user?.id ?? "signed-out"}:${state.group.id}`;
+    if (chatOutboxBoundaryRef.current === boundary) return;
+    chatOutboxBoundaryRef.current = boundary;
+    chatOutboxInitializedGroupRef.current = null;
+    chatOutboxSeenRef.current.clear();
+    chatOutboxPendingRef.current.clear();
+    chatOutboxAttemptsRef.current.clear();
+    if (chatOutboxTimerRef.current) clearTimeout(chatOutboxTimerRef.current);
+    chatOutboxTimerRef.current = null;
+  }, [auth.user?.id, state.group.id]);
+
   useEffect(() => {
     if (auth.status !== "signedIn" || !isCloudGroupId(state.group.id)) return;
-    const now = Date.now();
-    for (const message of state.messages) {
-      const createdAt = new Date(message.createdAt).getTime();
-      if (
+    const ownedMessagesForRecovery = state.messages
+      .filter((message) =>
+        !(
         message.senderId !== state.currentUserId ||
         (message.groupId
           ? message.groupId !== state.group.id
-          : message.conversationId !== `group:${state.group.id}`) ||
-        !Number.isFinite(createdAt) ||
-        now - createdAt > CHAT_OUTBOX_FRESHNESS_MS ||
-        chatOutboxSeenRef.current.has(message.id)
-      ) continue;
+          : message.conversationId !== `group:${state.group.id}`)
+        ),
+      )
+      .slice(-CHAT_OUTBOX_RECOVERY_LIMIT);
+    if (chatOutboxInitializedGroupRef.current !== state.group.id) {
+      chatOutboxInitializedGroupRef.current = state.group.id;
+      ownedMessagesForRecovery.forEach((message) =>
+        chatOutboxSeenRef.current.add(message.id),
+      );
+      // Startup/re-hydration uses one recovery query rather than treating all
+      // recent local history as newly sent and launching one request per row.
+      if (networkAvailable) {
+        const boundary = chatOutboxBoundaryRef.current;
+        void pushCloudMessagesNow(stateRef.current).catch(() => {
+          // A temporary failure must put the exact local rows back into the
+          // durable targeted outbox. The boundary guard prevents an old
+          // account/group recovery from leaking into the newly selected one.
+          if (chatOutboxBoundaryRef.current !== boundary) return;
+          ownedMessagesForRecovery.forEach((message) =>
+            chatOutboxPendingRef.current.add(message.id),
+          );
+          flushChatOutbox();
+        });
+      } else {
+        // These messages were restored from local persistence while offline.
+        // Keep them queued so the connectivity effect sends them without a
+        // Chat-page visit or manual Cloud Sync.
+        ownedMessagesForRecovery.forEach((message) =>
+          chatOutboxPendingRef.current.add(message.id),
+        );
+      }
+      return;
+    }
+    for (const message of ownedMessagesForRecovery) {
+      if (chatOutboxSeenRef.current.has(message.id)) continue;
       chatOutboxSeenRef.current.add(message.id);
       chatOutboxPendingRef.current.add(message.id);
     }
@@ -3805,16 +3917,37 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       initializedUserRef.current !== auth.user?.id
     )
       return;
-    // Do not restart the debounce clock for every state object. Busy pages can
-    // update several times per gesture; repeatedly cancelling here used to
-    // postpone the actual outbox save indefinitely and created timer churn.
+    const changedAt = Date.now();
+    autoSyncFirstChangeAtRef.current ??= changedAt;
+    autoSyncLastChangeAtRef.current = changedAt;
+
+    // Keep one timer for the whole burst. The callback observes the latest
+    // change time and reschedules itself, which avoids timer churn on every
+    // keystroke while retaining a five-second maximum trigger latency.
     if (timerRef.current || idleSyncRef.current) return;
-    // Coalesce and defer full-snapshot hashing. Serializing the whole offline
-    // state synchronously on every tap or keystroke caused phone UI stutter.
     const saveWhenReady = () => {
       timerRef.current = null;
+      const now = Date.now();
+      const firstChangeAt = autoSyncFirstChangeAtRef.current ?? now;
+      const lastChangeAt = autoSyncLastChangeAtRef.current ?? firstChangeAt;
+      const remaining = nextAutoSyncDelay(
+        now,
+        firstChangeAt,
+        lastChangeAt,
+      );
+      if (remaining > 0) {
+        timerRef.current = setTimeout(saveWhenReady, remaining);
+        return;
+      }
       if (isCloudSyncPaused()) {
-        timerRef.current = setTimeout(saveWhenReady, 1200);
+        // Edit/reorder and historical Health Connect imports deliberately hold
+        // the network gate. The gate subscription below wakes this exact
+        // outbox when the final pause reason clears, without polling.
+        setPendingChanges(hasUnsyncedLocalChanges());
+        return;
+      }
+      if (NativeAppState.currentState !== "active") {
+        setPendingChanges(hasUnsyncedLocalChanges());
         return;
       }
       if (!networkAvailableRef.current) {
@@ -3822,8 +3955,38 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setStatus("offline");
         return;
       }
-      idleSyncRef.current = InteractionManager.runAfterInteractions(() => {
+
+      let completed = false;
+      const runSyncCheck = () => {
+        if (completed) return;
+        const checkNow = Date.now();
+        const currentFirstChangeAt =
+          autoSyncFirstChangeAtRef.current ?? checkNow;
+        const currentLastChangeAt =
+          autoSyncLastChangeAtRef.current ?? currentFirstChangeAt;
+        const rescheduleAfter = nextAutoSyncDelay(
+          checkNow,
+          currentFirstChangeAt,
+          currentLastChangeAt,
+        );
+        if (rescheduleAfter > 0) {
+          completed = true;
+          idleSyncRef.current?.cancel();
+          idleSyncRef.current = null;
+          if (idleSyncFallbackTimerRef.current)
+            clearTimeout(idleSyncFallbackTimerRef.current);
+          idleSyncFallbackTimerRef.current = null;
+          timerRef.current = setTimeout(saveWhenReady, rescheduleAfter);
+          return;
+        }
+        completed = true;
+        idleSyncRef.current?.cancel();
         idleSyncRef.current = null;
+        if (idleSyncFallbackTimerRef.current)
+          clearTimeout(idleSyncFallbackTimerRef.current);
+        idleSyncFallbackTimerRef.current = null;
+        autoSyncFirstChangeAtRef.current = null;
+        autoSyncLastChangeAtRef.current = null;
         const live = stateRef.current;
         const privateSnapshotChanged = stableHash(live) !== hashRef.current;
         const groupWorkspaceChanged =
@@ -3836,9 +3999,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (!privateSnapshotChanged && !groupWorkspaceChanged) return;
         setPendingChanges(true);
         performSync().catch(() => undefined);
-      });
+      };
+      // Prefer an idle turn so hashing a large offline snapshot never competes
+      // with the tap/navigation frame. Infinite animations can keep React
+      // Native's interaction queue busy, so a short hard fallback guarantees
+      // the automatic outbox cannot remain stuck until manual Cloud Sync.
+      const idleTask = InteractionManager.runAfterInteractions(runSyncCheck);
+      if (completed) idleTask.cancel();
+      else {
+        idleSyncRef.current = idleTask;
+        idleSyncFallbackTimerRef.current = setTimeout(
+          runSyncCheck,
+          AUTO_SYNC_MAX_INTERACTION_WAIT_MS,
+        );
+      }
     };
-    timerRef.current = setTimeout(saveWhenReady, 1200);
+    timerRef.current = setTimeout(
+      saveWhenReady,
+      nextAutoSyncDelay(changedAt, changedAt, changedAt),
+    );
   }, [
     auth.status,
     auth.user?.id,
@@ -3853,9 +4032,44 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       timerRef.current = null;
       idleSyncRef.current?.cancel();
       idleSyncRef.current = null;
+      if (idleSyncFallbackTimerRef.current)
+        clearTimeout(idleSyncFallbackTimerRef.current);
+      idleSyncFallbackTimerRef.current = null;
+      autoSyncFirstChangeAtRef.current = null;
+      autoSyncLastChangeAtRef.current = null;
     },
     [auth.user?.id],
   );
+
+  useEffect(() => {
+    let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = subscribeCloudSyncPause((paused) => {
+      if (
+        paused ||
+        wakeTimer ||
+        auth.status !== "signedIn" ||
+        initializedUserRef.current !== auth.user?.id
+      )
+        return;
+      wakeTimer = setTimeout(() => {
+        wakeTimer = null;
+        if (!hasUnsyncedLocalChanges()) return;
+        setPendingChanges(true);
+        if (!networkAvailableRef.current) {
+          setStatus("offline");
+          return;
+        }
+        if (NativeAppState.currentState !== "active") return;
+        autoSyncFirstChangeAtRef.current = null;
+        autoSyncLastChangeAtRef.current = null;
+        performSyncRef.current?.().catch(() => undefined);
+      }, 0);
+    });
+    return () => {
+      unsubscribe();
+      if (wakeTimer) clearTimeout(wakeTimer);
+    };
+  }, [auth.status, auth.user?.id, hasUnsyncedLocalChanges]);
 
   useEffect(() => {
     const initializationPending = remoteInitializationPendingRef.current;
@@ -4330,7 +4544,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     cloudRetryAttemptRef.current = 0;
     nextRetryAtRef.current = 0;
     setNextRetryAt(0);
-    flushChatOutbox();
+    // A genuine offline -> online transition starts one new bounded retry
+    // window for durable chat rows that exhausted their previous attempt set.
+    chatOutboxAttemptsRef.current.clear();
+    void recoverChatOutbox();
     if (remoteInitializationPendingRef.current) {
       setInitializationAttempt((value) => value + 1);
       return;
@@ -4354,6 +4571,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     flushChatOutbox,
     networkAvailable,
     performSync,
+    recoverChatOutbox,
     refreshGroupActivity,
     refreshMessages,
     scheduleActivityReadRetry,
@@ -4831,7 +5049,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // separate turns. The activity subscription checks its lightweight
       // server version on reconnect and only reloads history when it changed.
       later(150, () => {
-        pushCloudMessagesNow(stateRef.current).catch(() => undefined);
+        void recoverChatOutbox();
         refreshMessages().catch(() => undefined);
       });
       // If the app was backgrounded for longer than the freshness window,
@@ -4840,8 +5058,22 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       later(450, () => {
         publishLeaderboardFreshness().catch(() => undefined);
       });
-      if (!initializationPending && (pendingChanges || status === "offline"))
-        later(900, () => performSync().catch(() => undefined));
+      // `pendingChanges` is presentation state and may still be false when the
+      // app was suspended before the autosave timer fired. Inspect the durable
+      // local outbox on resume so closing/reopening never makes manual Cloud
+      // Sync a prerequisite for publishing a just-made edit.
+      if (!initializationPending)
+        later(350, () => {
+          // Hashing a year-long offline snapshot is deliberately outside the
+          // native AppState callback so the first resumed frame and tap are
+          // never held up by JSON serialization.
+          if (
+            pendingChanges ||
+            status === "offline" ||
+            hasUnsyncedLocalChanges()
+          )
+            performSync().catch(() => undefined);
+        });
     });
     return () => {
       subscription.remove();
@@ -4851,9 +5083,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    flushChatOutbox,
+    hasUnsyncedLocalChanges,
     pendingChanges,
     performSync,
     publishLeaderboardFreshness,
+    recoverChatOutbox,
     recordServerSyncedAt,
     refreshMessages,
     scheduleActivityReadRetry,
@@ -5179,6 +5414,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       refreshMessages,
       syncMessagesNow: async (messageId) => {
         await pushCloudMessagesNow(stateRef.current, messageId);
+        if (messageId) {
+          chatOutboxPendingRef.current.delete(messageId);
+          chatOutboxAttemptsRef.current.delete(messageId);
+        }
       },
       approveMember: async (userId) => {
         const groupId = stateRef.current.group.id;
