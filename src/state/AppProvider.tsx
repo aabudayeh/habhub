@@ -26,6 +26,7 @@ import {
   applyImportedFoodFastBreaks,
   endManualFast,
   reconcileAutomaticFasting,
+  reinstateAutomaticFasting,
   startManualFast,
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
@@ -1036,6 +1037,13 @@ function reducer(state: AppState, action: Action): AppState {
       };
     }
     case "updateMetric": {
+      const previousMetric = state.metrics.find(
+        (metric) => metric.id === action.metricId,
+      );
+      const automaticFastingWasEnabled =
+        previousMetric?.fastingSettings?.automaticFoodBreak === true;
+      const automaticFastingIsEnabled =
+        action.changes.fastingSettings?.automaticFoodBreak === true;
       let next = withPersonalMetrics(
         state,
         state.metrics.map((metric) =>
@@ -1096,6 +1104,12 @@ function reducer(state: AppState, action: Action): AppState {
               : next.photos,
         };
       }
+      if (
+        action.metricId === "intermittent_fasting" &&
+        !automaticFastingWasEnabled &&
+        automaticFastingIsEnabled
+      )
+        next = reinstateAutomaticFasting(next, action.metricId);
       if (action.metricId === "intermittent_fasting")
         next = reconcileAutomaticFasting(next);
       if (!action.changes.activeFrom || !(state.trackedGoalPeriods[action.metricId]?.length))

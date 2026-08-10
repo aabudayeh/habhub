@@ -16,6 +16,15 @@ export type AutomaticFastProgress = {
   endedOutsideEatingWindow?: boolean;
 };
 
+export type CompletedFastDetails = {
+  startedAt: Date;
+  endedAt: Date;
+  minutes: number;
+  eatingWindowMinutes: number;
+  startedAutomatically: boolean;
+  endedAutomatically: boolean;
+};
+
 function fastingMetric(state: AppState, metricId = "intermittent_fasting") {
   return state.metrics.find(
     (candidate) => candidate.id === metricId && candidate.fastingSettings,
@@ -52,6 +61,21 @@ function isFoodEntry(entry: MetricEntry, userId: string) {
   );
 }
 
+function foodEntriesThrough(
+  state: AppState,
+  userId: string,
+  now: Date,
+) {
+  const nowMs = now.getTime();
+  return state.entries
+    .filter((entry) => {
+      if (!isFoodEntry(entry, userId)) return false;
+      const recordedAtMs = new Date(entry.recordedAt).getTime();
+      return Number.isFinite(recordedAtMs) && recordedAtMs <= nowMs;
+    })
+    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+}
+
 function elapsedMinutes(startedAt: Date, endedAt: Date) {
   return Math.max(
     0,
@@ -83,6 +107,36 @@ function progressFromEntry(
   };
 }
 
+/**
+ * Converts the private numeric fields used for sync/calculation into a safe,
+ * typed representation for user-facing history. Invalid legacy rows are
+ * intentionally ignored rather than exposing their raw metadata keys.
+ */
+export function completedFastDetails(
+  entry: MetricEntry,
+): CompletedFastDetails | undefined {
+  const startedAt = validDate(entry.submetricValues?.fast_started_at_ms);
+  const endedAt = validDate(
+    entry.submetricValues?.fast_ended_at_ms ?? entry.recordedAt,
+  );
+  if (!startedAt || !endedAt || endedAt < startedAt) return undefined;
+  const minutes = Number.isFinite(entry.submetricValues?.fasting_minutes)
+    ? Math.max(0, Number(entry.submetricValues?.fasting_minutes))
+    : elapsedMinutes(startedAt, endedAt);
+  const storedEatingWindow = entry.submetricValues?.eating_window_minutes;
+  return {
+    startedAt,
+    endedAt,
+    minutes,
+    eatingWindowMinutes: Number.isFinite(storedEatingWindow)
+      ? Math.max(0, Number(storedEatingWindow))
+      : Math.max(0, DAY_MINUTES - minutes),
+    startedAutomatically: entry.id.startsWith(AUTO_FAST_PREFIX),
+    endedAutomatically:
+      Number(entry.submetricValues?.ended_automatically) === 1,
+  };
+}
+
 function inferredAutomaticStart(
   state: AppState,
   metric: MetricDefinition,
@@ -99,28 +153,47 @@ function inferredAutomaticStart(
     plannedStartYesterday.getTime() +
       (metric.fastingSettings.fastingMinutes ?? 16 * 60) * MINUTE_MS,
   );
-  const todayFoods = state.entries
-    .filter((entry) => isFoodEntry(entry, userId) && entry.localDate === today)
-    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
-  const yesterdayFoods = state.entries
-    .filter(
-      (entry) => isFoodEntry(entry, userId) && entry.localDate === yesterday,
-    )
-    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+  const foods = foodEntriesThrough(state, userId, now);
+  const latestMeal = foods.at(-1);
+  const todayFoods = foods.filter((entry) => entry.localDate === today);
 
   let startedAt: Date | undefined;
   if (now >= plannedStartToday) {
-    const lastMeal = todayFoods.at(-1);
-    startedAt = lastMeal ? new Date(lastMeal.recordedAt) : plannedStartToday;
+    startedAt = latestMeal
+      ? new Date(latestMeal.recordedAt)
+      : plannedStartToday;
   } else if (now <= plannedEndToday && todayFoods.length === 0) {
-    const lastMeal = yesterdayFoods.at(-1);
-    startedAt = lastMeal
-      ? new Date(lastMeal.recordedAt)
+    startedAt = latestMeal
+      ? new Date(latestMeal.recordedAt)
       : plannedStartYesterday;
   }
   return startedAt && !Number.isNaN(startedAt.getTime()) && startedAt <= now
     ? startedAt
     : undefined;
+}
+
+/**
+ * Re-enables meal-derived inference after Auto has been switched off. An
+ * active manual session remains authoritative; completed/suppressed runtime
+ * state is cleared so the latest meal (or configured start) can be used again.
+ */
+export function reinstateAutomaticFasting(
+  state: AppState,
+  metricId = "intermittent_fasting",
+): AppState {
+  const runtime = state.settings.fastingRuntimeByMetric?.[metricId];
+  if (!runtime || (runtime.startedManually && !runtime.endedAt)) return state;
+  const fastingRuntimeByMetric = {
+    ...(state.settings.fastingRuntimeByMetric ?? {}),
+  };
+  delete fastingRuntimeByMetric[metricId];
+  return {
+    ...state,
+    settings: {
+      ...state.settings,
+      fastingRuntimeByMetric,
+    },
+  };
 }
 
 /** Current/manual session, falling back to the latest completed session today. */
@@ -465,10 +538,10 @@ export function reconcileAutomaticFasting(
       return;
     }
 
-    const previousDate = dateWithOffsetFrom(localDate, -1);
-    const previousFoods = foodsByDate.get(previousDate) ?? [];
-    const previousLastFood = previousFoods.at(-1);
     const endedAt = new Date(firstFood.recordedAt);
+    const previousLastFood = foods
+      .filter((food) => new Date(food.recordedAt) < endedAt)
+      .at(-1);
     const startedAt = previousLastFood
       ? new Date(previousLastFood.recordedAt)
       : scheduledFastStart(

@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Pressable,
   StyleSheet,
+  Switch,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
@@ -449,17 +450,21 @@ export default function NotificationsScreen() {
                     color={colors.faint}
                   />
                 </Pressable>
-                <Pressable
+                <Switch
+                  accessibilityRole="switch"
                   accessibilityLabel={`${active.length || progressActive ? "Disable" : "Enable"} ${metric.name} reminders`}
-                  onPress={() => toggleTrackerReminder(metric.id)}
+                  accessibilityState={{
+                    checked: Boolean(active.length || progressActive),
+                  }}
+                  value={Boolean(active.length || progressActive)}
+                  onValueChange={() => toggleTrackerReminder(metric.id)}
+                  trackColor={{ false: colors.border, true: `${accent}88` }}
+                  thumbColor={
+                    active.length || progressActive ? accent : colors.faint
+                  }
+                  ios_backgroundColor={colors.border}
                   style={styles.reminderToggle}
-                >
-                  <Ionicons
-                    name={active.length || progressActive ? "toggle" : "toggle-outline"}
-                    size={29}
-                    color={active.length || progressActive ? accent : colors.faint}
-                  />
-                </Pressable>
+                />
               </View>
             );
           })}
@@ -638,10 +643,7 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   reminderToggle: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
+    flexShrink: 0,
   },
   scheduleLink: {
     minHeight: 62,

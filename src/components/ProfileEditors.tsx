@@ -16,6 +16,7 @@ import {
   recommendedDailyIntakeForDirection,
 } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
+import { VACATION_COLOR } from "@/src/domain/vacation";
 import {
   isMetricTrackedOnDate,
   weightProgressStats,
@@ -394,10 +395,14 @@ export function StreakSettingsEditor() {
   const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { t } = useLocalization();
   const [collapsed, setCollapsed] = React.useState(true);
   const restDays = Math.max(
     0,
     Math.min(4, state.settings.streakRestDaysPerWeek ?? 1),
+  );
+  const vacationActive = (state.settings.vacationPeriods ?? []).some(
+    (period) => !period.to,
   );
   return (
     <>
@@ -405,6 +410,21 @@ export function StreakSettingsEditor() {
         title="Streaks & rest days"
         collapsed={collapsed}
         onToggle={() => setCollapsed((value) => !value)}
+        action={
+          vacationActive ? (
+            <View
+              accessible
+              accessibilityLabel={t("Vacation mode is active")}
+              style={[
+                styles.vacationHeaderStatus,
+                { backgroundColor: `${VACATION_COLOR}1C` },
+              ]}
+            >
+              <Ionicons name="airplane" size={12} color={VACATION_COLOR} />
+              <Ionicons name="checkmark-circle" size={13} color={VACATION_COLOR} />
+            </View>
+          ) : undefined
+        }
       />
       {!collapsed ? (
         <Card style={styles.goalList}>
@@ -446,11 +466,38 @@ export function StreakSettingsEditor() {
             })}
           </View>
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t(
+              vacationActive ? "Vacation mode is active" : "Vacation mode",
+            )}
             onPress={() => router.navigate("/vacation" as never)}
-            style={styles.vacationLink}
+            style={[styles.vacationLink, { borderTopColor: colors.border }]}
           >
-            <Ionicons name="airplane-outline" size={15} color={accent} />
-            <Text style={[styles.goalMeta, { color: accent }]}>Vacation mode</Text>
+            <View
+              style={[
+                styles.vacationIcon,
+                {
+                  backgroundColor: vacationActive
+                    ? `${VACATION_COLOR}1C`
+                    : colors.primarySoft,
+                },
+              ]}
+            >
+              <Ionicons
+                name={vacationActive ? "airplane" : "airplane-outline"}
+                size={17}
+                color={vacationActive ? VACATION_COLOR : accent}
+              />
+            </View>
+            <View style={styles.grow}>
+              <Text style={[styles.goalName, { color: colors.ink }]}>Vacation mode</Text>
+              <Text style={[styles.goalMeta, { color: colors.muted }]}>
+                {vacationActive
+                  ? "Active · your streaks are protected"
+                  : "Pause goal streaks without changing logged measurements."}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color={colors.faint} />
           </Pressable>
         </Card>
       ) : null}
@@ -678,10 +725,26 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   vacationLink: {
-    minHeight: 34,
+    minHeight: 58,
+    borderTopWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 4,
+  },
+  vacationIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: "center",
     justifyContent: "center",
-    gap: 6,
+  },
+  vacationHeaderStatus: {
+    minHeight: 24,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
 });

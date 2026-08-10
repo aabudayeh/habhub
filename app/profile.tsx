@@ -18,7 +18,6 @@ export default function ProfileScreen(){
   const accent=useGroupAccent();
   const {t}=useLocalization();
   const me=state.group.members.find((member)=>member.id===state.currentUserId)!;
-  const vacationActive=(state.settings.vacationPeriods??[]).some((period)=>!period.to);
   const [name,setName]=useState(me.name);
   const [editingName,setEditingName]=useState(false);
   useEffect(()=>{
@@ -64,7 +63,6 @@ export default function ProfileScreen(){
     <EnergyProfileEditor/>
     <MetricGoalsEditor/>
     <StreakSettingsEditor/>
-    <Pressable onPress={()=>router.push('/vacation')} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:vacationActive?'#E76FA8':colors.border}]}><View style={[styles.linkIcon,{backgroundColor:vacationActive?'#E76FA81C':colors.primarySoft}]}><Ionicons name="airplane-outline" size={21} color={vacationActive?'#E76FA8':accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Vacation mode</Text><Text style={[styles.meta,{color:colors.muted}]}>{vacationActive?'Active · your streaks are protected':'Pause goal streaks without changing logged measurements.'}</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
     <Pressable onPress={()=>router.push(`/member/${me.id}` as never)} style={[styles.linkCard,{backgroundColor:colors.card,borderColor:colors.border}]}><View style={[styles.linkIcon,{backgroundColor:colors.primarySoft}]}><Ionicons name="trophy-outline" size={21} color={accent}/></View><View style={styles.copy}><Text style={[styles.linkTitle,{color:colors.ink}]}>Public profile & badge showcase</Text><Text style={[styles.meta,{color:colors.muted}]}>Preview how you appear to friends and choose up to five featured badges.</Text></View><Ionicons name="chevron-forward" size={19} color={colors.faint}/></Pressable>
   </Screen>;
 }

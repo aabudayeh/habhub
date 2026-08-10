@@ -8,6 +8,7 @@ import {
   localizeExerciseName,
   localizeSubmetricName,
   localizeSubmetricUnit,
+  translateDomainText,
 } from "@/src/i18n/domain";
 
 import { ExpandableImage } from "@/src/components/ExpandableImage";
@@ -68,7 +69,7 @@ import {
 } from "@/src/domain/leaderboard";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { MetricChartStyle, MetricDefinition } from "@/src/types";
+import { AppLanguage, MetricChartStyle, MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
 import { isVacationDate } from "@/src/domain/vacation";
 import {
@@ -84,7 +85,10 @@ import {
   trainingVolumeKg,
 } from "@/src/domain/gym";
 import { metricVisualization } from "@/src/domain/visualization";
-import { fastingProgressForDate } from "@/src/domain/fasting";
+import {
+  completedFastDetails,
+  fastingProgressForDate,
+} from "@/src/domain/fasting";
 import { ScreenTimeBreakdownCard } from "@/src/screenTime/ScreenTimeBreakdownCard";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
@@ -112,7 +116,7 @@ export default function TrackerDetail() {
     endFast,
   } = useApp();
   const locale = useLocale();
-  const { language } = useLocalization();
+  const { language, t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [day, setDay] = useState(date ?? dateKey());
@@ -1686,6 +1690,13 @@ export default function TrackerDetail() {
           const gymClock = linkedGymSession
             ? gymSessionClockBounds(linkedGymSession)
             : undefined;
+          const hasFastMetadata =
+            entry.submetricValues?.fast_started_at_ms !== undefined ||
+            entry.submetricValues?.fast_ended_at_ms !== undefined ||
+            entry.submetricValues?.fasting_minutes !== undefined;
+          const fastDetails = hasFastMetadata
+            ? completedFastDetails(entry)
+            : undefined;
           return (
           <React.Fragment key={`${entry.userId}:${entry.id}`}>
           {dates.length > 1 && firstOnDate ? (
@@ -1741,7 +1752,9 @@ export default function TrackerDetail() {
             <View style={styles.entryTop}>
               <View style={styles.grow}>
                 <Text style={[styles.entryTitle, { color: colors.ink }]}>
-                  {entry.nutrition?.mealType
+                  {fastDetails
+                    ? `${t(fastDetails.startedAutomatically ? "Automatic" : "Manual")} · ${tracker.name}`
+                    : entry.nutrition?.mealType
                     ? `${entry.nutrition.mealType[0].toUpperCase()}${entry.nutrition.mealType.slice(1)} · ${entry.label || tracker.name}`
                     : entry.label || tracker.name}
                 </Text>
@@ -1754,7 +1767,9 @@ export default function TrackerDetail() {
                         locale,
                       )}{" "}
                   ·{" "}
-                  {entry.source === "imported"
+                  {fastDetails
+                    ? t(fastDetails.endedAutomatically ? "Automatic" : "Manual")
+                    : entry.source === "imported"
                     ? entry.sourceOrigin || "Health import"
                     : "Manual entry"}
                 </Text>
@@ -1780,7 +1795,35 @@ export default function TrackerDetail() {
                 {nutritionLine(entry.nutrition)}
               </Text>
             ) : null}
-            {entry.submetricValues &&
+            {fastDetails ? (
+              <View style={styles.fastEntryDetails}>
+                <Text style={[styles.note, { color: colors.muted }]}>
+                  {t("Start")} · {formatFastDateTime(
+                    fastDetails.startedAt,
+                    state.settings.timeFormat ?? "24h",
+                    locale,
+                  )}
+                </Text>
+                <Text style={[styles.note, { color: colors.muted }]}>
+                  {t("End")} · {formatFastDateTime(
+                    fastDetails.endedAt,
+                    state.settings.timeFormat ?? "24h",
+                    locale,
+                  )}
+                </Text>
+                <Text style={[styles.note, { color: colors.muted }]}>
+                  {t("Duration")} · {formatFastMinutes(
+                    fastDetails.minutes,
+                    language,
+                    locale,
+                  )} · {t("Eating window")} · {formatFastMinutes(
+                    fastDetails.eatingWindowMinutes,
+                    language,
+                    locale,
+                  )}
+                </Text>
+              </View>
+            ) : !hasFastMetadata && entry.submetricValues &&
             Object.keys(entry.submetricValues).length ? (
               <Text style={[styles.note, { color: colors.muted }]}>
                 {Object.entries(entry.submetricValues)
@@ -2980,6 +3023,38 @@ function hasData(
 ) {
   return hasMetricData(state, tracker, state.currentUserId, day);
 }
+
+function formatFastDateTime(
+  value: Date,
+  timeFormat: "12h" | "24h",
+  locale: string,
+) {
+  return new Intl.DateTimeFormat(locale, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: timeFormat === "12h",
+  }).format(value);
+}
+
+function formatFastMinutes(
+  value: number,
+  language: AppLanguage,
+  locale: string,
+) {
+  const minutes = Math.max(0, Math.round(value));
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  const number = new Intl.NumberFormat(locale);
+  const parts = [];
+  if (hours)
+    parts.push(`${number.format(hours)} ${translateDomainText(language, "hr")}`);
+  if (remainder || !parts.length)
+    parts.push(`${number.format(remainder)} ${translateDomainText(language, "min")}`);
+  return parts.join(" ");
+}
+
 function summaryLine(
   state: ReturnType<typeof useApp>["state"],
   tracker: MetricDefinition,
@@ -3408,6 +3483,7 @@ const styles = StyleSheet.create({
   time: { fontSize: 8, marginTop: 3 },
   entryValue: { fontSize: 12, fontWeight: "900" },
   note: { fontSize: 9, lineHeight: 14, marginTop: 7 },
+  fastEntryDetails: { gap: 1 },
   image: { width: 92, height: 66, borderRadius: 10, marginTop: 8 },
   photoImageFrame: { width: "100%", height: 230, marginTop: 8 },
   photoImage: { width: "100%", height: "100%", borderRadius: 13 },

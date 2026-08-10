@@ -29,7 +29,12 @@ import {
   safeMetricValue,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
-import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import {
+  palette,
+  typography,
+  useAppColors,
+  useGroupAccent,
+} from "@/src/theme";
 import { Visibility } from "@/src/types";
 
 type MealType = "breakfast" | "lunch" | "dinner" | "snack";
@@ -146,6 +151,7 @@ function LogScreen() {
   const [vitaminC, setVitaminC] = useState("");
   const [vitaminD, setVitaminD] = useState("");
   const [vitaminB12, setVitaminB12] = useState("");
+  const [nutritionOpen, setNutritionOpen] = useState(false);
   const [moreNutrition, setMoreNutrition] = useState(false);
   const [workoutDuration, setWorkoutDuration] = useState("");
   const [workoutCalories, setWorkoutCalories] = useState("");
@@ -245,6 +251,9 @@ function LogScreen() {
     setVitaminC(params.vitaminC ?? "");
     setVitaminD(params.vitaminD ?? "");
     setVitaminB12(params.vitaminB12 ?? "");
+    // Search and barcode results should be immediately reviewable. Manually
+    // opened food logs keep nutrition tucked away until the user asks for it.
+    setNutritionOpen(true);
   }, [
     params.calories,
     params.carbs,
@@ -320,6 +329,8 @@ function LogScreen() {
     setVitaminC("");
     setVitaminD("");
     setVitaminB12("");
+    setNutritionOpen(false);
+    setMoreNutrition(false);
     setWorkoutDuration("");
     setWorkoutCalories("");
     setWorkoutDistance("");
@@ -1141,125 +1152,156 @@ function LogScreen() {
                   />
                 </>
               ) : null}
-              <Text style={styles.fieldLabel}>Nutrition (optional)</Text>
-              <View style={styles.nutritionGrid}>
-                {[
-                  {
-                    label: "Protein",
-                    value: protein,
-                    set: setProtein,
-                    unit: "g",
-                  },
-                  { label: "Fat", value: fat, set: setFat, unit: "g" },
-                  { label: "Carbs", value: carbs, set: setCarbs, unit: "g" },
-                  { label: "Fiber", value: fiber, set: setFiber, unit: "g" },
-                ].map((item) => (
-                  <View key={item.label} style={styles.nutritionField}>
-                    <Text style={styles.nutritionLabel}>{item.label}</Text>
-                    <View style={styles.nutritionInput}>
-                      <TextInput
-                        value={item.value}
-                        onChangeText={item.set}
-                        keyboardType="decimal-pad"
-                        placeholder="0"
-                        placeholderTextColor={palette.faint}
-                        style={styles.nutritionText}
-                      />
-                      <Text style={styles.nutritionUnit}>{item.unit}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
               <Pressable
-                onPress={() => setMoreNutrition((open) => !open)}
-                style={styles.moreNutrition}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: nutritionOpen }}
+                onPress={() => setNutritionOpen((open) => !open)}
+                style={[
+                  styles.nutritionDisclosure,
+                  {
+                    borderColor: colors.border,
+                    backgroundColor: colors.canvas,
+                  },
+                ]}
               >
-                <Text style={[styles.moreNutritionText, { color: accent }]}>
-                  {moreNutrition
-                    ? "Hide extra nutrients"
-                    : "Add vitamins, minerals and more"}
-                </Text>
+                <View style={styles.nutritionDisclosureCopy}>
+                  <Text style={[styles.nutritionDisclosureTitle, { color: colors.ink }]}>
+                    Nutrition (optional)
+                  </Text>
+                  <Text style={[styles.nutritionDisclosureHint, { color: colors.muted }]}>
+                    Protein, carbs, fat, vitamins and minerals
+                  </Text>
+                </View>
                 <Ionicons
-                  name={moreNutrition ? "chevron-up" : "chevron-down"}
+                  name={nutritionOpen ? "chevron-up" : "chevron-down"}
                   size={16}
-                  color={accent}
+                  color={colors.muted}
                 />
               </Pressable>
-              {moreNutrition ? (
-                <View style={styles.nutritionGrid}>
-                  {[
-                    { label: "Sugar", value: sugar, set: setSugar, unit: "g" },
-                    {
-                      label: "Sat. fat",
-                      value: saturatedFat,
-                      set: setSaturatedFat,
-                      unit: "g",
-                    },
-                    {
-                      label: "Sodium",
-                      value: sodium,
-                      set: setSodium,
-                      unit: "mg",
-                    },
-                    {
-                      label: "Cholesterol",
-                      value: cholesterol,
-                      set: setCholesterol,
-                      unit: "mg",
-                    },
-                    {
-                      label: "Potassium",
-                      value: potassium,
-                      set: setPotassium,
-                      unit: "mg",
-                    },
-                    {
-                      label: "Calcium",
-                      value: calcium,
-                      set: setCalcium,
-                      unit: "mg",
-                    },
-                    { label: "Iron", value: iron, set: setIron, unit: "mg" },
-                    {
-                      label: "Magnesium",
-                      value: magnesium,
-                      set: setMagnesium,
-                      unit: "mg",
-                    },
-                    {
-                      label: "Vitamin C",
-                      value: vitaminC,
-                      set: setVitaminC,
-                      unit: "mg",
-                    },
-                    {
-                      label: "Vitamin D",
-                      value: vitaminD,
-                      set: setVitaminD,
-                      unit: "mcg",
-                    },
-                    {
-                      label: "Vitamin B12",
-                      value: vitaminB12,
-                      set: setVitaminB12,
-                      unit: "mcg",
-                    },
-                  ].map((item) => (
-                    <View key={item.label} style={styles.nutritionField}>
-                      <Text style={styles.nutritionLabel}>{item.label}</Text>
-                      <View style={styles.nutritionInput}>
-                        <TextInput
-                          value={item.value}
-                          onChangeText={item.set}
-                          keyboardType="decimal-pad"
-                          placeholder="0"
-                          placeholderTextColor={palette.faint}
-                          style={styles.nutritionText}
-                        />
-                        <Text style={styles.nutritionUnit}>{item.unit}</Text>
+              {nutritionOpen ? (
+                <View style={styles.nutritionDetails}>
+                  <View style={styles.nutritionGrid}>
+                    {[
+                      {
+                        label: "Protein",
+                        value: protein,
+                        set: setProtein,
+                        unit: "g",
+                      },
+                      { label: "Fat", value: fat, set: setFat, unit: "g" },
+                      { label: "Carbs", value: carbs, set: setCarbs, unit: "g" },
+                      { label: "Fiber", value: fiber, set: setFiber, unit: "g" },
+                    ].map((item) => (
+                      <View key={item.label} style={styles.nutritionField}>
+                        <Text style={styles.nutritionLabel}>{item.label}</Text>
+                        <View style={styles.nutritionInput}>
+                          <TextInput
+                            value={item.value}
+                            onChangeText={item.set}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor={palette.faint}
+                            style={styles.nutritionText}
+                          />
+                          <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                        </View>
                       </View>
+                    ))}
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: moreNutrition }}
+                    onPress={() => setMoreNutrition((open) => !open)}
+                    style={styles.moreNutrition}
+                  >
+                    <Text style={[styles.moreNutritionText, { color: accent }]}>
+                      {moreNutrition
+                        ? "Hide extra nutrients"
+                        : "Add vitamins, minerals and more"}
+                    </Text>
+                    <Ionicons
+                      name={moreNutrition ? "chevron-up" : "chevron-down"}
+                      size={16}
+                      color={accent}
+                    />
+                  </Pressable>
+                  {moreNutrition ? (
+                    <View style={styles.nutritionGrid}>
+                      {[
+                        { label: "Sugar", value: sugar, set: setSugar, unit: "g" },
+                        {
+                          label: "Sat. fat",
+                          value: saturatedFat,
+                          set: setSaturatedFat,
+                          unit: "g",
+                        },
+                        {
+                          label: "Sodium",
+                          value: sodium,
+                          set: setSodium,
+                          unit: "mg",
+                        },
+                        {
+                          label: "Cholesterol",
+                          value: cholesterol,
+                          set: setCholesterol,
+                          unit: "mg",
+                        },
+                        {
+                          label: "Potassium",
+                          value: potassium,
+                          set: setPotassium,
+                          unit: "mg",
+                        },
+                        {
+                          label: "Calcium",
+                          value: calcium,
+                          set: setCalcium,
+                          unit: "mg",
+                        },
+                        { label: "Iron", value: iron, set: setIron, unit: "mg" },
+                        {
+                          label: "Magnesium",
+                          value: magnesium,
+                          set: setMagnesium,
+                          unit: "mg",
+                        },
+                        {
+                          label: "Vitamin C",
+                          value: vitaminC,
+                          set: setVitaminC,
+                          unit: "mg",
+                        },
+                        {
+                          label: "Vitamin D",
+                          value: vitaminD,
+                          set: setVitaminD,
+                          unit: "mcg",
+                        },
+                        {
+                          label: "Vitamin B12",
+                          value: vitaminB12,
+                          set: setVitaminB12,
+                          unit: "mcg",
+                        },
+                      ].map((item) => (
+                        <View key={item.label} style={styles.nutritionField}>
+                          <Text style={styles.nutritionLabel}>{item.label}</Text>
+                          <View style={styles.nutritionInput}>
+                            <TextInput
+                              value={item.value}
+                              onChangeText={item.set}
+                              keyboardType="decimal-pad"
+                              placeholder="0"
+                              placeholderTextColor={palette.faint}
+                              style={styles.nutritionText}
+                            />
+                            <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                          </View>
+                        </View>
+                      ))}
                     </View>
-                  ))}
+                  ) : null}
                 </View>
               ) : null}
             </>
@@ -1447,7 +1489,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  timerShortcutText: { fontSize: 8, fontWeight: "900" },
+  timerShortcutText: { ...typography.supporting, fontWeight: "900" },
   mealTypes: { flexDirection: "row", flexWrap: "wrap", gap: 5, marginBottom: 8 },
   compactHeader: {
     height: 38,
@@ -1473,7 +1515,7 @@ const styles = StyleSheet.create({
   },
   calendarText: {
     color: palette.ink,
-    fontSize: 11,
+    ...typography.body,
     fontWeight: "900",
     marginTop: -5,
   },
@@ -1503,7 +1545,7 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     backgroundColor: palette.primarySoft,
   },
-  nowText: { color: palette.primary, fontSize: 10, fontWeight: "800" },
+  nowText: { color: palette.primary, ...typography.body, fontWeight: "800" },
   logCard: { marginBottom: 12, paddingVertical: 10 },
   heading: {
     flexDirection: "row",
@@ -1519,8 +1561,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   grow: { flex: 1 },
-  metricName: { color: palette.ink, fontSize: 14, fontWeight: "900" },
-  currentValue: { color: palette.muted, fontSize: 9, marginTop: 2 },
+  metricName: { color: palette.ink, ...typography.sectionTitle },
+  currentValue: { color: palette.muted, ...typography.supporting, marginTop: 2 },
   defaultPill: {
     flexDirection: "row",
     gap: 4,
@@ -1528,7 +1570,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 6,
   },
-  defaultText: { color: palette.primary, fontSize: 9, fontWeight: "800" },
+  defaultText: { color: palette.primary, ...typography.supporting, fontWeight: "800" },
   numberWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -1541,15 +1583,14 @@ const styles = StyleSheet.create({
   numberInput: {
     flex: 1,
     color: palette.ink,
-    fontSize: 12,
+    ...typography.cardTitle,
     fontWeight: "800",
     paddingVertical: 9,
   },
-  unit: { color: palette.muted, fontSize: 10, fontWeight: "700" },
+  unit: { color: palette.muted, ...typography.supporting },
   fieldLabel: {
     color: palette.ink,
-    fontSize: 9,
-    fontWeight: "900",
+    ...typography.cardTitle,
     marginBottom: 4,
     marginTop: 2,
   },
@@ -1566,6 +1607,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     color: palette.ink,
+    ...typography.body,
     marginBottom: 8,
   },
   textArea: { minHeight: 68, textAlignVertical: "top" },
@@ -1579,7 +1621,7 @@ const styles = StyleSheet.create({
     marginBottom: 7,
     overflow: "hidden",
   },
-  foodNameInput: { flex: 1, paddingHorizontal: 10, fontSize: 11 },
+  foodNameInput: { flex: 1, paddingHorizontal: 10, ...typography.body },
   foodSearchButton: {
     width: 40,
     height: 40,
@@ -1601,7 +1643,22 @@ const styles = StyleSheet.create({
     padding: 11,
     marginBottom: 14,
   },
-  foodLookupTitle: { color: palette.primary, fontSize: 11, fontWeight: "900" },
+  foodLookupTitle: { color: palette.primary, ...typography.cardTitle },
+  nutritionDisclosure: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  nutritionDisclosureCopy: { flex: 1 },
+  nutritionDisclosureTitle: { ...typography.cardTitle },
+  nutritionDisclosureHint: { ...typography.supporting, marginTop: 1 },
+  nutritionDetails: { marginBottom: 2 },
   nutritionGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1615,11 +1672,11 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     marginBottom: 8,
   },
-  moreNutritionText: { fontSize: 11, fontWeight: "800" },
+  moreNutritionText: { ...typography.body, fontWeight: "800" },
   nutritionField: { width: "31%", minWidth: 90 },
   nutritionLabel: {
     color: palette.muted,
-    fontSize: 9,
+    ...typography.supporting,
     fontWeight: "800",
     marginBottom: 4,
   },
@@ -1634,11 +1691,11 @@ const styles = StyleSheet.create({
   nutritionText: {
     flex: 1,
     color: palette.ink,
-    fontSize: 12,
+    ...typography.cardTitle,
     fontWeight: "800",
     paddingVertical: 8,
   },
-  nutritionUnit: { color: palette.faint, fontSize: 8 },
+  nutritionUnit: { color: palette.faint, ...typography.supporting },
   completion: {
     flexDirection: "row",
     alignItems: "center",
@@ -1648,8 +1705,8 @@ const styles = StyleSheet.create({
     backgroundColor: palette.canvas,
     marginBottom: 14,
   },
-  completionTitle: { color: palette.ink, fontSize: 15, fontWeight: "800" },
-  helper: { color: palette.muted, fontSize: 9, lineHeight: 13, marginTop: 2 },
+  completionTitle: { color: palette.ink, ...typography.sectionTitle, fontWeight: "800" },
+  helper: { color: palette.muted, ...typography.supporting, marginTop: 2 },
   attachRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1658,7 +1715,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginBottom: 7,
   },
-  attachText: { color: palette.primary, fontSize: 10, fontWeight: "800" },
+  attachText: { color: palette.primary, ...typography.body, fontWeight: "800" },
   entryImageWrap: { width: 120, height: 92, position: "relative" },
   entryImage: { width: 120, height: 92, borderRadius: 13 },
   removeImage: {
@@ -1690,8 +1747,7 @@ const styles = StyleSheet.create({
   privacyText: {
     flex: 1,
     color: palette.primary,
-    fontSize: 10,
-    lineHeight: 15,
+    ...typography.body,
     fontWeight: "700",
   },
   photoPreview: {
@@ -1710,5 +1766,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  photoTitle: { color: palette.ink, fontSize: 15, fontWeight: "800" },
+  photoTitle: { color: palette.ink, ...typography.sectionTitle, fontWeight: "800" },
 });
