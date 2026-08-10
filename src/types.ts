@@ -685,6 +685,8 @@ export type UserSettings = {
   progressLayoutAvailability?: ProgressLayoutAvailability;
   /** Condense Grid map cards without creating a separate navigation mode. */
   compactProgressGrid?: boolean;
+  /** Device-local disclosure state for the Grid map date navigator. */
+  progressGridDateNavigatorCollapsed?: boolean;
   progressHistoryRange?: HistoryRange;
   /** Shared Progress anchor so switching layouts preserves the same period. */
   progressHistoryAnchor?: string;

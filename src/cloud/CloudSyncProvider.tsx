@@ -668,6 +668,9 @@ function snapshotPayload(state: AppState): AppState {
       // This is a device-local outbox marker. Uploading it could make another
       // device push stale group settings on this device's behalf.
       pendingGroupConfigurationIds: undefined,
+      // Disclosure state follows this device and must not create an account
+      // sync just because another screen size uses a different layout.
+      progressGridDateNavigatorCollapsed: undefined,
       healthSync: {
         ...state.settings.healthSync,
         enabled: false,
@@ -846,6 +849,7 @@ function stableHash(state: AppState) {
     "activeScheduleViewFilterId",
     "progressHistoryAnchor",
     "progressHistoryRange",
+    "progressGridDateNavigatorCollapsed",
     "performanceRange",
     "tutorialGuideId",
     "tutorialGuideRunId",
@@ -1233,6 +1237,8 @@ function mergeStates(
   ) as unknown as AppState["settings"];
   settings.onboardingComplete = onboardingComplete;
   settings.tutorialComplete = tutorialComplete;
+  settings.progressGridDateNavigatorCollapsed =
+    local.settings.progressGridDateNavigatorCollapsed;
   settings.pendingDeletedEntryIds = mergeCollectionFromBase(
     remote.settings.pendingDeletedEntryIds,
     local.settings.pendingDeletedEntryIds,
@@ -1383,8 +1389,8 @@ function mergeStates(
   };
 }
 
-/** Native health authorization/import state belongs to this device, not cloud. */
-function preserveDeviceHealthState(
+/** Native authorization and transient UI state belong to this device. */
+function preserveDeviceSettings(
   remote: AppState,
   local: AppState,
 ): AppState {
@@ -1396,6 +1402,8 @@ function preserveDeviceHealthState(
       healthSync: local.settings.healthSync,
       healthHistoryDays: local.settings.healthHistoryDays,
       syncMode: local.settings.syncMode,
+      progressGridDateNavigatorCollapsed:
+        local.settings.progressGridDateNavigatorCollapsed,
     },
   };
 }
@@ -1409,7 +1417,7 @@ function preserveDeviceHealthState(
 function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
   if (remote.currentUserId !== local.currentUserId) return remote;
   const userId = remote.currentUserId;
-  const remoteWithDeviceSettings = preserveDeviceHealthState(remote, local);
+  const remoteWithDeviceSettings = preserveDeviceSettings(remote, local);
   // Personal setup groups are account-owned and therefore follow the remote
   // snapshot. Cloud groups are relational data, so retain their hydrated local
   // cache until the workspace refresh below replaces it. Treating every local
@@ -3315,7 +3323,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               ? cachedAccountHash !== acknowledgedSnapshotHash
               : cachedAccountHash !== remoteHash &&
                 !firstUpgradeCanAcceptRemote);
-          const remoteWithDeviceState = preserveDeviceHealthState(
+          const remoteWithDeviceState = preserveDeviceSettings(
             mergePrivateMediaUrls(bound, stateRef.current),
             stateRef.current,
           );

@@ -1386,6 +1386,7 @@ export function createInitialState(): AppState {
       progressViewMode: "overview",
       progressLayoutAvailability: "both",
       compactProgressGrid: false,
+      progressGridDateNavigatorCollapsed: false,
       progressHistoryRange: "week",
       todayHistoryByMetric: {},
       todayHistoryRange: "week",

@@ -1,14 +1,14 @@
-import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, { useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { BodyProgressAvatar } from "@/src/components/BodyProgressAvatar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { DateRangeNavigator } from "@/src/components/PeriodNavigator";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
-import { Avatar, Card, PageHeader, Screen } from "@/src/components/ui";
+import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
@@ -150,6 +150,7 @@ export default function StatusPage() {
   const [localDate, setLocalDate] = useState(dateKey());
   const [calendarOpen, setCalendarOpen] = useState(false);
   const summary = trackedGoalSummary(state, state.currentUserId, localDate);
+  const bodyProgress = summary.total ? summary.met / summary.total : 0;
   const member = state.group.members.find(
     (item) => item.id === state.currentUserId,
   );
@@ -202,18 +203,10 @@ export default function StatusPage() {
         <Card style={styles.statusCard}>
           <View style={styles.personWrap}>
             <View style={[styles.halo, { borderColor: `${accent}55` }]} />
-            {member ? (
-              <Avatar
-                initials={member.initials}
-                color={accent}
-                size={90}
-                uri={member.avatarUri}
-              />
-            ) : (
-              <View style={[styles.fallbackAvatar, { backgroundColor: accent }]}>
-                <Ionicons name="person" size={46} color={palette.white} />
-              </View>
-            )}
+            <BodyProgressAvatar
+              progress={bodyProgress}
+              sex={state.settings.energyProfile.sex}
+            />
             {member ? (
               <Text
                 translate={false}
@@ -248,18 +241,11 @@ const styles = StyleSheet.create({
   personWrap: { alignItems: "center", justifyContent: "center", gap: 5 },
   halo: {
     position: "absolute",
-    top: -9,
-    width: 112,
-    height: 112,
-    borderRadius: 56,
+    top: -8,
+    width: 172,
+    height: 242,
+    borderRadius: 86,
     borderWidth: 1,
-  },
-  fallbackAvatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    alignItems: "center",
-    justifyContent: "center",
   },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
   summary: { fontSize: 12, fontWeight: "700" },

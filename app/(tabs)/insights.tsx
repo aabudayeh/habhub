@@ -1176,13 +1176,13 @@ function GoalMapProgress({
   const accent = useGroupAccent();
   const today = dateKey();
   const compact = state.settings.compactProgressGrid === true;
-  const [controlsCardOpen, setControlsCardOpen] = useState(true);
+  // In the two-layout view this disclosure is a persisted, device-local UI
+  // preference. Grid-only mode intentionally reveals the navigator because
+  // there is no mode-bar control available to reopen it.
+  const controlsCardOpen =
+    !showModeBar ||
+    state.settings.progressGridDateNavigatorCollapsed !== true;
   const [controlsOpen, setControlsOpen] = useState(false);
-  useEffect(() => {
-    // Grid-map-only mode has no mode-bar toggle, so always reveal its date
-    // navigator when the user switches to that single-layout setting.
-    if (!showModeBar) setControlsCardOpen(true);
-  }, [showModeBar]);
   const visibleMetrics = metrics;
   const trackedSelected = selectedIds.includes(TRACKED);
   const gridItemIds = orderedIds.filter(
@@ -1299,7 +1299,9 @@ function GoalMapProgress({
             expanded={controlsCardOpen}
             onChange={onModeChange}
             onToggleSelected={() =>
-              setControlsCardOpen((open) => !open)
+              updateSettings({
+                progressGridDateNavigatorCollapsed: controlsCardOpen,
+              })
             }
           />
         </TutorialTarget>
