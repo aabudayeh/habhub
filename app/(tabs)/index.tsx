@@ -10,6 +10,7 @@ import React, {
   useState,
 } from "react";
 import {
+  AccessibilityInfo,
   Animated,
   BackHandler,
   Modal,
@@ -115,6 +116,8 @@ const GOLD_TILE_FADE_MS = 950;
 const GOLD_TILE_START_DELAY_MS = 1450;
 const GOLD_TILE_STAGGER_MS = 1050;
 const COMPLETION_INDICATOR_SIZE = 60;
+const GOAL_DOT_SIZE = 23;
+const GOAL_LIQUID_REVEAL_MS = 1800;
 
 if (
   Platform.OS === "android" &&
@@ -293,7 +296,9 @@ function Today() {
     )
     .sort((a, b) => a.order - b.order);
   const [goldSequenceRun, setGoldSequenceRun] = useState(0);
+  const goalLiquidReveal = useRef(new Animated.Value(0)).current;
   const goalLiquidMotion = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
   const heroGold = useRef(new Animated.Value(heroAllMet ? 1 : 0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
@@ -323,25 +328,75 @@ function Today() {
     return () => animation.stop();
   }, [goldSequenceRun, heroAllMet, heroGold]);
   useEffect(() => {
-    if (!goals.metrics.length || !showGoalsToday) return;
-    goalLiquidMotion.setValue(0);
-    const animation = Animated.loop(
-      Animated.sequence([
+    let mounted = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (mounted) setReduceMotion(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReduceMotion,
+    );
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      goalLiquidReveal.stopAnimation();
+      goalLiquidMotion.stopAnimation();
+      goalLiquidReveal.setValue(reduceMotion ? 1 : 0);
+      goalLiquidMotion.setValue(0);
+      if (
+        reduceMotion ||
+        !goals.metrics.length ||
+        !showGoalsToday
+      ) {
+        return () => {
+          goalLiquidReveal.stopAnimation();
+          goalLiquidMotion.stopAnimation();
+        };
+      }
+
+      // A single JS-driven reveal controls every mini tracker while a finite
+      // native-driver ripple gives the surface a water-like motion. Both end
+      // after this entrance and are stopped immediately when Today loses focus.
+      const reveal = Animated.timing(goalLiquidReveal, {
+        toValue: 1,
+        duration: GOAL_LIQUID_REVEAL_MS,
+        delay: 80,
+        useNativeDriver: false,
+      });
+      const ripple = Animated.sequence([
         Animated.timing(goalLiquidMotion, {
           toValue: 1,
-          duration: 1700,
+          duration: GOAL_LIQUID_REVEAL_MS / 2,
           useNativeDriver: true,
         }),
         Animated.timing(goalLiquidMotion, {
           toValue: 0,
-          duration: 1700,
+          duration: GOAL_LIQUID_REVEAL_MS / 2,
           useNativeDriver: true,
         }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [goalLiquidMotion, goals.metrics.length, showGoalsToday]);
+      ]);
+      reveal.start();
+      ripple.start();
+      return () => {
+        reveal.stop();
+        ripple.stop();
+        goalLiquidReveal.stopAnimation();
+        goalLiquidMotion.stopAnimation();
+        goalLiquidReveal.setValue(0);
+        goalLiquidMotion.setValue(0);
+      };
+    }, [
+      goalLiquidMotion,
+      goalLiquidReveal,
+      goals.metrics.length,
+      reduceMotion,
+      showGoalsToday,
+    ]),
+  );
   const celebration = useRef(new Animated.Value(0)).current;
   const [confettiVisible, setConfettiVisible] = useState(false);
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
@@ -769,6 +824,7 @@ function Today() {
                     unavailable={unavailable}
                     allMet={goals.allMet}
                     sequenceRun={goldSequenceRun}
+                    liquidReveal={goalLiquidReveal}
                     liquidMotion={goalLiquidMotion}
                     onPress={() =>
                       router.navigate({
@@ -1441,6 +1497,7 @@ function GoalCompletionDot({
   unavailable,
   allMet,
   sequenceRun,
+  liquidReveal,
   liquidMotion,
   onPress,
 }: {
@@ -1451,6 +1508,7 @@ function GoalCompletionDot({
   unavailable: boolean;
   allMet: boolean;
   sequenceRun: number;
+  liquidReveal: Animated.Value;
   liquidMotion: Animated.Value;
   onPress: () => void;
 }) {
@@ -1487,6 +1545,10 @@ function GoalCompletionDot({
     inputRange: [0, 1],
     outputRange: [-5, 5],
   });
+  const fillHeight = liquidReveal.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, GOAL_DOT_SIZE * normalized],
+  });
   return (
     <Pressable
       accessibilityLabel={`Open ${name}, ${Math.round(normalized * 100)}% complete`}
@@ -1504,7 +1566,7 @@ function GoalCompletionDot({
               styles.dotLiquid,
               {
                 backgroundColor: fillColor,
-                height: `${normalized * 100}%`,
+                height: fillHeight,
               },
             ]}
           >
@@ -2825,8 +2887,8 @@ const styles = StyleSheet.create({
   },
   goalDots: { flexDirection: "row", gap: 4, marginTop: 10, overflow: "hidden" },
   dot: {
-    width: 23,
-    height: 23,
+    width: GOAL_DOT_SIZE,
+    height: GOAL_DOT_SIZE,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,.2)",

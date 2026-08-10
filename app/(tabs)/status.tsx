@@ -372,9 +372,9 @@ const styles = StyleSheet.create({
   halo: {
     position: "absolute",
     top: -10,
-    width: 178,
-    height: 258,
-    borderRadius: 89,
+    width: 184,
+    height: 294,
+    borderRadius: 92,
     borderWidth: 1,
   },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
