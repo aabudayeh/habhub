@@ -104,7 +104,7 @@ export default function TrackerDetail() {
   const { metric: trackerId, date, period: requestedPeriod } = useLocalSearchParams<{
     metric: string;
     date?: string;
-    period?: Exclude<LeaderboardPeriod, "custom" | "overall">;
+    period?: LeaderboardPeriod;
   }>();
   const {
     state,
@@ -1155,8 +1155,10 @@ export default function TrackerDetail() {
               startedAt={fastingProgress.startedAt}
               endedAt={fastingProgress.endedAt}
               active={fastingProgress.active}
+              locale={locale}
               targetMinutes={fastingProgress.targetMinutes}
               metricColor={tracker.color}
+              timeFormat={state.settings.timeFormat ?? "24h"}
               endedOutsideEatingWindow={
                 fastingProgress.endedOutsideEatingWindow
               }

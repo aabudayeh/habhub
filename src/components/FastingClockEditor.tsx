@@ -6,17 +6,22 @@ import { AppText as Text } from "@/src/components/AppText";
 import {
   advanceTwelveHourDial,
   formatClockTime,
+  moveClockRangeHandle,
+  type ClockRange,
   type TwelveHourDialCursor,
 } from "@/src/domain/date";
+import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
 
 const DAY_MINUTES = 24 * 60;
-const DIAL_SIZE = 220;
+const HALF_DAY_MINUTES = 12 * 60;
+const MIN_FAST_MINUTES = 60;
+const MAX_FAST_MINUTES = 23 * 60;
+const DIAL_SIZE = 184;
 const CENTER = DIAL_SIZE / 2;
 const SEGMENTS = 48;
-const SEGMENT_RADIUS = 88;
-const HANDLE_RADIUS = 88;
-const HALF_DAY_MINUTES = 12 * 60;
+const AM_RING_RADIUS = 63;
+const PM_RING_RADIUS = 77;
 
 function parseClock(value: string) {
   const [hour, minute] = value.split(":").map(Number);
@@ -33,14 +38,19 @@ function elapsedFrom(start: number, end: number) {
   return (end - start + DAY_MINUTES) % DAY_MINUTES;
 }
 
-function point(minutes: number, radius: number, cycleMinutes = DAY_MINUTES) {
+function point(minutes: number, radius: number) {
   const normalized =
-    ((minutes % cycleMinutes) + cycleMinutes) % cycleMinutes;
-  const angle = (normalized / cycleMinutes) * Math.PI * 2 - Math.PI / 2;
+    ((minutes % HALF_DAY_MINUTES) + HALF_DAY_MINUTES) % HALF_DAY_MINUTES;
+  const angle = (normalized / HALF_DAY_MINUTES) * Math.PI * 2 - Math.PI / 2;
   return {
     left: CENTER + Math.cos(angle) * radius,
     top: CENTER + Math.sin(angle) * radius,
   };
+}
+
+function dialRadius(minutes: number) {
+  const normalized = ((minutes % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+  return normalized < HALF_DAY_MINUTES ? AM_RING_RADIUS : PM_RING_RADIUS;
 }
 
 function durationText(minutes: number, locale?: string) {
@@ -77,14 +87,20 @@ export function FastingClockEditor({
   onChange: (startTime: string, fastingMinutes: number) => void;
 }) {
   const colors = useAppColors();
+  const { t } = useLocalization();
   const [open, setOpen] = useState(false);
   const [draftStart, setDraftStart] = useState(parseClock(startTime));
   const [draftDuration, setDraftDuration] = useState(
-    Math.max(60, Math.min(23 * 60, Math.round(fastingMinutes / 15) * 15)),
+    Math.max(
+      MIN_FAST_MINUTES,
+      Math.min(MAX_FAST_MINUTES, Math.round(fastingMinutes / 15) * 15),
+    ),
   );
   const dialRef = useRef<View>(null);
   const centerRef = useRef({ x: 0, y: 0 });
   const draftRef = useRef({ start: draftStart, duration: draftDuration });
+  const fixedEndRef = useRef((draftStart + draftDuration) % DAY_MINUTES);
+  const fixedStartRef = useRef(draftStart);
   const startCursorRef = useRef<TwelveHourDialCursor>({
     dialMinutes: draftStart % HALF_DAY_MINUTES,
     absoluteMinutes: draftStart,
@@ -98,10 +114,13 @@ export function FastingClockEditor({
   onChangeRef.current = onChange;
 
   useEffect(() => {
-    setDraftStart(parseClock(startTime));
-    setDraftDuration(
-      Math.max(60, Math.min(23 * 60, Math.round(fastingMinutes / 15) * 15)),
+    const nextStart = parseClock(startTime);
+    const nextDuration = Math.max(
+      MIN_FAST_MINUTES,
+      Math.min(MAX_FAST_MINUTES, Math.round(fastingMinutes / 15) * 15),
     );
+    setDraftStart(nextStart);
+    setDraftDuration(nextDuration);
   }, [fastingMinutes, startTime]);
 
   const measureCenter = useCallback(() =>
@@ -109,27 +128,52 @@ export function FastingClockEditor({
       centerRef.current = { x: x + width / 2, y: y + height / 2 };
     }), []);
 
+  // The face is deliberately always a familiar 12-hour clock. AM/PM is
+  // retained by advanceTwelveHourDial, while displayed text still follows the
+  // user's global 12/24-hour preference.
   const minutesAt = useCallback((pageX: number, pageY: number) => {
     const angle = Math.atan2(
       pageY - centerRef.current.y,
       pageX - centerRef.current.x,
     );
     const clockwise = ((angle + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2));
-    const cycle = timeFormat === "12h" ? HALF_DAY_MINUTES : DAY_MINUTES;
     return (
-      Math.round((clockwise / (Math.PI * 2)) * (cycle / 15)) * 15
-    ) % cycle;
-  }, [timeFormat]);
+      Math.round((clockwise / (Math.PI * 2)) * (HALF_DAY_MINUTES / 15)) * 15
+    ) % HALF_DAY_MINUTES;
+  }, []);
+
+  const applyRange = useCallback((range: ClockRange) => {
+    if (
+      range.startMinutes === draftRef.current.start &&
+      range.durationMinutes === draftRef.current.duration
+    ) {
+      return;
+    }
+    draftRef.current = {
+      start: range.startMinutes,
+      duration: range.durationMinutes,
+    };
+    setDraftStart(range.startMinutes);
+    setDraftDuration(range.durationMinutes);
+  }, []);
+
+  const commitDraft = useCallback(() => {
+    const next = draftRef.current;
+    onChangeRef.current(clockValue(next.start), next.duration);
+  }, []);
 
   const startDrag = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
           measureCenter();
+          const current = draftRef.current;
+          fixedEndRef.current = (current.start + current.duration) % DAY_MINUTES;
           startCursorRef.current = {
-            dialMinutes: draftRef.current.start % HALF_DAY_MINUTES,
-            absoluteMinutes: draftRef.current.start,
+            dialMinutes: current.start % HALF_DAY_MINUTES,
+            absoluteMinutes: current.start,
           };
         },
         onPanResponderMove: (event) => {
@@ -137,39 +181,49 @@ export function FastingClockEditor({
             event.nativeEvent.pageX,
             event.nativeEvent.pageY,
           );
-          if (timeFormat === "12h") {
-            startCursorRef.current = advanceTwelveHourDial(
-              dialMinutes,
-              startCursorRef.current,
-            );
-          }
-          const next =
-            timeFormat === "12h"
-              ? startCursorRef.current.absoluteMinutes
-              : dialMinutes;
-          draftRef.current = { ...draftRef.current, start: next };
-          setDraftStart(next);
+          startCursorRef.current = advanceTwelveHourDial(
+            dialMinutes,
+            startCursorRef.current,
+          );
+          const current = draftRef.current;
+          const range = moveClockRangeHandle(
+            "start",
+            startCursorRef.current.absoluteMinutes,
+            {
+              startMinutes: current.start,
+              endMinutes: fixedEndRef.current,
+            },
+            {
+              minDurationMinutes: MIN_FAST_MINUTES,
+              maxDurationMinutes: MAX_FAST_MINUTES,
+            },
+          );
+          // Keep the untouched endpoint stationary until the handles actually
+          // collide with a duration limit. From there it follows only as much
+          // as needed to keep the range valid.
+          fixedEndRef.current = range.endMinutes;
+          applyRange(range);
         },
-        onPanResponderRelease: () => {
-          const next = draftRef.current;
-          onChangeRef.current(clockValue(next.start), next.duration);
-        },
+        onPanResponderRelease: commitDraft,
+        onPanResponderTerminate: commitDraft,
+        onPanResponderTerminationRequest: () => false,
       }),
-    // The responder reads current drafts through refs, avoiding a new native
-    // gesture object for every 15-minute movement.
-    [measureCenter, minutesAt, timeFormat],
+    [applyRange, commitDraft, measureCenter, minutesAt],
   );
+
   const endDrag = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
           measureCenter();
-          const absoluteMinutes =
-            (draftRef.current.start + draftRef.current.duration) % DAY_MINUTES;
+          const current = draftRef.current;
+          const endMinutes = (current.start + current.duration) % DAY_MINUTES;
+          fixedStartRef.current = current.start;
           endCursorRef.current = {
-            dialMinutes: absoluteMinutes % HALF_DAY_MINUTES,
-            absoluteMinutes,
+            dialMinutes: endMinutes % HALF_DAY_MINUTES,
+            absoluteMinutes: endMinutes,
           };
         },
         onPanResponderMove: (event) => {
@@ -177,45 +231,64 @@ export function FastingClockEditor({
             event.nativeEvent.pageX,
             event.nativeEvent.pageY,
           );
-          if (timeFormat === "12h") {
-            endCursorRef.current = advanceTwelveHourDial(
-              dialMinutes,
-              endCursorRef.current,
-            );
-          }
-          const end =
-            timeFormat === "12h"
-              ? endCursorRef.current.absoluteMinutes
-              : dialMinutes;
-          const next = Math.max(
-            60,
-            Math.min(23 * 60, elapsedFrom(draftRef.current.start, end)),
+          endCursorRef.current = advanceTwelveHourDial(
+            dialMinutes,
+            endCursorRef.current,
           );
-          draftRef.current = { ...draftRef.current, duration: next };
-          setDraftDuration(next);
+          const current = draftRef.current;
+          const range = moveClockRangeHandle(
+            "end",
+            endCursorRef.current.absoluteMinutes,
+            {
+              startMinutes: fixedStartRef.current,
+              endMinutes: (current.start + current.duration) % DAY_MINUTES,
+            },
+            {
+              minDurationMinutes: MIN_FAST_MINUTES,
+              maxDurationMinutes: MAX_FAST_MINUTES,
+            },
+          );
+          fixedStartRef.current = range.startMinutes;
+          applyRange(range);
         },
-        onPanResponderRelease: () => {
-          const next = draftRef.current;
-          onChangeRef.current(clockValue(next.start), next.duration);
-        },
+        onPanResponderRelease: commitDraft,
+        onPanResponderTerminate: commitDraft,
+        onPanResponderTerminationRequest: () => false,
       }),
-    [measureCenter, minutesAt, timeFormat],
+    [applyRange, commitDraft, measureCenter, minutesAt],
+  );
+
+  const adjustHandle = useCallback(
+    (handle: "start" | "end", delta: number) => {
+      const current = draftRef.current;
+      const endMinutes = (current.start + current.duration) % DAY_MINUTES;
+      const candidate =
+        (handle === "start" ? current.start : endMinutes) + delta;
+      const range = moveClockRangeHandle(
+        handle,
+        candidate,
+        { startMinutes: current.start, endMinutes },
+        {
+          minDurationMinutes: MIN_FAST_MINUTES,
+          maxDurationMinutes: MAX_FAST_MINUTES,
+        },
+      );
+      applyRange(range);
+      onChangeRef.current(
+        clockValue(range.startMinutes),
+        range.durationMinutes,
+      );
+    },
+    [applyRange],
   );
 
   const end = (draftStart + draftDuration) % DAY_MINUTES;
-  const dialCycle = timeFormat === "12h" ? HALF_DAY_MINUTES : DAY_MINUTES;
-  const startPoint = point(
-    draftStart,
-    timeFormat === "12h" ? 76 : HANDLE_RADIUS,
-    dialCycle,
-  );
-  const endPoint = point(
-    end,
-    timeFormat === "12h" ? 94 : HANDLE_RADIUS,
-    dialCycle,
-  );
+  const startPoint = point(draftStart, dialRadius(draftStart));
+  const endPoint = point(end, dialRadius(end));
   const formattedStart = formatClockTime(clockValue(draftStart), timeFormat, locale);
   const formattedEnd = formatClockTime(clockValue(end), timeFormat, locale);
+  const fastingText = durationText(draftDuration, locale);
+  const eatingText = durationText(DAY_MINUTES - draftDuration, locale);
 
   return (
     <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.card }]}>
@@ -231,114 +304,187 @@ export function FastingClockEditor({
         <View style={styles.copy}>
           <Text style={[styles.title, { color: colors.ink }]}>Intermittent fasting</Text>
           <Text translate={false} style={[styles.meta, { color: colors.muted }]}>
-            {formattedStart} – {formattedEnd} · {durationText(draftDuration, locale)}
+            {formattedStart}{" \u2013 "}{formattedEnd}{" \u00b7 "}{fastingText}
           </Text>
         </View>
         <Ionicons name={open ? "chevron-up" : "chevron-down"} size={17} color={colors.faint} />
       </Pressable>
       {open ? (
         <View style={styles.body}>
-          <View ref={dialRef} style={styles.dial}>
-            {Array.from({ length: SEGMENTS }, (_, index) => {
-              const minutes = (index / SEGMENTS) * dialCycle;
-              const location = point(minutes, SEGMENT_RADIUS, dialCycle);
-              const inFast =
-                timeFormat === "12h"
-                  ? elapsedFrom(draftStart, minutes) < draftDuration ||
-                    elapsedFrom(draftStart, minutes + HALF_DAY_MINUTES) <
-                      draftDuration
-                  : elapsedFrom(draftStart, minutes) < draftDuration;
-              return (
-                <View
-                  key={index}
-                  pointerEvents="none"
-                  style={[
-                    styles.tick,
-                    {
-                      left: location.left - 2,
-                      top: location.top - 6,
-                      backgroundColor: inFast ? metricColor : `${palette.lime}88`,
-                      transform: [{ rotate: `${(index / SEGMENTS) * 360}deg` }],
-                    },
-                  ]}
-                />
-              );
-            })}
-            {(timeFormat === "12h"
-              ? Array.from({ length: 12 }, (_, index) => index + 1)
-              : [0, 6, 12, 18]
-            ).map((hour) => {
-              const minutes =
-                timeFormat === "12h" ? (hour % 12) * 60 : hour * 60;
-              const location = point(minutes, 67, dialCycle);
-              return (
+          <View style={styles.clockLayout}>
+            <View ref={dialRef} onLayout={measureCenter} style={styles.dial}>
+              {[0, HALF_DAY_MINUTES].flatMap((halfDay) =>
+                Array.from({ length: SEGMENTS }, (_, index) => {
+                  const minutes = (index / SEGMENTS) * HALF_DAY_MINUTES;
+                  const absoluteMinutes = halfDay + minutes;
+                  const location = point(
+                    absoluteMinutes,
+                    dialRadius(absoluteMinutes),
+                  );
+                  const inFast =
+                    elapsedFrom(draftStart, absoluteMinutes) < draftDuration;
+                  return (
+                    <View
+                      key={`${halfDay}-${index}`}
+                      pointerEvents="none"
+                      style={[
+                        styles.tick,
+                        {
+                          left: location.left - 1.5,
+                          top: location.top - 4.5,
+                          backgroundColor: inFast
+                            ? metricColor
+                            : `${palette.lime}88`,
+                          transform: [
+                            { rotate: `${(index / SEGMENTS) * 360}deg` },
+                          ],
+                        },
+                      ]}
+                    />
+                  );
+                }),
+              )}
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((hour) => {
+                const location = point((hour % 12) * 60, 54);
+                return (
+                  <Text
+                    key={hour}
+                    translate={false}
+                    pointerEvents="none"
+                    style={[
+                      styles.hour,
+                      { left: location.left - 13, top: location.top - 7, color: colors.faint },
+                    ]}
+                  >
+                    {new Intl.NumberFormat(locale).format(hour)}
+                  </Text>
+                );
+              })}
+              <View
+                pointerEvents="none"
+                style={[styles.dialCenter, { backgroundColor: `${metricColor}16` }]}
+              >
+                <Ionicons name="moon" size={17} color={metricColor} />
+              </View>
+              <View
+                {...startDrag.panHandlers}
+                accessible
+                accessibilityLabel={t("Start fast")}
+                accessibilityRole="adjustable"
+                accessibilityValue={{ text: formattedStart }}
+                accessibilityActions={[
+                  { name: "increment" },
+                  { name: "decrement" },
+                ]}
+                onAccessibilityAction={(event) => {
+                  if (event.nativeEvent.actionName === "increment") {
+                    adjustHandle("start", 15);
+                  } else if (event.nativeEvent.actionName === "decrement") {
+                    adjustHandle("start", -15);
+                  }
+                }}
+                style={[
+                  styles.handle,
+                  {
+                    left: startPoint.left - 16,
+                    top: startPoint.top - 16,
+                    borderColor: colors.card,
+                    backgroundColor: metricColor,
+                  },
+                ]}
+              >
+                <Ionicons name="play" size={13} color={palette.white} />
+              </View>
+              <View
+                {...endDrag.panHandlers}
+                accessible
+                accessibilityLabel={t("End fast")}
+                accessibilityRole="adjustable"
+                accessibilityValue={{ text: formattedEnd }}
+                accessibilityActions={[
+                  { name: "increment" },
+                  { name: "decrement" },
+                ]}
+                onAccessibilityAction={(event) => {
+                  if (event.nativeEvent.actionName === "increment") {
+                    adjustHandle("end", 15);
+                  } else if (event.nativeEvent.actionName === "decrement") {
+                    adjustHandle("end", -15);
+                  }
+                }}
+                style={[
+                  styles.handle,
+                  {
+                    left: endPoint.left - 16,
+                    top: endPoint.top - 16,
+                    borderColor: colors.card,
+                    backgroundColor: palette.lime,
+                  },
+                ]}
+              >
+                <Ionicons name="stop" size={12} color="#10220A" />
+              </View>
+            </View>
+
+            <View style={styles.metricRail}>
+              <View style={styles.halfDayLegend}>
+                <View style={styles.halfDayLegendItem}>
+                  <View
+                    style={[
+                      styles.halfDayDot,
+                      styles.halfDayDotInner,
+                      { borderColor: colors.faint },
+                    ]}
+                  />
+                  <Text translate={false} style={[styles.halfDayText, { color: colors.faint }]}>AM</Text>
+                </View>
+                <View style={styles.halfDayLegendItem}>
+                  <View
+                    style={[
+                      styles.halfDayDot,
+                      styles.halfDayDotOuter,
+                      { borderColor: colors.faint },
+                    ]}
+                  />
+                  <Text translate={false} style={[styles.halfDayText, { color: colors.faint }]}>PM</Text>
+                </View>
+              </View>
+              <View style={styles.metricBlock}>
+                <View style={styles.endpointRow}>
+                  <Ionicons name="play" size={9} color={metricColor} />
+                  <Text style={[styles.endpointLabel, { color: colors.faint }]}>Start</Text>
+                </View>
                 <Text
-                  key={hour}
                   translate={false}
-                  pointerEvents="none"
-                  style={[
-                    styles.hour,
-                    { left: location.left - 13, top: location.top - 7, color: colors.faint },
-                  ]}
+                  numberOfLines={1}
+                  style={[styles.endpointTime, { color: metricColor }]}
                 >
-                  {timeFormat === "12h"
-                    ? new Intl.NumberFormat(locale).format(hour)
-                    : String(hour).padStart(2, "0")}
+                  {formattedStart}
                 </Text>
-              );
-            })}
-            <View pointerEvents="none" style={styles.centerLabel}>
-              <Text translate={false} style={[styles.duration, { color: colors.ink }]}>
-                {durationText(draftDuration, locale)}
-              </Text>
-              <Text style={[styles.centerMeta, { color: colors.muted }]}>Fasting</Text>
-              <Text translate={false} style={[styles.window, { color: colors.faint }]}>
-                {durationText(DAY_MINUTES - draftDuration, locale)} · <Text>Eating window</Text>
-              </Text>
+                <Text translate={false} numberOfLines={1} style={[styles.metricValue, { color: colors.ink }]}>
+                  {fastingText}
+                </Text>
+                <Text numberOfLines={1} style={[styles.metricLabel, { color: colors.muted }]}>Fasting</Text>
+              </View>
+              <View style={[styles.metricDivider, { backgroundColor: colors.border }]} />
+              <View style={styles.metricBlock}>
+                <View style={styles.endpointRow}>
+                  <Ionicons name="stop" size={8} color={palette.lime} />
+                  <Text style={[styles.endpointLabel, { color: colors.faint }]}>Stop</Text>
+                </View>
+                <Text
+                  translate={false}
+                  numberOfLines={1}
+                  style={[styles.endpointTime, { color: palette.lime }]}
+                >
+                  {formattedEnd}
+                </Text>
+                <Text translate={false} numberOfLines={1} style={[styles.metricValue, { color: colors.ink }]}>
+                  {eatingText}
+                </Text>
+                <Text numberOfLines={1} style={[styles.metricLabel, { color: colors.muted }]}>Eating window</Text>
+              </View>
             </View>
-            <View
-              {...startDrag.panHandlers}
-              accessibilityLabel="Start fast"
-              accessibilityRole="adjustable"
-              accessibilityValue={{ text: formattedStart }}
-              style={[
-                styles.handle,
-                {
-                  left: startPoint.left - 16,
-                  top: startPoint.top - 16,
-                  borderColor: colors.card,
-                  backgroundColor: metricColor,
-                },
-              ]}
-            >
-              <Ionicons name="play" size={13} color={palette.white} />
-            </View>
-            <View
-              {...endDrag.panHandlers}
-              accessibilityLabel="End fast"
-              accessibilityRole="adjustable"
-              accessibilityValue={{ text: formattedEnd }}
-              style={[
-                styles.handle,
-                {
-                  left: endPoint.left - 16,
-                  top: endPoint.top - 16,
-                  borderColor: colors.card,
-                  backgroundColor: palette.lime,
-                },
-              ]}
-            >
-              <Ionicons name="stop" size={12} color="#10220A" />
-            </View>
-          </View>
-          <View style={styles.times}>
-            <Text translate={false} style={[styles.time, { color: metricColor }]}>
-              {formattedStart}
-            </Text>
-            <Ionicons name="arrow-forward" size={15} color={colors.faint} />
-            <Text translate={false} style={[styles.time, { color: palette.lime }]}>
-              {formattedEnd}
-            </Text>
           </View>
         </View>
       ) : null}
@@ -353,15 +499,65 @@ const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 0 },
   title: { fontSize: 12, fontWeight: "900" },
   meta: { marginTop: 2, fontSize: 10, fontWeight: "700" },
-  body: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "rgba(127,127,127,0.25)", paddingVertical: 10, alignItems: "center" },
+  body: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(127,127,127,0.25)",
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    alignItems: "center",
+  },
+  clockLayout: {
+    minHeight: DIAL_SIZE,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
   dial: { width: DIAL_SIZE, height: DIAL_SIZE, position: "relative" },
-  tick: { position: "absolute", width: 4, height: 12, borderRadius: 3 },
+  tick: { position: "absolute", width: 3, height: 9, borderRadius: 3 },
   hour: { position: "absolute", width: 26, textAlign: "center", fontSize: 8, fontWeight: "800" },
-  centerLabel: { position: "absolute", left: 52, right: 52, top: 76, alignItems: "center" },
-  duration: { fontSize: 20, lineHeight: 24, fontWeight: "900" },
-  centerMeta: { fontSize: 10, fontWeight: "900" },
-  window: { marginTop: 4, fontSize: 8, fontWeight: "700" },
-  handle: { position: "absolute", width: 32, height: 32, borderRadius: 16, borderWidth: 3, alignItems: "center", justifyContent: "center", elevation: 4 },
-  times: { marginTop: -4, flexDirection: "row", alignItems: "center", gap: 10 },
-  time: { minWidth: 68, textAlign: "center", fontSize: 12, fontWeight: "900" },
+  dialCenter: {
+    position: "absolute",
+    left: CENTER - 19,
+    top: CENTER - 19,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  handle: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 3,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+  },
+  metricRail: {
+    width: 86,
+    minHeight: 164,
+    justifyContent: "center",
+  },
+  halfDayLegend: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 2,
+    marginBottom: 2,
+  },
+  halfDayLegendItem: { flexDirection: "row", alignItems: "center", gap: 3 },
+  halfDayDot: { borderWidth: 1.5, borderRadius: 8 },
+  halfDayDotInner: { width: 7, height: 7 },
+  halfDayDotOuter: { width: 10, height: 10 },
+  halfDayText: { fontSize: 7, lineHeight: 9, fontWeight: "900" },
+  metricBlock: { paddingHorizontal: 2, paddingVertical: 5 },
+  endpointRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  endpointLabel: { fontSize: 8, lineHeight: 10, fontWeight: "900", textTransform: "uppercase" },
+  endpointTime: { marginTop: 1, fontSize: 10, lineHeight: 13, fontWeight: "900" },
+  metricValue: { marginTop: 4, fontSize: 16, lineHeight: 19, fontWeight: "900" },
+  metricLabel: { marginTop: 1, fontSize: 8, lineHeight: 10, fontWeight: "800" },
+  metricDivider: { height: StyleSheet.hairlineWidth, marginHorizontal: 2, marginVertical: 4 },
 });

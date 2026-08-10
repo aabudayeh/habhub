@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
-  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -91,12 +90,15 @@ export default function LeaderboardDetail() {
   const [detailsReady, setDetailsReady] = useState(false);
   useEffect(() => {
     let active = true;
-    const task = InteractionManager.runAfterInteractions(() => {
+    // Paint the route shell first, then calculate details on the next task.
+    // Waiting on React Native's global interaction queue can starve forever
+    // behind an unrelated native animation and make this page look blank.
+    const task = setTimeout(() => {
       if (active) setDetailsReady(true);
-    });
+    }, 0);
     return () => {
       active = false;
-      task.cancel();
+      clearTimeout(task);
     };
   }, []);
   const dates = useMemo(
@@ -108,10 +110,16 @@ export default function LeaderboardDetail() {
   );
   const visibleEntries = useMemo(() => {
     if (!detailsReady) return [];
+    const dateSet = new Set(dates);
     const shared = state.entries.filter(
       (entry) =>
-        dates.includes(entry.localDate) &&
+        dateSet.has(entry.localDate) &&
         (entry.userId === state.currentUserId || entry.visibility === "group"),
+    );
+    const sharedKeys = new Set(
+      shared.map(
+        (entry) => `${entry.userId}\u0000${entry.metricId}\u0000${entry.localDate}`,
+      ),
     );
     const exactDailySnapshots: MetricEntry[] = (
       state.dailyMetricStatuses ?? []
@@ -120,13 +128,10 @@ export default function LeaderboardDetail() {
         (status) =>
           status.groupId === state.group.id &&
           status.userId !== state.currentUserId &&
-          dates.includes(status.localDate) &&
+          dateSet.has(status.localDate) &&
           status.exactValue !== undefined &&
-          !shared.some(
-            (entry) =>
-              entry.userId === status.userId &&
-              entry.metricId === status.metricId &&
-              entry.localDate === status.localDate,
+          !sharedKeys.has(
+            `${status.userId}\u0000${status.metricId}\u0000${status.localDate}`,
           ),
       )
       .map((status) => ({

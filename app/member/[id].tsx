@@ -10,7 +10,6 @@ import React, {
 import * as Sharing from "expo-sharing";
 import ViewShot from "react-native-view-shot";
 import {
-  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -319,14 +318,18 @@ export default function MemberProfile() {
   );
   useEffect(() => {
     let active = true;
-    const task = InteractionManager.runAfterInteractions(() => {
+    // Do the heavier badge calculation after the first paint without waiting
+    // for React Native's global interaction queue. Long-running gestures or
+    // animations elsewhere in the app can keep that queue busy indefinitely
+    // and previously made the showcase disappear on Android.
+    const task = setTimeout(() => {
       void badgeInputs;
       const next = buildBadges(calculationStateRef.current, anchor);
       if (active) setAllBadges(next);
-    });
+    }, 0);
     return () => {
       active = false;
-      task.cancel();
+      clearTimeout(task);
     };
   }, [anchor, badgeInputs]);
   const resultCache = useMemo(() => {
@@ -462,36 +465,55 @@ export default function MemberProfile() {
       comparisonInputs,
     ],
   );
-  const periodBadge =
-    period === "week" ? "week" : period === "month" ? "month" : "today";
-  const badges = useMemo(
+  const periodBadge = period === "yesterday"
+    ? "yesterday"
+    : period === "week"
+      ? "week"
+      : period === "month"
+        ? "month"
+        : period === "year"
+          ? "year"
+          : period === "overall"
+            ? "achievement"
+            : "today";
+  const memberBadges = useMemo(
     () =>
       allBadges.filter(
-        (badge) =>
-          badge.memberId === member.id && badge.period === periodBadge,
+        (badge) => badge.memberId === member.id,
       ),
-    [allBadges, member.id, periodBadge],
+    [allBadges, member.id],
   );
   const badgeOptions = useMemo(
     () =>
-      allBadges
-        .filter((badge) => badge.memberId === member.id)
-        .map((badge) => ({
+      memberBadges.map((badge) => ({
           id: badge.id,
           label: badge.title,
           icon: badge.icon,
           color: badge.color,
           sublabel: badge.caption,
         })),
-    [allBadges, member.id],
+    [memberBadges],
   );
-  const showcase = state.settings.badgeShowcaseByGroup[state.group.id] ?? [];
-  const displayedBadges = [...badges]
-    .sort(
-      (a, b) =>
-        (showcase.includes(a.id) ? 0 : 1) - (showcase.includes(b.id) ? 0 : 1),
-    )
-    .slice(0, 5);
+  const showcase = useMemo(
+    () => state.settings.badgeShowcaseByGroup[state.group.id] ?? [],
+    [state.group.id, state.settings.badgeShowcaseByGroup],
+  );
+  const displayedBadges = useMemo(() => {
+    const prioritized = [
+      ...showcase.flatMap((id) =>
+        memberBadges.filter((badge) => badge.id === id),
+      ),
+      ...memberBadges.filter((badge) => badge.period === periodBadge),
+      ...memberBadges.filter((badge) => badge.period === "achievement"),
+      ...memberBadges,
+    ];
+    return prioritized
+      .filter(
+        (badge, index, badges) =>
+          badges.findIndex((candidate) => candidate.id === badge.id) === index,
+      )
+      .slice(0, 5);
+  }, [memberBadges, periodBadge, showcase]);
   function shift(days: number) {
     if (period === "overall") return;
     const next = dateWithOffsetFrom(anchor, days);
@@ -925,8 +947,7 @@ export default function MemberProfile() {
           </Card>
         ))}
       </View>
-      {displayedBadges.length ? (
-        <>
+      <>
           <SectionHeader
             title={`${memberDisplayName(state, member)}'s badge showcase`}
             action={
@@ -942,7 +963,7 @@ export default function MemberProfile() {
               </Pressable>
             }
           />
-          {member.id === state.currentUserId ? (
+          {member.id === state.currentUserId && badgeOptions.length ? (
             <MetricSelector
               title="Choose up to 5 showcase badges"
               items={badgeOptions}
@@ -964,7 +985,7 @@ export default function MemberProfile() {
           ) : null}
           <Card style={styles.badgeShowcaseCard}>
             <View style={styles.badgeList}>
-              {displayedBadges.map((badge) => (
+              {displayedBadges.length ? displayedBadges.map((badge) => (
                 <View
                   key={badge.id}
                   style={[styles.badge, { borderLeftColor: badge.color }]}
@@ -984,11 +1005,15 @@ export default function MemberProfile() {
                     </Text>
                   </View>
                 </View>
-              ))}
+              )) : (
+                <View style={styles.badgeEmpty}>
+                  <Ionicons name="ribbon-outline" size={18} color={colors.faint} />
+                  <Text style={[styles.badgeCaption, { color: colors.muted }]}>No data</Text>
+                </View>
+              )}
             </View>
           </Card>
         </>
-      ) : null}
       <Pressable onPress={() => setPhotosOpen((open) => !open)}>
         <Card style={styles.collapseHeader}>
           <Ionicons name="images-outline" size={18} color={colors.primary} />
@@ -1511,17 +1536,18 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   badgeLink: { color: palette.primary, fontSize: 10, fontWeight: "900" },
-  badgeShowcaseCard: { paddingVertical: 14 },
-  badgeList: { gap: 12 },
+  badgeShowcaseCard: { paddingVertical: 14, overflow: "visible" },
+  badgeList: { width: "100%", gap: 12 },
   badge: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 10,
     borderLeftWidth: 3,
     paddingLeft: 10,
     paddingVertical: 3,
   },
   badgeIcon: {
+    flexShrink: 0,
     width: 36,
     height: 36,
     borderRadius: 12,
@@ -1534,6 +1560,13 @@ const styles = StyleSheet.create({
     fontSize: 8,
     lineHeight: 13,
     marginTop: 2,
+  },
+  badgeEmpty: {
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
   },
   dateSection: { marginTop: 16 },
   photoPerson: { paddingVertical: 9, gap: 7 },

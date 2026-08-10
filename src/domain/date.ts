@@ -29,6 +29,76 @@ export type TwelveHourDialCursor = {
   absoluteMinutes: number;
 };
 
+export type ClockRange = {
+  startMinutes: number;
+  endMinutes: number;
+  durationMinutes: number;
+};
+
+const CLOCK_DAY_MINUTES = 24 * 60;
+
+function normalizeClockMinutes(minutes: number): number {
+  return (
+    (Math.round(minutes) % CLOCK_DAY_MINUTES) + CLOCK_DAY_MINUTES
+  ) % CLOCK_DAY_MINUTES;
+}
+
+function clockRangeDuration(startMinutes: number, endMinutes: number): number {
+  return (
+    normalizeClockMinutes(endMinutes) -
+    normalizeClockMinutes(startMinutes) +
+    CLOCK_DAY_MINUTES
+  ) % CLOCK_DAY_MINUTES;
+}
+
+/**
+ * Moves one endpoint of a circular daily range without dragging the other.
+ * The dragged endpoint stops at the supported duration limits, so adjusting
+ * Start can never unexpectedly move End (and vice versa).
+ */
+export function moveClockRangeHandle(
+  handle: "start" | "end",
+  candidateMinutes: number,
+  current: Pick<ClockRange, "startMinutes" | "endMinutes">,
+  limits: { minDurationMinutes?: number; maxDurationMinutes?: number } = {},
+): ClockRange {
+  const minDurationMinutes = Math.max(
+    0,
+    Math.round(limits.minDurationMinutes ?? 0),
+  );
+  const maxDurationMinutes = Math.min(
+    CLOCK_DAY_MINUTES,
+    Math.max(
+      minDurationMinutes,
+      Math.round(limits.maxDurationMinutes ?? CLOCK_DAY_MINUTES),
+    ),
+  );
+  let startMinutes = normalizeClockMinutes(current.startMinutes);
+  let endMinutes = normalizeClockMinutes(current.endMinutes);
+
+  if (handle === "start") startMinutes = normalizeClockMinutes(candidateMinutes);
+  else endMinutes = normalizeClockMinutes(candidateMinutes);
+
+  let durationMinutes = clockRangeDuration(startMinutes, endMinutes);
+  if (durationMinutes < minDurationMinutes) {
+    durationMinutes = minDurationMinutes;
+    if (handle === "start") {
+      startMinutes = normalizeClockMinutes(endMinutes - durationMinutes);
+    } else {
+      endMinutes = normalizeClockMinutes(startMinutes + durationMinutes);
+    }
+  } else if (durationMinutes > maxDurationMinutes) {
+    durationMinutes = maxDurationMinutes;
+    if (handle === "start") {
+      startMinutes = normalizeClockMinutes(endMinutes - durationMinutes);
+    } else {
+      endMinutes = normalizeClockMinutes(startMinutes + durationMinutes);
+    }
+  }
+
+  return { startMinutes, endMinutes, durationMinutes };
+}
+
 /**
  * Advances a 12-hour clock hand without losing its AM/PM half-day.
  * The hand position is 0..719, while the returned absolute value remains

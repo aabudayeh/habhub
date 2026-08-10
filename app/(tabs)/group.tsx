@@ -3,6 +3,7 @@ import { router, useFocusEffect } from "expo-router";
 import React, {
   ReactNode,
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -140,6 +141,13 @@ function LeaderboardScreen() {
     () => (selectedIds.length ? selectedIds : [SCORE_ID]),
     [selectedIds],
   );
+  // Keep period/filter controls responsive while ranking rows for the newly
+  // selected range are prepared. React can keep showing the last complete
+  // rows for a frame instead of doing every member/metric calculation inside
+  // the press event's render.
+  const calculationPeriod = useDeferredValue(period);
+  const calculationAnchor = useDeferredValue(anchor);
+  const calculationSelected = useDeferredValue(selected);
   const pinnedIds = useMemo(
     () =>
       state.settings.leaderboardPinnedMetricIdsByGroup?.[state.group.id] ?? [],
@@ -178,24 +186,28 @@ function LeaderboardScreen() {
   const dates = useMemo(
     () => {
       void allTimeInputs;
-      return period === "overall"
+      return calculationPeriod === "overall"
         ? allTimePeriodDates(
             rankingStateRef.current,
-            anchor,
-            selected.includes(SCORE_ID)
+            calculationAnchor,
+            calculationSelected.includes(SCORE_ID)
               ? tracked.map((metric) => metric.id)
-              : selected,
+              : calculationSelected,
           )
-        : periodDates(period, anchor, weekStartsOn);
+        : periodDates(calculationPeriod, calculationAnchor, weekStartsOn);
     },
     [
       allTimeInputs,
-      anchor,
-      period,
-      selected,
+      calculationAnchor,
+      calculationPeriod,
+      calculationSelected,
       tracked,
       weekStartsOn,
     ],
+  );
+  const navigationDates = useMemo(
+    () => periodDates(period, anchor, weekStartsOn),
+    [anchor, period, weekStartsOn],
   );
   const rankingInputs = useMemo(
     () => ({
@@ -246,7 +258,7 @@ function LeaderboardScreen() {
   const rankingRows = useMemo(() => {
     void rankingInputs;
     const rows = new Map<string, ReturnType<typeof leaderboardRows>>();
-    for (const id of selected) {
+    for (const id of calculationSelected) {
       const metric = tracked.find((item) => item.id === id);
       rows.set(
         id,
@@ -262,7 +274,7 @@ function LeaderboardScreen() {
     return rows;
   }, [
     dates,
-    selected,
+    calculationSelected,
     rankingInputs,
     tracked,
   ]);
@@ -480,7 +492,7 @@ function LeaderboardScreen() {
           <DateRangeNavigator
             period={period}
             anchor={anchor}
-            dates={dates}
+            dates={navigationDates}
             calendarOpen={calendarOpen}
             onToggleCalendar={() => setCalendarOpen((value) => !value)}
             onShift={shiftRange}

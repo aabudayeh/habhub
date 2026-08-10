@@ -73,23 +73,12 @@ function isFoodEntry(entry: MetricEntry, userId: string) {
   );
 }
 
-function foodEntriesThrough(
-  state: AppState,
-  userId: string,
-  now: Date,
-) {
-  const nowMs = now.getTime();
-  return state.entries
-    .filter((entry) => {
-      if (!isFoodEntry(entry, userId)) return false;
-      const recordedAtMs = new Date(entry.recordedAt).getTime();
-      return Number.isFinite(recordedAtMs) && recordedAtMs <= nowMs;
-    })
-    .sort(
-      (left, right) =>
-        new Date(left.recordedAt).getTime() -
-        new Date(right.recordedAt).getTime(),
-    );
+function cycleMealFloor(scheduledStart: Date, fastingMinutes: number) {
+  const boundedFast = Math.max(1, Math.min(DAY_MINUTES - 1, fastingMinutes));
+  return new Date(
+    scheduledStart.getTime() -
+      (DAY_MINUTES - boundedFast) * MINUTE_MS,
+  );
 }
 
 function elapsedMinutes(startedAt: Date, endedAt: Date) {
@@ -165,20 +154,35 @@ function inferredAutomaticStart(
   const startTime = metric.fastingSettings.startTime ?? "20:00";
   const plannedStartToday = new Date(`${today}T${startTime}:00`);
   const plannedStartYesterday = new Date(`${yesterday}T${startTime}:00`);
+  const targetMinutes = metric.fastingSettings.fastingMinutes ?? 16 * 60;
   const plannedEndToday = new Date(
     plannedStartYesterday.getTime() +
-      (metric.fastingSettings.fastingMinutes ?? 16 * 60) * MINUTE_MS,
+      targetMinutes * MINUTE_MS,
   );
-  const foods = foodEntriesThrough(state, userId, now);
-  const latestMeal = foods.at(-1);
-  const todayFoods = foods.filter((entry) => entry.localDate === today);
+  const scheduledCycleStart =
+    now >= plannedStartToday ? plannedStartToday : plannedStartYesterday;
+  const mealFloor = cycleMealFloor(scheduledCycleStart, targetMinutes).getTime();
+  const nowMs = now.getTime();
+  let latestMeal: MetricEntry | undefined;
+  let latestMealMs = Number.NEGATIVE_INFINITY;
+  let hasTodayFood = false;
+  for (const entry of state.entries) {
+    if (!isFoodEntry(entry, userId)) continue;
+    const recordedAtMs = new Date(entry.recordedAt).getTime();
+    if (!Number.isFinite(recordedAtMs) || recordedAtMs > nowMs) continue;
+    if (entry.localDate === today) hasTodayFood = true;
+    if (recordedAtMs >= mealFloor && recordedAtMs > latestMealMs) {
+      latestMeal = entry;
+      latestMealMs = recordedAtMs;
+    }
+  }
 
   let startedAt: Date | undefined;
   if (now >= plannedStartToday) {
     startedAt = latestMeal
       ? new Date(latestMeal.recordedAt)
       : plannedStartToday;
-  } else if (now <= plannedEndToday && todayFoods.length === 0) {
+  } else if (now <= plannedEndToday && !hasTodayFood) {
     startedAt = latestMeal
       ? new Date(latestMeal.recordedAt)
       : plannedStartYesterday;
@@ -554,13 +558,24 @@ function reconcileAutomaticFastingMetric(
 
     const endedAt = new Date(firstFood.recordedAt);
     const previousLastFood = previousFoodByEntry.get(firstFood);
-    const startedAt = previousLastFood
+    const plannedStart = scheduledFastStart(
+      endedAt,
+      localDate,
+      metric.fastingSettings?.startTime ?? "20:00",
+    );
+    const previousMealAt = previousLastFood
       ? new Date(previousLastFood.recordedAt)
-      : scheduledFastStart(
-          endedAt,
-          localDate,
-          metric.fastingSettings?.startTime ?? "20:00",
-        );
+      : undefined;
+    const mealFloor = plannedStart
+      ? cycleMealFloor(
+          plannedStart,
+          metric.fastingSettings?.fastingMinutes ?? 16 * 60,
+        )
+      : undefined;
+    const startedAt =
+      previousMealAt && mealFloor && previousMealAt >= mealFloor
+      ? previousMealAt
+      : plannedStart;
     if (!startedAt || startedAt >= endedAt) return;
 
     const automaticEntry = completedFastEntry(

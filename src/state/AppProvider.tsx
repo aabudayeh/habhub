@@ -2553,12 +2553,19 @@ export function AppProvider({ children }: PropsWithChildren) {
     // synchronous, so coalescing here prevents duplicate full-state
     // serialization from blocking the first taps after returning to the app.
     if (persistenceWriteRef.current) return persistenceWriteRef.current;
-    // Begin from a microtask so the pressed control can paint before a large
-    // owned Health Connect history is serialized. The write is still queued in
-    // the same event turn and coalesces rapid keystrokes/taps into one latest
-    // durable snapshot.
-    const write = Promise.resolve()
-      .then(async () => {
+    // JSON.stringify runs synchronously. A Promise microtask still runs before
+    // React Native gets a chance to paint the pressed state/navigation change,
+    // so a large owned Health Connect history could make a tap look ignored.
+    // Start foreground writes in the next task instead. Background flushes
+    // remain immediate because the OS can suspend timers while the app leaves.
+    let resolveWrite!: () => void;
+    let rejectWrite!: (reason?: unknown) => void;
+    const write = new Promise<void>((resolve, reject) => {
+      resolveWrite = resolve;
+      rejectWrite = reject;
+    });
+    const persist = async () => {
+      try {
         while (persistenceDirtyRef.current) {
           const revision = persistenceRevisionRef.current;
           const latest = persistenceStateRef.current;
@@ -2566,12 +2573,18 @@ export function AppProvider({ children }: PropsWithChildren) {
           if (revision === persistenceRevisionRef.current)
             persistenceDirtyRef.current = false;
         }
-      })
-      .finally(() => {
+        resolveWrite();
+      } catch (error) {
+        rejectWrite(error);
+      } finally {
         if (persistenceWriteRef.current === write)
           persistenceWriteRef.current = null;
-      });
+      }
+    };
     persistenceWriteRef.current = write;
+    if (NativeAppState.currentState === "active")
+      setTimeout(() => void persist(), 0);
+    else void persist();
     return write;
   }, []);
 

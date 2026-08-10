@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingHorizontal: 1,
   },
-  periodChoiceYesterday: { flex: 1.22 },
+  periodChoiceYesterday: { flex: 1.45 },
   periodChoiceOverall: { flex: 1.08 },
   periodChevron: { marginTop: -2 },
   navigator: { padding: 8, marginBottom: 10 },

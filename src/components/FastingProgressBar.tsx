@@ -7,6 +7,8 @@ import {
 } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { dateKey, dateWithOffsetFrom, friendlyDate } from "@/src/domain/date";
+import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
 
 const DAY_MINUTES = 24 * 60;
@@ -30,6 +32,8 @@ export type FastingProgressBarProps = {
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
+  locale?: string;
+  timeFormat?: "12h" | "24h";
 };
 
 function timestamp(value: FastingTimestamp | undefined) {
@@ -43,13 +47,20 @@ function boundedMinutes(value: number, fallback = 0) {
   return Number.isFinite(value) ? Math.max(0, Math.round(value)) : fallback;
 }
 
-function formatMinutes(value: number) {
+function formatMinutes(value: number, locale?: string) {
   const minutes = boundedMinutes(value);
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
-  if (!hours) return `${remainder}m`;
-  if (!remainder) return `${hours}h`;
-  return `${hours}h ${remainder}m`;
+  const number = (amount: number, unit: "hour" | "minute") =>
+    new Intl.NumberFormat(locale, {
+      style: "unit",
+      unit,
+      unitDisplay: "narrow",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  if (!hours) return number(remainder, "minute");
+  if (!remainder) return number(hours, "hour");
+  return `${number(hours, "hour")} ${number(remainder, "minute")}`;
 }
 
 /** Keeps a running fast current without asking its parent screen to re-render. */
@@ -92,8 +103,11 @@ export function FastingProgressBar({
   compact = false,
   style,
   accessibilityLabel = "Fasting progress",
+  locale,
+  timeFormat = "24h",
 }: FastingProgressBarProps) {
   const colors = useAppColors();
+  const { t } = useLocalization();
   const startedAtMs = timestamp(startedAt);
   const endedAtMs = timestamp(endedAt);
   const liveNow = useLiveNow(active, startedAtMs);
@@ -130,9 +144,31 @@ export function FastingProgressBar({
         : elapsed <= DAY_MINUTES
           ? "Eating window open"
           : "Fast continuing";
-  const progressText = `${formatMinutes(elapsed)} elapsed / ${formatMinutes(
-    target,
-  )} target. ${formatMinutes(eatingWindow)} eating window. ${status}.`;
+  const startedDate = new Date(startedAtMs);
+  const today = dateKey();
+  const startDay =
+    Number.isFinite(startedAtMs)
+      ? dateKey(startedDate) === today
+        ? t("Today")
+        : dateKey(startedDate) === dateWithOffsetFrom(today, -1)
+          ? t("Yesterday")
+          : friendlyDate(dateKey(startedDate), locale)
+      : "";
+  const startClock = Number.isFinite(startedAtMs)
+    ? new Intl.DateTimeFormat(locale, {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: timeFormat === "12h",
+      }).format(startedDate)
+    : "";
+  const statusWithStart = startClock
+    ? `${t(status)} · ${startDay} ${startClock}`
+    : t(status);
+  const progressText = `${formatMinutes(elapsed, locale)} ${t(
+    "elapsed",
+  )}. ${t("Fast target")} ${formatMinutes(target, locale)}. ${t(
+    "Eating window",
+  )} ${formatMinutes(eatingWindow, locale)}. ${t(status)}.`;
 
   return (
     <View style={[styles.wrap, compact && styles.compactWrap, style]}>
@@ -143,7 +179,7 @@ export function FastingProgressBar({
             numberOfLines={1}
             style={[styles.summary, { color: colors.ink }]}
           >
-            {formatMinutes(elapsed)} / {formatMinutes(target)}
+            {formatMinutes(elapsed, locale)} / {formatMinutes(target, locale)}
           </Text>
           <Text
             translate={false}
@@ -153,14 +189,18 @@ export function FastingProgressBar({
               { color: outsideWindow ? palette.red : colors.muted },
             ]}
           >
-            {status}
+            {statusWithStart}
           </Text>
         </View>
       ) : null}
 
       <View
         accessible
-        accessibilityLabel={accessibilityLabel}
+        accessibilityLabel={
+          accessibilityLabel === "Fasting progress"
+            ? t("Fasting progress")
+            : accessibilityLabel
+        }
         accessibilityRole="progressbar"
         accessibilityValue={{
           min: 0,
@@ -204,18 +244,16 @@ export function FastingProgressBar({
       {!compact ? (
         <View style={styles.legendRow}>
           <Text
-            translate={false}
             numberOfLines={1}
             style={[styles.legend, { color: colors.muted }]}
           >
-            Fast target {formatMinutes(target)}
+            {t("Fast target")} {formatMinutes(target, locale)}
           </Text>
           <Text
-            translate={false}
             numberOfLines={1}
             style={[styles.legend, { color: colors.muted }]}
           >
-            Eating window {formatMinutes(eatingWindow)}
+            {t("Eating window")} {formatMinutes(eatingWindow, locale)}
           </Text>
         </View>
       ) : null}

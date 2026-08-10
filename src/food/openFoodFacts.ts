@@ -449,13 +449,17 @@ async function legacyOpenFoodFactsSearch(term: string) {
 }
 
 async function openFoodFactsSearch(term: string) {
-  try {
-    return await searchALicious(term);
-  } catch {
-    // Search-a-licious is the current full-text service. Retain the legacy
-    // endpoint only as a sequential fallback for temporary service outages.
-    return legacyOpenFoodFactsSearch(term);
-  }
+  // Keep the pre-FatSecret Open Food Facts path self-sufficient. Querying the
+  // modern full-text service and the legacy catalogue independently means an
+  // empty response or outage from either endpoint cannot make the optional
+  // FatSecret integration a single point of failure.
+  const settled = await Promise.allSettled([
+    searchALicious(term),
+    legacyOpenFoodFactsSearch(term),
+  ]);
+  return settled.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
 }
 
 async function settleWithin<T>(promise: Promise<T>, timeoutMs: number) {
@@ -652,25 +656,42 @@ export async function searchFoods(
   const cached = await cachedProducts(key);
   if (cached.fresh)
     return rankFoods([...cached.fresh, ...OFFLINE], term, options);
-  const searches: Promise<FoodProduct[] | undefined>[] = [
+  const primarySearches: Promise<FoodProduct[] | undefined>[] = [
     settleWithin(openFoodFactsSearch(term), FOOD_PROVIDER_DEADLINE_MS),
   ];
   // FoodData Central keys are free, but must not be embedded in source. It is a
   // useful second provider when a deployment supplies its public search key.
   if (USDA_KEY)
-    searches.push(settleWithin(usdaSearch(term), FOOD_PROVIDER_DEADLINE_MS));
-  searches.push(
-    settleWithin(fatSecretSearch(term), FOOD_PROVIDER_DEADLINE_MS),
-  );
-  const settled = await Promise.allSettled(searches);
-  const remote = settled.flatMap((result) =>
+    primarySearches.push(
+      settleWithin(usdaSearch(term), FOOD_PROVIDER_DEADLINE_MS),
+    );
+  // Start the supplemental request at the same time, but do not let it hold up
+  // useful results from the established providers. It gets the full cold-start
+  // window only when the primary, cached and offline catalogues have no match.
+  const fatSecretRequest = fatSecretSearch(term);
+  const primarySettled = await Promise.allSettled(primarySearches);
+  const primary = primarySettled.flatMap((result) =>
     result.status === "fulfilled" && result.value ? result.value : [],
   );
-  const candidates = remote.length ? remote : (cached.stale ?? []);
-  const products = rankFoods([...candidates, ...OFFLINE], term, options);
-  if (!products.length && settled.some((result) => result.status === "rejected"))
-    throw new Error("Food databases are temporarily busy. Try again shortly.");
-  if (settled.some((result) => result.status === "fulfilled"))
+  const hasFallbackMatch = rankFoods(
+    [...primary, ...(cached.stale ?? []), ...OFFLINE],
+    term,
+    options,
+  ).length > 0;
+  const supplemental = await settleWithin(
+    fatSecretRequest,
+    hasFallbackMatch ? 1200 : FATSECRET_CLIENT_TIMEOUT_MS,
+  );
+  const remote = [...primary, ...(supplemental ?? [])];
+  const products = rankFoods(
+    [...remote, ...(cached.stale ?? []), ...OFFLINE],
+    term,
+    options,
+  );
+  // FatSecret is supplemental. When it or every remote provider is
+  // unavailable, retain the previous Open Food Facts/USDA, stale-cache and
+  // offline behavior instead of turning the whole search into an error.
+  if (remote.length)
     void rememberProducts(key, remote).catch(() => undefined);
   return products;
 }

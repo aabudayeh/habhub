@@ -1,31 +1,42 @@
 import { router } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { BodyProgressAvatar } from "@/src/components/BodyProgressAvatar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
-import { DateRangeNavigator } from "@/src/components/PeriodNavigator";
+import {
+  adjacentPeriod,
+  DateRangeNavigator,
+  PeriodChoiceBar,
+} from "@/src/components/PeriodNavigator";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import {
+  periodDates,
+  shiftedPeriodAnchor,
+  type LeaderboardPeriod,
+} from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import {
-  effectiveGoalTarget,
-  isMetricTrackedOnDate,
-  metricApplicableOnDate,
-  metricVisualProgress,
-  safeMetricValue,
-  scheduledGoalReached,
-  trackedGoalSummary,
-} from "@/src/domain/metrics";
+  statusAllTimeDates,
+  statusAvatarProgression,
+  statusRangeRollup,
+  type StatusMetricRollup,
+} from "@/src/domain/status";
 import { localizeMetricName } from "@/src/i18n/domain";
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { MetricDefinition } from "@/src/types";
 
 const SEGMENTS = 32;
 const RING_SIZE = 76;
@@ -77,51 +88,25 @@ function ProgressRing({
 }
 
 function GoalOrbit({
-  metric,
-  localDate,
+  anchor,
+  period,
+  rollup,
 }: {
-  metric: MetricDefinition;
-  localDate: string;
+  anchor: string;
+  period: LeaderboardPeriod;
+  rollup: StatusMetricRollup;
 }) {
-  const { state } = useApp();
   const colors = useAppColors();
   const { language } = useLocalization();
-  const applicable = metricApplicableOnDate(
-    state,
-    metric,
-    state.currentUserId,
-    localDate,
-  );
-  const value = safeMetricValue(state, metric, state.currentUserId, localDate);
-  const target = effectiveGoalTarget(
-    state,
-    metric,
-    state.currentUserId,
-    localDate,
-  );
-  const met = applicable && scheduledGoalReached(
-    state,
-    metric,
-    state.currentUserId,
-    localDate,
-  );
-  const progress = applicable
-    ? metricVisualProgress(
-        state,
-        metric,
-        state.currentUserId,
-        localDate,
-        value,
-        target,
-      )
-    : 0;
+  const { metric, opportunities, completed, progress } = rollup;
+  const met = opportunities > 0 && completed === opportunities;
   return (
     <Pressable
       accessibilityRole="button"
       onPress={() =>
         router.navigate({
           pathname: "/metric-detail",
-          params: { metric: metric.id, date: localDate },
+          params: { metric: metric.id, date: anchor, period },
         } as never)
       }
       style={({ pressed }) => [styles.goal, pressed && styles.pressed]}
@@ -129,7 +114,7 @@ function GoalOrbit({
       <ProgressRing
         progress={progress}
         color={met ? GOAL_COMPLETE_COLOR : metric.color}
-        unavailable={!applicable}
+        unavailable={!opportunities}
       />
       <Text
         translate={false}
@@ -147,31 +132,148 @@ export default function StatusPage() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { t } = useLocalization();
-  const [localDate, setLocalDate] = useState(dateKey());
+  const [period, setPeriod] = useState<LeaderboardPeriod>("today");
+  const [anchor, setAnchor] = useState(dateKey());
+  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
-  const summary = trackedGoalSummary(state, state.currentUserId, localDate);
-  const bodyProgress = summary.total ? summary.met / summary.total : 0;
+  // Date controls should acknowledge a tap immediately. Range totals and the
+  // all-time avatar history can then catch up at transition priority while the
+  // previous result remains visible instead of blocking the pressed frame.
+  const calculationState = useDeferredValue(state);
+  const calculationPeriod = useDeferredValue(period);
+  const calculationAnchor = useDeferredValue(anchor);
+  const calculationStateRef = useRef(calculationState);
+  calculationStateRef.current = calculationState;
+  // Presence, chat, theme, and navigation settings must not invalidate a full
+  // Status history calculation. Track only collections/settings used by the
+  // metric engine, matching the lightweight leaderboard calculation boundary.
+  const calculationInputs = useMemo(
+    () => ({
+      baselineCalories: calculationState.settings.baselineCalories,
+      currentUserId: calculationState.currentUserId,
+      dailyMetricStatuses: calculationState.dailyMetricStatuses,
+      dayEndTime: calculationState.settings.dayEndTime,
+      energyProfile: calculationState.settings.energyProfile,
+      energyProfiles: calculationState.energyProfiles,
+      entries: calculationState.entries,
+      foodGoalMode: calculationState.settings.foodGoalMode,
+      fastingRuntimeByMetric:
+        calculationState.settings.fastingRuntimeByMetric,
+      groupId: calculationState.group.id,
+      gymSessions: calculationState.gymSessions,
+      metrics: calculationState.metrics,
+      photos: calculationState.photos,
+      todos: calculationState.todos,
+      trackedGoalPeriods: calculationState.trackedGoalPeriods,
+      vacationPeriods: calculationState.settings.vacationPeriods,
+      weightDirection: calculationState.settings.weightDirection,
+      weekStartsOn: calculationState.settings.weekStartsOn,
+    }),
+    [
+      calculationState.currentUserId,
+      calculationState.dailyMetricStatuses,
+      calculationState.energyProfiles,
+      calculationState.entries,
+      calculationState.group.id,
+      calculationState.gymSessions,
+      calculationState.metrics,
+      calculationState.photos,
+      calculationState.settings.baselineCalories,
+      calculationState.settings.dayEndTime,
+      calculationState.settings.energyProfile,
+      calculationState.settings.foodGoalMode,
+      calculationState.settings.fastingRuntimeByMetric,
+      calculationState.settings.vacationPeriods,
+      calculationState.settings.weightDirection,
+      calculationState.settings.weekStartsOn,
+      calculationState.todos,
+      calculationState.trackedGoalPeriods,
+    ],
+  );
   const member = state.group.members.find(
     (item) => item.id === state.currentUserId,
   );
-  const goals = useMemo(
-    () =>
-      state.metrics.filter(
-        (metric) =>
-          metric.goalEnabled !== false &&
-          metric.dataType !== "text" &&
-          isMetricTrackedOnDate(state, metric, localDate),
-      ),
-    [localDate, state],
+  const navigationDates = useMemo(
+    () => periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
+    [anchor, period, state.settings.weekStartsOn],
   );
-  const shift = (direction: -1 | 1) =>
-    setLocalDate((current) => {
-      const next = dateWithOffsetFrom(current, direction);
-      return next <= dateKey() ? next : current;
-    });
+  const calculationDates = useMemo(
+    () => {
+      void calculationInputs;
+      const currentState = calculationStateRef.current;
+      return calculationPeriod === "overall"
+        ? statusAllTimeDates(
+            currentState,
+            currentState.currentUserId,
+            calculationAnchor,
+          )
+        : periodDates(
+            calculationPeriod,
+            calculationAnchor,
+            currentState.settings.weekStartsOn ?? 1,
+          );
+    },
+    [
+      calculationAnchor,
+      calculationInputs,
+      calculationPeriod,
+    ],
+  );
+  const summary = useMemo(
+    () => {
+      void calculationInputs;
+      const currentState = calculationStateRef.current;
+      return statusRangeRollup(
+        currentState,
+        currentState.currentUserId,
+        calculationDates,
+      );
+    },
+    [calculationDates, calculationInputs],
+  );
+  const avatarProgression = useMemo(
+    () => {
+      void calculationInputs;
+      const currentState = calculationStateRef.current;
+      return statusAvatarProgression(
+        currentState,
+        currentState.currentUserId,
+        calculationAnchor,
+      );
+    },
+    [calculationAnchor, calculationInputs],
+  );
+  const choosePeriod = useCallback(
+    (next: Exclude<LeaderboardPeriod, "custom">) => {
+      setPeriod(next);
+      setAnchor(
+        next === "yesterday" ? dateWithOffsetFrom(dateKey(), -1) : dateKey(),
+      );
+      setCalendarOpen(false);
+    },
+    [],
+  );
+  const shift = useCallback(
+    (direction: -1 | 1) => {
+      const next = shiftedPeriodAnchor(period, anchor, direction);
+      if (!next) return;
+      if (period === "today" || period === "yesterday") setPeriod("custom");
+      setAnchor(next);
+      setCalendarOpen(false);
+    },
+    [anchor, period],
+  );
+  const swipeRange = useCallback(
+    (direction: -1 | 1) => {
+      const next = adjacentPeriod(period, direction);
+      if (!next) return;
+      choosePeriod(next);
+    },
+    [choosePeriod, period],
+  );
   const swipe = usePageSwipeGesture({
-    onPrevious: () => shift(-1),
-    onNext: () => shift(1),
+    onPrevious: () => swipeRange(-1),
+    onNext: () => swipeRange(1),
   });
 
   return (
@@ -181,31 +283,50 @@ export default function StatusPage() {
           title="Status"
           showMenu
         />
-        <DateRangeNavigator
-          period="custom"
-          anchor={localDate}
-          dates={[localDate]}
-          calendarOpen={calendarOpen}
-          onToggleCalendar={() => setCalendarOpen((open) => !open)}
-          onShift={shift}
-        >
-          <MonthCalendar
-            monthDate={localDate}
-            selectedDate={localDate}
-            onSelect={(next) => {
-              setLocalDate(next <= dateKey() ? next : dateKey());
-              setCalendarOpen(false);
-            }}
-            onMonthChange={setLocalDate}
-          />
-        </DateRangeNavigator>
+        <PeriodChoiceBar
+          period={period}
+          onChange={choosePeriod}
+          dateViewOpen={dateNavigatorOpen}
+          onToggleDateView={() => {
+            if (dateNavigatorOpen) setCalendarOpen(false);
+            setDateNavigatorOpen((open) => !open);
+          }}
+        />
+        {period !== "overall" && dateNavigatorOpen ? (
+          <DateRangeNavigator
+            period={period}
+            anchor={anchor}
+            dates={navigationDates}
+            calendarOpen={calendarOpen}
+            onToggleCalendar={() => setCalendarOpen((open) => !open)}
+            onShift={shift}
+          >
+            <MonthCalendar
+              monthDate={anchor}
+              selectedDate={anchor}
+              onSelect={(next) => {
+                setAnchor(next <= dateKey() ? next : dateKey());
+                if (period === "today" || period === "yesterday")
+                  setPeriod("custom");
+                setCalendarOpen(false);
+              }}
+              onMonthChange={(next) =>
+                setAnchor(next <= dateKey() ? next : dateKey())
+              }
+            />
+          </DateRangeNavigator>
+        ) : null}
 
         <Card style={styles.statusCard}>
           <View style={styles.personWrap}>
             <View style={[styles.halo, { borderColor: `${accent}55` }]} />
             <BodyProgressAvatar
-              progress={bodyProgress}
+              heightCm={state.settings.energyProfile.heightCm}
+              mindTier={avatarProgression.mindTier}
+              muscleProgress={avatarProgression.muscleProgress}
+              progress={summary.progress}
               sex={state.settings.energyProfile.sex}
+              weightKg={avatarProgression.currentWeightKg}
             />
             {member ? (
               <Text
@@ -217,16 +338,25 @@ export default function StatusPage() {
               </Text>
             ) : null}
             <Text style={[styles.summary, { color: colors.muted }]}>
-              {summary.total
-                ? `${summary.met}/${summary.total} ${t("goals completed on this date")}`
+              {summary.opportunities
+                ? `${summary.completed}/${summary.opportunities} ${t(
+                    calculationDates.length === 1
+                      ? "goals completed on this date"
+                      : "goal opportunities completed in this range",
+                  )}`
                 : t("No goals are currently tracked. Add one in customization.")}
             </Text>
           </View>
 
-          {goals.length ? (
+          {summary.metrics.length ? (
             <View style={styles.goalGrid}>
-              {goals.map((metric) => (
-                <GoalOrbit key={metric.id} metric={metric} localDate={localDate} />
+              {summary.metrics.map((rollup) => (
+                <GoalOrbit
+                  key={rollup.metric.id}
+                  rollup={rollup}
+                  anchor={anchor}
+                  period={period}
+                />
               ))}
             </View>
           ) : null}

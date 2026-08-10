@@ -26,7 +26,11 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
+import {
+  LocalizedAlert as Alert,
+  useLocale,
+  useLocalization,
+} from "@/src/i18n";
 import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
@@ -51,6 +55,7 @@ import {
   calendarPeriodRange,
   compactDayDate,
   dateKey,
+  dateWithOffsetFrom,
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
@@ -230,7 +235,7 @@ function Today() {
             metricMatchesActiveView(state, item, today, "today") &&
             (editing ||
               showGoalsToday ||
-              !isMetricTrackedOnDate(state, item, today)),
+              item.goalEnabled === false),
         )
         .sort((a, b) => a.order - b.order);
     if (editing || !completionSortEnabled) return ordered;
@@ -1502,6 +1507,7 @@ function TrackerRow({
   onDragEnd: () => void;
 }) {
   const locale = useLocale();
+  const { t } = useLocalization();
   const arrival = useRef(new Animated.Value(1)).current;
   const dragStep = height + 6;
   const smoothDrag = useSmoothReorderGesture({
@@ -1612,6 +1618,29 @@ function TrackerRow({
         item.id,
       )
     : undefined;
+  const fastingStartedAt = fastingProgress?.startedAt
+    ? new Date(fastingProgress.startedAt)
+    : undefined;
+  const fastingStartClock =
+    fastingStartedAt && !Number.isNaN(fastingStartedAt.getTime())
+      ? new Intl.DateTimeFormat(locale, {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: state.settings.timeFormat === "12h",
+        }).format(fastingStartedAt)
+      : undefined;
+  const fastingStartDay =
+    fastingStartedAt && dateKey(fastingStartedAt) === dateKey()
+      ? t("Today")
+      : fastingStartedAt &&
+          dateKey(fastingStartedAt) === dateWithOffsetFrom(dateKey(), -1)
+        ? t("Yesterday")
+        : fastingStartedAt
+          ? new Intl.DateTimeFormat(locale, {
+              month: "short",
+              day: "numeric",
+            }).format(fastingStartedAt)
+          : "";
   const diastolic = isBloodPressure
     ? state.metrics.find(
         (candidate) =>
@@ -1652,7 +1681,7 @@ function TrackerRow({
             ? `${formatMetricValue(item, fastingProgress.minutes / 60)} fast`
             : "Ready to start",
         secondary: fastingProgress?.active
-          ? `${formatMetricValue(item, fastingProgress.minutes / 60)} elapsed · ${formatMetricValue(item, fastingProgress.targetMinutes / 60)} target`
+          ? `${t("Started")} ${fastingStartDay} ${fastingStartClock ?? ""} · ${formatMetricValue(item, fastingProgress.minutes / 60)} ${t("elapsed")}`
           : fastingProgress?.startedAt
             ? fastingProgress.endedOutsideEatingWindow
               ? "Ended outside the eating window"
@@ -1860,8 +1889,10 @@ function TrackerRow({
               startedAt={fastingProgress.startedAt}
               endedAt={fastingProgress.endedAt}
               active={fastingProgress.active}
+              locale={locale}
               targetMinutes={fastingProgress.targetMinutes}
               metricColor={item.color}
+              timeFormat={state.settings.timeFormat ?? "24h"}
               endedOutsideEatingWindow={
                 fastingProgress.endedOutsideEatingWindow
               }
@@ -2692,7 +2723,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  sectionActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  sectionActions: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 6,
+  },
   sectionVisibility: {
     width: 28,
     height: 28,
@@ -2704,7 +2742,8 @@ const styles = StyleSheet.create({
   section: { fontSize: 13, fontWeight: "900" },
   hint: { fontSize: 8, fontWeight: "700" },
   filterButton: {
-    maxWidth: "58%",
+    maxWidth: "100%",
+    flexShrink: 1,
     minHeight: 28,
     paddingHorizontal: 9,
     borderWidth: 1,
@@ -2713,7 +2752,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  filterButtonText: { flexShrink: 1, fontSize: 8, fontWeight: "900" },
+  filterButtonText: {
+    minWidth: 0,
+    flexShrink: 1,
+    fontSize: 8,
+    fontWeight: "900",
+  },
   list: { flex: 1, gap: 6 },
   row: {
     minHeight: 62,
