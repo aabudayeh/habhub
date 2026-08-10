@@ -1753,6 +1753,7 @@ function mergeWorkspaceWithoutRegression(
     return {
       ...shared,
       goal: metric.goal,
+      adaptiveGoalTarget: metric.adaptiveGoalTarget,
       goalRange: metric.goalRange,
       goalEnabled: metric.goalEnabled,
       goalSchedule: metric.goalSchedule,

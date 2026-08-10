@@ -24,6 +24,63 @@ export type ScheduleEvent = {
   durationMinutes?: number;
 };
 
+function clockMinutes(time: string | undefined) {
+  if (!time || !/^\d{2}:\d{2}$/.test(time)) return undefined;
+  const [hour, minute] = time.split(":").map(Number);
+  if (
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  )
+    return undefined;
+  return hour * 60 + minute;
+}
+
+/**
+ * Returns whether an event belongs in an hourly Schedule slot.
+ *
+ * A duration's finishing boundary is intentionally discoverable from the next
+ * slot (19:00-20:00 appears in both 19:00 and 20:00). Its starting boundary
+ * is not copied into the preceding slot. Point events only belong to the hour
+ * in which they start.
+ */
+export function scheduleEventTouchesHourSlot(
+  event: ScheduleEvent,
+  hour: number,
+) {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return false;
+  const startsAt = clockMinutes(event.time);
+  if (startsAt === undefined) return false;
+  const slotStart = hour * 60;
+  const slotEnd = slotStart + 60;
+  const duration = event.durationMinutes;
+  if (
+    typeof duration !== "number" ||
+    !Number.isFinite(duration) ||
+    duration <= 0
+  )
+    return startsAt >= slotStart && startsAt < slotEnd;
+  const endsAt = startsAt + duration;
+  return startsAt < slotEnd && endsAt >= slotStart;
+}
+
+/** Stable, de-duplicated events discoverable from one hourly slot. */
+export function scheduleEventsForHourSlot(
+  events: readonly ScheduleEvent[],
+  hour: number,
+) {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    if (seen.has(event.id) || !scheduleEventTouchesHourSlot(event, hour))
+      return false;
+    seen.add(event.id);
+    return true;
+  });
+}
+
 function localClock(timestamp: string) {
   const value = new Date(timestamp);
   if (Number.isNaN(value.getTime())) return undefined;
@@ -87,85 +144,92 @@ function todoTimeBlocksForDate(
 }
 
 function fastingBlocksForDate(state: AppState, localDate: string): ScheduleEvent[] {
-  const metric = state.metrics.find((item) => item.id === "intermittent_fasting");
-  if (!metric) return [];
-  const endpoint = (
-    id: string,
-    title: string,
-    value: Date,
-    color: string,
-    completed = false,
-  ): ScheduleEvent[] =>
-    dateKey(value) === localDate
-      ? [{
-          id,
-          title,
-          time: localClock(value.toISOString()),
-          kind: "fasting",
-          metricId: metric.id,
-          color,
-          completed,
-        }]
-      : [];
-  const logged = state.entries
-    .filter(
-      (entry) =>
-        entry.userId === state.currentUserId && entry.metricId === metric.id,
-    )
-    .flatMap((entry) => {
-      const startedAtMs = entry.submetricValues?.fast_started_at_ms;
-      const endedAtMs = entry.submetricValues?.fast_ended_at_ms;
-      if (!startedAtMs || !endedAtMs) return [];
-      const startedAt = new Date(startedAtMs);
-      const endedAt = new Date(endedAtMs);
-      if (
-        Number.isNaN(startedAt.getTime()) ||
-        Number.isNaN(endedAt.getTime())
-      )
-        return [];
-      return [
-        ...endpoint(
-          `fast:start:${entry.id}`,
-          "Fast started",
-          startedAt,
-          metric.color,
-          true,
-        ),
-        ...endpoint(
-          `fast:end:${entry.id}`,
-          "Fast ended",
-          endedAt,
-          "#E58A3B",
-          true,
-        ),
-      ];
+  return state.metrics
+    .filter((metric) => Boolean(metric.fastingSettings))
+    .flatMap((metric) => {
+      const endpoint = (
+        id: string,
+        title: string,
+        value: Date,
+        color: string,
+        completed = false,
+      ): ScheduleEvent[] =>
+        dateKey(value) === localDate
+          ? [
+              {
+                id,
+                title,
+                time: localClock(value.toISOString()),
+                kind: "fasting",
+                metricId: metric.id,
+                color,
+                completed,
+              },
+            ]
+          : [];
+      const logged = state.entries
+        .filter(
+          (entry) =>
+            entry.userId === state.currentUserId &&
+            entry.metricId === metric.id,
+        )
+        .flatMap((entry) => {
+          const startedAtMs = entry.submetricValues?.fast_started_at_ms;
+          const endedAtMs = entry.submetricValues?.fast_ended_at_ms;
+          if (!startedAtMs || !endedAtMs) return [];
+          const startedAt = new Date(startedAtMs);
+          const endedAt = new Date(endedAtMs);
+          if (
+            Number.isNaN(startedAt.getTime()) ||
+            Number.isNaN(endedAt.getTime())
+          )
+            return [];
+          return [
+            ...endpoint(
+              `fast:start:${entry.id}`,
+              "Fast started",
+              startedAt,
+              metric.color,
+              true,
+            ),
+            ...endpoint(
+              `fast:end:${entry.id}`,
+              "Fast ended",
+              endedAt,
+              "#E58A3B",
+              true,
+            ),
+          ];
+        });
+      if (logged.length) return logged;
+      const startTime = metric.fastingSettings?.startTime ?? "20:00";
+      const fastingMinutes = Math.max(
+        15,
+        Math.min(1425, metric.fastingSettings?.fastingMinutes ?? 16 * 60),
+      );
+      return [dateWithOffsetFrom(localDate, -1), localDate].flatMap(
+        (occurrenceDate) => {
+          const fastStart = new Date(`${occurrenceDate}T${startTime}:00`);
+          const fastEnd = new Date(
+            fastStart.getTime() + fastingMinutes * 60000,
+          );
+          return [
+            ...endpoint(
+              `fast:planned:start:${metric.id}:${occurrenceDate}`,
+              "Fast starts",
+              fastStart,
+              metric.color,
+            ),
+            ...endpoint(
+              `fast:planned:end:${metric.id}:${occurrenceDate}`,
+              "Fast ends",
+              fastEnd,
+              "#E58A3B",
+            ),
+          ];
+        },
+      );
     });
-  if (logged.length) return logged;
-  const startTime = metric.fastingSettings?.startTime ?? "20:00";
-  const fastingMinutes = Math.max(
-    15,
-    Math.min(1425, metric.fastingSettings?.fastingMinutes ?? 16 * 60),
-  );
-  return [dateWithOffsetFrom(localDate, -1), localDate].flatMap(
-    (occurrenceDate) => {
-      const fastStart = new Date(`${occurrenceDate}T${startTime}:00`);
-      const fastEnd = new Date(fastStart.getTime() + fastingMinutes * 60000);
-      return [
-        ...endpoint(
-          `fast:planned:start:${occurrenceDate}`,
-          "Fast starts",
-          fastStart,
-          metric.color,
-        ),
-        ...endpoint(
-          `fast:planned:end:${occurrenceDate}`,
-          "Fast ends",
-          fastEnd,
-          "#E58A3B",
-        ),
-      ];
-    },
-  );
 }
 
 export function scheduleEventsForDate(
@@ -320,14 +384,14 @@ export function scheduleEventsForDate(
   const previousLocalDate = dateWithOffsetFrom(localDate, -1);
   const nextLocalDate = dateWithOffsetFrom(localDate, 1);
   const entryLogs: ScheduleEvent[] = state.entries.flatMap((entry) => {
+    const metric = state.metrics.find((item) => item.id === entry.metricId);
     if (
       entry.userId !== state.currentUserId ||
       ![previousLocalDate, localDate, nextLocalDate].includes(entry.localDate) ||
-      entry.metricId === "intermittent_fasting" ||
+      Boolean(metric?.fastingSettings) ||
       isScheduleNoiseEntry(entry)
     )
       return [];
-    const metric = state.metrics.find((item) => item.id === entry.metricId);
     if (!metric || metric.dataType === "calculated") return [];
     if (
       childNutritionIds.has(metric.id) &&

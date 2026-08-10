@@ -1,9 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { formatClockTime } from "@/src/domain/date";
+import {
+  advanceTwelveHourDial,
+  formatClockTime,
+  type TwelveHourDialCursor,
+} from "@/src/domain/date";
 import { palette, useAppColors } from "@/src/theme";
 
 const DAY_MINUTES = 24 * 60;
@@ -12,6 +16,7 @@ const CENTER = DIAL_SIZE / 2;
 const SEGMENTS = 48;
 const SEGMENT_RADIUS = 88;
 const HANDLE_RADIUS = 88;
+const HALF_DAY_MINUTES = 12 * 60;
 
 function parseClock(value: string) {
   const [hour, minute] = value.split(":").map(Number);
@@ -28,8 +33,10 @@ function elapsedFrom(start: number, end: number) {
   return (end - start + DAY_MINUTES) % DAY_MINUTES;
 }
 
-function point(minutes: number, radius: number) {
-  const angle = (minutes / DAY_MINUTES) * Math.PI * 2 - Math.PI / 2;
+function point(minutes: number, radius: number, cycleMinutes = DAY_MINUTES) {
+  const normalized =
+    ((minutes % cycleMinutes) + cycleMinutes) % cycleMinutes;
+  const angle = (normalized / cycleMinutes) * Math.PI * 2 - Math.PI / 2;
   return {
     left: CENTER + Math.cos(angle) * radius,
     top: CENTER + Math.sin(angle) * radius,
@@ -78,6 +85,14 @@ export function FastingClockEditor({
   const dialRef = useRef<View>(null);
   const centerRef = useRef({ x: 0, y: 0 });
   const draftRef = useRef({ start: draftStart, duration: draftDuration });
+  const startCursorRef = useRef<TwelveHourDialCursor>({
+    dialMinutes: draftStart % HALF_DAY_MINUTES,
+    absoluteMinutes: draftStart,
+  });
+  const endCursorRef = useRef<TwelveHourDialCursor>({
+    dialMinutes: (draftStart + draftDuration) % HALF_DAY_MINUTES,
+    absoluteMinutes: (draftStart + draftDuration) % DAY_MINUTES,
+  });
   const onChangeRef = useRef(onChange);
   draftRef.current = { start: draftStart, duration: draftDuration };
   onChangeRef.current = onChange;
@@ -89,27 +104,49 @@ export function FastingClockEditor({
     );
   }, [fastingMinutes, startTime]);
 
-  const measureCenter = () =>
+  const measureCenter = useCallback(() =>
     dialRef.current?.measureInWindow((x, y, width, height) => {
       centerRef.current = { x: x + width / 2, y: y + height / 2 };
-    });
+    }), []);
 
-  const minutesAt = (pageX: number, pageY: number) => {
+  const minutesAt = useCallback((pageX: number, pageY: number) => {
     const angle = Math.atan2(
       pageY - centerRef.current.y,
       pageX - centerRef.current.x,
     );
     const clockwise = ((angle + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2));
-    return (Math.round((clockwise / (Math.PI * 2)) * 96) * 15) % DAY_MINUTES;
-  };
+    const cycle = timeFormat === "12h" ? HALF_DAY_MINUTES : DAY_MINUTES;
+    return (
+      Math.round((clockwise / (Math.PI * 2)) * (cycle / 15)) * 15
+    ) % cycle;
+  }, [timeFormat]);
 
   const startDrag = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
-        onPanResponderGrant: measureCenter,
+        onPanResponderGrant: () => {
+          measureCenter();
+          startCursorRef.current = {
+            dialMinutes: draftRef.current.start % HALF_DAY_MINUTES,
+            absoluteMinutes: draftRef.current.start,
+          };
+        },
         onPanResponderMove: (event) => {
-          const next = minutesAt(event.nativeEvent.pageX, event.nativeEvent.pageY);
+          const dialMinutes = minutesAt(
+            event.nativeEvent.pageX,
+            event.nativeEvent.pageY,
+          );
+          if (timeFormat === "12h") {
+            startCursorRef.current = advanceTwelveHourDial(
+              dialMinutes,
+              startCursorRef.current,
+            );
+          }
+          const next =
+            timeFormat === "12h"
+              ? startCursorRef.current.absoluteMinutes
+              : dialMinutes;
           draftRef.current = { ...draftRef.current, start: next };
           setDraftStart(next);
         },
@@ -120,15 +157,36 @@ export function FastingClockEditor({
       }),
     // The responder reads current drafts through refs, avoiding a new native
     // gesture object for every 15-minute movement.
-    [],
+    [measureCenter, minutesAt, timeFormat],
   );
   const endDrag = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
-        onPanResponderGrant: measureCenter,
+        onPanResponderGrant: () => {
+          measureCenter();
+          const absoluteMinutes =
+            (draftRef.current.start + draftRef.current.duration) % DAY_MINUTES;
+          endCursorRef.current = {
+            dialMinutes: absoluteMinutes % HALF_DAY_MINUTES,
+            absoluteMinutes,
+          };
+        },
         onPanResponderMove: (event) => {
-          const end = minutesAt(event.nativeEvent.pageX, event.nativeEvent.pageY);
+          const dialMinutes = minutesAt(
+            event.nativeEvent.pageX,
+            event.nativeEvent.pageY,
+          );
+          if (timeFormat === "12h") {
+            endCursorRef.current = advanceTwelveHourDial(
+              dialMinutes,
+              endCursorRef.current,
+            );
+          }
+          const end =
+            timeFormat === "12h"
+              ? endCursorRef.current.absoluteMinutes
+              : dialMinutes;
           const next = Math.max(
             60,
             Math.min(23 * 60, elapsedFrom(draftRef.current.start, end)),
@@ -141,12 +199,21 @@ export function FastingClockEditor({
           onChangeRef.current(clockValue(next.start), next.duration);
         },
       }),
-    [],
+    [measureCenter, minutesAt, timeFormat],
   );
 
   const end = (draftStart + draftDuration) % DAY_MINUTES;
-  const startPoint = point(draftStart, HANDLE_RADIUS);
-  const endPoint = point(end, HANDLE_RADIUS);
+  const dialCycle = timeFormat === "12h" ? HALF_DAY_MINUTES : DAY_MINUTES;
+  const startPoint = point(
+    draftStart,
+    timeFormat === "12h" ? 76 : HANDLE_RADIUS,
+    dialCycle,
+  );
+  const endPoint = point(
+    end,
+    timeFormat === "12h" ? 94 : HANDLE_RADIUS,
+    dialCycle,
+  );
   const formattedStart = formatClockTime(clockValue(draftStart), timeFormat, locale);
   const formattedEnd = formatClockTime(clockValue(end), timeFormat, locale);
 
@@ -173,9 +240,14 @@ export function FastingClockEditor({
         <View style={styles.body}>
           <View ref={dialRef} style={styles.dial}>
             {Array.from({ length: SEGMENTS }, (_, index) => {
-              const minutes = (index / SEGMENTS) * DAY_MINUTES;
-              const location = point(minutes, SEGMENT_RADIUS);
-              const inFast = elapsedFrom(draftStart, minutes) < draftDuration;
+              const minutes = (index / SEGMENTS) * dialCycle;
+              const location = point(minutes, SEGMENT_RADIUS, dialCycle);
+              const inFast =
+                timeFormat === "12h"
+                  ? elapsedFrom(draftStart, minutes) < draftDuration ||
+                    elapsedFrom(draftStart, minutes + HALF_DAY_MINUTES) <
+                      draftDuration
+                  : elapsedFrom(draftStart, minutes) < draftDuration;
               return (
                 <View
                   key={index}
@@ -192,8 +264,13 @@ export function FastingClockEditor({
                 />
               );
             })}
-            {[0, 6, 12, 18].map((hour) => {
-              const location = point(hour * 60, 67);
+            {(timeFormat === "12h"
+              ? Array.from({ length: 12 }, (_, index) => index + 1)
+              : [0, 6, 12, 18]
+            ).map((hour) => {
+              const minutes =
+                timeFormat === "12h" ? (hour % 12) * 60 : hour * 60;
+              const location = point(minutes, 67, dialCycle);
               return (
                 <Text
                   key={hour}
@@ -205,13 +282,7 @@ export function FastingClockEditor({
                   ]}
                 >
                   {timeFormat === "12h"
-                    ? hour === 0
-                      ? "12a"
-                      : hour === 12
-                        ? "12p"
-                        : hour < 12
-                          ? `${hour}a`
-                          : `${hour - 12}p`
+                    ? new Intl.NumberFormat(locale).format(hour)
                     : String(hour).padStart(2, "0")}
                 </Text>
               );
@@ -229,6 +300,7 @@ export function FastingClockEditor({
               {...startDrag.panHandlers}
               accessibilityLabel="Start fast"
               accessibilityRole="adjustable"
+              accessibilityValue={{ text: formattedStart }}
               style={[
                 styles.handle,
                 {
@@ -245,6 +317,7 @@ export function FastingClockEditor({
               {...endDrag.panHandlers}
               accessibilityLabel="End fast"
               accessibilityRole="adjustable"
+              accessibilityValue={{ text: formattedEnd }}
               style={[
                 styles.handle,
                 {

@@ -6,6 +6,18 @@ const MANUAL_FAST_PREFIX = "fasting-manual-";
 const DAY_MINUTES = 24 * 60;
 const MINUTE_MS = 60_000;
 
+function automaticFastEntryId(metricId: string, localDate: string) {
+  return metricId === "intermittent_fasting"
+    ? `${AUTO_FAST_PREFIX}${localDate}`
+    : `${AUTO_FAST_PREFIX}${metricId}:${localDate}`;
+}
+
+function manualFastEntryId(metricId: string, suffix: string | number) {
+  return metricId === "intermittent_fasting"
+    ? `${MANUAL_FAST_PREFIX}${suffix}`
+    : `${MANUAL_FAST_PREFIX}${metricId}:${suffix}`;
+}
+
 export type AutomaticFastProgress = {
   active: boolean;
   mode?: "manual" | "automatic";
@@ -73,7 +85,11 @@ function foodEntriesThrough(
       const recordedAtMs = new Date(entry.recordedAt).getTime();
       return Number.isFinite(recordedAtMs) && recordedAtMs <= nowMs;
     })
-    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+    .sort(
+      (left, right) =>
+        new Date(left.recordedAt).getTime() -
+        new Date(right.recordedAt).getTime(),
+    );
 }
 
 function elapsedMinutes(startedAt: Date, endedAt: Date) {
@@ -366,7 +382,7 @@ export function endManualFast(
   const progress = automaticFastProgress(state, state.currentUserId, now, metricId);
   const startedAt = validDate(progress.startedAt);
   if (!metric || !progress.active || !startedAt || startedAt >= now) return state;
-  const id = `${MANUAL_FAST_PREFIX}${now.getTime()}`;
+  const id = manualFastEntryId(metric.id, now.getTime());
   const entry = completedFastEntry(
     state,
     metric,
@@ -408,23 +424,14 @@ export function endManualFast(
  * Rebuilds automatic fasting completions from food history and closes an
  * active manual session at the first food only when Auto from meals is on.
  */
-export function reconcileAutomaticFasting(
+function reconcileAutomaticFastingMetric(
   state: AppState,
+  metric: MetricDefinition,
+  foods: MetricEntry[],
+  foodsByDate: Map<string, MetricEntry[]>,
+  previousFoodByEntry: Map<MetricEntry, MetricEntry | undefined>,
   changedEntries?: MetricEntry[],
 ): AppState {
-  const metric = fastingMetric(state);
-  if (!metric?.fastingSettings?.automaticFoodBreak) return state;
-
-  const foods = state.entries
-    .filter((entry) => isFoodEntry(entry, state.currentUserId))
-    .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
-  const foodsByDate = new Map<string, MetricEntry[]>();
-  foods.forEach((entry) => {
-    const day = foodsByDate.get(entry.localDate) ?? [];
-    day.push(entry);
-    foodsByDate.set(entry.localDate, day);
-  });
-
   let next = state;
   let runtime = state.settings.fastingRuntimeByMetric?.[metric.id];
   let runtimeStart = validDate(runtime?.startedAt);
@@ -435,7 +442,10 @@ export function reconcileAutomaticFasting(
     runtime.endedByFoodEntryId &&
     !foods.some((entry) => entry.id === runtime!.endedByFoodEntryId)
   ) {
-    const removedId = `${MANUAL_FAST_PREFIX}food-${runtime.endedByFoodEntryId}`;
+    const removedId = manualFastEntryId(
+      metric.id,
+      `food-${runtime.endedByFoodEntryId}`,
+    );
     runtime = { startedAt: runtime.startedAt, startedManually: true };
     next = withRuntime(
       {
@@ -458,7 +468,7 @@ export function reconcileAutomaticFasting(
     );
     if (!runtime.endedAt && foodAfterStart) {
       const endedAt = new Date(foodAfterStart.recordedAt);
-      const id = `${MANUAL_FAST_PREFIX}food-${foodAfterStart.id}`;
+      const id = manualFastEntryId(metric.id, `food-${foodAfterStart.id}`);
       const entry = completedFastEntry(
         state,
         metric,
@@ -476,7 +486,10 @@ export function reconcileAutomaticFasting(
               (candidate) =>
                 !(
                   candidate.userId === state.currentUserId &&
-                  candidate.id.startsWith(`${MANUAL_FAST_PREFIX}food-`)
+                  candidate.metricId === metric.id &&
+                  candidate.id.startsWith(
+                    manualFastEntryId(metric.id, "food-"),
+                  )
                 ),
             ),
             entry,
@@ -490,7 +503,7 @@ export function reconcileAutomaticFasting(
           endedByFoodEntryId: foodAfterStart.id,
           suppressAutomaticUntil: nextScheduledStart(
             endedAt,
-            metric.fastingSettings.startTime,
+            metric.fastingSettings?.startTime ?? "20:00",
           ).toISOString(),
         },
       );
@@ -508,6 +521,7 @@ export function reconcileAutomaticFasting(
     next.entries.forEach((entry) => {
       if (
         entry.userId === state.currentUserId &&
+        entry.metricId === metric.id &&
         entry.id.startsWith(AUTO_FAST_PREFIX)
       )
         requestedDates.add(entry.localDate);
@@ -517,7 +531,7 @@ export function reconcileAutomaticFasting(
   let entries = [...next.entries];
   let changed = next !== state;
   requestedDates.forEach((localDate) => {
-    const automaticId = `${AUTO_FAST_PREFIX}${localDate}`;
+    const automaticId = automaticFastEntryId(metric.id, localDate);
     const automaticIndex = entries.findIndex(
       (entry) =>
         entry.userId === state.currentUserId && entry.id === automaticId,
@@ -539,9 +553,7 @@ export function reconcileAutomaticFasting(
     }
 
     const endedAt = new Date(firstFood.recordedAt);
-    const previousLastFood = foods
-      .filter((food) => new Date(food.recordedAt) < endedAt)
-      .at(-1);
+    const previousLastFood = previousFoodByEntry.get(firstFood);
     const startedAt = previousLastFood
       ? new Date(previousLastFood.recordedAt)
       : scheduledFastStart(
@@ -571,6 +583,60 @@ export function reconcileAutomaticFasting(
   });
 
   return changed ? { ...next, entries } : next;
+}
+
+/**
+ * Reconciles every enabled fasting tracker after a food change, or one
+ * explicitly requested tracker after its own settings/runtime changes.
+ * Food rows are indexed once so duplicate/custom fasting trackers do not add
+ * repeated scans of the full entry history.
+ */
+export function reconcileAutomaticFasting(
+  state: AppState,
+  changedEntries?: MetricEntry[],
+  metricId?: string,
+): AppState {
+  const metrics = state.metrics.filter(
+    (metric) =>
+      Boolean(metric.fastingSettings?.automaticFoodBreak) &&
+      (!metricId || metric.id === metricId),
+  );
+  if (!metrics.length) return state;
+
+  const foods = state.entries
+    .filter((entry) => isFoodEntry(entry, state.currentUserId))
+    .sort(
+      (left, right) =>
+        new Date(left.recordedAt).getTime() -
+        new Date(right.recordedAt).getTime(),
+    );
+  const foodsByDate = new Map<string, MetricEntry[]>();
+  const previousFoodByEntry = new Map<MetricEntry, MetricEntry | undefined>();
+  let previousEarlierFood: MetricEntry | undefined;
+  let previousTimestamp: number | undefined;
+  foods.forEach((entry, index) => {
+    const timestamp = new Date(entry.recordedAt).getTime();
+    if (previousTimestamp !== undefined && timestamp > previousTimestamp)
+      previousEarlierFood = foods[index - 1];
+    const day = foodsByDate.get(entry.localDate) ?? [];
+    day.push(entry);
+    foodsByDate.set(entry.localDate, day);
+    previousFoodByEntry.set(entry, previousEarlierFood);
+    previousTimestamp = timestamp;
+  });
+
+  return metrics.reduce(
+    (next, metric) =>
+      reconcileAutomaticFastingMetric(
+        next,
+        metric,
+        foods,
+        foodsByDate,
+        previousFoodByEntry,
+        changedEntries,
+      ),
+    state,
+  );
 }
 
 /** Backward-compatible entry point used by Health Connect import paths. */

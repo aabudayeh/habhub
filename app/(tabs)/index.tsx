@@ -1602,9 +1602,15 @@ function TrackerRow({
     item.name.trim().toLowerCase() === "blood pressure" ||
     (item.healthMapping?.dataType === "blood_pressure" &&
       item.healthMapping.field !== "diastolic");
-  const isFasting = item.id === "intermittent_fasting";
+  const isFasting = Boolean(item.fastingSettings);
   const fastingProgress = isFasting
-    ? fastingProgressForDate(state, state.currentUserId, day)
+    ? fastingProgressForDate(
+        state,
+        state.currentUserId,
+        day,
+        new Date(),
+        item.id,
+      )
     : undefined;
   const diastolic = isBloodPressure
     ? state.metrics.find(
@@ -1717,6 +1723,9 @@ function TrackerRow({
       }
       style={[
         styles.row,
+        !editing && historyRange !== "off" && historyExpanded
+          ? styles.rowWithHistory
+          : null,
         {
           height,
           backgroundColor: cardComplete
@@ -2715,6 +2724,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  rowWithHistory: {
+    borderBottomWidth: 0,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
   drag: {
     width: 30,
     height: 42,
@@ -2787,12 +2801,11 @@ const styles = StyleSheet.create({
   todayHistory: {
     borderWidth: 1,
     borderTopWidth: 0,
-    borderBottomLeftRadius: 14,
-    borderBottomRightRadius: 14,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    marginTop: -8,
-    paddingTop: 11,
+    paddingTop: 8,
   },
   remove: {
     width: 25,

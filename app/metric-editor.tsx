@@ -325,6 +325,15 @@ export default function TrackerEditor() {
   const [goalProgressMode, setGoalProgressMode] = useState(
     tracker?.goalProgressMode ?? "daily",
   );
+  const [adaptiveTargetEnabled, setAdaptiveTargetEnabled] = useState(
+    tracker?.adaptiveGoalTarget?.enabled ?? false,
+  );
+  const [adaptiveTargetStatistic, setAdaptiveTargetStatistic] = useState<
+    "average" | "median"
+  >(tracker?.adaptiveGoalTarget?.statistic ?? "average");
+  const [adaptiveTargetPeriod, setAdaptiveTargetPeriod] = useState<
+    "week" | "month" | "year" | "all_time"
+  >(tracker?.adaptiveGoalTarget?.period ?? "month");
   const existingDiastolic = sourceMetrics.find(
     (item) => item.id === "blood_pressure_diastolic",
   );
@@ -384,6 +393,8 @@ export default function TrackerEditor() {
   const [aggregationOpen, setAggregationOpen] = useState(false);
   const [rankingOpen, setRankingOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
+  const [adaptiveStatisticOpen, setAdaptiveStatisticOpen] = useState(false);
+  const [adaptivePeriodOpen, setAdaptivePeriodOpen] = useState(false);
   const [visualsOpen, setVisualsOpen] = useState(false);
   const [detailDayVisual, setDetailDayVisual] = useState<
     "progress" | "completion" | "none"
@@ -438,6 +449,7 @@ export default function TrackerEditor() {
     tracker?.fastingSettings?.automaticFoodBreak ?? true,
   );
   const isFastingTracker =
+    Boolean(tracker?.fastingSettings) ||
     (presetId || tracker?.id) === "intermittent_fasting";
   const fastingDurationMinutes = Math.max(
     15,
@@ -626,6 +638,9 @@ export default function TrackerEditor() {
     goalKind,
     goal,
     goalProgressMode,
+    adaptiveTargetEnabled,
+    adaptiveTargetStatistic,
+    adaptiveTargetPeriod,
     diastolicGoal,
     diastolicMin,
     rangeMin,
@@ -713,6 +728,9 @@ export default function TrackerEditor() {
     setGoalKind("at_least");
     setGoal("");
     setGoalProgressMode("daily");
+    setAdaptiveTargetEnabled(false);
+    setAdaptiveTargetStatistic("average");
+    setAdaptiveTargetPeriod("month");
     setRangeGoal(false);
     setRangeMin("");
     setRangeMax("");
@@ -759,6 +777,11 @@ export default function TrackerEditor() {
     setGoalKind(preset.goal.kind);
     setGoal(String(preset.goal.target));
     setGoalProgressMode(preset.goalProgressMode ?? "daily");
+    setAdaptiveTargetEnabled(preset.adaptiveGoalTarget?.enabled ?? false);
+    setAdaptiveTargetStatistic(
+      preset.adaptiveGoalTarget?.statistic ?? "average",
+    );
+    setAdaptiveTargetPeriod(preset.adaptiveGoalTarget?.period ?? "month");
     if (preset.templateId === "blood_pressure_systolic") {
       setDiastolicGoal("80");
       setDiastolicMin("60");
@@ -981,6 +1004,19 @@ export default function TrackerEditor() {
             : goalKind,
         target: Number.isFinite(target) ? target : 0,
       },
+      adaptiveGoalTarget:
+        dataType === "number" &&
+        goalEnabled &&
+        !rangeGoal &&
+        goalProgressMode !== "journey" &&
+        !isFastingTracker &&
+        !["weight", "food"].includes(presetId || tracker?.id || "")
+          ? {
+              enabled: adaptiveTargetEnabled,
+              statistic: adaptiveTargetStatistic,
+              period: adaptiveTargetPeriod,
+            }
+          : undefined,
       goalEnabled,
       goalProgressMode:
         goalEnabled && dataType === "number" && !rangeGoal
@@ -1976,6 +2012,71 @@ export default function TrackerEditor() {
                 colors={colors}
                 accent={accent}
               />
+            </View>
+          ) : null}
+          {dataType === "number" &&
+          goalEnabled &&
+          !isFastingTracker &&
+          !rangeGoal &&
+          goalProgressMode !== "journey" &&
+          !["weight", "food"].includes(presetId || tracker?.id || "") ? (
+            <View
+              style={[styles.advancedSection, { borderColor: colors.border }]}
+            >
+              <View style={[styles.switchRow, { borderColor: colors.border }]}>
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Automatic target
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Use your own completed history. The manual target remains
+                    the fallback when no earlier data is available.
+                  </Text>
+                </View>
+                <Switch
+                  value={adaptiveTargetEnabled}
+                  onValueChange={setAdaptiveTargetEnabled}
+                />
+              </View>
+              {adaptiveTargetEnabled ? (
+                <View style={styles.visualChoices}>
+                  <ChoicePicker
+                    label="Calculate with"
+                    value={adaptiveTargetStatistic}
+                    open={adaptiveStatisticOpen}
+                    setOpen={setAdaptiveStatisticOpen}
+                    options={[
+                      { id: "average", label: "Average" },
+                      { id: "median", label: "Median" },
+                    ]}
+                    onChange={(value) =>
+                      setAdaptiveTargetStatistic(value as "average" | "median")
+                    }
+                    colors={colors}
+                    accent={accent}
+                  />
+                  <ChoicePicker
+                    label="History"
+                    value={adaptiveTargetPeriod}
+                    open={adaptivePeriodOpen}
+                    setOpen={setAdaptivePeriodOpen}
+                    options={[
+                      { id: "week", label: "Previous week" },
+                      { id: "month", label: "Previous month" },
+                      { id: "year", label: "Previous year" },
+                      { id: "all_time", label: "All earlier data" },
+                    ]}
+                    onChange={(value) =>
+                      setAdaptiveTargetPeriod(
+                        value as "week" | "month" | "year" | "all_time",
+                      )
+                    }
+                    colors={colors}
+                    accent={accent}
+                    help="Week, month and year use the last fully completed calendar period."
+                  />
+                </View>
+              ) : null}
             </View>
           ) : null}
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>

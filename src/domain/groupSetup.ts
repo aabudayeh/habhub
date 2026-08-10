@@ -93,6 +93,9 @@ export function newMetricFromDefinition(
     dataType: metric.dataType,
     aggregation: metric.aggregation,
     goal: { ...metric.goal },
+    adaptiveGoalTarget: metric.adaptiveGoalTarget
+      ? { ...metric.adaptiveGoalTarget }
+      : undefined,
     goalEnabled: metric.goalEnabled,
     goalRange: metric.goalRange ? { ...metric.goalRange } : undefined,
     category: metric.category,

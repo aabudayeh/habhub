@@ -24,6 +24,35 @@ export function formatClockTime(
   });
 }
 
+export type TwelveHourDialCursor = {
+  dialMinutes: number;
+  absoluteMinutes: number;
+};
+
+/**
+ * Advances a 12-hour clock hand without losing its AM/PM half-day.
+ * The hand position is 0..719, while the returned absolute value remains
+ * 0..1439 so the rest of the app can keep using its normal 24-hour storage.
+ */
+export function advanceTwelveHourDial(
+  dialMinutes: number,
+  cursor: TwelveHourDialCursor,
+): TwelveHourDialCursor {
+  const halfDayMinutes = 12 * 60;
+  const dayMinutes = 24 * 60;
+  const normalizedDial =
+    ((Math.round(dialMinutes) % halfDayMinutes) + halfDayMinutes) %
+    halfDayMinutes;
+  let delta = normalizedDial - cursor.dialMinutes;
+  if (delta > halfDayMinutes / 2) delta -= halfDayMinutes;
+  else if (delta < -halfDayMinutes / 2) delta += halfDayMinutes;
+  return {
+    dialMinutes: normalizedDial,
+    absoluteMinutes:
+      ((cursor.absoluteMinutes + delta) % dayMinutes + dayMinutes) % dayMinutes,
+  };
+}
+
 export function dateKeyWithOffset(days: number): string {
   const date = new Date();
   date.setHours(12, 0, 0, 0);

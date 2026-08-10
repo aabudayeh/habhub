@@ -23,48 +23,125 @@ type Shape = {
 function bodyShapes(variant: BodyVariant): Shape[] {
   const female = variant === "female";
   const male = variant === "male";
-  const torsoLeft = female ? 35 : male ? 29 : 33;
-  const torsoWidth = female ? 46 : male ? 58 : 50;
-  const hipLeft = female ? 29 : male ? 35 : 32;
-  const hipWidth = female ? 58 : male ? 46 : 52;
+  const shoulderLeft = female ? 27 : male ? 22 : 25;
+  const shoulderRight = female ? 69 : male ? 74 : 71;
+  const chestLeft = female ? 34 : male ? 30 : 32;
+  const chestWidth = female ? 48 : male ? 56 : 52;
+  const waistLeft = female ? 39 : male ? 35 : 37;
+  const waistWidth = female ? 38 : male ? 46 : 42;
+  const hipLeft = female ? 29 : male ? 34 : 32;
+  const hipWidth = female ? 58 : male ? 48 : 52;
+  const armLeft = male ? 19 : 22;
+  const armRight = male ? 84 : 81;
 
   return [
-    { left: 44, top: 3, width: 28, height: 28, borderRadius: 14 },
-    { left: 52, top: 29, width: 12, height: 13, borderRadius: 6 },
+    // An overlapping set of soft ovals creates one organic silhouette while
+    // remaining fully code-native on Android, iOS, and web.
+    { left: 44.5, top: 2, width: 27, height: 31, borderRadius: 14 },
+    { left: 52, top: 30, width: 12, height: 15, borderRadius: 7 },
     {
-      left: torsoLeft,
-      top: 38,
-      width: torsoWidth,
-      height: female ? 65 : 68,
-      borderRadius: female ? 23 : 20,
+      left: shoulderLeft,
+      top: 43,
+      width: 21,
+      height: 20,
+      borderRadius: 10,
+    },
+    {
+      left: shoulderRight,
+      top: 43,
+      width: 21,
+      height: 20,
+      borderRadius: 10,
+    },
+    {
+      left: chestLeft,
+      top: 40,
+      width: chestWidth,
+      height: female ? 56 : 59,
+      borderRadius: female ? 24 : 25,
+    },
+    {
+      left: waistLeft,
+      top: 78,
+      width: waistWidth,
+      height: 39,
+      borderRadius: 18,
     },
     {
       left: hipLeft,
-      top: 91,
+      top: 101,
       width: hipWidth,
-      height: female ? 35 : 30,
-      borderRadius: female ? 18 : 14,
+      height: female ? 29 : 27,
+      borderRadius: female ? 16 : 14,
     },
     {
-      left: male ? 18 : 21,
-      top: 43,
+      left: armLeft,
+      top: 47,
       width: 13,
-      height: 78,
-      borderRadius: 7,
-      rotate: "7deg",
+      height: 49,
+      borderRadius: 9,
+      rotate: "11deg",
     },
     {
-      left: male ? 85 : 82,
-      top: 43,
+      left: armRight,
+      top: 47,
       width: 13,
-      height: 78,
-      borderRadius: 7,
-      rotate: "-7deg",
+      height: 49,
+      borderRadius: 9,
+      rotate: "-11deg",
     },
-    { left: 35, top: 111, width: 19, height: 70, borderRadius: 10 },
-    { left: 62, top: 111, width: 19, height: 70, borderRadius: 10 },
-    { left: 29, top: 174, width: 27, height: 12, borderRadius: 7 },
-    { left: 60, top: 174, width: 27, height: 12, borderRadius: 7 },
+    {
+      left: male ? 15 : 18,
+      top: 86,
+      width: 11,
+      height: 45,
+      borderRadius: 8,
+      rotate: "5deg",
+    },
+    {
+      left: male ? 89 : 86,
+      top: 86,
+      width: 11,
+      height: 45,
+      borderRadius: 8,
+      rotate: "-5deg",
+    },
+    { left: male ? 14 : 17, top: 124, width: 11, height: 16, borderRadius: 8 },
+    { left: male ? 90 : 87, top: 124, width: 11, height: 16, borderRadius: 8 },
+    {
+      left: female ? 32 : 34,
+      top: 116,
+      width: female ? 21 : 20,
+      height: 48,
+      borderRadius: 12,
+      rotate: "2deg",
+    },
+    {
+      left: female ? 63 : 62,
+      top: 116,
+      width: female ? 21 : 20,
+      height: 48,
+      borderRadius: 12,
+      rotate: "-2deg",
+    },
+    {
+      left: female ? 34 : 35,
+      top: 153,
+      width: female ? 17 : 18,
+      height: 31,
+      borderRadius: 10,
+      rotate: "2deg",
+    },
+    {
+      left: female ? 65 : 63,
+      top: 153,
+      width: female ? 17 : 18,
+      height: 31,
+      borderRadius: 10,
+      rotate: "-2deg",
+    },
+    { left: female ? 28 : 29, top: 178, width: 27, height: 10, borderRadius: 7 },
+    { left: female ? 61 : 60, top: 178, width: 27, height: 10, borderRadius: 7 },
   ];
 }
 

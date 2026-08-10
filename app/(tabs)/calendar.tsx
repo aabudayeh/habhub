@@ -22,7 +22,11 @@ import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { InfoPopover } from "@/src/components/InfoPopover";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
-import { scheduleEventsForDate, ScheduleEvent } from "@/src/domain/calendar";
+import {
+  scheduleEventsForDate,
+  scheduleEventsForHourSlot,
+  ScheduleEvent,
+} from "@/src/domain/calendar";
 import {
   calendarWeekRange,
   dateKey,
@@ -87,6 +91,7 @@ function SchedulePage() {
   const [draftFilter, setDraftFilter] = useState<ScheduleViewFilter>();
   const [slotMenu, setSlotMenu] = useState<{
     date: string;
+    hour: number | null;
     events: ScheduleEvent[];
   }>();
   const [expandedRows, setExpandedRows] = useState<Set<string>>(
@@ -166,6 +171,18 @@ function SchedulePage() {
       ]),
     ) as Record<string, ScheduleEvent[]>;
   }, [dates, eventMatchesActiveFilter, state]);
+  const hourSlotEventsByDate = useMemo(
+    () =>
+      Object.fromEntries(
+        dates.map((date) => [
+          date,
+          HOURS.map((hour) =>
+            scheduleEventsForHourSlot(eventsByDate[date] ?? [], hour),
+          ),
+        ]),
+      ) as Record<string, ScheduleEvent[][]>,
+    [dates, eventsByDate],
+  );
   const swipeGesture = usePageSwipeGesture({
     enabled: !editing,
     onPrevious: () => {
@@ -326,6 +343,35 @@ function SchedulePage() {
     dates[dates.length - 1],
     locale,
   )}`;
+  const uniqueSlotEvents = [
+    ...new Map(
+      (slotMenu?.events ?? []).map((event) => [event.id, event]),
+    ).values(),
+  ];
+  const slotSections = [
+    {
+      id: "todos",
+      title: "To-Dos",
+      icon: "checkbox-outline" as const,
+      events: uniqueSlotEvents.filter((event) => event.kind === "todo"),
+    },
+    {
+      id: "reminders",
+      title: "Reminders",
+      icon: "notifications-outline" as const,
+      events: uniqueSlotEvents.filter(
+        (event) => event.kind === "tracker" || event.kind === "reminder",
+      ),
+    },
+    {
+      id: "activities",
+      title: "Activities",
+      icon: "pulse-outline" as const,
+      events: uniqueSlotEvents.filter((event) =>
+        ["log", "gym", "fasting"].includes(event.kind),
+      ),
+    },
+  ];
   return (
     <GestureDetector gesture={swipeGesture}>
     <View style={styles.pageGesture}>
@@ -553,11 +599,15 @@ function SchedulePage() {
               events={(eventsByDate[date] ?? []).filter(
                 (event) => !event.time,
               )}
+              slotEvents={(eventsByDate[date] ?? []).filter(
+                (event) => !event.time,
+              )}
               date={date}
               editing={editing}
               expanded={expandedRows.has("all")}
-              onOpen={openEvent}
-              onOpenSlot={(events) => setSlotMenu({ date, events })}
+              onOpenSlot={(events) =>
+                setSlotMenu({ date, hour: null, events })
+              }
               onCreate={(date) => createInSlot(date)}
             />
           ))}
@@ -612,11 +662,13 @@ function SchedulePage() {
                     event.time &&
                     Number(event.time.slice(0, 2)) === hour,
                 )}
+                slotEvents={hourSlotEventsByDate[date]?.[hour] ?? []}
                 date={date}
                 editing={editing}
                 expanded={expandedRows.has(String(hour))}
-                onOpen={openEvent}
-                onOpenSlot={(events) => setSlotMenu({ date, events })}
+                onOpenSlot={(events) =>
+                  setSlotMenu({ date, hour, events })
+                }
                 onCreate={(date) =>
                   createInSlot(
                     date,
@@ -649,8 +701,21 @@ function SchedulePage() {
             <View style={styles.slotHeader}>
               <View style={styles.filterManageCopy}>
                 <Text style={[styles.slotTitle, { color: colors.ink }]}>Schedule items</Text>
-                <Text style={[styles.slotDate, { color: colors.muted }]}>
-                  {slotMenu ? friendlyDate(slotMenu.date, locale) : ""}
+                <Text
+                  translate={false}
+                  style={[styles.slotDate, { color: colors.muted }]}
+                >
+                  {slotMenu
+                    ? `${t(friendlyDate(slotMenu.date, locale))} · ${
+                        slotMenu.hour === null
+                          ? t("All day")
+                          : scheduleSlotWindow(
+                              slotMenu.hour,
+                              state.settings.timeFormat,
+                              locale,
+                            )
+                      }`
+                    : ""}
                 </Text>
               </View>
               <Pressable onPress={() => setSlotMenu(undefined)} hitSlop={10}>
@@ -662,36 +727,99 @@ function SchedulePage() {
               contentContainerStyle={styles.slotListContent}
               nestedScrollEnabled
             >
-              {(slotMenu?.events ?? []).map((event) => (
-                <Pressable
-                  key={event.id}
-                  onPress={() => {
-                    const selectedDate = slotMenu?.date ?? dateKey();
-                    setSlotMenu(undefined);
-                    openEvent(event, selectedDate);
-                  }}
-                  style={[styles.slotItem, { borderColor: colors.border }]}
+              {slotSections.map((section) => (
+                <View
+                  key={section.id}
+                  style={[styles.slotSection, { borderColor: colors.border }]}
                 >
-                  <View
-                    style={[
-                      styles.slotMarker,
-                      { backgroundColor: event.color ?? accent },
-                    ]}
-                  />
-                  <View style={styles.filterManageCopy}>
-                    <Text
-                      translate={false}
-                      numberOfLines={2}
-                      style={[styles.slotItemTitle, { color: colors.ink }]}
+                  <View style={styles.slotSectionHeader}>
+                    <View
+                      style={[
+                        styles.slotSectionIcon,
+                        { backgroundColor: `${accent}18` },
+                      ]}
                     >
-                      {event.title}
+                      <Ionicons name={section.icon} size={14} color={accent} />
+                    </View>
+                    <Text style={[styles.slotSectionTitle, { color: colors.ink }]}>
+                      {t(section.title)}
                     </Text>
-                    <Text style={[styles.slotItemMeta, { color: colors.muted }]}>
-                      {`${slotMenu ? t(friendlyDate(slotMenu.date, locale)) : ""} · ${t(scheduleEventWindow(event, state.settings.timeFormat, locale))}`}
-                    </Text>
+                    <View
+                      style={[
+                        styles.slotCount,
+                        { backgroundColor: colors.canvas },
+                      ]}
+                    >
+                      <Text
+                        translate={false}
+                        style={[styles.slotCountText, { color: colors.muted }]}
+                      >
+                        {section.events.length}
+                      </Text>
+                    </View>
                   </View>
-                  <Ionicons name="chevron-forward" size={15} color={colors.faint} />
-                </Pressable>
+                  {section.events.length ? (
+                    <View style={styles.slotSectionItems}>
+                      {section.events.map((event) => (
+                        <Pressable
+                          key={event.id}
+                          onPress={() => {
+                            const selectedDate = slotMenu?.date ?? dateKey();
+                            setSlotMenu(undefined);
+                            openEvent(event, selectedDate);
+                          }}
+                          style={[
+                            styles.slotItem,
+                            { borderColor: colors.border },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.slotMarker,
+                              { backgroundColor: event.color ?? accent },
+                            ]}
+                          />
+                          <View style={styles.filterManageCopy}>
+                            <Text
+                              translate={false}
+                              numberOfLines={2}
+                              style={[
+                                styles.slotItemTitle,
+                                { color: colors.ink },
+                              ]}
+                            >
+                              {event.title}
+                            </Text>
+                            <Text
+                              translate={false}
+                              style={[
+                                styles.slotItemMeta,
+                                { color: colors.muted },
+                              ]}
+                            >
+                              {`${t(friendlyDate(slotMenu?.date ?? dateKey(), locale))} · ${t(
+                                scheduleEventWindow(
+                                  event,
+                                  state.settings.timeFormat,
+                                  locale,
+                                ),
+                              )}`}
+                            </Text>
+                          </View>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={15}
+                            color={colors.faint}
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={[styles.slotEmpty, { color: colors.faint }]}>
+                      No items in this slot
+                    </Text>
+                  )}
+                </View>
               ))}
             </ScrollView>
           </Pressable>
@@ -862,32 +990,37 @@ function ScheduleViewEditor({
 
 function ScheduleCell({
   events,
+  slotEvents,
   date,
   editing,
   expanded,
-  onOpen,
   onOpenSlot,
   onCreate,
 }: {
   events: ScheduleEvent[];
+  slotEvents: ScheduleEvent[];
   date: string;
   editing: boolean;
   expanded: boolean;
-  onOpen: (event: ScheduleEvent, date: string) => void;
   onOpenSlot: (events: ScheduleEvent[]) => void;
   onCreate: (date: string) => void;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const lastTap = useRef(0);
-  const cellLongPress = useRef(false);
-  const eventLongPress = useRef(false);
   const eventTap = useRef<{ id: string; at: number } | undefined>(undefined);
   const eventTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
   const cellTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
+  );
+  React.useEffect(
+    () => () => {
+      if (eventTimer.current) clearTimeout(eventTimer.current);
+      if (cellTimer.current) clearTimeout(cellTimer.current);
+    },
+    [],
   );
   const durationEvents = events.filter((event) => event.durationMinutes);
   const pointEvents = events.filter((event) => !event.durationMinutes);
@@ -906,22 +1039,17 @@ function ScheduleCell({
     if (eventTimer.current) clearTimeout(eventTimer.current);
     eventTimer.current = setTimeout(() => {
       eventTap.current = undefined;
-      if (events.length > 1) onOpenSlot(events);
-      else onOpen(event, date);
+      onOpenSlot(slotEvents);
     }, 325);
   };
   return (
     <Pressable
       delayLongPress={380}
-      onLongPress={() => {
-        cellLongPress.current = true;
+      onLongPress={(press) => {
+        press.stopPropagation();
         onCreate(date);
       }}
       onPress={() => {
-        if (cellLongPress.current) {
-          cellLongPress.current = false;
-          return;
-        }
         const now = Date.now();
         if (now - lastTap.current < 320) {
           if (cellTimer.current) clearTimeout(cellTimer.current);
@@ -932,7 +1060,7 @@ function ScheduleCell({
           if (cellTimer.current) clearTimeout(cellTimer.current);
           cellTimer.current = setTimeout(() => {
             lastTap.current = 0;
-            if (events.length > 1) onOpenSlot(events);
+            onOpenSlot(slotEvents);
           }, 325);
         }
       }}
@@ -944,9 +1072,16 @@ function ScheduleCell({
         return (
           <Pressable
             key={event.id}
+            delayLongPress={380}
             onPress={(press) => {
               press.stopPropagation();
               pressEvent(event);
+            }}
+            onLongPress={(press) => {
+              press.stopPropagation();
+              if (eventTimer.current) clearTimeout(eventTimer.current);
+              eventTap.current = undefined;
+              onCreate(date);
             }}
             style={[
               styles.event,
@@ -998,15 +1133,10 @@ function ScheduleCell({
             onPress={(press) => {
               press.stopPropagation();
               // Nested event presses must not also open the whole slot menu.
-              if (eventLongPress.current) {
-                eventLongPress.current = false;
-                return;
-              }
               pressEvent(event);
             }}
             onLongPress={(press) => {
               press.stopPropagation();
-              eventLongPress.current = true;
               if (eventTimer.current) clearTimeout(eventTimer.current);
               eventTap.current = undefined;
               onCreate(date);
@@ -1038,7 +1168,7 @@ function ScheduleCell({
         <Pressable
           onPress={(press) => {
             press.stopPropagation();
-            onOpenSlot(events);
+            onOpenSlot(slotEvents);
           }}
         >
           <Text style={[styles.more, { color: colors.muted }]}>
@@ -1069,6 +1199,25 @@ function scheduleEventWindow(
     locale,
   );
   return `${start} – ${end}${nextDay}`;
+}
+
+function scheduleSlotWindow(
+  hour: number,
+  timeFormat: "12h" | "24h" | undefined,
+  locale?: string,
+) {
+  const start = formatClockTime(
+    `${String(hour).padStart(2, "0")}:00`,
+    timeFormat ?? "24h",
+    locale,
+  );
+  const nextHour = (hour + 1) % 24;
+  const end = formatClockTime(
+    `${String(nextHour).padStart(2, "0")}:00`,
+    timeFormat ?? "24h",
+    locale,
+  );
+  return `${start} – ${end}`;
 }
 
 function formatHour(hour: number, format: "12h" | "24h" | undefined) {
@@ -1263,7 +1412,38 @@ const styles = StyleSheet.create({
   slotTitle: { fontSize: 14, fontWeight: "900" },
   slotDate: { fontSize: 9, fontWeight: "700", marginTop: 1 },
   slotList: { flexGrow: 0 },
-  slotListContent: { gap: 6 },
+  slotListContent: { gap: 8, paddingBottom: 2 },
+  slotSection: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 15,
+    padding: 8,
+    gap: 7,
+  },
+  slotSectionHeader: {
+    minHeight: 26,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  slotSectionIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  slotSectionTitle: { flex: 1, fontSize: 10, fontWeight: "900" },
+  slotCount: {
+    minWidth: 24,
+    height: 22,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  slotCountText: { fontSize: 8, fontWeight: "900" },
+  slotSectionItems: { gap: 6 },
+  slotEmpty: { fontSize: 8, fontWeight: "700", paddingHorizontal: 3 },
   slotItem: {
     minHeight: 52,
     borderWidth: 1,

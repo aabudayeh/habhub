@@ -574,11 +574,17 @@ export default function TrackerDetail() {
           ? palette.red
           : colors.border;
   const canSkipToday = day === dateKey() && tracker.goalEnabled !== false;
-  const isFasting = tracker.id === "intermittent_fasting";
+  const isFasting = Boolean(tracker.fastingSettings);
   const automaticFasting =
     isFasting && tracker.fastingSettings?.automaticFoodBreak === true;
   const fastingProgress = isFasting
-    ? fastingProgressForDate(state, state.currentUserId, day)
+    ? fastingProgressForDate(
+        state,
+        state.currentUserId,
+        day,
+        new Date(),
+        tracker.id,
+      )
     : undefined;
   const canControlFast =
     isFasting && dates.length === 1 && day === dateKey();

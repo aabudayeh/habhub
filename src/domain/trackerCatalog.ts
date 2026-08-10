@@ -83,6 +83,9 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         dataType: item.dataType,
         aggregation: item.aggregation,
         goal: { ...item.goal },
+        adaptiveGoalTarget: item.adaptiveGoalTarget
+          ? { ...item.adaptiveGoalTarget }
+          : undefined,
         goalEnabled: item.goalEnabled,
         goalRange: item.goalRange ? { ...item.goalRange } : undefined,
         goalProgressMode: item.goalProgressMode,

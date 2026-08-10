@@ -83,7 +83,7 @@ function LogScreen() {
         (metric) =>
           metric.dataType !== "calculated" &&
           metric.id !== "steps" &&
-          metric.id !== "intermittent_fasting" &&
+          !metric.fastingSettings &&
           metric.id !== "blood_pressure_diastolic" &&
           !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
           metric.manualEntry !== false,
@@ -96,7 +96,7 @@ function LogScreen() {
         .filter(
           (metric) =>
             !isInternalTracker(metric) &&
-            metric.id !== "intermittent_fasting",
+            !metric.fastingSettings,
         )
         .sort((a, b) => a.order - b.order),
     [state.metrics],

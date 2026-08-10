@@ -562,7 +562,7 @@ export async function syncGoalNotifications(state: AppState) {
         !(metric.reminders?.some((item) => item.enabled) || metric.reminder?.enabled) ||
         metric.goalEnabled === false ||
         (!isMetricTrackedOnDate(state, metric, localDate) &&
-          metric.id !== "intermittent_fasting") ||
+          !metric.fastingSettings) ||
         (offset === 0 && scheduledGoalReached(state, metric, state.currentUserId, localDate))
       ) continue;
       const configured = metric.reminders?.length ? metric.reminders : metric.reminder ? [metric.reminder] : [];
@@ -583,7 +583,7 @@ export async function syncGoalNotifications(state: AppState) {
         const content = localizedContent(
           state,
           reminder.label ?? `${localizeMetricName(state.settings.language, metric)} reminder`,
-          metric.id === "intermittent_fasting" && reminder.label
+          metric.fastingSettings && reminder.label
             ? reminder.label
             : goalReminderBody(state, metric, localDate),
         );

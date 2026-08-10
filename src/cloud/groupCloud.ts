@@ -557,6 +557,7 @@ function metricFromRow(row: Record<string, any>): MetricDefinition {
     aggregation: row.aggregation_method,
     rankingDirection: row.ranking_direction,
     goal: configuration.goal ?? { kind: "at_least", target: 1 },
+    adaptiveGoalTarget: configuration.adaptiveGoalTarget,
     goalProgressMode:
       configuration.goalProgressMode ?? preset?.goalProgressMode,
     goalEnabled:
@@ -614,6 +615,7 @@ function metricRow(groupId: string, metric: MetricDefinition) {
     default_visibility: metric.defaultVisibility,
     configuration: {
       goal: metric.goal,
+      adaptiveGoalTarget: metric.adaptiveGoalTarget,
       goalProgressMode: metric.goalProgressMode,
       goalEnabled: metric.goalEnabled,
       goalRange: metric.goalRange,

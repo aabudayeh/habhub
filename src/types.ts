@@ -9,6 +9,13 @@ export type Aggregation = "sum" | "latest" | "average" | "max" | "min";
 export type RankingDirection = "higher" | "lower" | "closest";
 export type GoalKind = "at_least" | "at_most" | "exact" | "complete";
 export type GoalProgressMode = "daily" | "journey";
+export type AdaptiveGoalTarget = {
+  /** Opt-in. When disabled or history is unavailable, `goal.target` remains the fallback. */
+  enabled: boolean;
+  statistic: "average" | "median";
+  /** The last fully completed calendar period, or all earlier logged history. */
+  period: "week" | "month" | "year" | "all_time";
+};
 export type DashboardSection = "today" | "group" | "insights";
 export type ActivityLevel =
   | "sedentary"
@@ -178,6 +185,8 @@ export type MetricDefinition = {
   aggregation: Aggregation;
   rankingDirection: RankingDirection;
   goal: MetricGoal;
+  /** Optional history-based target for ordinary numerical trackers. */
+  adaptiveGoalTarget?: AdaptiveGoalTarget;
   /**
    * `daily` compares each reading with that day's target. `journey` treats
    * the first recorded reading as 0% and the target as 100%.
@@ -924,6 +933,7 @@ export type NewMetric = Pick<
   | "dataType"
   | "aggregation"
   | "goal"
+  | "adaptiveGoalTarget"
   | "rankingDirection"
   | "defaultVisibility"
   | "goalEnabled"

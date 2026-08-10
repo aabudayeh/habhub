@@ -1,5 +1,12 @@
 import { AppState, MetricDefinition, MetricEntry } from "@/src/types";
-import { dateKey, dateRangeEnding, dateWithOffsetFrom } from "./date";
+import {
+  calendarWeekRange,
+  dateKey,
+  dateRangeEnding,
+  dateWithOffsetFrom,
+  monthDateRange,
+  yearDateRange,
+} from "./date";
 import {
   dailyFoodGoal,
   energyFormulaVariables,
@@ -37,8 +44,20 @@ type MetricDateCache<T> = WeakMap<
 
 const metricValueCache: MetricDateCache<number> = new WeakMap();
 const goalTargetCache: MetricDateCache<number> = new WeakMap();
+const adaptivePeriodTargetCache: MetricDateCache<number | null> = new WeakMap();
 const applicabilityCache: MetricDateCache<boolean> = new WeakMap();
 const metricDataCache: MetricDateCache<boolean> = new WeakMap();
+
+type AdaptiveHistorySeries = {
+  dates: string[];
+  prefixSums: number[];
+  prefixMedians: number[];
+};
+
+const adaptiveAllTimeHistoryCache = new WeakMap<
+  AppState,
+  WeakMap<MetricDefinition, Map<string, AdaptiveHistorySeries>>
+>();
 
 function cachedMetricDateValue<T>(
   cache: MetricDateCache<T>,
@@ -158,11 +177,16 @@ export function metricValue(
     );
   }
   if (
-    metric.id === "intermittent_fasting" &&
+    Boolean(metric.fastingSettings) &&
     localDate === dateKey() &&
     entriesForDay(state.entries, metric.id, userId, localDate).length === 0
   ) {
-    const automatic = automaticFastProgress(state, userId);
+    const automatic = automaticFastProgress(
+      state,
+      userId,
+      new Date(),
+      metric.id,
+    );
     if (automatic.active) return automatic.minutes / 60;
   }
   if (metric.id === "cycle_day")
@@ -252,7 +276,7 @@ export function safeMetricValue(
   localDate: string,
 ): number {
   if (
-    metric.id === "intermittent_fasting" &&
+    Boolean(metric.fastingSettings) &&
     localDate === dateKey() &&
     entriesForDay(state.entries, metric.id, userId, localDate).length === 0
   )
@@ -271,6 +295,251 @@ export function safeMetricValue(
       }
     },
   );
+}
+
+function previousAdaptivePeriodDates(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  const period = metric.adaptiveGoalTarget?.period;
+  if (!period) return [];
+  if (period === "week") {
+    const currentStart = calendarWeekRange(
+      localDate,
+      state.settings.weekStartsOn ?? 1,
+    )[0];
+    return calendarWeekRange(
+      dateWithOffsetFrom(currentStart, -1),
+      state.settings.weekStartsOn ?? 1,
+    );
+  }
+  if (period === "month") {
+    const anchor = new Date(`${localDate}T12:00:00`);
+    return monthDateRange(
+      dateKey(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1, 12)),
+    );
+  }
+  if (period === "year") {
+    const year = new Date(`${localDate}T12:00:00`).getFullYear() - 1;
+    return yearDateRange(`${year}-01-01`);
+  }
+  return [];
+}
+
+function adaptiveValuesForDates(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  dates: string[],
+) {
+  return dates
+    .map((date) => {
+      if (hasMetricData(state, metric, userId, date))
+        return safeMetricValue(state, metric, userId, date);
+      return statusForDay(
+        state.dailyMetricStatuses,
+        state.group.id,
+        metric.id,
+        userId,
+        date,
+      )?.exactValue;
+    })
+    .filter((value): value is number =>
+      typeof value === "number" && Number.isFinite(value),
+    );
+}
+
+function pushHeap(heap: number[], value: number, maxHeap: boolean) {
+  heap.push(value);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    const ordered = maxHeap
+      ? heap[parent] >= heap[index]
+      : heap[parent] <= heap[index];
+    if (ordered) break;
+    [heap[parent], heap[index]] = [heap[index], heap[parent]];
+    index = parent;
+  }
+}
+
+function popHeap(heap: number[], maxHeap: boolean) {
+  const root = heap[0];
+  const last = heap.pop();
+  if (last === undefined || heap.length === 0) return root;
+  heap[0] = last;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    let next = index;
+    if (
+      left < heap.length &&
+      (maxHeap ? heap[left] > heap[next] : heap[left] < heap[next])
+    )
+      next = left;
+    if (
+      right < heap.length &&
+      (maxHeap ? heap[right] > heap[next] : heap[right] < heap[next])
+    )
+      next = right;
+    if (next === index) break;
+    [heap[index], heap[next]] = [heap[next], heap[index]];
+    index = next;
+  }
+  return root;
+}
+
+function adaptiveAllTimeHistory(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+): AdaptiveHistorySeries {
+  let metrics = adaptiveAllTimeHistoryCache.get(state);
+  if (!metrics) {
+    metrics = new WeakMap();
+    adaptiveAllTimeHistoryCache.set(state, metrics);
+  }
+  let users = metrics.get(metric);
+  if (!users) {
+    users = new Map();
+    metrics.set(metric, users);
+  }
+  const cached = users.get(userId);
+  if (cached) return cached;
+
+  const candidateDates = new Set<string>();
+  entriesForMetric(state.entries, metric.id, userId).forEach((entry) =>
+    candidateDates.add(entry.localDate),
+  );
+  if (metric.gymMapping)
+    (state.gymSessions ?? []).forEach((session) => {
+      if (session.userId === userId) candidateDates.add(session.localDate);
+    });
+  state.dailyMetricStatuses.forEach((status) => {
+    if (
+      status.groupId === state.group.id &&
+      status.metricId === metric.id &&
+      status.userId === userId &&
+      status.exactValue !== undefined
+    )
+      candidateDates.add(status.localDate);
+  });
+
+  const datedValues = [...candidateDates]
+    .sort()
+    .map((date) => ({
+      date,
+      value: adaptiveValuesForDates(state, metric, userId, [date])[0],
+    }))
+    .filter(
+      (item): item is { date: string; value: number } =>
+        typeof item.value === "number" && Number.isFinite(item.value),
+    );
+  const lower: number[] = [];
+  const upper: number[] = [];
+  const prefixSums = [0];
+  const prefixMedians = [0];
+  datedValues.forEach(({ value }, index) => {
+    prefixSums.push(prefixSums[index] + value);
+    if (!lower.length || value <= lower[0]) pushHeap(lower, value, true);
+    else pushHeap(upper, value, false);
+    if (lower.length > upper.length + 1)
+      pushHeap(upper, popHeap(lower, true), false);
+    else if (upper.length > lower.length)
+      pushHeap(lower, popHeap(upper, false), true);
+    prefixMedians.push(
+      lower.length === upper.length
+        ? (lower[0] + upper[0]) / 2
+        : lower[0],
+    );
+  });
+  const series = {
+    dates: datedValues.map(({ date }) => date),
+    prefixSums,
+    prefixMedians,
+  };
+  users.set(userId, series);
+  return series;
+}
+
+function datesBefore(dates: string[], localDate: string) {
+  let low = 0;
+  let high = dates.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (dates[middle] < localDate) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function adaptivePeriodCacheKey(
+  state: AppState,
+  period: "week" | "month" | "year",
+  localDate: string,
+) {
+  if (period === "week")
+    return `week:${calendarWeekRange(localDate, state.settings.weekStartsOn ?? 1)[0]}`;
+  if (period === "month") return `month:${localDate.slice(0, 7)}`;
+  return `year:${localDate.slice(0, 4)}`;
+}
+
+function adaptiveGoalTargetFromHistory(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  const setting = metric.adaptiveGoalTarget;
+  if (
+    !setting?.enabled ||
+    metric.dataType !== "number" ||
+    metric.goalEnabled === false ||
+    metric.goalRange ||
+    metric.goalProgressMode === "journey" ||
+    metric.id === "weight" ||
+    metric.id === "food" ||
+    Boolean(metric.fastingSettings)
+  )
+    return undefined;
+
+  if (setting.period === "all_time") {
+    const history = adaptiveAllTimeHistory(state, metric, userId);
+    const count = datesBefore(history.dates, localDate);
+    if (!count) return undefined;
+    return setting.statistic === "median"
+      ? history.prefixMedians[count]
+      : history.prefixSums[count] / count;
+  }
+
+  const cached = cachedMetricDateValue(
+    adaptivePeriodTargetCache,
+    state,
+    metric,
+    userId,
+    `${adaptivePeriodCacheKey(state, setting.period, localDate)}:${setting.statistic}`,
+    () => {
+      const values = adaptiveValuesForDates(
+        state,
+        metric,
+        userId,
+        previousAdaptivePeriodDates(state, metric, userId, localDate),
+      );
+      if (!values.length) return null;
+      if (setting.statistic === "median") {
+        const sorted = [...values].sort((left, right) => left - right);
+        const middle = Math.floor(sorted.length / 2);
+        return sorted.length % 2
+          ? sorted[middle]
+          : (sorted[middle - 1] + sorted[middle]) / 2;
+      }
+      return values.reduce((sum, value) => sum + value, 0) / values.length;
+    },
+  );
+  return cached ?? undefined;
 }
 
 export function effectiveGoalTarget(
@@ -317,6 +586,13 @@ export function effectiveGoalTarget(
           ? Math.min(profile.targetWeightKg, startingWeight + planned)
           : Math.max(profile.targetWeightKg, startingWeight - planned);
       }
+      const adaptiveTarget = adaptiveGoalTargetFromHistory(
+        state,
+        metric,
+        userId,
+        localDate,
+      );
+      if (adaptiveTarget !== undefined) return adaptiveTarget;
       if (metric.id !== "food") return metric.goal.target;
       const exercise = state.metrics.find(
         (candidate) => candidate.id === "exercise",
@@ -871,9 +1147,9 @@ export function metricApplicableOnDate(
           todoAppearsOnDate(todo, localDate),
         );
       if (
-        metric.id === "intermittent_fasting" &&
+        Boolean(metric.fastingSettings) &&
         localDate === dateKey() &&
-        automaticFastProgress(state, userId).active
+        automaticFastProgress(state, userId, new Date(), metric.id).active
       )
         return true;
       if (hasSharedDailyStatus && userId !== state.currentUserId) return true;
@@ -892,9 +1168,9 @@ export function hasMetricData(
   localDate: string,
 ) {
   if (
-    metric.id === "intermittent_fasting" &&
+    Boolean(metric.fastingSettings) &&
     localDate === dateKey() &&
-    automaticFastProgress(state, userId).active
+    automaticFastProgress(state, userId, new Date(), metric.id).active
   )
     return true;
   return cachedMetricDateValue(
@@ -1453,8 +1729,14 @@ export function scheduledGoalReached(
     if (!metricApplicableOnDate(state, metric, userId, date)) return false;
     if (metric.id === "weight")
       return weightDailyGoalStatus(state, userId, date).reached;
-    if (metric.id === "intermittent_fasting") {
-      const fasting = fastingProgressForDate(state, userId, date);
+    if (metric.fastingSettings) {
+      const fasting = fastingProgressForDate(
+        state,
+        userId,
+        date,
+        new Date(),
+        metric.id,
+      );
       if (!fasting.startedAt) return false;
       return (
         fasting.minutes >= fasting.targetMinutes &&

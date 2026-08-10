@@ -876,8 +876,12 @@ function reducer(state: AppState, action: Action): AppState {
       const addedEntry = nextState.entries.at(-1)!;
       if (metric?.id === "food")
         nextState = reconcileAutomaticFasting(nextState, [addedEntry]);
-      else if (metric?.id === "intermittent_fasting")
-        nextState = reconcileAutomaticFasting(nextState);
+      else if (metric?.fastingSettings)
+        nextState = reconcileAutomaticFasting(
+          nextState,
+          undefined,
+          metric.id,
+        );
       if (
         metric?.id === "weight" &&
         typeof action.value === "number" &&
@@ -1105,13 +1109,17 @@ function reducer(state: AppState, action: Action): AppState {
         };
       }
       if (
-        action.metricId === "intermittent_fasting" &&
+        previousMetric?.fastingSettings &&
         !automaticFastingWasEnabled &&
         automaticFastingIsEnabled
       )
         next = reinstateAutomaticFasting(next, action.metricId);
-      if (action.metricId === "intermittent_fasting")
-        next = reconcileAutomaticFasting(next);
+      if (previousMetric?.fastingSettings)
+        next = reconcileAutomaticFasting(
+          next,
+          undefined,
+          action.metricId,
+        );
       if (!action.changes.activeFrom || !(state.trackedGoalPeriods[action.metricId]?.length))
         return next;
       return {
@@ -1209,9 +1217,13 @@ function reducer(state: AppState, action: Action): AppState {
                 : state.settings.dismissedHealthEntryIds,
           },
         };
-        return target.metricId === "food" ||
-          target.metricId === "intermittent_fasting"
-          ? reconcileAutomaticFasting(next, [target])
+        if (target.metricId === "food")
+          return reconcileAutomaticFasting(next, [target]);
+        return state.metrics.some(
+          (metric) =>
+            metric.id === target.metricId && Boolean(metric.fastingSettings),
+        )
+          ? reconcileAutomaticFasting(next, [target], target.metricId)
           : next;
       }
     case "skipGoal": {
@@ -1421,6 +1433,7 @@ function reducer(state: AppState, action: Action): AppState {
               ...personal,
               ...normalizedShared,
               goal: personal.goal,
+              adaptiveGoalTarget: personal.adaptiveGoalTarget,
               goalRange: personal.goalRange,
               goalEnabled: personal.goalEnabled,
               goalSchedule: personal.goalSchedule,
