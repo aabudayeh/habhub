@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "HabHub",
-    "slug": "metrally",
+    "slug": "habhub",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
@@ -17,7 +17,18 @@
       "infoPlist": {
         "NSHealthShareUsageDescription": "HabHub reads only the health categories you choose so it can update your private goals and permitted group progress.",
         "NSHealthUpdateUsageDescription": "HabHub does not write health data unless you explicitly choose a future export feature.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "ExpoLocalization_supportsRTL": true,
+        "CFBundleLocalizations": [
+          "en",
+          "ar",
+          "es",
+          "zh",
+          "sv",
+          "de",
+          "ru",
+          "fr"
+        ]
       }
     },
     "android": {
@@ -135,13 +146,13 @@
       "reactCompiler": true
     },
     "updates": {
-      "url": "https://u.expo.dev/f7411fe5-5319-4476-b70b-d7e3a4252a5c"
+      "url": "https://u.expo.dev/5dc65e73-0957-4441-b14c-4550d78a8bb7"
     },
-    "owner": "sethynos",
+    "owner": "sethypoo",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f7411fe5-5319-4476-b70b-d7e3a4252a5c"
+        "projectId": "5dc65e73-0957-4441-b14c-4550d78a8bb7"
       }
     }
   }
