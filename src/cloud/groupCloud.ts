@@ -1021,7 +1021,7 @@ async function groupMembers(groupIds: string[]) {
   const { data: profiles, error: profileError } = userIds.length
     ? await client
         .from("profiles")
-        .select("id, display_name, avatar_path")
+        .select("id, display_name, avatar_path, account_revision")
         .in("id", userIds)
     : { data: [], error: null };
   if (profileError) throw profileError;
@@ -1044,6 +1044,9 @@ async function groupMembers(groupIds: string[]) {
       lastSeenAt: membershipRow.last_seen_at ?? undefined,
       lastDataSyncedAt:
         membershipRow.last_data_synced_at ?? undefined,
+      profileRevision: Number.isFinite(Number(profile?.account_revision))
+        ? Number(profile?.account_revision)
+        : undefined,
       avatarStoragePath: profile?.avatar_path ?? undefined,
       avatarUri: profile?.avatar_path
         ? (urls.get(profile.avatar_path) ?? undefined)
@@ -1763,6 +1766,72 @@ export async function pushCloudRecentActivity(
   };
 }
 
+function currentAccountMember(state: AppState) {
+  return (
+    state.group.members.find(
+      (member) => member.id === state.currentUserId,
+    ) ??
+    state.groups
+      .flatMap((group) => group.members)
+      .find((member) => member.id === state.currentUserId)
+  );
+}
+
+function accountMetadataRpcParams(
+  state: AppState,
+  publishRevision: number,
+) {
+  const current = currentAccountMember(state);
+  if (!current)
+    throw new Error("The signed-in profile is not available locally yet.");
+  const profile = normalizeEnergyProfile(
+    state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile,
+  );
+  return {
+    p_expected_revision: publishRevision,
+    p_display_name: current.name,
+    p_avatar_path: current.avatarStoragePath ?? null,
+    p_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    p_energy_profile: {
+      age: profile.age,
+      biological_sex: profile.sex,
+      height_cm: profile.heightCm,
+      weight_kg: profile.weightKg,
+      target_weight_kg: profile.targetWeightKg,
+      activity_level: profile.activityLevel,
+      desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
+    },
+  };
+}
+
+/**
+ * Publish the small account-owned profile projection without loading or
+ * rewriting the active group's activity history. This is also used while the
+ * personal setup workspace is active, where no relational group push exists.
+ */
+export async function pushCloudAccountMetadata(
+  state: AppState,
+  accountRevision?: number,
+) {
+  const client = requireCloud();
+  const publishRevision = await resolveAccountRevision(
+    client,
+    state.currentUserId,
+    accountRevision,
+  );
+  const projection = await client.rpc("publish_account_workspace_metadata", {
+    ...accountMetadataRpcParams(state, publishRevision),
+    p_group_id: null,
+    p_expected_group_configuration_revision: null,
+    p_group_name: null,
+    p_group_template_name: null,
+    p_group_settings: null,
+    p_group_metrics: null,
+    p_member_roles: [],
+  });
+  if (projection.error) throw projection.error;
+}
+
 export async function pushCloudWorkspace(
   state: AppState,
   pushGroupConfiguration = true,
@@ -1814,26 +1883,10 @@ export async function pushCloudWorkspace(
     };
   const canManage = current.role === "owner" || current.role === "admin";
   const groupConfigurationPushed = canManage && pushGroupConfiguration;
-  const profile = normalizeEnergyProfile(
-    state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile,
-  );
   const metadataProjection = await client.rpc(
     "publish_account_workspace_metadata",
     {
-      p_expected_revision: publishRevision,
-      p_display_name: current.name,
-      p_avatar_path: current.avatarStoragePath ?? null,
-      p_timezone:
-        Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-      p_energy_profile: {
-        age: profile.age,
-        biological_sex: profile.sex,
-        height_cm: profile.heightCm,
-        weight_kg: profile.weightKg,
-        target_weight_kg: profile.targetWeightKg,
-        activity_level: profile.activityLevel,
-        desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
-      },
+      ...accountMetadataRpcParams(state, publishRevision),
       p_group_id: groupConfigurationPushed ? state.group.id : null,
       p_expected_group_configuration_revision: groupConfigurationPushed
         ? (state.group.configurationRevision ?? 0)

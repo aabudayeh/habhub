@@ -264,9 +264,20 @@ class HabHubNativeModule(
   fun reconcileWorkoutTimerNotification(identifier: String, promise: Promise) {
     thread(name = "habhub-workout-notification") {
       try {
-        promise.resolve(
-          HabHubWorkoutNotificationStore.reconcile(reactContext, identifier),
+        val reconciled = HabHubWorkoutNotificationStore.reconcile(
+          reactContext,
+          identifier,
         )
+        if (reconciled) {
+          // Expo and some OEM notification pipelines can perform a delayed
+          // rewrite after scheduleNotificationAsync has resolved. Keep the
+          // native stopwatch row authoritative through that handoff without
+          // blocking React or posting a second notification.
+          HabHubWorkoutNotificationStore.reconcileAsync(
+            reactContext.applicationContext,
+          )
+        }
+        promise.resolve(reconciled)
       } catch (_: Exception) {
         // Expo's notification remains usable if an OEM does not expose the
         // active row in time. Never reject the React call for this best-effort

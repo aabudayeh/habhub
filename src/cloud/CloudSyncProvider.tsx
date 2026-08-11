@@ -34,11 +34,19 @@ import {
   sendMembershipPush,
   touchCloudGroupPresence,
   pushCloudRecentActivity,
+  pushCloudAccountMetadata,
   pushCloudWorkspace,
   pushCloudMessagesNow,
 } from "@/src/cloud/groupCloud";
 import { createInitialState } from "@/src/data/seed";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import {
+  accountMemberProfile,
+  applyAccountMemberProfile,
+  type AccountMemberProfile,
+  mergeAccountMemberProfile,
+  profileProjectionLagsSnapshot,
+} from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import { suggestedAccountName } from "@/src/domain/profileName";
 import {
@@ -89,6 +97,7 @@ const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
 const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v2:";
 const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
+const ACCOUNT_METADATA_ACK_KEY_PREFIX = "habhub-account-metadata-ack-v1:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
 const MAX_GROUP_READ_RETRY_MS = 2 * 60 * 1000;
 const MAX_SURFACE_READ_RETRY_MS = 60 * 1000;
@@ -183,6 +192,7 @@ type SnapshotRow = {
 
 type CloudMergeBase = {
   version: 2;
+  accountProfile?: AccountMemberProfile | null;
   settings: Record<string, string>;
   collections: Record<string, Record<string, string>>;
 };
@@ -239,6 +249,17 @@ async function readCloudSnapshotAck(userId: string) {
 async function writeCloudSnapshotAck(userId: string, hash: string) {
   await AsyncStorage.setItem(
     `${CLOUD_SNAPSHOT_ACK_KEY_PREFIX}${userId}`,
+    hash,
+  );
+}
+
+async function readAccountMetadataAck(userId: string) {
+  return AsyncStorage.getItem(`${ACCOUNT_METADATA_ACK_KEY_PREFIX}${userId}`);
+}
+
+async function writeAccountMetadataAck(userId: string, hash: string) {
+  await AsyncStorage.setItem(
+    `${ACCOUNT_METADATA_ACK_KEY_PREFIX}${userId}`,
     hash,
   );
 }
@@ -649,6 +670,7 @@ function snapshotPayload(state: AppState): AppState {
       const {
         lastSeenAt: _presence,
         lastDataSyncedAt: _published,
+        profileRevision: _profileRevision,
         ...stableMember
       } = member;
       return stableMember.avatarStoragePath
@@ -659,6 +681,7 @@ function snapshotPayload(state: AppState): AppState {
       const {
         lastSeenAt: _presence,
         lastDataSyncedAt: _published,
+        profileRevision: _profileRevision,
         ...stableMember
       } = member;
       return stableMember;
@@ -672,6 +695,7 @@ function snapshotPayload(state: AppState): AppState {
         const {
           lastSeenAt: _presence,
           lastDataSyncedAt: _published,
+          profileRevision: _profileRevision,
           ...stableMember
         } = member;
         return stableMember;
@@ -784,6 +808,7 @@ function createCloudMergeBase(state: AppState): CloudMergeBase {
       : [];
   return {
     version: 2,
+    accountProfile: accountMemberProfile(payload),
     settings: hashRecord(payload.settings as unknown as Record<string, unknown>),
     collections: {
       energyProfiles: hashRecord(
@@ -852,6 +877,7 @@ function createCloudMergeBase(state: AppState): CloudMergeBase {
 
 const stableHashCache = new WeakMap<AppState, string>();
 const workspaceHashCache = new WeakMap<AppState, string>();
+const accountMetadataHashCache = new WeakMap<AppState, string>();
 
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
@@ -887,6 +913,9 @@ function stableHash(state: AppState) {
   const hash = valueHash({
     ...payload,
     settings,
+    // Cloud shells are reduced to ids below, so retain the account-owned
+    // identity explicitly in the private revision stream.
+    accountProfile: accountMemberProfile(payload),
     // Cloud group shells are hydrated from relational tables. Membership,
     // invites and admin-owned configuration changing on the server is not a
     // private account edit and must not re-open this device's outbox.
@@ -898,32 +927,31 @@ function stableHash(state: AppState) {
   return hash;
 }
 
+/** Small relational projection shared by every group and every device. */
+function accountMetadataHash(state: AppState) {
+  const cached = accountMetadataHashCache.get(state);
+  if (cached) return cached;
+  const hash = valueHash({
+    profile: accountMemberProfile(state),
+    energyProfile:
+      state.energyProfiles[state.currentUserId] ??
+      state.settings.energyProfile,
+  });
+  accountMetadataHashCache.set(state, hash);
+  return hash;
+}
+
 /** Only data represented by relational group tables belongs in a group push. */
 function workspaceHash(state: AppState) {
   const cached = workspaceHashCache.get(state);
   if (cached) return cached;
   const payload = snapshotPayload(state);
-  const currentMember = payload.group.members.find(
-    (member) => member.id === payload.currentUserId,
-  );
   const hash = valueHash({
     currentUserId: payload.currentUserId,
     groupId: payload.group.id,
-    // The group shell, membership list and shared tracker definitions are
-    // server-owned cache. Only this member's editable profile belongs in their
-    // workspace outbox; group configuration has its own explicit hash below.
-    currentMember: currentMember
-      ? {
-          id: currentMember.id,
-          name: currentMember.name,
-          initials: currentMember.initials,
-          color: currentMember.color,
-          avatarStoragePath: currentMember.avatarStoragePath,
-        }
-      : null,
-    energyProfile:
-      payload.energyProfiles[payload.currentUserId] ??
-      payload.settings.energyProfile,
+    // Profile and energy data use their own small global projection. Keeping
+    // them out of this hash prevents a rename from uploading a year of group
+    // activity or reopening the outbox once for every joined group.
     aliases: payload.settings.memberNicknamesByGroup[payload.group.id] ?? {},
     entries: payload.entries.filter(
       (entry) => entry.userId === payload.currentUserId,
@@ -1246,6 +1274,11 @@ function mergeStates(
   base?: CloudMergeBase | null,
 ): AppState {
   const groups = mergeById(remote.groups, local.groups);
+  const profile = mergeAccountMemberProfile(
+    accountMemberProfile(remote),
+    accountMemberProfile(local),
+    base?.accountProfile,
+  );
   const onboardingComplete =
     remote.settings.onboardingComplete ||
     local.settings.onboardingComplete;
@@ -1313,7 +1346,7 @@ function mergeStates(
     (item) => item.id,
     base?.collections.activityTimers,
   );
-  return {
+  const merged: AppState = {
     ...remote,
     ...local,
     settings,
@@ -1409,6 +1442,7 @@ function mergeStates(
     ),
     lastSavedAt: null,
   };
+  return applyAccountMemberProfile(merged, profile);
 }
 
 /** Native authorization and transient UI state belong to this device. */
@@ -1481,7 +1515,7 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
   const keepForeignStatuses = local.dailyMetricStatuses.filter(
     (item) => item.userId !== userId,
   );
-  return {
+  const accepted: AppState = {
     ...remoteWithDeviceSettings,
     group: activeGroup,
     groups,
@@ -1515,6 +1549,14 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
     ],
     lastSavedAt: null,
   };
+  // Cloud group shells are retained as a relational activity cache, but the
+  // signed-in member's account identity belongs to the accepted snapshot. If
+  // this is omitted, a clean second device can publish its stale cached name
+  // back over the newly saved one.
+  return applyAccountMemberProfile(
+    accepted,
+    accountMemberProfile(remoteWithDeviceSettings),
+  );
 }
 
 type MembershipRealtimeRow = {
@@ -1525,6 +1567,74 @@ type MembershipRealtimeRow = {
   last_seen_at?: string;
   last_data_synced_at?: string;
 };
+
+type ProfileRealtimeRow = {
+  id?: string;
+  display_name?: string;
+  avatar_path?: string | null;
+  account_revision?: number;
+};
+
+function applyProfileRealtimeRow(
+  state: AppState,
+  row: ProfileRealtimeRow,
+): AppState | null {
+  const userId = row.id;
+  const name = row.display_name?.trim();
+  const revision = Number(row.account_revision);
+  if (!userId || !name) return null;
+  let changed = false;
+  const updateGroup = (group: Group) => {
+    let groupChanged = false;
+    const updateMember = (member: Member) => {
+      if (member.id !== userId) return member;
+      if (
+        Number.isSafeInteger(revision) &&
+        Number.isSafeInteger(member.profileRevision) &&
+        revision < Number(member.profileRevision)
+      )
+        return member;
+      const avatarStoragePath = row.avatar_path ?? undefined;
+      const initials = name
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part[0] ?? "")
+        .join("")
+        .toUpperCase();
+      if (
+        member.name === name &&
+        member.initials === initials &&
+        member.avatarStoragePath === avatarStoragePath &&
+        (!Number.isSafeInteger(revision) ||
+          member.profileRevision === revision)
+      )
+        return member;
+      changed = true;
+      groupChanged = true;
+      return {
+        ...member,
+        name,
+        initials,
+        avatarStoragePath,
+        avatarUri:
+          member.avatarStoragePath === avatarStoragePath
+            ? member.avatarUri
+            : undefined,
+        profileRevision: Number.isSafeInteger(revision)
+          ? revision
+          : member.profileRevision,
+      };
+    };
+    const members = group.members.map(updateMember);
+    const pendingMembers = group.pendingMembers?.map(updateMember);
+    return groupChanged ? { ...group, members, pendingMembers } : group;
+  };
+  const groups = state.groups.map(updateGroup);
+  const group =
+    groups.find((candidate) => candidate.id === state.group.id) ??
+    updateGroup(state.group);
+  return changed ? { ...state, groups, group } : state;
+}
 
 function applyMembershipRealtimeRow(
   state: AppState,
@@ -1754,6 +1864,8 @@ function mergeWorkspaceWithoutRegression(
   remote: AppState,
   live: AppState,
   preserveLocalGroupConfiguration = false,
+  preserveLocalAccountProfile = false,
+  minimumAccountProfileRevision?: number,
 ): AppState {
   const remoteGroupMetricIds = new Set(
     (remote.group.metricConfiguration ?? []).map((metric) => metric.id),
@@ -1797,16 +1909,18 @@ function mergeWorkspaceWithoutRegression(
       activeFrom: metric.activeFrom,
     };
   });
-  // The group shell is server-owned, but an account name/avatar selected on
-  // this device is an offline-capable pending write. Preserve those fields
-  // while the signed URL/profile row catches up instead of flashing the old
-  // avatar back over the local selection.
-  const liveCurrentMember = [live.group, ...live.groups]
-    .flatMap((group) => group.members)
-    .find((member) => member.id === live.currentUserId);
-  const preserveLocalAvatar = isUploadableLocalUri(
-    liveCurrentMember?.avatarUri ?? null,
+  const remoteCurrentMember = remote.group.members.find(
+    (member) => member.id === live.currentUserId,
   );
+  const remoteProfileRevision = Number(remoteCurrentMember?.profileRevision);
+  const remoteProfileLagsSnapshot = profileProjectionLagsSnapshot(
+    remoteProfileRevision,
+    minimumAccountProfileRevision,
+  );
+  const selectedAccountProfile =
+    preserveLocalAccountProfile || remoteProfileLagsSnapshot
+    ? accountMemberProfile(live)
+    : (accountMemberProfile(remote) ?? accountMemberProfile(live));
   const localGroupConfiguration =
     preserveLocalGroupConfiguration && live.group.id === remote.group.id
       ? live.group
@@ -1833,27 +1947,7 @@ function mergeWorkspaceWithoutRegression(
         })),
       }
     : remote.group;
-  const remoteGroup: Group = liveCurrentMember
-    ? {
-        ...remoteGroupBase,
-        members: remoteGroupBase.members.map((member) =>
-          member.id === live.currentUserId
-            ? {
-                ...member,
-                name: liveCurrentMember.name,
-                initials: liveCurrentMember.initials,
-                color: liveCurrentMember.color,
-                avatarUri: preserveLocalAvatar
-                  ? liveCurrentMember.avatarUri
-                  : member.avatarUri,
-                avatarStoragePath: preserveLocalAvatar
-                  ? liveCurrentMember.avatarStoragePath
-                  : member.avatarStoragePath,
-              }
-            : member,
-        ),
-      }
-    : remoteGroupBase;
+  const remoteGroup = remoteGroupBase;
   const groupMemberIds = new Set(
     remoteGroup.members.map((member) => member.id),
   );
@@ -1898,7 +1992,7 @@ function mergeWorkspaceWithoutRegression(
     live.dailyMetricStatuses,
     remote.dailyMetricStatuses,
   );
-  return {
+  const merged: AppState = {
     ...remote,
     ...live,
     group: remoteGroup,
@@ -1927,6 +2021,7 @@ function mergeWorkspaceWithoutRegression(
       : remote.selectedGroupMetricId,
     lastSavedAt: null,
   };
+  return applyAccountMemberProfile(merged, selectedAccountProfile);
 }
 
 async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
@@ -2084,6 +2179,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const revisionRef = useRef(0);
   const hashRef = useRef<string | null>(null);
   const mergeBaseRef = useRef<CloudMergeBase | null>(null);
+  const accountMetadataHashRef = useRef<string | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
   const workspaceAckHashesRef = useRef(new Map<string, string>());
   const groupConfigurationAckHashesRef = useRef(
@@ -2191,6 +2287,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const hasUnsyncedLocalChanges = useCallback(() => {
     const live = stateRef.current;
     if (stableHash(live) !== hashRef.current) return true;
+    if (accountMetadataHash(live) !== accountMetadataHashRef.current)
+      return true;
     if (!isCloudGroupId(live.group.id)) return false;
     return (
       live.settings.pendingGroupConfigurationIds?.includes(live.group.id) ===
@@ -2212,10 +2310,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         (explicitlyPending ||
           (acknowledged !== null &&
             groupConfigurationHash(live) !== acknowledged));
+      const preserveLocalAccountProfile =
+        accountMetadataHash(live) !== accountMetadataHashRef.current;
       const next = mergeWorkspaceWithoutRegression(
         remote,
         live,
         preserveLocalGroupConfiguration,
+        preserveLocalAccountProfile,
+        revisionRef.current,
       );
       if (!preserveLocalGroupConfiguration) {
         const nextConfigurationHash = groupConfigurationHash(next);
@@ -2643,6 +2745,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     stateRef.current = clean;
     revisionRef.current = 0;
     hashRef.current = null;
+    accountMetadataHashRef.current = null;
     workspaceHashRef.current = null;
     groupConfigurationHashRef.current = null;
     initializedUserRef.current = null;
@@ -2771,6 +2874,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         : acceptCleanRemoteState(resolvedRemote, stateRef.current);
       const resolvedHash = stableHash(resolved);
       hashRef.current = remoteHash;
+      if (!preserveLocalAccount) {
+        const acceptedMetadataHash = accountMetadataHash(resolved);
+        accountMetadataHashRef.current = acceptedMetadataHash;
+        void writeAccountMetadataAck(
+          operationUserId,
+          acceptedMetadataHash,
+        ).catch(() => undefined);
+      }
       workspaceHashRef.current = isCloudGroupId(resolved.group.id)
         ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
         : null;
@@ -3058,6 +3169,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // cannot temporarily re-publish older visibility or deleted content.
         await persistPrivateSnapshot();
         if (!operationIsCurrent()) return;
+        const pushedAccountMetadataHash = accountMetadataHash(candidate);
+        const accountMetadataNeedsUpload =
+          pushedAccountMetadataHash !== accountMetadataHashRef.current;
+        let accountMetadataSynced = !accountMetadataNeedsUpload;
+        const acknowledgeAccountMetadata = () => {
+          accountMetadataHashRef.current = pushedAccountMetadataHash;
+          return writeAccountMetadataAck(
+            operationUserId,
+            pushedAccountMetadataHash,
+          ).catch(() => undefined);
+        };
         let nextWorkspaceHash = workspaceHash(candidate);
         const nextGroupConfigurationHash = groupConfigurationHash(candidate);
         const pushedGroupId = candidate.group.id;
@@ -3129,6 +3251,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 "Group settings are waiting for administrator access.",
               );
             workspaceWasUploaded = true;
+            accountMetadataSynced = true;
+            await acknowledgeAccountMetadata();
+            if (!operationIsCurrent()) return;
             if (workspaceResult.activityVersion !== undefined)
               activityVersionByGroupRef.current.set(
                 candidate.group.id,
@@ -3368,6 +3493,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             replaceState(candidate);
           }
         }
+        // A profile rename/body-profile edit is global account metadata, not a
+        // group-history operation. Publish it even while the personal setup
+        // workspace is active, and independently while a heavy group retry is
+        // backed off. One persisted hash coalesces all such edits.
+        if (
+          accountMetadataNeedsUpload &&
+          !accountMetadataSynced &&
+          (!groupWorkspaceNeedsUpload || deferGroupRetry)
+        ) {
+          await pushCloudAccountMetadata(candidate, revisionRef.current);
+          if (!operationIsCurrent()) return;
+          accountMetadataSynced = true;
+          await acknowledgeAccountMetadata();
+          if (!operationIsCurrent()) return;
+        }
         await persistPrivateSnapshot();
         if (!operationIsCurrent()) return;
         hashRef.current = candidateHash;
@@ -3389,19 +3529,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         recordServerSyncedAt(syncedAt);
         const latestState = stateRef.current;
         const hasNewerLocalState = stableHash(latestState) !== candidateHash;
+        const hasPendingAccountMetadata =
+          accountMetadataHash(latestState) !==
+          accountMetadataHashRef.current;
         const hasPendingWorkspace =
           isCloudGroupId(latestState.group.id) &&
           (latestState.settings.pendingGroupConfigurationIds?.includes(
             latestState.group.id,
           ) === true ||
             workspaceHash(latestState) !== workspaceHashRef.current);
-        const needsFollowUpSync = hasNewerLocalState || hasPendingWorkspace;
+        const needsFollowUpSync =
+          hasNewerLocalState ||
+          hasPendingAccountMetadata ||
+          hasPendingWorkspace;
         setPendingChanges(
-          !workspaceSynced || needsFollowUpSync,
+          !workspaceSynced || !accountMetadataSynced || needsFollowUpSync,
         );
         setStatus("synced");
         if (!deferGroupRetry) setErrorMessage(workspaceWarning);
-        if (workspaceSynced) {
+        if (workspaceSynced && accountMetadataSynced) {
           cloudRetryAttemptRef.current = 0;
           const retryAt = needsFollowUpSync ? Date.now() + 500 : 0;
           nextRetryAtRef.current = retryAt;
@@ -3580,6 +3726,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         workspaceAckHashesRef.current = await readWorkspaceAcks(user.id);
         groupConfigurationAckHashesRef.current =
           await readGroupConfigurationAcks(user.id);
+        accountMetadataHashRef.current = await readAccountMetadataAck(user.id);
         const acknowledgedSnapshotHash = await readCloudSnapshotAck(user.id);
         mergeBaseRef.current = await readCloudMergeBase(user.id);
         if (
@@ -3700,6 +3847,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             hashRef.current = correctedAccountState
               ? null
               : remoteHash;
+            if (!correctedAccountState && !localWasDirty) {
+              const acceptedMetadataHash = accountMetadataHash(resolved);
+              accountMetadataHashRef.current = acceptedMetadataHash;
+              void writeAccountMetadataAck(
+                user.id,
+                acceptedMetadataHash,
+              ).catch(() => undefined);
+            }
             workspaceHashRef.current = isCloudGroupId(resolved.group.id)
               ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
               : null;
@@ -3992,6 +4147,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         autoSyncLastChangeAtRef.current = null;
         const live = stateRef.current;
         const privateSnapshotChanged = stableHash(live) !== hashRef.current;
+        const accountMetadataChanged =
+          accountMetadataHash(live) !== accountMetadataHashRef.current;
         const groupWorkspaceChanged =
           isCloudGroupId(live.group.id) &&
           (live.settings.pendingGroupConfigurationIds?.includes(
@@ -3999,7 +4156,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           ) === true ||
             workspaceUploadRequiredGroupsRef.current.has(live.group.id) ||
             workspaceHash(live) !== workspaceHashRef.current);
-        if (!privateSnapshotChanged && !groupWorkspaceChanged) return;
+        if (
+          !privateSnapshotChanged &&
+          !accountMetadataChanged &&
+          !groupWorkspaceChanged
+        )
+          return;
         setPendingChanges(true);
         performSync().catch(() => undefined);
       };
@@ -4904,10 +5066,45 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           schema: "public",
           table: "profiles",
         },
-        // Profile RLS limits this stream to the signed-in account and people
-        // who share a group. Display-name/avatar changes can therefore refresh
-        // the member shell without polling or waiting for unrelated activity.
-        queueRefresh,
+        (event) => {
+          const row = event.new as ProfileRealtimeRow;
+          if (row.id === stateRef.current.currentUserId) {
+            // The private revision is the canonical merge boundary for this
+            // account. Pull it instead of turning an incoming self-profile row
+            // into a new local outbox write.
+            const revision = Number(row.account_revision);
+            if (
+              Number.isSafeInteger(revision) &&
+              revision <= revisionRef.current
+            )
+              return;
+            pullLatest(
+              Number.isSafeInteger(revision) ? revision : undefined,
+            ).catch(() => undefined);
+            return;
+          }
+          const live = stateRef.current;
+          const previousAvatarPath = live.groups
+            .flatMap((group) => [
+              ...group.members,
+              ...(group.pendingMembers ?? []),
+            ])
+            .find((member) => member.id === row.id)?.avatarStoragePath;
+          const next = applyProfileRealtimeRow(live, row);
+          if (!next) {
+            queueRefresh();
+            return;
+          }
+          if (next !== live) {
+            stateRef.current = next;
+            replaceState(next);
+          }
+          // Names apply from the tiny realtime row immediately. Only a changed
+          // private-bucket object needs the deferred shell refresh for a new
+          // signed URL.
+          if (previousAvatarPath !== (row.avatar_path ?? undefined))
+            queueRefresh();
+        },
       )
       .on(
         "postgres_changes",
@@ -5001,6 +5198,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    pullLatest,
     refreshGroup,
     refreshGroupActivity,
     refreshMessages,

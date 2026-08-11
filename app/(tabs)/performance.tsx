@@ -2,7 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import React, {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -30,7 +29,7 @@ import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
-import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { dateKey } from "@/src/domain/date";
 import {
   formatMetricValue,
@@ -565,10 +564,7 @@ function PerformancePage() {
       sublabel: trackerGroupLabel(metric),
     }));
 
-  useEffect(() => {
-    setCloudSyncPaused("performance-edit", editing);
-    return () => setCloudSyncPaused("performance-edit", false);
-  }, [editing]);
+  useFocusedCloudSyncPause("performance-edit", editing);
 
   const beginEditing = useCallback(() => {
     const next = [...configuredIds];

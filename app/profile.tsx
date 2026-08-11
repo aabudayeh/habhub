@@ -7,7 +7,7 @@ import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { EnergyProfileEditor, MetricGoalsEditor, StreakSettingsEditor } from '@/src/components/ProfileEditors';
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { Avatar, Card, IconButton, PageHeader, Screen } from '@/src/components/ui';
-import { memberDisplayName, memberOriginalLabel, memberRoleLabel } from '@/src/domain/members';
+import { memberRoleLabel } from '@/src/domain/members';
 import { useLocalization } from '@/src/i18n';
 import { useApp } from '@/src/state/AppProvider';
 import { palette, useAppColors, useGroupAccent } from '@/src/theme';
@@ -45,7 +45,7 @@ export default function ProfileScreen(){
     <Card style={styles.identity}>
       <View style={styles.identityRow}>
         <View><Avatar initials={me.initials} color={accent} size={72} uri={me.avatarUri}/><Pressable accessibilityRole="button" accessibilityLabel={t("Edit")} onPress={choosePhoto} style={[styles.camera,{backgroundColor:accent,borderColor:colors.card}]}><Ionicons name="camera" size={15} color={palette.white}/></Pressable></View>
-        <View style={styles.copy}><Text translate={false} style={[styles.name,{color:colors.ink}]}>{memberDisplayName(state,me)}</Text>{memberOriginalLabel(state,me)?<Text translate={false} style={[styles.original,{color:colors.faint}]}>{memberOriginalLabel(state,me)}</Text>:null}<Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in <Text translate={false}>{state.group.name}</Text></Text></View>
+        <View style={styles.copy}><Text translate={false} style={[styles.name,{color:colors.ink}]}>{me.name}</Text><Text style={[styles.meta,{color:colors.muted}]}>{memberRoleLabel(me)} in <Text translate={false}>{state.group.name}</Text></Text></View>
         <View style={styles.identityActions}>
           <Pressable accessibilityRole="button" accessibilityLabel={`${t("Edit")} ${t("Account display name")}`} onPress={()=>setEditingName(true)} style={({pressed})=>[styles.smallAction,{backgroundColor:colors.primarySoft},pressed&&styles.pressed]}><Ionicons name="pencil-outline" size={17} color={accent}/></Pressable>
           {me.avatarUri?<Pressable accessibilityRole="button" accessibilityLabel="Remove profile photo" onPress={()=>updateMemberAvatar(me.id,undefined)} style={({pressed})=>[styles.smallAction,styles.remove,pressed&&styles.pressed]}><Ionicons name="trash-outline" size={17} color={palette.red}/></Pressable>:null}

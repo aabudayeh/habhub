@@ -14,6 +14,10 @@ const componentSource = fs.readFileSync(
   path.join(root, "src", "components", "BodyProgressAvatar.tsx"),
   "utf8",
 );
+const atlasSource = fs.readFileSync(
+  path.join(root, "src", "domain", "statusAvatarAtlas.ts"),
+  "utf8",
+);
 const profileEditorSource = fs.readFileSync(
   path.join(root, "src", "components", "ProfileEditors.tsx"),
   "utf8",
@@ -56,8 +60,10 @@ const {
   STATUS_AVATAR_VIEWBOX,
   STATUS_BODY_FAT_PERCENT_KNOTS,
   STATUS_BODY_MASS_BMI_KNOTS,
+  STATUS_FAT_MASS_INDEX_KNOTS,
   STATUS_LEAN_MASS_INDEX_KNOTS,
   statusAdiposityForBodyFat,
+  statusAdiposityForComposition,
   statusAvatarGeometry,
   statusBodyAppearance,
   statusLeanMassProgress,
@@ -68,14 +74,70 @@ const {
 
 assert.match(
   componentSource,
-  /d=\{bodyPath\}[\s\S]*fill=\{`url\(#\$\{gradientId\}\)`\}[\s\S]*stroke=\{colors\.ink\}/,
-  "the same single silhouette path must own both lime fill and outline",
+  /statusAvatarAtlasBlend\([\s\S]{0,160}appearance\.adiposity[\s\S]{0,160}appearance\.muscleProgress/,
+  "the avatar must map measured adiposity and muscularity onto the atlas",
+);
+assert.match(
+  componentSource,
+  /styles\.avatarViewport[\s\S]*styles\.progressClip[\s\S]*GOAL_COMPLETE_COLOR/,
+  "one clipped avatar viewport must own the bottom-up lime progress layer",
+);
+assert.match(
+  componentSource,
+  /bodyModel \? \([\s\S]{0,450}opacityScale=\{0\.36\}[\s\S]{0,180}tintColor=\{colors\.ink\}/,
+  "the detailed atlas must retain a theme-visible contour in dark and light modes",
 );
 assert.doesNotMatch(
   componentSource,
-  /ClipPath|clipPath/,
-  "the body must not be duplicated behind a clipping mask",
+  /AvatarHair|bodySilhouettePath|side-parted haircut/,
+  "the atlas contour must not be distorted by a second vector head or haircut",
 );
+assert.match(
+  componentSource,
+  /const sourceBodyHeight = config\.bodyHeights\[sample\.row\][\s\S]{0,220}const sourceBodyTop = config\.bodyTops\[sample\.row\][\s\S]{0,220}const sourceBodyCenter = config\.bodyCenters\[sample\.row\]\[sample\.column\][\s\S]{0,220}const scale = height \/ sourceBodyHeight/,
+  "every atlas state must normalize its measured body bounds with one uniform scale",
+);
+assert.match(
+  componentSource,
+  /left: width \/ 2 - sourceBodyCenter \* scale[\s\S]{0,240}top: -sourceBodyTop \* scale[\s\S]{0,240}width: config\.atlasWidth \* scale/,
+  "every atlas state must share one centered head-to-foot viewport",
+);
+assert.doesNotMatch(
+  componentSource,
+  /scaleX|scaleY|resizeMode=["']stretch["'][\s\S]{0,300}cropWidth/,
+  "the body must not be independently stretched across the two axes",
+);
+assert.match(
+  componentSource,
+  /function MindAccessories[\s\S]{0,3500}mindTier >= 3/,
+  "mind progression accessories must remain anchored to the atlas face",
+);
+assert.doesNotMatch(
+  componentSource,
+  /tmp\/imagegen|https?:\/\//,
+  "runtime avatar assets must be local final assets rather than drafts or downloads",
+);
+assert.match(
+  atlasSource,
+  /bodyCenters:[\s\S]*bodyHeights:[\s\S]*bodyTops:[\s\S]*Math\.round\([\s\S]*samples: \[\{ column, row, opacity: 1 \}\]/,
+  "the dense atlas must select exactly one normalized crisp body state",
+);
+assert.doesNotMatch(
+  atlasSource,
+  /horizontalMix|verticalMix|new Map/,
+  "whole-body crossfades must not create duplicate or ghost contours",
+);
+for (const file of [
+  "status-avatar-male-atlas-v1.png",
+  "status-avatar-female-atlas-v1.png",
+]) {
+  const assetPath = path.join(root, "assets", "images", file);
+  assert.ok(fs.existsSync(assetPath), `${file} must be bundled locally`);
+  assert.ok(
+    fs.statSync(assetPath).size < 900_000,
+    `${file} should remain a compact mobile asset`,
+  );
+}
 assert.doesNotMatch(
   statusSource,
   /earliestWeight|earliestBodyFat|earliestLean/i,
@@ -85,6 +147,11 @@ assert.match(
   statusSource,
   /entry\.localDate > anchorDate/,
   "selected-date composition must reject measurements after the anchor",
+);
+assert.match(
+  statusSource,
+  /entry\.sourceUpdatedAt \?\? entry\.recordedAt/,
+  "selected-date composition must use the real source update time",
 );
 assert.match(
   statusSource,
@@ -141,11 +208,12 @@ const nonDecreasing = (values, label) => {
   );
 };
 
-// Representative real profile calibration. At 170 cm, 70/80/90/120 kg must
-// remain visibly distinct instead of saturating early at the full silhouette.
+// Representative rendering calibration. These are not body predictions: at a
+// fixed height, the weights only verify that the total-size fallback remains
+// continuous and does not saturate before common high-weight profiles differ.
 const profileFixtures = [
-  { sex: "male", heightCm: 170, weightsKg: [55, 70, 80, 90, 120] },
-  { sex: "female", heightCm: 165, weightsKg: [48, 60, 75, 90, 115] },
+  { sex: "male", heightCm: 170, weightsKg: [50, 70, 80, 100, 120, 150] },
+  { sex: "female", heightCm: 165, weightsKg: [50, 70, 80, 100, 120, 150] },
 ];
 for (const fixture of profileFixtures) {
   const masses = fixture.weightsKg.map(
@@ -153,13 +221,30 @@ for (const fixture of profileFixtures) {
   );
   strictlyIncreasing(masses, `${fixture.sex} body mass`);
 }
-const male170 = [70, 80, 90, 120].map(
+const male170 = [50, 70, 80, 100, 120, 150].map(
   (weightKg) => statusBodyAppearance(170, weightKg, 0).bodyMass,
 );
-closeTo(male170[0], -0.058);
-closeTo(male170[1], 0.199);
-closeTo(male170[2], 0.427);
-closeTo(male170[3], 0.866);
+closeTo(male170[0], -0.967);
+closeTo(male170[1], -0.128);
+closeTo(male170[2], 0.147);
+closeTo(male170[3], 0.5);
+closeTo(male170[4], 0.746);
+closeTo(male170[5], 0.949);
+assert.ok(
+  male170.at(-1) - male170.at(-2) > 0.15,
+  "120 kg and 150 kg at 170 cm must not collapse into one high-mass shape",
+);
+
+const shortAppearance = statusBodyAppearance(155, 70, 0);
+const tallAppearance = statusBodyAppearance(195, 70, 0);
+assert.ok(
+  shortAppearance.bodyMass > tallAppearance.bodyMass,
+  "the same weight must resolve through height rather than an absolute-kg tier",
+);
+assert.ok(
+  shortAppearance.heightScale < tallAppearance.heightScale,
+  "height must also affect presentation scale without changing the pose",
+);
 
 const massCheckpoints = STATUS_BODY_MASS_BMI_KNOTS.map(
   (checkpoint) => checkpoint.bodyMass,
@@ -170,6 +255,11 @@ for (const sex of ["male", "female", "unspecified"]) {
     STATUS_BODY_FAT_PERCENT_KNOTS[sex].length,
     10,
     `${sex} must retain ten body-fat review checkpoints`,
+  );
+  assert.equal(
+    STATUS_FAT_MASS_INDEX_KNOTS[sex].length,
+    10,
+    `${sex} must retain ten fat-mass review checkpoints`,
   );
   assert.equal(
     STATUS_LEAN_MASS_INDEX_KNOTS[sex].length,
@@ -189,6 +279,23 @@ for (const sex of ["male", "female", "unspecified"]) {
     `${sex} tone across lean-mass checkpoints`,
   );
 }
+
+const samePercentLighter = statusAdiposityForComposition(170, 70, 30, "male");
+const samePercentHeavier = statusAdiposityForComposition(170, 110, 30, "male");
+assert.ok(
+  samePercentHeavier > samePercentLighter,
+  "measured adiposity must retain absolute fat-mass evidence at a fixed height",
+);
+const weightOnly = statusBodyAppearance(178, 100, 0.2, { sex: "male" });
+const leanMassOnly = statusBodyAppearance(178, 100, 0.2, {
+  leanBodyMassKg: 88,
+  sex: "male",
+});
+assert.ok(
+  leanMassOnly.adiposity < weightOnly.adiposity &&
+    leanMassOnly.muscleProgress > weightOnly.muscleProgress,
+  "lean mass alone must separate fat and lean signals instead of looking like weight alone",
+);
 
 const leanMale = statusBodyAppearance(178, 82, 0.2, {
   bodyFatPercent: 11,
@@ -273,6 +380,12 @@ for (const sex of ["male", "female"]) {
     ),
     `${sex} body-fat changes must not distort the shoulder pose`,
   );
+  assert.ok(
+    compositionGeometries.at(-1).body.waistHalf -
+      compositionGeometries[0].body.waistHalf >=
+      18,
+    `${sex} high and low adiposity must be visibly different at equal mass`,
+  );
 
   // Ten independent muscle checkpoints. Head/accessory anchors stay fixed;
   // shoulders, chest and arms progressively gain volume at every step.
@@ -337,6 +450,14 @@ for (const sex of ["male", "female"]) {
       `${sex} ${key} must stay aligned to the same face`,
     );
   }
+
+  const leanUntrained = statusAvatarGeometry(sex, 0, 0.05, -0.8);
+  const fullMuscular = statusAvatarGeometry(sex, 0, 0.9, 0.8);
+  assert.ok(
+    fullMuscular.body.waistHalf > leanUntrained.body.waistHalf &&
+      fullMuscular.body.shoulderHalf > leanUntrained.body.shoulderHalf,
+    `${sex} adiposity and muscularity must remain visible together`,
+  );
 }
 
 const totalHeight =

@@ -1,5 +1,20 @@
 import type { BiologicalSex } from "../types";
 
+/**
+ * Calibration background (the formulas below remain app-specific morphs):
+ * - VanItallie et al., AJCN 1990, doi:10.1093/ajcn/52.6.953 introduced
+ *   height-normalized fat and fat-free mass indices.
+ * - Kyle et al., Nutrition 2003, doi:10.1016/S0899-9007(03)00061-3 reported
+ *   sex-specific FFMI/FMI population ranges used for the middle anchors.
+ * - Heo et al., AJCN 2012, doi:10.3945/ajcn.111.025171 showed that BMI-to-fat
+ *   relationships vary with sex, age and race/ethnicity. Accordingly, this
+ *   code never treats weight/height as a unique or accurate body prediction.
+ * - Talbot et al., Psychology of Men & Masculinities 2019,
+ *   doi:10.1037/men0000165 validated a visual matrix with independent %fat and
+ *   FFMI axes. It supports the two-axis design, not reuse of its artwork or a
+ *   claim that a figure is an individual's measured body.
+ */
+
 export type StatusBodyShape = "thin" | "average" | "full";
 
 export type StatusBodyAppearance = {
@@ -31,25 +46,42 @@ export const STATUS_AVATAR_VIEWBOX = {
   width: 200,
 } as const;
 
-/** Ten review checkpoints; runtime values are interpolated between them. */
+/**
+ * Ten visual review checkpoints. Runtime values are interpolated between
+ * them, so these are not BMI classifications and are never shown to users.
+ * The wide final interval keeps 120 kg and 150 kg visibly distinct at common
+ * adult heights instead of making every high-weight profile the same shape.
+ */
 export const STATUS_BODY_MASS_BMI_KNOTS = [
   { bmi: 17, bodyMass: -1 },
-  { bmi: 19, bodyMass: -0.75 },
-  { bmi: 21, bodyMass: -0.45 },
-  { bmi: 23, bodyMass: -0.18 },
-  { bmi: 25, bodyMass: 0.02 },
-  { bmi: 28, bodyMass: 0.22 },
-  { bmi: 31, bodyMass: 0.42 },
-  { bmi: 35, bodyMass: 0.63 },
-  { bmi: 40, bodyMass: 0.82 },
-  { bmi: 46, bodyMass: 1 },
+  { bmi: 19, bodyMass: -0.78 },
+  { bmi: 21, bodyMass: -0.5 },
+  { bmi: 23, bodyMass: -0.25 },
+  { bmi: 25, bodyMass: -0.05 },
+  { bmi: 28, bodyMass: 0.17 },
+  { bmi: 32, bodyMass: 0.38 },
+  { bmi: 37, bodyMass: 0.61 },
+  { bmi: 44, bodyMass: 0.82 },
+  { bmi: 55, bodyMass: 1 },
 ] as const;
 
 /** Ten review checkpoints per sex; runtime percentages interpolate smoothly. */
 export const STATUS_BODY_FAT_PERCENT_KNOTS = {
-  female: [14, 17, 20, 23, 27, 31, 35, 40, 47, 56],
-  male: [6, 9, 12, 15, 18, 22, 26, 31, 38, 48],
-  unspecified: [10, 13, 16, 19, 23, 27, 31, 36, 43, 52],
+  female: [14, 18, 23, 27, 31, 35, 39, 44, 50, 58],
+  male: [6, 10, 14, 18, 22, 26, 30, 35, 41, 50],
+  unspecified: [10, 14, 18, 22, 26, 30, 34, 39, 46, 54],
+} as const satisfies Record<BiologicalSex, readonly number[]>;
+
+/**
+ * Fat-mass index (fat mass / height squared) complements percentage body fat.
+ * The middle anchors cover the sex-specific population ranges reported by
+ * Kyle et al. (2003); the outer anchors are deliberately broad rendering
+ * limits, not healthy/unhealthy labels or diagnostic cut-offs.
+ */
+export const STATUS_FAT_MASS_INDEX_KNOTS = {
+  female: [2.5, 3.9, 5.2, 6.7, 8.2, 9.8, 11.8, 14.5, 18, 23],
+  male: [1.2, 1.8, 2.8, 4, 5.2, 6.7, 8.3, 10.8, 14, 19],
+  unspecified: [1.8, 2.8, 4, 5.4, 6.8, 8.2, 10, 12.7, 16, 21],
 } as const satisfies Record<BiologicalSex, readonly number[]>;
 
 /**
@@ -58,9 +90,9 @@ export const STATUS_BODY_FAT_PERCENT_KNOTS = {
  * estimate. Every value between checkpoints is interpolated continuously.
  */
 export const STATUS_LEAN_MASS_INDEX_KNOTS = {
-  female: [12, 13, 14, 15, 16, 17, 18.5, 20, 22, 24],
-  male: [14, 15, 16, 17, 18.5, 20, 21.5, 23, 25, 27],
-  unspecified: [13, 14, 15, 16, 17.25, 18.5, 20, 21.5, 23.5, 25.5],
+  female: [12, 13, 14, 14.6, 15.3, 16.1, 16.8, 17.9, 20, 22.5],
+  male: [14, 15, 16, 16.7, 17.7, 19, 19.8, 21.5, 24, 27],
+  unspecified: [13, 14, 15, 15.65, 16.5, 17.55, 18.3, 19.7, 22, 24.75],
 } as const satisfies Record<BiologicalSex, readonly number[]>;
 
 export type StatusAvatarGeometry = {
@@ -140,6 +172,34 @@ export function statusAdiposityForBodyFat(
   );
 }
 
+/**
+ * Resolves measured body fat into the avatar's continuous adiposity axis.
+ * Percentage supplies the distribution signal while fat-mass index retains
+ * the effect of absolute fat mass at a given height. Neither input can recover
+ * an individual's real circumferences or regional fat distribution, so this
+ * remains an approximate motivational morph.
+ */
+export function statusAdiposityForComposition(
+  heightCm: number,
+  weightKg: number,
+  bodyFatPercent: number,
+  sex: BiologicalSex,
+) {
+  const safeHeightM = bounded(heightCm, 135, 215) / 100;
+  const safeWeightKg = bounded(weightKg, 35, 250);
+  const safeBodyFat = bounded(bodyFatPercent, 1, 75);
+  const fatMassIndex =
+    (safeWeightKg * (safeBodyFat / 100)) / (safeHeightM * safeHeightM);
+  const percentageSignal = statusAdiposityForBodyFat(safeBodyFat, sex);
+  const massSignal = interpolateCheckpoints(
+    fatMassIndex,
+    STATUS_FAT_MASS_INDEX_KNOTS[sex],
+    -1,
+    1,
+  );
+  return bounded(percentageSignal * 0.6 + massSignal * 0.4, -1, 1);
+}
+
 export function statusLeanMassProgress(
   heightCm: number,
   leanBodyMassKg: number,
@@ -174,8 +234,12 @@ export function statusBodyMassForBmi(bmi: number) {
 
 /**
  * Diminishing-return response for completed resistance sets assigned to one
- * muscle group in one week. Ten weekly sets reach the reference dose; further
- * volume adds at most 15%, with effectively no visual reward past 20 sets.
+ * muscle group in one week. Ten sets are the app's reference dose, not a
+ * physiological optimum. The cap prevents one very high-volume week from
+ * producing an implausible visual jump. The qualitative diminishing-return
+ * shape and fractional credit for secondary muscles follow Pelland et al.,
+ * Sports Medicine 2026, doi:10.1007/s40279-025-02344-w; the exact visual curve
+ * and cap are deliberately conservative product calibration.
  */
 export function statusMuscleDoseResponse(weeklySets: number) {
   const sets = bounded(Number.isFinite(weeklySets) ? weeklySets : 0, 0, 20);
@@ -183,7 +247,7 @@ export function statusMuscleDoseResponse(weeklySets: number) {
   return 1 + 0.15 * (1 - Math.exp(-(sets - 10) / 4));
 }
 
-/** Six well-trained muscle-group equivalents represent a balanced week. */
+/** Six trained muscle-group equivalents represent the app's balanced week. */
 export function statusMuscleWeeklyQuality(
   muscleGroupWeeklySets: readonly number[],
 ) {
@@ -201,10 +265,10 @@ export type StatusMuscleWeek = {
 
 /**
  * Motivational training visualization, not a lean-mass estimate. Lifetime
- * effective training weeks drive slow adaptation (45-week time constant),
- * while the last eight weeks can soften or restore at most 14% of the look.
- * One unusually large session is capped to one weekly point and cannot jump a
- * visual checkpoint by itself.
+ * effective training weeks drive slow visual progression, while the last
+ * eight weeks can soften or restore at most 14% of the look. The 45-week
+ * calibration is a UX pacing choice, not a claim that physiology follows one
+ * universal clock. One unusually large session is capped to one weekly point.
  */
 export function statusMuscleProgressFromWeeks(
   weeks: readonly StatusMuscleWeek[],
@@ -237,10 +301,12 @@ export function statusMuscleProgressFromWeeks(
 }
 
 /**
- * Converts height and weight into a restrained continuous silhouette input.
- * The wider upper range intentionally does not make 90 kg and 120 kg look the
- * same at an average height. BMI is only used as a visual interpolation input;
- * the UI does not present it as a diagnosis or a preferred body shape.
+ * Converts height, weight and optional composition evidence into restrained
+ * continuous silhouette inputs. Weight and height alone cannot identify fat
+ * and lean compartments, so BMI is only the fallback total-size/adiposity
+ * morph. Measured body fat separates adiposity, and height-normalized lean mass
+ * separates muscularity. The result is approximate and motivational: it is
+ * not a scan, diagnosis, or prediction of a person's real body.
  */
 export function statusBodyAppearance(
   heightCm: number,
@@ -268,24 +334,41 @@ export function statusBodyAppearance(
     composition.bodyFatPercent > 0
       ? bounded(composition.bodyFatPercent, 1, 75)
       : undefined;
-  const adiposity =
-    measuredBodyFat === undefined
-      ? bodyMass
-      : statusAdiposityForBodyFat(measuredBodyFat, sex);
   const explicitLeanMass =
     composition.leanBodyMassKg !== undefined &&
     Number.isFinite(composition.leanBodyMassKg) &&
     composition.leanBodyMassKg > 0
       ? bounded(composition.leanBodyMassKg, 10, safeWeightKg)
       : undefined;
+  // Lean mass alone also identifies the remaining non-lean mass. Prefer a
+  // directly supplied body-fat percentage when both exist, but do not throw
+  // away composition information merely because only lean mass was logged.
+  const resolvedBodyFat =
+    measuredBodyFat ??
+    (explicitLeanMass === undefined
+      ? undefined
+      : bounded(
+          ((safeWeightKg - explicitLeanMass) / safeWeightKg) * 100,
+          1,
+          75,
+        ));
+  const adiposity =
+    resolvedBodyFat === undefined
+      ? bodyMass
+      : statusAdiposityForComposition(
+          safeHeightCm,
+          safeWeightKg,
+          resolvedBodyFat,
+          sex,
+        );
   // Body-fat measurements can provide a coherent fat-free-mass fallback. If
   // both fields are supplied but disagree, the explicit lean value remains
   // bounded by total weight and both signals stay inside safe morph limits.
   const resolvedLeanMass =
     explicitLeanMass ??
-    (measuredBodyFat === undefined
+    (resolvedBodyFat === undefined
       ? undefined
-      : safeWeightKg * (1 - measuredBodyFat / 100));
+      : safeWeightKg * (1 - resolvedBodyFat / 100));
   const leanMassProgress =
     resolvedLeanMass === undefined
       ? undefined
@@ -296,21 +379,22 @@ export function statusBodyAppearance(
     1,
   );
   // Lean body mass includes bone, organs and water, so it is evidence rather
-  // than a literal skeletal-muscle reading. Resistance history adds a smaller
-  // independent tone signal with diminishing visual returns.
+  // than a skeletal-muscle measurement. Resistance history adds an independent
+  // tone signal with diminishing visual returns. The noisy signals are blended
+  // instead of treating either one as a literal body-shape prediction.
   const muscleProgress =
     leanMassProgress === undefined
       ? boundedTraining
       : bounded(
           1 -
-            (1 - leanMassProgress * 0.82) *
-              (1 - boundedTraining * 0.45),
+            (1 - leanMassProgress * 0.76) *
+              (1 - boundedTraining * 0.5),
           0,
           1,
         );
   const shapeScore = bodyMass * 0.35 + adiposity * 0.65;
   const bodyShape: StatusBodyShape =
-    shapeScore < -0.42 ? "thin" : shapeScore > 0.28 ? "full" : "average";
+    shapeScore < -0.42 ? "thin" : shapeScore > 0.22 ? "full" : "average";
   const muscleTier: 0 | 1 | 2 | 3 =
     muscleProgress >= 0.72
       ? 3
@@ -327,7 +411,7 @@ export function statusBodyAppearance(
     // Height changes presentation scale without distorting the fixed pose or
     // limb ratios. The restrained range keeps every figure inside the same
     // Status layout while still distinguishing short and tall profiles.
-    heightScale: bounded(1 + (safeHeightCm - 170) / 700, 0.95, 1.065),
+    heightScale: bounded(1 + (safeHeightCm - 170) / 560, 0.935, 1.08),
     muscleProgress,
     muscleTier,
   };
@@ -359,50 +443,53 @@ export function statusAvatarGeometry(
     1,
   );
   const headHalf = female ? 17 : male ? 18 : 17.5;
-  const neckHalf = (female ? 10 : male ? 12 : 11) + muscle * 0.8;
+  const neckHalf = (female ? 10 : male ? 12 : 11) + muscle * 0.9;
   const shoulderHalf =
-    (female ? 40 : male ? 45 : 42) + muscle * 7.5 + size * 2.5 - thin * 1.5;
+    (female ? 39.5 : male ? 45 : 42) +
+    muscle * (female ? 7.5 : 9.5) +
+    size * 2.8 -
+    thin * 1.8;
   const chestHalf =
     (female ? 34 : male ? 38 : 36) +
-    muscle * 5 +
-    size * 3 +
-    fatFull * 4.5 -
-    thin * 3;
-  const waistHalf =
-    (female ? 25.5 : male ? 28 : 27) +
+    muscle * (female ? 6.5 : 9) +
     size * 3.5 +
-    fatFull * 11 -
-    fatLean * 2.5 -
-    thin * 2 -
-    muscle * 0.8;
+    fatFull * 6 -
+    thin * 3.5;
+  const waistHalf =
+    (female ? 25 : male ? 27.5 : 26.5) +
+    size * 4 +
+    fatFull * (female ? 16 : 17.5) -
+    fatLean * 3 -
+    thin * 2.3 -
+    muscle;
   const hipHalf =
     (female ? 38 : male ? 32 : 35) +
-    size * 4 +
-    fatFull * 8 -
-    fatLean * 1.5 -
-    thin * 1.5 +
-    muscle;
+    size * 4.5 +
+    fatFull * (female ? 11.5 : 10.5) -
+    fatLean * 2 -
+    thin * 1.8 +
+    muscle * (female ? 1.8 : 1.3);
   const thighHalf =
     (female ? 31.5 : male ? 29.5 : 30.5) +
-    size * 3 +
-    fatFull * 6 -
-    fatLean -
-    thin * 2 +
-    muscle * 2;
+    size * 3.8 +
+    fatFull * (female ? 8.5 : 7.5) -
+    fatLean * 1.4 -
+    thin * 2.2 +
+    muscle * 3.5;
   const kneeHalf =
     (female ? 20 : male ? 21 : 20.5) +
     size +
-    fatFull * 2 -
+    fatFull * 2.8 -
     thin * 1.5 +
     muscle;
   const calfHalf =
     (female ? 21.5 : male ? 23 : 22.2) +
     size +
-    fatFull * 2 -
+    fatFull * 3 -
     thin * 1.5 +
-    muscle * 1.5;
+    muscle * 2;
   const ankleHalf =
-    (female ? 10 : male ? 11.5 : 10.8) + size * 0.6 + fatFull;
+    (female ? 10 : male ? 11.5 : 10.8) + size * 0.7 + fatFull * 1.3;
 
   return {
     accessory: {
@@ -418,22 +505,22 @@ export function statusAvatarGeometry(
       ankleHalf,
       calfHalf,
       chestHalf,
-      elbowInnerHalf: shoulderHalf - 1 + muscle + size,
+      elbowInnerHalf: shoulderHalf - 1 + muscle * 1.2 + size,
       elbowOuterHalf:
-        shoulderHalf + 10 + muscle * 2.5 + size * 1.4 + fatFull * 2,
+        shoulderHalf + 10 + muscle * 3.5 + size * 1.5 + fatFull * 3,
       headHalf,
       hipHalf,
       kneeHalf,
       neckHalf,
       shoulderHalf,
       thighHalf,
-      upperArmInnerHalf: shoulderHalf - 9 + muscle + size,
+      upperArmInnerHalf: shoulderHalf - 9 + muscle * 1.4 + size,
       upperArmOuterHalf:
-        shoulderHalf + 8 + muscle * 2.5 + size * 1.4 + fatFull * 2,
+        shoulderHalf + 8 + muscle * 3.8 + size * 1.5 + fatFull * 3,
       waistHalf,
       wristInnerHalf: shoulderHalf - 4 + size * 0.25 + fatFull * 0.25,
       wristOuterHalf:
-        shoulderHalf + 4 + muscle + size * 0.5 + fatFull * 0.9,
+        shoulderHalf + 4 + muscle * 1.2 + size * 0.55 + fatFull,
     },
     adiposity: fat,
     bodyMass: mass,

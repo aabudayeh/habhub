@@ -251,6 +251,8 @@ export type Member = {
   lastSeenAt?: string;
   /** Server-confirmed time this member last published current group data. */
   lastDataSyncedAt?: string;
+  /** Snapshot revision that last projected this account-owned profile row. */
+  profileRevision?: number;
   avatarUri?: string;
   /** Private-bucket object path; signed URLs in avatarUri are intentionally temporary. */
   avatarStoragePath?: string;

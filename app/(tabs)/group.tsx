@@ -65,7 +65,7 @@ import {
 import { leaderboardSyncTimestamp } from "@/src/domain/leaderboardSync";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
-import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { Visibility } from "@/src/types";
@@ -93,19 +93,25 @@ function LeaderboardScreen() {
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
-  useEffect(() => {
-    const timer = setInterval(() => setClockTick((value) => value + 1), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      // Relative sync labels only need a clock while this tab is visible. A
+      // mounted-but-frozen leaderboard can otherwise wake every minute and
+      // recompute year-scale rankings behind whichever page the user is using.
+      setClockTick((value) => value + 1);
+      const timer = setInterval(
+        () => setClockTick((value) => value + 1),
+        60_000,
+      );
+      return () => clearInterval(timer);
+    }, []),
+  );
   useEffect(() => {
     if (!editing) {
       setDraggingCardId(null);
     }
   }, [editing]);
-  useEffect(() => {
-    setCloudSyncPaused("leaderboard-edit", editing);
-    return () => setCloudSyncPaused("leaderboard-edit", false);
-  }, [editing]);
+  useFocusedCloudSyncPause("leaderboard-edit", editing);
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );

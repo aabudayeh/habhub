@@ -52,6 +52,7 @@ internal object HabHubWorkoutNotificationStore {
   private const val MAX_ACTIONS = 30
   private val reconciliationRunning = AtomicBoolean(false)
   private val reconciliationRequested = AtomicBoolean(false)
+  private val stabilizationDelaysMs = longArrayOf(75L, 150L, 300L, 600L, 1_200L)
 
   private data class Step(
     val title: String,
@@ -68,6 +69,7 @@ internal object HabHubWorkoutNotificationStore {
     var finished: Boolean = false,
   )
 
+  @Synchronized
   fun sync(context: Context, raw: String): Boolean {
     val incoming = parseFlow(raw) ?: return false
     val existing = readFlow(context)
@@ -93,10 +95,12 @@ internal object HabHubWorkoutNotificationStore {
     return preferences(context).edit().putString(FLOW_KEY, encodeFlow(next)).commit()
   }
 
+  @Synchronized
   fun clear(context: Context) {
     preferences(context).edit().remove(FLOW_KEY).remove(ACTIONS_KEY).commit()
   }
 
+  @Synchronized
   fun consumeActions(context: Context): String {
     val prefs = preferences(context)
     val actions = prefs.getString(ACTIONS_KEY, null) ?: "[]"
@@ -107,6 +111,7 @@ internal object HabHubWorkoutNotificationStore {
     return actions
   }
 
+  @Synchronized
   fun applyAction(
     context: Context,
     notificationId: String,
@@ -182,17 +187,7 @@ internal object HabHubWorkoutNotificationStore {
       return false
     }
     repeat(40) { attempt ->
-      val flow = readFlow(context) ?: return false
-      if (render(context, flow)) {
-        // A pair of follow-up passes covers OEM/Expo rewrites that can land
-        // just after scheduleNotificationAsync or response delivery. Each
-        // pass rereads the flow, so a rapid second action always wins.
-        Thread.sleep(90L)
-        readFlow(context)?.let { render(context, it) }
-        Thread.sleep(180L)
-        readFlow(context)?.let { render(context, it) }
-        return true
-      }
+      if (renderStoredFlow(context)) return true
       if (attempt < 39) Thread.sleep(75L)
     }
     return false
@@ -205,7 +200,7 @@ internal object HabHubWorkoutNotificationStore {
       try {
         do {
           reconciliationRequested.set(false)
-          reconcile(context)
+          stabilize(context)
         } while (reconciliationRequested.get())
       } finally {
         reconciliationRunning.set(false)
@@ -214,6 +209,62 @@ internal object HabHubWorkoutNotificationStore {
         if (reconciliationRequested.get()) reconcileAsync(context)
       }
     }
+  }
+
+  /**
+   * Watch the one existing workout row through Expo/OEM's asynchronous
+   * handoff. A matching row is left untouched; only a generation that lost
+   * its title, phase origin, or chronometer flag is rebuilt. This is local
+   * NotificationManager work, not a recurring JS/network timer.
+   */
+  private fun stabilize(context: Context) {
+    if (!reconcile(context)) return
+    stabilizationDelaysMs.forEach { delayMs ->
+      Thread.sleep(delayMs)
+      ensureStoredFlowRendered(context)
+    }
+  }
+
+  @Synchronized
+  private fun renderStoredFlow(context: Context): Boolean {
+    val flow = readFlow(context) ?: return false
+    return render(context, flow)
+  }
+
+  @Synchronized
+  private fun ensureStoredFlowRendered(context: Context): Boolean {
+    val flow = readFlow(context) ?: return false
+    return matchesRenderedFlow(context, flow) || render(context, flow)
+  }
+
+  private fun matchesRenderedFlow(context: Context, flow: Flow): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    val active = manager.activeNotifications.firstOrNull { it.tag == NOTIFICATION_ID }
+      ?: return false
+    val step = flow.steps.getOrNull(flow.index.coerceIn(0, flow.steps.lastIndex))
+      ?: return false
+    val phase = if (flow.paused) "paused" else step.phase
+    val expectedTitle = when {
+      flow.finished -> "Workout complete"
+      phase == "paused" -> "PAUSED · ${step.title}"
+      phase == "work" -> "WORK · ${step.title}"
+      else -> "REST · ${step.title}"
+    }
+    val notification = active.notification
+    val extras = notification.extras
+    val titleMatches = extras
+      .getCharSequence(Notification.EXTRA_TITLE)
+      ?.toString() == expectedTitle
+    val shouldRun = !flow.finished && !flow.paused
+    val chronometerMatches =
+      extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER, false) == shouldRun
+    val showWhenMatches =
+      extras.getBoolean(Notification.EXTRA_SHOW_WHEN, false) == shouldRun
+    val originMatches = !shouldRun || kotlin.math.abs(
+      notification.`when` - (flow.phaseStartedAt - flow.phaseElapsedMs),
+    ) <= 1_000L
+    return titleMatches && chronometerMatches && showWhenMatches && originMatches
   }
 
   private fun render(context: Context, flow: Flow): Boolean {

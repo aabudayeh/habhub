@@ -85,7 +85,7 @@ import {
   useCloudSyncActions,
   useCloudSyncStatus,
 } from "@/src/cloud/CloudSyncProvider";
-import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -192,10 +192,7 @@ function Today() {
       setDraggingMetricId(null);
     }
   }, [editing]);
-  useEffect(() => {
-    setCloudSyncPaused("today-edit", editing);
-    return () => setCloudSyncPaused("today-edit", false);
-  }, [editing]);
+  useFocusedCloudSyncPause("today-edit", editing);
   const beginEditing = useCallback(() => {
     exitingEditMode.current = false;
     setCompletionSortEnabled(false);

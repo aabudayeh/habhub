@@ -45,8 +45,12 @@ app-example
 /ios
 /android
 
+# Downloaded build artifacts are release outputs, never source inputs.
+/artifacts/*.apk
+
 # Codex scratch/output folders
 /work/
+/tmp/
 /outputs/
 
 # Local editor metadata

@@ -44,6 +44,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
+import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 
 function ChatScreen() {
   const params = useLocalSearchParams<{ recipient?: string | string[] }>();
@@ -78,9 +79,7 @@ function ChatScreen() {
   }, [requestedRecipient, state.currentUserId, state.group.members]);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
   const tabBarHeight = useBottomTabBarHeight();
-  const [keyboardVisible, setKeyboardVisible] = useState(() =>
-    Keyboard.isVisible(),
-  );
+  const keyboardVisible = useSoftwareKeyboardVisibility();
   const messageScroll = useRef<ScrollView>(null);
   const pendingScrollFrame = useRef<number | null>(null);
   const pendingAnimatedScroll = useRef(false);
@@ -334,7 +333,6 @@ function ChatScreen() {
     const hideEvent =
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
     const shown = Keyboard.addListener(showEvent, () => {
-      setKeyboardVisible(true);
       keyboardTransitionEventAt.current = Date.now();
       cancelPendingNewestScroll();
       scrollToNewestAfterLayout(48, true);
@@ -342,7 +340,6 @@ function ChatScreen() {
     const hidden = Keyboard.addListener(hideEvent, () => {
       // Wait for the restored Android viewport to settle before aligning so
       // the close transition does not visibly fight the ScrollView.
-      setKeyboardVisible(false);
       keyboardTransitionEventAt.current = Date.now();
       cancelPendingNewestScroll();
       scrollToNewestAfterLayout(64, true);
@@ -497,12 +494,15 @@ function ChatScreen() {
       <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
         style={styles.flex}
-        // Android already uses adjustResize (app.json). Applying the RN
-        // `height` adjustment as well can retain its reduced frame after
-        // keyboardDidHide, leaving the composer stranded above the tab bar
-        // until the scene is laid out again. Keep this wrapper disabled there
-        // and let the native window resize be the single source of truth.
-        enabled={Platform.OS !== "android"}
+        // Android uses adjustResize, but some tab-scene/OEM combinations still
+        // need the measured overlap supplied by KeyboardAvoidingView. Enable it
+        // only while the keyboard is present: disabling it on close forces its
+        // internal height back to zero even if an OEM omits keyboardDidHide.
+        // React Native Web's implementation is intentionally a no-op.
+        enabled={
+          Platform.OS === "ios" ||
+          (Platform.OS === "android" && keyboardVisible)
+        }
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
@@ -910,6 +910,21 @@ function ChatScreen() {
                 value={draft}
                 onChangeText={setDraft}
                 onFocus={handleComposerFocus}
+                onKeyPress={(event) => {
+                  if (Platform.OS !== "web") return;
+                  const key = event.nativeEvent as typeof event.nativeEvent & {
+                    isComposing?: boolean;
+                    shiftKey?: boolean;
+                  };
+                  if (
+                    key.key !== "Enter" ||
+                    key.shiftKey ||
+                    key.isComposing
+                  )
+                    return;
+                  event.preventDefault();
+                  submit();
+                }}
                 onSubmitEditing={submit}
                 placeholder={
                   recipient
@@ -920,6 +935,7 @@ function ChatScreen() {
                 style={[styles.input, { color: colors.ink }]}
                 returnKeyType="send"
                 multiline
+                submitBehavior={Platform.OS === "web" ? "newline" : "submit"}
               />
               <Pressable
                 disabled={!draft.trim() && !imageUri}

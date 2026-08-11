@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useIsFocused } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, useFocusEffect } from "expo-router";
 import * as Notifications from "expo-notifications";
@@ -80,7 +79,7 @@ import {
   type QueuedWorkoutTimerAction,
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
-import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { readableTextColor } from "@/src/domain/colors";
@@ -449,7 +448,6 @@ function GymDraggableExercise({
 }
 
 function GymScreen() {
-  const isFocused = useIsFocused();
   const {
     state,
     hydrated,
@@ -482,10 +480,7 @@ function GymScreen() {
   const [calorieEstimateOpen, setCalorieEstimateOpen] = useState(false);
   const [exercises, setExercises] = useState<GymExercise[]>([]);
   const [exerciseEditMode, setExerciseEditMode] = useState(false);
-  useEffect(() => {
-    setCloudSyncPaused("gym-edit", exerciseEditMode);
-    return () => setCloudSyncPaused("gym-edit", false);
-  }, [exerciseEditMode]);
+  useFocusedCloudSyncPause("gym-edit", exerciseEditMode);
   const [openExerciseId, setOpenExerciseId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -508,7 +503,6 @@ function GymScreen() {
   const [appActivity, setAppActivity] = useState(
     NativeAppState.currentState,
   );
-  const restAlerted = useRef(false);
   const handledTimerResponse = useRef<string | null>(null);
   const [queuedNativeTimerActions, setQueuedNativeTimerActions] = useState<
     QueuedWorkoutTimerAction[]
@@ -587,10 +581,7 @@ function GymScreen() {
   const [performanceOrder, setPerformanceOrder] = useState<string[]>([]);
   const [performancePinned, setPerformancePinned] = useState<string[]>([]);
   const [performanceHidden, setPerformanceHidden] = useState<string[]>([]);
-  useEffect(() => {
-    setCloudSyncPaused("gym-performance-edit", performanceEditMode);
-    return () => setCloudSyncPaused("gym-performance-edit", false);
-  }, [performanceEditMode]);
+  useFocusedCloudSyncPause("gym-performance-edit", performanceEditMode);
 
   const moveExercise = useCallback((exerciseId: string, target: number) => {
     setExercises((current) => {
@@ -1104,7 +1095,6 @@ function GymScreen() {
 
   const loadSavedSession = useCallback((session: GymSession) => {
     setWorkoutTimer(null);
-    restAlerted.current = false;
     setSessionId(session.id);
     setSessionName(session.name);
     setDuration(session.durationMinutes ? String(session.durationMinutes) : "");
@@ -1129,7 +1119,6 @@ function GymScreen() {
 
   const seedNewSession = useCallback(() => {
     setWorkoutTimer(null);
-    restAlerted.current = false;
     setSessionId(uniqueId("gym"));
     setDuration("");
     setCalories("");
@@ -1277,46 +1266,16 @@ function GymScreen() {
     workoutTimer,
   ]);
 
-  useEffect(() => {
+  useFocusEffect(
+    useCallback(() => {
     // Native timestamps and the workout notification remain authoritative while
     // this tab is offscreen; only the visible one-second display ticker pauses.
-    if (!isFocused || !workoutTimer || workoutTimer.phase === "paused") return;
+    if (!workoutTimer || workoutTimer.phase === "paused") return;
     setTimerNow(Date.now());
     const timer = setInterval(() => setTimerNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [isFocused, workoutTimer]);
-
-  useEffect(() => {
-    if (
-      !workoutTimer ||
-      appActivity === "active" ||
-      !["set_rest", "exercise_rest"].includes(workoutTimer.phase) ||
-      restAlerted.current ||
-      timerPhaseSeconds <= recommendedRestSeconds(intensity) + 60 ||
-      state.settings.notifications.gymRestAlerts === false
-    )
-      return;
-    restAlerted.current = true;
-    void Notifications.getPermissionsAsync()
-      .then((permission) => {
-        if (!permission.granted) return;
-        return Notifications.scheduleNotificationAsync({
-          content: {
-            title: "Rest timer",
-            body: `Rest is ${formatGymDuration(timerPhaseSeconds)}. Ready to continue?`,
-            data: { route: "/gym" },
-          },
-          trigger: null,
-        });
-      })
-      .catch(() => undefined);
-  }, [
-    appActivity,
-    intensity,
-    state.settings.notifications.gymRestAlerts,
-    timerPhaseSeconds,
-    workoutTimer,
-  ]);
+    }, [workoutTimer]),
+  );
 
   useEffect(() => {
     if (Platform.OS === "web") return;
@@ -1738,7 +1697,6 @@ function GymScreen() {
       preciseDuration ? String(Math.round(preciseDuration * 10) / 10) : "",
     );
     setWorkoutTimer(null);
-    restAlerted.current = false;
     Alert.alert(
       sessionCompletedSets ? "Workout saved" : "Day planned",
       sessionCompletedSets
@@ -1785,7 +1743,6 @@ function GymScreen() {
       if (nextSet) {
         setExercises(nextExercises);
         setTimerNow(now);
-        restAlerted.current = false;
         setWorkoutTimer({
           ...workoutTimer,
           phase: "set_rest",
@@ -1808,7 +1765,6 @@ function GymScreen() {
       if (nextExercise) {
         setExercises(nextExercises);
         setTimerNow(now);
-        restAlerted.current = false;
         setWorkoutTimer({
           ...workoutTimer,
           phase: "exercise_rest",
@@ -1842,7 +1798,6 @@ function GymScreen() {
     }
     setExercises(nextExercises);
     setTimerNow(now);
-    restAlerted.current = false;
     setWorkoutTimer({
       ...workoutTimer,
       phase: "work",

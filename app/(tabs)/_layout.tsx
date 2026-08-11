@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useIsFocused } from "@react-navigation/native";
 import { Href, Tabs } from "expo-router";
 import React, { useMemo } from "react";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
+import { Freeze } from "react-freeze";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -9,6 +11,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { LandingPage } from "@/src/types";
 import { useTranslation } from "@/src/i18n";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -23,12 +26,23 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   status: "accessibility-outline",
 };
 
+function WebTabFreeze({ children }: React.PropsWithChildren) {
+  const isFocused = useIsFocused();
+  // react-native-screens freezes inactive native screens, but its web fallback
+  // leaves every visited tab mounted and subscribed to the full app state.
+  // Suspend only hidden web tab subtrees so large Status/Progress histories do
+  // not re-render behind the page the user is actually touching.
+  if (Platform.OS !== "web") return children;
+  return <Freeze freeze={!isFocused}>{children}</Freeze>;
+}
+
 export default function TabLayout() {
   const accent = useGroupAccent();
   const { state } = useApp();
   const colors = useAppColors();
   const t = useTranslation();
   const insets = useSafeAreaInsets();
+  const softwareKeyboardVisible = useSoftwareKeyboardVisibility();
   const hasUnreadChat = useMemo(() => {
     const readAt =
       state.settings.notifications.chatReadAtByConversation ?? {};
@@ -135,6 +149,9 @@ export default function TabLayout() {
   return (
     <Tabs
       initialRouteName={defaultTab}
+      screenLayout={({ children }) => (
+        <WebTabFreeze>{children}</WebTabFreeze>
+      )}
       // Inactive native trees must not keep drawing charts/lists behind the
       // visible page. Routes stay mounted so their local navigation state is
       // preserved, while React Navigation detaches and freezes their views.
@@ -150,7 +167,9 @@ export default function TabLayout() {
           : () => null,
         tabBarActiveTintColor: accent,
         tabBarInactiveTintColor: colors.faint,
-        tabBarHideOnKeyboard: true,
+        // React Native Web does not emit the Keyboard events consumed by
+        // tabBarHideOnKeyboard. Its visual viewport is handled below instead.
+        tabBarHideOnKeyboard: Platform.OS !== "web",
         // The default tab-bar show animation keeps the bar absolutely
         // positioned for 250 ms after Android has already closed the keyboard,
         // then puts it back into layout. On Chat that creates a second resize
@@ -164,6 +183,10 @@ export default function TabLayout() {
               }
             : undefined,
         tabBarStyle: {
+          display:
+            Platform.OS === "web" && softwareKeyboardVisible
+              ? "none"
+              : "flex",
           // Chat reserves the measured tab-bar height inside its own footer.
           // Keeping the bar overlaid there prevents hide/show from changing
           // the scene height in a second layout pass after the keyboard moves.

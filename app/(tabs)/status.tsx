@@ -45,24 +45,27 @@ import { palette, useAppColors } from "@/src/theme";
 
 const SEGMENTS = 32;
 const RING_SIZE = 76;
+const FLANK_RING_SIZE = 68;
 
 function ProgressRing({
   progress,
   color,
+  size = RING_SIZE,
   unavailable,
 }: {
   progress: number;
   color: string;
+  size?: number;
   unavailable: boolean;
 }) {
   const colors = useAppColors();
   const filled = Math.round(Math.max(0, Math.min(1, progress)) * SEGMENTS);
   const ringColor = unavailable ? palette.amber : color;
   return (
-    <View style={styles.ring}>
+    <View style={{ height: size, width: size }}>
       {Array.from({ length: SEGMENTS }, (_, index) => {
         const angle = (index / SEGMENTS) * Math.PI * 2 - Math.PI / 2;
-        const radius = RING_SIZE / 2 - 4;
+        const radius = size / 2 - 4;
         return (
           <View
             key={index}
@@ -70,8 +73,8 @@ function ProgressRing({
             style={[
               styles.segment,
               {
-                left: RING_SIZE / 2 + Math.cos(angle) * radius - 1.5,
-                top: RING_SIZE / 2 + Math.sin(angle) * radius - 4,
+                left: size / 2 + Math.cos(angle) * radius - 1.5,
+                top: size / 2 + Math.sin(angle) * radius - 4,
                 backgroundColor: index < filled ? ringColor : colors.border,
                 transform: [{ rotate: `${(index / SEGMENTS) * 360}deg` }],
               },
@@ -94,10 +97,12 @@ function ProgressRing({
 
 function GoalOrbit({
   anchor,
+  flank = false,
   period,
   rollup,
 }: {
   anchor: string;
+  flank?: boolean;
   period: LeaderboardPeriod;
   rollup: StatusMetricRollup;
 }) {
@@ -114,11 +119,16 @@ function GoalOrbit({
           params: { metric: metric.id, date: anchor, period },
         } as never)
       }
-      style={({ pressed }) => [styles.goal, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.goal,
+        flank && { width: FLANK_RING_SIZE },
+        pressed && styles.pressed,
+      ]}
     >
       <ProgressRing
         progress={progress}
         color={met ? GOAL_COMPLETE_COLOR : metric.color}
+        size={flank ? FLANK_RING_SIZE : RING_SIZE}
         unavailable={!opportunities}
       />
       <Text
@@ -132,15 +142,11 @@ function GoalOrbit({
   );
 }
 
-function StatusSideStat({
-  accent,
+function StatusBodyFact({
   label,
-  roomy,
   value,
 }: {
-  accent: string;
   label: string;
-  roomy: boolean;
   value: string;
 }) {
   const colors = useAppColors();
@@ -150,12 +156,10 @@ function StatusSideStat({
       accessible
       accessibilityLabel={`${t(label)}: ${value}`}
       style={[
-        styles.sideStat,
-        roomy && styles.sideStatRoomy,
+        styles.bodyFact,
         {
           backgroundColor: colors.canvas,
           borderColor: colors.border,
-          borderTopColor: accent,
         },
       ]}
     >
@@ -163,7 +167,7 @@ function StatusSideStat({
         numberOfLines={2}
         adjustsFontSizeToFit
         minimumFontScale={0.72}
-        style={[styles.sideStatLabel, { color: colors.muted }]}
+        style={[styles.bodyFactLabel, { color: colors.muted }]}
       >
         {label}
       </Text>
@@ -172,7 +176,7 @@ function StatusSideStat({
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.72}
-        style={[styles.sideStatValue, { color: colors.ink }]}
+        style={[styles.bodyFactValue, { color: colors.ink }]}
       >
         {value}
       </Text>
@@ -186,6 +190,7 @@ export default function StatusPage() {
   const { t } = useLocalization();
   const { width: viewportWidth } = useWindowDimensions();
   const roomyStatus = viewportWidth >= 480;
+  const narrowStatus = viewportWidth < 360;
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
@@ -297,16 +302,6 @@ export default function StatusPage() {
     },
     [calculationAnchor, calculationInputs],
   );
-  const workoutCount = useMemo(() => {
-    void calculationInputs;
-    const currentState = calculationStateRef.current;
-    const selectedDates = new Set(calculationDates);
-    return (currentState.gymSessions ?? []).filter(
-      (session) =>
-        session.userId === currentState.currentUserId &&
-        selectedDates.has(session.localDate),
-    ).length;
-  }, [calculationDates, calculationInputs]);
   const bodyCompositionStat =
     typeof avatarProgression.currentBodyFatPercent === "number"
       ? {
@@ -319,9 +314,24 @@ export default function StatusPage() {
             value: `${avatarProgression.currentLeanBodyMassKg.toFixed(1)} kg`,
           }
         : {
-            label: "Tracked goals",
-            value: String(summary.metrics.length),
+            label: "Body fat",
+            value: "—",
           };
+  // The existing tracker order is the user's display order, so reordering
+  // trackers also determines which goal rings sit closest to the avatar. Keep
+  // an even flank count for a balanced narrow-phone layout; any remainder
+  // continues in the compact grid below.
+  const flankGoalCount = narrowStatus
+    ? 0
+    : summary.metrics.length >= 4
+      ? 4
+      : summary.metrics.length >= 2
+        ? 2
+        : 0;
+  const flankGoals = summary.metrics.slice(0, flankGoalCount);
+  const leftFlankGoals = flankGoals.filter((_, index) => index % 2 === 0);
+  const rightFlankGoals = flankGoals.filter((_, index) => index % 2 === 1);
+  const remainingGoals = summary.metrics.slice(flankGoalCount);
   const choosePeriod = useCallback(
     (next: Exclude<LeaderboardPeriod, "custom">) => {
       setPeriod(next);
@@ -404,28 +414,22 @@ export default function StatusPage() {
                 roomyStatus && styles.avatarStageRoomy,
               ]}
             >
-              <View style={styles.sideRail}>
-                <StatusSideStat
-                  accent={
-                    summary.opportunities > 0 &&
-                    summary.completed === summary.opportunities
-                      ? GOAL_COMPLETE_COLOR
-                      : colors.primary
-                  }
-                  label="Completed"
-                  roomy={roomyStatus}
-                  value={
-                    summary.opportunities
-                      ? `${summary.completed}/${summary.opportunities}`
-                      : "—"
-                  }
-                />
-                <StatusSideStat
-                  accent={colors.primary}
-                  label="Workouts"
-                  roomy={roomyStatus}
-                  value={String(workoutCount)}
-                />
+              <View
+                style={[
+                  styles.goalRail,
+                  !flankGoalCount && styles.goalRailEmpty,
+                  roomyStatus && styles.goalRailRoomy,
+                ]}
+              >
+                {leftFlankGoals.map((rollup) => (
+                  <GoalOrbit
+                    key={rollup.metric.id}
+                    rollup={rollup}
+                    anchor={anchor}
+                    period={period}
+                    flank
+                  />
+                ))}
               </View>
 
               <View style={styles.avatarColumn}>
@@ -442,20 +446,33 @@ export default function StatusPage() {
                 />
               </View>
 
-              <View style={styles.sideRail}>
-                <StatusSideStat
-                  accent={colors.primary}
-                  label="Weight"
-                  roomy={roomyStatus}
-                  value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
-                />
-                <StatusSideStat
-                  accent={colors.primary}
-                  label={bodyCompositionStat.label}
-                  roomy={roomyStatus}
-                  value={bodyCompositionStat.value}
-                />
+              <View
+                style={[
+                  styles.goalRail,
+                  !flankGoalCount && styles.goalRailEmpty,
+                  roomyStatus && styles.goalRailRoomy,
+                ]}
+              >
+                {rightFlankGoals.map((rollup) => (
+                  <GoalOrbit
+                    key={rollup.metric.id}
+                    rollup={rollup}
+                    anchor={anchor}
+                    period={period}
+                    flank
+                  />
+                ))}
               </View>
+            </View>
+            <View style={styles.bodyFacts}>
+              <StatusBodyFact
+                label="Weight"
+                value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
+              />
+              <StatusBodyFact
+                label={bodyCompositionStat.label}
+                value={bodyCompositionStat.value}
+              />
             </View>
             {member ? (
               <Text
@@ -477,9 +494,9 @@ export default function StatusPage() {
             </Text>
           </View>
 
-          {summary.metrics.length ? (
+          {remainingGoals.length ? (
             <View style={styles.goalGrid}>
-              {summary.metrics.map((rollup) => (
+              {remainingGoals.map((rollup) => (
                 <GoalOrbit
                   key={rollup.metric.id}
                   rollup={rollup}
@@ -505,40 +522,50 @@ const styles = StyleSheet.create({
     alignItems: "stretch",
     justifyContent: "center",
     flexDirection: "row",
-    columnGap: 4,
+    columnGap: 2,
   },
   avatarStageRoomy: { columnGap: 12 },
   avatarColumn: { width: 164, alignItems: "center", justifyContent: "center" },
-  sideRail: {
-    flex: 1,
-    maxWidth: 112,
+  goalRail: {
+    width: FLANK_RING_SIZE,
     justifyContent: "space-evenly",
-    gap: 8,
+    alignItems: "center",
+    alignSelf: "stretch",
   },
-  sideStat: {
-    minHeight: 60,
+  goalRailRoomy: { width: 92 },
+  goalRailEmpty: { width: 0 },
+  bodyFacts: {
+    width: "100%",
+    maxWidth: 286,
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 2,
+  },
+  bodyFact: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 44,
     borderWidth: 1,
-    borderTopWidth: 2,
-    borderRadius: 13,
-    paddingHorizontal: 4,
-    paddingVertical: 7,
+    borderRadius: 14,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
     alignItems: "center",
     justifyContent: "center",
-    gap: 3,
+    gap: 1,
   },
-  sideStatRoomy: { minHeight: 66, paddingHorizontal: 8, paddingVertical: 9 },
-  sideStatLabel: {
+  bodyFactLabel: {
     width: "100%",
     textAlign: "center",
-    fontSize: 8,
-    lineHeight: 10,
+    fontSize: 9,
+    lineHeight: 11,
     fontWeight: "800",
   },
-  sideStatValue: {
+  bodyFactValue: {
     width: "100%",
     textAlign: "center",
-    fontSize: 13,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 15,
     fontWeight: "900",
   },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
@@ -551,7 +578,6 @@ const styles = StyleSheet.create({
   },
   goal: { width: 92, alignItems: "center", gap: 5 },
   pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
-  ring: { width: RING_SIZE, height: RING_SIZE },
   segment: { position: "absolute", width: 3, height: 8, borderRadius: 2 },
   ringLabel: {
     ...StyleSheet.absoluteFillObject,

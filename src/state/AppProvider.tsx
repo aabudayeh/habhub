@@ -201,6 +201,7 @@ function sameOwnedRowsByReference<T extends { userId: string }>(
   right: T[],
   userId: string,
 ) {
+  if (left === right) return true;
   let leftIndex = 0;
   let rightIndex = 0;
   while (true) {
@@ -222,6 +223,7 @@ function sameOwnedRowsByReference<T extends { userId: string }>(
  * a second monolithic app snapshot when only those transient rows changed.
  */
 function localPersistenceChanged(previous: AppState, next: AppState) {
+  if (previous === next) return false;
   if (
     previous.version !== next.version ||
     previous.currentUserId !== next.currentUserId ||
@@ -745,46 +747,51 @@ function withLocalDeletionTombstones(
   next: AppState,
 ): AppState {
   if (previous.currentUserId !== next.currentUserId) return next;
-  const previousEntryIds = new Set(
-    previous.entries
-      .filter((entry) => entry.userId === previous.currentUserId)
-      .map((entry) => entry.id),
+  const entriesChanged = previous.entries !== next.entries;
+  const photosChanged = previous.photos !== next.photos;
+  // Most local actions only update settings, todos, timers, or another small
+  // collection. Their reducers preserve the entries/photos array references,
+  // which is definitive proof that no deletion tombstone can have changed.
+  // Avoid walking a year of Health Connect rows on the originating tap.
+  if (!entriesChanged && !photosChanged) return next;
+
+  const changedOwnedIds = <T extends { id: string; userId: string }>(
+    previousItems: T[],
+    nextItems: T[],
+    changed: boolean,
+  ) => {
+    if (!changed)
+      return { removed: [] as string[], added: new Set<string>() };
+    const previousIds = new Set<string>();
+    const nextIds = new Set<string>();
+    for (const item of previousItems)
+      if (item.userId === previous.currentUserId) previousIds.add(item.id);
+    for (const item of nextItems)
+      if (item.userId === next.currentUserId) nextIds.add(item.id);
+    const removed: string[] = [];
+    const added = new Set<string>();
+    previousIds.forEach((id) => {
+      if (!nextIds.has(id)) removed.push(id);
+    });
+    nextIds.forEach((id) => {
+      if (!previousIds.has(id)) added.add(id);
+    });
+    return { removed, added };
+  };
+  const entryChanges = changedOwnedIds(
+    previous.entries,
+    next.entries,
+    entriesChanged,
   );
-  const nextEntryIds = new Set(
-    next.entries
-      .filter((entry) => entry.userId === next.currentUserId)
-      .map((entry) => entry.id),
+  const photoChanges = changedOwnedIds(
+    previous.photos,
+    next.photos,
+    photosChanged,
   );
-  const removedEntryIds = previous.entries
-    .filter(
-      (entry) =>
-        entry.userId === previous.currentUserId &&
-        !nextEntryIds.has(entry.id),
-    )
-    .map((entry) => entry.id);
-  const addedEntryIds = new Set(
-    [...nextEntryIds].filter((id) => !previousEntryIds.has(id)),
-  );
-  const previousPhotoIds = new Set(
-    previous.photos
-      .filter((photo) => photo.userId === previous.currentUserId)
-      .map((photo) => photo.id),
-  );
-  const nextPhotoIds = new Set(
-    next.photos
-      .filter((photo) => photo.userId === next.currentUserId)
-      .map((photo) => photo.id),
-  );
-  const removedPhotoIds = previous.photos
-    .filter(
-      (photo) =>
-        photo.userId === previous.currentUserId &&
-        !nextPhotoIds.has(photo.id),
-    )
-    .map((photo) => photo.id);
-  const addedPhotoIds = new Set(
-    [...nextPhotoIds].filter((id) => !previousPhotoIds.has(id)),
-  );
+  const removedEntryIds = entryChanges.removed;
+  const addedEntryIds = entryChanges.added;
+  const removedPhotoIds = photoChanges.removed;
+  const addedPhotoIds = photoChanges.added;
   if (
     !removedEntryIds.length &&
     !removedPhotoIds.length &&
@@ -3458,6 +3465,54 @@ export function AppProvider({ children }: PropsWithChildren) {
     dispatch({ type: "replaceLocal", state: next });
   }, []);
 
+  // These callbacks sit on provider/effect boundaries. Keeping their identity
+  // stable prevents every unrelated entry, message, or presence update from
+  // tearing down and rebuilding Health Connect and root notification effects.
+  const updateSettingsAction = useCallback<
+    AppContextValue["updateSettings"]
+  >(
+    (changes) => void commitAction({ type: "settings", changes }),
+    [commitAction],
+  );
+  const importHealthEntriesAction = useCallback<
+    AppContextValue["importHealthEntries"]
+  >(
+    (
+      entries,
+      provider,
+      metricIds,
+      fromDate,
+      finalizeInitialImport,
+      preserveTrackedGoalHistory,
+    ) => {
+      const previous = persistenceStateRef.current;
+      const next = withLocalDeletionTombstones(
+        previous,
+        reducer(previous, {
+          type: "importHealth",
+          entries,
+          provider,
+          metricIds,
+          fromDate,
+          finalizeInitialImport,
+          preserveTrackedGoalHistory,
+        }),
+      );
+      return commitReducedState(next, true).then(async () => {
+        // Historical repairs must remain silent. Only a current-day value
+        // crossing a configured threshold can emit an immediate milestone.
+        if (entries.some((entry) => entry.localDate === dateKey())) {
+          await notifyProgressMilestones(previous, next, dateKey());
+        }
+      });
+    },
+    [commitReducedState],
+  );
+  const flushLocalPersistenceAction = useCallback(
+    () => persistLatestState(true),
+    [persistLatestState],
+  );
+
   const value = useMemo<AppContextValue>(
     () => ({
       state,
@@ -3600,7 +3655,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           metricId,
           at: new Date().toISOString(),
         }),
-      updateSettings: (changes) => void commitAction({ type: "settings", changes }),
+      updateSettings: updateSettingsAction,
       updateEnergyProfile: (changes) =>
         void commitAction({ type: "energyProfile", changes }),
       createGroup: (name, options) =>
@@ -3625,36 +3680,8 @@ export function AppProvider({ children }: PropsWithChildren) {
         void commitAction({ type: "memberName", memberId, name }),
       setMemberRole: (memberId, role) =>
         void commitAction({ type: "memberRole", memberId, role }),
-      importHealthEntries: (
-        entries,
-        provider,
-        metricIds,
-        fromDate,
-        finalizeInitialImport,
-        preserveTrackedGoalHistory,
-      ) => {
-        const previous = persistenceStateRef.current;
-        const next = withLocalDeletionTombstones(
-          previous,
-          reducer(previous, {
-            type: "importHealth",
-            entries,
-            provider,
-            metricIds,
-            fromDate,
-            finalizeInitialImport,
-            preserveTrackedGoalHistory,
-          }),
-        );
-        return commitReducedState(next, true).then(async () => {
-          // Historical repairs must remain silent. Only a current-day value
-          // crossing a configured threshold can emit an immediate milestone.
-          if (entries.some((entry) => entry.localDate === dateKey())) {
-            await notifyProgressMilestones(previous, next, dateKey());
-          }
-        });
-      },
-      flushLocalPersistence: () => persistLatestState(true),
+      importHealthEntries: importHealthEntriesAction,
+      flushLocalPersistence: flushLocalPersistenceAction,
       stageState,
       replaceState,
       resetDemo: () => void commitAction({ type: "reset" }),
@@ -3662,11 +3689,13 @@ export function AppProvider({ children }: PropsWithChildren) {
     [
       commitAction,
       commitReducedState,
+      flushLocalPersistenceAction,
       hydrated,
-      persistLatestState,
+      importHealthEntriesAction,
       stageState,
       replaceState,
       state,
+      updateSettingsAction,
     ],
   );
 

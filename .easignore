@@ -36,6 +36,7 @@ browser-extension/
 
 # Scratch and local-only projects
 /work/
+/tmp/
 /outputs/
 /invite-site/
 app-example/

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
-import { AppState as NativeAppState, Platform } from "react-native";
+import {
+  AppState as NativeAppState,
+  InteractionManager,
+  Platform,
+} from "react-native";
 
 import { dateKey } from "@/src/domain/date";
 import { notifyScreenTimeAppLimits } from "@/src/notifications/push";
@@ -28,6 +32,7 @@ export function ScreenTimeSyncBridge() {
   const sync = useCallback(async () => {
     if (
       Platform.OS !== "android" ||
+      NativeAppState.currentState !== "active" ||
       !hydrated ||
       syncingRef.current ||
       !stateRef.current.metrics.some((metric) => metric.id === "screen_time") ||
@@ -69,14 +74,57 @@ export function ScreenTimeSyncBridge() {
   }, [hydrated]);
 
   useEffect(() => {
-    void sync();
-    const interval = setInterval(() => void sync(), FOREGROUND_REFRESH_MS);
+    let queued = false;
+    let delayTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleTask: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
+    const cancelQueued = () => {
+      queued = false;
+      if (delayTimer) clearTimeout(delayTimer);
+      delayTimer = null;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+      idleTask?.cancel();
+      idleTask = null;
+    };
+    const schedule = (delayMs: number) => {
+      if (NativeAppState.currentState !== "active" || queued) return;
+      queued = true;
+      delayTimer = setTimeout(() => {
+        delayTimer = null;
+        let completed = false;
+        const run = () => {
+          if (completed) return;
+          completed = true;
+          queued = false;
+          if (fallbackTimer) clearTimeout(fallbackTimer);
+          fallbackTimer = null;
+          idleTask?.cancel();
+          idleTask = null;
+          void sync();
+        };
+        // UsageStats queries and limit evaluation can touch every installed
+        // app. Keep that work away from startup/resume navigation frames, with
+        // a bounded fallback so screen-time data still refreshes reliably.
+        const task = InteractionManager.runAfterInteractions(run);
+        if (completed) task.cancel();
+        else {
+          idleTask = task;
+          fallbackTimer = setTimeout(run, 1_500);
+        }
+      }, delayMs);
+    };
+    schedule(1_200);
+    const interval = setInterval(() => schedule(0), FOREGROUND_REFRESH_MS);
     const subscription = NativeAppState.addEventListener("change", (next) => {
-      if (next === "active") void sync();
+      if (next === "active") schedule(900);
+      else cancelQueued();
     });
     return () => {
       clearInterval(interval);
       subscription.remove();
+      cancelQueued();
     };
   }, [sync]);
 

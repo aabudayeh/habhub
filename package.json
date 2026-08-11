@@ -20,8 +20,10 @@
     "validate:avatar": "node scripts/validate-status-avatar.mjs",
     "validate:health": "node --no-warnings --experimental-strip-types scripts/validate-health-dedup.mjs",
     "validate:progress-grid": "node scripts/validate-progress-grid-navigation.mjs",
-    "check": "pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm typecheck && pnpm lint",
-    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm typecheck && pnpm lint && pnpm export:web"
+    "validate:profile-sync": "node --no-warnings --experimental-strip-types scripts/validate-profile-sync.mjs",
+    "validate:sync-gates": "node scripts/validate-sync-gates.mjs",
+    "check": "pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -62,6 +64,7 @@
     "expo-web-browser": "~15.0.11",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-freeze": "1.0.4",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-health-connect": "3.5.3",

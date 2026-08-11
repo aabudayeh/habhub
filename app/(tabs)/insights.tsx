@@ -17,6 +17,7 @@ import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
 import { useLocale, useTranslation } from "@/src/i18n";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
@@ -262,10 +263,7 @@ function Insights() {
       updateSettings({ progressHistoryRange }),
     [updateSettings],
   );
-  useEffect(() => {
-    setCloudSyncPaused("progress-edit", editing);
-    return () => setCloudSyncPaused("progress-edit", false);
-  }, [editing]);
+  useFocusedCloudSyncPause("progress-edit", editing);
   useEffect(() => {
     if (!editing || progressMode !== "overview") return;
     const timer = setTimeout(

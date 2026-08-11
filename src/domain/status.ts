@@ -67,10 +67,14 @@ function latestMeasurementAtOrBefore(
       entry.value <= 0
     )
       continue;
+    const updateTime = entry.sourceUpdatedAt ?? entry.recordedAt;
+    const latestUpdateTime = latest
+      ? (latest.sourceUpdatedAt ?? latest.recordedAt)
+      : "";
     if (
       !latest ||
-      `${entry.localDate}:${entry.recordedAt}` >
-        `${latest.localDate}:${latest.recordedAt}`
+      `${entry.localDate}:${updateTime}:${entry.id}` >
+        `${latest.localDate}:${latestUpdateTime}:${latest.id}`
     )
       latest = entry;
   }
