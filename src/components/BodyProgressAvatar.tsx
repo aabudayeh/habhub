@@ -21,7 +21,7 @@ import {
 } from "@/src/domain/statusAvatar";
 import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
-import { BiologicalSex } from "@/src/types";
+import { BiologicalSex, StatusAvatarStyle } from "@/src/types";
 
 const BODY_WIDTH = 132;
 const BODY_HEIGHT = 278;
@@ -84,56 +84,39 @@ export function bodySilhouettePath(
       : 11;
 
   const start: Point = [CENTER_X, 8];
-  const head: BodySegment[] = female
-    ? [
-        curve(
-          [CENTER_X + headHalf * 0.62, 8],
-          [CENTER_X + headHalf, 16],
-          [CENTER_X + headHalf, 31],
-        ),
-        curve(
-          [CENTER_X + headHalf, 43],
-          [CENTER_X + headHalf + 4.5, 50],
-          [CENTER_X + headHalf + 6.5, 62],
-        ),
-        curve(
-          [CENTER_X + headHalf + 8.5, 72],
-          [CENTER_X + headHalf + 7, 79],
-          [CENTER_X + headHalf + 5, 84],
-        ),
-        curve(
-          [CENTER_X + headHalf, 81],
-          [CENTER_X + faceNeckHalf + 2, 75],
-          [CENTER_X + faceNeckHalf, 70],
-        ),
-        curve(
-          [CENTER_X + faceNeckHalf, 74],
-          [CENTER_X + faceNeckHalf, 78],
-          [CENTER_X + faceNeckHalf + 0.5, 80],
-        ),
-      ]
-    : [
-        curve(
-          [CENTER_X + headHalf * 0.62, 8],
-          [CENTER_X + headHalf, 16],
-          [CENTER_X + headHalf, 31],
-        ),
-        curve(
-          [CENTER_X + headHalf, 43],
-          [CENTER_X + headHalf - 1, 50],
-          [CENTER_X + headHalf - 4.5, 55],
-        ),
-        curve(
-          [CENTER_X + headHalf - 6, 60],
-          [CENTER_X + faceNeckHalf, 64],
-          [CENTER_X + faceNeckHalf, 70],
-        ),
-        curve(
-          [CENTER_X + faceNeckHalf, 74],
-          [CENTER_X + faceNeckHalf, 78],
-          [CENTER_X + faceNeckHalf + 0.5, 80],
-        ),
-      ];
+  const jawHalf = female ? 13.5 : geometry.variant === "male" ? 15 : 14.25;
+  const head: BodySegment[] = [
+    curve(
+      [CENTER_X + headHalf * 0.62, 8],
+      [CENTER_X + headHalf, 16],
+      [CENTER_X + headHalf, 30],
+    ),
+    curve(
+      [CENTER_X + headHalf, 35],
+      [CENTER_X + headHalf - 0.5, 40],
+      [CENTER_X + headHalf - 1, 43],
+    ),
+    curve(
+      [CENTER_X + headHalf + 3.5, 42],
+      [CENTER_X + headHalf + 4, 48],
+      [CENTER_X + headHalf + 1.5, 52],
+    ),
+    curve(
+      [CENTER_X + headHalf, 57],
+      [CENTER_X + jawHalf + 2, 62],
+      [CENTER_X + jawHalf, 64],
+    ),
+    curve(
+      [CENTER_X + jawHalf - 1, 67],
+      [CENTER_X + faceNeckHalf, 68],
+      [CENTER_X + faceNeckHalf, 71],
+    ),
+    curve(
+      [CENTER_X + faceNeckHalf, 75],
+      [CENTER_X + faceNeckHalf, 78],
+      [CENTER_X + faceNeckHalf + 0.5, 80],
+    ),
+  ];
 
   const segments: BodySegment[] = [
     ...head,
@@ -284,6 +267,200 @@ export function bodySilhouettePath(
   return `M ${point(start)} ${right} ${left} Z`;
 }
 
+/**
+ * Hair is anchored only to the stable head landmarks. It never scales with
+ * weight or training, so the face remains recognizably the same person while
+ * the body morphs. The rear layer adds a female bob without drawing a second
+ * head/body; the front layer supplies a clean hairline for each profile sex.
+ */
+function AvatarHair({
+  fillColor,
+  geometry,
+  layer,
+  lineColor,
+}: {
+  fillColor: string;
+  geometry: StatusAvatarGeometry;
+  layer: "back" | "front";
+  lineColor: string;
+}) {
+  const { headHalf } = geometry.body;
+  const female = geometry.variant === "female";
+
+  if (layer === "back") {
+    if (!female) return null;
+    const outer = headHalf + 4.5;
+    return (
+      <Path
+        d={`M ${CENTER_X} 4.5 C ${CENTER_X - outer * 0.68} 4.5 ${
+          CENTER_X - outer
+        } 16 ${CENTER_X - outer} 33 C ${CENTER_X - outer - 1.5} 48 ${
+          CENTER_X - outer - 1
+        } 66 ${CENTER_X - outer - 4} 82 Q ${CENTER_X - headHalf + 2} 80 ${
+          CENTER_X - 11
+        } 70 L ${CENTER_X + 11} 70 Q ${CENTER_X + headHalf - 2} 80 ${
+          CENTER_X + outer + 4
+        } 82 C ${CENTER_X + outer + 1} 66 ${CENTER_X + outer + 1.5} 48 ${
+          CENTER_X + outer
+        } 33 C ${CENTER_X + outer} 16 ${CENTER_X + outer * 0.68} 4.5 ${
+          CENTER_X
+        } 4.5 Z`}
+        fill={fillColor}
+        stroke={lineColor}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={3}
+      />
+    );
+  }
+
+  if (female) {
+    return (
+      <Path
+        d={`M ${CENTER_X - headHalf + 0.5} 33 C ${
+          CENTER_X - headHalf + 0.5
+        } 16 ${CENTER_X - headHalf * 0.56} 8 ${CENTER_X} 7.5 C ${
+          CENTER_X + headHalf * 0.66
+        } 7.5 ${CENTER_X + headHalf} 17 ${CENTER_X + headHalf - 0.2} 33 C ${
+          CENTER_X + headHalf * 0.52
+        } 27 ${CENTER_X + 7} 22 ${CENTER_X + 1.5} 22 C ${CENTER_X - 5} 20 ${
+          CENTER_X - headHalf * 0.45
+        } 26 ${CENTER_X - headHalf + 0.5} 33 Z`}
+        fill={fillColor}
+        stroke={lineColor}
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+      />
+    );
+  }
+
+  // A short side-parted haircut follows the same fixed head anchor for male
+  // and unspecified profiles. It does not alter face width or height.
+  return (
+    <Path
+      d={`M ${CENTER_X - headHalf + 1} 30 C ${CENTER_X - headHalf + 1} 16 ${
+        CENTER_X - headHalf * 0.55
+      } 8 ${CENTER_X - 1} 7.5 C ${CENTER_X + headHalf * 0.58} 7.5 ${
+        CENTER_X + headHalf - 0.5
+      } 16 ${CENTER_X + headHalf - 0.5} 29 C ${CENTER_X + 8} 23 ${
+        CENTER_X + 2
+      } 20 ${CENTER_X - 3} 20.5 C ${CENTER_X - 7} 21 ${
+        CENTER_X - 12
+      } 25 ${CENTER_X - headHalf + 1} 30 Z`}
+      fill={fillColor}
+      stroke={lineColor}
+      strokeLinejoin="round"
+      strokeWidth={1.8}
+    />
+  );
+}
+
+/**
+ * Optional body-model treatment. These are restrained anatomical contour
+ * hints inside the one silhouette—not a second body layer or a raster sprite.
+ * Their definition follows the same continuous fat/lean/training signals.
+ */
+function BodyModelDetails({
+  color,
+  geometry,
+}: {
+  color: string;
+  geometry: StatusAvatarGeometry;
+}) {
+  const { body, adiposity, muscleProgress } = geometry;
+  const female = geometry.variant === "female";
+  const definition = Math.max(
+    0.16,
+    Math.min(0.72, 0.28 + muscleProgress * 0.52 - Math.max(0, adiposity) * 0.2),
+  );
+  const chestY = female ? 123 : 119;
+  const waistY = 181;
+  const leftChest = CENTER_X - body.chestHalf * 0.66;
+  const rightChest = CENTER_X + body.chestHalf * 0.66;
+  const leftWaist = CENTER_X - body.waistHalf * 0.7;
+  const rightWaist = CENTER_X + body.waistHalf * 0.7;
+  const leftKnee = CENTER_X - body.kneeHalf * 0.56;
+  const rightKnee = CENTER_X + body.kneeHalf * 0.56;
+
+  return (
+    <G
+      fill="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      opacity={definition}
+    >
+      <Path
+        d={`M ${CENTER_X - body.neckHalf + 1} 87 Q ${
+          CENTER_X - body.chestHalf * 0.38
+        } 98 ${leftChest} 103 M ${CENTER_X + body.neckHalf - 1} 87 Q ${
+          CENTER_X + body.chestHalf * 0.38
+        } 98 ${rightChest} 103`}
+        strokeWidth={1.9}
+      />
+      <Path
+        d={`M ${leftChest} ${chestY} Q ${CENTER_X - body.chestHalf * 0.34} ${
+          chestY + 7
+        } ${CENTER_X - 2} ${chestY + 3} M ${rightChest} ${chestY} Q ${
+          CENTER_X + body.chestHalf * 0.34
+        } ${chestY + 7} ${CENTER_X + 2} ${chestY + 3}`}
+        strokeWidth={1.8}
+      />
+      <Path
+        d={`M ${CENTER_X} ${chestY + 7} C ${CENTER_X - 1} 145 ${
+          CENTER_X + 1
+        } 157 ${CENTER_X} 168`}
+        opacity={0.45 + muscleProgress * 0.55}
+        strokeWidth={1.5}
+      />
+      <Path
+        d={`M ${leftWaist} ${waistY} Q ${CENTER_X - body.waistHalf * 0.32} ${
+          waistY + 5
+        } ${CENTER_X - 4} ${waistY + 3} M ${rightWaist} ${waistY} Q ${
+          CENTER_X + body.waistHalf * 0.32
+        } ${waistY + 5} ${CENTER_X + 4} ${waistY + 3}`}
+        strokeWidth={1.35}
+      />
+      <Circle cx={CENTER_X} cy={173} r={1.7} fill={color} stroke="none" />
+      <Path
+        d={`M ${CENTER_X - body.hipHalf * 0.72} 218 Q ${
+          CENTER_X - body.thighHalf * 0.38
+        } 224 ${CENTER_X - 6} 228 M ${CENTER_X + body.hipHalf * 0.72} 218 Q ${
+          CENTER_X + body.thighHalf * 0.38
+        } 224 ${CENTER_X + 6} 228`}
+        strokeWidth={1.45}
+      />
+      <Path
+        d={`M ${leftKnee - 6} 307 Q ${leftKnee} 313 ${leftKnee + 6} 307 M ${
+          rightKnee - 6
+        } 307 Q ${rightKnee} 313 ${rightKnee + 6} 307`}
+        strokeWidth={1.45}
+      />
+      <Path
+        d={`M ${CENTER_X - body.calfHalf * 0.65} 333 Q ${
+          CENTER_X - body.calfHalf * 0.82
+        } 348 ${CENTER_X - body.ankleHalf * 0.72} 374 M ${
+          CENTER_X + body.calfHalf * 0.65
+        } 333 Q ${CENTER_X + body.calfHalf * 0.82} 348 ${
+          CENTER_X + body.ankleHalf * 0.72
+        } 374`}
+        strokeWidth={1.35}
+      />
+      <Path
+        d={`M ${CENTER_X - body.upperArmOuterHalf + 4} 123 Q ${
+          CENTER_X - body.elbowOuterHalf + 2
+        } 142 ${CENTER_X - body.elbowOuterHalf + 4} 161 M ${
+          CENTER_X + body.upperArmOuterHalf - 4
+        } 123 Q ${CENTER_X + body.elbowOuterHalf - 2} 142 ${
+          CENTER_X + body.elbowOuterHalf - 4
+        } 161`}
+        opacity={0.25 + muscleProgress * 0.75}
+        strokeWidth={1.5}
+      />
+    </G>
+  );
+}
+
 function NerdAccessories({
   color,
   geometry,
@@ -377,6 +554,7 @@ export function BodyProgressAvatar({
   muscleProgress = 0,
   progress,
   sex = "unspecified",
+  visualStyle = "silhouette",
   weightKg = 70,
 }: {
   bodyFatPercent?: number;
@@ -386,6 +564,7 @@ export function BodyProgressAvatar({
   muscleProgress?: number;
   progress: number;
   sex?: BiologicalSex;
+  visualStyle?: StatusAvatarStyle;
   weightKg?: number;
 }) {
   const colors = useAppColors();
@@ -476,6 +655,9 @@ export function BodyProgressAvatar({
   const transparentBoundary = Math.max(0, fillBoundary - 0.001);
   const hasVisibleFill = renderedProgress > 0.0005;
   const hasFullFill = renderedProgress >= 0.9995;
+  const bodyModel = visualStyle === "body_model";
+  const restingFillColor = bodyModel ? colors.primarySoft : GOAL_COMPLETE_COLOR;
+  const restingFillOpacity = bodyModel ? 1 : 0;
 
   return (
     <View
@@ -495,13 +677,13 @@ export function BodyProgressAvatar({
           <LinearGradient id={gradientId} x1={0} y1={0} x2={0} y2={1}>
             <Stop
               offset={0}
-              stopColor={GOAL_COMPLETE_COLOR}
-              stopOpacity={hasFullFill ? 1 : 0}
+              stopColor={hasFullFill ? GOAL_COMPLETE_COLOR : restingFillColor}
+              stopOpacity={hasFullFill ? 1 : restingFillOpacity}
             />
             <Stop
               offset={transparentBoundary}
-              stopColor={GOAL_COMPLETE_COLOR}
-              stopOpacity={hasFullFill ? 1 : 0}
+              stopColor={hasFullFill ? GOAL_COMPLETE_COLOR : restingFillColor}
+              stopOpacity={hasFullFill ? 1 : restingFillOpacity}
             />
             <Stop
               offset={fillBoundary}
@@ -515,6 +697,12 @@ export function BodyProgressAvatar({
             />
           </LinearGradient>
         </Defs>
+        <AvatarHair
+          fillColor={colors.card}
+          geometry={geometry}
+          layer="back"
+          lineColor={colors.ink}
+        />
         <Path
           d={bodyPath}
           fill={`url(#${gradientId})`}
@@ -522,6 +710,15 @@ export function BodyProgressAvatar({
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeWidth={3.6}
+        />
+        {bodyModel ? (
+          <BodyModelDetails color={colors.ink} geometry={geometry} />
+        ) : null}
+        <AvatarHair
+          fillColor={colors.card}
+          geometry={geometry}
+          layer="front"
+          lineColor={colors.ink}
         />
         <NerdAccessories
           color={colors.ink}

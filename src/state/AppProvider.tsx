@@ -563,7 +563,11 @@ const BODY_PROFILE_METRICS: readonly {
 ];
 
 function entryOrder(entry: MetricEntry) {
-  return `${entry.localDate}:${entry.recordedAt}`;
+  // recordedAt can be a sample/end-of-day timestamp in the future relative to
+  // the moment a Health aggregate or profile value was actually updated.
+  // sourceUpdatedAt keeps a newly logged/imported same-day composition value
+  // authoritative without letting an older date replace today's profile.
+  return `${entry.localDate}:${entry.sourceUpdatedAt ?? entry.recordedAt}`;
 }
 
 function latestNumericProfileEntry(

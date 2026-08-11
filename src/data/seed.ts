@@ -1399,6 +1399,7 @@ export function createInitialState(): AppState {
       completionIndicatorIcon: "ellipse-outline",
       completionIndicatorFillMode: "auto",
       showFeaturedCardProgressOutline: true,
+      statusAvatarStyle: "silhouette",
       todosBelowGoals: false,
       scheduleStartHour: 7,
       scheduleViewFilters: [],

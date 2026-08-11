@@ -20,6 +20,7 @@ import {
   AppLanguage,
   LandingPage,
   ProgressLayoutAvailability,
+  StatusAvatarStyle,
 } from "@/src/types";
 
 const pages: {
@@ -521,6 +522,28 @@ export default function DisplaySettings() {
         onPress={() => setAdvancedOpen((open) => !open)}
       >
         <Card style={styles.list}>
+          <SelectionMenu
+            title="Status avatar style"
+            items={[
+              {
+                id: "silhouette",
+                label: "Clean silhouette",
+                icon: "person-outline",
+              },
+              {
+                id: "body_model",
+                label: "Detailed body model",
+                icon: "fitness-outline",
+              },
+            ]}
+            selectedIds={[state.settings.statusAvatarStyle ?? "silhouette"]}
+            onChange={([value]) =>
+              value &&
+              updateSettings({ statusAvatarStyle: value as StatusAvatarStyle })
+            }
+            multiple={false}
+            searchable={false}
+          />
           <SelectionMenu
             title="Progress layouts"
             items={[

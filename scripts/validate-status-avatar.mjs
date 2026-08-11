@@ -86,6 +86,26 @@ assert.match(
   /entry\.localDate > anchorDate/,
   "selected-date composition must reject measurements after the anchor",
 );
+assert.match(
+  statusSource,
+  /isCurrentDate \? profile\.weightKg : undefined[\s\S]{0,180}latestMeasurementAtOrBefore\(state, "weight"/,
+  "today's avatar must use the canonical profile updated by logs and imports",
+);
+assert.match(
+  stateSource,
+  /function entryOrder\(entry: MetricEntry\) \{[\s\S]*?return `\$\{entry\.localDate\}:\$\{entry\.sourceUpdatedAt \?\? entry\.recordedAt\}`;/,
+  "same-day body composition must be ordered by its real update time",
+);
+assert.match(
+  stateSource,
+  /case "log"[\s\S]{0,7000}bodyProfileMapping[\s\S]{0,700}withEnergyProfile/,
+  "a current-day manual body-composition log must refresh the profile",
+);
+assert.match(
+  stateSource,
+  /case "importHealth"[\s\S]{0,2200}withLatestBodyProfileMeasurements/,
+  "a current-day imported body-composition reading must refresh the profile",
+);
 for (const field of ["bodyFatPercent", "leanBodyMassKg"]) {
   assert.match(
     profileEditorSource,

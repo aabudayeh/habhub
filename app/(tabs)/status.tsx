@@ -6,7 +6,12 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 
 import { AppText as Text } from "@/src/components/AppText";
@@ -127,10 +132,60 @@ function GoalOrbit({
   );
 }
 
+function StatusSideStat({
+  accent,
+  label,
+  roomy,
+  value,
+}: {
+  accent: string;
+  label: string;
+  roomy: boolean;
+  value: string;
+}) {
+  const colors = useAppColors();
+  const { t } = useLocalization();
+  return (
+    <View
+      accessible
+      accessibilityLabel={`${t(label)}: ${value}`}
+      style={[
+        styles.sideStat,
+        roomy && styles.sideStatRoomy,
+        {
+          backgroundColor: colors.canvas,
+          borderColor: colors.border,
+          borderTopColor: accent,
+        },
+      ]}
+    >
+      <Text
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        style={[styles.sideStatLabel, { color: colors.muted }]}
+      >
+        {label}
+      </Text>
+      <Text
+        translate={false}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        style={[styles.sideStatValue, { color: colors.ink }]}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 export default function StatusPage() {
   const { state } = useApp();
   const colors = useAppColors();
   const { t } = useLocalization();
+  const { width: viewportWidth } = useWindowDimensions();
+  const roomyStatus = viewportWidth >= 480;
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
@@ -242,6 +297,31 @@ export default function StatusPage() {
     },
     [calculationAnchor, calculationInputs],
   );
+  const workoutCount = useMemo(() => {
+    void calculationInputs;
+    const currentState = calculationStateRef.current;
+    const selectedDates = new Set(calculationDates);
+    return (currentState.gymSessions ?? []).filter(
+      (session) =>
+        session.userId === currentState.currentUserId &&
+        selectedDates.has(session.localDate),
+    ).length;
+  }, [calculationDates, calculationInputs]);
+  const bodyCompositionStat =
+    typeof avatarProgression.currentBodyFatPercent === "number"
+      ? {
+          label: "Body fat",
+          value: `${avatarProgression.currentBodyFatPercent.toFixed(1)}%`,
+        }
+      : typeof avatarProgression.currentLeanBodyMassKg === "number"
+        ? {
+            label: "Lean body mass",
+            value: `${avatarProgression.currentLeanBodyMassKg.toFixed(1)} kg`,
+          }
+        : {
+            label: "Tracked goals",
+            value: String(summary.metrics.length),
+          };
   const choosePeriod = useCallback(
     (next: Exclude<LeaderboardPeriod, "custom">) => {
       setPeriod(next);
@@ -318,16 +398,65 @@ export default function StatusPage() {
 
         <Card style={styles.statusCard}>
           <View style={styles.personWrap}>
-            <BodyProgressAvatar
-              bodyFatPercent={avatarProgression.currentBodyFatPercent}
-              heightCm={state.settings.energyProfile.heightCm}
-              leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
-              mindTier={avatarProgression.mindTier}
-              muscleProgress={avatarProgression.muscleProgress}
-              progress={summary.progress}
-              sex={state.settings.energyProfile.sex}
-              weightKg={avatarProgression.currentWeightKg}
-            />
+            <View
+              style={[
+                styles.avatarStage,
+                roomyStatus && styles.avatarStageRoomy,
+              ]}
+            >
+              <View style={styles.sideRail}>
+                <StatusSideStat
+                  accent={
+                    summary.opportunities > 0 &&
+                    summary.completed === summary.opportunities
+                      ? GOAL_COMPLETE_COLOR
+                      : colors.primary
+                  }
+                  label="Completed"
+                  roomy={roomyStatus}
+                  value={
+                    summary.opportunities
+                      ? `${summary.completed}/${summary.opportunities}`
+                      : "—"
+                  }
+                />
+                <StatusSideStat
+                  accent={colors.primary}
+                  label="Workouts"
+                  roomy={roomyStatus}
+                  value={String(workoutCount)}
+                />
+              </View>
+
+              <View style={styles.avatarColumn}>
+                <BodyProgressAvatar
+                  bodyFatPercent={avatarProgression.currentBodyFatPercent}
+                  heightCm={state.settings.energyProfile.heightCm}
+                  leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
+                  mindTier={avatarProgression.mindTier}
+                  muscleProgress={avatarProgression.muscleProgress}
+                  progress={summary.progress}
+                  sex={state.settings.energyProfile.sex}
+                  visualStyle={state.settings.statusAvatarStyle ?? "silhouette"}
+                  weightKg={avatarProgression.currentWeightKg}
+                />
+              </View>
+
+              <View style={styles.sideRail}>
+                <StatusSideStat
+                  accent={colors.primary}
+                  label="Weight"
+                  roomy={roomyStatus}
+                  value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
+                />
+                <StatusSideStat
+                  accent={colors.primary}
+                  label={bodyCompositionStat.label}
+                  roomy={roomyStatus}
+                  value={bodyCompositionStat.value}
+                />
+              </View>
+            </View>
             {member ? (
               <Text
                 translate={false}
@@ -367,10 +496,53 @@ export default function StatusPage() {
 }
 
 const styles = StyleSheet.create({
-  statusCard: { gap: 16, paddingVertical: 18 },
+  statusCard: { gap: 16, paddingHorizontal: 10, paddingVertical: 18 },
   personWrap: { alignItems: "center", justifyContent: "center", gap: 5 },
+  avatarStage: {
+    width: "100%",
+    maxWidth: 448,
+    alignSelf: "center",
+    alignItems: "stretch",
+    justifyContent: "center",
+    flexDirection: "row",
+    columnGap: 4,
+  },
+  avatarStageRoomy: { columnGap: 12 },
+  avatarColumn: { width: 164, alignItems: "center", justifyContent: "center" },
+  sideRail: {
+    flex: 1,
+    maxWidth: 112,
+    justifyContent: "space-evenly",
+    gap: 8,
+  },
+  sideStat: {
+    minHeight: 60,
+    borderWidth: 1,
+    borderTopWidth: 2,
+    borderRadius: 13,
+    paddingHorizontal: 4,
+    paddingVertical: 7,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  sideStatRoomy: { minHeight: 66, paddingHorizontal: 8, paddingVertical: 9 },
+  sideStatLabel: {
+    width: "100%",
+    textAlign: "center",
+    fontSize: 8,
+    lineHeight: 10,
+    fontWeight: "800",
+  },
+  sideStatValue: {
+    width: "100%",
+    textAlign: "center",
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
-  summary: { fontSize: 12, fontWeight: "700" },
+  summary: { maxWidth: 520, textAlign: "center", fontSize: 12, fontWeight: "700" },
   goalGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

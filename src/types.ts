@@ -665,6 +665,9 @@ export type AppLanguage =
   | "ru"
   | "fr";
 
+/** Code-native Status figure treatment; both modes share the same live body geometry. */
+export type StatusAvatarStyle = "silhouette" | "body_model";
+
 export type UserSettings = {
   /** Legacy/manual fallback. Formula variable `baseline` now resolves to calculated daily energy. */
   baselineCalories: number;
@@ -736,6 +739,8 @@ export type UserSettings = {
   completionIndicatorFillMode?: CompletionFillMode;
   /** Show the percentage-revealed outline around Today's featured card. */
   showFeaturedCardProgressOutline?: boolean;
+  /** Personal visual treatment for the continuously morphed Status figure. */
+  statusAvatarStyle?: StatusAvatarStyle;
   /** Put the to-do block below goal trackers instead of above them. */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */

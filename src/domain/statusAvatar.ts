@@ -324,7 +324,10 @@ export function statusBodyAppearance(
     adiposity,
     bodyMass,
     bodyShape,
-    heightScale: bounded(0.97 + (safeHeightCm - 170) / 600, 0.94, 1.04),
+    // Height changes presentation scale without distorting the fixed pose or
+    // limb ratios. The restrained range keeps every figure inside the same
+    // Status layout while still distinguishing short and tall profiles.
+    heightScale: bounded(1 + (safeHeightCm - 170) / 700, 0.95, 1.065),
     muscleProgress,
     muscleTier,
   };
@@ -362,43 +365,44 @@ export function statusAvatarGeometry(
   const chestHalf =
     (female ? 34 : male ? 38 : 36) +
     muscle * 5 +
-    size * 2.5 +
-    fatFull * 3 -
+    size * 3 +
+    fatFull * 4.5 -
     thin * 3;
   const waistHalf =
     (female ? 25.5 : male ? 28 : 27) +
-    size * 2.5 +
-    fatFull * 8 -
+    size * 3.5 +
+    fatFull * 11 -
     fatLean * 2.5 -
     thin * 2 -
     muscle * 0.8;
   const hipHalf =
     (female ? 38 : male ? 32 : 35) +
-    size * 3 +
-    fatFull * 5.5 -
+    size * 4 +
+    fatFull * 8 -
     fatLean * 1.5 -
     thin * 1.5 +
     muscle;
   const thighHalf =
     (female ? 31.5 : male ? 29.5 : 30.5) +
-    size * 2 +
-    fatFull * 4 -
+    size * 3 +
+    fatFull * 6 -
     fatLean -
     thin * 2 +
     muscle * 2;
   const kneeHalf =
     (female ? 20 : male ? 21 : 20.5) +
     size +
-    fatFull * 1.5 -
+    fatFull * 2 -
     thin * 1.5 +
     muscle;
   const calfHalf =
     (female ? 21.5 : male ? 23 : 22.2) +
     size +
-    fatFull -
+    fatFull * 2 -
     thin * 1.5 +
     muscle * 1.5;
-  const ankleHalf = (female ? 10 : male ? 11.5 : 10.8) + size * 0.5 + fatFull * 0.5;
+  const ankleHalf =
+    (female ? 10 : male ? 11.5 : 10.8) + size * 0.6 + fatFull;
 
   return {
     accessory: {
@@ -415,7 +419,8 @@ export function statusAvatarGeometry(
       calfHalf,
       chestHalf,
       elbowInnerHalf: shoulderHalf - 1 + muscle + size,
-      elbowOuterHalf: shoulderHalf + 10 + muscle * 2.5 + size * 1.4 + fatFull * 0.6,
+      elbowOuterHalf:
+        shoulderHalf + 10 + muscle * 2.5 + size * 1.4 + fatFull * 2,
       headHalf,
       hipHalf,
       kneeHalf,
@@ -423,10 +428,12 @@ export function statusAvatarGeometry(
       shoulderHalf,
       thighHalf,
       upperArmInnerHalf: shoulderHalf - 9 + muscle + size,
-      upperArmOuterHalf: shoulderHalf + 8 + muscle * 2.5 + size * 1.4 + fatFull * 0.6,
+      upperArmOuterHalf:
+        shoulderHalf + 8 + muscle * 2.5 + size * 1.4 + fatFull * 2,
       waistHalf,
       wristInnerHalf: shoulderHalf - 4 + size * 0.25 + fatFull * 0.25,
-      wristOuterHalf: shoulderHalf + 4 + muscle + size * 0.5 + fatFull * 0.5,
+      wristOuterHalf:
+        shoulderHalf + 4 + muscle + size * 0.5 + fatFull * 0.9,
     },
     adiposity: fat,
     bodyMass: mass,

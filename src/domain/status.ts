@@ -290,19 +290,21 @@ export function statusAvatarProgression(
   const profile = state.energyProfiles?.[userId] ?? state.settings.energyProfile;
   const isCurrentDate = anchorDate >= dateKey();
   const currentWeightKg =
+    (isCurrentDate ? profile.weightKg : undefined) ??
     latestMeasurementAtOrBefore(state, "weight", userId, anchorDate) ??
     profile.startingWeightKg ??
     profile.weightKg;
   const currentBodyFatPercent =
-    latestMeasurementAtOrBefore(state, "body_fat", userId, anchorDate) ??
-    (isCurrentDate ? profile.bodyFatPercent : undefined);
+    (isCurrentDate ? profile.bodyFatPercent : undefined) ??
+    latestMeasurementAtOrBefore(state, "body_fat", userId, anchorDate);
   const currentLeanBodyMassKg =
+    (isCurrentDate ? profile.leanBodyMassKg : undefined) ??
     latestMeasurementAtOrBefore(
       state,
       "lean_body_mass",
       userId,
       anchorDate,
-    ) ?? (isCurrentDate ? profile.leanBodyMassKg : undefined);
+    );
 
   const muscleProgress = statusMuscleProgress(
     state.gymSessions,
