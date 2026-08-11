@@ -2,6 +2,7 @@ allowBuilds:
   '@firebase/util': true
   protobufjs: true
   unrs-resolver: false
+virtualStoreDirMaxLength: 60
 packageExtensions:
   '@kingstinct/react-native-healthkit@*':
     dependencies:

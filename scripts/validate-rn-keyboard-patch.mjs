@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 const appConfig = JSON.parse(read("app.json"));
+const packageJson = JSON.parse(read("package.json"));
 const workspace = read("pnpm-workspace.yaml");
 const lockfile = read("pnpm-lock.yaml");
 const patchPath = "patches/react-native@0.81.5.patch";
 const patch = read(patchPath);
+const installedReactNativePath = fs.realpathSync("node_modules/react-native");
+const virtualStoreEntry = path.basename(
+  path.dirname(path.dirname(installedReactNativePath)),
+);
 
 const buildProperties = appConfig.expo.plugins.find(
   (plugin) => Array.isArray(plugin) && plugin[0] === "expo-build-properties",
@@ -19,6 +25,25 @@ assert.equal(
 assert.match(
   workspace,
   /patchedDependencies:\s*[\s\S]*react-native@0\.81\.5:\s*patches\/react-native@0\.81\.5\.patch/,
+);
+assert.match(
+  workspace,
+  /^virtualStoreDirMaxLength:\s*60\s*$/m,
+  "React Native source builds require a bounded pnpm virtual-store path",
+);
+assert.ok(
+  virtualStoreEntry.length <= 60,
+  `React Native virtual-store entry exceeds 60 characters: ${virtualStoreEntry}`,
+);
+assert.doesNotMatch(
+  virtualStoreEntry,
+  /=|patch_hash=/,
+  `React Native virtual-store entry is unsafe for Prefab CLI arguments: ${virtualStoreEntry}`,
+);
+assert.equal(
+  packageJson.scripts?.["eas-build-post-install"],
+  "pnpm doctor && pnpm validate:rn-keyboard",
+  "EAS must run Expo Doctor and the native keyboard packaging guard before Gradle",
 );
 assert.match(
   lockfile,
