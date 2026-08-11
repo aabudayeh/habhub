@@ -18,9 +18,10 @@ import {
   metricPeriodStats,
   trackedGoalSummary,
 } from "@/src/domain/metrics";
+import { resolvedGroupChallengeWins } from "@/src/domain/groupChallenges";
 import { memberDisplayName } from "@/src/domain/members";
 import { palette } from "@/src/theme";
-import { AppState, MetricDefinition } from "@/src/types";
+import { AppState, GroupChallenge, MetricDefinition } from "@/src/types";
 
 export type BadgePeriod =
   | "today"
@@ -90,6 +91,7 @@ function milestoneStatus(count: number): BadgeStatus {
 
 type BadgeCache = {
   anchor: string;
+  challenges: readonly GroupChallenge[];
   group: AppState["group"];
   metrics: AppState["metrics"];
   entries: AppState["entries"];
@@ -112,13 +114,16 @@ type BadgeCache = {
 };
 
 let badgeCache: BadgeCache | undefined;
+const EMPTY_GROUP_CHALLENGES: readonly GroupChallenge[] = [];
 
 export function buildBadges(
   state: AppState,
   anchor = dateKey(),
+  challenges: readonly GroupChallenge[] = EMPTY_GROUP_CHALLENGES,
 ): EarnedBadge[] {
   if (
     badgeCache?.anchor === anchor &&
+    badgeCache.challenges === challenges &&
     badgeCache.group === state.group &&
     badgeCache.metrics === state.metrics &&
     badgeCache.entries === state.entries &&
@@ -605,6 +610,40 @@ export function buildBadges(
       };
     }),
   );
+  const resolvedChallengeWins = resolvedGroupChallengeWins(
+    state,
+    challenges,
+    anchor,
+    dateKey(),
+  );
+  const challengeWinBadges = state.group.members.map((member): EarnedBadge => {
+    const memberWins = resolvedChallengeWins.filter((win) =>
+      win.winnerIds.includes(member.id),
+    );
+    const count = memberWins.length;
+    const nextTarget = nextMilestone(count);
+    return {
+      id: `challenge-wins:${member.id}`,
+      icon: "trophy",
+      title: "Challenge wins",
+      owner: memberDisplayName(state, member),
+      memberId: member.id,
+      caption:
+        count === 1 ? `${count} challenge win` : `${count} challenge wins`,
+      description: count
+        ? "Each finished challenge counts once, including a tied first place."
+        : "Finish a friend challenge in first place to earn this badge.",
+      earnedCount: count,
+      nextTarget,
+      progress: badgeProgress(count, nextTarget),
+      status: count > 0 ? "earned" : "locked",
+      category: "competition",
+      color: palette.amber,
+      period: "achievement",
+      periodLabel: labels.achievement,
+      anchorDate: memberWins[0]?.localDate ?? anchor,
+    };
+  });
   const earnedMilestoneBadges = [
     ...trackerGoalBadges,
     ...perfectDayBadges,
@@ -684,6 +723,7 @@ export function buildBadges(
     ...streakBadges,
     ...streakMilestoneBadges,
     ...personalBestBadges,
+    ...challengeWinBadges,
     ...earnedMilestoneBadges,
     {
       id: "comeback",
@@ -753,6 +793,7 @@ export function buildBadges(
   ];
   badgeCache = {
     anchor,
+    challenges,
     group: state.group,
     metrics: state.metrics,
     entries: state.entries,

@@ -34,6 +34,8 @@ export type HealthDataType =
   | "workouts"
   | "body_fat"
   | "lean_body_mass"
+  | "body_water_mass"
+  | "bone_mass"
   | "blood_pressure"
   | "heart_rate"
   | "sleep"
@@ -407,6 +409,20 @@ export type TodoReminder = {
   repeatDailyUntilDue?: boolean;
   /** Optional recurrence for this reminder, independent from task recurrence. */
   schedule?: GoalSchedule;
+};
+
+/** A dated, exact-value competition shared only with explicitly invited members. */
+export type GroupChallenge = {
+  id: string;
+  groupId: string;
+  creatorId: string;
+  metricId: string;
+  title?: string;
+  target: number;
+  localDate: string;
+  participantIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 export type TodoItem = {
   id: string;
@@ -811,8 +827,10 @@ export type UserSettings = {
   performancePinnedMetricIds?: string[];
   performanceRange?: "day" | "week" | "month" | "year";
   leaderboardMetricIdsByGroup: Record<string, string[]>;
-  /** Personal pinned Leaderboard cards, scoped to each group. */
+  /** Personal pinned Leaderboard cards; metric ids and challenge-prefixed ids share one order. */
   leaderboardPinnedMetricIdsByGroup?: Record<string, string[]>;
+  /** Unified metric/challenge card order. Unknown ids are ignored during rendering. */
+  leaderboardCardOrderByGroup?: Record<string, string[]>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,

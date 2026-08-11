@@ -19,6 +19,8 @@ const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   workouts: ['workout','workout_duration','workout_calories','workout_distance'],
   body_fat: ['body_fat'],
   lean_body_mass: ['lean_body_mass'],
+  body_water_mass: ['body_water_mass'],
+  bone_mass: ['bone_mass'],
   blood_pressure: ['blood_pressure_systolic','blood_pressure_diastolic'],
   heart_rate: ['pulse'],
   sleep:['sleep'],
@@ -185,6 +187,8 @@ export function mapHealthRecordsToEntries(
     }
     if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,visibility));
     if (record.type === 'lean_body_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'lean_body_mass',Math.round(Number(record.value)*10)/10,visibility));
+    if (record.type === 'body_water_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_water_mass',Math.round(Number(record.value)*10)/10,visibility));
+    if (record.type === 'bone_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'bone_mass',Math.round(Number(record.value)*10)/10,visibility));
     if (record.type === 'heart_rate' && Number(record.value)>0) entries.push(entryFor(record,userId,'pulse',Math.round(Number(record.value)),visibility));
     if (record.type === 'blood_pressure') {
       const systolic=record.measurements?.systolic??Number(record.value);const diastolic=record.measurements?.diastolic;

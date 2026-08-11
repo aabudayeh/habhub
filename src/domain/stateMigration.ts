@@ -85,7 +85,11 @@ function repairKnownMetricDefaults(metric: MetricDefinition) {
       goalEnabled: true,
       goal: { kind: "at_least" as const, target: 100 },
     };
-  if (["body_fat", "lean_body_mass"].includes(metric.id))
+  if (
+    ["body_fat", "lean_body_mass", "body_water_mass", "bone_mass"].includes(
+      metric.id,
+    )
+  )
     return {
       ...metric,
       goalEnabled: metric.goalEnabled ?? false,

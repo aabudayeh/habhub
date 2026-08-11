@@ -263,15 +263,26 @@ export type StatusMuscleWeek = {
   weeksAgo: number;
 };
 
+export type StatusMuscleFrequency = {
+  /** Distinct resistance-training days in the seven days through the anchor. */
+  recentWeekSessions?: number;
+  /** Distinct resistance-training days in the 28 days through the anchor. */
+  recentMonthSessions?: number;
+  /** Distinct resistance-training days at or before the anchor. */
+  lifetimeSessions?: number;
+};
+
 /**
  * Motivational training visualization, not a lean-mass estimate. Lifetime
  * effective training weeks drive slow visual progression, while the last
- * eight weeks can soften or restore at most 14% of the look. The 45-week
- * calibration is a UX pacing choice, not a claim that physiology follows one
- * universal clock. One unusually large session is capped to one weekly point.
+ * eight weeks and bounded 7/28-day session frequency softly reinforce the
+ * look. The 45-week/72-session calibrations are UX pacing choices, not a claim
+ * that physiology follows one universal clock. One unusually large session is
+ * capped to one weekly point.
  */
 export function statusMuscleProgressFromWeeks(
   weeks: readonly StatusMuscleWeek[],
+  frequency: StatusMuscleFrequency = {},
 ) {
   let effectiveTrainingWeeks = 0;
   let recentWeightedQuality = 0;
@@ -293,8 +304,47 @@ export function statusMuscleProgressFromWeeks(
     ? recentWeightedQuality / recentWeightTotal
     : 0;
   const lifetimeAdaptation = 1 - Math.exp(-effectiveTrainingWeeks / 45);
+  const recentWeekFrequency = bounded(
+    Number.isFinite(frequency.recentWeekSessions)
+      ? Number(frequency.recentWeekSessions) / 3
+      : 0,
+    0,
+    1,
+  );
+  const recentMonthFrequency = bounded(
+    Number.isFinite(frequency.recentMonthSessions)
+      ? Number(frequency.recentMonthSessions) / 12
+      : 0,
+    0,
+    1,
+  );
+  const lifetimeSessionAdaptation =
+    1 -
+    Math.exp(
+      -bounded(
+        Number.isFinite(frequency.lifetimeSessions)
+          ? Number(frequency.lifetimeSessions)
+          : 0,
+        0,
+        10_000,
+      ) /
+        72,
+    );
+  // Frequency is deliberately secondary to completed resistance work. It
+  // helps people whose sessions lack detailed set/load data, but one busy
+  // week cannot instantly create a high-muscle avatar. The 7/28-day windows
+  // also make a selected historical date independent from future workouts.
+  const recentFrequency =
+    recentWeekFrequency * 0.4 + recentMonthFrequency * 0.6;
+  const durableAdaptation =
+    1 -
+    (1 - lifetimeAdaptation) *
+      (1 - lifetimeSessionAdaptation * 0.45);
   return bounded(
-    lifetimeAdaptation * (0.86 + 0.14 * recentConsistency),
+    durableAdaptation * (0.86 + 0.14 * recentConsistency) +
+      recentFrequency *
+        0.1 *
+        (0.35 + lifetimeSessionAdaptation * 0.65),
     0,
     1,
   );
@@ -361,14 +411,11 @@ export function statusBodyAppearance(
           resolvedBodyFat,
           sex,
         );
-  // Body-fat measurements can provide a coherent fat-free-mass fallback. If
-  // both fields are supplied but disagree, the explicit lean value remains
-  // bounded by total weight and both signals stay inside safe morph limits.
-  const resolvedLeanMass =
-    explicitLeanMass ??
-    (resolvedBodyFat === undefined
-      ? undefined
-      : safeWeightKg * (1 - resolvedBodyFat / 100));
+  // A body-fat percentage mathematically identifies fat-free mass, but not
+  // skeletal muscle. Use only explicitly supplied lean mass for this axis;
+  // otherwise completed resistance history and recent gym frequency provide
+  // the conservative muscle fallback requested by the user.
+  const resolvedLeanMass = explicitLeanMass;
   const leanMassProgress =
     resolvedLeanMass === undefined
       ? undefined

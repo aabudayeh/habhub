@@ -29,6 +29,7 @@ import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
+import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   adjacentPeriod,
@@ -46,6 +47,7 @@ import {
 import {
   dateKey,
   dateKeyWithOffset,
+  friendlyDate,
   relativeTime,
 } from "@/src/domain/date";
 import {
@@ -65,10 +67,21 @@ import {
 import { leaderboardSyncTimestamp } from "@/src/domain/leaderboardSync";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
+import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
+import {
+  canManageGroupChallenge,
+  challengeCardId,
+  challengeIdFromCard,
+  groupChallengeProgress,
+  isChallengeMetric,
+  mergedLeaderboardCardOrder,
+} from "@/src/domain/groupChallenges";
+import { formatMetricValue } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { Visibility } from "@/src/types";
+import { AppState, GroupChallenge, MetricDefinition, Visibility } from "@/src/types";
 
 const SCORE_ID = "__score";
 if (
@@ -89,6 +102,8 @@ function LeaderboardScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
+  const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const rankingStateRef = useRef(state);
@@ -111,13 +126,18 @@ function LeaderboardScreen() {
       setDraggingCardId(null);
     }
   }, [editing]);
-  useFocusedCloudSyncPause("leaderboard-edit", editing);
+  useFocusedCloudSyncPause(
+    "leaderboard-edit",
+    editing || challengeEditorOpen,
+  );
   const currentMember = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
   const personalSetup = isPersonalSetupGroup(state.group);
+  const challengesEnabled = !personalSetup && isCloudGroupId(state.group.id);
+  const challengeCloud = useGroupChallenges(state.group.id);
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
   const tracked = useMemo(
     () =>
@@ -159,21 +179,6 @@ function LeaderboardScreen() {
       state.settings.leaderboardPinnedMetricIdsByGroup?.[state.group.id] ?? [],
     [state.group.id, state.settings.leaderboardPinnedMetricIdsByGroup],
   );
-  const displayedSelected = useMemo(() => {
-    if (editing) return selected;
-    const pinOrder = new Map(pinnedIds.map((id, index) => [id, index]));
-    return [...selected].sort((left, right) => {
-      const leftPin = pinOrder.get(left);
-      const rightPin = pinOrder.get(right);
-      if (leftPin !== undefined || rightPin !== undefined)
-        return leftPin === undefined
-          ? 1
-          : rightPin === undefined
-            ? -1
-            : leftPin - rightPin;
-      return selected.indexOf(left) - selected.indexOf(right);
-    });
-  }, [editing, pinnedIds, selected]);
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
   const allTimeInputs = useMemo(
     () => ({
@@ -215,6 +220,51 @@ function LeaderboardScreen() {
     () => periodDates(period, anchor, weekStartsOn),
     [anchor, period, weekStartsOn],
   );
+  const visibleChallenges = useMemo(() => {
+    const visibleDates = new Set(dates);
+    return challengeCloud.challenges.filter(
+      (challenge) =>
+        period === "overall" || visibleDates.has(challenge.localDate),
+    );
+  }, [challengeCloud.challenges, dates, period]);
+  const savedCardOrder =
+    state.settings.leaderboardCardOrderByGroup?.[state.group.id];
+  const allCardIds = useMemo(
+    () =>
+      mergedLeaderboardCardOrder(
+        savedCardOrder,
+        selected,
+        challengeCloud.challenges,
+      ),
+    [challengeCloud.challenges, savedCardOrder, selected],
+  );
+  const orderedCardIds = useMemo(
+    () => {
+      const visibleChallengeIds = new Set(
+        visibleChallenges.map((challenge) => challenge.id),
+      );
+      return allCardIds.filter((id) => {
+        const challengeId = challengeIdFromCard(id);
+        return !challengeId || visibleChallengeIds.has(challengeId);
+      });
+    },
+    [allCardIds, visibleChallenges],
+  );
+  const displayedSelected = useMemo(() => {
+    if (editing) return orderedCardIds;
+    const pinOrder = new Map(pinnedIds.map((id, index) => [id, index]));
+    return [...orderedCardIds].sort((left, right) => {
+      const leftPin = pinOrder.get(left);
+      const rightPin = pinOrder.get(right);
+      if (leftPin !== undefined || rightPin !== undefined)
+        return leftPin === undefined
+          ? 1
+          : rightPin === undefined
+            ? -1
+            : leftPin - rightPin;
+      return orderedCardIds.indexOf(left) - orderedCardIds.indexOf(right);
+    });
+  }, [editing, orderedCardIds, pinnedIds]);
   const rankingInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -371,6 +421,10 @@ function LeaderboardScreen() {
   function saveSelection(ids: string[]) {
     const next = ids.length ? ids : [SCORE_ID];
     setSelectedIds(next);
+    const nextCardOrder = allCardIds.filter(
+      (id) => challengeIdFromCard(id) || next.includes(id),
+    );
+    for (const id of next) if (!nextCardOrder.includes(id)) nextCardOrder.push(id);
     updateSettings({
       leaderboardMetricIdsByGroup: {
         ...state.settings.leaderboardMetricIdsByGroup,
@@ -378,7 +432,13 @@ function LeaderboardScreen() {
       },
       leaderboardPinnedMetricIdsByGroup: {
         ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
-        [state.group.id]: pinnedIds.filter((id) => next.includes(id)),
+        [state.group.id]: pinnedIds.filter(
+          (id) => challengeIdFromCard(id) || next.includes(id),
+        ),
+      },
+      leaderboardCardOrderByGroup: {
+        ...(state.settings.leaderboardCardOrderByGroup ?? {}),
+        [state.group.id]: nextCardOrder,
       },
     });
   }
@@ -393,12 +453,22 @@ function LeaderboardScreen() {
     });
   }
   function move(id: string, target: number) {
-    const next = [...selected];
+    const next = [...orderedCardIds];
     const index = next.indexOf(id);
     if (index < 0) return;
     const [item] = next.splice(index, 1);
     next.splice(Math.max(0, Math.min(target, next.length)), 0, item);
-    saveSelection(next);
+    const visibleIds = new Set(orderedCardIds);
+    const reordered = [...next];
+    const fullOrder = allCardIds.map((cardId) =>
+      visibleIds.has(cardId) ? (reordered.shift() ?? cardId) : cardId,
+    );
+    updateSettings({
+      leaderboardCardOrderByGroup: {
+        ...(state.settings.leaderboardCardOrderByGroup ?? {}),
+        [state.group.id]: fullOrder,
+      },
+    });
   }
   const options = [
     {
@@ -417,6 +487,62 @@ function LeaderboardScreen() {
     })),
   ];
   const hiddenOptions = options.filter((item) => !selected.includes(item.id));
+  function openChallengeEditor(challenge?: GroupChallenge) {
+    if (!challenge && state.group.members.length < 2) {
+      Alert.alert(
+        "Invite a friend first",
+        "A challenge needs at least two active group members.",
+      );
+      return;
+    }
+    if (!tracked.some(isChallengeMetric)) {
+      Alert.alert(
+        "Add a numerical tracker first",
+        "Challenges use an existing numerical tracker shared with this group.",
+      );
+      return;
+    }
+    setEditingChallenge(challenge);
+    setChallengeEditorOpen(true);
+  }
+  function confirmDeleteChallenge(challenge: GroupChallenge) {
+    Alert.alert(
+      "Delete challenge?",
+      "This removes the challenge card for every invited member. Tracker data is not changed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            challengeCloud
+              .remove(challenge.id)
+              .then(() => {
+                const cardId = challengeCardId(challenge.id);
+                updateSettings({
+                  leaderboardPinnedMetricIdsByGroup: {
+                    ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
+                    [state.group.id]: pinnedIds.filter((id) => id !== cardId),
+                  },
+                  leaderboardCardOrderByGroup: {
+                    ...(state.settings.leaderboardCardOrderByGroup ?? {}),
+                    [state.group.id]: (savedCardOrder ?? []).filter(
+                      (id) => id !== cardId,
+                    ),
+                  },
+                });
+              })
+              .catch((reason) =>
+                Alert.alert(
+                  "Could not delete challenge",
+                  reason instanceof Error ? reason.message : String(reason),
+                ),
+              );
+          },
+        },
+      ],
+    );
+  }
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -460,6 +586,13 @@ function LeaderboardScreen() {
             </View>
           ) : (
             <View style={styles.headerActions}>
+              {challengesEnabled ? (
+                <IconButton
+                  icon="trophy-outline"
+                  label="Create challenge"
+                  onPress={() => openChallengeEditor()}
+                />
+              ) : null}
               <IconButton
                 icon="sparkles-outline"
                 label="Group recap"
@@ -516,6 +649,48 @@ function LeaderboardScreen() {
           </DateRangeNavigator>
         ) : null}
       {displayedSelected.map((id, cardIndex) => {
+        const challengeId = challengeIdFromCard(id);
+        const challenge = challengeId
+          ? visibleChallenges.find((item) => item.id === challengeId)
+          : undefined;
+        if (challenge) {
+          const manageable = canManageGroupChallenge(
+            challenge,
+            state.currentUserId,
+            currentMember,
+          );
+          return (
+            <ReorderItem key={id} active={draggingCardId === id}>
+              <EditableRankingCard
+                editing={editing}
+                index={cardIndex}
+                count={displayedSelected.length}
+                colors={colors}
+                onMove={(target) => move(id, target)}
+                onSendBelow={() => move(id, displayedSelected.length - 1)}
+                onRemove={manageable ? () => confirmDeleteChallenge(challenge) : undefined}
+                onEdit={manageable ? () => openChallengeEditor(challenge) : undefined}
+                pinned={pinnedIds.includes(id)}
+                onPin={() => togglePin(id)}
+                onDragStart={() => setDraggingCardId(id)}
+                onDragHover={() => {}}
+                onDragCancel={() => setDraggingCardId(null)}
+                onDragEnd={() => setDraggingCardId(null)}
+              >
+                <ChallengeRankingCard
+                  challenge={challenge}
+                  state={state}
+                  metric={tracked.find((item) => item.id === challenge.metricId)}
+                  colors={colors}
+                  accent={accent}
+                  editing={editing}
+                  pinned={pinnedIds.includes(id)}
+                  onLongPress={() => setEditing(true)}
+                />
+              </EditableRankingCard>
+            </ReorderItem>
+          );
+        }
         const metric = tracked.find((item) => item.id === id);
         const includeScore = id === SCORE_ID;
         const rows = rankingRows.get(id) ?? [];
@@ -530,6 +705,7 @@ function LeaderboardScreen() {
               count={displayedSelected.length}
               colors={colors}
               onMove={(target) => move(id, target)}
+              onSendBelow={() => move(id, displayedSelected.length - 1)}
               onRemove={() => saveSelection(selected.filter((item) => item !== id))}
               pinned={pinnedIds.includes(id)}
               onPin={() => togglePin(id)}
@@ -858,8 +1034,130 @@ function LeaderboardScreen() {
           setShowPicker(false);
         }}
       />
+      <GroupChallengeEditor
+        visible={challengeEditorOpen}
+        group={state.group}
+        metrics={tracked}
+        currentUserId={state.currentUserId}
+        initialDate={anchor}
+        challenge={editingChallenge}
+        onClose={() => {
+          setChallengeEditorOpen(false);
+          setEditingChallenge(undefined);
+        }}
+        onSave={async (input) => {
+          await challengeCloud.save(input);
+        }}
+      />
+      {challengeCloud.error && challengesEnabled ? (
+        <Pressable
+          onPress={() => challengeCloud.refresh()}
+          style={[styles.challengeRetry, { backgroundColor: colors.primarySoft }]}
+        >
+          <Ionicons name="cloud-offline-outline" size={14} color={accent} />
+          <Text numberOfLines={2} style={[styles.challengeRetryText, { color: colors.muted }]}>Challenges could not refresh. Tap to retry.</Text>
+        </Pressable>
+      ) : null}
       </View>
     </Screen>
+  );
+}
+
+function ChallengeRankingCard({
+  challenge,
+  state,
+  metric,
+  colors,
+  accent,
+  editing,
+  pinned,
+  onLongPress,
+}: {
+  challenge: GroupChallenge;
+  state: AppState;
+  metric?: MetricDefinition;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+  editing: boolean;
+  pinned: boolean;
+  onLongPress: () => void;
+}) {
+  const rows = useMemo(
+    () => (metric ? groupChallengeProgress(state, challenge, metric) : []),
+    [challenge, metric, state],
+  );
+  const complete = rows.filter((row) => row.complete).length;
+  const title =
+    challenge.title?.trim() ||
+    (metric ? `${metric.name} challenge` : "Group challenge");
+  const targetLabel = metric
+    ? formatMetricValue(metric, challenge.target)
+    : String(challenge.target);
+  return (
+    <Card style={[styles.ranking, styles.challengeCard]}>
+      <Pressable disabled={editing} onLongPress={onLongPress} style={styles.challengeHead}>
+        <View style={[styles.challengeMark, { backgroundColor: `${accent}1F` }]}>
+          <Ionicons name="trophy" size={18} color={accent} />
+        </View>
+        <View style={styles.challengeHeadingCopy}>
+          <View style={styles.challengeEyebrowLine}>
+            <Text style={[styles.eyebrow, { color: accent }]}>FRIEND CHALLENGE</Text>
+            {pinned && !editing ? <Ionicons name="pin" size={12} color={palette.amber} /> : null}
+          </View>
+          <Text numberOfLines={1} style={[styles.title, { color: colors.ink }]}>{title}</Text>
+          <Text style={[styles.challengeMeta, { color: colors.muted }]}>
+            {friendlyDate(challenge.localDate)} · {targetLabel} · {rows.length} invited
+          </Text>
+        </View>
+        <View style={[styles.completePill, { backgroundColor: complete === rows.length && rows.length ? `${palette.lime}35` : colors.primarySoft }]}>
+          <Text style={[styles.completePillText, { color: complete === rows.length && rows.length ? colors.ink : accent }]}>
+            {complete}/{rows.length}
+          </Text>
+        </View>
+      </Pressable>
+      {!metric ? (
+        <View style={[styles.challengeUnavailable, { borderTopColor: colors.border }]}>
+          <Text style={[styles.detail, { color: colors.muted }]}>This tracker is no longer available.</Text>
+        </View>
+      ) : (
+        rows.slice(0, 5).map((row, index) => (
+          <View
+            key={row.member.id}
+            style={[
+              styles.challengeRow,
+              { borderTopColor: colors.border },
+              row.member.id === state.currentUserId && {
+                backgroundColor: colors.primarySoft,
+                borderTopColor: "transparent",
+              },
+            ]}
+          >
+            <Text style={[styles.challengeRank, { color: index < 3 ? palette.amber : colors.faint }]}>#{index + 1}</Text>
+            <Avatar initials={row.member.initials} color={row.member.color} uri={row.member.avatarUri} size={29} />
+            <View style={styles.challengeMemberCopy}>
+              <Text numberOfLines={1} style={[styles.name, { color: colors.ink }]}>
+                {memberDisplayName(state, row.member)}{row.member.id === state.currentUserId ? " · You" : ""}
+              </Text>
+              <Text numberOfLines={1} style={[styles.challengeValue, { color: row.complete ? colors.ink : colors.muted }]}>
+                {row.complete ? "Target reached" : row.valueLabel}
+              </Text>
+            </View>
+            <View style={styles.challengeProgress}>
+              <View style={styles.challengeProgressLabel}>
+                <Text style={[styles.challengePercent, { color: row.mode === "exact" ? colors.ink : colors.faint }]}>
+                  {row.mode === "exact" ? `${Math.round(row.progress * 100)}%` : "—"}
+                </Text>
+                {row.complete ? <Ionicons name="checkmark-circle" size={14} color={palette.lime} /> : null}
+              </View>
+              <ProgressBar progress={row.progress} color={row.complete ? palette.lime : accent} />
+            </View>
+          </View>
+        ))
+      )}
+      {rows.length > 5 ? (
+        <Text style={[styles.challengeMore, { color: colors.muted }]}>+{rows.length - 5} more invited members</Text>
+      ) : null}
+    </Card>
   );
 }
 
@@ -870,7 +1168,9 @@ function EditableRankingCard({
   count,
   colors,
   onMove,
+  onSendBelow,
   onRemove,
+  onEdit,
   pinned,
   onPin,
   visibility,
@@ -886,7 +1186,9 @@ function EditableRankingCard({
   count: number;
   colors: ReturnType<typeof useAppColors>;
   onMove: (target: number) => void;
-  onRemove: () => void;
+  onSendBelow?: () => void;
+  onRemove?: () => void;
+  onEdit?: () => void;
   pinned: boolean;
   onPin: () => void;
   visibility?: Visibility;
@@ -944,6 +1246,16 @@ function EditableRankingCard({
           </View>
           </GestureDetector>
           <Text style={[styles.dragText, { color: colors.muted }]}>Drag to reorder</Text>
+          {onEdit ? (
+            <Pressable accessibilityLabel="Edit challenge" onPress={onEdit} style={styles.pinAction} hitSlop={6}>
+              <Ionicons name="create-outline" size={15} color={colors.muted} />
+            </Pressable>
+          ) : null}
+          {index < count - 1 && onSendBelow ? (
+            <Pressable accessibilityLabel="Send card below" onPress={onSendBelow} style={styles.pinAction} hitSlop={6}>
+              <Ionicons name="arrow-down" size={15} color={colors.muted} />
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityLabel={pinned ? "Unpin ranking" : "Pin ranking"}
             onPress={onPin}
@@ -982,9 +1294,11 @@ function EditableRankingCard({
               </Text>
             </Pressable>
           ) : null}
-          <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
-            <Ionicons name="remove" size={16} color={palette.white} />
-          </Pressable>
+          {onRemove ? (
+            <Pressable onPress={onRemove} style={styles.remove} hitSlop={8}>
+              <Ionicons name="remove" size={16} color={palette.white} />
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
       {children}
@@ -1028,6 +1342,25 @@ const styles = StyleSheet.create({
   editHint: { alignItems: "center", paddingVertical: 7 },
   hint: { fontSize: 9, fontWeight: "700" },
   ranking: { padding: 7 },
+  challengeCard: { overflow: "hidden" },
+  challengeHead: { flexDirection: "row", alignItems: "center", gap: 9, padding: 5, paddingBottom: 8 },
+  challengeMark: { width: 38, height: 38, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  challengeHeadingCopy: { flex: 1, minWidth: 0 },
+  challengeEyebrowLine: { flexDirection: "row", alignItems: "center", gap: 5 },
+  challengeMeta: { fontSize: 8, lineHeight: 11, marginTop: 2, fontWeight: "700" },
+  completePill: { minWidth: 43, height: 31, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 7 },
+  completePillText: { fontSize: 10, fontWeight: "900" },
+  challengeRow: { minHeight: 48, paddingHorizontal: 5, paddingVertical: 7, borderTopWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", gap: 7 },
+  challengeRank: { width: 23, fontSize: 10, fontWeight: "900" },
+  challengeMemberCopy: { flex: 1, minWidth: 0 },
+  challengeValue: { fontSize: 8, lineHeight: 11, marginTop: 2 },
+  challengeProgress: { width: 105, gap: 3 },
+  challengeProgressLabel: { minHeight: 15, flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 4 },
+  challengePercent: { fontSize: 9, fontWeight: "900", textAlign: "right" },
+  challengeMore: { paddingVertical: 7, textAlign: "center", fontSize: 8, fontWeight: "800" },
+  challengeUnavailable: { minHeight: 42, borderTopWidth: 1, alignItems: "center", justifyContent: "center" },
+  challengeRetry: { minHeight: 42, marginVertical: 6, paddingHorizontal: 11, borderRadius: 13, flexDirection: "row", alignItems: "center", gap: 7 },
+  challengeRetryText: { flex: 1, fontSize: 9, fontWeight: "800" },
   rankingHead: {
     flexDirection: "row",
     alignItems: "center",

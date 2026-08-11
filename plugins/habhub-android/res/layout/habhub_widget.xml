@@ -14,59 +14,82 @@
     android:gravity="center_vertical"
     android:orientation="horizontal">
 
-    <TextView
-      android:id="@+id/widget_title"
+    <LinearLayout
       android:layout_width="0dp"
       android:layout_height="wrap_content"
       android:layout_weight="1"
-      android:ellipsize="end"
-      android:fontFamily="sans-serif-medium"
-      android:letterSpacing="0.08"
-      android:maxLines="1"
-      android:text="@string/app_name"
-      android:textAllCaps="true"
-      android:textColor="#C9D4E8"
-      android:textSize="9sp" />
+      android:orientation="vertical">
+
+      <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
+        android:letterSpacing="0.1"
+        android:maxLines="1"
+        android:text="TODAY'S FOCUS"
+        android:textAllCaps="true"
+        android:textColor="#D9FF82"
+        android:textSize="9sp" />
+
+      <TextView
+        android:id="@+id/widget_value"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="sans-serif-medium"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="0 / 0"
+        android:textColor="#FFFFFF"
+        android:textSize="21sp" />
+
+      <TextView
+        android:id="@+id/widget_subtitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="Tap to open HabHub"
+        android:textColor="#D3DFF2"
+        android:textSize="9sp" />
+    </LinearLayout>
+
+    <FrameLayout
+      android:id="@+id/widget_completion_badge"
+      android:layout_width="40dp"
+      android:layout_height="40dp"
+      android:layout_marginStart="7dp"
+      android:background="@drawable/habhub_widget_badge">
+
+      <TextView
+        android:id="@+id/widget_badge_value"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fontFamily="sans-serif-medium"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="0%"
+        android:textColor="#10264A"
+        android:textSize="11sp" />
+    </FrameLayout>
 
     <TextView
       android:id="@+id/widget_range"
-      android:layout_width="wrap_content"
-      android:layout_height="wrap_content"
-      android:fontFamily="sans-serif-medium"
-      android:maxLines="1"
-      android:text="0%"
-      android:textColor="#DCE6F6"
-      android:textSize="9sp" />
+      android:layout_width="0dp"
+      android:layout_height="0dp"
+      android:visibility="gone" />
   </LinearLayout>
-
-  <TextView
-    android:id="@+id/widget_value"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:ellipsize="end"
-    android:fontFamily="sans-serif-medium"
-    android:includeFontPadding="false"
-    android:maxLines="1"
-    android:text="0 / 0"
-    android:textColor="#FFFFFF"
-    android:textSize="20sp" />
-
-  <TextView
-    android:id="@+id/widget_subtitle"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:ellipsize="end"
-    android:includeFontPadding="false"
-    android:maxLines="1"
-    android:text="@string/habhub_widget_open_to_update"
-    android:textColor="#D1DCF0"
-    android:textSize="9sp" />
 
   <FrameLayout
     android:id="@+id/widget_progress_container"
     android:layout_width="match_parent"
-    android:layout_height="3dp"
-    android:layout_marginTop="2dp">
+    android:layout_height="5dp"
+    android:layout_marginTop="4dp">
 
     <ProgressBar
       android:id="@+id/widget_progress"
@@ -75,8 +98,7 @@
       android:layout_height="match_parent"
       android:max="100"
       android:progress="0"
-      android:progressBackgroundTint="#365078"
-      android:progressTint="#B8E45C" />
+      android:progressDrawable="@drawable/habhub_widget_progress_lime" />
 
     <ProgressBar
       android:id="@+id/widget_progress_gold"
@@ -85,8 +107,7 @@
       android:layout_height="match_parent"
       android:max="100"
       android:progress="0"
-      android:progressBackgroundTint="#A67A1C"
-      android:progressTint="#FFD166"
+      android:progressDrawable="@drawable/habhub_widget_progress_gold"
       android:visibility="gone" />
   </FrameLayout>
 
@@ -95,11 +116,55 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginTop="5dp"
-    android:orientation="vertical"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
     android:visibility="gone">
 
-    <TextView android:id="@+id/widget_goal_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
-    <TextView android:id="@+id/widget_goal_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
-    <TextView android:id="@+id/widget_goal_3" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView
+      android:id="@+id/widget_goal_1"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_weight="1"
+      android:background="@drawable/habhub_widget_goal"
+      android:ellipsize="end"
+      android:fontFamily="sans-serif-medium"
+      android:gravity="center"
+      android:includeFontPadding="false"
+      android:maxLines="2"
+      android:minHeight="25dp"
+      android:textColor="#FFFFFF"
+      android:textSize="8sp" />
+
+    <TextView
+      android:id="@+id/widget_goal_2"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_marginStart="4dp"
+      android:layout_weight="1"
+      android:background="@drawable/habhub_widget_goal"
+      android:ellipsize="end"
+      android:fontFamily="sans-serif-medium"
+      android:gravity="center"
+      android:includeFontPadding="false"
+      android:maxLines="2"
+      android:minHeight="25dp"
+      android:textColor="#FFFFFF"
+      android:textSize="8sp" />
+
+    <TextView
+      android:id="@+id/widget_goal_3"
+      android:layout_width="0dp"
+      android:layout_height="wrap_content"
+      android:layout_marginStart="4dp"
+      android:layout_weight="1"
+      android:background="@drawable/habhub_widget_goal"
+      android:ellipsize="end"
+      android:fontFamily="sans-serif-medium"
+      android:gravity="center"
+      android:includeFontPadding="false"
+      android:maxLines="2"
+      android:minHeight="25dp"
+      android:textColor="#FFFFFF"
+      android:textSize="8sp" />
   </LinearLayout>
 </LinearLayout>

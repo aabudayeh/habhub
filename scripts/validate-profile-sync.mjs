@@ -8,6 +8,10 @@ import {
   mergeAccountMemberProfile,
   profileProjectionLagsSnapshot,
 } from "../src/domain/accountProfile.ts";
+import {
+  excludeAlreadyPublishedDailyStatusRows,
+} from "../src/domain/cloudSyncProjection.ts";
+import { cloudAccountEnergyProjection } from "../src/domain/energy.ts";
 
 const base = {
   name: "Ahmad",
@@ -125,6 +129,20 @@ const providerSource = fs.readFileSync(
   ),
   "utf8",
 );
+const groupCloudSource = fs.readFileSync(
+  path.resolve(import.meta.dirname, "..", "src", "cloud", "groupCloud.ts"),
+  "utf8",
+);
+const statusNoopMigration = fs.readFileSync(
+  path.resolve(
+    import.meta.dirname,
+    "..",
+    "supabase",
+    "migrations",
+    "202608110002_skip_unchanged_daily_status_updates.sql",
+  ),
+  "utf8",
+);
 const metadataHashBody = providerSource.match(
   /function accountMetadataHash\(state: AppState\) \{([\s\S]*?)\n\}/,
 )?.[1];
@@ -136,6 +154,108 @@ assert.doesNotMatch(
 );
 assert.match(providerSource, /pushCloudAccountMetadata\(candidate,/);
 
+const baselineEnergy = {
+  age: 31,
+  sex: "male",
+  heightCm: 178,
+  startingWeightKg: 90,
+  weightKg: 82,
+  bodyFatPercent: 18,
+  leanBodyMassKg: 67,
+  targetWeightKg: 78,
+  activityLevel: "moderate",
+  dailyActivityCaloriesOverride: 500,
+  desiredWeeklyLossKg: 0.5,
+};
+assert.deepEqual(
+  cloudAccountEnergyProjection(baselineEnergy),
+  cloudAccountEnergyProjection({
+    ...baselineEnergy,
+    startingWeightKg: 120,
+    bodyFatPercent: 28,
+    leanBodyMassKg: 59,
+    dailyActivityCaloriesOverride: 900,
+  }),
+  "private-only body inputs must not churn the relational account projection",
+);
+assert.notDeepEqual(
+  cloudAccountEnergyProjection(baselineEnergy),
+  cloudAccountEnergyProjection({ ...baselineEnergy, weightKg: 83 }),
+  "a relational body-profile field must still invalidate account metadata",
+);
+
+const recentStatuses = Array.from({ length: 30 * 17 }, (_, index) => ({
+  group_id: "group",
+  metric_id: `metric-${index % 17}`,
+  user_id: "user",
+  local_date: `day-${Math.floor(index / 17)}`,
+  goal_reached: false,
+}));
+const olderStatus = {
+  group_id: "group",
+  metric_id: "metric-0",
+  user_id: "user",
+  local_date: "older-day",
+  goal_reached: true,
+};
+assert.deepEqual(
+  excludeAlreadyPublishedDailyStatusRows(recentStatuses, [
+    ...recentStatuses,
+    olderStatus,
+  ]),
+  [olderStatus],
+  "the historical pass must not upsert an unchanged 510-row recent window twice",
+);
+
+const stableHashBody = providerSource.match(
+  /function stableHash\(state: AppState\) \{([\s\S]*?)\n\}/,
+)?.[1];
+assert.ok(stableHashBody, "private snapshot hash projection must exist");
+assert.match(
+  stableHashBody,
+  /dailyMetricStatuses: \[\]/,
+  "server-owned daily status cache must not reopen the account snapshot outbox",
+);
+const workspaceHashBody = providerSource.match(
+  /function workspaceHash\(state: AppState\) \{([\s\S]*?)\n\}/,
+)?.[1];
+assert.ok(workspaceHashBody, "workspace hash helper must exist");
+assert.doesNotMatch(
+  workspaceHashBody,
+  /dailyMetricStatuses/,
+  "server-hydrated daily statuses must not reopen the relational workspace outbox",
+);
+assert.match(
+  providerSource,
+  /const activeFreshness = leaderboardPublishPromiseRef\.current;[\s\S]{0,100}await activeFreshness/,
+  "full workspace publication must serialize behind compact freshness publication",
+);
+assert.match(
+  groupCloudSource,
+  /const profile = cloudAccountEnergyProjection\([\s\S]{0,500}p_energy_profile: profile/,
+  "account metadata hashing and publication must share one exact energy projection",
+);
+assert.match(
+  groupCloudSource,
+  /supplementalStatuses = excludeAlreadyPublishedDailyStatusRows\(\s*fastRecentStatuses,\s*statuses/,
+  "the detailed workspace pass must exclude its already-published recent rows",
+);
+assert.match(
+  statusNoopMigration,
+  /to_jsonb\(new\) - 'updated_at'[\s\S]*is not distinct from[\s\S]*to_jsonb\(old\) - 'updated_at'[\s\S]*return null/i,
+  "the database must cancel exact status no-op updates before tuple churn",
+);
+assert.match(
+  statusNoopMigration,
+  /new\.updated_at = statement_timestamp\(\)[\s\S]*return new/i,
+  "meaningful status updates must still receive a fresh server timestamp",
+);
+assert.match(
+  statusNoopMigration,
+  /revoke all on function public\.touch_daily_metric_status_updated_at\(\)[\s\S]*from public, anon, authenticated/i,
+  "the internal trigger helper must not remain directly executable by clients",
+);
+
 console.log(
-  "Profile sync validation passed: clean/dirty rename, concurrent avatar edits, and multi-group shells.",
+  "Profile/cloud no-op validation passed: rename merges, exact metadata projection, status-cache isolation, publication coalescing, and server-side no-op cancellation.",
 );

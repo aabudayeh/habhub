@@ -22,8 +22,11 @@
     "validate:progress-grid": "node scripts/validate-progress-grid-navigation.mjs",
     "validate:profile-sync": "node --no-warnings --experimental-strip-types scripts/validate-profile-sync.mjs",
     "validate:sync-gates": "node scripts/validate-sync-gates.mjs",
-    "check": "pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm typecheck && pnpm lint",
-    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm typecheck && pnpm lint && pnpm export:web"
+    "validate:native-ui": "node scripts/validate-native-chat-widgets.mjs",
+    "validate:challenges": "node --no-warnings --experimental-strip-types scripts/validate-group-challenges.mjs",
+    "validate:onboarding": "node scripts/validate-onboarding-flow.mjs",
+    "check": "pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

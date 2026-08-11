@@ -1,4 +1,9 @@
-import { ActivityLevel, EnergyProfile, FoodGoalMode, WeightDirection } from '@/src/types';
+import type {
+  ActivityLevel,
+  EnergyProfile,
+  FoodGoalMode,
+  WeightDirection,
+} from '@/src/types';
 
 export const ACTIVITY_FACTORS: Record<ActivityLevel, number> = {
   sedentary: 1.2,
@@ -51,6 +56,23 @@ export function normalizeEnergyProfile(profile: EnergyProfile): EnergyProfile {
         ? undefined
         : Math.round(bounded(activityOverride, 0, 0, 5000)),
     desiredWeeklyLossKg: bounded(profile.desiredWeeklyLossKg, 0.5, 0, 2),
+  };
+}
+
+/**
+ * Exact energy subset stored in the global relational profile projection.
+ * Private body-composition inputs remain in the revisioned account snapshot.
+ */
+export function cloudAccountEnergyProjection(profile: EnergyProfile) {
+  const normalized = normalizeEnergyProfile(profile);
+  return {
+    age: normalized.age,
+    biological_sex: normalized.sex,
+    height_cm: normalized.heightCm,
+    weight_kg: normalized.weightKg,
+    target_weight_kg: normalized.targetWeightKg,
+    activity_level: normalized.activityLevel,
+    desired_weekly_loss_kg: normalized.desiredWeeklyLossKg,
   };
 }
 

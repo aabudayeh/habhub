@@ -38,6 +38,8 @@ const termRows = [
   ["Workout duration", "مدة التمرين", "Duración del entrenamiento", "锻炼时长", "Träningstid", "Trainingsdauer", "Длительность тренировки", "Durée de l’entraînement"],
   ["Body fat", "دهون الجسم", "Grasa corporal", "体脂", "Kroppsfett", "Körperfett", "Жир в организме", "Masse grasse"],
   ["Lean body mass", "كتلة الجسم الخالية من الدهون", "Masa corporal magra", "瘦体重", "Fettfri kroppsmassa", "Fettfreie Körpermasse", "Безжировая масса тела", "Masse maigre"],
+  ["Body water mass", "كتلة ماء الجسم", "Masa de agua corporal", "身体水分质量", "Kroppsvattenmassa", "Körperwassermasse", "Масса воды в организме", "Masse hydrique corporelle"],
+  ["Bone mass", "كتلة العظام", "Masa ósea", "骨量", "Benmassa", "Knochenmasse", "Костная масса", "Masse osseuse"],
   ["Blood pressure", "ضغط الدم", "Presión arterial", "血压", "Blodtryck", "Blutdruck", "Артериальное давление", "Tension artérielle"],
   ["Systolic", "الانقباضي", "Sistólica", "收缩压", "Systoliskt", "Systolisch", "Систолическое", "Systolique"],
   ["Diastolic", "الانبساطي", "Diastólica", "舒张压", "Diastoliskt", "Diastolisch", "Диастолическое", "Diastolique"],
@@ -582,7 +584,7 @@ const translatedUnits = new Set([
 const builtInIds = new Set([
   "steps", "food", "exercise", "deficit", "water", "workout", "weight", "protein",
   "fat", "carbs", "fiber", "sodium", "progress_photo", "workout_duration", "body_fat",
-  "lean_body_mass", "blood_pressure_systolic", "blood_pressure_diastolic", "pulse",
+  "lean_body_mass", "body_water_mass", "bone_mass", "blood_pressure_systolic", "blood_pressure_diastolic", "pulse",
   "workout_calories", "workout_distance", "sugar", "saturated_fat", "cholesterol",
   "potassium", "calcium", "iron", "magnesium", "vitamin_c", "vitamin_d", "vitamin_b12",
   "weekly_deficit_balance", "sleep", "blood_glucose", "menstrual_cycle", "period_flow", "menstrual_flow",

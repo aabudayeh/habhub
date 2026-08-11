@@ -18,6 +18,12 @@ const NATIVE_SOURCES = [
 const RESOURCE_FILES = [
   ["drawable", "habhub_widget_background.xml"],
   ["drawable", "habhub_widget_background_complete.xml"],
+  ["drawable", "habhub_widget_badge.xml"],
+  ["drawable", "habhub_widget_badge_complete.xml"],
+  ["drawable", "habhub_widget_goal.xml"],
+  ["drawable", "habhub_widget_goal_complete.xml"],
+  ["drawable", "habhub_widget_progress_lime.xml"],
+  ["drawable", "habhub_widget_progress_gold.xml"],
   ["layout", "habhub_widget.xml"],
   ["values", "habhub_widgets.xml"],
   ["values-ar", "habhub_widgets.xml"],

@@ -102,13 +102,14 @@ const HEALTH = [
   {
     id: "body_composition",
     label: "Body composition",
-    metrics: ["body_fat", "lean_body_mass"],
+    metrics: ["body_fat", "lean_body_mass", "body_water_mass", "bone_mass"],
   },
 ] as const;
 const GROUP_LABELS: Record<string, string> = {
   energy: "Weight & energy",
   activity: "Movement",
   nutrition: "Food & hydration",
+  body: "Body composition",
   health: "Health readings",
   mind: "Mind & focus",
   gym: "Workout",
@@ -124,8 +125,23 @@ const NOT_GOALS = new Set([
   "blood_pressure_diastolic",
   "body_fat",
   "lean_body_mass",
+  "body_water_mass",
+  "bone_mass",
   "todo_completion",
 ]);
+
+function presetTargetLabel(item: TrackerPreset) {
+  if (item.goalEnabled === false) return null;
+  if (item.dataType === "boolean") return "✓";
+  const format = (value: number) =>
+    Number.isInteger(value)
+      ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  const value = item.goalRange
+    ? `${format(item.goalRange.min)}–${format(item.goalRange.max)}`
+    : format(item.goal.target);
+  return `${value}${item.unit ? ` ${item.unit}` : ""}`;
+}
 
 export default function Onboarding() {
   const {
@@ -224,7 +240,8 @@ export default function Onboarding() {
       ? "group"
       : "index",
   );
-  const initialized = useRef(false);
+  const previousProposedIds = useRef<Set<string> | null>(null);
+  const knownRecommendationGroups = useRef(new Set<string>());
   const scrollRef = useRef<ScrollView>(null);
   useKeyboardReveal(scrollRef);
   useEffect(() => {
@@ -305,7 +322,14 @@ export default function Onboarding() {
     () =>
       Object.entries(
         proposed
-          .filter((item) => !isInternalTracker({ id: item.templateId, healthMapping: item.healthMapping }))
+          .filter(
+            (item) =>
+              item.templateId !== "todo_completion" &&
+              !isInternalTracker({
+                id: item.templateId,
+                healthMapping: item.healthMapping,
+              }),
+          )
           .reduce<Record<string, typeof proposed>>((all, item) => {
           const key = item.category ?? "other";
           (all[key] ??= []).push(item);
@@ -314,6 +338,17 @@ export default function Onboarding() {
       ),
     [proposed],
   );
+  useEffect(() => {
+    const newlyAvailable = grouped
+      .map(([group]) => group)
+      .filter((group) => !knownRecommendationGroups.current.has(group));
+    grouped.forEach(([group]) => knownRecommendationGroups.current.add(group));
+    if (!newlyAvailable.length) return;
+    setExpanded((current) => [
+      ...current,
+      ...newlyAvailable.filter((group) => !current.includes(group)),
+    ]);
+  }, [grouped]);
   const trackedHealthHistoryCount = proposed.filter(
     (item) =>
       selected.includes(item.templateId) &&
@@ -325,19 +360,34 @@ export default function Onboarding() {
     (direction === "lose" && nextProfile.targetWeightKg < nextProfile.weightKg) ||
     (direction === "gain" && nextProfile.targetWeightKg > nextProfile.weightKg);
   useEffect(() => {
-    if (step === 2 && !initialized.current) {
-      initialized.current = true;
-      setSelected(proposed.map((item) => item.templateId));
-      setTrackedSelected(
-        proposed
-          .filter(
-            (item) =>
-              item.goalEnabled !== false && !NOT_GOALS.has(item.templateId),
-          )
-          .map((item) => item.templateId),
-      );
-    }
-  }, [step, proposed]);
+    const nextIds = new Set(proposed.map((item) => item.templateId));
+    const previousIds = previousProposedIds.current;
+    const added = previousIds
+      ? proposed.filter((item) => !previousIds.has(item.templateId))
+      : proposed;
+    const removed = previousIds
+      ? [...previousIds].filter((id) => !nextIds.has(id))
+      : [];
+    previousProposedIds.current = nextIds;
+    if (!added.length && !removed.length) return;
+    const removedSet = new Set(removed);
+    setSelected((current) => [
+      ...current.filter((id) => !removedSet.has(id)),
+      ...added
+        .map((item) => item.templateId)
+        .filter((id) => !current.includes(id)),
+    ]);
+    setTrackedSelected((current) => [
+      ...current.filter((id) => !removedSet.has(id)),
+      ...added
+        .filter(
+          (item) =>
+            item.goalEnabled !== false && !NOT_GOALS.has(item.templateId),
+        )
+        .map((item) => item.templateId)
+        .filter((id) => !current.includes(id)),
+    ]);
+  }, [proposed]);
   useEffect(() => {
     if (step === 1 && goals.includes("friends")) setLandingPage("group");
   }, [step, goals]);
@@ -564,8 +614,8 @@ export default function Onboarding() {
   }
   async function continueFlow() {
     if (step === 0) saveDisplayName();
-    if (step === 2) configure();
-    if (step === 4) await finish();
+    if (step === 1) configure();
+    if (step === 3) await finish();
     else setStep((value) => value + 1);
   }
   async function skipSetup() {
@@ -594,10 +644,10 @@ export default function Onboarding() {
             </View>
             <Text style={[styles.brand, { color: colors.ink }]}>HABHUB</Text>
             <Text style={[styles.step, { color: colors.muted }]}>
-              {step + 1}/5
+              {step + 1}/4
             </Text>
           </View>
-          <ProgressBar progress={(step + 1) / 5} color={accent} />
+          <ProgressBar progress={(step + 1) / 4} color={accent} />
           <ScrollView
             ref={scrollRef}
             style={styles.body}
@@ -639,6 +689,8 @@ export default function Onboarding() {
                   {GOALS.map((goal) => (
                     <Pressable
                       key={goal.id}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: goals.includes(goal.id) }}
                       onPress={() => toggle(goal.id)}
                       style={[
                         styles.goal,
@@ -804,7 +856,7 @@ export default function Onboarding() {
                 )}
               </>
             ) : null}
-            {step === 2 ? (
+            {step === 0 && goals.length ? (
               <>
                 <Title
                   title="Your starting setup"
@@ -832,7 +884,11 @@ export default function Onboarding() {
                   </Pressable>
                   <Pressable
                     onPress={() => {
-                      setSelected([]);
+                      setSelected(
+                        proposed
+                          .filter((item) => item.templateId === "todo_completion")
+                          .map((item) => item.templateId),
+                      );
                       setTrackedSelected([]);
                     }}
                   >
@@ -982,6 +1038,10 @@ export default function Onboarding() {
                     ]}
                   >
                     <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        expanded: expanded.includes(group),
+                      }}
                       onPress={() => toggle(group, setExpanded, expanded)}
                       style={styles.groupHead}
                     >
@@ -1010,6 +1070,10 @@ export default function Onboarding() {
                       ? items.map((item) => (
                           <Pressable
                             key={item.templateId}
+                            accessibilityRole="checkbox"
+                            accessibilityState={{
+                              checked: selected.includes(item.templateId),
+                            }}
                             onPress={() => toggleTracker(item.templateId)}
                             style={[
                               styles.tracker,
@@ -1047,10 +1111,27 @@ export default function Onboarding() {
                               >
                                 {item.description}
                               </Text>
+                              {presetTargetLabel(item) ? (
+                                <Text
+                                  style={[
+                                    styles.targetText,
+                                    { color: colors.muted },
+                                  ]}
+                                >
+                                  <Text style={styles.targetLabel}>Target</Text>
+                                  {` · ${presetTargetLabel(item)}`}
+                                </Text>
+                              ) : null}
                             </View>
                             {item.goalEnabled !== false &&
                             !NOT_GOALS.has(item.templateId) ? (
                               <Pressable
+                                accessibilityRole="checkbox"
+                                accessibilityState={{
+                                  checked: trackedSelected.includes(
+                                    item.templateId,
+                                  ),
+                                }}
                                 accessibilityLabel={
                                   trackedSelected.includes(item.templateId)
                                     ? "Remove from daily tracked goals"
@@ -1114,7 +1195,7 @@ export default function Onboarding() {
                 ))}
               </>
             ) : null}
-            {step === 3 ? (
+            {step === 2 ? (
               <>
                 <Title
                   title="Connect when you are ready"
@@ -1182,7 +1263,7 @@ export default function Onboarding() {
                 </View>
               </>
             ) : null}
-            {step === 4 ? (
+            {step === 3 ? (
               <>
                 <Title
                   title="You are ready"
@@ -1227,7 +1308,7 @@ export default function Onboarding() {
                 </Pressable>
               </>
             ) : null}
-            {step === 4 ? (
+            {step === 3 ? (
               <View style={styles.landing}>
                 <Text style={[styles.label, { color: colors.ink }]}>
                   Open HabHub on
@@ -1316,12 +1397,11 @@ export default function Onboarding() {
             )}
             <View style={styles.next}>
               <Button
-                label={step === 4 ? "Start using HabHub" : "Continue"}
+                label={step === 3 ? "Start using HabHub" : "Continue"}
                 disabled={
                   finishing ||
                   (step === 0 && (!displayName.trim() || !goals.length)) ||
-                  (step === 1 && goals.includes("weight") && !targetIsValid) ||
-                  (step === 2 && !selected.length)
+                  (step === 1 && goals.includes("weight") && !targetIsValid)
                 }
                 loading={finishing}
                 onPress={continueFlow}
@@ -1504,6 +1584,8 @@ const styles = StyleSheet.create({
   goalTitle: { fontSize: 11, fontWeight: "900" },
   nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 },
   goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 },
+  targetText: { fontSize: 8, lineHeight: 12, marginTop: 2 },
+  targetLabel: { fontSize: 8, fontWeight: "900" },
   grow: { flex: 1 },
   label: { fontSize: 10, fontWeight: "900", marginTop: 6, marginBottom: 6 },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },

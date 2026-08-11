@@ -197,6 +197,8 @@ export function healthRecordsAreEquivalent(
     weight: 0.2,
     body_fat: 0.5,
     lean_body_mass: 0.3,
+    body_water_mass: 0.3,
+    bone_mass: 0.1,
     blood_pressure: 2,
     heart_rate: 3,
     blood_glucose: 3,

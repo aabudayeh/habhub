@@ -48,6 +48,7 @@ import {
   profileProjectionLagsSnapshot,
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
 import {
   createPersonalSetupGroup,
@@ -913,6 +914,9 @@ function stableHash(state: AppState) {
   const hash = valueHash({
     ...payload,
     settings,
+    // Keep owned summaries in the snapshot as an offline cache, but never let
+    // their server-owned `updated_at` reopen the private account outbox.
+    dailyMetricStatuses: [],
     // Cloud shells are reduced to ids below, so retain the account-owned
     // identity explicitly in the private revision stream.
     accountProfile: accountMemberProfile(payload),
@@ -933,9 +937,11 @@ function accountMetadataHash(state: AppState) {
   if (cached) return cached;
   const hash = valueHash({
     profile: accountMemberProfile(state),
-    energyProfile:
+    energyProfile: cloudAccountEnergyProjection(
       state.energyProfiles[state.currentUserId] ??
-      state.settings.energyProfile,
+        state.settings.energyProfile,
+    ),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   });
   accountMetadataHashCache.set(state, hash);
   return hash;
@@ -958,9 +964,6 @@ function workspaceHash(state: AppState) {
     ),
     photos: payload.photos.filter(
       (photo) => photo.userId === payload.currentUserId,
-    ),
-    dailyMetricStatuses: payload.dailyMetricStatuses.filter(
-      (status) => status.userId === payload.currentUserId,
     ),
   });
   workspaceHashCache.set(state, hash);
@@ -3109,6 +3112,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // this operation observes syncPromiseRef and waits for this save instead.
       const activePull = pullLatestPromiseRef.current;
       if (activePull) await activePull;
+      // A compact foreground freshness publish and a durable workspace save
+      // target the same status rows/checkpoint. Serialize the hand-off so a
+      // resume/interval tick cannot duplicate that work beside an autosave.
+      const activeFreshness = leaderboardPublishPromiseRef.current;
+      if (activeFreshness) await activeFreshness;
       if (!operationIsCurrent()) return;
       // Routine debounced saves stay visually quiet. Explicit refresh controls
       // already expose their own progress and should not flash on every tap.

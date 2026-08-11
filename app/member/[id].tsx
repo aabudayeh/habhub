@@ -26,7 +26,10 @@ import { localizeMetricName } from "@/src/i18n/domain";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { isCloudGroupId } from "@/src/cloud/groupCloud";
+import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import {
   adjacentPeriod,
   DateRangeNavigator,
@@ -75,6 +78,7 @@ import {
   metricOverallAverage,
   metricVisualProgress,
 } from "@/src/domain/metrics";
+import { isChallengeMetric } from "@/src/domain/groupChallenges";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors } from "@/src/theme";
 
@@ -86,6 +90,7 @@ export default function MemberProfile() {
     metrics?: string;
   }>();
   const { state, updateSettings } = useApp();
+  const challengeCloud = useGroupChallenges(state.group.id);
   const locale = useLocale();
   const { language } = useLocalization();
   const calculationStateRef = useRef(state);
@@ -141,9 +146,19 @@ export default function MemberProfile() {
   );
   const [anchor, setAnchor] = useState(params.anchor || dateKey());
   const [photosOpen, setPhotosOpen] = useState(false);
+  const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const comparisonReady = true;
+  const challengeParticipantIds = useMemo(
+    () => [...new Set([state.currentUserId, member.id])],
+    [member.id, state.currentUserId],
+  );
+  const canChallengeFriend =
+    member.id !== state.currentUserId &&
+    isCloudGroupId(state.group.id) &&
+    state.group.members.length > 1 &&
+    available.some(isChallengeMetric);
   // Keep selector/date presses responsive. The previous comparison remains
   // visible while React prepares the newly requested range at low priority.
   const deferredMetricIds = useDeferredValue(metricIds);
@@ -324,14 +339,18 @@ export default function MemberProfile() {
     // and previously made the showcase disappear on Android.
     const task = setTimeout(() => {
       void badgeInputs;
-      const next = buildBadges(calculationStateRef.current, anchor);
+      const next = buildBadges(
+        calculationStateRef.current,
+        anchor,
+        challengeCloud.challenges,
+      );
       if (active) setAllBadges(next);
     }, 0);
     return () => {
       active = false;
       clearTimeout(task);
     };
-  }, [anchor, badgeInputs]);
+  }, [anchor, badgeInputs, challengeCloud.challenges]);
   const resultCache = useMemo(() => {
     void comparisonInputs;
     const cache = new Map<
@@ -613,11 +632,20 @@ export default function MemberProfile() {
         translateTitle={member.id === state.currentUserId}
         showMenu={false}
         action={
-          <IconButton
-            icon="close"
-            label="Close"
-            onPress={() => router.back()}
-          />
+          <View style={styles.headerActions}>
+            {canChallengeFriend ? (
+              <IconButton
+                icon="trophy-outline"
+                label="Create challenge"
+                onPress={() => setChallengeEditorOpen(true)}
+              />
+            ) : null}
+            <IconButton
+              icon="close"
+              label="Close"
+              onPress={() => router.back()}
+            />
+          </View>
         }
       />
       <View {...pageSwipeResponder.panHandlers}>
@@ -1103,6 +1131,18 @@ export default function MemberProfile() {
         </Text>
       </View>
       </View>
+      <GroupChallengeEditor
+        visible={challengeEditorOpen}
+        group={state.group}
+        metrics={available}
+        currentUserId={state.currentUserId}
+        initialDate={anchor}
+        initialParticipantIds={challengeParticipantIds}
+        onClose={() => setChallengeEditorOpen(false)}
+        onSave={async (input) => {
+          await challengeCloud.save(input);
+        }}
+      />
     </Screen>
   );
 }
@@ -1373,6 +1413,7 @@ function ProfilePhotoCompare({
   );
 }
 const styles = StyleSheet.create({
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   collapseHeader: { flexDirection: "row", alignItems: "center", gap: 9 },
   collapseTitle: { flex: 1, fontSize: 11, fontWeight: "900" },
   photoCapture: {

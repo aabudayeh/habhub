@@ -133,6 +133,7 @@ export function statusMuscleProgress(
   const anchorOrdinal = localDateOrdinal(anchorDate);
   if (anchorOrdinal === null) return 0;
   const weeklyDoses = new Map<number, Map<MuscleGroup, number>>();
+  const resistanceSessionDays = new Set<string>();
 
   const addSet = (weeksAgo: number, groups: readonly MuscleGroup[]) => {
     if (!groups.length) return;
@@ -154,22 +155,45 @@ export function statusMuscleProgress(
     const sessionOrdinal = localDateOrdinal(session.localDate);
     if (sessionOrdinal === null || sessionOrdinal > anchorOrdinal) continue;
     const weeksAgo = Math.floor((anchorOrdinal - sessionOrdinal) / 7);
+    let sessionHasResistanceEvidence = false;
     for (const exercise of session.exercises) {
       const primaryGroups = resistanceMovementGroups(exercise);
+      if (
+        primaryGroups.length &&
+        (exercise.completed || exercise.sets.some((set) => set.completed))
+      )
+        sessionHasResistanceEvidence = true;
       for (const set of exercise.sets) {
         if (!set.completed) continue;
         addSet(weeksAgo, primaryGroups);
-        if (set.superset)
-          addSet(weeksAgo, resistanceMovementGroups(set.superset));
+        if (set.superset) {
+          const supersetGroups = resistanceMovementGroups(set.superset);
+          addSet(weeksAgo, supersetGroups);
+          if (supersetGroups.length) sessionHasResistanceEvidence = true;
+        }
       }
     }
+    if (sessionHasResistanceEvidence)
+      resistanceSessionDays.add(session.localDate);
   }
+
+  const sessionOffsets = [...resistanceSessionDays].flatMap((localDate) => {
+    const ordinal = localDateOrdinal(localDate);
+    return ordinal === null ? [] : [anchorOrdinal - ordinal];
+  });
 
   return statusMuscleProgressFromWeeks(
     [...weeklyDoses].map(([weeksAgo, doses]) => ({
       quality: statusMuscleWeeklyQuality([...doses.values()]),
       weeksAgo,
     })),
+    {
+      recentWeekSessions: sessionOffsets.filter((daysAgo) => daysAgo <= 6)
+        .length,
+      recentMonthSessions: sessionOffsets.filter((daysAgo) => daysAgo <= 27)
+        .length,
+      lifetimeSessions: sessionOffsets.length,
+    },
   );
 }
 

@@ -53,6 +53,8 @@ const ALIASES: Record<string, string[]> = {
   blood_glucose: ["blood glucose", "glucose", "blood sugar"],
   body_fat: ["body fat", "body fat percentage"],
   lean_body_mass: ["lean body mass", "lean mass"],
+  body_water_mass: ["body water mass", "body water"],
+  bone_mass: ["bone mass"],
 };
 
 function normalize(value: string | undefined) {

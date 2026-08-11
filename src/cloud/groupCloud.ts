@@ -20,7 +20,10 @@ import {
   scheduledGoalReached,
 } from "@/src/domain/metrics";
 import { leaderboardRows } from "@/src/domain/leaderboard";
-import { normalizeEnergyProfile } from "@/src/domain/energy";
+import {
+  excludeAlreadyPublishedDailyStatusRows,
+} from "@/src/domain/cloudSyncProjection";
+import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
   isBloodPressureSystolic,
@@ -1784,7 +1787,7 @@ function accountMetadataRpcParams(
   const current = currentAccountMember(state);
   if (!current)
     throw new Error("The signed-in profile is not available locally yet.");
-  const profile = normalizeEnergyProfile(
+  const profile = cloudAccountEnergyProjection(
     state.energyProfiles[state.currentUserId] ?? state.settings.energyProfile,
   );
   return {
@@ -1792,15 +1795,7 @@ function accountMetadataRpcParams(
     p_display_name: current.name,
     p_avatar_path: current.avatarStoragePath ?? null,
     p_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    p_energy_profile: {
-      age: profile.age,
-      biological_sex: profile.sex,
-      height_cm: profile.heightCm,
-      weight_kg: profile.weightKg,
-      target_weight_kg: profile.targetWeightKg,
-      activity_level: profile.activityLevel,
-      desired_weekly_loss_kg: profile.desiredWeeklyLossKg,
-    },
+    p_energy_profile: profile,
   };
 }
 
@@ -2511,13 +2506,21 @@ export async function pushCloudWorkspace(
   // continue afterwards, while peers already receive today's values and an
   // honest recent-sync timestamp instead of seeing "No data" for minutes.
   const recentSince = recentCommitSinceDate;
-  const recentStatuses = statuses.filter(
+  // The fast pass above already wrote every applicable row in the newest
+  // 30-day window. The historical calculation can include those same rows;
+  // never upsert them twice in one publication (about 500 redundant UPDATEs
+  // for a typical 17-tracker workspace).
+  const supplementalStatuses = excludeAlreadyPublishedDailyStatusRows(
+    fastRecentStatuses,
+    statuses,
+  );
+  const supplementalRecentStatuses = supplementalStatuses.filter(
     (status) => status.local_date >= recentSince,
   );
-  const olderStatuses = statuses.filter(
+  const olderStatuses = supplementalStatuses.filter(
     (status) => status.local_date < recentSince,
   );
-  await upsertStatuses(recentStatuses);
+  await upsertStatuses(supplementalRecentStatuses);
   await upsertStatuses(olderStatuses);
 
   const activityCommitDates = [

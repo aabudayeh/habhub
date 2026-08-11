@@ -6,10 +6,8 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
@@ -191,19 +189,30 @@ object HabHubWidgetRenderer {
     // Even the 2x1 card keeps an at-a-glance progress line.
     views.setViewVisibility(R.id.widget_progress_container, View.VISIBLE)
     views.setViewVisibility(R.id.widget_subtitle, if (oneRow) View.GONE else View.VISIBLE)
-    views.setViewVisibility(R.id.widget_range, if (minWidth < 150) View.GONE else View.VISIBLE)
-    if (!oneRow && hasGoalDetails && minWidth < 220) {
-      views.setViewVisibility(R.id.widget_goal_3, View.GONE)
+    views.setViewVisibility(R.id.widget_completion_badge, if (oneRow) View.GONE else View.VISIBLE)
+    views.setViewVisibility(R.id.widget_range, View.GONE)
+    if (!oneRow && hasGoalDetails) {
+      if (minWidth < 150) {
+        views.setViewVisibility(R.id.widget_goal_2, View.GONE)
+        views.setViewVisibility(R.id.widget_goal_3, View.GONE)
+      } else if (minWidth < 220) {
+        views.setViewVisibility(R.id.widget_goal_3, View.GONE)
+      }
     }
     views.setTextViewTextSize(
       R.id.widget_title,
       TypedValue.COMPLEX_UNIT_SP,
-      if (oneRow) 8f else 9f,
+      if (oneRow || minWidth < 150) 8f else 9f,
     )
     views.setTextViewTextSize(
       R.id.widget_value,
       TypedValue.COMPLEX_UNIT_SP,
-      if (oneRow) 17f else 20f,
+      if (oneRow || minWidth < 150) 17f else 21f,
+    )
+    views.setTextViewTextSize(
+      R.id.widget_badge_value,
+      TypedValue.COMPLEX_UNIT_SP,
+      if (oneRow || minWidth < 150) 10f else 11f,
     )
   }
 
@@ -224,6 +233,7 @@ object HabHubWidgetRenderer {
       context.getString(R.string.habhub_widget_open_to_update),
     )
     views.setTextViewText(R.id.widget_range, "")
+    views.setTextViewText(R.id.widget_badge_value, "\u2014")
     views.setProgressBar(R.id.widget_progress, 100, 0, false)
     views.setProgressBar(R.id.widget_progress_gold, 100, 0, false)
     views.setViewVisibility(R.id.widget_progress, View.VISIBLE)
@@ -233,6 +243,12 @@ object HabHubWidgetRenderer {
       "setBackgroundResource",
       R.drawable.habhub_widget_background,
     )
+    views.setInt(
+      R.id.widget_completion_badge,
+      "setBackgroundResource",
+      R.drawable.habhub_widget_badge,
+    )
+    views.setTextColor(R.id.widget_title, parseColor(GOAL_LIME, Color.rgb(184, 228, 92)))
     clearGoalDetails(views)
     views.setOnClickPendingIntent(
       R.id.widget_root,
@@ -259,6 +275,7 @@ object HabHubWidgetRenderer {
       R.id.widget_range,
       "$progress%",
     )
+    views.setTextViewText(R.id.widget_badge_value, "$progress%")
     views.setProgressBar(R.id.widget_progress, 100, progress, false)
     views.setProgressBar(R.id.widget_progress_gold, 100, progress, false)
     views.setViewVisibility(R.id.widget_progress, if (allComplete) View.GONE else View.VISIBLE)
@@ -272,15 +289,15 @@ object HabHubWidgetRenderer {
         R.drawable.habhub_widget_background
       },
     )
-    if (!allComplete && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      val fallback = Color.rgb(8, 27, 73)
-      val background = parseColor(item.optString("backgroundColor"), fallback)
-      views.setColorStateList(
-        R.id.widget_root,
-        "setBackgroundTintList",
-        ColorStateList.valueOf(background),
-      )
-    }
+    views.setInt(
+      R.id.widget_completion_badge,
+      "setBackgroundResource",
+      if (allComplete) R.drawable.habhub_widget_badge_complete else R.drawable.habhub_widget_badge,
+    )
+    views.setTextColor(
+      R.id.widget_title,
+      if (allComplete) Color.rgb(255, 225, 138) else parseColor(GOAL_LIME, Color.rgb(184, 228, 92)),
+    )
     val goals = item.optJSONArray("goals") ?: JSONArray()
     if (goals.length() > 0) {
       renderGoalDetails(views, goals)
@@ -308,7 +325,12 @@ object HabHubWidgetRenderer {
         val completed = goal.optBoolean("met", false)
         views.setTextViewText(
           viewId,
-          "${if (completed) "\u2713 " else ""}${goal.optString("value")}  \u00B7  $percent%  ${goal.optString("title")}",
+          "${if (completed) "\u2713 " else ""}${goal.optString("value")}  \u00B7  $percent%\n${goal.optString("title")}",
+        )
+        views.setInt(
+          viewId,
+          "setBackgroundResource",
+          if (completed) R.drawable.habhub_widget_goal_complete else R.drawable.habhub_widget_goal,
         )
         views.setTextColor(
           viewId,

@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -158,6 +159,7 @@ const SOURCES: {
   id: HealthDataType;
   label: string;
   fields: { id: HealthMetricField; label: string }[];
+  platforms?: readonly ("android" | "ios")[];
 }[] = [
   {
     id: "steps",
@@ -194,6 +196,18 @@ const SOURCES: {
     id: "lean_body_mass",
     label: "Lean mass",
     fields: [{ id: "value", label: "Mass" }],
+  },
+  {
+    id: "body_water_mass",
+    label: "Body water mass",
+    fields: [{ id: "value", label: "Mass" }],
+    platforms: ["android"],
+  },
+  {
+    id: "bone_mass",
+    label: "Bone mass",
+    fields: [{ id: "value", label: "Mass" }],
+    platforms: ["android"],
   },
   {
     id: "blood_pressure",
@@ -242,6 +256,13 @@ const SOURCES: {
     ],
   },
 ];
+
+const AVAILABLE_SOURCES = SOURCES.filter(
+  (source) =>
+    !source.platforms ||
+    ((Platform.OS === "android" || Platform.OS === "ios") &&
+      source.platforms.includes(Platform.OS)),
+);
 
 export default function TrackerEditor() {
   const { id, scope, focus } = useLocalSearchParams<{
@@ -2550,7 +2571,7 @@ export default function TrackerEditor() {
                       }
                       options={[
                         { id: "none", label: "No device connection" },
-                        ...SOURCES.map((source) => ({
+                        ...AVAILABLE_SOURCES.map((source) => ({
                           id: source.id,
                           label: source.label,
                         })),
@@ -2731,7 +2752,7 @@ export default function TrackerEditor() {
                   setOpen={setHealthSourceChoiceOpen}
                   options={[
                     { id: "none", label: "No connection" },
-                    ...SOURCES.map((item) => ({
+                    ...AVAILABLE_SOURCES.map((item) => ({
                       id: item.id,
                       label: item.label,
                     })),

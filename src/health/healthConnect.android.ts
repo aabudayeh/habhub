@@ -28,6 +28,8 @@ const RECORD_TYPES: Record<HealthDataType, string> = {
   workouts: "ExerciseSession",
   body_fat: "BodyFat",
   lean_body_mass: "LeanBodyMass",
+  body_water_mass: "BodyWaterMass",
+  bone_mass: "BoneMass",
   blood_pressure: "BloodPressure",
   heart_rate: "HeartRate",
   sleep: "SleepSession",
@@ -403,6 +405,10 @@ function convert(
     unit = "%";
   }
   if (type === "lean_body_mass") {
+    value = nestedNumber(record, "mass", "inKilograms");
+    unit = "kg";
+  }
+  if (type === "body_water_mass" || type === "bone_mass") {
     value = nestedNumber(record, "mass", "inKilograms");
     unit = "kg";
   }

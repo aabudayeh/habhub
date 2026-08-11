@@ -494,16 +494,12 @@ function ChatScreen() {
       <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
         style={styles.flex}
-        // Android uses adjustResize, but some tab-scene/OEM combinations still
-        // need the measured overlap supplied by KeyboardAvoidingView. Enable it
-        // only while the keyboard is present: disabling it on close forces its
-        // internal height back to zero even if an OEM omits keyboardDidHide.
-        // React Native Web's implementation is intentionally a no-op.
-        enabled={
-          Platform.OS === "ios" ||
-          (Platform.OS === "android" && keyboardVisible)
-        }
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        // Android's adjustResize is the single owner of the IME inset. Applying
+        // KeyboardAvoidingView's measured height as well double-counts some OEM
+        // keyboards and can leave a stale half-height after the IME closes.
+        // Web is laid out by its visual viewport; only iOS needs KAV padding.
+        enabled={Platform.OS === "ios"}
+        behavior="padding"
         keyboardVerticalOffset={0}
       >
         <View style={styles.flex}>
@@ -859,7 +855,18 @@ function ChatScreen() {
           <View
             style={[
               styles.composerDock,
-              { paddingBottom: keyboardVisible ? 0 : tabBarHeight },
+              {
+                // Android keeps the tab bar in normal navigator layout, so the
+                // scene always ends at the exact usable bottom: above the bar
+                // when closed, and above the resized IME viewport when open.
+                // Web/iOS retain their overlaid bar and reserve its height here.
+                paddingBottom:
+                  Platform.OS === "android"
+                    ? 0
+                    : keyboardVisible
+                      ? 0
+                      : tabBarHeight,
+              },
             ]}
           >
             {imageUri ? (

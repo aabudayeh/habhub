@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
+import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import {
   Avatar,
   Card,
@@ -112,6 +113,7 @@ export default function BadgesScreen() {
     highlight?: string;
   }>();
   const { state } = useApp();
+  const challengeCloud = useGroupChallenges(state.group.id);
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [anchor, setAnchor] = useState(params.anchor ?? dateKey());
@@ -149,7 +151,10 @@ export default function BadgesScreen() {
         .filter((id) => !hiddenMetricIds.includes(id)),
     [hiddenMetricIds, trackerItems],
   );
-  const badges = useMemo(() => buildBadges(state, anchor), [anchor, state]);
+  const badges = useMemo(
+    () => buildBadges(state, anchor, challengeCloud.challenges),
+    [anchor, challengeCloud.challenges, state],
+  );
   const visible = useMemo(
     () =>
       badges

@@ -187,10 +187,14 @@ export default function TabLayout() {
             Platform.OS === "web" && softwareKeyboardVisible
               ? "none"
               : "flex",
-          // Chat reserves the measured tab-bar height inside its own footer.
-          // Keeping the bar overlaid there prevents hide/show from changing
-          // the scene height in a second layout pass after the keyboard moves.
-          position: route.name === "chat" ? "absolute" : undefined,
+          // On Android, keep Chat's bar in normal navigator layout. Combined
+          // with adjustResize this gives the composer one authoritative bottom
+          // edge and prevents stale/double IME offsets. Web and iOS retain the
+          // established overlay behavior and reserve this height in Chat.
+          position:
+            route.name === "chat" && Platform.OS !== "android"
+              ? "absolute"
+              : undefined,
           height: 55 + insets.bottom,
           paddingTop: 2,
           paddingBottom: Math.max(1, insets.bottom),

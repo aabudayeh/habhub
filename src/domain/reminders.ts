@@ -58,6 +58,8 @@ const DEFAULT_TRACKER_PROGRESS_PRESETS: Record<string, readonly number[]> = {
   weight: [25, 50, 75, 100],
   body_fat: [25, 50, 75, 100],
   lean_body_mass: [25, 50, 75, 100],
+  body_water_mass: [25, 50, 75, 100],
+  bone_mass: [25, 50, 75, 100],
 };
 
 export function defaultReminderTimes(metric: Pick<MetricDefinition, "id" | "category">) {

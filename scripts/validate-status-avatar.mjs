@@ -150,6 +150,11 @@ assert.match(
 );
 assert.match(
   statusSource,
+  /session\.localDate > anchorDate[\s\S]{0,1800}recentWeekSessions:[\s\S]{0,220}daysAgo <= 6[\s\S]{0,220}recentMonthSessions:[\s\S]{0,220}daysAgo <= 27/,
+  "muscle fallback must use anchor-safe week and month resistance frequency",
+);
+assert.match(
+  statusSource,
   /entry\.sourceUpdatedAt \?\? entry\.recordedAt/,
   "selected-date composition must use the real source update time",
 );
@@ -287,6 +292,18 @@ assert.ok(
   "measured adiposity must retain absolute fat-mass evidence at a fixed height",
 );
 const weightOnly = statusBodyAppearance(178, 100, 0.2, { sex: "male" });
+assert.equal(
+  weightOnly.adiposity,
+  weightOnly.bodyMass,
+  "when body fat and lean mass are absent, BMI must drive avatar adiposity",
+);
+const selectedDateBmiFallback = statusBodyAppearance(165, 100, 0, {
+  sex: "female",
+});
+assert.ok(
+  selectedDateBmiFallback.adiposity > weightOnly.adiposity,
+  "BMI fallback must use the supplied selected-date height and weight",
+);
 const leanMassOnly = statusBodyAppearance(178, 100, 0.2, {
   leanBodyMassKg: 88,
   sex: "male",
@@ -296,6 +313,11 @@ assert.ok(
     leanMassOnly.muscleProgress > weightOnly.muscleProgress,
   "lean mass alone must separate fat and lean signals instead of looking like weight alone",
 );
+const bodyFatWithoutLean = statusBodyAppearance(178, 82, 0.42, {
+  bodyFatPercent: 18,
+  sex: "male",
+});
+closeTo(bodyFatWithoutLean.muscleProgress, 0.42, 0.0001);
 
 const leanMale = statusBodyAppearance(178, 82, 0.2, {
   bodyFatPercent: 11,
@@ -491,6 +513,32 @@ const oneMaximalWeek = statusMuscleProgressFromWeeks([
 assert.ok(
   oneMaximalWeek < 1 / 9,
   "one unusually large week must not jump a visual checkpoint",
+);
+const firstFrequentWeek = statusMuscleProgressFromWeeks([], {
+  recentWeekSessions: 3,
+  recentMonthSessions: 3,
+  lifetimeSessions: 3,
+});
+const consistentFrequencyMonth = statusMuscleProgressFromWeeks([], {
+  recentWeekSessions: 3,
+  recentMonthSessions: 12,
+  lifetimeSessions: 12,
+});
+assert.ok(
+  firstFrequentWeek > 0 && firstFrequentWeek < 1 / 9,
+  "one frequent gym week should count without causing an abrupt muscle tier",
+);
+assert.ok(
+  consistentFrequencyMonth > firstFrequentWeek,
+  "month-scale resistance frequency must progressively strengthen the fallback",
+);
+assert.ok(
+  statusMuscleProgressFromWeeks([], {
+    recentWeekSessions: 300,
+    recentMonthSessions: 300,
+    lifetimeSessions: 30_000,
+  }) <= 1,
+  "gym frequency fallback must remain bounded",
 );
 const consistentProgress = (weekCount, quality = 0.75, offset = 0) =>
   statusMuscleProgressFromWeeks(

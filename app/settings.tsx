@@ -76,6 +76,7 @@ const healthDataTypes: {
   title: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
+  platforms?: readonly ("android" | "ios")[];
 }[] = [
   {
     id: "steps",
@@ -126,6 +127,20 @@ const healthDataTypes: {
     icon: "fitness-outline",
   },
   {
+    id: "body_water_mass",
+    title: "Body water mass",
+    subtitle: "Body-water measurements in kilograms from Health Connect",
+    icon: "water-outline",
+    platforms: ["android"],
+  },
+  {
+    id: "bone_mass",
+    title: "Bone mass",
+    subtitle: "Bone-mass measurements in kilograms from Health Connect",
+    icon: "accessibility-outline",
+    platforms: ["android"],
+  },
+  {
     id: "blood_pressure",
     title: "Blood pressure",
     subtitle: "Systolic and diastolic readings",
@@ -156,6 +171,13 @@ const healthDataTypes: {
     icon: "flower-outline",
   },
 ];
+
+const supportedHealthDataTypes = healthDataTypes.filter(
+  (item) =>
+    !item.platforms ||
+    ((Platform.OS === "android" || Platform.OS === "ios") &&
+      item.platforms.includes(Platform.OS)),
+);
 
 const statusCopy = {
   disabled: ["Device only", "cloud-offline-outline"],
@@ -709,7 +731,7 @@ export default function SettingsScreen() {
           </Text>
           <Text style={[styles.meta, { color: colors.muted }]}>
             {
-              healthDataTypes.filter(
+              supportedHealthDataTypes.filter(
                 (item) => state.settings.healthSync.dataTypes[item.id],
               ).length
             }{" "}
@@ -722,12 +744,12 @@ export default function SettingsScreen() {
           />
         </Pressable>
         {showHealthTypes
-          ? healthDataTypes.map((item, index) => (
+          ? supportedHealthDataTypes.map((item, index) => (
               <View
                 key={item.id}
                 style={[
                   styles.healthType,
-                  index < healthDataTypes.length - 1 && styles.border,
+                  index < supportedHealthDataTypes.length - 1 && styles.border,
                 ]}
               >
                 <View style={styles.modeIcon}>
