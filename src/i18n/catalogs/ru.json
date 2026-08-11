@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "Открыть полное расписание"
   ,"Start or manage timers": "Запустить таймеры или управлять ими"
   ,"Today’s schedule": "Расписание на сегодня"
+  ,"Data sources": "Источники данных"
+  ,"Choose which apps can contribute imported health data.": "Выберите приложения, из которых можно импортировать данные о здоровье."
+  ,"Could not update data source": "Не удалось обновить источник данных"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Новые источники остаются включёнными, пока вы их не отключите. При повторном включении источника выбранная история восстанавливается в фоновом режиме."
+  ,"Your phone": "Ваш телефон"
 }

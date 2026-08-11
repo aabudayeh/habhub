@@ -71,10 +71,12 @@ import {
 import {
   consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
+  nativeWorkoutActionsEnabled,
   showWorkoutTimerNotification,
   WORKOUT_TIMER_FINISH,
   WORKOUT_TIMER_NEXT,
   WORKOUT_TIMER_PAUSE,
+  type QueuedWorkoutTimerAction,
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
@@ -507,6 +509,11 @@ function GymScreen() {
   );
   const restAlerted = useRef(false);
   const handledTimerResponse = useRef<string | null>(null);
+  const [queuedNativeTimerActions, setQueuedNativeTimerActions] = useState<
+    QueuedWorkoutTimerAction[]
+  >([]);
+  const processedNativeTimerActionIds = useRef(new Set<string>());
+  const processedNativeTimerActionOrder = useRef<string[]>([]);
   const timerActionRef = useRef<
     (action: string, occurredAt?: number) => void
   >(() => undefined);
@@ -520,6 +527,25 @@ function GymScreen() {
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
+  const enqueueNativeTimerActions = useCallback(
+    (actions: QueuedWorkoutTimerAction[]) => {
+      if (!actions.length) return;
+      setQueuedNativeTimerActions((current) => {
+        const known = new Set(
+          current.map((item) => `${item.action}:${item.occurredAt}`),
+        );
+        const additions = actions.filter((item) => {
+          const id = `${item.action}:${item.occurredAt}`;
+          if (known.has(id) || processedNativeTimerActionIds.current.has(id))
+            return false;
+          known.add(id);
+          return true;
+        });
+        return additions.length ? [...current, ...additions].slice(-30) : current;
+      });
+    },
+    [],
+  );
   const [performanceRange, setPerformanceRange] =
     useState<PerformanceRange>("week");
   const defaultPerformancePeriod = useMemo(
@@ -1296,15 +1322,24 @@ function GymScreen() {
     const handle = (response: Notifications.NotificationResponse) => {
       if (response.notification.request.content.data?.workoutTimer !== true)
         return;
-      // Android notification actions are handled by the headless task and
-      // replayed once on resume; handling them here as well would skip twice.
+      // Android notification actions are committed by the native receiver;
+      // consume that single persisted queue instead of applying the response
+      // object separately and advancing twice.
       if (
         Platform.OS === "android" &&
         (response.actionIdentifier === WORKOUT_TIMER_NEXT ||
           response.actionIdentifier === WORKOUT_TIMER_PAUSE ||
           response.actionIdentifier === WORKOUT_TIMER_FINISH)
-      )
+      ) {
+        // Native handles the lock-screen row synchronously. If React is still
+        // alive (including a Wear action while the app is foreground), consume
+        // its persisted action now; the AppState replay remains a race-safe
+        // fallback when Android wakes the app later.
+        if (nativeWorkoutActionsEnabled())
+          void consumeWorkoutTimerActions().then(enqueueNativeTimerActions);
+        void Notifications.clearLastNotificationResponseAsync();
         return;
+      }
       const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
       if (handledTimerResponse.current === responseKey) return;
       handledTimerResponse.current = responseKey;
@@ -1317,7 +1352,7 @@ function GymScreen() {
       if (response) handle(response);
     });
     return () => subscription.remove();
-  }, []);
+  }, [enqueueNativeTimerActions]);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
@@ -1710,7 +1745,9 @@ function GymScreen() {
   function advanceWorkoutTimer(occurredAt = Date.now()) {
     if (!workoutTimer) return;
     if (workoutTimer.phase === "paused") {
-      pauseOrResumeWorkout();
+      // A notification/watch action may be replayed well after the tap. Keep
+      // the pause duration anchored to that native action timestamp.
+      pauseOrResumeWorkout(occurredAt);
       return;
     }
     // Android may deliver an action after waking JS; use tap time so a late
@@ -2093,6 +2130,42 @@ function GymScreen() {
     else if (action === WORKOUT_TIMER_FINISH)
       finishTimedWorkout(occurredAt ?? Date.now());
   };
+
+  useEffect(() => {
+    const next = queuedNativeTimerActions[0];
+    if (!next || !workoutDraftReady) return;
+    const id = `${next.action}:${next.occurredAt}`;
+    if (!workoutTimer || processedNativeTimerActionIds.current.has(id)) {
+      setQueuedNativeTimerActions((current) =>
+        current[0] && `${current[0].action}:${current[0].occurredAt}` === id
+          ? current.slice(1)
+          : current.filter(
+              (item) => `${item.action}:${item.occurredAt}` !== id,
+            ),
+      );
+      return;
+    }
+
+    processedNativeTimerActionIds.current.add(id);
+    processedNativeTimerActionOrder.current.push(id);
+    if (processedNativeTimerActionOrder.current.length > 60) {
+      const expired = processedNativeTimerActionOrder.current.shift();
+      if (expired) processedNativeTimerActionIds.current.delete(expired);
+    }
+    // Apply exactly one native transition in this committed render. Removing
+    // it from the queue is batched with the timer/exercise state updates, so
+    // the next effect observes the newly committed workout phase rather than
+    // relying on a timing delay that can fail on a large account.
+    timerActionRef.current(next.action, next.occurredAt);
+    setQueuedNativeTimerActions((current) =>
+      current[0] && `${current[0].action}:${current[0].occurredAt}` === id
+        ? current.slice(1)
+        : current.filter(
+            (item) => `${item.action}:${item.occurredAt}` !== id,
+          ),
+    );
+  }, [queuedNativeTimerActions, workoutDraftReady, workoutTimer]);
+
   notificationPayloadRef.current = workoutTimer
     ? {
         title: t(timerHeading),
@@ -2134,15 +2207,13 @@ function GymScreen() {
       appActivity !== "active"
     )
       return;
-    void consumeWorkoutTimerActions().then((actions) => {
-      actions.forEach((item, index) => {
-        setTimeout(
-          () => timerActionRef.current(item.action, item.occurredAt),
-          index * 180,
-        );
-      });
-    });
-  }, [appActivity, workoutDraftReady, workoutTimer]);
+    void consumeWorkoutTimerActions().then(enqueueNativeTimerActions);
+  }, [
+    appActivity,
+    enqueueNativeTimerActions,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
 
   useEffect(() => {
     if (!workoutTimer) {
@@ -3164,8 +3235,19 @@ function GymScreen() {
                     <Text
                       style={[styles.restNoteText, { color: colors.ink }]}
                     >
-                      Between <Text translate={false}>{localizeExerciseName(language, exercise)}</Text> and{" "}
-                      <Text translate={false}>{exercises[exerciseIndex + 1] ? localizeExerciseName(language, exercises[exerciseIndex + 1]) : ""}</Text>
+                      Between{" "}
+                      <Text translate={false} style={styles.restNoteText}>
+                        {localizeExerciseName(language, exercise)}
+                      </Text>{" "}
+                      and{" "}
+                      <Text translate={false} style={styles.restNoteText}>
+                        {exercises[exerciseIndex + 1]
+                          ? localizeExerciseName(
+                              language,
+                              exercises[exerciseIndex + 1],
+                            )
+                          : ""}
+                      </Text>
                       {" · "}
                       {formatGymDuration(
                         activeExerciseRest

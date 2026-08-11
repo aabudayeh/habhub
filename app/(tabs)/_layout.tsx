@@ -164,6 +164,10 @@ export default function TabLayout() {
               }
             : undefined,
         tabBarStyle: {
+          // Chat reserves the measured tab-bar height inside its own footer.
+          // Keeping the bar overlaid there prevents hide/show from changing
+          // the scene height in a second layout pass after the keyboard moves.
+          position: route.name === "chat" ? "absolute" : undefined,
           height: 58 + insets.bottom,
           paddingTop: 3,
           paddingBottom: Math.max(2, insets.bottom),

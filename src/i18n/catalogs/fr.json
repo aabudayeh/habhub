@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "Ouvrir le planning complet"
   ,"Start or manage timers": "Démarrer ou gérer les minuteurs"
   ,"Today’s schedule": "Planning du jour"
+  ,"Data sources": "Sources de données"
+  ,"Choose which apps can contribute imported health data.": "Choisissez les applications pouvant fournir des données de santé importées."
+  ,"Could not update data source": "Impossible de mettre à jour la source de données"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Les nouvelles sources restent activées jusqu’à ce que vous les désactiviez. Réactiver une source restaure l’historique sélectionné en arrière-plan."
+  ,"Your phone": "Votre téléphone"
 }

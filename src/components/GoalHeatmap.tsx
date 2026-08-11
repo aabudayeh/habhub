@@ -1,9 +1,16 @@
 import React, { useMemo, useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import {
+  type GestureResponderEvent,
+  Pressable,
+  type StyleProp,
+  StyleSheet,
+  View,
+  type ViewStyle,
+} from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 
 import { AppText as Text } from "@/src/components/AppText";
-import { useLocale } from "@/src/i18n";
+import { useLocale, useTranslation } from "@/src/i18n";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { entriesForDay } from "@/src/domain/dataIndex";
 import {
@@ -22,6 +29,7 @@ import {
 import { useAppColors } from "@/src/theme";
 import { AppState, HistoryRange, MetricDefinition } from "@/src/types";
 import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
+import { yearHeatmapDateAtPoint } from "@/src/domain/progressGrid";
 
 const NOT_LOGGED = "#9CA3AF";
 const LOGGED_NO_GOAL = "#F59E0B";
@@ -58,6 +66,59 @@ export type TrackedGoalsHeatmapModel = {
   eligibleDays: number;
   cells: HeatmapCellModel[];
 };
+
+function YearHeatmapGrid({
+  accessibilityLabel,
+  cells,
+  cellHeight,
+  cellWidth,
+  gap,
+  onLongPress,
+  onSelect,
+  style,
+  children,
+}: {
+  accessibilityLabel: string;
+  cells: (string | null)[];
+  cellHeight: number;
+  cellWidth: number;
+  gap: number;
+  onLongPress?: () => void;
+  onSelect?: (date: string) => void;
+  style: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}) {
+  const onPress = (event: GestureResponderEvent) => {
+    // Keep a full-year grid lightweight: one delegated press target replaces
+    // 365 nested Pressables while retaining exact day selection.
+    event.stopPropagation();
+    if (!onSelect) return;
+    const date = yearHeatmapDateAtPoint(
+      cells,
+      event.nativeEvent.locationX,
+      event.nativeEvent.locationY,
+      cellWidth,
+      cellHeight,
+      gap,
+    );
+    if (date) onSelect(date);
+  };
+  if (!onSelect && !onLongPress) return <View style={style}>{children}</View>;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      onLongPress={(event) => {
+        event.stopPropagation();
+        onLongPress?.();
+      }}
+      style={style}
+    >
+      {children}
+    </Pressable>
+  );
+}
 
 type CacheInputs = {
   metrics: AppState["metrics"];
@@ -355,17 +416,26 @@ export function TrackedGoalsHeatmap({
   range,
   compact = false,
   onSelect,
+  onLongPress,
   model,
+  selectedDate,
 }: {
   state: AppState;
   dates: string[];
   range: HistoryRange;
   compact?: boolean;
   onSelect?: (date: string) => void;
+  onLongPress?: () => void;
   model?: TrackedGoalsHeatmapModel;
+  selectedDate?: string;
 }) {
   const colors = useAppColors();
   const locale = useLocale();
+  const t = useTranslation();
+  const weekdayFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { weekday: "short" }),
+    [locale],
+  );
   const today = new Date().toISOString().slice(0, 10);
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
   const firstWeekday = dates[0]
@@ -373,10 +443,13 @@ export function TrackedGoalsHeatmap({
     : weekStartsOn;
   const leading =
     range === "week" ? 0 : (firstWeekday - weekStartsOn + 7) % 7;
-  const cells = [
-    ...Array.from({ length: leading }, () => null),
-    ...dates,
-  ];
+  const cells = useMemo(
+    () => [
+      ...Array.from({ length: leading }, () => null),
+      ...dates,
+    ],
+    [dates, leading],
+  );
   const [availableWidth, setAvailableWidth] = useState(0);
   const gap = range === "year" ? 1 : compact ? 4 : 5;
   const yearColumns = Math.ceil(cells.length / 7);
@@ -418,14 +491,23 @@ export function TrackedGoalsHeatmap({
               key={date}
               style={[styles.weekLabel, { color: colors.muted }]}
             >
-              {new Intl.DateTimeFormat(locale, { weekday: "short" })
+              {weekdayFormatter
                 .format(new Date(`${date}T12:00:00`))
                 .slice(0, 2)}
             </Text>
           ))}
         </View>
       ) : null}
-      <View
+      <YearHeatmapGrid
+        accessibilityLabel={t(
+          `Select a day from the ${t("Tracked goals")} year grid`,
+        )}
+        cells={cells}
+        cellHeight={cellHeight}
+        cellWidth={cellWidth}
+        gap={gap}
+        onLongPress={range === "year" ? onLongPress : undefined}
+        onSelect={range === "year" ? onSelect : undefined}
         style={[
           styles.grid,
           compact &&
@@ -446,6 +528,7 @@ export function TrackedGoalsHeatmap({
             return (
               <View
                 key={`empty-${index}`}
+                pointerEvents={range === "year" ? "none" : "auto"}
                 style={{
                   width: cellWidth,
                   height: cellHeight,
@@ -462,21 +545,37 @@ export function TrackedGoalsHeatmap({
             backgroundColor: cell?.future
               ? colors.canvas
               : cell?.backgroundColor,
-            borderWidth: date === today ? 1 : 0,
-            borderColor: colors.ink,
+            borderWidth:
+              date === selectedDate
+                ? range === "year"
+                  ? 1
+                  : 2
+                : date === today
+                  ? 1
+                  : 0,
+            borderColor:
+              date === selectedDate ? GOAL_COMPLETE_COLOR : colors.ink,
           };
           return range === "year" ? (
-            <View key={date} style={cellStyle} />
+            <View key={date} pointerEvents="none" style={cellStyle} />
           ) : (
             <Pressable
               key={date}
-              disabled={!onSelect}
-              onPress={() => onSelect?.(date)}
+              disabled={!onSelect && !onLongPress}
+              accessibilityState={{ selected: date === selectedDate }}
+              onPress={(event) => {
+                event.stopPropagation();
+                onSelect?.(date);
+              }}
+              onLongPress={(event) => {
+                event.stopPropagation();
+                onLongPress?.();
+              }}
               style={cellStyle}
             />
           );
         })}
-      </View>
+      </YearHeatmapGrid>
       {!compact ? (
         <View style={styles.caption}>
           <Text style={[styles.captionText, { color: colors.muted }]}>
@@ -501,8 +600,10 @@ export function GoalHeatmap({
   range,
   compact = false,
   onSelect,
+  onLongPress,
   model,
   completionOnly = false,
+  selectedDate,
 }: {
   state: AppState;
   metric: MetricDefinition;
@@ -510,11 +611,18 @@ export function GoalHeatmap({
   range: HistoryRange;
   compact?: boolean;
   onSelect?: (date: string) => void;
+  onLongPress?: () => void;
   model?: GoalHeatmapModel;
   completionOnly?: boolean;
+  selectedDate?: string;
 }) {
   const colors = useAppColors();
   const locale = useLocale();
+  const t = useTranslation();
+  const weekdayFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { weekday: "short" }),
+    [locale],
+  );
   const today = new Date().toISOString().slice(0, 10);
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
   const firstDate = dates[0];
@@ -578,14 +686,23 @@ export function GoalHeatmap({
               key={date}
               style={[styles.weekLabel, { color: colors.muted }]}
             >
-              {new Intl.DateTimeFormat(locale, { weekday: "short" })
+              {weekdayFormatter
                 .format(new Date(`${date}T12:00:00`))
                 .slice(0, 2)}
             </Text>
           ))}
         </View>
       ) : null}
-      <View
+      <YearHeatmapGrid
+        accessibilityLabel={t(
+          `Select a day from the ${t(metric.name)} year grid`,
+        )}
+        cells={cells}
+        cellHeight={cellHeight}
+        cellWidth={cellWidth}
+        gap={gap}
+        onLongPress={range === "year" ? onLongPress : undefined}
+        onSelect={range === "year" ? onSelect : undefined}
         style={[
           styles.grid,
           compact &&
@@ -606,6 +723,7 @@ export function GoalHeatmap({
             return (
               <View
                 key={`empty-${index}`}
+                pointerEvents={range === "year" ? "none" : "auto"}
                 style={{
                   width: cellWidth,
                   height: cellHeight,
@@ -628,8 +746,15 @@ export function GoalHeatmap({
             backgroundColor: cell?.future
               ? colors.canvas
               : completionColor,
-            borderWidth: date === today ? 1 : 0,
-            borderColor: colors.ink,
+            borderWidth:
+              date === selectedDate
+                ? range === "year"
+                  ? 1
+                  : 2
+                : date === today
+                  ? 1
+                  : 0,
+            borderColor: date === selectedDate ? metric.color : colors.ink,
             overflow: "hidden" as const,
           };
           const split =
@@ -649,7 +774,9 @@ export function GoalHeatmap({
               />
             ) : null;
           return range === "year" ? (
-            <View key={date} style={cellStyle}>{split}</View>
+            <View key={date} pointerEvents="none" style={cellStyle}>
+              {split}
+            </View>
           ) : (
             <Pressable
               key={date}
@@ -660,15 +787,23 @@ export function GoalHeatmap({
                     ? ", not logged"
                     : ""
               }`}
-              disabled={!onSelect}
-              onPress={() => onSelect?.(date)}
+              disabled={!onSelect && !onLongPress}
+              accessibilityState={{ selected: date === selectedDate }}
+              onPress={(event) => {
+                event.stopPropagation();
+                onSelect?.(date);
+              }}
+              onLongPress={(event) => {
+                event.stopPropagation();
+                onLongPress?.();
+              }}
               style={cellStyle}
             >
               {split}
             </Pressable>
           );
         })}
-      </View>
+      </YearHeatmapGrid>
       {!compact ? (
         <View style={styles.caption}>
           <Text style={[styles.captionText, { color: colors.muted }]}>

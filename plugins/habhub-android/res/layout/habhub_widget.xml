@@ -21,10 +21,12 @@
       android:layout_weight="1"
       android:ellipsize="end"
       android:fontFamily="sans-serif-medium"
+      android:letterSpacing="0.08"
       android:maxLines="1"
       android:text="@string/app_name"
-      android:textColor="#FFFFFF"
-      android:textSize="13sp" />
+      android:textAllCaps="true"
+      android:textColor="#C9D4E8"
+      android:textSize="9sp" />
 
     <TextView
       android:id="@+id/widget_range"
@@ -32,8 +34,8 @@
       android:layout_height="wrap_content"
       android:fontFamily="sans-serif-medium"
       android:maxLines="1"
-      android:text="@string/habhub_widget_week"
-      android:textColor="#A8B9D8"
+      android:text="0%"
+      android:textColor="#DCE6F6"
       android:textSize="9sp" />
   </LinearLayout>
 
@@ -43,35 +45,50 @@
     android:layout_height="wrap_content"
     android:ellipsize="end"
     android:fontFamily="sans-serif-medium"
+    android:includeFontPadding="false"
     android:maxLines="1"
-    android:text="0%"
+    android:text="0 / 0"
     android:textColor="#FFFFFF"
     android:textSize="20sp" />
 
-  <ProgressBar
-    android:id="@+id/widget_progress"
-    style="?android:attr/progressBarStyleHorizontal"
-    android:layout_width="match_parent"
-    android:layout_height="4dp"
-    android:layout_marginTop="3dp"
-    android:max="100"
-    android:progress="0"
-    android:progressBackgroundTint="#20365F"
-    android:progressTint="#58E1D4" />
-
-  <LinearLayout
-    android:id="@+id/widget_history"
+  <TextView
+    android:id="@+id/widget_subtitle"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginTop="5dp"
-    android:orientation="vertical">
+    android:ellipsize="end"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:text="@string/habhub_widget_open_to_update"
+    android:textColor="#D1DCF0"
+    android:textSize="9sp" />
 
-    <LinearLayout android:id="@+id/widget_history_row_1" android:layout_width="match_parent" android:layout_height="7dp" android:orientation="horizontal" />
-    <LinearLayout android:id="@+id/widget_history_row_2" android:layout_width="match_parent" android:layout_height="7dp" android:layout_marginTop="2dp" android:orientation="horizontal" />
-    <LinearLayout android:id="@+id/widget_history_row_3" android:layout_width="match_parent" android:layout_height="7dp" android:layout_marginTop="2dp" android:orientation="horizontal" />
-    <LinearLayout android:id="@+id/widget_history_row_4" android:layout_width="match_parent" android:layout_height="7dp" android:layout_marginTop="2dp" android:orientation="horizontal" />
-    <LinearLayout android:id="@+id/widget_history_row_5" android:layout_width="match_parent" android:layout_height="7dp" android:layout_marginTop="2dp" android:orientation="horizontal" />
-  </LinearLayout>
+  <FrameLayout
+    android:id="@+id/widget_progress_container"
+    android:layout_width="match_parent"
+    android:layout_height="3dp"
+    android:layout_marginTop="2dp">
+
+    <ProgressBar
+      android:id="@+id/widget_progress"
+      style="?android:attr/progressBarStyleHorizontal"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:max="100"
+      android:progress="0"
+      android:progressBackgroundTint="#365078"
+      android:progressTint="#B8E45C" />
+
+    <ProgressBar
+      android:id="@+id/widget_progress_gold"
+      style="?android:attr/progressBarStyleHorizontal"
+      android:layout_width="match_parent"
+      android:layout_height="match_parent"
+      android:max="100"
+      android:progress="0"
+      android:progressBackgroundTint="#A67A1C"
+      android:progressTint="#FFD166"
+      android:visibility="gone" />
+  </FrameLayout>
 
   <LinearLayout
     android:id="@+id/widget_goal_details"
@@ -81,19 +98,8 @@
     android:orientation="vertical"
     android:visibility="gone">
 
-    <TextView android:id="@+id/widget_goal_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
-    <TextView android:id="@+id/widget_goal_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
-    <TextView android:id="@+id/widget_goal_3" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView android:id="@+id/widget_goal_1" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView android:id="@+id/widget_goal_2" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
+    <TextView android:id="@+id/widget_goal_3" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:fontFamily="sans-serif-medium" android:includeFontPadding="false" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="9sp" />
   </LinearLayout>
-
-  <TextView
-    android:id="@+id/widget_subtitle"
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_marginTop="3dp"
-    android:ellipsize="end"
-    android:maxLines="1"
-    android:text="@string/habhub_widget_open_to_update"
-    android:textColor="#A8B9D8"
-    android:textSize="9sp" />
 </LinearLayout>

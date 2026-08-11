@@ -423,13 +423,13 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,
-      version: 23,
+      version: 24,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
   if (sourceVersion >= 19)
     return upgradeStateV21({
       ...state,
-      version: 23,
+      version: 24,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
@@ -440,7 +440,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return upgradeStateV21({
       ...state,
-      version: 23,
+      version: 24,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -465,7 +465,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return upgradeStateV21({
     ...state,
-    version: 23,
+    version: 24,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -694,6 +694,9 @@ function snapshotPayload(state: AppState): AppState {
         ...state.settings.healthSync,
         enabled: false,
         backgroundAccess: false,
+        // Installed writer packages and enable/disable choices differ per
+        // phone. Keep them in the offline device snapshot, not the account.
+        sourcePreferences: undefined,
         initialHistoryImportPending: undefined,
         backfillTrackedGoalsOnFirstImport: undefined,
         backfillTrackedGoalsEmptyReadCount: undefined,

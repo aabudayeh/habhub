@@ -96,6 +96,7 @@ import {
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { orderTodayMetrics } from "@/src/domain/todayOrdering";
 import { metricVisualization } from "@/src/domain/visualization";
+import { progressGridNavigationSettings } from "@/src/domain/progressGrid";
 import { fastingProgressForDate } from "@/src/domain/fasting";
 import {
   completionIndicatorFillMode,
@@ -214,6 +215,24 @@ function Today() {
   }, []);
   const today = dateKey();
   const todayHistoryRange = state.settings.todayHistoryRange ?? "week";
+  const todayHistoryDates = useMemo(
+    () =>
+      calendarPeriodRange(
+        today,
+        todayHistoryRange,
+        state.settings.weekStartsOn ?? 1,
+      ),
+    [state.settings.weekStartsOn, today, todayHistoryRange],
+  );
+  const openHistoryDayInProgress = useCallback(
+    (selectedDate: string) => {
+      updateSettings(
+        progressGridNavigationSettings(selectedDate, todayHistoryRange),
+      );
+      router.navigate("/insights" as never);
+    },
+    [todayHistoryRange, updateSettings],
+  );
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
   )!;
@@ -681,7 +700,9 @@ function Today() {
     <SafeAreaView
       {...todaySwipeResponder.panHandlers}
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top", "bottom"]}
+      // The navigator owns the bottom safe area. Reserving it again here
+      // leaves a canvas-coloured strip between Today and the tab bar.
+      edges={["top"]}
     >
       {confettiVisible ? (
         <ConfettiBurst progress={celebration} special={celebrationSpecial} />
@@ -745,15 +766,6 @@ function Today() {
               </>
             ) : (
               <>
-                <HeaderIcon
-                  icon="sparkles-outline"
-                  label="Open recap"
-                  onPress={() =>
-                    router.navigate("/recap?scope=personal" as never)
-                  }
-                  colors={colors}
-                  accent={accent}
-                />
                 {state.settings.showCalendarShortcut ? (
                   <HeaderIcon
                     icon="calendar-outline"
@@ -802,10 +814,18 @@ function Today() {
             styles.hero,
             {
               backgroundColor: heroBackgroundColor,
-              borderColor: heroCompletionColor,
+              borderColor: "rgba(255,255,255,.22)",
             },
           ]}
         >
+          <HeroProgressOutline
+            progress={heroProgress}
+            color={heroAllMet ? "#FFD166" : GOAL_COMPLETE_COLOR}
+            fillMode={completionIndicatorFillMode(
+              state.settings.completionIndicatorIcon,
+              state.settings.completionIndicatorFillMode ?? "auto",
+            )}
+          />
           <View style={styles.heroTop}>
             <View>
               <Text
@@ -1035,6 +1055,7 @@ function Today() {
                 goldSequenceRun={goldSequenceRun}
                 celebrating={celebratingGoalIds.includes(item.id)}
                 historyRange={todayHistoryRange}
+                historyDates={todayHistoryDates}
                 historyExpanded={expandedHistoryIds.includes(item.id)}
                 onEdit={beginEditing}
                 onMove={(target) =>
@@ -1097,6 +1118,7 @@ function Today() {
                       : [...current, item.id],
                   )
                 }
+                onHistoryDateSelect={openHistoryDayInProgress}
                 onDragStart={() => {
                   setDraggingMetricId(item.id);
                 }}
@@ -1636,10 +1658,14 @@ function GoalCompletionDot({
     inputRange: [0, 1],
     outputRange: [-5, 5],
   });
-  const fillHeight = GOAL_DOT_SIZE * normalized;
+  // Extend the liquid one physical point under the rounded border. Otherwise
+  // React Native can leave a hairline of the translucent cup background at
+  // the bottom after clipping, especially at fractional progress heights.
+  const liquidExtent = GOAL_DOT_SIZE + 2;
+  const fillHeight = liquidExtent * normalized;
   const liquidTranslateY = liquidReveal.interpolate({
     inputRange: [0, 1],
-    outputRange: [fillHeight, 0],
+    outputRange: [fillHeight + 1, 0],
   });
   return (
     <Pressable
@@ -1731,6 +1757,7 @@ function TrackerRow({
   goldSequenceRun,
   celebrating,
   historyRange,
+  historyDates,
   historyExpanded,
   onEdit,
   onMove,
@@ -1738,6 +1765,7 @@ function TrackerRow({
   onPin,
   onTrackedToggle,
   onHistoryExpandToggle,
+  onHistoryDateSelect,
   onDragStart,
   onDragHover,
   onDragCancel,
@@ -1759,6 +1787,7 @@ function TrackerRow({
   goldSequenceRun: number;
   celebrating: boolean;
   historyRange: HistoryRange | "off";
+  historyDates: string[];
   historyExpanded: boolean;
   onEdit: () => void;
   onMove: (target: number) => void;
@@ -1766,6 +1795,7 @@ function TrackerRow({
   onPin: () => void;
   onTrackedToggle: () => void;
   onHistoryExpandToggle: () => void;
+  onHistoryDateSelect: (selectedDate: string) => void;
   onDragStart: () => void;
   onDragHover: (target: number) => void;
   onDragCancel: () => void;
@@ -2326,22 +2356,14 @@ function TrackerRow({
         <GoalHeatmap
           state={state}
           metric={item}
-          dates={calendarPeriodRange(
-            day,
-            historyRange,
-            state.settings.weekStartsOn ?? 1,
-          )}
+          dates={historyDates}
           range={historyRange}
           compact
           completionOnly={
             metricVisualization(item).progressGrid === "completion"
           }
-          onSelect={(selectedDate) =>
-            router.navigate({
-              pathname: "/metric-detail",
-              params: { metric: item.id, date: selectedDate },
-            })
-          }
+          onSelect={onHistoryDateSelect}
+          onLongPress={onEdit}
         />
       </Animated.View>
     ) : null}
@@ -2623,6 +2645,174 @@ function Celebration({
   );
 }
 
+/** Draws only the completed portion of the featured-card outline. */
+function HeroProgressOutline({
+  progress,
+  color,
+  fillMode,
+}: {
+  progress: number;
+  color: string;
+  fillMode: Exclude<CompletionFillMode, "auto">;
+}) {
+  const normalized = Math.max(0, Math.min(1, progress));
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const stroke = 2;
+  const fullOutline = (offsetLeft = 0, offsetTop = 0) => (
+    <View
+      style={[
+        styles.heroOutlineStroke,
+        {
+          borderColor: color,
+          width: size.width,
+          height: size.height,
+          left: offsetLeft,
+          top: offsetTop,
+        },
+      ]}
+    />
+  );
+
+  let clockwiseSegments: React.ReactNode = null;
+  if (
+    fillMode === "clockwise" &&
+    normalized > 0 &&
+    size.width > 0 &&
+    size.height > 0
+  ) {
+    let remaining = normalized * (2 * size.width + 2 * size.height);
+    const take = (length: number) => {
+      const used = Math.max(0, Math.min(length, remaining));
+      remaining -= used;
+      return used;
+    };
+    const topRight = take(size.width / 2);
+    const right = take(size.height);
+    const bottom = take(size.width);
+    const left = take(size.height);
+    const topLeft = take(size.width / 2);
+    clockwiseSegments = (
+      <>
+        {topRight > 0 ? (
+          <View
+            style={[
+              styles.heroOutlineSegment,
+              {
+                backgroundColor: color,
+                left: size.width / 2,
+                top: 0,
+                width: topRight,
+                height: stroke,
+              },
+            ]}
+          />
+        ) : null}
+        {right > 0 ? (
+          <View
+            style={[
+              styles.heroOutlineSegment,
+              {
+                backgroundColor: color,
+                right: 0,
+                top: 0,
+                width: stroke,
+                height: right,
+              },
+            ]}
+          />
+        ) : null}
+        {bottom > 0 ? (
+          <View
+            style={[
+              styles.heroOutlineSegment,
+              {
+                backgroundColor: color,
+                right: 0,
+                bottom: 0,
+                width: bottom,
+                height: stroke,
+              },
+            ]}
+          />
+        ) : null}
+        {left > 0 ? (
+          <View
+            style={[
+              styles.heroOutlineSegment,
+              {
+                backgroundColor: color,
+                left: 0,
+                bottom: 0,
+                width: stroke,
+                height: left,
+              },
+            ]}
+          />
+        ) : null}
+        {topLeft > 0 ? (
+          <View
+            style={[
+              styles.heroOutlineSegment,
+              {
+                backgroundColor: color,
+                left: size.width / 2 - topLeft,
+                top: 0,
+                width: topLeft,
+                height: stroke,
+              },
+            ]}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <View
+      pointerEvents="none"
+      style={styles.heroOutlineLayer}
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        if (width !== size.width || height !== size.height) {
+          setSize({ width, height });
+        }
+      }}
+    >
+      {fillMode === "clockwise" ? clockwiseSegments : null}
+      {fillMode === "bottom_up" && normalized > 0 && size.height > 0 ? (
+        <View
+          style={[
+            styles.heroOutlineClip,
+            {
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: size.height * normalized,
+            },
+          ]}
+        >
+          {fullOutline(0, -size.height * (1 - normalized))}
+        </View>
+      ) : null}
+      {fillMode === "center_out" && normalized > 0 && size.width > 0 ? (
+        <View
+          style={[
+            styles.heroOutlineClip,
+            {
+              left: (size.width * (1 - normalized)) / 2,
+              top: 0,
+              bottom: 0,
+              width: size.width * normalized,
+            },
+          ]}
+        >
+          {fullOutline(-(size.width * (1 - normalized)) / 2, 0)}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 /**
  * The selected completion shape is the progress track itself. Its outline is
  * revealed continuously, rather than drawing a second ring around a small icon.
@@ -2894,6 +3084,24 @@ const styles = StyleSheet.create({
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   hero: { borderRadius: 20, borderWidth: 1, padding: 14, minHeight: 135 },
+  heroOutlineLayer: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    overflow: "hidden",
+  },
+  heroOutlineClip: {
+    position: "absolute",
+    overflow: "hidden",
+  },
+  heroOutlineStroke: {
+    position: "absolute",
+    borderRadius: 20,
+    borderWidth: 2,
+  },
+  heroOutlineSegment: {
+    position: "absolute",
+    borderRadius: 2,
+  },
   heroTop: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -2994,9 +3202,9 @@ const styles = StyleSheet.create({
   },
   dotLiquid: {
     position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    left: -1,
+    right: -1,
+    bottom: -1,
   },
   dotWave: {
     position: "absolute",

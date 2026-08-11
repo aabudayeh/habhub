@@ -1,80 +1,33 @@
 import { useEffect, useRef } from "react";
 import { InteractionManager } from "react-native";
 
-import { dateKey, dateWithOffsetFrom, monthDateRange, yearDateRange } from "@/src/domain/date";
+import { dateKey } from "@/src/domain/date";
 import {
   displayGoalProgress,
   effectiveGoalTarget,
   formatMetricValue,
   hasMetricData,
   isMetricTrackedOnDate,
-  metricApplicableOnDate,
   safeMetricValue,
   scheduledGoalReached,
 } from "@/src/domain/metrics";
 import { localizeMetricName, localizeMetricUnit } from "@/src/i18n/domain";
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
+import {
+  ALL_GOALS_COMPLETE_COLOR,
+  GOAL_COMPLETE_COLOR,
+} from "@/src/domain/colors";
+import { completionIndicatorFillMode } from "@/src/domain/completionIndicators";
+import { useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
 import {
   areHomeScreenWidgetsSupported,
   getHomeScreenWidgetConfigurations,
   updateHomeScreenWidgets,
-  WidgetHistoryPoint,
   WidgetSnapshot,
   WidgetTrackerSnapshot,
 } from "@/src/widgets";
-
-const GOAL_COMPLETE_COLOR = "#A7F432";
-
-function pointForDate(
-  state: AppState,
-  metric: MetricDefinition,
-  localDate: string,
-): WidgetHistoryPoint {
-  const userId = state.currentUserId;
-  if (
-    !metricApplicableOnDate(state, metric, userId, localDate) ||
-    !hasMetricData(state, metric, userId, localDate)
-  ) {
-    return { progress: 0, status: "not_logged" };
-  }
-  const value = safeMetricValue(state, metric, userId, localDate);
-  return {
-    progress: Math.max(
-      0,
-      Math.min(
-        1,
-        displayGoalProgress(
-          metric,
-          value,
-          effectiveGoalTarget(state, metric, userId, localDate),
-        ),
-      ),
-    ),
-    status: scheduledGoalReached(state, metric, userId, localDate)
-      ? "met"
-      : "missed",
-  };
-}
-
-function monthSummary(
-  state: AppState,
-  metric: MetricDefinition,
-  monthAnchor: string,
-  throughDate: string,
-): WidgetHistoryPoint {
-  const points = monthDateRange(monthAnchor)
-    .filter((day) => day <= throughDate)
-    .map((day) => pointForDate(state, metric, day))
-    .filter((point) => point.status !== "not_logged");
-  if (!points.length) return { progress: 0, status: "not_logged" };
-  return {
-    progress:
-      points.reduce((sum, point) => sum + point.progress, 0) / points.length,
-    status: points.every((point) => point.status === "met") ? "met" : "missed",
-  };
-}
 
 function trackerSnapshot(
   state: AppState,
@@ -83,6 +36,7 @@ function trackerSnapshot(
   language: AppState["settings"]["language"],
   locale: string,
   t: (source: string) => string,
+  backgroundColor: string,
 ): WidgetTrackerSnapshot {
   const value = safeMetricValue(state, metric, state.currentUserId, today);
   const available = hasMetricData(state, metric, state.currentUserId, today);
@@ -97,27 +51,13 @@ function trackerSnapshot(
     name: localizeMetricName(language, metric),
     unit: localizeMetricUnit(language, metric),
   };
-  const week = Array.from({ length: 7 }, (_, offset) =>
-    pointForDate(state, metric, dateWithOffsetFrom(today, offset - 6)),
-  );
-  const month = monthDateRange(today).map((day) =>
-    day <= today
-      ? pointForDate(state, metric, day)
-      : { progress: 0, status: "not_logged" as const },
-  );
-  const yearMonths = Array.from({ length: 12 }, (_, monthIndex) => {
-    const year = Number(today.slice(0, 4));
-    const anchor = `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`;
-    return anchor <= today
-      ? monthSummary(state, metric, anchor, today)
-      : { progress: 0, status: "not_logged" as const };
-  });
   const progress = available
     ? displayGoalProgress(metric, value, target)
     : 0;
   const remaining = Math.max(0, target - value);
   return {
     id: metric.id,
+    eyebrow: localizedMetric.name,
     title: localizedMetric.name,
     value: available
       ? formatMetricValue(localizedMetric, value, locale)
@@ -128,8 +68,9 @@ function trackerSnapshot(
         : t("Tap to open HabHub"),
     progress: Math.max(0, Math.min(3, progress)),
     color: metric.color,
+    backgroundColor,
+    progressColor: GOAL_COMPLETE_COLOR,
     deepLink: `paceboard://metric-detail?metric=${encodeURIComponent(metric.id)}&date=${today}`,
-    history: { week, month, year: yearMonths },
   };
 }
 
@@ -139,6 +80,8 @@ function featuredSnapshot(
   language: AppState["settings"]["language"],
   locale: string,
   t: (source: string) => string,
+  backgroundColor: string,
+  completedBackgroundColor: string,
 ): WidgetTrackerSnapshot {
   const tracked = state.metrics.filter(
     (metric) =>
@@ -146,45 +89,12 @@ function featuredSnapshot(
       metric.dataType !== "text" &&
       isMetricTrackedOnDate(state, metric, today),
   );
-  const pointsFor = (localDate: string): WidgetHistoryPoint => {
-    const applicable = tracked.filter((metric) =>
-      metricApplicableOnDate(state, metric, state.currentUserId, localDate),
-    );
-    const logged = applicable.filter((metric) =>
-      hasMetricData(state, metric, state.currentUserId, localDate),
-    );
-    if (!logged.length) return { progress: 0, status: "not_logged" };
-    const met = logged.filter((metric) =>
-      scheduledGoalReached(state, metric, state.currentUserId, localDate),
-    ).length;
-    return {
-      progress: applicable.length ? met / applicable.length : 0,
-      status:
-        applicable.length > 0 && met === applicable.length ? "met" : "missed",
-    };
-  };
-  const todayPoint = pointsFor(today);
   const metToday = tracked.filter(
     (metric) =>
       hasMetricData(state, metric, state.currentUserId, today) &&
       scheduledGoalReached(state, metric, state.currentUserId, today),
   ).length;
-  const yearDays = yearDateRange(today).filter((day) => day <= today);
-  const year = Array.from({ length: 12 }, (_, monthIndex) => {
-    const prefix = `${today.slice(0, 4)}-${String(monthIndex + 1).padStart(2, "0")}`;
-    const points = yearDays
-      .filter((day) => day.startsWith(prefix))
-      .map(pointsFor)
-      .filter((point) => point.status !== "not_logged");
-    if (!points.length) return { progress: 0, status: "not_logged" as const };
-    return {
-      progress:
-        points.reduce((sum, point) => sum + point.progress, 0) / points.length,
-      status: points.every((point) => point.status === "met")
-        ? ("met" as const)
-        : ("missed" as const),
-    };
-  });
+  const allComplete = tracked.length > 0 && metToday === tracked.length;
   const goalRows = tracked.slice(0, 3).map((metric) => {
     const available = hasMetricData(state, metric, state.currentUserId, today);
     const value = available
@@ -209,28 +119,34 @@ function featuredSnapshot(
       progress: available
         ? Math.max(0, Math.min(1, displayGoalProgress(metric, value, target)))
         : 0,
+      met:
+        available &&
+        scheduledGoalReached(state, metric, state.currentUserId, today),
     };
   });
   return {
     id: "__featured__",
+    eyebrow: t(allComplete ? "DAY COMPLETE" : "TODAY'S FOCUS"),
     title: "HabHub",
-    value: `${Math.round(todayPoint.progress * 100)}%`,
-    subtitle: `${metToday}/${tracked.length} ${t("goals complete")}`,
-    progress: todayPoint.progress,
-    color: todayPoint.status === "met" ? GOAL_COMPLETE_COLOR : "#58E1D4",
+    value: `${metToday} / ${tracked.length}`,
+    subtitle: allComplete
+      ? t("Every goal reached")
+      : tracked.length
+        ? `${tracked.length - metToday} ${t("remaining")}`
+        : t("Choose your first goal"),
+    progress: tracked.length ? metToday / tracked.length : 0,
+    color: allComplete ? ALL_GOALS_COMPLETE_COLOR : GOAL_COMPLETE_COLOR,
+    backgroundColor: allComplete ? completedBackgroundColor : backgroundColor,
+    progressColor: allComplete
+      ? ALL_GOALS_COMPLETE_COLOR
+      : GOAL_COMPLETE_COLOR,
+    allComplete,
+    fillMode: completionIndicatorFillMode(
+      state.settings.completionIndicatorIcon,
+      state.settings.completionIndicatorFillMode ?? "auto",
+    ),
     deepLink: "paceboard://",
     goals: goalRows,
-    history: {
-      week: Array.from({ length: 7 }, (_, offset) =>
-        pointsFor(dateWithOffsetFrom(today, offset - 6)),
-      ),
-      month: monthDateRange(today).map((day) =>
-        day <= today
-          ? pointsFor(day)
-          : { progress: 0, status: "not_logged" as const },
-      ),
-      year,
-    },
   };
 }
 
@@ -238,6 +154,8 @@ function featuredSnapshot(
 export function WidgetSnapshotBridge() {
   const { state, hydrated } = useApp();
   const { locale, t } = useLocalization();
+  const accent = useGroupAccent();
+  const colors = useAppColors();
   const lastPayloadRef = useRef("");
   const initialSnapshotPublishedRef = useRef(false);
   const stateRef = useRef(state);
@@ -282,6 +200,8 @@ export function WidgetSnapshotBridge() {
             currentState.settings.language,
             locale,
             t,
+            accent,
+            colors.isDark ? "#806018" : "#B98212",
           ),
           catalog: selectableMetrics.map((metric) => ({
             id: metric.id,
@@ -295,6 +215,7 @@ export function WidgetSnapshotBridge() {
               currentState.settings.language,
               locale,
               t,
+              accent,
             ),
           ),
         };
@@ -320,6 +241,8 @@ export function WidgetSnapshotBridge() {
       interactionTask?.cancel();
     };
   }, [
+    accent,
+    colors.isDark,
     hydrated,
     locale,
     state.currentUserId,

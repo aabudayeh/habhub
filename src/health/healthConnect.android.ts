@@ -1,4 +1,5 @@
 import {
+  aggregateGroupByPeriod,
   getGrantedPermissions,
   initialize,
   openHealthConnectSettings,
@@ -11,6 +12,10 @@ import {
   healthConnectSegmentExercise,
   healthConnectSessionExercise,
 } from "@/src/domain/exerciseCatalog";
+import {
+  healthSourceEnabled,
+  healthSourcePriority,
+} from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
 
@@ -278,29 +283,38 @@ function dedupeCrossSource(
   kind: "activity" | "nutrition",
   value: (record: Record<string, unknown>) => number,
 ) {
-  const chosen: Record<string, unknown>[] = [];
+  const byDay = new Map<string, Record<string, unknown>[]>();
   for (const record of records) {
-    const duplicateIndex = chosen.findIndex(
-      (candidate) =>
-        origin(candidate) !== origin(record) &&
-        intervalSimilarity(candidate, record) &&
-        (kind === "activity" ||
-          (Math.abs(value(candidate) - value(record)) <=
-            Math.max(2, Math.abs(value(candidate)) * 0.08) &&
-            nutritionEquivalent(candidate, record))),
-    );
-    if (duplicateIndex < 0) {
-      chosen.push(record);
-      continue;
-    }
-    const current = chosen[duplicateIndex];
-    if (
-      sourcePriority(origin(record), kind) <
-      sourcePriority(origin(current), kind)
-    )
-      chosen[duplicateIndex] = record;
+    const day = String(record.startTime ?? record.time ?? "").slice(0, 10);
+    const group = byDay.get(day);
+    if (group) group.push(record);
+    else byDay.set(day, [record]);
   }
-  return chosen;
+  return [...byDay.values()].flatMap((group) => {
+    const chosen: Record<string, unknown>[] = [];
+    for (const record of group) {
+      const duplicateIndex = chosen.findIndex(
+        (candidate) =>
+          origin(candidate) !== origin(record) &&
+          intervalSimilarity(candidate, record) &&
+          (kind === "activity" ||
+            (Math.abs(value(candidate) - value(record)) <=
+              Math.max(2, Math.abs(value(candidate)) * 0.08) &&
+              nutritionEquivalent(candidate, record))),
+      );
+      if (duplicateIndex < 0) {
+        chosen.push(record);
+        continue;
+      }
+      const current = chosen[duplicateIndex];
+      if (
+        sourcePriority(origin(record), kind) <
+        sourcePriority(origin(current), kind)
+      )
+        chosen[duplicateIndex] = record;
+    }
+    return chosen;
+  });
 }
 
 function overlaps(record: Record<string, unknown>, start: string, end: string) {
@@ -547,7 +561,7 @@ export const healthConnectAdapter: HealthAdapter = {
       await requestPermission(base);
     }
   },
-  read: async ({ from, to, dataTypes }) => {
+  read: async ({ from, to, dataTypes, sourcePreferences }) => {
     const options = {
       timeRangeFilter: {
         operator: "between",
@@ -559,20 +573,27 @@ export const healthConnectAdapter: HealthAdapter = {
     };
     const failures: string[] = [];
     let successfulReads = 0;
+    const readPages = async (
+      recordType: string,
+      readOptions: typeof options = options,
+    ) => {
+      const records: Record<string, unknown>[] = [];
+      let pageToken: string | undefined;
+      let page = 0;
+      do {
+        const result = await readRecords(recordType, {
+          ...readOptions,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        records.push(...(result.records as Record<string, unknown>[]));
+        pageToken = result.pageToken;
+        page += 1;
+      } while (pageToken && page < 50);
+      return records;
+    };
     const readSafe = async (recordType: string) => {
       try {
-        const records: Record<string, unknown>[] = [];
-        let pageToken: string | undefined;
-        let page = 0;
-        do {
-          const result = await readRecords(recordType, {
-            ...options,
-            ...(pageToken ? { pageToken } : {}),
-          });
-          records.push(...(result.records as Record<string, unknown>[]));
-          pageToken = result.pageToken;
-          page += 1;
-        } while (pageToken && page < 50);
+        const records = await readPages(recordType);
         successfulReads += 1;
         return records;
       } catch (error) {
@@ -580,20 +601,24 @@ export const healthConnectAdapter: HealthAdapter = {
         return [];
       }
     };
+    const enabledRecords = (records: Record<string, unknown>[]) =>
+      records.filter((record) =>
+        healthSourceEnabled(origin(record), sourcePreferences),
+      );
     const needsWorkoutDetails = dataTypes.includes("workouts");
     const needsWorkoutNames =
       needsWorkoutDetails || dataTypes.includes("active_energy");
     const calorieRecords =
       dataTypes.includes("active_energy") || needsWorkoutDetails
         ? dedupeCrossSource(
-            individualIntervals(await readSafe("TotalCaloriesBurned")),
+            individualIntervals(enabledRecords(await readSafe("TotalCaloriesBurned"))),
             "activity",
             (record) => nestedNumber(record, "energy", "inKilocalories"),
           )
         : [];
     const distanceRecords = needsWorkoutDetails
       ? dedupeCrossSource(
-          individualIntervals(await readSafe("Distance")),
+          individualIntervals(enabledRecords(await readSafe("Distance"))),
           "activity",
           (record) =>
             nestedNumber(record, "distance", "inKilometers") ||
@@ -602,7 +627,7 @@ export const healthConnectAdapter: HealthAdapter = {
       : [];
     const workoutRecords = needsWorkoutNames
       ? dedupeCrossSource(
-          await readSafe("ExerciseSession"),
+          enabledRecords(await readSafe("ExerciseSession")),
           "activity",
           (record) => recordDuration(record) / 60000,
         )
@@ -696,7 +721,111 @@ export const healthConnectAdapter: HealthAdapter = {
         try {
           if (type === "active_energy") return activeEnergyImports;
           if (type === "workouts") return workoutImports;
-          const records = await readSafe(RECORD_TYPES[type]);
+          if (type === "steps") {
+            const preferences = Object.values(sourcePreferences ?? {});
+            const hasDisabledSource = preferences.some(
+              (preference) => preference.enabled === false,
+            );
+            let discoveredOrigins: string[] = [];
+            if (hasDisabledSource) {
+              // Inclusion filters are the only source selector Health Connect
+              // exposes. Discover new writers over a bounded recent window so
+              // unknown apps remain enabled by default without loading a full
+              // year of granular StepsRecord rows before daily aggregation.
+              const discoveryEnd = new Date();
+              const discoveryStart = new Date(
+                discoveryEnd.getTime() - 7 * 24 * 60 * 60 * 1000,
+              );
+              try {
+                const recentRecords = await readPages("Steps", {
+                  ...options,
+                  timeRangeFilter: {
+                    operator: "between",
+                    startTime: discoveryStart.toISOString(),
+                    endTime: discoveryEnd.toISOString(),
+                  },
+                });
+                discoveredOrigins = recentRecords.map((record) => origin(record));
+              } catch {
+                // If discovery is unavailable, fall back to the requested raw
+                // range so a disabled writer can never leak into the import.
+                const rawRecords = await readSafe("Steps");
+                return enabledRecords(rawRecords).map((record) =>
+                  convert(type, record),
+                );
+              }
+            }
+            const observedOrigins = [
+              ...new Set([
+                ...preferences.map((preference) => preference.origin),
+                ...discoveredOrigins,
+              ].filter(Boolean)),
+            ];
+            const enabledOrigins = observedOrigins.filter((item) =>
+              healthSourceEnabled(item, sourcePreferences),
+            );
+            if (hasDisabledSource && !enabledOrigins.length) {
+              successfulReads += 1;
+              return [];
+            }
+            try {
+              const groups = await aggregateGroupByPeriod({
+                recordType: "Steps",
+                timeRangeFilter: options.timeRangeFilter,
+                timeRangeSlicer: { period: "DAYS", length: 1 },
+                ...(hasDisabledSource
+                  ? { dataOriginFilter: enabledOrigins }
+                  : {}),
+              });
+              successfulReads += 1;
+              return groups.flatMap((group): HealthImportRecord[] => {
+                const count = Number(group.result.COUNT_TOTAL ?? 0);
+                if (!(count > 0)) return [];
+                const sources = [
+                  ...new Set(
+                    (group.result.dataOrigins?.length
+                      ? group.result.dataOrigins
+                      : enabledOrigins
+                    ).filter(Boolean),
+                  ),
+                ].sort(
+                  (a, b) =>
+                    healthSourcePriority(a, "steps") -
+                    healthSourcePriority(b, "steps"),
+                );
+                const end = new Date(group.endTime);
+                const recordedAt = Number.isNaN(end.getTime())
+                  ? group.endTime
+                  : new Date(end.getTime() - 1).toISOString();
+                return [
+                  {
+                    id: `aggregate:steps:${group.startTime.slice(0, 10)}`,
+                    provider: "health_connect",
+                    type: "steps",
+                    startTime: group.startTime,
+                    endTime: recordedAt,
+                    value: Math.round(count),
+                    unit: "steps",
+                    origin: sources[0] ?? "Health Connect",
+                    sourceOrigins: sources,
+                    note:
+                      sources.length > 1
+                        ? "Health Connect combined overlapping step sources without double counting."
+                        : undefined,
+                  },
+                ];
+              });
+            } catch {
+              // Old providers may not expose grouped aggregation. The pure
+              // domain fallback still selects one daily source safely.
+              const rawRecords = await readSafe("Steps");
+              return enabledRecords(rawRecords).map((record) =>
+                convert(type, record),
+              );
+            }
+          }
+          const rawRecords = await readSafe(RECORD_TYPES[type]);
+          const records = enabledRecords(rawRecords);
           if (type === "nutrition")
             return dedupeCrossSource(
               records,

@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "Öppna hela schemat"
   ,"Start or manage timers": "Starta eller hantera timers"
   ,"Today’s schedule": "Dagens schema"
+  ,"Data sources": "Datakällor"
+  ,"Choose which apps can contribute imported health data.": "Välj vilka appar som får bidra med importerade hälsodata."
+  ,"Could not update data source": "Det gick inte att uppdatera datakällan"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Nya källor förblir aktiverade tills du stänger av dem. När du aktiverar en källa igen återställs den valda historiken i bakgrunden."
+  ,"Your phone": "Din telefon"
 }

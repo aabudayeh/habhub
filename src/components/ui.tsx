@@ -63,9 +63,13 @@ export function Screen({
     insets.bottom;
   useKeyboardReveal(activeRef);
   return (
+    // A tab scene already ends above the bottom bar. Adding a second bottom
+    // safe-area inset here produced a canvas-coloured strip above the bar.
+    // Scroll content still receives `insets.bottom` below, so standalone
+    // screens keep their last control clear of the system gesture area.
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
-      edges={["top", "bottom"]}
+      edges={["top"]}
     >
       <KeyboardAvoidingView
         style={styles.safe}

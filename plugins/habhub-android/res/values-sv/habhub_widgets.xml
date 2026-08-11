@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="habhub_widget_description">Dagens framsteg och historik</string>
+  <string name="habhub_widget_description">Dagens mål och spårningsframsteg</string>
   <string name="habhub_widget_open_to_update">Öppna HabHub för att uppdatera</string>
   <string name="habhub_widget_featured_progress">Utvalda framsteg</string>
   <string name="habhub_widget_choose">Välj vad widgeten visar</string>
   <string name="habhub_widget_tracker">Spårare</string>
-  <string name="habhub_widget_history">Historik</string>
-  <string name="habhub_widget_week">Vecka</string>
-  <string name="habhub_widget_month">Månad</string>
-  <string name="habhub_widget_year">År</string>
   <string name="habhub_widget_add">Lägg till widget</string>
 </resources>

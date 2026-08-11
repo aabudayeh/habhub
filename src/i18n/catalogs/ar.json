@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "فتح الجدول الكامل"
   ,"Start or manage timers": "بدء المؤقتات أو إدارتها"
   ,"Today’s schedule": "جدول اليوم"
+  ,"Data sources": "مصادر البيانات"
+  ,"Choose which apps can contribute imported health data.": "اختر التطبيقات التي يمكنها إضافة بيانات صحية مستوردة."
+  ,"Could not update data source": "تعذر تحديث مصدر البيانات"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "تظل المصادر الجديدة مفعّلة حتى توقفها. تؤدي إعادة تفعيل المصدر إلى استعادة السجل المحدد في الخلفية."
+  ,"Your phone": "هاتفك"
 }

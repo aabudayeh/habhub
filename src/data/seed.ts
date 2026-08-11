@@ -1239,7 +1239,7 @@ export function createInitialState(): AppState {
     metricConfiguration: DEFAULT_METRICS,
   };
   return {
-    version: 23,
+    version: 24,
     currentUserId: "ahmad",
     group,
     groups: [group],

@@ -6,8 +6,10 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
@@ -129,17 +131,11 @@ class HabHubSquareWidgetProvider : HabHubWidgetProvider()
 class HabHubWideWidgetProvider : HabHubWidgetProvider()
 
 object HabHubWidgetRenderer {
+  private const val GOAL_LIME = "#B8E45C"
   private val providers = arrayOf(
     HabHubSmallWidgetProvider::class.java,
     HabHubSquareWidgetProvider::class.java,
     HabHubWideWidgetProvider::class.java,
-  )
-  private val rowIds = intArrayOf(
-    R.id.widget_history_row_1,
-    R.id.widget_history_row_2,
-    R.id.widget_history_row_3,
-    R.id.widget_history_row_4,
-    R.id.widget_history_row_5,
   )
   private val goalIds = intArrayOf(
     R.id.widget_goal_1,
@@ -168,9 +164,14 @@ object HabHubWidgetRenderer {
     if (selected == null) {
       renderEmpty(context, views, widgetId)
     } else {
-      renderSnapshot(context, views, widgetId, selected, configuration.range)
+      renderSnapshot(context, views, widgetId, selected)
     }
-    applyWidgetDimensions(manager, widgetId, views)
+    applyWidgetDimensions(
+      manager,
+      widgetId,
+      views,
+      selected?.optJSONArray("goals")?.length()?.let { it > 0 } == true,
+    )
     manager.updateAppWidget(widgetId, views)
   }
 
@@ -178,17 +179,27 @@ object HabHubWidgetRenderer {
     manager: AppWidgetManager,
     widgetId: Int,
     views: RemoteViews,
+    hasGoalDetails: Boolean,
   ) {
     val options = manager.getAppWidgetOptions(widgetId)
     val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 105)
     val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
     val oneRow = minHeight < 90
     if (oneRow) {
-      views.setViewVisibility(R.id.widget_history, View.GONE)
       views.setViewVisibility(R.id.widget_goal_details, View.GONE)
     }
+    // Even the 2x1 card keeps an at-a-glance progress line.
+    views.setViewVisibility(R.id.widget_progress_container, View.VISIBLE)
     views.setViewVisibility(R.id.widget_subtitle, if (oneRow) View.GONE else View.VISIBLE)
     views.setViewVisibility(R.id.widget_range, if (minWidth < 150) View.GONE else View.VISIBLE)
+    if (!oneRow && hasGoalDetails && minWidth < 220) {
+      views.setViewVisibility(R.id.widget_goal_3, View.GONE)
+    }
+    views.setTextViewTextSize(
+      R.id.widget_title,
+      TypedValue.COMPLEX_UNIT_SP,
+      if (oneRow) 8f else 9f,
+    )
     views.setTextViewTextSize(
       R.id.widget_value,
       TypedValue.COMPLEX_UNIT_SP,
@@ -207,14 +218,21 @@ object HabHubWidgetRenderer {
 
   private fun renderEmpty(context: Context, views: RemoteViews, widgetId: Int) {
     views.setTextViewText(R.id.widget_title, "HabHub")
-    views.setTextViewText(R.id.widget_value, "—")
+    views.setTextViewText(R.id.widget_value, "\u2014")
     views.setTextViewText(
       R.id.widget_subtitle,
       context.getString(R.string.habhub_widget_open_to_update),
     )
     views.setTextViewText(R.id.widget_range, "")
     views.setProgressBar(R.id.widget_progress, 100, 0, false)
-    clearHistory(views)
+    views.setProgressBar(R.id.widget_progress_gold, 100, 0, false)
+    views.setViewVisibility(R.id.widget_progress, View.VISIBLE)
+    views.setViewVisibility(R.id.widget_progress_gold, View.GONE)
+    views.setInt(
+      R.id.widget_root,
+      "setBackgroundResource",
+      R.drawable.habhub_widget_background,
+    )
     clearGoalDetails(views)
     views.setOnClickPendingIntent(
       R.id.widget_root,
@@ -227,32 +245,47 @@ object HabHubWidgetRenderer {
     views: RemoteViews,
     widgetId: Int,
     item: JSONObject,
-    range: String,
   ) {
-    views.setTextViewText(R.id.widget_title, item.optString("title", "HabHub"))
-    views.setTextViewText(R.id.widget_value, item.optString("value", "—"))
+    val featured = item.optString("id") == "__featured__"
+    val allComplete = featured && item.optBoolean("allComplete", false)
+    views.setTextViewText(
+      R.id.widget_title,
+      item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") },
+    )
+    views.setTextViewText(R.id.widget_value, item.optString("value", "\u2014"))
     views.setTextViewText(R.id.widget_subtitle, item.optString("subtitle", ""))
+    val progress = (item.optDouble("progress", 0.0).coerceIn(0.0, 1.0) * 100).toInt()
     views.setTextViewText(
       R.id.widget_range,
-      context.getString(
-        when (range) {
-          "month" -> R.string.habhub_widget_month
-          "year" -> R.string.habhub_widget_year
-          else -> R.string.habhub_widget_week
-        },
-      ),
+      "$progress%",
     )
-    val progress = (item.optDouble("progress", 0.0).coerceIn(0.0, 1.0) * 100).toInt()
     views.setProgressBar(R.id.widget_progress, 100, progress, false)
-    val metricColor = parseColor(item.optString("color"), Color.rgb(88, 225, 212))
+    views.setProgressBar(R.id.widget_progress_gold, 100, progress, false)
+    views.setViewVisibility(R.id.widget_progress, if (allComplete) View.GONE else View.VISIBLE)
+    views.setViewVisibility(R.id.widget_progress_gold, if (allComplete) View.VISIBLE else View.GONE)
+    views.setInt(
+      R.id.widget_root,
+      "setBackgroundResource",
+      if (allComplete) {
+        R.drawable.habhub_widget_background_complete
+      } else {
+        R.drawable.habhub_widget_background
+      },
+    )
+    if (!allComplete && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val fallback = Color.rgb(8, 27, 73)
+      val background = parseColor(item.optString("backgroundColor"), fallback)
+      views.setColorStateList(
+        R.id.widget_root,
+        "setBackgroundTintList",
+        ColorStateList.valueOf(background),
+      )
+    }
     val goals = item.optJSONArray("goals") ?: JSONArray()
     if (goals.length() > 0) {
       renderGoalDetails(views, goals)
-      clearHistory(views)
     } else {
       clearGoalDetails(views)
-      val points = item.optJSONObject("history")?.optJSONArray(range) ?: JSONArray()
-      renderHistory(context, views, points, metricColor)
     }
     views.setOnClickPendingIntent(
       R.id.widget_root,
@@ -264,39 +297,6 @@ object HabHubWidgetRenderer {
     )
   }
 
-  private fun renderHistory(
-    context: Context,
-    views: RemoteViews,
-    points: JSONArray,
-    metricColor: Int,
-  ) {
-    clearHistory(views)
-    val count = points.length().coerceAtMost(35)
-    if (count == 0) return
-    for (index in 0 until count) {
-      val point = points.optJSONObject(index) ?: JSONObject()
-      val cell = RemoteViews(context.packageName, R.layout.habhub_widget_cell)
-      val status = point.optString("status", "not_logged")
-      val progress = point.optDouble("progress", 0.0).coerceIn(0.0, 1.0)
-      val color = when (status) {
-        "met" -> Color.rgb(167, 244, 50)
-        "missed" -> blend(Color.rgb(30, 46, 80), metricColor, 0.2 + progress * 0.8)
-        else -> Color.rgb(30, 46, 80)
-      }
-      cell.setInt(R.id.widget_history_cell, "setBackgroundColor", color)
-      val rowIndex = index / 7
-      views.setViewVisibility(rowIds[rowIndex], View.VISIBLE)
-      views.addView(rowIds[rowIndex], cell)
-    }
-  }
-
-  private fun clearHistory(views: RemoteViews) {
-    rowIds.forEach { rowId ->
-      views.removeAllViews(rowId)
-      views.setViewVisibility(rowId, View.GONE)
-    }
-  }
-
   private fun renderGoalDetails(views: RemoteViews, goals: JSONArray) {
     views.setViewVisibility(R.id.widget_goal_details, View.VISIBLE)
     goalIds.forEachIndexed { index, viewId ->
@@ -305,9 +305,14 @@ object HabHubWidgetRenderer {
         views.setViewVisibility(viewId, View.GONE)
       } else {
         val percent = (goal.optDouble("progress", 0.0).coerceIn(0.0, 1.0) * 100).toInt()
+        val completed = goal.optBoolean("met", false)
         views.setTextViewText(
           viewId,
-          "${goal.optString("title")}  ${goal.optString("value")}  •  $percent%",
+          "${if (completed) "\u2713 " else ""}${goal.optString("value")}  \u00B7  $percent%  ${goal.optString("title")}",
+        )
+        views.setTextColor(
+          viewId,
+          if (completed) parseColor(GOAL_LIME, Color.rgb(184, 228, 92)) else Color.WHITE,
         )
         views.setViewVisibility(viewId, View.VISIBLE)
       }
@@ -345,13 +350,4 @@ object HabHubWidgetRenderer {
     fallback
   }
 
-  private fun blend(background: Int, foreground: Int, amount: Double): Int {
-    val ratio = amount.coerceIn(0.0, 1.0)
-    fun channel(from: Int, to: Int) = (from + (to - from) * ratio).toInt()
-    return Color.rgb(
-      channel(Color.red(background), Color.red(foreground)),
-      channel(Color.green(background), Color.green(foreground)),
-      channel(Color.blue(background), Color.blue(foreground)),
-    )
-  }
 }

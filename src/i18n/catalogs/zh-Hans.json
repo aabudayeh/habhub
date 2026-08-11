@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "打开完整日程"
   ,"Start or manage timers": "启动或管理计时器"
   ,"Today’s schedule": "今日日程"
+  ,"Data sources": "数据来源"
+  ,"Choose which apps can contribute imported health data.": "选择哪些应用可以提供导入的健康数据。"
+  ,"Could not update data source": "无法更新数据来源"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "新来源会保持启用，直到你将其关闭。重新启用来源后，系统会在后台恢复所选历史记录。"
+  ,"Your phone": "你的手机"
 }

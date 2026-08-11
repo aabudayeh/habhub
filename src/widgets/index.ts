@@ -1,33 +1,29 @@
 import { NativeModules, Platform } from "react-native";
 
-export type WidgetHistoryStatus = "met" | "missed" | "not_logged";
-
-export type WidgetHistoryPoint = {
-  progress: number;
-  status: WidgetHistoryStatus;
-};
+import type { CompletionFillMode } from "@/src/types";
 
 export type WidgetTrackerSnapshot = {
   id: string;
+  eyebrow?: string;
   title: string;
   value: string;
   subtitle: string;
   progress: number;
   color: string;
+  /** Matches the Today hero rather than using a separate widget palette. */
+  backgroundColor?: string;
+  progressColor?: string;
+  allComplete?: boolean;
+  fillMode?: Exclude<CompletionFillMode, "auto">;
   deepLink: string;
-  /** Featured widgets use the available history area for at-a-glance goals. */
-  goals?: { title: string; value: string; progress: number }[];
-  history: {
-    week: WidgetHistoryPoint[];
-    month: WidgetHistoryPoint[];
-    year: WidgetHistoryPoint[];
-  };
+  /** Hero-style detail rows use current values only, keeping refreshes cheap. */
+  goals?: { title: string; value: string; progress: number; met?: boolean }[];
 };
 
 export type WidgetSnapshot = {
   updatedAt: string;
   featured: WidgetTrackerSnapshot;
-  /** Cheap picker metadata; history is sent only for active widget trackers. */
+  /** Cheap picker metadata; no historical metric payload is duplicated here. */
   catalog: { id: string; title: string }[];
   trackers: WidgetTrackerSnapshot[];
 };

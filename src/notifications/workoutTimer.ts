@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 
 import { enhanceAndroidTimerNotification } from "@/src/notifications/liveTimer";
 
@@ -38,8 +38,57 @@ type StoredWorkoutFlow = {
   phaseElapsedMs: number;
 };
 
+type AndroidWorkoutNotificationBridge = {
+  nativeWorkoutActions?: boolean;
+  syncWorkoutTimerNotificationFlow?: (flow: string) => Promise<boolean>;
+  consumeWorkoutTimerNotificationActions?: () => Promise<string>;
+  clearWorkoutTimerNotificationFlow?: () => Promise<boolean>;
+};
+
 let configured = false;
 let pendingFlowAction = Promise.resolve();
+
+const androidWorkoutBridge = () =>
+  NativeModules.HabHubAndroid as AndroidWorkoutNotificationBridge | undefined;
+
+export function nativeWorkoutActionsEnabled() {
+  return (
+    Platform.OS === "android" &&
+    androidWorkoutBridge()?.nativeWorkoutActions === true
+  );
+}
+
+async function syncNativeFlow(flow: StoredWorkoutFlow) {
+  if (!nativeWorkoutActionsEnabled()) return false;
+  return (
+    (await androidWorkoutBridge()
+      ?.syncWorkoutTimerNotificationFlow?.(JSON.stringify(flow))
+      .catch(() => false)) ?? false
+  );
+}
+
+async function consumeNativeActions() {
+  if (!nativeWorkoutActionsEnabled()) return [];
+  const stored = await androidWorkoutBridge()
+    ?.consumeWorkoutTimerNotificationActions?.()
+    .catch(() => "[]");
+  try {
+    const parsed = stored ? (JSON.parse(stored) as unknown) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is QueuedWorkoutTimerAction =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            typeof (item as QueuedWorkoutTimerAction).occurredAt === "number" &&
+            [WORKOUT_TIMER_NEXT, WORKOUT_TIMER_PAUSE, WORKOUT_TIMER_FINISH].includes(
+              (item as QueuedWorkoutTimerAction).action,
+            ),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 async function readFlow() {
   const stored = await AsyncStorage.getItem(WORKOUT_TIMER_FLOW_KEY);
@@ -85,14 +134,19 @@ async function presentFlow(flow: StoredWorkoutFlow) {
   const phase = flow.paused ? "paused" : step.phase;
   const phaseLabel =
     phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
+  const notificationTitle = `${phaseLabel} · ${step.title}`;
   const hasNext = !flow.paused && flow.index < flow.steps.length - 1;
+  // Hand the complete remaining flow to Android before the notification can
+  // be tapped. Its receiver can then update the row synchronously even if
+  // TaskManager is deferred by a locked/dozing device.
+  await syncNativeFlow(flow);
   // Reusing the same identifier updates the phone notification in place. Do
   // not dismiss/repost: that introduces visible gaps and delays Wear OS
   // notification bridging.
   const identifier = await Notifications.scheduleNotificationAsync({
     identifier: WORKOUT_TIMER_NOTIFICATION,
     content: {
-      title: `${phaseLabel} · ${step.title}`,
+      title: notificationTitle,
       body: flow.paused
         ? `Paused at ${formatElapsedMs(flow.phaseElapsedMs)} · ${step.body}`
         : step.body,
@@ -120,6 +174,8 @@ async function presentFlow(flow: StoredWorkoutFlow) {
       identifier,
       flow.paused ? "paused" : "elapsed",
       phaseOrigin,
+      0,
+      notificationTitle,
     );
   }
 }
@@ -193,6 +249,10 @@ if (
       action !== WORKOUT_TIMER_FINISH
     )
       return;
+    // The custom Android receiver already committed, rendered, and queued
+    // this action synchronously. Running the delayed TaskManager copy as well
+    // would advance a second time and briefly restore an older phase.
+    if (nativeWorkoutActionsEnabled()) return;
     const actionRun = pendingFlowAction.then(() => applyFlowAction(action));
     // Keep rapid lock-screen actions ordered even if one notification update
     // fails, so the next tap still starts from the committed flow.
@@ -277,14 +337,21 @@ export async function showWorkoutTimerNotification({
   };
   const storedFlow = await readFlow();
   // Android can emit inactive and background in quick succession. A late
-  // duplicate must not reset a flow already advanced by a headless action.
+  // duplicate must not reset a newer flow, but an actual foreground
+  // transition must replace the previous phase even when the step list is
+  // unchanged.
   const nextFlow =
-    storedFlow && sameSteps(storedFlow.steps, flow.steps) ? storedFlow : flow;
+    storedFlow &&
+    sameSteps(storedFlow.steps, flow.steps) &&
+    storedFlow.phaseStartedAt > flow.phaseStartedAt
+      ? storedFlow
+      : flow;
   await saveFlow(nextFlow);
   await presentFlow(nextFlow);
 }
 
 export async function consumeWorkoutTimerActions() {
+  const nativeActions = await consumeNativeActions();
   const stored = await AsyncStorage.getItem(WORKOUT_TIMER_ACTIONS_KEY);
   // Once the foreground workout has replayed the queued actions, its own
   // timestamped state is authoritative. Clear the background flow so a later
@@ -293,6 +360,7 @@ export async function consumeWorkoutTimerActions() {
     WORKOUT_TIMER_ACTIONS_KEY,
     WORKOUT_TIMER_FLOW_KEY,
   ]);
+  if (nativeActions.length) return nativeActions;
   if (!stored) return [];
   try {
     return JSON.parse(stored) as QueuedWorkoutTimerAction[];
@@ -314,5 +382,8 @@ export async function dismissWorkoutTimerNotification(clearState = false) {
       WORKOUT_TIMER_FLOW_KEY,
       WORKOUT_TIMER_ACTIONS_KEY,
     ]);
+    await androidWorkoutBridge()
+      ?.clearWorkoutTimerNotificationFlow?.()
+      .catch(() => undefined);
   }
 }

@@ -21,6 +21,7 @@ import {
 } from "react-native";
 
 import { createInitialState } from "@/src/data/seed";
+import { entriesForMetric } from "@/src/domain/dataIndex";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
   applyImportedFoodFastBreaks,
@@ -30,6 +31,7 @@ import {
   startManualFast,
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import {
   normalizeEnergyProfile,
   recommendedDailyDeficit,
@@ -89,6 +91,7 @@ import {
 
 export const APP_STORAGE_KEY = "paceboard-state-v1";
 const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
+const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 
 export function appAccountStorageKey(accountId: string) {
   return `${APP_ACCOUNT_STORAGE_KEY_PREFIX}${accountId}`;
@@ -541,6 +544,70 @@ function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
   );
 }
 
+type BodyProfileNumericField =
+  | "weightKg"
+  | "bodyFatPercent"
+  | "leanBodyMassKg";
+
+const BODY_PROFILE_METRICS: readonly {
+  field: BodyProfileNumericField;
+  label?: string;
+  metricId: "weight" | "body_fat" | "lean_body_mass";
+}[] = [
+  { field: "weightKg", label: "Profile weight", metricId: "weight" },
+  { field: "bodyFatPercent", metricId: "body_fat" },
+  {
+    field: "leanBodyMassKg",
+    metricId: "lean_body_mass",
+  },
+];
+
+function entryOrder(entry: MetricEntry) {
+  return `${entry.localDate}:${entry.recordedAt}`;
+}
+
+function latestNumericProfileEntry(
+  entries: MetricEntry[],
+  userId: string,
+  metricId: string,
+) {
+  let latest: MetricEntry | undefined;
+  for (const entry of entriesForMetric(entries, metricId, userId)) {
+    if (
+      typeof entry.value !== "number" ||
+      !Number.isFinite(entry.value) ||
+      entry.value <= 0
+    )
+      continue;
+    if (!latest || entryOrder(entry) > entryOrder(latest)) latest = entry;
+  }
+  return latest;
+}
+
+/** Keep current private profile values aligned with the newest logged/imported measurements. */
+function withLatestBodyProfileMeasurements(state: AppState) {
+  const changes: Partial<EnergyProfile> = {};
+  for (const mapping of BODY_PROFILE_METRICS) {
+    const latest = latestNumericProfileEntry(
+      state.entries,
+      state.currentUserId,
+      mapping.metricId,
+    );
+    if (latest) changes[mapping.field] = Number(latest.value);
+  }
+  if (!Object.keys(changes).length) return state;
+  const candidate = normalizeEnergyProfile({
+    ...state.settings.energyProfile,
+    ...changes,
+  });
+  const changed = BODY_PROFILE_METRICS.some(
+    (mapping) =>
+      Object.prototype.hasOwnProperty.call(changes, mapping.field) &&
+      candidate[mapping.field] !== state.settings.energyProfile[mapping.field],
+  );
+  return changed ? withEnergyProfile(state, candidate) : state;
+}
+
 function withPersonalMetrics(
   state: AppState,
   metrics: MetricDefinition[],
@@ -884,26 +951,24 @@ function reducer(state: AppState, action: Action): AppState {
           undefined,
           metric.id,
         );
+      const bodyProfileMapping = BODY_PROFILE_METRICS.find(
+        (mapping) => mapping.metricId === metric?.id,
+      );
       if (
-        metric?.id === "weight" &&
+        bodyProfileMapping &&
         typeof action.value === "number" &&
-        Number.isFinite(action.value) &&
-        localDate >=
-          (state.entries
-            .filter(
-              (entry) =>
-                entry.userId === state.currentUserId &&
-                entry.metricId === "weight",
-            )
-            .map((entry) => entry.localDate)
-            .sort()
-            .at(-1) ?? "0000-00-00")
+        Number.isFinite(action.value)
       ) {
-        const energyProfile = {
-          ...state.settings.energyProfile,
-          weightKg: action.value,
-        };
-        nextState = withEnergyProfile(nextState, energyProfile);
+        const previousLatest = latestNumericProfileEntry(
+          state.entries,
+          state.currentUserId,
+          bodyProfileMapping.metricId,
+        );
+        if (!previousLatest || entryOrder(addedEntry) >= entryOrder(previousLatest))
+          nextState = withEnergyProfile(nextState, {
+            ...state.settings.energyProfile,
+            [bodyProfileMapping.field]: action.value,
+          });
       }
       if (
         metric &&
@@ -2005,9 +2070,32 @@ function reducer(state: AppState, action: Action): AppState {
       return endManualFast(state, action.metricId, new Date(action.at));
     case "settings": {
       const next = { ...state, settings: { ...state.settings, ...action.changes } };
+      const sourcePreferenceEnablementChanged = action.changes.healthSync &&
+        Object.prototype.hasOwnProperty.call(action.changes.healthSync, "sourcePreferences") &&
+        [
+          ...new Set([
+            ...Object.keys(state.settings.healthSync.sourcePreferences ?? {}),
+            ...Object.keys(action.changes.healthSync.sourcePreferences ?? {}),
+          ]),
+        ].some(
+          (sourceId) =>
+            (state.settings.healthSync.sourcePreferences?.[sourceId]?.enabled ?? true) !==
+            (action.changes.healthSync?.sourcePreferences?.[sourceId]?.enabled ?? true),
+        );
+      const withSources = sourcePreferenceEnablementChanged
+          ? {
+              ...next,
+              entries: reconcileImportedHealthEntries(
+                next.entries,
+                next.metrics,
+                next.settings.healthSync.sourcePreferences,
+                next.currentUserId,
+              ),
+            }
+          : next;
       return action.changes.weightDirection
-        ? withEnergyProfile(next, next.settings.energyProfile)
-        : next;
+        ? withEnergyProfile(withSources, withSources.settings.energyProfile)
+        : withSources;
     }
     case "energyProfile": {
       const energyProfile = {
@@ -2015,32 +2103,85 @@ function reducer(state: AppState, action: Action): AppState {
         ...action.changes,
       };
       const next = withEnergyProfile(state, energyProfile);
-      if (!Object.prototype.hasOwnProperty.call(action.changes, "weightKg"))
-        return next;
+      const changedMeasurements = BODY_PROFILE_METRICS.filter((mapping) =>
+        Object.prototype.hasOwnProperty.call(action.changes, mapping.field),
+      );
+      if (!changedMeasurements.length) return next;
       const localDate = dateKey();
-      const id = `profile-weight:${state.currentUserId}:${localDate}`;
+      const recordedAt = new Date().toISOString();
+      const changedIds = new Set(
+        changedMeasurements.map(
+          (mapping) =>
+            `profile-${mapping.metricId}:${state.currentUserId}:${localDate}`,
+        ),
+      );
+      const deletedIds = changedMeasurements
+        .filter((mapping) => next.settings.energyProfile[mapping.field] === undefined)
+        .map(
+          (mapping) =>
+            `profile-${mapping.metricId}:${state.currentUserId}:${localDate}`,
+        );
+      const restoredIds = new Set(
+        changedMeasurements
+          .filter(
+            (mapping) =>
+              next.settings.energyProfile[mapping.field] !== undefined,
+          )
+          .map(
+            (mapping) =>
+              `profile-${mapping.metricId}:${state.currentUserId}:${localDate}`,
+          ),
+      );
       return {
         ...next,
+        settings: {
+          ...next.settings,
+          pendingDeletedEntryIds: [
+            ...new Set([
+              ...(next.settings.pendingDeletedEntryIds ?? []).filter(
+                (id) => !restoredIds.has(id),
+              ),
+              ...deletedIds,
+            ]),
+          ],
+          deletedEntryIds: [
+            ...new Set([
+              ...(next.settings.deletedEntryIds ?? []).filter(
+                (id) => !restoredIds.has(id),
+              ),
+              ...deletedIds,
+            ]),
+          ],
+        },
         entries: [
           ...next.entries.filter(
             (entry) =>
-              metricEntryKey(entry.userId, entry.id) !==
-              metricEntryKey(state.currentUserId, id),
+              !changedIds.has(entry.id) || entry.userId !== state.currentUserId,
           ),
-          {
-            id,
-            metricId: "weight",
-            userId: state.currentUserId,
-            value: next.settings.energyProfile.weightKg,
-            localDate,
-            recordedAt: new Date().toISOString(),
-            visibility:
-              next.metrics.find((metric) => metric.id === "weight")
-                ?.defaultVisibility ?? "group",
-            source: "manual",
-            label: "Profile weight",
-            note: "Updated from Body & energy profile",
-          },
+          ...changedMeasurements.flatMap((mapping): MetricEntry[] => {
+            const value = next.settings.energyProfile[mapping.field];
+            if (value === undefined) return [];
+            return [
+              {
+                id: `profile-${mapping.metricId}:${state.currentUserId}:${localDate}`,
+                metricId: mapping.metricId,
+                userId: state.currentUserId,
+                value,
+                localDate,
+                recordedAt,
+                visibility:
+                  next.metrics.find((metric) => metric.id === mapping.metricId)
+                    ?.defaultVisibility ?? "private",
+                source: "manual",
+                sourceUpdatedAt: recordedAt,
+                label: mapping.label,
+                note:
+                  mapping.metricId === "weight"
+                    ? "Updated from Body & energy profile"
+                    : undefined,
+              },
+            ];
+          }),
         ],
       };
     }
@@ -2334,10 +2475,28 @@ function reducer(state: AppState, action: Action): AppState {
       for (const entry of action.entries)
         if (!dismissed.has(entry.id))
           byId.set(metricEntryKey(entry.userId, entry.id), entry);
-      const importedState = applyImportedFoodFastBreaks(
-        { ...state, entries: [...byId.values()] },
-        action.entries,
+      const targetMetrics = new Set(action.metricIds);
+      const affected: MetricEntry[] = [];
+      const unaffected: MetricEntry[] = [];
+      for (const entry of byId.values()) {
+        if (
+          entry.userId === state.currentUserId &&
+          entry.sourceProvider === action.provider &&
+          targetMetrics.has(entry.metricId) &&
+          entry.localDate >= action.fromDate
+        )
+          affected.push(entry);
+        else unaffected.push(entry);
+      }
+      const reconciled = reconcileImportedHealthEntries(
+        affected,
+        state.metrics,
+        state.settings.healthSync.sourcePreferences,
       );
+      const importedState = withLatestBodyProfileMeasurements(applyImportedFoodFastBreaks(
+        { ...state, entries: [...unaffected, ...reconciled] },
+        action.entries,
+      ));
       if (action.preserveTrackedGoalHistory) return importedState;
       const withOnboardingGoalHistory = (next: AppState): AppState => {
         const pendingFirstImport =
@@ -2421,36 +2580,7 @@ function reducer(state: AppState, action: Action): AppState {
           ),
         };
       };
-      const latestWeight = action.entries
-        .filter(
-          (entry) =>
-            entry.metricId === "weight" &&
-            entry.userId === state.currentUserId &&
-            Number(entry.value) > 0,
-        )
-        .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
-      const existingLatestWeight = state.entries
-        .filter(
-          (entry) =>
-            entry.metricId === "weight" &&
-            entry.userId === state.currentUserId &&
-            Number(entry.value) > 0,
-        )
-        .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
-      if (
-        !latestWeight ||
-        (existingLatestWeight &&
-          latestWeight.recordedAt < existingLatestWeight.recordedAt)
-      )
-        return withOnboardingGoalHistory(importedState);
-      const energyProfile = {
-        ...state.settings.energyProfile,
-        weightKg: Number(latestWeight.value),
-      };
-      return withEnergyProfile(
-        withOnboardingGoalHistory(importedState),
-        energyProfile,
-      );
+      return withOnboardingGoalHistory(importedState);
     }
     case "reset":
       return createInitialState();
@@ -2584,6 +2714,9 @@ export function AppProvider({ children }: PropsWithChildren) {
   const persistenceTaskRef = useRef<
     ReturnType<typeof InteractionManager.runAfterInteractions> | null
   >(null);
+  const persistenceIdleFallbackTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
   const persistenceWriteRef = useRef<Promise<void> | null>(null);
   const persistenceDeferredTimerRef = useRef<ReturnType<
     typeof setTimeout
@@ -2655,6 +2788,66 @@ export function AppProvider({ children }: PropsWithChildren) {
     persistenceWriteRef.current = write;
     return write;
   }, []);
+
+  const queuePersistenceAfterInteractions = useCallback(() => {
+    if (persistenceTaskRef.current) return;
+    let completed = false;
+    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
+    const run = () => {
+      if (completed) return;
+      completed = true;
+      if (persistenceIdleFallbackTimerRef.current) {
+        clearTimeout(persistenceIdleFallbackTimerRef.current);
+        persistenceIdleFallbackTimerRef.current = null;
+      }
+      if (persistenceTaskRef.current === task)
+        persistenceTaskRef.current = null;
+      void persistLatestState().catch(() => undefined);
+    };
+    task = InteractionManager.runAfterInteractions(run);
+    // A looping animation can keep InteractionManager busy indefinitely. The
+    // fallback cancels the same task and invokes the same guarded callback, so
+    // persistence stays off the immediate tap frame without sacrificing local
+    // durability or serializing twice.
+    if (!completed) {
+      persistenceTaskRef.current = task;
+      persistenceIdleFallbackTimerRef.current = setTimeout(
+        () => {
+          if (completed) return;
+          task?.cancel();
+          run();
+        },
+        LOCAL_PERSIST_IDLE_MAX_WAIT_MS,
+      );
+    } else {
+      task.cancel();
+    }
+  }, [persistLatestState]);
+
+  const scheduleDeferredPersistence = useCallback(() => {
+    if (NativeAppState.currentState !== "active") {
+      void persistLatestState(true).catch(() => undefined);
+      return;
+    }
+    if (
+      persistenceWriteRef.current ||
+      persistenceTimerRef.current ||
+      persistenceTaskRef.current
+    )
+      return;
+    const persistWhenIdle = () => {
+      persistenceTimerRef.current = null;
+      if (isCloudSyncPaused()) {
+        persistenceTimerRef.current = setTimeout(persistWhenIdle, 650);
+        return;
+      }
+      queuePersistenceAfterInteractions();
+    };
+    // A short coalescing window preserves near-immediate offline durability
+    // while avoiding a full year-cache JSON.stringify for every rapid tap.
+    persistenceTimerRef.current = setTimeout(persistWhenIdle, 850);
+  }, [persistLatestState, queuePersistenceAfterInteractions]);
 
   useEffect(() => {
     AsyncStorage.getItem(APP_STORAGE_KEY)
@@ -2779,7 +2972,7 @@ export function AppProvider({ children }: PropsWithChildren) {
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 23,
+            version: 24,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -3092,44 +3285,8 @@ export function AppProvider({ children }: PropsWithChildren) {
     persistenceDirtyRef.current = true;
     persistenceRevisionRef.current += 1;
     if (NativeAppState.currentState !== "active") return;
-    // Persist the newest state at most once per short burst. The old effect
-    // repeatedly cancelled/recreated timers and serialized the full offline
-    // cache after nearly every cloud/health update.
-    if (persistenceTimerRef.current || persistenceTaskRef.current) return;
-    const persistWhenIdle = () => {
-      persistenceTimerRef.current = null;
-      // Edit/drag modes deliberately pause cloud work. They should also avoid
-      // serializing the full offline cache while a gesture is in flight.
-      if (isCloudSyncPaused()) {
-        persistenceTimerRef.current = setTimeout(persistWhenIdle, 650);
-        return;
-      }
-      persistenceTaskRef.current = InteractionManager.runAfterInteractions(
-        () => {
-          persistenceTaskRef.current = null;
-          const revision = persistenceRevisionRef.current;
-          persistLatestState()
-            .then(() => {
-              if (
-                revision !== persistenceRevisionRef.current &&
-                NativeAppState.currentState === "active" &&
-                !persistenceTimerRef.current &&
-                !persistenceTaskRef.current
-              ) {
-                // Changes that arrived while the snapshot was being written
-                // still need one trailing save.
-                persistenceTimerRef.current = setTimeout(
-                  persistWhenIdle,
-                  3000,
-                );
-              }
-            })
-            .catch(() => undefined);
-        },
-      );
-    };
-    persistenceTimerRef.current = setTimeout(persistWhenIdle, 3000);
-  }, [hydrated, persistLatestState, state]);
+    scheduleDeferredPersistence();
+  }, [hydrated, scheduleDeferredPersistence, state]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -3140,6 +3297,10 @@ export function AppProvider({ children }: PropsWithChildren) {
       }
       persistenceTaskRef.current?.cancel();
       persistenceTaskRef.current = null;
+      if (persistenceIdleFallbackTimerRef.current) {
+        clearTimeout(persistenceIdleFallbackTimerRef.current);
+        persistenceIdleFallbackTimerRef.current = null;
+      }
       if (persistenceResumeTimerRef.current) {
         clearTimeout(persistenceResumeTimerRef.current);
         persistenceResumeTimerRef.current = null;
@@ -3205,12 +3366,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         // Let navigation paint and resume-time subscriptions settle first.
         persistenceResumeTimerRef.current = setTimeout(() => {
           persistenceResumeTimerRef.current = null;
-          persistenceTaskRef.current = InteractionManager.runAfterInteractions(
-            () => {
-              persistenceTaskRef.current = null;
-              void persistLatestState().catch(() => undefined);
-            },
-          );
+          queuePersistenceAfterInteractions();
         }, 4000);
       })();
     });
@@ -3218,7 +3374,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       subscription.remove();
       clearQueuedPersistence();
     };
-  }, [hydrated, persistLatestState]);
+  }, [hydrated, persistLatestState, queuePersistenceAfterInteractions]);
 
   useEffect(
     () => () => {
@@ -3227,6 +3383,8 @@ export function AppProvider({ children }: PropsWithChildren) {
       persistenceTaskRef.current?.cancel();
       if (persistenceResumeTimerRef.current)
         clearTimeout(persistenceResumeTimerRef.current);
+      if (persistenceIdleFallbackTimerRef.current)
+        clearTimeout(persistenceIdleFallbackTimerRef.current);
       // Do not leave a coalesced persistence promise waiting on a foreground
       // timer when the provider/app is being torn down.
       persistenceDeferredRunRef.current?.();
@@ -3235,7 +3393,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   );
 
   const commitReducedState = useCallback(
-    (next: AppState) => {
+    (next: AppState, persistImmediately = false) => {
       if (next === persistenceStateRef.current) return Promise.resolve();
       const committed = { ...next, lastSavedAt: new Date().toISOString() };
       persistenceStateRef.current = committed;
@@ -3243,9 +3401,11 @@ export function AppProvider({ children }: PropsWithChildren) {
       persistenceDirtyRef.current = true;
       persistenceRevisionRef.current += 1;
       dispatch({ type: "replaceLocal", state: committed });
-      return persistLatestState();
+      if (persistImmediately) return persistLatestState(true);
+      scheduleDeferredPersistence();
+      return Promise.resolve();
     },
-    [persistLatestState],
+    [persistLatestState, scheduleDeferredPersistence],
   );
 
   const commitAction = useCallback(
@@ -3482,7 +3642,7 @@ export function AppProvider({ children }: PropsWithChildren) {
             preserveTrackedGoalHistory,
           }),
         );
-        return commitReducedState(next).then(async () => {
+        return commitReducedState(next, true).then(async () => {
           // Historical repairs must remain silent. Only a current-day value
           // crossing a configured threshold can emit an immediate milestone.
           if (entries.some((entry) => entry.localDate === dateKey())) {

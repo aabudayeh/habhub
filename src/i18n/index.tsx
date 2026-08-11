@@ -517,6 +517,7 @@ const commonTranslationRows = [
 ] satisfies readonly TranslationRow[];
 
 const templateTranslationRows = [
+  ["Select a day from the {value} year grid", "اختر يومًا من شبكة السنة لـ {value}", "Selecciona un día de la cuadrícula anual de {value}", "从 {value} 年度网格中选择一天", "Välj en dag i årsöversikten för {value}", "Wähle einen Tag im Jahresraster für {value} aus", "Выберите день в годовой сетке для {value}", "Sélectionnez un jour dans la grille annuelle de {value}"],
   ["Edit {name}", "تعديل {name}", "Editar {name}", "编辑{name}", "Redigera {name}", "{name} bearbeiten", "Изменить {name}", "Modifier {name}"],
   ["Delete {name}?", "حذف {name}؟", "¿Eliminar {name}?", "删除{name}？", "Radera {name}?", "{name} löschen?", "Удалить {name}?", "Supprimer {name} ?"],
   ["Add {name}", "إضافة {name}", "Añadir {name}", "添加{name}", "Lägg till {name}", "{name} hinzufügen", "Добавить {name}", "Ajouter {name}"],

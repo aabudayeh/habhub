@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="habhub_widget_description">تقدم اليوم وسجل المتتبّع</string>
+  <string name="habhub_widget_description">أهداف اليوم وتقدم المتتبّع</string>
   <string name="habhub_widget_open_to_update">افتح HabHub للتحديث</string>
   <string name="habhub_widget_featured_progress">التقدم المميز</string>
   <string name="habhub_widget_choose">اختر ما تعرضه هذه الأداة</string>
   <string name="habhub_widget_tracker">المتتبّع</string>
-  <string name="habhub_widget_history">السجل</string>
-  <string name="habhub_widget_week">أسبوع</string>
-  <string name="habhub_widget_month">شهر</string>
-  <string name="habhub_widget_year">سنة</string>
   <string name="habhub_widget_add">إضافة الأداة</string>
 </resources>

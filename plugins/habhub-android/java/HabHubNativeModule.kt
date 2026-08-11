@@ -29,6 +29,10 @@ class HabHubNativeModule(
 
   override fun getName() = "HabHubAndroid"
 
+  override fun getConstants(): Map<String, Any> = mapOf(
+    "nativeWorkoutActions" to true,
+  )
+
   private fun usageAccessGranted(): Boolean {
     val appOps = reactContext.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
     val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -189,6 +193,7 @@ class HabHubNativeModule(
     mode: String,
     referenceTime: Double,
     timeoutAt: Double,
+    expectedTitle: String,
     promise: Promise,
   ) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
@@ -204,11 +209,18 @@ class HabHubNativeModule(
         // expo-notifications. Briefly retry so we enhance the first frame that
         // reaches NotificationManager without blocking the JS or UI threads.
         var updated = false
-        for (attempt in 0 until 12) {
+        for (attempt in 0 until 20) {
           val active = manager.activeNotifications.firstOrNull {
             it.tag == identifier
           }
-          if (active != null) {
+          val activeTitle = active?.notification?.extras
+            ?.getCharSequence(Notification.EXTRA_TITLE)
+            ?.toString()
+          // An update reuses the same notification tag. Wait until Expo has
+          // posted the requested generation instead of immediately rebuilding
+          // the previous phase and then losing the chronometer when Expo's
+          // asynchronous replacement lands.
+          if (active != null && (expectedTitle.isBlank() || activeTitle == expectedTitle)) {
             val builder = Notification.Builder.recoverBuilder(
               reactContext,
               active.notification,
@@ -232,7 +244,7 @@ class HabHubNativeModule(
             updated = true
             break
           }
-          if (attempt < 11) Thread.sleep(50L)
+          if (attempt < 19) Thread.sleep(50L)
         }
         promise.resolve(updated)
       } catch (error: Exception) {
@@ -241,6 +253,22 @@ class HabHubNativeModule(
         promise.resolve(false)
       }
     }
+  }
+
+  @ReactMethod
+  fun syncWorkoutTimerNotificationFlow(flow: String, promise: Promise) {
+    promise.resolve(HabHubWorkoutNotificationStore.sync(reactContext, flow))
+  }
+
+  @ReactMethod
+  fun consumeWorkoutTimerNotificationActions(promise: Promise) {
+    promise.resolve(HabHubWorkoutNotificationStore.consumeActions(reactContext))
+  }
+
+  @ReactMethod
+  fun clearWorkoutTimerNotificationFlow(promise: Promise) {
+    HabHubWorkoutNotificationStore.clear(reactContext)
+    promise.resolve(true)
   }
 
   /**

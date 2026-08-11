@@ -1,373 +1,368 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  AccessibilityInfo,
-  Animated,
-  StyleSheet,
-  View,
-} from "react-native";
+import { AccessibilityInfo, StyleSheet, View } from "react-native";
 import Svg, {
   Circle,
-  ClipPath,
   Defs,
   G,
   Line,
+  LinearGradient,
   Path,
   Polygon,
-  Rect,
+  Stop,
 } from "react-native-svg";
 
+import { AppText as Text } from "@/src/components/AppText";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
-import { statusBodyAppearance } from "@/src/domain/status";
+import {
+  STATUS_AVATAR_VIEWBOX,
+  statusAvatarGeometry,
+  statusBodyAppearance,
+  type StatusAvatarGeometry,
+} from "@/src/domain/statusAvatar";
 import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
 import { BiologicalSex } from "@/src/types";
 
-const BODY_WIDTH = 128;
-const BODY_HEIGHT = 252;
-const VIEWBOX_WIDTH = 180;
-const VIEWBOX_HEIGHT = 356;
-
-const AnimatedRect = Animated.createAnimatedComponent(Rect);
-
-type BodyVariant = BiologicalSex;
+const BODY_WIDTH = 132;
+const BODY_HEIGHT = 278;
+const VIEWBOX_WIDTH = STATUS_AVATAR_VIEWBOX.width;
+const VIEWBOX_HEIGHT = STATUS_AVATAR_VIEWBOX.height;
+const CENTER_X = VIEWBOX_WIDTH / 2;
 
 type Point = readonly [number, number];
-type BodySegment =
-  | { kind: "line"; end: Point }
-  | { kind: "curve"; control1: Point; control2: Point; end: Point };
+type BodySegment = {
+  control1: Point;
+  control2: Point;
+  end: Point;
+};
 
 const point = ([x, y]: Point) => `${x.toFixed(1)} ${y.toFixed(1)}`;
 
-function humanBodyPath(
-  variant: BodyVariant,
-  bodyMass: number,
-  muscleProgress: number,
+function curve(control1: Point, control2: Point, end: Point): BodySegment {
+  return { control1, control2, end };
+}
+
+/**
+ * Builds one closed, symmetrical body silhouette. Fullness and muscle alter
+ * only horizontal landmarks, so every combination keeps the same head,
+ * height, baseline and human proportions.
+ */
+export function bodySilhouettePath(
+  geometry: StatusAvatarGeometry,
 ) {
-  const center = VIEWBOX_WIDTH / 2;
-  const positiveMass = Math.max(0, bodyMass);
-  const muscle = Math.max(0, Math.min(1, muscleProgress));
-  const headHalf =
-    (variant === "male" ? 17.5 : variant === "female" ? 16.8 : 17.2) +
-    positiveMass * 0.45;
-  const neckHalf =
-    (variant === "male" ? 11.5 : variant === "female" ? 10.2 : 10.8) +
-    muscle * 0.8;
-  const shoulderHalf =
-    (variant === "male" ? 40 : variant === "female" ? 35.5 : 38) +
-    muscle * 3.8 +
-    bodyMass * 1.8;
-  const waistHalf =
-    (variant === "male" ? 23.5 : variant === "female" ? 22 : 23) +
-    positiveMass * 7 +
-    Math.min(0, bodyMass) * 2 +
-    muscle * 0.5;
-  const hipHalf =
-    (variant === "male" ? 28 : variant === "female" ? 33 : 30.5) +
-    positiveMass * 6 +
-    Math.min(0, bodyMass) * 2.5 +
-    muscle * 0.6;
-  const chestHalf =
-    (variant === "male" ? 31.5 : variant === "female" ? 29 : 30) +
-    positiveMass * 4.5 +
-    muscle * (variant === "female" ? 2 : 3);
-  const upperArmOuter =
-    center + shoulderHalf + 6 + muscle * 1.5 + positiveMass;
-  const elbowOuter = center + shoulderHalf + 3 + muscle + positiveMass;
-  const wristOuter = center + shoulderHalf - 1 + positiveMass;
-  const upperArmInner = center + shoulderHalf - 10;
-  const kneeOuter = center + 21 + positiveMass * 2.8 + muscle;
-  const calfOuter = center + 23 + positiveMass * 2.3 + muscle;
-  const ankleOuter = center + 13 + positiveMass * 1.4;
-  const start: Point = [center, 10];
+  const female = geometry.variant === "female";
+  const {
+    ankleHalf,
+    calfHalf,
+    chestHalf,
+    elbowInnerHalf,
+    elbowOuterHalf,
+    headHalf,
+    hipHalf,
+    kneeHalf,
+    neckHalf,
+    shoulderHalf,
+    thighHalf,
+    upperArmInnerHalf,
+    upperArmOuterHalf,
+    waistHalf,
+    wristInnerHalf,
+    wristOuterHalf,
+  } = geometry.body;
+  const upperArmOuter = CENTER_X + upperArmOuterHalf;
+  const elbowOuter = CENTER_X + elbowOuterHalf;
+  const wristOuter = CENTER_X + wristOuterHalf;
+  const wristInner = CENTER_X + wristInnerHalf;
+  const elbowInner = CENTER_X + elbowInnerHalf;
+  const upperArmInner = CENTER_X + upperArmInnerHalf;
+  // Keep the complete head/jaw outline identical within each sex. Training may
+  // widen the lower neck into the shoulders, but never changes the face.
+  const faceNeckHalf = female
+    ? 10
+    : geometry.variant === "male"
+      ? 12
+      : 11;
+
+  const start: Point = [CENTER_X, 8];
+  const head: BodySegment[] = female
+    ? [
+        curve(
+          [CENTER_X + headHalf * 0.62, 8],
+          [CENTER_X + headHalf, 16],
+          [CENTER_X + headHalf, 31],
+        ),
+        curve(
+          [CENTER_X + headHalf, 43],
+          [CENTER_X + headHalf + 4.5, 50],
+          [CENTER_X + headHalf + 6.5, 62],
+        ),
+        curve(
+          [CENTER_X + headHalf + 8.5, 72],
+          [CENTER_X + headHalf + 7, 79],
+          [CENTER_X + headHalf + 5, 84],
+        ),
+        curve(
+          [CENTER_X + headHalf, 81],
+          [CENTER_X + faceNeckHalf + 2, 75],
+          [CENTER_X + faceNeckHalf, 70],
+        ),
+        curve(
+          [CENTER_X + faceNeckHalf, 74],
+          [CENTER_X + faceNeckHalf, 78],
+          [CENTER_X + faceNeckHalf + 0.5, 80],
+        ),
+      ]
+    : [
+        curve(
+          [CENTER_X + headHalf * 0.62, 8],
+          [CENTER_X + headHalf, 16],
+          [CENTER_X + headHalf, 31],
+        ),
+        curve(
+          [CENTER_X + headHalf, 43],
+          [CENTER_X + headHalf - 1, 50],
+          [CENTER_X + headHalf - 4.5, 55],
+        ),
+        curve(
+          [CENTER_X + headHalf - 6, 60],
+          [CENTER_X + faceNeckHalf, 64],
+          [CENTER_X + faceNeckHalf, 70],
+        ),
+        curve(
+          [CENTER_X + faceNeckHalf, 74],
+          [CENTER_X + faceNeckHalf, 78],
+          [CENTER_X + faceNeckHalf + 0.5, 80],
+        ),
+      ];
+
   const segments: BodySegment[] = [
-    {
-      kind: "curve",
-      control1: [center + headHalf * 0.58, 10],
-      control2: [center + headHalf, 17],
-      end: [center + headHalf, 29],
-    },
-    {
-      kind: "curve",
-      control1: [center + headHalf, 34],
-      control2: [center + headHalf + 3.8, 33],
-      end: [center + headHalf + 3.8, 39],
-    },
-    {
-      kind: "curve",
-      control1: [center + headHalf + 3.8, 45],
-      control2: [center + headHalf + 1, 48],
-      end: [center + headHalf - 0.7, 45],
-    },
-    {
-      kind: "curve",
-      control1: [center + headHalf - 1.5, 53],
-      control2: [center + neckHalf + 1.5, 58],
-      end: [center + neckHalf + 1, 63],
-    },
-    {
-      kind: "curve",
-      control1: [center + neckHalf + 1, 67],
-      control2: [center + neckHalf, 70],
-      end: [center + neckHalf, 73],
-    },
-    {
-      kind: "curve",
-      control1: [center + neckHalf, 76],
-      control2: [center + shoulderHalf * 0.68, 77],
-      end: [center + shoulderHalf, 83],
-    },
-    {
-      kind: "curve",
-      control1: [center + shoulderHalf + 5, 88],
-      control2: [upperArmOuter + 1, 101],
-      end: [upperArmOuter, 113],
-    },
-    {
-      kind: "curve",
-      control1: [upperArmOuter, 124],
-      control2: [elbowOuter + 1, 136],
-      end: [elbowOuter, 144],
-    },
-    {
-      kind: "curve",
-      control1: [elbowOuter - 1, 154],
-      control2: [wristOuter + 2, 168],
-      end: [wristOuter, 180],
-    },
-    {
-      kind: "curve",
-      control1: [wristOuter + 4, 183],
-      control2: [wristOuter + 5, 188],
-      end: [wristOuter + 5, 192],
-    },
-    {
-      kind: "curve",
-      control1: [wristOuter + 5, 198],
-      control2: [wristOuter + 2, 202],
-      end: [wristOuter + 1, 207],
-    },
-    {
-      kind: "curve",
-      control1: [wristOuter, 211],
-      control2: [wristOuter - 4, 212],
-      end: [wristOuter - 6, 207],
-    },
-    {
-      kind: "curve",
-      control1: [wristOuter - 8, 201],
-      control2: [wristOuter - 7, 190],
-      end: [wristOuter - 7, 180],
-    },
-    {
-      kind: "curve",
-      control1: [upperArmInner + 4, 164],
-      control2: [upperArmInner + 2, 151],
-      end: [upperArmInner + 1, 143],
-    },
-    {
-      kind: "curve",
-      control1: [upperArmInner, 130],
-      control2: [center + chestHalf - 4, 114],
-      end: [center + chestHalf - 5, 105],
-    },
-    {
-      kind: "curve",
-      control1: [center + chestHalf - 1, 114],
-      control2: [center + chestHalf, 124],
-      end: [center + chestHalf, 134],
-    },
-    {
-      kind: "curve",
-      control1: [center + chestHalf - 1, 145],
-      control2: [center + waistHalf, 151],
-      end: [center + waistHalf, 159],
-    },
-    {
-      kind: "curve",
-      control1: [center + waistHalf, 169],
-      control2: [center + hipHalf, 176],
-      end: [center + hipHalf, 185],
-    },
-    {
-      kind: "curve",
-      control1: [center + hipHalf, 199],
-      control2: [kneeOuter + 6, 218],
-      end: [kneeOuter + 3, 235],
-    },
-    {
-      kind: "curve",
-      control1: [kneeOuter + 1, 244],
-      control2: [kneeOuter, 250],
-      end: [kneeOuter, 258],
-    },
-    {
-      kind: "curve",
-      control1: [kneeOuter, 270],
-      control2: [calfOuter + 1, 280],
-      end: [calfOuter - 1, 290],
-    },
-    {
-      kind: "curve",
-      control1: [calfOuter - 3, 307],
-      control2: [ankleOuter + 2, 321],
-      end: [ankleOuter, 330],
-    },
-    {
-      kind: "curve",
-      control1: [ankleOuter, 335],
-      control2: [ankleOuter + 10, 339],
-      end: [ankleOuter + 10, 343],
-    },
-    {
-      kind: "curve",
-      control1: [ankleOuter + 10, 347],
-      control2: [center + 13, 349],
-      end: [center + 8, 349],
-    },
-    {
-      kind: "curve",
-      control1: [center + 3, 349],
-      control2: [center + 4, 339],
-      end: [center + 8, 329],
-    },
-    {
-      kind: "curve",
-      control1: [center + 7, 309],
-      control2: [center + 5, 278],
-      end: [center + 7, 257],
-    },
-    {
-      kind: "curve",
-      control1: [center + 8, 239],
-      control2: [center + 8, 220],
-      end: [center + 6, 204],
-    },
-    {
-      kind: "curve",
-      control1: [center + 5, 197],
-      control2: [center + 3, 192],
-      end: [center, 189],
-    },
+    ...head,
+    // Shoulder to fingertips. Hands finish at upper-thigh level, as in the
+    // reference silhouettes, rather than reaching toward the knees.
+    curve(
+      [CENTER_X + neckHalf + 8, 81],
+      [CENTER_X + shoulderHalf - 8, 82],
+      [CENTER_X + shoulderHalf, 87],
+    ),
+    curve(
+      [CENTER_X + shoulderHalf + 7, 95],
+      [upperArmOuter, 109],
+      [upperArmOuter, 126],
+    ),
+    curve(
+      [upperArmOuter + 1, 141],
+      [elbowOuter + 1, 157],
+      [elbowOuter, 172],
+    ),
+    curve(
+      [elbowOuter - 1, 188],
+      [wristOuter + 1, 213],
+      [wristOuter, 230],
+    ),
+    curve(
+      [wristOuter + 5, 237],
+      [wristOuter + 7, 246],
+      [wristOuter + 4, 252],
+    ),
+    curve(
+      [wristOuter + 2, 259],
+      [wristOuter - 2, 263],
+      [wristOuter - 4, 258],
+    ),
+    curve(
+      [wristOuter - 7, 253],
+      [wristInner - 1, 242],
+      [wristInner, 232],
+    ),
+    curve(
+      [wristInner - 1, 215],
+      [elbowInner - 2, 190],
+      [elbowInner, 176],
+    ),
+    curve(
+      [elbowInner, 158],
+      [upperArmInner + 1, 140],
+      [upperArmInner, 126],
+    ),
+    curve(
+      [upperArmInner - 2, 119],
+      [CENTER_X + chestHalf - 2, 113],
+      [CENTER_X + chestHalf - 3, 108],
+    ),
+    curve(
+      [CENTER_X + chestHalf, 124],
+      [CENTER_X + chestHalf, 136],
+      [CENTER_X + chestHalf - 1, 145],
+    ),
+    curve(
+      [CENTER_X + chestHalf - 2, 160],
+      [CENTER_X + waistHalf, 173],
+      [CENTER_X + waistHalf, 183],
+    ),
+    curve(
+      [CENTER_X + waistHalf, 195],
+      [CENTER_X + hipHalf, 204],
+      [CENTER_X + hipHalf, 216],
+    ),
+    curve(
+      [CENTER_X + hipHalf, 231],
+      [CENTER_X + thighHalf + 3, 245],
+      [CENTER_X + thighHalf, 262],
+    ),
+    curve(
+      [CENTER_X + thighHalf - 2, 281],
+      [CENTER_X + kneeHalf + 2, 296],
+      [CENTER_X + kneeHalf, 310],
+    ),
+    curve(
+      [CENTER_X + kneeHalf, 326],
+      [CENTER_X + calfHalf + 1, 340],
+      [CENTER_X + calfHalf, 352],
+    ),
+    curve(
+      [CENTER_X + calfHalf - 2, 368],
+      [CENTER_X + ankleHalf + 1, 384],
+      [CENTER_X + ankleHalf, 393],
+    ),
+    curve(
+      [CENTER_X + ankleHalf + 2, 399],
+      [CENTER_X + ankleHalf + 13, 402],
+      [CENTER_X + ankleHalf + 14, 407],
+    ),
+    curve(
+      [CENTER_X + ankleHalf + 14, 412],
+      [CENTER_X + 13, 413],
+      [CENTER_X + 9, 411],
+    ),
+    curve(
+      [CENTER_X + 5, 408],
+      [CENTER_X + 7, 400],
+      [CENTER_X + 8, 393],
+    ),
+    curve(
+      [CENTER_X + 10, 378],
+      [CENTER_X + 11, 363],
+      [CENTER_X + 10, 348],
+    ),
+    curve(
+      [CENTER_X + 9, 334],
+      [CENTER_X + 8, 320],
+      [CENTER_X + 9, 307],
+    ),
+    curve(
+      [CENTER_X + 10, 291],
+      [CENTER_X + 8, 274],
+      [CENTER_X + 6, 259],
+    ),
+    curve(
+      [CENTER_X + 5, 248],
+      [CENTER_X + 3, 237],
+      [CENTER_X, 229],
+    ),
   ];
-  const mirror = ([x, y]: Point): Point => [center * 2 - x, y];
-  const points = [start, ...segments.map((segment) => segment.end)];
+
+  const mirror = ([x, y]: Point): Point => [CENTER_X * 2 - x, y];
+  const vertices = [start, ...segments.map((segment) => segment.end)];
   const right = segments
-    .map((segment) =>
-      segment.kind === "line"
-        ? `L ${point(segment.end)}`
-        : `C ${point(segment.control1)} ${point(segment.control2)} ${point(
-            segment.end,
-          )}`,
+    .map(
+      (segment) =>
+        `C ${point(segment.control1)} ${point(segment.control2)} ${point(
+          segment.end,
+        )}`,
     )
     .join(" ");
   const left = segments
     .map((segment, index) => ({ segment, index }))
     .reverse()
-    .map(({ segment, index }) => {
-      const previous = mirror(points[index]);
-      return segment.kind === "line"
-        ? `L ${point(previous)}`
-        : `C ${point(mirror(segment.control2))} ${point(
-            mirror(segment.control1),
-          )} ${point(previous)}`;
-    })
+    .map(
+      ({ segment, index }) =>
+        `C ${point(mirror(segment.control2))} ${point(
+          mirror(segment.control1),
+        )} ${point(mirror(vertices[index]))}`,
+    )
     .join(" ");
   return `M ${point(start)} ${right} ${left} Z`;
 }
 
-function BodyDetails({
-  bodyPath,
+function NerdAccessories({
   color,
+  geometry,
   mindTier,
-  muscleTier,
-  muscleProgress,
-  variant,
 }: {
-  bodyPath: string;
   color: string;
+  geometry: StatusAvatarGeometry;
   mindTier: 0 | 1 | 2 | 3;
-  muscleTier: 0 | 1 | 2 | 3;
-  muscleProgress: number;
-  variant: BodyVariant;
 }) {
-  const shoulderY = variant === "male" ? 102 : 105;
-  const muscleOpacity = 0.25 + Math.max(0, Math.min(1, muscleProgress)) * 0.2;
+  if (!mindTier) return null;
+  const { capBrimY, capCrownBottomY, capHalfWidth, capTopY, eyeOffset, eyeY, lensRadius } =
+    geometry.accessory;
+  const leftEyeX = CENTER_X - eyeOffset;
+  const rightEyeX = CENTER_X + eyeOffset;
+  const bridgeLeft = leftEyeX + lensRadius;
+  const bridgeRight = rightEyeX - lensRadius;
+  const templeOffset = geometry.body.headHalf - 1;
   return (
-    <G>
-      <Path
-        d={bodyPath}
-        fill="none"
-        stroke={color}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={3.5}
-      />
-      {muscleTier >= 1 ? (
-        <G
-          fill="none"
-          opacity={muscleOpacity}
-          stroke={color}
-          strokeLinecap="round"
-          strokeWidth={2.2}
-        >
-          <Path d={`M 54 ${shoulderY} Q 62 96 69 105`} />
-          <Path d={`M 126 ${shoulderY} Q 118 96 111 105`} />
-        </G>
-      ) : null}
-      {muscleTier >= 2 ? (
-        <G
-          fill="none"
-          opacity={muscleOpacity}
-          stroke={color}
-          strokeLinecap="round"
-          strokeWidth={2.1}
-        >
-          <Path d="M 68 127 Q 79 135 89 132" />
-          <Path d="M 112 127 Q 101 135 91 132" />
-          <Path d="M 90 136 L 90 171" />
-        </G>
-      ) : null}
-      {muscleTier >= 3 ? (
-        <G
-          fill="none"
-          opacity={muscleOpacity}
-          stroke={color}
-          strokeLinecap="round"
-          strokeWidth={1.9}
-        >
-          <Path d="M 80 149 Q 90 153 100 149" />
-          <Path d="M 80 161 Q 90 165 100 161" />
-          <Path d="M 81 174 Q 90 177 99 174" />
-        </G>
-      ) : null}
-      {mindTier >= 1 ? (
-        <G fill="none" stroke={color} strokeWidth={2.8}>
-          <Rect x={72} y={34} width={16} height={11} rx={5} />
-          <Rect x={92} y={34} width={16} height={11} rx={5} />
-          <Line x1={88} y1={38.5} x2={92} y2={38.5} />
-          <Line x1={72} y1={38} x2={67} y2={36.5} />
-          <Line x1={108} y1={38} x2={113} y2={36.5} />
-        </G>
-      ) : null}
-      {mindTier === 2 ? (
-        <G fill="none" stroke={palette.amber} strokeWidth={2.2}>
-          <Circle cx={100} cy={39.5} r={7.5} />
-          <Path d="M 106 44 Q 111 52 108 62" />
+    <G fill="none" stroke={color} strokeLinecap="round" strokeLinejoin="round">
+      <G strokeWidth={3}>
+        <Circle cx={leftEyeX} cy={eyeY} r={lensRadius} />
+        <Circle cx={rightEyeX} cy={eyeY} r={lensRadius} />
+        <Line x1={bridgeLeft} y1={eyeY} x2={bridgeRight} y2={eyeY} />
+        <Line
+          x1={leftEyeX - lensRadius}
+          y1={eyeY - 1}
+          x2={CENTER_X - templeOffset}
+          y2={eyeY - 2.5}
+        />
+        <Line
+          x1={rightEyeX + lensRadius}
+          y1={eyeY - 1}
+          x2={CENTER_X + templeOffset}
+          y2={eyeY - 2.5}
+        />
+      </G>
+      {mindTier >= 2 ? (
+        <G stroke={palette.amber} strokeWidth={2.2}>
+          <Circle cx={rightEyeX} cy={eyeY} r={lensRadius + 3} />
+          <Path
+            d={`M ${rightEyeX + lensRadius * 0.7} ${eyeY + lensRadius * 0.75} Q ${
+              rightEyeX + lensRadius + 6
+            } ${eyeY + 17} ${rightEyeX + lensRadius + 2} ${eyeY + 29}`}
+          />
         </G>
       ) : null}
       {mindTier >= 3 ? (
         <G>
-          <Polygon points="63,12 90,2 117,12 90,22" fill={color} />
-          <Path d="M 72 14 L 72 28 Q 90 36 108 28 L 108 14" fill={color} />
+          <Polygon
+            points={`${CENTER_X - capHalfWidth},${capBrimY} ${CENTER_X},${capTopY} ${
+              CENTER_X + capHalfWidth
+            },${capBrimY} ${CENTER_X},${capBrimY + 12}`}
+            fill={color}
+            stroke="none"
+          />
+          <Path
+            d={`M ${CENTER_X - geometry.body.headHalf - 2} ${capBrimY + 3} L ${
+              CENTER_X - geometry.body.headHalf - 2
+            } ${capCrownBottomY} Q ${CENTER_X} ${capCrownBottomY + 8} ${
+              CENTER_X + geometry.body.headHalf + 2
+            } ${capCrownBottomY} L ${CENTER_X + geometry.body.headHalf + 2} ${capBrimY + 3}`}
+            fill={color}
+            stroke="none"
+          />
           <Line
-            x1={114}
-            y1={13}
-            x2={114}
-            y2={29}
+            x1={CENTER_X + capHalfWidth - 3}
+            y1={capBrimY}
+            x2={CENTER_X + capHalfWidth - 3}
+            y2={capCrownBottomY + 5}
             stroke={palette.amber}
             strokeWidth={2.2}
           />
-          <Circle cx={114} cy={31} r={3} fill={palette.amber} />
+          <Circle
+            cx={CENTER_X + capHalfWidth - 3}
+            cy={capCrownBottomY + 8}
+            r={3}
+            fill={palette.amber}
+            stroke="none"
+          />
         </G>
       ) : null}
     </G>
@@ -375,14 +370,18 @@ function BodyDetails({
 }
 
 export function BodyProgressAvatar({
+  bodyFatPercent,
   heightCm = 170,
+  leanBodyMassKg,
   mindTier = 0,
   muscleProgress = 0,
   progress,
   sex = "unspecified",
   weightKg = 70,
 }: {
+  bodyFatPercent?: number;
   heightCm?: number;
+  leanBodyMassKg?: number;
   mindTier?: 0 | 1 | 2 | 3;
   muscleProgress?: number;
   progress: number;
@@ -391,10 +390,15 @@ export function BodyProgressAvatar({
 }) {
   const colors = useAppColors();
   const { t } = useLocalization();
-  const clipId = useId().replace(/:/g, "");
-  const clamped = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
-  const animatedProgress = useRef(new Animated.Value(0)).current;
+  const gradientId = `statusBodyFill${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const clamped = Math.max(
+    0,
+    Math.min(1, Number.isFinite(progress) ? progress : 0),
+  );
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [renderedProgress, setRenderedProgress] = useState(0);
+  const renderedProgressRef = useRef(0);
+  const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -412,33 +416,66 @@ export function BodyProgressAvatar({
   }, []);
 
   useEffect(() => {
-    animatedProgress.stopAnimation();
-    Animated.timing(animatedProgress, {
-      duration: reduceMotion ? 0 : 900,
-      toValue: clamped,
-      useNativeDriver: false,
-    }).start();
-  }, [animatedProgress, clamped, reduceMotion]);
+    if (animationFrameRef.current !== null)
+      cancelAnimationFrame(animationFrameRef.current);
+    if (reduceMotion) {
+      renderedProgressRef.current = clamped;
+      setRenderedProgress(clamped);
+      return;
+    }
+    const from = renderedProgressRef.current;
+    const startedAt = Date.now();
+    const durationMs = 900;
+    const step = () => {
+      const elapsed = Date.now() - startedAt;
+      const linear = Math.min(1, elapsed / durationMs);
+      const eased = 1 - Math.pow(1 - linear, 3);
+      const next = from + (clamped - from) * eased;
+      renderedProgressRef.current = next;
+      setRenderedProgress(next);
+      if (linear < 1) animationFrameRef.current = requestAnimationFrame(step);
+      else animationFrameRef.current = null;
+    };
+    animationFrameRef.current = requestAnimationFrame(step);
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [clamped, reduceMotion]);
 
-  const fillHeight = animatedProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, VIEWBOX_HEIGHT],
-  });
-  const fillTop = animatedProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [VIEWBOX_HEIGHT, 0],
-  });
   const percent = Math.round(clamped * 100);
   const boundedMuscle = Math.max(0, Math.min(1, muscleProgress));
   const appearance = useMemo(
-    () => statusBodyAppearance(heightCm, weightKg, boundedMuscle),
-    [boundedMuscle, heightCm, weightKg],
+    () =>
+      statusBodyAppearance(heightCm, weightKg, boundedMuscle, {
+        bodyFatPercent,
+        leanBodyMassKg,
+        sex,
+      }),
+    [bodyFatPercent, boundedMuscle, heightCm, leanBodyMassKg, sex, weightKg],
+  );
+  const geometry = useMemo(
+    () =>
+      statusAvatarGeometry(
+        sex,
+        appearance.bodyMass,
+        appearance.muscleProgress,
+        appearance.adiposity,
+      ),
+    [appearance.adiposity, appearance.bodyMass, appearance.muscleProgress, sex],
   );
   const bodyPath = useMemo(
-    () => humanBodyPath(sex, appearance.bodyMass, boundedMuscle),
-    [appearance.bodyMass, boundedMuscle, sex],
+    () => bodySilhouettePath(geometry),
+    [geometry],
   );
+  const renderedWidth = Math.round(BODY_WIDTH * appearance.heightScale);
   const renderedHeight = Math.round(BODY_HEIGHT * appearance.heightScale);
+  const fillBoundary = Math.max(0, Math.min(1, 1 - renderedProgress));
+  const transparentBoundary = Math.max(0, fillBoundary - 0.001);
+  const hasVisibleFill = renderedProgress > 0.0005;
+  const hasFullFill = renderedProgress >= 0.9995;
 
   return (
     <View
@@ -450,39 +487,58 @@ export function BodyProgressAvatar({
     >
       <Svg
         pointerEvents="none"
-        width={BODY_WIDTH}
+        width={renderedWidth}
         height={renderedHeight}
         viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
       >
         <Defs>
-          <ClipPath id={clipId}>
-            <Path d={bodyPath} />
-          </ClipPath>
+          <LinearGradient id={gradientId} x1={0} y1={0} x2={0} y2={1}>
+            <Stop
+              offset={0}
+              stopColor={GOAL_COMPLETE_COLOR}
+              stopOpacity={hasFullFill ? 1 : 0}
+            />
+            <Stop
+              offset={transparentBoundary}
+              stopColor={GOAL_COMPLETE_COLOR}
+              stopOpacity={hasFullFill ? 1 : 0}
+            />
+            <Stop
+              offset={fillBoundary}
+              stopColor={GOAL_COMPLETE_COLOR}
+              stopOpacity={hasVisibleFill ? 1 : 0}
+            />
+            <Stop
+              offset={1}
+              stopColor={GOAL_COMPLETE_COLOR}
+              stopOpacity={hasVisibleFill ? 1 : 0}
+            />
+          </LinearGradient>
         </Defs>
-        <AnimatedRect
-          clipPath={`url(#${clipId})`}
-          fill={GOAL_COMPLETE_COLOR}
-          height={fillHeight}
-          width={VIEWBOX_WIDTH}
-          x={0}
-          y={fillTop}
+        <Path
+          d={bodyPath}
+          fill={`url(#${gradientId})`}
+          stroke={colors.ink}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={3.6}
         />
-        <BodyDetails
-          bodyPath={bodyPath}
+        <NerdAccessories
           color={colors.ink}
+          geometry={geometry}
           mindTier={mindTier}
-          muscleProgress={boundedMuscle}
-          muscleTier={appearance.muscleTier}
-          variant={sex}
         />
       </Svg>
       <View
         pointerEvents="none"
-        style={[styles.percentPill, { backgroundColor: colors.card, borderColor: colors.border }]}
+        style={[
+          styles.percentPill,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
       >
-        <Animated.Text style={[styles.percent, { color: colors.ink }]}>
+        <Text translate={false} style={[styles.percent, { color: colors.ink }]}>
           {percent}%
-        </Animated.Text>
+        </Text>
       </View>
     </View>
   );
@@ -491,7 +547,7 @@ export function BodyProgressAvatar({
 const styles = StyleSheet.create({
   frame: {
     width: 164,
-    height: 282,
+    height: 302,
     alignItems: "center",
     justifyContent: "center",
   },

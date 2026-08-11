@@ -1,4 +1,5 @@
 import { AppState, MetricDefinition } from "@/src/types";
+import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import {
   isBloodPressureDiastolic,
   isBloodPressureSystolic,
@@ -184,12 +185,24 @@ export function upgradeStateV21(
         ? upgradeMetricList(state.group.metricConfiguration, defaults)
         : state.group.metricConfiguration,
     };
-    return repairOrphanedGroupMetrics({
+    const repaired = repairOrphanedGroupMetrics({
       ...state,
       metrics,
       groups: groups.map((item) => (item.id === group.id ? group : item)),
       group,
     });
+    return sourceVersion >= 24
+      ? repaired
+      : {
+          ...repaired,
+          version: 24,
+          entries: reconcileImportedHealthEntries(
+            repaired.entries,
+            repaired.metrics,
+            repaired.settings.healthSync.sourcePreferences,
+            repaired.currentUserId,
+          ),
+        };
   }
   const metrics = upgradeMetricList(state.metrics, defaults);
   const withTodo =
@@ -217,9 +230,9 @@ export function upgradeStateV21(
       ? upgradeMetricList(state.group.metricConfiguration, defaults)
       : state.group.metricConfiguration,
   };
-  return repairOrphanedGroupMetrics({
+  const repaired = repairOrphanedGroupMetrics({
     ...state,
-    version: 23,
+    version: 24,
     metrics: withTodo,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
     group,
@@ -230,4 +243,13 @@ export function upgradeStateV21(
         : {}),
     },
   });
+  return {
+    ...repaired,
+    entries: reconcileImportedHealthEntries(
+      repaired.entries,
+      repaired.metrics,
+      repaired.settings.healthSync.sourcePreferences,
+      repaired.currentUserId,
+    ),
+  };
 }

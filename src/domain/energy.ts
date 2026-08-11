@@ -26,11 +26,21 @@ function bounded(value: number, fallback: number, minimum: number, maximum: numb
 export function normalizeEnergyProfile(profile: EnergyProfile): EnergyProfile {
   const weightKg = bounded(profile.weightKg, 70, 20, 500);
   const activityOverride = profile.dailyActivityCaloriesOverride;
+  const bodyFatPercent = profile.bodyFatPercent;
+  const leanBodyMassKg = profile.leanBodyMassKg;
   return {
     ...profile,
     age: Math.round(bounded(profile.age, 30, 13, 120)),
     heightCm: bounded(profile.heightCm, 170, 80, 260),
     weightKg,
+    bodyFatPercent:
+      bodyFatPercent === undefined
+        ? undefined
+        : bounded(bodyFatPercent, 20, 1, 75),
+    leanBodyMassKg:
+      leanBodyMassKg === undefined
+        ? undefined
+        : bounded(leanBodyMassKg, Math.min(55, weightKg), 10, weightKg),
     startingWeightKg:
       profile.startingWeightKg === undefined
         ? undefined

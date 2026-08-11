@@ -319,7 +319,9 @@ export default function StatusPage() {
         <Card style={styles.statusCard}>
           <View style={styles.personWrap}>
             <BodyProgressAvatar
+              bodyFatPercent={avatarProgression.currentBodyFatPercent}
               heightCm={state.settings.energyProfile.heightCm}
+              leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
               mindTier={avatarProgression.mindTier}
               muscleProgress={avatarProgression.muscleProgress}
               progress={summary.progress}

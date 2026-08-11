@@ -10,14 +10,15 @@ const {
 const NATIVE_SOURCES = [
   "HabHubNativeModule.kt",
   "HabHubNativePackage.kt",
+  "HabHubNotificationsService.kt",
   "HabHubWidgetConfigActivity.kt",
   "HabHubWidgetProvider.kt",
 ];
 
 const RESOURCE_FILES = [
   ["drawable", "habhub_widget_background.xml"],
+  ["drawable", "habhub_widget_background_complete.xml"],
   ["layout", "habhub_widget.xml"],
-  ["layout", "habhub_widget_cell.xml"],
   ["values", "habhub_widgets.xml"],
   ["values-ar", "habhub_widgets.xml"],
   ["values-de", "habhub_widgets.xml"],
@@ -98,12 +99,40 @@ function withNativeManifest(config, packageName) {
       },
     });
 
+    const notificationService = `${packageName}.HabHubNotificationsService`;
     const providerNames = new Set(
       PROVIDERS.map(([className]) => `${packageName}.${className}`),
     );
     application.receiver = (application.receiver ?? []).filter(
-      (receiver) => !providerNames.has(receiver.$?.["android:name"]),
+      (receiver) =>
+        receiver.$?.["android:name"] !== notificationService &&
+        !providerNames.has(receiver.$?.["android:name"]),
     );
+    // expo-notifications resolves one app-local receiver when it creates its
+    // category action PendingIntents. This subclass keeps Expo's normal
+    // delivery path but updates the workout row synchronously before Android's
+    // deferred JS background job runs, which is important while the phone is
+    // locked or in Doze.
+    application.receiver.unshift({
+      $: {
+        "android:name": notificationService,
+        "android:enabled": "true",
+        "android:exported": "false",
+      },
+      "intent-filter": [
+        {
+          $: { "android:priority": "1000" },
+          action: [
+            {
+              $: {
+                "android:name":
+                  "expo.modules.notifications.NOTIFICATION_EVENT",
+              },
+            },
+          ],
+        },
+      ],
+    });
     PROVIDERS.forEach(([className, infoResource]) => {
       application.receiver.push(
         appWidgetReceiver(packageName, className, infoResource),

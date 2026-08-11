@@ -15,7 +15,7 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { useLocale } from "@/src/i18n";
+import { useLocale, useTranslation } from "@/src/i18n";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -171,6 +171,7 @@ if (
 function Insights() {
   const { state, updateSettings } = useApp();
   const locale = useLocale();
+  const t = useTranslation();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const today = dateKey();
@@ -469,6 +470,11 @@ function Insights() {
     });
   }
 
+  const selectGridDate = useCallback(
+    (day: string) => setHistoryAnchor(day),
+    [setHistoryAnchor],
+  );
+
   function trackedProgress(day: string) {
     const summary = trackedGoalSummary(state, state.currentUserId, day);
     return summary.total ? summary.met / summary.total : 0;
@@ -606,6 +612,7 @@ function Insights() {
         onModeChange={setProgressMode}
         onRangeChange={setHistoryRange}
         onOpenDay={openDay}
+        onSelectDate={selectGridDate}
         onOpenEditor={beginEditing}
         editing={editing}
         onDoneEditing={finishEditing}
@@ -666,13 +673,24 @@ function Insights() {
             </Pressable>
             </View>
           ) : (
-            <Pressable
-              accessibilityLabel="Open performance"
-              onPress={() => router.push("/performance" as never)}
-              style={[styles.headerEditIcon, { borderColor: colors.border }]}
-            >
-              <Ionicons name="speedometer-outline" size={17} color={accent} />
-            </Pressable>
+            <View style={styles.headerEditActions}>
+              <Pressable
+                accessibilityLabel={t("Open recap")}
+                onPress={() =>
+                  router.navigate("/recap?scope=personal" as never)
+                }
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons name="sparkles-outline" size={17} color={accent} />
+              </Pressable>
+              <Pressable
+                accessibilityLabel={t("Open performance")}
+                onPress={() => router.push("/performance" as never)}
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons name="speedometer-outline" size={17} color={accent} />
+              </Pressable>
+            </View>
           )
         }
       />
@@ -1136,6 +1154,7 @@ function GoalMapProgress({
   onModeChange,
   onRangeChange,
   onOpenDay,
+  onSelectDate,
   onOpenEditor,
   editing,
   onDoneEditing,
@@ -1158,6 +1177,7 @@ function GoalMapProgress({
   onModeChange: (mode: ProgressViewMode) => void;
   onRangeChange: (range: HistoryRange) => void;
   onOpenDay: (date: string) => void;
+  onSelectDate: (date: string) => void;
   onOpenEditor: () => void;
   editing: boolean;
   onDoneEditing: () => void;
@@ -1171,6 +1191,7 @@ function GoalMapProgress({
   orderedIds: string[];
 }) {
   const locale = useLocale();
+  const t = useTranslation();
   const { updateSettings } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -1184,11 +1205,16 @@ function GoalMapProgress({
     state.settings.progressGridDateNavigatorCollapsed !== true;
   const [controlsOpen, setControlsOpen] = useState(false);
   const visibleMetrics = metrics;
+  const visibleMetricById = useMemo(
+    () => new Map(visibleMetrics.map((metric) => [metric.id, metric])),
+    [visibleMetrics],
+  );
+  const pinnedIdSet = useMemo(() => new Set(pinnedIds), [pinnedIds]);
   const trackedSelected = selectedIds.includes(TRACKED);
   const gridItemIds = orderedIds.filter(
     (id) =>
       (id === TRACKED && trackedSelected) ||
-      visibleMetrics.some((metric) => metric.id === id),
+      visibleMetricById.has(id),
   );
   const dates = useMemo(
     () =>
@@ -1278,7 +1304,16 @@ function GoalMapProgress({
                 />
               </Pressable>
               <Pressable
-                accessibilityLabel="Open performance"
+                accessibilityLabel={t("Open recap")}
+                onPress={() =>
+                  router.navigate("/recap?scope=personal" as never)
+                }
+                style={[styles.headerEditIcon, { borderColor: colors.border }]}
+              >
+                <Ionicons name="sparkles-outline" size={17} color={accent} />
+              </Pressable>
+              <Pressable
+                accessibilityLabel={t("Open performance")}
                 onPress={() => router.push("/performance" as never)}
                 style={[styles.headerEditIcon, { borderColor: colors.border }]}
               >
@@ -1477,7 +1512,7 @@ function GoalMapProgress({
                     <Ionicons name="flag" size={13} color={accent} />
                   </>
                 )}
-                {pinnedIds.includes(TRACKED) && !editing ? (
+                {pinnedIdSet.has(TRACKED) && !editing ? (
                   <Ionicons
                     accessibilityLabel="Pinned"
                     name="pin"
@@ -1489,7 +1524,7 @@ function GoalMapProgress({
                   <View style={styles.cardEditActions}>
                     <Pressable
                       accessibilityLabel={
-                        pinnedIds.includes(TRACKED)
+                        pinnedIdSet.has(TRACKED)
                           ? "Unpin tracked goals"
                           : "Pin tracked goals"
                       }
@@ -1501,9 +1536,9 @@ function GoalMapProgress({
                       hitSlop={7}
                     >
                       <Ionicons
-                        name={pinnedIds.includes(TRACKED) ? "pin" : "pin-outline"}
+                        name={pinnedIdSet.has(TRACKED) ? "pin" : "pin-outline"}
                         size={15}
-                        color={pinnedIds.includes(TRACKED) ? palette.amber : accent}
+                        color={pinnedIdSet.has(TRACKED) ? palette.amber : accent}
                       />
                     </Pressable>
                     <Pressable
@@ -1524,15 +1559,15 @@ function GoalMapProgress({
                 dates={dates}
                 range={range}
                 compact={compact}
-                onSelect={onOpenDay}
+                selectedDate={anchor}
+                onSelect={editing ? undefined : onSelectDate}
+                onLongPress={editing ? undefined : onOpenEditor}
                 model={trackedModel}
               />
             </Card>
           </MapReorderCard>
         ) : (() => {
-          const metric = visibleMetrics.find(
-            (candidate) => candidate.id === itemId,
-          );
+          const metric = visibleMetricById.get(itemId);
           if (!metric) return null;
           const heatmapModel = cachedGoalHeatmapModel(
             state,
@@ -1702,7 +1737,7 @@ function GoalMapProgress({
                       ) : null}
                     </>
                   )}
-                  {pinnedIds.includes(metric.id) && !editing ? (
+                  {pinnedIdSet.has(metric.id) && !editing ? (
                     <Ionicons
                       accessibilityLabel="Pinned"
                       name="pin"
@@ -1736,7 +1771,7 @@ function GoalMapProgress({
                       ) : null}
                       <Pressable
                         accessibilityLabel={
-                          pinnedIds.includes(metric.id)
+                            pinnedIdSet.has(metric.id)
                             ? `Unpin ${metric.name}`
                             : `Pin ${metric.name}`
                         }
@@ -1748,9 +1783,9 @@ function GoalMapProgress({
                         hitSlop={7}
                       >
                         <Ionicons
-                          name={pinnedIds.includes(metric.id) ? "pin" : "pin-outline"}
+                          name={pinnedIdSet.has(metric.id) ? "pin" : "pin-outline"}
                           size={15}
-                          color={pinnedIds.includes(metric.id) ? palette.amber : accent}
+                          color={pinnedIdSet.has(metric.id) ? palette.amber : accent}
                         />
                       </Pressable>
                       <Pressable
@@ -1772,7 +1807,9 @@ function GoalMapProgress({
                   dates={dates}
                   range={range}
                   compact={compact}
-                  onSelect={onOpenDay}
+                  selectedDate={anchor}
+                  onSelect={editing ? undefined : onSelectDate}
+                  onLongPress={editing ? undefined : onOpenEditor}
                   model={heatmapModel}
                   completionOnly={
                     metricVisualization(metric).progressGrid === "completion"

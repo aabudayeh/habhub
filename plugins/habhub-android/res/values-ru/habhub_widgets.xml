@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="habhub_widget_description">Прогресс за сегодня и история трекера</string>
+  <string name="habhub_widget_description">Цели на сегодня и прогресс трекера</string>
   <string name="habhub_widget_open_to_update">Откройте HabHub для обновления</string>
   <string name="habhub_widget_featured_progress">Главный прогресс</string>
   <string name="habhub_widget_choose">Выберите содержимое виджета</string>
   <string name="habhub_widget_tracker">Трекер</string>
-  <string name="habhub_widget_history">История</string>
-  <string name="habhub_widget_week">Неделя</string>
-  <string name="habhub_widget_month">Месяц</string>
-  <string name="habhub_widget_year">Год</string>
   <string name="habhub_widget_add">Добавить виджет</string>
 </resources>

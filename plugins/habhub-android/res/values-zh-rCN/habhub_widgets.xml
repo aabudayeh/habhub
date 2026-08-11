@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="habhub_widget_description">今日进度与追踪记录</string>
+  <string name="habhub_widget_description">今日目标与追踪进度</string>
   <string name="habhub_widget_open_to_update">打开 HabHub 以更新</string>
   <string name="habhub_widget_featured_progress">重点进度</string>
   <string name="habhub_widget_choose">选择此小组件显示的内容</string>
   <string name="habhub_widget_tracker">追踪项目</string>
-  <string name="habhub_widget_history">历史</string>
-  <string name="habhub_widget_week">周</string>
-  <string name="habhub_widget_month">月</string>
-  <string name="habhub_widget_year">年</string>
   <string name="habhub_widget_add">添加小组件</string>
 </resources>

@@ -1,7 +1,14 @@
 import { dateKey } from '@/src/domain/date';
+import {
+  deduplicateHealthImportRecords,
+  healthRecordsAreEquivalent,
+  healthSourceEnabled,
+  healthSourceId,
+  healthSourcePriority,
+} from '@/src/domain/healthDedup';
 import { metricEntryKey } from '@/src/domain/metricEntry';
 import { HealthImportRecord } from '@/src/health/types';
-import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
+import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
 
 const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   steps: ['steps'],
@@ -93,15 +100,36 @@ export function mapHealthRecordsToEntries(
   visibility: Visibility = 'group',
   metrics?:MetricDefinition[],
   profileOrWeight: StepActivityProfile | number = 70,
+  sourcePreferences?: Record<string, HealthSourcePreference>,
 ) {
   const entries: MetricEntry[] = [];
-  for (const record of normalizeStepRecords(records)) {
+  const entryById = new Map<string, MetricEntry>();
+  const directByType = new Map<HealthDataType, MetricDefinition[]>();
+  const compoundByType = new Map<HealthDataType, MetricDefinition[]>();
+  for (const metric of metrics ?? []) {
+    if (metric.healthMapping) {
+      const direct = directByType.get(metric.healthMapping.dataType);
+      if (direct) direct.push(metric);
+      else directByType.set(metric.healthMapping.dataType, [metric]);
+    }
+    for (const type of new Set(
+      (metric.submetrics ?? []).flatMap((field) =>
+        field.healthMapping ? [field.healthMapping.dataType] : [],
+      ),
+    )) {
+      const compounds = compoundByType.get(type);
+      if (compounds) compounds.push(metric);
+      else compoundByType.set(type, [metric]);
+    }
+  }
+  for (const record of deduplicateHealthImportRecords(records, sourcePreferences)) {
     if(metrics){
-      for(const metric of metrics.filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
+      for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
-        entries.push(entryFor(record,userId,metric.id,value,visibility,record.nutrition));
+        const entry=entryFor(record,userId,metric.id,value,visibility,record.nutrition);
+        entries.push(entry);entryById.set(entry.id,entry);
       }
-      for(const metric of metrics.filter((item)=>
+      for(const metric of (compoundByType.get(record.type) ?? []).filter((item)=>
         item.submetrics?.some((field)=>healthMappingMatchesRecord(field.healthMapping,record))
       )){
         const submetricValues=Object.fromEntries(
@@ -120,7 +148,7 @@ export function mapHealthRecordsToEntries(
         );
         if(!Object.keys(submetricValues).length)continue;
         const id=importedId(record,metric.id);
-        const existing=entries.find((entry)=>entry.id===id);
+        const existing=entryById.get(id);
         if(existing){
           existing.submetricValues={
             ...(existing.submetricValues??{}),
@@ -141,7 +169,7 @@ export function mapHealthRecordsToEntries(
           record.nutrition,
         );
         entry.submetricValues=submetricValues;
-        entries.push(entry);
+        entries.push(entry);entryById.set(entry.id,entry);
       }
       continue;
     }
@@ -417,14 +445,17 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
   if(!stepIds.length||!fallback.length)return entries;
-  const days=[...new Set(entries.filter((entry)=>stepIds.includes(entry.metricId)).map((entry)=>entry.localDate))];
+  const stepIdSet=new Set(stepIds);
+  const entriesByDay=new Map<string,MetricEntry[]>();
+  for(const entry of entries){const dayEntries=entriesByDay.get(entry.localDate);if(dayEntries)dayEntries.push(entry);else entriesByDay.set(entry.localDate,[entry]);}
+  const days=[...entriesByDay].filter(([,dayEntries])=>dayEntries.some((entry)=>stepIdSet.has(entry.metricId))).map(([day])=>day);
   const derived:MetricEntry[]=[];
   for(const day of days){
-    const dayEntries=entries.filter((entry)=>entry.localDate===day);
-    const steps=Math.max(0,...dayEntries.filter((entry)=>stepIds.includes(entry.metricId)).map((entry)=>Number(entry.value||0)));
+    const dayEntries=entriesByDay.get(day)??[];
+    const steps=Math.max(0,...dayEntries.filter((entry)=>stepIdSet.has(entry.metricId)).map((entry)=>Number(entry.value||0)));
     if(steps<=0)continue;
     const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
-    const stepEntry=dayEntries.find((entry)=>stepIds.includes(entry.metricId))!;
+    const stepEntry=dayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
     const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;
@@ -442,22 +473,188 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
   return [...entries,...derived];
 }
 
-function normalizeStepRecords(records: HealthImportRecord[]) {
-  const nonSteps=records.filter((record)=>record.type!=='steps');
-  const grouped=new Map<string,HealthImportRecord[]>();
-  for(const record of records.filter((item)=>item.type==='steps')){
-    const day=dateKey(new Date(record.endTime||record.startTime));const source=(record.origin||'Health Connect').toLowerCase();const key=`${day}|${source}`;
-    grouped.set(key,[...(grouped.get(key)??[]),record]);
+function metricHealthType(metric: MetricDefinition | undefined) {
+  return (
+    metric?.healthMapping?.dataType ??
+    metric?.submetrics?.find((field) => field.healthMapping)?.healthMapping
+      ?.dataType
+  );
+}
+
+function entryAsHealthRecord(
+  entry: MetricEntry,
+  type: HealthDataType,
+): HealthImportRecord {
+  const origin = entry.sourceOrigin ?? entry.sourceProvider ?? "Health system";
+  return {
+    id: entry.id,
+    provider: entry.sourceProvider ?? "health_connect",
+    type,
+    startTime: entry.recordedAt,
+    endTime: entry.recordedAt,
+    value:
+      typeof entry.value === "string"
+        ? Number(entry.value) || 0
+        : entry.value,
+    unit: "",
+    origin,
+    label: entry.label,
+    nutrition: entry.nutrition,
+    updatedAt: entry.sourceUpdatedAt,
+    measurements:
+      type === "blood_pressure"
+        ? {
+            systolic: entry.submetricValues?.systolic,
+            diastolic: entry.submetricValues?.diastolic,
+          }
+        : undefined,
+  };
+}
+
+function legacyIntervalMirror(
+  left: MetricEntry,
+  right: MetricEntry,
+  type: HealthDataType,
+) {
+  if (!["active_energy", "workouts", "sleep"].includes(type)) return false;
+  if (left.localDate !== right.localDate) return false;
+  const leftSource = healthSourceId(left.sourceOrigin);
+  const rightSource = healthSourceId(right.sourceOrigin);
+  if (leftSource === rightSource) return false;
+  const systemSource = (source: string) =>
+    source === "health-connect-device" ||
+    source === "apple-health" ||
+    source === "health-system";
+  if (!systemSource(leftSource) && !systemSource(rightSource)) return false;
+  const timeGap = Math.abs(
+    new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime(),
+  );
+  if (!Number.isFinite(timeGap) || timeGap > 2 * 60 * 60 * 1000) return false;
+  const a = Number(left.value || 0);
+  const b = Number(right.value || 0);
+  if (
+    !Number.isFinite(a) ||
+    !Number.isFinite(b) ||
+    Math.abs(a - b) > Math.max(2, Math.max(Math.abs(a), Math.abs(b)) * 0.08)
+  )
+    return false;
+  const clean = (value: string | undefined) =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  const leftLabel = clean(left.label);
+  const rightLabel = clean(right.label);
+  // A missing label is not enough evidence to merge two real workouts. Sleep
+  // and unlabeled daily energy may safely use the strong system-source/value
+  // match; workouts require a matching activity description.
+  if (type === "workouts" && (!leftLabel || !rightLabel)) return false;
+  return (
+    !leftLabel ||
+    !rightLabel ||
+    leftLabel === rightLabel ||
+    leftLabel.includes(rightLabel) ||
+    rightLabel.includes(leftLabel)
+  );
+}
+
+/**
+ * Removes legacy mirrored rows and disabled sources without touching manual
+ * data. Callers can pass a refreshed slice so normal imports stay bounded.
+ */
+export function reconcileImportedHealthEntries(
+  entries: MetricEntry[],
+  metrics: MetricDefinition[],
+  sourcePreferences?: Record<string, HealthSourcePreference>,
+  ownerUserId?: string,
+) {
+  const metricById = new Map(metrics.map((metric) => [metric.id, metric]));
+  const untouched: MetricEntry[] = [];
+  const groups = new Map<string, MetricEntry[]>();
+  for (const entry of entries) {
+    const healthType = metricHealthType(metricById.get(entry.metricId));
+    const healthOwned = Boolean(
+      entry.sourceProvider &&
+        healthType &&
+        (!ownerUserId || entry.userId === ownerUserId),
+    );
+    if (!healthOwned) {
+      untouched.push(entry);
+      continue;
+    }
+    if (!healthSourceEnabled(entry.sourceOrigin, sourcePreferences)) continue;
+    const key = `${entry.userId}\u0000${entry.metricId}\u0000${entry.localDate}`;
+    const group = groups.get(key);
+    if (group) group.push(entry);
+    else groups.set(key, [entry]);
   }
-  const byDay=new Map<string,{origin:string;records:HealthImportRecord[];total:number}[]>();
-  for(const [key,items] of grouped){const [day,origin]=key.split('|');const contains=(outer:HealthImportRecord,inner:HealthImportRecord)=>outer!==inner&&outer.startTime<=inner.startTime&&outer.endTime>=inner.endTime;const aggregates=items.filter((item)=>items.filter((other)=>contains(item,other)).length>=2);const atomic=items.filter((item)=>!items.some((other)=>contains(item,other)));const aggregateTotal=Math.max(0,...aggregates.map((item)=>Number(item.value||0)));const intervalTotal=atomic.reduce((sum,item)=>sum+Number(item.value||0),0);const group={origin,records:items,total:Math.max(aggregateTotal,intervalTotal)};byDay.set(day,[...(byDay.get(day)??[]),group]);}
-  const daily:HealthImportRecord[]=[];
-  for(const [day,sources] of byDay){
-    const priority=(source:string)=>source.includes('samsung')||source.includes('shealth')?0:source.includes('healthconnect.phone')||source.includes('com.google.android.apps.healthdata')?9:2;
-    const chosen=[...sources].sort((a,b)=>priority(a.origin)-priority(b.origin)||b.total-a.total)[0];if(!chosen||chosen.total<=0)continue;
-    const ordered=[...chosen.records].sort((a,b)=>a.startTime.localeCompare(b.startTime));const first=ordered[0];daily.push({...first,id:`daily:${day}:${chosen.origin}`,value:Math.round(chosen.total),startTime:first.startTime,endTime:ordered.reduce((latest,item)=>item.endTime>latest?item.endTime:latest,first.endTime)});
+
+  const reconciled: MetricEntry[] = [];
+  for (const group of groups.values()) {
+    const healthType = metricHealthType(metricById.get(group[0].metricId));
+    if (!healthType) {
+      reconciled.push(...group);
+      continue;
+    }
+    if (healthType === "steps") {
+      const bySource = new Map<string, MetricEntry[]>();
+      for (const entry of group) {
+        const source = healthSourceId(entry.sourceOrigin);
+        const items = bySource.get(source);
+        if (items) items.push(entry);
+        else bySource.set(source, [entry]);
+      }
+      const sourceTotals = [...bySource.values()].map((items) => {
+        const hasDailyAggregate = items.some(
+          (entry) =>
+            entry.sourceRecordId?.startsWith("daily:") ||
+            entry.id.includes(":daily:"),
+        );
+        const total = hasDailyAggregate
+          ? Math.max(...items.map((entry) => Number(entry.value || 0)))
+          : items.reduce((sum, entry) => sum + Number(entry.value || 0), 0);
+        const template = [...items].sort((a, b) =>
+          b.recordedAt.localeCompare(a.recordedAt),
+        )[0];
+        return { template, total };
+      });
+      sourceTotals.sort(
+        (a, b) =>
+          healthSourcePriority(a.template.sourceOrigin, "steps") -
+            healthSourcePriority(b.template.sourceOrigin, "steps") ||
+          b.total - a.total,
+      );
+      const selected = sourceTotals[0];
+      if (selected?.total > 0)
+        reconciled.push({
+          ...selected.template,
+          value: Math.round(selected.total),
+        });
+      continue;
+    }
+
+    const sorted = [...group].sort(
+      (a, b) =>
+        healthSourcePriority(a.sourceOrigin, healthType) -
+          healthSourcePriority(b.sourceOrigin, healthType) ||
+        b.recordedAt.localeCompare(a.recordedAt),
+    );
+    const keep: MetricEntry[] = [];
+    for (const entry of sorted) {
+      const record = entryAsHealthRecord(entry, healthType);
+      if (
+        !keep.some((candidate) =>
+          healthRecordsAreEquivalent(
+            entryAsHealthRecord(candidate, healthType),
+            record,
+          ) || legacyIntervalMirror(candidate, entry, healthType),
+        )
+      )
+        keep.push(entry);
+    }
+    reconciled.push(...keep);
   }
-  return [...nonSteps,...daily];
+  return [...untouched, ...reconciled];
 }
 
 export function mergeHealthEntries(
@@ -489,6 +686,11 @@ export function mergeHealthEntries(
 
 export function friendlyHealthOrigin(origin: string) {
   const normalized = origin.toLowerCase();
+  if (
+    normalized.includes('healthconnect.phone') ||
+    normalized.includes('com.google.android.apps.healthdata') ||
+    normalized === 'health connect'
+  ) return 'Your phone';
   if (normalized.includes('myfitnesspal')) return 'MyFitnessPal';
   if (normalized.includes('shealth') || normalized.includes('samsung')) return 'Samsung Health';
   if (normalized.includes('google') && normalized.includes('fitness')) return 'Google Fit';

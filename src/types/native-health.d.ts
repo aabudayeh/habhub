@@ -1,4 +1,11 @@
 declare module '@kingstinct/react-native-healthkit' {
+  export type HealthKitSource = {
+    readonly name: string;
+    readonly bundleIdentifier: string;
+    toJSON(key?: string): { name: string; bundleIdentifier: string };
+    equals(other: unknown): boolean;
+    dispose(): void;
+  };
   export function isHealthDataAvailableAsync(): Promise<boolean>;
   export function requestAuthorization(request: { toRead: string[]; toShare?: string[] }): Promise<boolean>;
   export function queryStatisticsCollectionForQuantity(
@@ -6,16 +13,17 @@ declare module '@kingstinct/react-native-healthkit' {
     statistics: string[],
     anchorDate: Date,
     interval: { day?: number; hour?: number },
-    options: { unit?: string; filter?: { date?: { startDate?: Date; endDate?: Date; strictStartDate?: boolean; strictEndDate?: boolean } } },
+    options: { unit?: string; filter?: { date?: { startDate?: Date; endDate?: Date; strictStartDate?: boolean; strictEndDate?: boolean }; sources?: HealthKitSource[] } },
   ): Promise<Record<string, unknown>[]>;
   export function queryQuantitySamples(
     identifier: string,
-    options: { unit?: string; limit: number; ascending?: boolean; filter?: { date?: { startDate?: Date; endDate?: Date } } },
+    options: { unit?: string; limit: number; ascending?: boolean; filter?: { date?: { startDate?: Date; endDate?: Date }; sources?: HealthKitSource[] } },
   ): Promise<Record<string, unknown>[]>;
+  export function querySources(identifier: string, filter?: { date?: { startDate?: Date; endDate?: Date } }): Promise<HealthKitSource[]>;
   export function queryWorkoutSamples(options: {
     limit: number;
     ascending?: boolean;
-    filter?: { date?: { startDate?: Date; endDate?: Date } };
+    filter?: { date?: { startDate?: Date; endDate?: Date }; sources?: HealthKitSource[] };
   }): Promise<Record<string, unknown>[]>;
 }
 
@@ -25,6 +33,16 @@ declare module 'react-native-health-connect' {
   export function requestPermission(permissions: Permission[]): Promise<Permission[]>;
   export function getGrantedPermissions(): Promise<Permission[]>;
   export function readRecords(recordType: string, options: Record<string, unknown>): Promise<{ records: Record<string, unknown>[]; pageToken?: string }>;
+  export function aggregateGroupByPeriod(request: {
+    recordType: 'Steps';
+    timeRangeFilter: Record<string, unknown>;
+    timeRangeSlicer: { period: 'DAYS'; length: number };
+    dataOriginFilter?: string[];
+  }): Promise<{
+    result: { COUNT_TOTAL?: number; dataOrigins?: string[] };
+    startTime: string;
+    endTime: string;
+  }[]>;
   export function openHealthConnectSettings(): Promise<void>;
 }
 

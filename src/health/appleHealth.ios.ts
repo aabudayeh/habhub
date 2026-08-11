@@ -1,6 +1,7 @@
 import {
   isHealthDataAvailableAsync,
   queryQuantitySamples,
+  querySources,
   queryStatisticsCollectionForQuantity,
   queryWorkoutSamples,
   requestAuthorization,
@@ -9,8 +10,12 @@ import { CategoryTypes } from '@kingstinct/react-native-healthkit/modules';
 import { Linking } from 'react-native';
 
 import { appleWorkoutExercise, exerciseFromActivityName } from '@/src/domain/exerciseCatalog';
+import { healthSourceEnabled } from '@/src/domain/healthDedup';
 import { HealthAdapter, HealthImportRecord } from '@/src/health/types';
 import { HealthDataType, NutritionDetails } from '@/src/types';
+
+type AppleSource = Awaited<ReturnType<typeof querySources>>[number];
+type AppleSourceSelection = { sources?: AppleSource[]; disabled: boolean };
 
 type QuantityConfig = {
   identifier: string;
@@ -46,9 +51,10 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier: 'HKQuantityTypeIdentifierBloodGlucose', type: 'blood_glucose', unit: 'mg/dL' },
 ];
 
-async function readCategories(type:HealthDataType,identifier:'HKCategoryTypeIdentifierSleepAnalysis'|'HKCategoryTypeIdentifierMenstrualFlow',from:Date,to:Date):Promise<HealthImportRecord[]>{
-  const samples=await CategoryTypes.queryCategorySamples(identifier,{limit:0,ascending:true,filter:{date:{startDate:from,endDate:to}}});
-  return samples.flatMap((sample)=>{const start=asDate(sample.startDate,from);const end=asDate(sample.endDate,start);const numeric=Number(sample.value);if(type==='sleep'&&![1,3,4,5].includes(numeric))return[];if(type==='menstruation'&&numeric===5)return[];const durationMinutes=Math.max(0,(end.getTime()-start.getTime())/60000);return[{id:String(sample.uuid??`${identifier}:${start.toISOString()}`),provider:'apple_health' as const,type,startTime:start.toISOString(),endTime:end.toISOString(),value:type==='sleep'?durationMinutes/60:true,unit:type==='sleep'?'hr':'',origin:sourceName(sample),measurements:type==='sleep'?{durationMinutes}:undefined}];});
+async function readCategories(type:HealthDataType,identifier:'HKCategoryTypeIdentifierSleepAnalysis'|'HKCategoryTypeIdentifierMenstrualFlow',from:Date,to:Date,selection:AppleSourceSelection):Promise<HealthImportRecord[]>{
+  if(selection.disabled)return[];
+  const samples=await CategoryTypes.queryCategorySamples(identifier,{limit:0,ascending:true,filter:{date:{startDate:from,endDate:to},...(selection.sources?{sources:selection.sources}:{})}});
+  return samples.flatMap((sample)=>{const start=asDate(sample.startDate,from);const end=asDate(sample.endDate,start);const numeric=Number(sample.value);if(type==='sleep'&&![1,3,4,5].includes(numeric))return[];if(type==='menstruation'&&numeric===5)return[];const durationMinutes=Math.max(0,(end.getTime()-start.getTime())/60000);return[{id:String(sample.uuid??`${identifier}:${start.toISOString()}`),provider:'apple_health' as const,type,startTime:start.toISOString(),endTime:end.toISOString(),value:type==='sleep'?durationMinutes/60:true,unit:type==='sleep'?'hr':'',origin:sourceName(sample),sourceOrigins:sourceNames(sample),measurements:type==='sleep'?{durationMinutes}:undefined}];});
 }
 
 function asDate(value: unknown, fallback: Date) {
@@ -63,18 +69,25 @@ function nestedNumber(value: unknown, ...keys: string[]) {
 }
 
 function sourceName(value: Record<string, unknown>) {
-  const sources = Array.isArray(value.sources) ? value.sources : [];
-  const source = (sources[0] ?? (value.sourceRevision as Record<string, unknown> | undefined)?.source) as Record<string, unknown> | undefined;
-  return String(source?.bundleIdentifier ?? source?.name ?? 'Apple Health');
+  return sourceNames(value)[0] ?? 'Apple Health';
 }
 
-async function readQuantity(config: QuantityConfig, from: Date, to: Date): Promise<HealthImportRecord[]> {
+function sourceNames(value: Record<string, unknown>) {
+  const sources = Array.isArray(value.sources) ? value.sources : [];
+  const revisionSource = (value.sourceRevision as Record<string, unknown> | undefined)?.source;
+  const all = [...sources, ...(revisionSource ? [revisionSource] : [])] as Record<string, unknown>[];
+  return [...new Set(all.map((source)=>String(source?.bundleIdentifier??source?.name??'')).filter(Boolean))];
+}
+
+async function readQuantity(config: QuantityConfig, from: Date, to: Date, selection:AppleSourceSelection): Promise<HealthImportRecord[]> {
+  if(selection.disabled)return[];
+  const filter={date:{startDate:from,endDate:to},...(selection.sources?{sources:selection.sources}:{})};
   if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'heart_rate') {
     const samples = await queryQuantitySamples(config.identifier, {
       limit: 0,
       ascending: true,
       unit: config.unit,
-      filter: { date: { startDate: from, endDate: to } },
+      filter,
     });
     return samples.map((sample) => {
       const start = asDate(sample.startDate, from);
@@ -88,6 +101,7 @@ async function readQuantity(config: QuantityConfig, from: Date, to: Date): Promi
         value: Number(sample.quantity ?? 0),
         unit: config.unit,
         origin: sourceName(sample),
+        sourceOrigins: sourceNames(sample),
       };
     });
   }
@@ -96,7 +110,7 @@ async function readQuantity(config: QuantityConfig, from: Date, to: Date): Promi
     ['cumulativeSum'],
     from,
     { day: 1 },
-    { unit: config.unit, filter: { date: { startDate: from, endDate: to, strictStartDate: true, strictEndDate: true } } },
+    { unit: config.unit, filter: { ...filter, date: { startDate: from, endDate: to, strictStartDate: true, strictEndDate: true } } },
   );
   return buckets.flatMap((bucket) => {
     const value = nestedNumber(bucket, 'sumQuantity', 'quantity');
@@ -113,6 +127,7 @@ async function readQuantity(config: QuantityConfig, from: Date, to: Date): Promi
       value: config.type === 'nutrition' && config.nutritionField ? 0 : value,
       unit: config.unit,
       origin: sourceName(bucket),
+      sourceOrigins: sourceNames(bucket),
       nutrition,
     }];
   });
@@ -134,12 +149,23 @@ export const appleHealthAdapter: HealthAdapter = {
     if (!toRead.length) throw new Error('Choose at least one health data category.');
     await requestAuthorization({ toRead });
   },
-  read: async ({ from, to, dataTypes }) => {
-    const records = (await Promise.all(QUANTITIES.filter((item) => dataTypes.includes(item.type)).map((item) => readQuantity(item, from, to)))).flat();
-    if(dataTypes.includes('sleep'))records.push(...await readCategories('sleep','HKCategoryTypeIdentifierSleepAnalysis',from,to));
-    if(dataTypes.includes('menstruation'))records.push(...await readCategories('menstruation','HKCategoryTypeIdentifierMenstrualFlow',from,to));
+  read: async ({ from, to, dataTypes, sourcePreferences }) => {
+    const sourceCache=new Map<string,Promise<AppleSourceSelection>>();
+    const selectionFor=(identifier:string)=>{
+      const cached=sourceCache.get(identifier);if(cached)return cached;
+      const result=querySources(identifier,{date:{startDate:from,endDate:to}}).then((sources)=>{
+        const enabled=sources.filter((source)=>healthSourceEnabled(source.bundleIdentifier||source.name,sourcePreferences));
+        return {sources:enabled.length<sources.length?enabled:undefined,disabled:sources.length>0&&!enabled.length};
+      }).catch(()=>({sources:undefined,disabled:false}));
+      sourceCache.set(identifier,result);return result;
+    };
+    const records = (await Promise.all(QUANTITIES.filter((item) => dataTypes.includes(item.type)).map(async(item) => readQuantity(item, from, to,await selectionFor(item.identifier))))).flat();
+    if(dataTypes.includes('sleep'))records.push(...await readCategories('sleep','HKCategoryTypeIdentifierSleepAnalysis',from,to,await selectionFor('HKCategoryTypeIdentifierSleepAnalysis')));
+    if(dataTypes.includes('menstruation'))records.push(...await readCategories('menstruation','HKCategoryTypeIdentifierMenstrualFlow',from,to,await selectionFor('HKCategoryTypeIdentifierMenstrualFlow')));
     if (!dataTypes.includes('workouts')) return records;
-    const workouts = await queryWorkoutSamples({ limit: 0, ascending: true, filter: { date: { startDate: from, endDate: to } } });
+    const workoutSelection=await selectionFor('HKWorkoutTypeIdentifier');
+    if(workoutSelection.disabled)return records;
+    const workouts = await queryWorkoutSamples({ limit: 0, ascending: true, filter: { date: { startDate: from, endDate: to },...(workoutSelection.sources?{sources:workoutSelection.sources}:{}) } });
     return [...records, ...workouts.map((workout): HealthImportRecord => {
       const raw = workout as unknown as Record<string, unknown>;
       const start = asDate(workout.startDate, from);
@@ -157,6 +183,7 @@ export const appleHealthAdapter: HealthAdapter = {
         value: Math.max(1,(end.getTime()-start.getTime())/60000),
         unit: 'min',
         origin: sourceName(workout),
+        sourceOrigins: sourceNames(workout),
         label: activity?.name ?? (Number.isFinite(Number(nativeActivity)) ? `Workout (${nativeActivity})` : 'Workout'),
         activityKey: activity?.key,
         workoutRecordKind: 'session',

@@ -146,6 +146,44 @@ export function EnergyProfileEditor() {
               </View>
             </View>
           ))}
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.ink }]}>Body fat</Text>
+            <View style={[styles.inputWrap, { borderColor: colors.border }]}>
+              <DraftNumberInput
+                allowEmpty
+                value={profile.bodyFatPercent}
+                placeholder="—"
+                selectTextOnFocus
+                keyboardType="decimal-pad"
+                minimum={1}
+                maximum={75}
+                onCommit={(bodyFatPercent) =>
+                  updateEnergyProfile({ bodyFatPercent })
+                }
+                style={[styles.input, { color: colors.ink }]}
+              />
+              <Text translate={false} style={[styles.unit, { color: colors.muted }]}>%</Text>
+            </View>
+          </View>
+          <View style={styles.field}>
+            <Text style={[styles.label, { color: colors.ink }]}>Lean body mass</Text>
+            <View style={[styles.inputWrap, { borderColor: colors.border }]}>
+              <DraftNumberInput
+                allowEmpty
+                value={profile.leanBodyMassKg}
+                placeholder="—"
+                selectTextOnFocus
+                keyboardType="decimal-pad"
+                minimum={10}
+                maximum={profile.weightKg}
+                onCommit={(leanBodyMassKg) =>
+                  updateEnergyProfile({ leanBodyMassKg })
+                }
+                style={[styles.input, { color: colors.ink }]}
+              />
+              <Text translate={false} style={[styles.unit, { color: colors.muted }]}>kg</Text>
+            </View>
+          </View>
         </View>
         <Text style={[styles.label, { color: colors.ink }]}>
           Biological sex used by the BMR estimate

@@ -5,6 +5,10 @@ import { AppState as NativeAppState, InteractionManager } from 'react-native';
 import { dateKey } from '@/src/domain/date';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
 import { enabledHealthDataTypes, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import {
+  healthSourceId,
+  mergeHealthSourcePreferences,
+} from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
 import {
@@ -41,6 +45,11 @@ type HealthSyncContextValue = {
     | 'configuring'
     | 'error';
   sourceOrigins: string[];
+  sourceOptions: {
+    id: string;
+    origin: string;
+    enabled: boolean;
+  }[];
   connect: (options?: {
     historyDays?: 30 | 90 | 365 | 730;
     startTrackedGoalsAtFirstData?: boolean;
@@ -48,6 +57,7 @@ type HealthSyncContextValue = {
   syncNow: (reason?: 'open' | 'pull' | 'manual') => Promise<void>;
   syncHistory: () => Promise<void>;
   setSyncMode: (mode: SyncMode) => Promise<void>;
+  setSourceEnabled: (sourceId: string, enabled: boolean) => Promise<void>;
   disconnect: () => Promise<void>;
   openSettings: () => Promise<void>;
 };
@@ -267,6 +277,24 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     }, delayMs);
   }, []);
 
+  const rememberHealthSources = useCallback((records: import('@/src/health/types').HealthImportRecord[]) => {
+    const currentState = stateRef.current;
+    const currentHealth = currentState.settings.healthSync;
+    const sourcePreferences = mergeHealthSourcePreferences(
+      currentHealth.sourcePreferences,
+      records,
+    );
+    if (sourcePreferences === currentHealth.sourcePreferences)
+      return sourcePreferences;
+    const healthSync = { ...currentHealth, sourcePreferences };
+    stateRef.current = {
+      ...currentState,
+      settings: { ...currentState.settings, healthSync },
+    };
+    updateSettingsRef.current({ healthSync });
+    return sourcePreferences;
+  }, []);
+
   const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill', forceEnabled = false) => {
     if (syncingRef.current) return syncingRef.current;
     const current = stateRef.current;
@@ -329,13 +357,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             from: recentFrom,
             to: now,
             dataTypes,
+            sourcePreferences: current.settings.healthSync.sourcePreferences,
           });
+          const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
             'group',
             current.metrics,
             current.settings.energyProfile,
+            sourcePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
@@ -362,13 +393,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             from: chunkStart,
             to: chunkEnd,
             dataTypes,
+            sourcePreferences: current.settings.healthSync.sourcePreferences,
           });
+          const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
             'group',
             current.metrics,
             current.settings.energyProfile,
+            sourcePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount =
@@ -395,13 +429,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             from,
             to: new Date(),
             dataTypes,
+            sourcePreferences: current.settings.healthSync.sourcePreferences,
           });
+          const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
             'group',
             current.metrics,
             current.settings.energyProfile,
+            sourcePreferences,
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
@@ -458,7 +495,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     })();
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, saveStatus, scheduleBackfill]);
+  }, [importHealthEntries, rememberHealthSources, saveStatus, scheduleBackfill]);
   runSyncRef.current = runSync;
 
   const connect = useCallback(async (options?: {
@@ -600,6 +637,39 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     updateSettings({ healthSync: { ...current, enabled: false, backgroundAccess: false } });
     setStatus(availability?.available ? 'idle' : 'unavailable');
   }, [availability, saveStatus, updateSettings]);
+
+  const setSourceEnabled = useCallback(async (sourceId: string, enabled: boolean) => {
+    const currentState = stateRef.current;
+    const currentHealth = currentState.settings.healthSync;
+    const existing = currentHealth.sourcePreferences?.[sourceId];
+    const observedOrigin = existing?.origin ?? currentState.entries.find(
+      (entry) =>
+        entry.userId === currentState.currentUserId &&
+        entry.sourceOrigin &&
+        healthSourceId(entry.sourceOrigin) === sourceId,
+    )?.sourceOrigin;
+    if (!observedOrigin || (existing?.enabled ?? true) === enabled) return;
+    const healthSync = {
+      ...currentHealth,
+      sourcePreferences: {
+        ...currentHealth.sourcePreferences,
+        [sourceId]: { origin: observedOrigin, enabled },
+      },
+    };
+    stateRef.current = {
+      ...currentState,
+      settings: { ...currentState.settings, healthSync },
+    };
+    updateSettingsRef.current({ healthSync });
+    if (currentHealth.enabled) {
+      // Rebuild the selected window in either direction. This also recomputes
+      // OS aggregates whose stored row represented more than one writer.
+      const joinedExistingSync = Boolean(syncingRef.current);
+      await runSyncRef.current?.('history', true);
+      if (joinedExistingSync)
+        await runSyncRef.current?.('history', true);
+    }
+  }, []);
 
   useEffect(() => {
     // Cloud merges often recreate the settings object even when the actual
@@ -819,6 +889,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   const sourceOrigins = useMemo(() => [...new Set(state.entries
     .filter((entry) => entry.userId === state.currentUserId && entry.source === 'imported' && entry.sourceOrigin)
     .map((entry) => entry.sourceOrigin!))].sort(), [state.currentUserId, state.entries]);
+  const sourceOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; origin: string; enabled: boolean }>();
+    for (const preference of Object.values(
+      state.settings.healthSync.sourcePreferences ?? {},
+    )) {
+      const id = healthSourceId(preference.origin);
+      byId.set(id, { id, origin: preference.origin, enabled: preference.enabled });
+    }
+    for (const origin of sourceOrigins) {
+      const id = healthSourceId(origin);
+      if (!byId.has(id)) byId.set(id, { id, origin, enabled: true });
+    }
+    return [...byId.values()].sort((a, b) => a.origin.localeCompare(b.origin));
+  }, [sourceOrigins, state.settings.healthSync.sourcePreferences]);
 
   const value = useMemo<HealthSyncContextValue>(() => ({
     status,
@@ -828,13 +912,15 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     errorMessage: persisted.error ?? null,
     backgroundRegistration,
     sourceOrigins,
+    sourceOptions,
     connect,
     syncNow: (reason = 'manual') => runSync(reason),
     syncHistory: () => runSync('history'),
     setSyncMode,
+    setSourceEnabled,
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
-  }), [availability, backgroundRegistration, connect, disconnect, persisted, runSync, setSyncMode, sourceOrigins, status]);
+  }), [availability, backgroundRegistration, connect, disconnect, persisted, runSync, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }

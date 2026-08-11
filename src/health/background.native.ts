@@ -6,6 +6,7 @@ import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud'
 import { dateKey } from '@/src/domain/date';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
 import { enabledHealthDataTypes, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import { mergeHealthSourcePreferences } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
 import {
@@ -70,16 +71,33 @@ TaskManager.defineTask(TASK_NAME, async () => {
     const dataTypes = enabledHealthDataTypes(state.settings.healthSync.dataTypes);
     if (!dataTypes.length) return BackgroundTask.BackgroundTaskResult.Success;
     const from = startDate(status.lastSyncedAt);
-    const records = await nativeHealthAdapter.read({ from, to: new Date(), dataTypes });
+    const records = await nativeHealthAdapter.read({
+      from,
+      to: new Date(),
+      dataTypes,
+      sourcePreferences: state.settings.healthSync.sourcePreferences,
+    });
+    const sourcePreferences = mergeHealthSourcePreferences(
+      state.settings.healthSync.sourcePreferences,
+      records,
+    );
     const entries = mapHealthRecordsToEntries(
       records,
       state.currentUserId,
       'group',
       state.metrics,
       state.settings.energyProfile,
+      sourcePreferences,
     );
     const nextState = applyImportedFoodFastBreaks({
       ...state,
+      settings:
+        sourcePreferences === state.settings.healthSync.sourcePreferences
+          ? state.settings
+          : {
+              ...state.settings,
+              healthSync: { ...state.settings.healthSync, sourcePreferences },
+            },
       entries: mergeHealthEntries(state, entries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
       lastSavedAt: new Date().toISOString(),
     }, entries);

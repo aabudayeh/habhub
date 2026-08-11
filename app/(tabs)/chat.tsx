@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import * as ImagePicker from "expo-image-picker";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, {
@@ -76,6 +77,10 @@ function ChatScreen() {
     }
   }, [requestedRecipient, state.currentUserId, state.group.members]);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
+  const tabBarHeight = useBottomTabBarHeight();
+  const [keyboardVisible, setKeyboardVisible] = useState(() =>
+    Keyboard.isVisible(),
+  );
   const messageScroll = useRef<ScrollView>(null);
   const pendingScrollFrame = useRef<number | null>(null);
   const pendingAnimatedScroll = useRef(false);
@@ -221,10 +226,20 @@ function ChatScreen() {
     }
   }, []);
   const scrollToNewestAfterLayout = useCallback(
-    (delay = 48) => {
+    (delay = 48, onlyIfFollowing = false) => {
       cancelSettledNewestScroll();
+      if (
+        onlyIfFollowing &&
+        (userScrolledAwayFromBottom.current || userDragInProgress.current)
+      )
+        return;
       settledScrollTimer.current = setTimeout(() => {
         settledScrollTimer.current = null;
+        if (
+          onlyIfFollowing &&
+          (userScrolledAwayFromBottom.current || userDragInProgress.current)
+        )
+          return;
         scrollToNewest(false);
       }, delay);
     },
@@ -244,10 +259,11 @@ function ChatScreen() {
         (heightChange >= 120 ||
           (followsKeyboardEvent && heightChange >= 24))
       )
-        // Keyboard and tab-bar changes can commit in separate layout passes.
-        // Debouncing here produces one final alignment after the last pass.
+        // Keyboard viewport and footer-inset changes can commit in adjacent
+        // layout passes. Debounce to one final alignment after both settle.
         scrollToNewestAfterLayout(
           followsKeyboardEvent ? 64 : 320,
+          true,
         );
     },
     [scrollToNewestAfterLayout],
@@ -293,10 +309,15 @@ function ChatScreen() {
     [handleThreadScroll],
   );
   const handleComposerFocus = useCallback(() => {
+    if (
+      userScrolledAwayFromBottom.current ||
+      userDragInProgress.current
+    )
+      return;
     // Align immediately, then keep a delayed fallback for Android versions
     // where adjustResize can suppress the keyboardDidShow notification.
     scrollToNewest(false);
-    scrollToNewestAfterLayout(360);
+    scrollToNewestAfterLayout(360, true);
   }, [scrollToNewest, scrollToNewestAfterLayout]);
   useEffect(
     () => () => {
@@ -306,18 +327,25 @@ function ChatScreen() {
     [cancelPendingNewestScroll, cancelSettledNewestScroll],
   );
   useEffect(() => {
-    const shown = Keyboard.addListener("keyboardDidShow", () => {
+    // Match the tab navigator's own visibility events so the footer inset and
+    // overlaid bar swap in the same render, instead of briefly overlapping.
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const shown = Keyboard.addListener(showEvent, () => {
+      setKeyboardVisible(true);
       keyboardTransitionEventAt.current = Date.now();
       cancelPendingNewestScroll();
-      scrollToNewestAfterLayout();
+      scrollToNewestAfterLayout(48, true);
     });
-    const hidden = Keyboard.addListener("keyboardDidHide", () => {
-      // Android restores the window and tab scene in separate passes. Wait for
-      // both before aligning so the close transition does not visibly fight
-      // the ScrollView.
+    const hidden = Keyboard.addListener(hideEvent, () => {
+      // Wait for the restored Android viewport to settle before aligning so
+      // the close transition does not visibly fight the ScrollView.
+      setKeyboardVisible(false);
       keyboardTransitionEventAt.current = Date.now();
       cancelPendingNewestScroll();
-      scrollToNewestAfterLayout(64);
+      scrollToNewestAfterLayout(64, true);
     });
     return () => {
       shown.remove();
@@ -824,75 +852,84 @@ function ChatScreen() {
             )}
           </ScrollView>
 
-          {imageUri ? (
-            <View style={styles.attachmentPreview}>
-              <ExpandableImage
-                uri={imageUri}
-                thumbnailStyle={styles.previewImage}
-              />
-              <Pressable
-                onPress={() => setImageUri(null)}
-                style={styles.removeImage}
-              >
-                <Ionicons name="close" size={16} color={palette.white} />
-              </Pressable>
-            </View>
-          ) : null}
-          <View style={styles.quickRow}>
-            <Quick
-              label="Cheer"
-              icon="sparkles-outline"
-              onPress={() => suggest("cheer")}
-            />
-            <Quick
-              label="Taunt"
-              icon="flash-outline"
-              onPress={() => suggest("taunt")}
-            />
-            <Quick
-              label="Remind"
-              icon="notifications-outline"
-              onPress={() => suggest("reminder")}
-            />
-          </View>
           <View
             style={[
-              styles.composer,
-              { backgroundColor: colors.card, borderColor: colors.border },
+              styles.composerDock,
+              { paddingBottom: keyboardVisible ? 0 : tabBarHeight },
             ]}
           >
-            <Pressable
-              accessibilityLabel="Attach image"
-              onPress={chooseImage}
-              style={styles.attach}
-            >
-              <Ionicons name="image-outline" size={20} color={accent} />
-            </Pressable>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              onFocus={handleComposerFocus}
-              onSubmitEditing={submit}
-              placeholder={
-                recipient ? `Message ${recipient.name}…` : "Message the group…"
-              }
-              placeholderTextColor={palette.faint}
-              style={[styles.input, { color: colors.ink }]}
-              returnKeyType="send"
-              multiline
-            />
-            <Pressable
-              disabled={!draft.trim() && !imageUri}
-              onPress={submit}
-              style={({ pressed }) => [
-                styles.send,
-                { backgroundColor: accent },
-                !draft.trim() && !imageUri && styles.sendDisabled,
-                pressed && styles.pressed,
+            {imageUri ? (
+              <View style={styles.attachmentPreview}>
+                <ExpandableImage
+                  uri={imageUri}
+                  thumbnailStyle={styles.previewImage}
+                />
+                <Pressable
+                  onPress={() => setImageUri(null)}
+                  style={styles.removeImage}
+                >
+                  <Ionicons name="close" size={16} color={palette.white} />
+                </Pressable>
+              </View>
+            ) : null}
+            <View style={styles.quickRow}>
+              <Quick
+                label="Cheer"
+                icon="sparkles-outline"
+                onPress={() => suggest("cheer")}
+              />
+              <Quick
+                label="Taunt"
+                icon="flash-outline"
+                onPress={() => suggest("taunt")}
+              />
+              <Quick
+                label="Remind"
+                icon="notifications-outline"
+                onPress={() => suggest("reminder")}
+              />
+            </View>
+            <View
+              style={[
+                styles.composer,
+                { backgroundColor: colors.card, borderColor: colors.border },
               ]}
             >
-              <Ionicons name="arrow-up" size={18} color={palette.white} />
-            </Pressable>
+              <Pressable
+                accessibilityLabel="Attach image"
+                onPress={chooseImage}
+                style={styles.attach}
+              >
+                <Ionicons name="image-outline" size={20} color={accent} />
+              </Pressable>
+              <TextInput
+                value={draft}
+                onChangeText={setDraft}
+                onFocus={handleComposerFocus}
+                onSubmitEditing={submit}
+                placeholder={
+                  recipient
+                    ? `Message ${recipient.name}…`
+                    : "Message the group…"
+                }
+                placeholderTextColor={palette.faint}
+                style={[styles.input, { color: colors.ink }]}
+                returnKeyType="send"
+                multiline
+              />
+              <Pressable
+                disabled={!draft.trim() && !imageUri}
+                onPress={submit}
+                style={({ pressed }) => [
+                  styles.send,
+                  { backgroundColor: accent },
+                  !draft.trim() && !imageUri && styles.sendDisabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons name="arrow-up" size={18} color={palette.white} />
+              </Pressable>
+            </View>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -1183,6 +1220,7 @@ const styles = StyleSheet.create({
     position: "relative",
     marginBottom: 8,
   },
+  composerDock: { flexShrink: 0 },
   previewImage: { width: 76, height: 76, borderRadius: 12 },
   removeImage: {
     position: "absolute",

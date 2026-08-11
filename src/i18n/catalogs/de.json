@@ -2200,4 +2200,9 @@
   ,"Open full schedule": "Vollständigen Zeitplan öffnen"
   ,"Start or manage timers": "Timer starten oder verwalten"
   ,"Today’s schedule": "Heutiger Zeitplan"
+  ,"Data sources": "Datenquellen"
+  ,"Choose which apps can contribute imported health data.": "Wähle aus, welche Apps importierte Gesundheitsdaten bereitstellen dürfen."
+  ,"Could not update data source": "Datenquelle konnte nicht aktualisiert werden"
+  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Neue Quellen bleiben aktiviert, bis du sie ausschaltest. Wenn du eine Quelle wieder aktivierst, wird der ausgewählte Verlauf im Hintergrund wiederhergestellt."
+  ,"Your phone": "Dein Smartphone"
 }

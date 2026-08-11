@@ -11,6 +11,7 @@ type AndroidTimerEnhancer = {
     mode: "elapsed" | "countdown" | "paused",
     referenceTime: number,
     timeoutAt: number,
+    expectedTitle: string,
   ) => Promise<boolean>;
 };
 
@@ -40,6 +41,7 @@ export async function enhanceAndroidTimerNotification(
   mode: LiveTimerMode,
   referenceTime: number,
   timeoutAt = 0,
+  expectedTitle = "",
 ) {
   if (Platform.OS !== "android") return false;
   return (
@@ -49,6 +51,7 @@ export async function enhanceAndroidTimerNotification(
         mode,
         referenceTime,
         timeoutAt,
+        expectedTitle,
       )
       .catch(() => false)) ?? false
   );
@@ -129,6 +132,7 @@ async function syncLiveActivityTimerNotificationsNow(
         timer.mode,
         timer.referenceTime,
         timer.timeoutAt,
+        timer.title,
       );
     }),
   );

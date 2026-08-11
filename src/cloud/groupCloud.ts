@@ -30,6 +30,7 @@ import {
   vacationDates,
 } from "@/src/domain/vacation";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import { supabase } from "@/src/lib/supabase";
 import { translateUiText } from "@/src/i18n";
 import {
@@ -925,8 +926,18 @@ export async function loadCloudGroupActivity(
     )
       statusMap.set(key, status);
   });
+  const sourceFiltered = reconcileImportedHealthEntries(
+    [...entriesById.values()],
+    state.metrics,
+    state.settings.healthSync.sourcePreferences,
+    state.currentUserId,
+  );
+  const deduplicatedEntries = reconcileImportedHealthEntries(
+    sourceFiltered,
+    state.metrics,
+  );
   return {
-    entries: [...entriesById.values()].sort((a, b) =>
+    entries: deduplicatedEntries.sort((a, b) =>
       a.recordedAt.localeCompare(b.recordedAt),
     ),
     dailyMetricStatuses: [...statusMap.values()],

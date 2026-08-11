@@ -180,6 +180,8 @@ export default function SettingsScreen() {
   >(null);
   const [showDevices, setShowDevices] = useState(false);
   const [showHealthTypes, setShowHealthTypes] = useState(false);
+  const [showHealthSources, setShowHealthSources] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState<string | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const selectedSyncMode = normalizeHealthSyncMode(state.settings.syncMode);
   const selectedHealthSchedule = healthSyncSchedule(selectedSyncMode);
@@ -627,14 +629,74 @@ export default function SettingsScreen() {
             </View>
           </>
         ) : null}
-        {health.sourceOrigins.length ? (
+        {health.sourceOptions.length ? (
           <View style={styles.origins}>
-            <Text style={styles.originLabel}>RECENT DATA SOURCES</Text>
-            <View style={styles.originChips}>
-              {health.sourceOrigins.slice(0, 6).map((origin) => (
-                <Chip key={origin} label={friendlyHealthOrigin(origin)} />
-              ))}
-            </View>
+            <Pressable
+              onPress={() => setShowHealthSources((value) => !value)}
+              style={styles.collapseRow}
+            >
+              <View style={styles.modeIcon}>
+                <Ionicons name="apps-outline" size={19} color={accent} />
+              </View>
+              <View style={styles.copy}>
+                <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                  Data sources
+                </Text>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  Choose which apps can contribute imported health data.
+                </Text>
+              </View>
+              <Ionicons
+                name={showHealthSources ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={accent}
+              />
+            </Pressable>
+            {showHealthSources ? (
+              <>
+                {health.sourceOptions.map((source, index) => (
+                  <View
+                    key={source.id}
+                    style={[
+                      styles.healthType,
+                      index < health.sourceOptions.length - 1 && styles.border,
+                    ]}
+                  >
+                    <View style={styles.modeIcon}>
+                      <Ionicons name="phone-portrait-outline" size={19} color={accent} />
+                    </View>
+                    <View style={styles.copy}>
+                      <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                        {friendlyHealthOrigin(source.origin)}
+                      </Text>
+                    </View>
+                    <Switch
+                      disabled={sourceBusy === source.id || health.status === "syncing"}
+                      value={source.enabled}
+                      onValueChange={(enabled) => {
+                        setSourceBusy(source.id);
+                        void health
+                          .setSourceEnabled(source.id, enabled)
+                          .catch((error) =>
+                            Alert.alert(
+                              "Could not update data source",
+                              error instanceof Error
+                                ? error.message
+                                : "Please try again.",
+                            ),
+                          )
+                          .finally(() => setSourceBusy(null));
+                      }}
+                      trackColor={{ false: palette.border, true: `${accent}88` }}
+                      thumbColor={source.enabled ? accent : "#F4F5F4"}
+                    />
+                  </View>
+                ))}
+                <Text style={[styles.meta, styles.sourceNote, { color: colors.muted }]}>
+                  New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.
+                </Text>
+              </>
+            ) : null}
           </View>
         ) : null}
         <View style={styles.localDivider} />
@@ -1043,4 +1105,5 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   originChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  sourceNote: { marginTop: 8, lineHeight: 16 },
 });

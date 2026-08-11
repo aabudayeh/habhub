@@ -587,6 +587,8 @@ export type GymSession = {
 export type HealthSyncSettings = {
   enabled: boolean;
   dataTypes: Record<HealthDataType, boolean>;
+  /** Observed native writers and their device-local import preference. */
+  sourcePreferences?: Record<string, HealthSourcePreference>;
   /** Requested separately because both mobile operating systems may decline it. */
   backgroundAccess: boolean;
   /**
@@ -601,6 +603,13 @@ export type HealthSyncSettings = {
   initialHistoryImportPending?: boolean;
 };
 
+export type HealthSourcePreference = {
+  /** Raw Health Connect package id or HealthKit source name. */
+  origin: string;
+  /** Unknown/new writers default to enabled until the user turns one off. */
+  enabled: boolean;
+};
+
 export type EnergyProfile = {
   age: number;
   sex: BiologicalSex;
@@ -608,6 +617,10 @@ export type EnergyProfile = {
   /** Baseline retained for total progress even as current weight updates. */
   startingWeightKg?: number;
   weightKg: number;
+  /** Optional measured body-fat percentage used by the private body profile. */
+  bodyFatPercent?: number;
+  /** Optional measured lean body mass, including non-fat tissue, in kilograms. */
+  leanBodyMassKg?: number;
   targetWeightKg: number;
   activityLevel: ActivityLevel;
   /** Optional baseline activity estimate; synced exercise remains separate. */
@@ -878,7 +891,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 23;
+  version: 24;
   currentUserId: string;
   group: Group;
   groups: Group[];

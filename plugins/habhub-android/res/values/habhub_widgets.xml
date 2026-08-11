@@ -1,13 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="habhub_widget_description">Today progress and tracker history</string>
+  <string name="habhub_widget_description">Today goals and tracker progress</string>
   <string name="habhub_widget_open_to_update">Open HabHub to update</string>
   <string name="habhub_widget_featured_progress">Featured progress</string>
   <string name="habhub_widget_choose">Choose what this widget shows</string>
   <string name="habhub_widget_tracker">Tracker</string>
-  <string name="habhub_widget_history">History</string>
-  <string name="habhub_widget_week">Week</string>
-  <string name="habhub_widget_month">Month</string>
-  <string name="habhub_widget_year">Year</string>
   <string name="habhub_widget_add">Add widget</string>
 </resources>

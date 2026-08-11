@@ -1,8 +1,15 @@
-import { AppState, MetricDefinition } from "@/src/types";
+import {
+  AppState,
+  type GymExercise,
+  type GymSuperset,
+  MetricDefinition,
+  type MuscleGroup,
+} from "@/src/types";
 
 import { allTimePeriodDates } from "./leaderboard";
 import { entriesForMetric } from "./dataIndex";
-import { dateRangeEnding } from "./date";
+import { dateKey, dateRangeEnding } from "./date";
+import { catalogExercise, exerciseFromActivityName } from "./exerciseCatalog";
 import {
   effectiveGoalTarget,
   isMetricTrackedOnDate,
@@ -12,6 +19,16 @@ import {
   scheduledGoalReached,
   weightDailyGoalStatus,
 } from "./metrics";
+import {
+  statusMuscleProgressFromWeeks,
+  statusMuscleWeeklyQuality,
+} from "./statusAvatar";
+
+export {
+  statusBodyAppearance,
+  type StatusBodyAppearance,
+  type StatusBodyShape,
+} from "./statusAvatar";
 
 export type StatusMetricRollup = {
   completed: number;
@@ -28,73 +45,128 @@ export type StatusRangeRollup = {
 };
 
 export type StatusAvatarProgression = {
+  currentBodyFatPercent?: number;
+  currentLeanBodyMassKg?: number;
   currentWeightKg: number;
   mindTier: 0 | 1 | 2 | 3;
   muscleProgress: number;
 };
 
-export type StatusBodyShape = "thin" | "average" | "full";
-
-export type StatusBodyAppearance = {
-  /** A continuous -1..1 value so body changes do not jump between presets. */
-  bodyMass: number;
-  bodyShape: StatusBodyShape;
-  heightScale: number;
-  muscleTier: 0 | 1 | 2 | 3;
-};
+function latestMeasurementAtOrBefore(
+  state: AppState,
+  metricId: string,
+  userId: string,
+  anchorDate: string,
+) {
+  let latest: AppState["entries"][number] | undefined;
+  for (const entry of entriesForMetric(state.entries, metricId, userId)) {
+    if (
+      entry.localDate > anchorDate ||
+      typeof entry.value !== "number" ||
+      !Number.isFinite(entry.value) ||
+      entry.value <= 0
+    )
+      continue;
+    if (
+      !latest ||
+      `${entry.localDate}:${entry.recordedAt}` >
+        `${latest.localDate}:${latest.recordedAt}`
+    )
+      latest = entry;
+  }
+  return latest ? Number(latest.value) : undefined;
+}
 
 function bounded(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-/**
- * Converts profile/body history into restrained avatar proportions. BMI is
- * used only as a visual interpolation input; the UI never presents it as a
- * diagnosis or assumes that one body shape is better than another.
- */
-export function statusBodyAppearance(
-  heightCm: number,
-  weightKg: number,
-  muscleProgress: number,
-): StatusBodyAppearance {
-  const safeHeightCm = bounded(
-    Number.isFinite(heightCm) ? heightCm : 170,
-    135,
-    215,
-  );
-  const safeWeightKg = bounded(
-    Number.isFinite(weightKg) ? weightKg : 70,
-    35,
-    250,
-  );
-  const heightM = safeHeightCm / 100;
-  const bmi = safeWeightKg / (heightM * heightM);
-  const bodyMass =
-    bmi < 22
-      ? bounded((bmi - 22) / 5, -1, 0)
-      : bounded((bmi - 22) / 12, 0, 1);
-  const bodyShape: StatusBodyShape =
-    bmi < 19.5 ? "thin" : bmi > 27.5 ? "full" : "average";
-  const boundedMuscle = bounded(
-    Number.isFinite(muscleProgress) ? muscleProgress : 0,
-    0,
-    1,
-  );
-  const muscleTier: 0 | 1 | 2 | 3 =
-    boundedMuscle >= 0.72
-      ? 3
-      : boundedMuscle >= 0.4
-        ? 2
-        : boundedMuscle >= 0.14
-          ? 1
-          : 0;
+type ResistanceMovement = Pick<
+  GymExercise | GymSuperset,
+  "exerciseKey" | "muscleGroups" | "name" | "trackingMode"
+>;
 
-  return {
-    bodyMass,
-    bodyShape,
-    heightScale: bounded(0.97 + (safeHeightCm - 170) / 600, 0.94, 1.04),
-    muscleTier,
+const FULL_BODY_MUSCLE_GROUPS: MuscleGroup[] = [
+  "chest",
+  "back",
+  "shoulders",
+  "glutes",
+  "quadriceps",
+  "hamstrings",
+];
+
+function resistanceMovementGroups(movement: ResistanceMovement) {
+  const catalog =
+    catalogExercise(movement.exerciseKey) ??
+    exerciseFromActivityName(movement.name);
+  const trackingMode = movement.trackingMode ?? catalog?.trackingMode;
+  // Known cardio, mobility, yoga and duration activities do not create a
+  // muscularity reward just because they were recorded on the Workout page.
+  if (trackingMode === "duration" || (catalog && catalog.category !== "strength"))
+    return [];
+  const groups = movement.muscleGroups?.length
+    ? movement.muscleGroups
+    : (catalog?.muscles ?? []);
+  if (!catalog && !groups.length) return [];
+  return groups.length ? groups : (["full_body"] as MuscleGroup[]);
+}
+
+function localDateOrdinal(localDate: string) {
+  const [year, month, day] = localDate.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return null;
+  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
+}
+
+/**
+ * Calculates a bounded, training-linked motivational physique progression.
+ * This is deliberately not a body-composition or lean-mass estimate.
+ */
+export function statusMuscleProgress(
+  sessions: AppState["gymSessions"],
+  userId: string,
+  anchorDate: string,
+) {
+  const anchorOrdinal = localDateOrdinal(anchorDate);
+  if (anchorOrdinal === null) return 0;
+  const weeklyDoses = new Map<number, Map<MuscleGroup, number>>();
+
+  const addSet = (weeksAgo: number, groups: readonly MuscleGroup[]) => {
+    if (!groups.length) return;
+    const week = weeklyDoses.get(weeksAgo) ?? new Map<MuscleGroup, number>();
+    const expanded = groups.includes("full_body")
+      ? FULL_BODY_MUSCLE_GROUPS.map((group) => [group, 0.35] as const)
+      : groups.map((group, index) => [group, index === 0 ? 1 : 0.5] as const);
+    for (const [group, credit] of expanded)
+      week.set(group, Math.min(20, (week.get(group) ?? 0) + credit));
+    weeklyDoses.set(weeksAgo, week);
   };
+
+  for (const session of sessions ?? []) {
+    if (
+      session.userId !== userId ||
+      session.localDate > anchorDate
+    )
+      continue;
+    const sessionOrdinal = localDateOrdinal(session.localDate);
+    if (sessionOrdinal === null || sessionOrdinal > anchorOrdinal) continue;
+    const weeksAgo = Math.floor((anchorOrdinal - sessionOrdinal) / 7);
+    for (const exercise of session.exercises) {
+      const primaryGroups = resistanceMovementGroups(exercise);
+      for (const set of exercise.sets) {
+        if (!set.completed) continue;
+        addSet(weeksAgo, primaryGroups);
+        if (set.superset)
+          addSet(weeksAgo, resistanceMovementGroups(set.superset));
+      }
+    }
+  }
+
+  return statusMuscleProgressFromWeeks(
+    [...weeklyDoses].map(([weeksAgo, doses]) => ({
+      quality: statusMuscleWeeklyQuality([...doses.values()]),
+      weeksAgo,
+    })),
+  );
 }
 
 /** Includes scheduled goal opportunities even when a day has no data row. */
@@ -216,36 +288,27 @@ export function statusAvatarProgression(
   anchorDate: string,
 ): StatusAvatarProgression {
   const profile = state.energyProfiles?.[userId] ?? state.settings.energyProfile;
-  let latestWeight: AppState["entries"][number] | undefined;
-  let earliestWeight: AppState["entries"][number] | undefined;
-  for (const entry of entriesForMetric(state.entries, "weight", userId)) {
-    if (typeof entry.value !== "number" || !Number.isFinite(entry.value))
-      continue;
-    if (
-      !earliestWeight ||
-      `${entry.localDate}:${entry.recordedAt}` <
-        `${earliestWeight.localDate}:${earliestWeight.recordedAt}`
-    )
-      earliestWeight = entry;
-    if (entry.localDate > anchorDate) continue;
-    if (
-      !latestWeight ||
-      `${entry.localDate}:${entry.recordedAt}` >
-        `${latestWeight.localDate}:${latestWeight.recordedAt}`
-    )
-      latestWeight = entry;
-  }
-  const currentWeightKg = Number(
-    latestWeight?.value ?? earliestWeight?.value ?? profile.weightKg,
-  );
+  const isCurrentDate = anchorDate >= dateKey();
+  const currentWeightKg =
+    latestMeasurementAtOrBefore(state, "weight", userId, anchorDate) ??
+    profile.startingWeightKg ??
+    profile.weightKg;
+  const currentBodyFatPercent =
+    latestMeasurementAtOrBefore(state, "body_fat", userId, anchorDate) ??
+    (isCurrentDate ? profile.bodyFatPercent : undefined);
+  const currentLeanBodyMassKg =
+    latestMeasurementAtOrBefore(
+      state,
+      "lean_body_mass",
+      userId,
+      anchorDate,
+    ) ?? (isCurrentDate ? profile.leanBodyMassKg : undefined);
 
-  let completedSets = 0;
-  for (const session of state.gymSessions ?? []) {
-    if (session.userId !== userId || session.localDate > anchorDate) continue;
-    for (const exercise of session.exercises)
-      for (const set of exercise.sets) if (set.completed) completedSets += 1;
-  }
-  const muscleProgress = bounded(1 - Math.exp(-completedSets / 140), 0, 1);
+  const muscleProgress = statusMuscleProgress(
+    state.gymSessions,
+    userId,
+    anchorDate,
+  );
 
   const mindMetrics = state.metrics.filter(
     (metric) => metric.category === "mind" && metric.goalEnabled !== false,
@@ -278,5 +341,11 @@ export function statusAvatarProgression(
           ? 1
           : 0;
 
-  return { currentWeightKg, mindTier, muscleProgress };
+  return {
+    currentBodyFatPercent,
+    currentLeanBodyMassKg,
+    currentWeightKg,
+    mindTier,
+    muscleProgress,
+  };
 }

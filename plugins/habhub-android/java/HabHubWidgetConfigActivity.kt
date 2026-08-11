@@ -62,34 +62,20 @@ class HabHubWidgetConfigActivity : Activity() {
     }
     root.addView(trackerGroup)
 
-    root.addView(label(getString(R.string.habhub_widget_history), 14f).apply { setPadding(0, dp(18), 0, dp(4)) })
-    val rangeGroup = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-    listOf(
-      "week" to getString(R.string.habhub_widget_week),
-      "month" to getString(R.string.habhub_widget_month),
-      "year" to getString(R.string.habhub_widget_year),
-    ).forEach { choice ->
-      rangeGroup.addView(RadioButton(this).apply {
-        id = View.generateViewId()
-        tag = choice.first
-        text = choice.second
-        setTextColor(Color.WHITE)
-        isChecked = choice.first == existing.range
-      })
-    }
-    root.addView(rangeGroup)
-
     root.addView(Button(this).apply {
       text = getString(R.string.habhub_widget_add)
       isAllCaps = false
       setTextColor(Color.rgb(8, 27, 73))
-      setBackgroundColor(Color.rgb(88, 225, 212))
+      setBackgroundColor(Color.rgb(184, 228, 92))
       setOnClickListener {
         val tracker = trackerGroup.findViewById<RadioButton>(trackerGroup.checkedRadioButtonId)
           ?.tag?.toString() ?: "__featured__"
-        val range = rangeGroup.findViewById<RadioButton>(rangeGroup.checkedRadioButtonId)
-          ?.tag?.toString() ?: "week"
-        HabHubWidgetStore.saveConfiguration(this@HabHubWidgetConfigActivity, widgetId, tracker, range)
+        HabHubWidgetStore.saveConfiguration(
+          this@HabHubWidgetConfigActivity,
+          widgetId,
+          tracker,
+          existing.range,
+        )
         HabHubWidgetRenderer.updateWidget(this@HabHubWidgetConfigActivity, widgetId)
         setResult(
           RESULT_OK,
