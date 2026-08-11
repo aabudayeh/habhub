@@ -5,6 +5,7 @@ import * as WebBrowser from 'expo-web-browser';
 import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { readableAuthError } from '@/src/domain/authErrors';
 import { cloudConfigured, consumeAuthUrl, isAuthCallbackUrl, supabase } from '@/src/lib/supabase';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
@@ -19,6 +20,7 @@ type AuthContextValue = {
   passwordRecovery: boolean;
   authError: string | null;
   clearAuthError: () => void;
+  reportAuthError: (error: unknown) => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<'confirmed' | 'verification-required'>;
   sendMagicLink: (email: string) => Promise<void>;
@@ -43,18 +45,6 @@ function callbackUrl() {
     return `${window.location.origin}/auth-callback`;
   }
   return `${configuredOrigin || 'https://habhub.expo.app'}/auth-callback`;
-}
-
-function readableAuthError(error: unknown) {
-  const message =
-    error instanceof Error ? error.message : 'The sign-in attempt did not finish.';
-  if (/network request failed|failed to fetch|networkerror/i.test(message))
-    return 'HabHub could not reach the account service. Check your connection and try again.';
-  if (/code verifier|flow state|expired/i.test(message))
-    return 'This sign-in attempt expired. Start Google sign-in again.';
-  if (/cancel/i.test(message))
-    return 'Google sign-in was cancelled before HabHub received your account.';
-  return message;
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
@@ -141,6 +131,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!supabase) throw new Error('Cloud accounts are not configured for this build.');
     return supabase;
   }, []);
+  const reportAuthError = useCallback(
+    (error: unknown) => setAuthError(readableAuthError(error)),
+    [],
+  );
 
   const value = useMemo<AuthContextValue>(() => ({
     configured: cloudConfigured,
@@ -150,6 +144,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     passwordRecovery,
     authError,
     clearAuthError: () => setAuthError(null),
+    reportAuthError,
     signInWithPassword: async (email, password) => {
       const client = requireClient();
       const { error } = await client.auth.signInWithPassword({ email: email.trim(), password });
@@ -266,7 +261,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       setSession(null);
       setStatus('signedOut');
     },
-  }), [authError, passwordRecovery, requireClient, session, status]);
+  }), [authError, passwordRecovery, reportAuthError, requireClient, session, status]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

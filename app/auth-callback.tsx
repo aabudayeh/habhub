@@ -9,7 +9,7 @@ import { consumeAuthUrl } from "@/src/lib/supabase";
 import { palette } from "@/src/theme";
 
 export default function AuthCallbackScreen() {
-  const { status } = useAuth();
+  const { status, reportAuthError } = useAuth();
   const [destination, setDestination] = useState<string | null>(null);
   const [processed, setProcessed] = useState(false);
 
@@ -24,14 +24,14 @@ export default function AuthCallbackScreen() {
       };
     }
     void consumeAuthUrl(window.location.href)
-      .catch(() => undefined)
+      .catch((error: unknown) => reportAuthError(error))
       .finally(() => {
         if (active) setProcessed(true);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [reportAuthError]);
 
   useEffect(() => {
     if (status !== "signedIn") return;

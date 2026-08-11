@@ -24,6 +24,7 @@ import {
   useGroupAccent,
 } from "@/src/theme";
 import { rememberPendingInvite } from "@/src/domain/invites";
+import { readableAuthError } from "@/src/domain/authErrors";
 
 type Mode = "sign-in" | "sign-up" | "magic";
 
@@ -80,7 +81,7 @@ export default function SignInScreen() {
     } catch (error) {
       Alert.alert(
         "Could not continue",
-        error instanceof Error ? error.message : "Please try again.",
+        readableAuthError(error),
       );
     } finally {
       setBusy(null);

@@ -16,6 +16,7 @@
     "lint": "node node_modules/eslint/bin/eslint.js app src",
     "validate:env": "node scripts/validate-release-env.cjs",
     "validate:cloud": "node scripts/validate-release-env.cjs --cloud",
+    "validate:auth": "node --no-warnings --experimental-strip-types scripts/validate-auth-errors.mjs",
     "validate:i18n": "node scripts/validate-i18n.mjs",
     "validate:avatar": "node scripts/validate-status-avatar.mjs",
     "validate:health": "node --no-warnings --experimental-strip-types scripts/validate-health-dedup.mjs",
@@ -25,8 +26,8 @@
     "validate:native-ui": "node scripts/validate-native-chat-widgets.mjs",
     "validate:challenges": "node --no-warnings --experimental-strip-types scripts/validate-group-challenges.mjs",
     "validate:onboarding": "node scripts/validate-onboarding-flow.mjs",
-    "check": "pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint",
-    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint && pnpm export:web"
+    "check": "pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
