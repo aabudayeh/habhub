@@ -41,12 +41,17 @@ type StoredWorkoutFlow = {
 type AndroidWorkoutNotificationBridge = {
   nativeWorkoutActions?: boolean;
   syncWorkoutTimerNotificationFlow?: (flow: string) => Promise<boolean>;
+  reconcileWorkoutTimerNotification?: (
+    identifier: string,
+  ) => Promise<boolean>;
   consumeWorkoutTimerNotificationActions?: () => Promise<string>;
   clearWorkoutTimerNotificationFlow?: () => Promise<boolean>;
 };
 
 let configured = false;
 let pendingFlowAction = Promise.resolve();
+let workoutNotificationOperation = Promise.resolve<unknown>(undefined);
+let workoutNotificationRevision = 0;
 
 const androidWorkoutBridge = () =>
   NativeModules.HabHubAndroid as AndroidWorkoutNotificationBridge | undefined;
@@ -63,6 +68,15 @@ async function syncNativeFlow(flow: StoredWorkoutFlow) {
   return (
     (await androidWorkoutBridge()
       ?.syncWorkoutTimerNotificationFlow?.(JSON.stringify(flow))
+      .catch(() => false)) ?? false
+  );
+}
+
+async function reconcileNativeNotification(identifier: string) {
+  if (!nativeWorkoutActionsEnabled()) return false;
+  return (
+    (await androidWorkoutBridge()
+      ?.reconcileWorkoutTimerNotification?.(identifier)
       .catch(() => false)) ?? false
   );
 }
@@ -170,13 +184,19 @@ async function presentFlow(flow: StoredWorkoutFlow) {
   });
   if (Platform.OS === "android") {
     const phaseOrigin = flow.phaseStartedAt - flow.phaseElapsedMs;
-    await enhanceAndroidTimerNotification(
-      identifier,
-      flow.paused ? "paused" : "elapsed",
-      phaseOrigin,
-      0,
-      notificationTitle,
-    );
+    // The workout-specific native pass rereads the authoritative persisted
+    // phase and rebuilds the same Expo row a few times. That closes the race
+    // where Expo or an OEM rewrites a later exercise after the first native
+    // chronometer frame. Older APKs fall back to the generic enhancer.
+    const reconciled = await reconcileNativeNotification(identifier);
+    if (!reconciled)
+      await enhanceAndroidTimerNotification(
+        identifier,
+        flow.paused ? "paused" : "elapsed",
+        phaseOrigin,
+        0,
+        notificationTitle,
+      );
   }
 }
 
@@ -322,9 +342,7 @@ export async function showWorkoutTimerNotification({
   phaseElapsedSeconds?: number;
 }) {
   if (Platform.OS === "web") return;
-  const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return;
-  await configureWorkoutTimerNotification();
+  const revision = ++workoutNotificationRevision;
   const flow: StoredWorkoutFlow = {
     steps:
       steps?.length
@@ -335,19 +353,32 @@ export async function showWorkoutTimerNotification({
     phaseStartedAt: phaseStartedAt ?? Date.now(),
     phaseElapsedMs: Math.max(0, phaseElapsedSeconds * 1000),
   };
-  const storedFlow = await readFlow();
-  // Android can emit inactive and background in quick succession. A late
-  // duplicate must not reset a newer flow, but an actual foreground
-  // transition must replace the previous phase even when the step list is
-  // unchanged.
-  const nextFlow =
-    storedFlow &&
-    sameSteps(storedFlow.steps, flow.steps) &&
-    storedFlow.phaseStartedAt > flow.phaseStartedAt
-      ? storedFlow
-      : flow;
-  await saveFlow(nextFlow);
-  await presentFlow(nextFlow);
+  const update = workoutNotificationOperation.then(async () => {
+    // Locking Android commonly emits inactive and background back-to-back.
+    // Coalesce those requests before touching Expo: two asynchronous posts
+    // using the same identifier can otherwise leave the later row without the
+    // chronometer installed by the earlier request.
+    if (revision !== workoutNotificationRevision) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted || revision !== workoutNotificationRevision) return;
+    await configureWorkoutTimerNotification();
+    if (revision !== workoutNotificationRevision) return;
+    const storedFlow = await readFlow();
+    // A late duplicate must not reset a flow already advanced natively, but a
+    // genuine foreground transition must replace the previous phase even when
+    // the remaining step list is unchanged.
+    const nextFlow =
+      storedFlow &&
+      sameSteps(storedFlow.steps, flow.steps) &&
+      storedFlow.phaseStartedAt > flow.phaseStartedAt
+        ? storedFlow
+        : flow;
+    await saveFlow(nextFlow);
+    if (revision !== workoutNotificationRevision) return;
+    await presentFlow(nextFlow);
+  });
+  workoutNotificationOperation = update.catch(() => undefined);
+  await update;
 }
 
 export async function consumeWorkoutTimerActions() {
@@ -371,19 +402,24 @@ export async function consumeWorkoutTimerActions() {
 
 export async function dismissWorkoutTimerNotification(clearState = false) {
   if (Platform.OS === "web") return;
-  await Notifications.dismissNotificationAsync(
-    WORKOUT_TIMER_NOTIFICATION,
-  ).catch(() => undefined);
-  await Notifications.cancelScheduledNotificationAsync(
-    WORKOUT_TIMER_NOTIFICATION,
-  ).catch(() => undefined);
-  if (clearState) {
-    await AsyncStorage.multiRemove([
-      WORKOUT_TIMER_FLOW_KEY,
-      WORKOUT_TIMER_ACTIONS_KEY,
-    ]);
-    await androidWorkoutBridge()
-      ?.clearWorkoutTimerNotificationFlow?.()
-      .catch(() => undefined);
-  }
+  ++workoutNotificationRevision;
+  const update = workoutNotificationOperation.then(async () => {
+    await Notifications.dismissNotificationAsync(
+      WORKOUT_TIMER_NOTIFICATION,
+    ).catch(() => undefined);
+    await Notifications.cancelScheduledNotificationAsync(
+      WORKOUT_TIMER_NOTIFICATION,
+    ).catch(() => undefined);
+    if (clearState) {
+      await AsyncStorage.multiRemove([
+        WORKOUT_TIMER_FLOW_KEY,
+        WORKOUT_TIMER_ACTIONS_KEY,
+      ]);
+      await androidWorkoutBridge()
+        ?.clearWorkoutTimerNotificationFlow?.()
+        .catch(() => undefined);
+    }
+  });
+  workoutNotificationOperation = update.catch(() => undefined);
+  await update;
 }

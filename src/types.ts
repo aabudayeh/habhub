@@ -734,6 +734,8 @@ export type UserSettings = {
   completionIndicatorIcon?: string;
   /** How the selected completion symbol reveals its completed portion. */
   completionIndicatorFillMode?: CompletionFillMode;
+  /** Show the percentage-revealed outline around Today's featured card. */
+  showFeaturedCardProgressOutline?: boolean;
   /** Put the to-do block below goal trackers instead of above them. */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */

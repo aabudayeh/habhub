@@ -8,6 +8,8 @@ import android.os.Build
 import expo.modules.notifications.service.NotificationsService
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 /**
  * Handles workout actions immediately on Android's broadcast thread, then
@@ -18,7 +20,7 @@ import org.json.JSONObject
  */
 class HabHubNotificationsService : NotificationsService() {
   override fun onReceiveNotificationResponse(context: Context, intent: Intent) {
-    runCatching {
+    val workoutActionHandled = runCatching {
       val response = getNotificationResponseFromBroadcastIntent(intent)
       HabHubWorkoutNotificationStore.applyAction(
         context,
@@ -26,8 +28,15 @@ class HabHubNotificationsService : NotificationsService() {
         response.action.identifier,
         System.currentTimeMillis(),
       )
-    }
+    }.getOrDefault(false)
     super.onReceiveNotificationResponse(context, intent)
+    if (workoutActionHandled) {
+      // Expo still needs the response for routing, TaskManager, and Wear OS.
+      // Reconcile once that delivery has run as well: some Android builds
+      // rewrite the row after the receiver returns, which otherwise removes
+      // the chronometer that applyAction installed synchronously.
+      HabHubWorkoutNotificationStore.reconcileAsync(context.applicationContext)
+    }
   }
 }
 
@@ -41,6 +50,8 @@ internal object HabHubWorkoutNotificationStore {
   private const val FLOW_KEY = "flow"
   private const val ACTIONS_KEY = "actions"
   private const val MAX_ACTIONS = 30
+  private val reconciliationRunning = AtomicBoolean(false)
+  private val reconciliationRequested = AtomicBoolean(false)
 
   private data class Step(
     val title: String,
@@ -101,11 +112,11 @@ internal object HabHubWorkoutNotificationStore {
     notificationId: String,
     action: String,
     occurredAt: Long,
-  ) {
+  ): Boolean {
     if (
       notificationId != NOTIFICATION_ID ||
       action !in setOf(NEXT_ACTION, PAUSE_ACTION, FINISH_ACTION)
-    ) return
+    ) return false
 
     val flow = readFlow(context)
     var accepted = false
@@ -151,22 +162,67 @@ internal object HabHubWorkoutNotificationStore {
       accepted = true
     }
 
-    if (!accepted) return
+    if (!accepted) return false
     val prefs = preferences(context)
     val editor = prefs.edit()
     if (flow != null) editor.putString(FLOW_KEY, encodeFlow(flow))
     editor.putString(ACTIONS_KEY, appendAction(prefs.getString(ACTIONS_KEY, null), action, occurredAt))
     editor.commit()
     if (flow != null) render(context, flow)
+    return true
   }
 
-  private fun render(context: Context, flow: Flow) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+  /**
+   * Rebuild the currently stored phase on the existing Expo row. This never
+   * creates a second notification: recoverBuilder retains Expo's content and
+   * action PendingIntents, then notify(tag, id) updates that exact row.
+   */
+  fun reconcile(context: Context, identifier: String = NOTIFICATION_ID): Boolean {
+    if (identifier != NOTIFICATION_ID || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+      return false
+    }
+    repeat(40) { attempt ->
+      val flow = readFlow(context) ?: return false
+      if (render(context, flow)) {
+        // A pair of follow-up passes covers OEM/Expo rewrites that can land
+        // just after scheduleNotificationAsync or response delivery. Each
+        // pass rereads the flow, so a rapid second action always wins.
+        Thread.sleep(90L)
+        readFlow(context)?.let { render(context, it) }
+        Thread.sleep(180L)
+        readFlow(context)?.let { render(context, it) }
+        return true
+      }
+      if (attempt < 39) Thread.sleep(75L)
+    }
+    return false
+  }
+
+  fun reconcileAsync(context: Context) {
+    reconciliationRequested.set(true)
+    if (!reconciliationRunning.compareAndSet(false, true)) return
+    thread(name = "habhub-workout-notification-reconcile") {
+      try {
+        do {
+          reconciliationRequested.set(false)
+          reconcile(context)
+        } while (reconciliationRequested.get())
+      } finally {
+        reconciliationRunning.set(false)
+        // Close the narrow handoff race where another receiver asks for a pass
+        // after the loop condition but before running becomes false.
+        if (reconciliationRequested.get()) reconcileAsync(context)
+      }
+    }
+  }
+
+  private fun render(context: Context, flow: Flow): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     val active = manager.activeNotifications.firstOrNull { it.tag == NOTIFICATION_ID }
-      ?: return
+      ?: return false
     val step = flow.steps.getOrNull(flow.index.coerceIn(0, flow.steps.lastIndex))
-      ?: return
+      ?: return false
     val phase = if (flow.paused) "paused" else step.phase
     val phaseLabel = when {
       flow.finished -> "DONE"
@@ -227,6 +283,7 @@ internal object HabHubWorkoutNotificationStore {
     }
     builder.setActions(*visibleActions.toTypedArray())
     manager.notify(active.tag, active.id, builder.build())
+    return true
   }
 
   private fun relabel(action: Notification.Action, title: String): Notification.Action {

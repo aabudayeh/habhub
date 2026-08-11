@@ -433,6 +433,15 @@ export default function DisplaySettings() {
             </View>
           ) : null}
           <ToggleRow
+            icon="scan-outline"
+            title="Progress outline"
+            copy="Show progress around the featured card"
+            enabled={state.settings.showFeaturedCardProgressOutline !== false}
+            onChange={(showFeaturedCardProgressOutline) =>
+              updateSettings({ showFeaturedCardProgressOutline })
+            }
+          />
+          <ToggleRow
             icon="list-outline"
             title="Show every tile"
             copy="Scroll through all Today tiles instead of using More"

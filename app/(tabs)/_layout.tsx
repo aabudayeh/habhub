@@ -168,9 +168,9 @@ export default function TabLayout() {
           // Keeping the bar overlaid there prevents hide/show from changing
           // the scene height in a second layout pass after the keyboard moves.
           position: route.name === "chat" ? "absolute" : undefined,
-          height: 58 + insets.bottom,
-          paddingTop: 3,
-          paddingBottom: Math.max(2, insets.bottom),
+          height: 55 + insets.bottom,
+          paddingTop: 2,
+          paddingBottom: Math.max(1, insets.bottom),
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },
@@ -188,7 +188,7 @@ export default function TabLayout() {
                       ) as keyof typeof Ionicons.glyphMap)
                     : icon
                 }
-                size={23}
+                size={22}
                 color={color}
               />
               {route.name === "chat" && hasUnreadChat ? (
@@ -215,7 +215,7 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabIcon: {
     width: 30,
-    height: 24,
+    height: 23,
     alignItems: "center",
     justifyContent: "center",
   },

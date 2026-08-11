@@ -1053,7 +1053,14 @@ function ScheduleCell({
             }}
             style={[
               styles.event,
-              expanded ? styles.expandedDurationEvent : styles.durationEvent,
+              expanded
+                ? styles.expandedDurationEvent
+                : [
+                    styles.durationEvent,
+                    pointEvents.length
+                      ? styles.splitDurationEvent
+                      : styles.fullDurationEvent,
+                  ],
               expanded
                 ? {
                     backgroundColor: `${color}35`,
@@ -1348,10 +1355,13 @@ const styles = StyleSheet.create({
   durationEvent: {
     position: "absolute",
     left: 2,
-    width: "56%",
     borderLeftWidth: 2,
     zIndex: 4,
   },
+  // A lone timed activity should read as one complete schedule card. Only
+  // reserve a side column when the same slot also contains point items.
+  fullDurationEvent: { right: 2 },
+  splitDurationEvent: { width: "56%" },
   expandedDurationEvent: {
     minHeight: 20,
     borderLeftWidth: 2,

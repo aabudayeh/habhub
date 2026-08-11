@@ -497,8 +497,12 @@ function ChatScreen() {
       <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
         style={styles.flex}
-        // Android still needs `height` on tab scenes to keep the composer above
-        // the resized window. Scroll position is handled independently below.
+        // Android already uses adjustResize (app.json). Applying the RN
+        // `height` adjustment as well can retain its reduced frame after
+        // keyboardDidHide, leaving the composer stranded above the tab bar
+        // until the scene is laid out again. Keep this wrapper disabled there
+        // and let the native window resize be the single source of truth.
+        enabled={Platform.OS !== "android"}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >

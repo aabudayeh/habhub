@@ -818,14 +818,16 @@ function Today() {
             },
           ]}
         >
-          <HeroProgressOutline
-            progress={heroProgress}
-            color={heroAllMet ? "#FFD166" : GOAL_COMPLETE_COLOR}
-            fillMode={completionIndicatorFillMode(
-              state.settings.completionIndicatorIcon,
-              state.settings.completionIndicatorFillMode ?? "auto",
-            )}
-          />
+          {state.settings.showFeaturedCardProgressOutline !== false ? (
+            <HeroProgressOutline
+              progress={heroProgress}
+              color={heroAllMet ? "#FFD166" : GOAL_COMPLETE_COLOR}
+              fillMode={completionIndicatorFillMode(
+                state.settings.completionIndicatorIcon,
+                state.settings.completionIndicatorFillMode ?? "auto",
+              )}
+            />
+          ) : null}
           <View style={styles.heroTop}>
             <View>
               <Text

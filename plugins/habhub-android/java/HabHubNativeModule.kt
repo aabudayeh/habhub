@@ -261,6 +261,22 @@ class HabHubNativeModule(
   }
 
   @ReactMethod
+  fun reconcileWorkoutTimerNotification(identifier: String, promise: Promise) {
+    thread(name = "habhub-workout-notification") {
+      try {
+        promise.resolve(
+          HabHubWorkoutNotificationStore.reconcile(reactContext, identifier),
+        )
+      } catch (_: Exception) {
+        // Expo's notification remains usable if an OEM does not expose the
+        // active row in time. Never reject the React call for this best-effort
+        // visual enhancement.
+        promise.resolve(false)
+      }
+    }
+  }
+
+  @ReactMethod
   fun consumeWorkoutTimerNotificationActions(promise: Promise) {
     promise.resolve(HabHubWorkoutNotificationStore.consumeActions(reactContext))
   }

@@ -69,6 +69,7 @@ import {
   type PerformanceRange,
 } from "@/src/domain/performance";
 import {
+  configureWorkoutTimerNotification,
   consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
   nativeWorkoutActionsEnabled,
@@ -1400,6 +1401,10 @@ function GymScreen() {
       );
       return;
     }
+    // Prepare the Android channel, action categories, and background handler
+    // while React is fully active. Waiting until the screen-lock AppState event
+    // leaves some OEMs too little time before JS is suspended.
+    void configureWorkoutTimerNotification().catch(() => undefined);
     const now = Date.now();
     setDuration("");
     setTimerNow(now);
@@ -2185,6 +2190,10 @@ function GymScreen() {
   useEffect(() => {
     const handleActivity = (next: typeof appActivity) => {
       setAppActivity(next);
+      // Android can suspend React before the state-driven effect commits when
+      // the screen locks. Start this request directly from AppState as the
+      // pre-suspend fallback; workoutTimer.ts revision-coalesces the duplicate
+      // inactive/background/effect calls into one final Expo post.
       if (next === "active") {
         void dismissWorkoutTimerNotification();
         return;
