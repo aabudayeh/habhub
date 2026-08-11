@@ -3,6 +3,7 @@
   <string name="habhub_widget_description">أهداف اليوم وتقدم المتتبّع</string>
   <string name="habhub_widget_open_to_update">افتح HabHub للتحديث</string>
   <string name="habhub_widget_featured_progress">التقدم المميز</string>
+  <string name="habhub_widget_status_avatar">الشخصية الرمزية للحالة</string>
   <string name="habhub_widget_choose">اختر ما تعرضه هذه الأداة</string>
   <string name="habhub_widget_tracker">المتتبّع</string>
   <string name="habhub_widget_add">إضافة الأداة</string>

@@ -1,6 +1,6 @@
 import { NativeModules, Platform } from "react-native";
 
-import type { CompletionFillMode } from "@/src/types";
+import type { CompletionFillMode, StatusAvatarStyle } from "@/src/types";
 
 export type WidgetTrackerSnapshot = {
   id: string;
@@ -20,9 +20,20 @@ export type WidgetTrackerSnapshot = {
   goals?: { title: string; value: string; progress: number; met?: boolean }[];
 };
 
+export type WidgetAvatarSnapshot = WidgetTrackerSnapshot & {
+  id: "__avatar__";
+  /** One resolved bundled/OTA asset. Native decodes only this visible sprite. */
+  avatarUri?: string;
+  avatarStyle: StatusAvatarStyle;
+  heightScale: number;
+  weightLabel: string;
+  bodyCompositionLabel?: string;
+};
+
 export type WidgetSnapshot = {
   updatedAt: string;
   featured: WidgetTrackerSnapshot;
+  avatar?: WidgetAvatarSnapshot;
   /** Cheap picker metadata; no historical metric payload is duplicated here. */
   catalog: { id: string; title: string }[];
   trackers: WidgetTrackerSnapshot[];

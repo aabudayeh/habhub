@@ -40,6 +40,25 @@ type ParsedLine = {
 type TextSelection = { start: number; end: number };
 const EMPTY_RUN = "\u200B";
 
+function setInputSelection(
+  input: NativeTextInput,
+  selection: TextSelection,
+) {
+  // React Native mutates the native ref with `setSelection`, while
+  // react-native-web exposes the underlying textarea's `setSelectionRange`.
+  // Calling only the native method throws after Enter on web and unmounts the
+  // editor, which appears to the user as a blank page.
+  const selectionInput = input as unknown as {
+    setSelection?: (start: number, end: number) => void;
+    setSelectionRange?: (start: number, end: number) => void;
+  };
+  if (typeof selectionInput.setSelection === "function") {
+    selectionInput.setSelection(selection.start, selection.end);
+    return;
+  }
+  selectionInput.setSelectionRange?.(selection.start, selection.end);
+}
+
 export type RichNoteComposerHandle = {
   setBlock: (block: Block) => void;
   toggleInline: (style: Exclude<Inline, "link">) => void;
@@ -318,7 +337,7 @@ export const RichNoteComposer = forwardRef<
     const moveFocus = (input: NativeTextInput | null | undefined) => {
       if (!input) return false;
       input.focus();
-      input.setSelection(target.selection.start, target.selection.end);
+      setInputSelection(input, target.selection);
       selections.current[key] = target.selection;
       pendingFocus.current = null;
       return true;
@@ -429,25 +448,67 @@ export const RichNoteComposer = forwardRef<
     [active, draft, focus, lines, onChange, onHashtagQuery, replaceLine],
   );
 
-  const insertAfter = (index: number, runIndex: number) => {
-    const current = lines[index] ?? parseLine("");
+  const replaceRunText = (
+    lineIndex: number,
+    runIndex: number,
+    nextText: string,
+  ) => {
+    const current = lines[lineIndex] ?? parseLine("");
     const activeRun = current.runs[runIndex] ?? parseRun("");
+    const normalizedText = nextText.replace(/\r\n?/g, "\n");
+    const parts = normalizedText.split("\n");
+
+    if (parts.length === 1) {
+      const runs = [...current.runs];
+      runs[runIndex] = { ...activeRun, text: normalizedText };
+      replaceLine(lineIndex, { ...current, runs });
+      const hashtag = normalizedText.match(
+        /(?:^|\s)#([\p{L}\p{N}_-]*)$/u,
+      );
+      onHashtagQuery?.(hashtag ? hashtag[1] : null);
+      return;
+    }
+
+    // Each visual row is stored as one serialized rich-note line. A multiline
+    // input gives mobile keyboards a real newline action; split that newline
+    // back into rows while preserving both surrounding formatted runs.
     const nextBlock: Block =
       current.block === "bullet" ||
       current.block === "check" ||
       current.block === "quote"
         ? current.block
         : "text";
-    const next = serializeLine({
-      block: nextBlock,
-      checked: false,
-      runs: [{ text: "", inline: new Set(activeRun.inline) }],
-    });
+
+    const firstRuns = [
+      ...current.runs.slice(0, runIndex),
+      { ...activeRun, text: parts[0] },
+    ];
+    const finalRuns = [
+      { ...activeRun, text: parts[parts.length - 1] },
+      ...current.runs.slice(runIndex + 1),
+    ];
+    const inserted = [
+      serializeLine({ ...current, runs: firstRuns }),
+      ...parts.slice(1, -1).map((text) =>
+        serializeLine({
+          block: nextBlock,
+          checked: false,
+          runs: [{ ...activeRun, text }],
+        }),
+      ),
+      serializeLine({
+        block: nextBlock,
+        checked: false,
+        runs: finalRuns,
+      }),
+    ];
     const updated = [...rawLines];
-    updated.splice(index + 1, 0, next);
+    updated.splice(lineIndex, 1, ...inserted);
     commit(updated.join("\n"));
-    setActive({ line: index + 1, run: 0 });
-    focus(index + 1, 0);
+    const destinationLine = lineIndex + parts.length - 1;
+    setActive({ line: destinationLine, run: 0 });
+    focus(destinationLine, 0);
+    onHashtagQuery?.(null);
   };
 
   const backspace = (
@@ -603,21 +664,16 @@ export const RichNoteComposer = forwardRef<
                     ) => {
                       selections.current[key] = event.nativeEvent.selection;
                     }}
-                    onChangeText={(text) => {
-                      const runs = [...line.runs];
-                      runs[runIndex] = { ...run, text };
-                      replaceLine(lineIndex, { ...line, runs });
-                      const hashtag = text.match(
-                        /(?:^|\s)#([\p{L}\p{N}_-]*)$/u,
-                      );
-                      onHashtagQuery?.(hashtag ? hashtag[1] : null);
-                    }}
-                    onSubmitEditing={() => insertAfter(lineIndex, runIndex)}
+                    onChangeText={(text) =>
+                      replaceRunText(lineIndex, runIndex, text)
+                    }
                     onKeyPress={(event) =>
                       backspace(lineIndex, runIndex, event)
                     }
-                    blurOnSubmit={false}
-                    multiline={false}
+                    multiline
+                    numberOfLines={1}
+                    enterKeyHint="enter"
+                    submitBehavior="newline"
                     placeholder={
                       lineIndex === 0 && runIndex === 0
                         ? "Write anything…"

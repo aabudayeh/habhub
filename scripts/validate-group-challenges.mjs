@@ -193,6 +193,16 @@ assert.match(
 assert.match(migration, /alter publication supabase_realtime add table public\.group_challenges/i);
 assert.match(hook, /trailingRefreshRef\.current = true/);
 assert.match(hook, /\}, 180\)/);
+assert.match(
+  hook,
+  /const subscriberId = useId\(\)/,
+  "each mounted challenge hook must own a stable Realtime subscriber id",
+);
+assert.match(
+  hook,
+  /\.channel\(`group-challenges:\$\{groupId\}:\$\{subscriberId\}`\)/,
+  "leaderboard and friend comparison must not reuse one subscribed Realtime channel",
+);
 assert.match(cloud, /\.limit\(200\)/, "challenge reads must stay bounded");
 assert.match(
   progress,

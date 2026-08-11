@@ -23,6 +23,7 @@ import {
   PeriodChoiceBar,
 } from "@/src/components/PeriodNavigator";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
+import { StatusAvatarSimulator } from "@/src/components/StatusAvatarSimulator";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
@@ -155,27 +156,17 @@ function StatusBodyFact({
     <View
       accessible
       accessibilityLabel={`${t(label)}: ${value}`}
-      style={[
-        styles.bodyFact,
-        {
-          backgroundColor: colors.canvas,
-          borderColor: colors.border,
-        },
-      ]}
+      style={styles.bodyFact}
     >
       <Text
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.72}
+        numberOfLines={1}
         style={[styles.bodyFactLabel, { color: colors.muted }]}
       >
-        {label}
+        {label}:
       </Text>
       <Text
         translate={false}
         numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.72}
         style={[styles.bodyFactValue, { color: colors.ink }]}
       >
         {value}
@@ -185,7 +176,7 @@ function StatusBodyFact({
 }
 
 export default function StatusPage() {
-  const { state } = useApp();
+  const { state, updateSettings } = useApp();
   const colors = useAppColors();
   const { t } = useLocalization();
   const { width: viewportWidth } = useWindowDimensions();
@@ -195,6 +186,9 @@ export default function StatusPage() {
   const [anchor, setAnchor] = useState(dateKey());
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [avatarSourceEditorOpen, setAvatarSourceEditorOpen] = useState(false);
+  const [avatarSimulatorOpen, setAvatarSimulatorOpen] = useState(false);
+  const avatarLongPressRef = useRef(false);
   // Date controls should acknowledge a tap immediately. Range totals and the
   // all-time avatar history can then catch up at transition priority while the
   // previous result remains visible instead of blocking the pressed frame.
@@ -317,6 +311,15 @@ export default function StatusPage() {
             label: "Body fat",
             value: "—",
           };
+  const bodyCompositionReady =
+    typeof avatarProgression.currentBodyFatPercent === "number" &&
+    Number.isFinite(avatarProgression.currentBodyFatPercent) &&
+    avatarProgression.currentBodyFatPercent > 0 &&
+    typeof avatarProgression.currentLeanBodyMassKg === "number" &&
+    Number.isFinite(avatarProgression.currentLeanBodyMassKg) &&
+    avatarProgression.currentLeanBodyMassKg > 0;
+  const avatarCalculationSource =
+    state.settings.statusAvatarCalculationSource ?? "bmi";
   // The existing tracker order is the user's display order, so reordering
   // trackers also determines which goal rings sit closest to the avatar. Keep
   // an even flank count for a balanced narrow-phone layout; any remainder
@@ -432,9 +435,36 @@ export default function StatusPage() {
                 ))}
               </View>
 
-              <View style={styles.avatarColumn}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Open avatar simulator")}
+                accessibilityHint={t(
+                  "Tap to preview changes. Hold for avatar calculation settings.",
+                )}
+                accessibilityState={{
+                  expanded: avatarSourceEditorOpen || avatarSimulatorOpen,
+                }}
+                delayLongPress={420}
+                onLongPress={() => {
+                  avatarLongPressRef.current = true;
+                  setAvatarSourceEditorOpen(true);
+                }}
+                onPress={() => {
+                  if (avatarLongPressRef.current) return;
+                  setAvatarSourceEditorOpen(false);
+                  setAvatarSimulatorOpen(true);
+                }}
+                onPressIn={() => {
+                  avatarLongPressRef.current = false;
+                }}
+                style={({ pressed }) => [
+                  styles.avatarColumn,
+                  pressed && styles.avatarHeld,
+                ]}
+              >
                 <BodyProgressAvatar
                   bodyFatPercent={avatarProgression.currentBodyFatPercent}
+                  calculationSource={avatarCalculationSource}
                   heightCm={state.settings.energyProfile.heightCm}
                   leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
                   mindTier={avatarProgression.mindTier}
@@ -444,7 +474,7 @@ export default function StatusPage() {
                   visualStyle={state.settings.statusAvatarStyle ?? "silhouette"}
                   weightKg={avatarProgression.currentWeightKg}
                 />
-              </View>
+              </Pressable>
 
               <View
                 style={[
@@ -469,11 +499,92 @@ export default function StatusPage() {
                 label="Weight"
                 value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
               />
+              <View
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
+              />
               <StatusBodyFact
                 label={bodyCompositionStat.label}
                 value={bodyCompositionStat.value}
               />
             </View>
+            {avatarSourceEditorOpen ? (
+              <View
+                accessibilityLabel={t("Avatar calculation source")}
+                style={[
+                  styles.avatarSourceEditor,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <View style={styles.avatarSourceChoices}>
+                  {(["bmi", "body_composition"] as const).map((source) => {
+                    const selected = avatarCalculationSource === source;
+                    return (
+                      <Pressable
+                        key={source}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                        onPress={() =>
+                          updateSettings({ statusAvatarCalculationSource: source })
+                        }
+                        style={({ pressed }) => [
+                          styles.avatarSourceChoice,
+                          {
+                            backgroundColor: selected
+                              ? GOAL_COMPLETE_COLOR
+                              : colors.card,
+                            borderColor: selected
+                              ? GOAL_COMPLETE_COLOR
+                              : colors.border,
+                          },
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text
+                          translate={false}
+                          style={[
+                            styles.avatarSourceChoiceText,
+                            { color: selected ? palette.ink : colors.ink },
+                          ]}
+                        >
+                          {source === "bmi"
+                            ? t("BMI")
+                            : t("Body composition")}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAvatarSourceEditorOpen(false)}
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.avatarSourceDone,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text
+                      translate={false}
+                      style={[styles.avatarSourceDoneText, { color: colors.muted }]}
+                    >
+                      {t("Done")}
+                    </Text>
+                  </Pressable>
+                </View>
+                {avatarCalculationSource === "body_composition" &&
+                !bodyCompositionReady ? (
+                  <Text
+                    translate={false}
+                    style={[styles.avatarSourceFallback, { color: colors.muted }]}
+                  >
+                    {t(
+                      "BMI fallback until body fat and lean mass are logged",
+                    )}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             {member ? (
               <Text
                 translate={false}
@@ -483,15 +594,6 @@ export default function StatusPage() {
                 {memberDisplayName(state, member)}
               </Text>
             ) : null}
-            <Text style={[styles.summary, { color: colors.muted }]}>
-              {summary.opportunities
-                ? `${summary.completed}/${summary.opportunities} ${t(
-                    calculationDates.length === 1
-                      ? "goals completed on this date"
-                      : "goal opportunities completed in this range",
-                  )}`
-                : t("No goals are currently tracked. Add one in customization.")}
-            </Text>
           </View>
 
           {remainingGoals.length ? (
@@ -507,6 +609,19 @@ export default function StatusPage() {
             </View>
           ) : null}
         </Card>
+        <StatusAvatarSimulator
+          bodyFatPercent={avatarProgression.currentBodyFatPercent}
+          heightCm={state.settings.energyProfile.heightCm}
+          leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
+          mindTier={avatarProgression.mindTier}
+          muscleProgress={avatarProgression.muscleProgress}
+          onClose={() => setAvatarSimulatorOpen(false)}
+          progress={summary.progress}
+          sex={state.settings.energyProfile.sex}
+          visible={avatarSimulatorOpen}
+          visualStyle={state.settings.statusAvatarStyle ?? "silhouette"}
+          weightKg={avatarProgression.currentWeightKg}
+        />
       </Screen>
     </GestureDetector>
   );
@@ -526,6 +641,7 @@ const styles = StyleSheet.create({
   },
   avatarStageRoomy: { columnGap: 12 },
   avatarColumn: { width: 164, alignItems: "center", justifyContent: "center" },
+  avatarHeld: { opacity: 0.9, transform: [{ scale: 0.99 }] },
   goalRail: {
     width: FLANK_RING_SIZE,
     justifyContent: "space-evenly",
@@ -535,41 +651,59 @@ const styles = StyleSheet.create({
   goalRailRoomy: { width: 92 },
   goalRailEmpty: { width: 0 },
   bodyFacts: {
-    width: "100%",
-    maxWidth: 286,
     flexDirection: "row",
-    justifyContent: "center",
-    gap: 8,
-    marginTop: 2,
-  },
-  bodyFact: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 44,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
     alignItems: "center",
     justifyContent: "center",
-    gap: 1,
+    flexWrap: "wrap",
+    columnGap: 8,
+    rowGap: 3,
+    marginTop: 1,
+  },
+  bodyFact: {
+    minHeight: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
   },
   bodyFactLabel: {
-    width: "100%",
-    textAlign: "center",
     fontSize: 9,
-    lineHeight: 11,
+    lineHeight: 13,
     fontWeight: "800",
   },
   bodyFactValue: {
-    width: "100%",
-    textAlign: "center",
-    fontSize: 12,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 14,
     fontWeight: "900",
   },
+  bodyFactDivider: { width: 1, height: 13 },
+  avatarSourceEditor: {
+    maxWidth: 330,
+    width: "92%",
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    gap: 5,
+  },
+  avatarSourceChoices: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  avatarSourceChoice: {
+    minHeight: 30,
+    justifyContent: "center",
+    paddingHorizontal: 11,
+    borderWidth: 1,
+    borderRadius: 15,
+  },
+  avatarSourceChoiceText: { fontSize: 10, lineHeight: 13, fontWeight: "900" },
+  avatarSourceDone: { minHeight: 30, justifyContent: "center", paddingHorizontal: 5 },
+  avatarSourceDoneText: { fontSize: 10, lineHeight: 13, fontWeight: "800" },
+  avatarSourceFallback: { textAlign: "center", fontSize: 9, lineHeight: 12, fontWeight: "700" },
   personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
-  summary: { maxWidth: 520, textAlign: "center", fontSize: 12, fontWeight: "700" },
   goalGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

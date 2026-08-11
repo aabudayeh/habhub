@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import pngjs from "pngjs";
 import ts from "typescript";
+
+const { PNG } = pngjs;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sourcePath = path.join(root, "src", "domain", "statusAvatar.ts");
@@ -18,6 +22,14 @@ const atlasSource = fs.readFileSync(
   path.join(root, "src", "domain", "statusAvatarAtlas.ts"),
   "utf8",
 );
+const spriteManifestSource = fs.readFileSync(
+  path.join(root, "src", "generated", "statusAvatarSprites.ts"),
+  "utf8",
+);
+const spriteGeneratorSource = fs.readFileSync(
+  path.join(root, "scripts", "build-status-avatar-sprites.mjs"),
+  "utf8",
+);
 const profileEditorSource = fs.readFileSync(
   path.join(root, "src", "components", "ProfileEditors.tsx"),
   "utf8",
@@ -28,6 +40,18 @@ const stateSource = fs.readFileSync(
 );
 const statusSource = fs.readFileSync(
   path.join(root, "src", "domain", "status.ts"),
+  "utf8",
+);
+const statusPageSource = fs.readFileSync(
+  path.join(root, "app", "(tabs)", "status.tsx"),
+  "utf8",
+);
+const seedSource = fs.readFileSync(
+  path.join(root, "src", "data", "seed.ts"),
+  "utf8",
+);
+const typesSource = fs.readFileSync(
+  path.join(root, "src", "types.ts"),
   "utf8",
 );
 const compiled = ts.transpileModule(source, {
@@ -56,6 +80,26 @@ try {
 } finally {
   fs.unlinkSync(compiledPath);
 }
+const atlasCompiled = ts.transpileModule(atlasSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    target: ts.ScriptTarget.ES2022,
+  },
+  fileName: "statusAvatarAtlas.ts",
+  reportDiagnostics: true,
+});
+assert.equal(atlasCompiled.diagnostics?.length ?? 0, 0);
+const atlasCompiledPath = path.join(
+  os.tmpdir(),
+  `habhub-status-avatar-grid-${process.pid}-${Date.now()}.cjs`,
+);
+fs.writeFileSync(atlasCompiledPath, atlasCompiled.outputText, "utf8");
+let atlasDomain;
+try {
+  atlasDomain = require(atlasCompiledPath);
+} finally {
+  fs.unlinkSync(atlasCompiledPath);
+}
 const {
   STATUS_AVATAR_VIEWBOX,
   STATUS_BODY_FAT_PERCENT_KNOTS,
@@ -66,11 +110,27 @@ const {
   statusAdiposityForComposition,
   statusAvatarGeometry,
   statusBodyAppearance,
+  statusBodyCompositionForSource,
   statusLeanMassProgress,
   statusMuscleDoseResponse,
   statusMuscleProgressFromWeeks,
   statusMuscleWeeklyQuality,
 } = avatarDomain;
+const { STATUS_AVATAR_SPRITE_GRIDS, statusAvatarAtlasBlend } = atlasDomain;
+
+for (const variant of ["female", "male"]) {
+  assert.equal(STATUS_AVATAR_SPRITE_GRIDS[variant].adiposityStates, 20);
+  assert.equal(STATUS_AVATAR_SPRITE_GRIDS[variant].muscleStates, 10);
+  assert.equal(STATUS_AVATAR_SPRITE_GRIDS[variant].bodyHeight, 500);
+}
+for (const sex of ["female", "male"]) {
+  const leanUntrained = statusAvatarAtlasBlend(sex, -1, 0).samples[0];
+  const middle = statusAvatarAtlasBlend(sex, 0, 0.5).samples[0];
+  const fullMuscular = statusAvatarAtlasBlend(sex, 1, 1).samples[0];
+  assert.deepEqual(leanUntrained, { column: 0, opacity: 1, row: 0 });
+  assert.deepEqual(middle, { column: 6, opacity: 1, row: 5 });
+  assert.deepEqual(fullMuscular, { column: 19, opacity: 1, row: 9 });
+}
 
 assert.match(
   componentSource,
@@ -79,8 +139,43 @@ assert.match(
 );
 assert.match(
   componentSource,
+  /calculationSource = "bmi"[\s\S]*statusBodyCompositionForSource\(calculationSource/,
+  "missing avatar source preferences must follow the BMI calculation path",
+);
+assert.match(
+  typesSource,
+  /StatusAvatarCalculationSource = "bmi" \| "body_composition"[\s\S]*statusAvatarCalculationSource\?: StatusAvatarCalculationSource/,
+  "the persisted settings type must expose exactly the two calculation sources",
+);
+assert.match(
+  seedSource,
+  /statusAvatarCalculationSource: "bmi"/,
+  "new users must default the avatar calculation source to BMI",
+);
+assert.match(
+  statusPageSource,
+  /delayLongPress=\{420\}[\s\S]*onLongPress=[\s\S]*statusAvatarCalculationSource[\s\S]*"body_composition"/,
+  "holding the Status avatar must reveal the compact persisted source selector",
+);
+assert.match(
+  componentSource,
   /styles\.avatarViewport[\s\S]*styles\.progressClip[\s\S]*GOAL_COMPLETE_COLOR/,
   "one clipped avatar viewport must own the bottom-up lime progress layer",
+);
+assert.match(
+  componentSource,
+  /styles\.avatarViewport[\s\S]{0,5000}styles\.percentPill/,
+  "the avatar percentage must render inside the shared avatar viewport",
+);
+assert.match(
+  componentSource,
+  /percentPill:[\s\S]{0,180}left: "50%"[\s\S]{0,180}translateX: -25/,
+  "the avatar percentage must stay centered rather than hanging off the right edge",
+);
+assert.doesNotMatch(
+  statusPageSource,
+  /summary\.completed\}\/\$\{summary\.opportunities|goal opportunities completed in this range/,
+  "Status must not repeat the avatar percentage in a separate completion sentence",
 );
 assert.match(
   componentSource,
@@ -94,12 +189,12 @@ assert.doesNotMatch(
 );
 assert.match(
   componentSource,
-  /const sourceBodyHeight = config\.bodyHeights\[sample\.row\][\s\S]{0,220}const sourceBodyTop = config\.bodyTops\[sample\.row\][\s\S]{0,220}const sourceBodyCenter = config\.bodyCenters\[sample\.row\]\[sample\.column\][\s\S]{0,220}const scale = height \/ sourceBodyHeight/,
+  /const scale = height \/ config\.bodyHeight/,
   "every atlas state must normalize its measured body bounds with one uniform scale",
 );
 assert.match(
   componentSource,
-  /left: width \/ 2 - sourceBodyCenter \* scale[\s\S]{0,240}top: -sourceBodyTop \* scale[\s\S]{0,240}width: config\.atlasWidth \* scale/,
+  /left: width \/ 2 - config\.bodyCenter \* scale[\s\S]{0,240}top: -config\.bodyTop \* scale[\s\S]{0,240}width: config\.spriteWidth \* scale/,
   "every atlas state must share one centered head-to-foot viewport",
 );
 assert.doesNotMatch(
@@ -119,7 +214,7 @@ assert.doesNotMatch(
 );
 assert.match(
   atlasSource,
-  /bodyCenters:[\s\S]*bodyHeights:[\s\S]*bodyTops:[\s\S]*Math\.round\([\s\S]*samples: \[\{ column, row, opacity: 1 \}\]/,
+  /adiposityStates:[\s\S]*bodyHeight: 500[\s\S]*muscleStates:[\s\S]*Math\.round\([\s\S]*samples: \[\{ column, row, opacity: 1 \}\]/,
   "the dense atlas must select exactly one normalized crisp body state",
 );
 assert.doesNotMatch(
@@ -127,17 +222,130 @@ assert.doesNotMatch(
   /horizontalMix|verticalMix|new Map/,
   "whole-body crossfades must not create duplicate or ghost contours",
 );
-for (const file of [
-  "status-avatar-male-atlas-v1.png",
-  "status-avatar-female-atlas-v1.png",
-]) {
-  const assetPath = path.join(root, "assets", "images", file);
-  assert.ok(fs.existsSync(assetPath), `${file} must be bundled locally`);
-  assert.ok(
-    fs.statSync(assetPath).size < 900_000,
-    `${file} should remain a compact mobile asset`,
+assert.match(
+  componentSource,
+  /STATUS_AVATAR_SPRITES\[variant\]\[sample\.row\][\s\S]{0,40}sample\.column/,
+  "the renderer must decode only the selected normalized sprite",
+);
+assert.doesNotMatch(
+  componentSource,
+  /status-avatar-(?:male|female)-atlas-v1/,
+  "the approved low-resolution atlases must be generator inputs, not runtime assets",
+);
+assert.match(
+  spriteGeneratorSource,
+  /BODY_HEIGHT = 500[\s\S]*ADIPOSITY_STATES = 20[\s\S]*MUSCLE_STATES = 10/,
+  "the reproducible generator must keep 500px bodies and the dense two-axis grid",
+);
+assert.match(
+  spriteGeneratorSource,
+  /Premultiplied-alpha separable Lanczos[\s\S]*midpointSprite[\s\S]*horizontalScale/,
+  "the generator must supersample approved anchors and bake geometric midpoints",
+);
+assert.doesNotMatch(
+  spriteGeneratorSource,
+  /tmp[/\\]|https?:\/\//,
+  "the generator must use only project-local source art and final paths",
+);
+
+const spriteCounts = { female: 20 * 10, male: 20 * 10 };
+let spriteBytes = 0;
+for (const variant of ["female", "male"]) {
+  const directory = path.join(
+    root,
+    "assets",
+    "images",
+    "status-avatar-v2",
+    variant,
+  );
+  const files = fs
+    .readdirSync(directory)
+    .filter((file) => file.endsWith(".png"))
+    .sort();
+  assert.equal(
+    files.length,
+    spriteCounts[variant],
+    `${variant} must expose twenty adiposity by ten muscle states`,
+  );
+  const hashes = new Set();
+  const alphaAreas = new Map();
+  for (const file of files) {
+    const filePath = path.join(directory, file);
+    const buffer = fs.readFileSync(filePath);
+    spriteBytes += buffer.length;
+    const image = PNG.sync.read(buffer);
+    assert.deepEqual(
+      [image.width, image.height],
+      [328, 512],
+      `${variant}/${file} must retain its normalized supersampled canvas`,
+    );
+    let left = image.width;
+    let right = -1;
+    let top = image.height;
+    let bottom = -1;
+    let alphaArea = 0;
+    for (let y = 0; y < image.height; y += 1) {
+      for (let x = 0; x < image.width; x += 1) {
+        if (image.data[(y * image.width + x) * 4 + 3] <= 16) continue;
+        alphaArea += 1;
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+      }
+    }
+    assert.ok(right > left && bottom > top, `${variant}/${file} must not be empty`);
+    assert.ok(
+      bottom - top + 1 >= 490,
+      `${variant}/${file} must retain at least 490px of alpha body height`,
+    );
+    assert.ok(
+      Math.abs((left + right) / 2 - 164) <= 4,
+      `${variant}/${file} must stay centered on the shared body axis`,
+    );
+    assert.ok(
+      left >= 4 && right <= image.width - 5,
+      `${variant}/${file} must retain transparent side safety and never clip`,
+    );
+    alphaAreas.set(file, alphaArea);
+    hashes.add(crypto.createHash("sha256").update(image.data).digest("hex"));
+  }
+  assert.equal(
+    hashes.size,
+    files.length,
+    `${variant} intermediate states must be real distinct sprites`,
+  );
+  for (let row = 0; row < 10; row += 1) {
+    const extensionAreas = Array.from({ length: 8 }, (_, offset) => {
+      const file = `m${String(row).padStart(2, "0")}-a${String(offset + 12).padStart(2, "0")}.png`;
+      return alphaAreas.get(file);
+    });
+    extensionAreas.slice(1).forEach((area, index) =>
+      assert.ok(
+        area > extensionAreas[index],
+        `${variant} extended adiposity area must increase at muscle row ${row}, column ${index + 13}`,
+      ),
+    );
+    assert.ok(
+      extensionAreas.at(-1) >= extensionAreas[0] * 1.13,
+      `${variant} a19 must be visibly fuller than the approved a12 endpoint`,
+    );
+  }
+  const manifestRequires = [
+    ...spriteManifestSource.matchAll(
+      new RegExp(`status-avatar-v2/${variant}/`, "g"),
+    ),
+  ].length;
+  assert.equal(
+    manifestRequires,
+    files.length,
+    `${variant} manifest must statically bundle every generated state once`,
   );
 }
+assert.ok(
+  spriteBytes < 12 * 1_048_576,
+  `runtime avatar sprite payload must stay below 12 MiB (received ${spriteBytes})`,
+);
 assert.doesNotMatch(
   statusSource,
   /earliestWeight|earliestBodyFat|earliestLean/i,
@@ -239,6 +447,14 @@ assert.ok(
   male170.at(-1) - male170.at(-2) > 0.15,
   "120 kg and 150 kg at 170 cm must not collapse into one high-mass shape",
 );
+const male120Column = statusAvatarAtlasBlend("male", male170[4], 0).samples[0]
+  .column;
+const male150Column = statusAvatarAtlasBlend("male", male170[5], 0).samples[0]
+  .column;
+assert.ok(
+  male150Column >= male120Column + 5 && male150Column > 12,
+  "the extreme extension must keep 120 kg and 150 kg visibly separated",
+);
 
 const shortAppearance = statusBodyAppearance(155, 70, 0);
 const tallAppearance = statusBodyAppearance(195, 70, 0);
@@ -296,6 +512,32 @@ assert.equal(
   weightOnly.adiposity,
   weightOnly.bodyMass,
   "when body fat and lean mass are absent, BMI must drive avatar adiposity",
+);
+assert.deepEqual(
+  statusBodyCompositionForSource(undefined, {
+    bodyFatPercent: 18,
+    leanBodyMassKg: 72,
+    sex: "male",
+  }),
+  { sex: "male" },
+  "an existing user without the new preference must default to BMI",
+);
+assert.deepEqual(
+  statusBodyCompositionForSource("body_composition", {
+    bodyFatPercent: 18,
+    sex: "male",
+  }),
+  { sex: "male" },
+  "composition mode must fall back cleanly when lean mass is missing",
+);
+assert.deepEqual(
+  statusBodyCompositionForSource("body_composition", {
+    bodyFatPercent: 18,
+    leanBodyMassKg: 72,
+    sex: "male",
+  }),
+  { bodyFatPercent: 18, leanBodyMassKg: 72, sex: "male" },
+  "composition mode must preserve both measurements when they are available",
 );
 const selectedDateBmiFallback = statusBodyAppearance(165, 100, 0, {
   sex: "female",

@@ -3864,6 +3864,7 @@ function GymScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              style={styles.pickerCategoryScroller}
               contentContainerStyle={styles.pickerCategories}
             >
               <Chip
@@ -4415,8 +4416,22 @@ const styles = StyleSheet.create({
   pickerSheet: { maxHeight: "88%", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, gap: 10 },
   pickerHeader: { flexDirection: "row", alignItems: "center", gap: 9 },
   search: { height: 42, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, fontSize: 10 },
-  pickerCategories: { gap: 5, paddingRight: 8 },
-  pickerMuscles: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  pickerCategoryScroller: { flexGrow: 0, minHeight: 40, maxHeight: 40 },
+  pickerCategories: {
+    minHeight: 40,
+    alignItems: "center",
+    columnGap: 5,
+    paddingRight: 8,
+    paddingVertical: 2,
+  },
+  pickerMuscles: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    columnGap: 5,
+    rowGap: 6,
+    paddingVertical: 2,
+  },
   customRow: { flexDirection: "row", gap: 7 },
   customInput: { flex: 1, height: 40, borderWidth: 1, borderRadius: 11, paddingHorizontal: 11, fontSize: 10 },
   customAdd: { width: 40, height: 40, borderRadius: 11, alignItems: "center", justifyContent: "center" },

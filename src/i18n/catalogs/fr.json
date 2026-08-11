@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "Simulateur d’avatar",
+  "Preview a change without saving it.": "Prévisualisez un changement sans l’enregistrer.",
+  "Choose what to change": "Choisissez ce que vous souhaitez modifier",
+  "Open avatar simulator": "Ouvrir le simulateur d’avatar",
+  "Tap to preview changes. Hold for avatar calculation settings.": "Touchez pour prévisualiser les changements. Maintenez appuyé pour les réglages de calcul de l’avatar.",
+  "Avatar appearance settings": "Paramètres d’apparence de l’avatar",
+  "Avatar calculation source": "Source de calcul de l’avatar",
+  "BMI": "IMC",
+  "BMI fallback until body fat and lean mass are logged": "L’IMC est utilisé jusqu’à l’enregistrement de la masse grasse et de la masse maigre",
+  "Hold to choose the measurements used for this avatar": "Maintenez appuyé pour choisir les mesures utilisées pour cet avatar",
   "Challenge wins": "Victoires de défis",
   "{value1} challenge win": "{value1} victoire de défi",
   "{value1} challenge wins": "{value1} victoires de défis",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "Vous pouvez rejoindre ce groupe directement dans le navigateur."
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "L’accès à l’utilisation Android fournit un temps d’écran quotidien approximatif et un détail par application. HabHub conserve ce détail uniquement sur cet appareil.",
   "App usage": "Utilisation des applications",
+  "Average app usage": "Utilisation quotidienne moyenne des applications",
   "Approximate Android foreground time · stored only on this device": "Temps approximatif au premier plan Android · stocké uniquement sur cet appareil",
   "Checking": "Vérification",
   "Device usage": "Utilisation de l’appareil",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "Votre téléphone"
   ,"Body-water measurements in kilograms from Health Connect": "Mesures de masse hydrique corporelle en kilogrammes depuis Health Connect"
   ,"Bone-mass measurements in kilograms from Health Connect": "Mesures de masse osseuse en kilogrammes depuis Health Connect"
+  ,"Battery optimization": "Optimisation de la batterie"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "L’optimisation de la batterie est désactivée pour HabHub. La synchronisation planifiée en arrière-plan peut fonctionner de façon plus fiable."
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "L’optimisation de la batterie est activée pour HabHub. Touchez pour vérifier les réglages Android et fiabiliser la synchronisation planifiée."
+  ,"Checking Android battery settings...": "Vérification des réglages de batterie Android..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Facultatif. Android contrôle ce réglage ; HabHub ne le modifie jamais automatiquement."
+  ,"Disabled": "Désactivée"
+  ,"Review": "Vérifier"
+  ,"Open Android battery optimization settings": "Ouvrir les réglages d’optimisation de la batterie Android"
+  ,"Battery settings unavailable": "Réglages de batterie indisponibles"
+  ,"Android battery settings could not be opened.": "Les réglages de batterie Android n’ont pas pu être ouverts."
 }

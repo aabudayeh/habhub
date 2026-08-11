@@ -23,6 +23,7 @@ import { leaderboardRows } from "@/src/domain/leaderboard";
 import {
   excludeAlreadyPublishedDailyStatusRows,
 } from "@/src/domain/cloudSyncProjection";
+import { confirmedCloudPublishRevision } from "@/src/domain/cloudConflict";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
@@ -2830,9 +2831,13 @@ export async function pushCloudWorkspace(
       subject_user_id: memberId,
       nickname: alias.trim(),
     }));
+  const aliasRevision = confirmedCloudPublishRevision(
+    publishRevision,
+    await resolveAccountRevision(client, state.currentUserId),
+  );
   const aliasProjection = await client.rpc("publish_group_member_aliases", {
     p_group_id: state.group.id,
-    p_expected_revision: publishRevision,
+    p_expected_revision: aliasRevision,
     p_aliases: aliasRows,
   });
   if (aliasProjection.error) throw aliasProjection.error;

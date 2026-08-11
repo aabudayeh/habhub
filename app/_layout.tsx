@@ -23,12 +23,16 @@ import {
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
-import { CloudSyncProvider } from "@/src/cloud/CloudSyncProvider";
+import {
+  CloudSyncProvider,
+  useCloudSyncStatus,
+} from "@/src/cloud/CloudSyncProvider";
 import { HealthSyncProvider } from "@/src/health/HealthSyncProvider";
 import { AppProvider, useApp } from "@/src/state/AppProvider";
 import { LocalizationProvider } from "@/src/i18n";
 import { WebDocumentMetadata } from "@/src/i18n/WebDocumentMetadata";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
+import { shouldWaitForOnboardingAuthority } from "@/src/domain/onboarding";
 import { ScreenTimeSyncBridge } from "@/src/screenTime/ScreenTimeSyncBridge";
 import { WidgetSnapshotBridge } from "@/src/widgets/WidgetSnapshotBridge";
 import {
@@ -87,6 +91,7 @@ function AppLocalizationBridge() {
 
 function RootNavigator() {
   const auth = useAuth();
+  const cloudSyncStatus = useCloudSyncStatus();
   const { state, hydrated, updateSettings } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
@@ -465,7 +470,16 @@ function RootNavigator() {
     auth.status === "signedIn" &&
     Boolean(auth.user) &&
     state.currentUserId !== auth.user?.id;
-  if (auth.status === "loading" || accountStateMismatch) {
+  // A new browser has no local onboarding marker. Wait for the authoritative
+  // account snapshot before deciding whether to enter onboarding; otherwise an
+  // already-onboarded account can bounce between onboarding and its saved
+  // landing page while the first cloud read is still resolving.
+  const cloudAccountHydrating = shouldWaitForOnboardingAuthority({
+    authStatus: auth.status,
+    cloudSyncStatus,
+    onboardingDone,
+  });
+  if (auth.status === "loading" || accountStateMismatch || cloudAccountHydrating) {
     return (
       <View style={styles.loading}>
         <Image

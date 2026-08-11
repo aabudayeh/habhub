@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "Симулятор аватара",
+  "Preview a change without saving it.": "Просмотрите изменение без сохранения.",
+  "Choose what to change": "Выберите, что изменить",
+  "Open avatar simulator": "Открыть симулятор аватара",
+  "Tap to preview changes. Hold for avatar calculation settings.": "Коснитесь для просмотра изменений. Удерживайте для настроек расчёта аватара.",
+  "Avatar appearance settings": "Настройки внешнего вида аватара",
+  "Avatar calculation source": "Источник расчёта аватара",
+  "BMI": "ИМТ",
+  "BMI fallback until body fat and lean mass are logged": "Пока не записаны процент жира и безжировая масса, используется ИМТ",
+  "Hold to choose the measurements used for this avatar": "Нажмите и удерживайте, чтобы выбрать измерения для этого аватара",
   "Challenge wins": "Победы в испытаниях",
   "{value1} challenge win": "{value1} победа в испытаниях",
   "{value1} challenge wins": "{value1} побед в испытаниях",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "Вы можете присоединиться к этой группе прямо в браузере."
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Доступ к статистике использования Android показывает приблизительное экранное время за день и разбивку по приложениям. HabHub хранит разбивку только на этом устройстве.",
   "App usage": "Использование приложений",
+  "Average app usage": "Среднее ежедневное использование приложений",
   "Approximate Android foreground time · stored only on this device": "Приблизительное время приложений на экране Android · хранится только на этом устройстве",
   "Checking": "Проверка",
   "Device usage": "Использование устройства",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "Ваш телефон"
   ,"Body-water measurements in kilograms from Health Connect": "Измерения массы воды в организме в килограммах из Health Connect"
   ,"Bone-mass measurements in kilograms from Health Connect": "Измерения костной массы в килограммах из Health Connect"
+  ,"Battery optimization": "Оптимизация батареи"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "Оптимизация батареи для HabHub отключена. Плановая фоновая синхронизация может работать надёжнее."
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "Оптимизация батареи для HabHub включена. Нажмите, чтобы проверить настройки Android для более надёжной плановой синхронизации."
+  ,"Checking Android battery settings...": "Проверяем настройки батареи Android..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Необязательно. Эта настройка управляется Android; HabHub никогда не изменяет её автоматически."
+  ,"Disabled": "Отключена"
+  ,"Review": "Проверить"
+  ,"Open Android battery optimization settings": "Открыть настройки оптимизации батареи Android"
+  ,"Battery settings unavailable": "Настройки батареи недоступны"
+  ,"Android battery settings could not be opened.": "Не удалось открыть настройки батареи Android."
 }

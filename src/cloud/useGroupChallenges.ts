@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   deleteGroupChallenge,
@@ -12,6 +12,10 @@ import { GroupChallenge } from "@/src/types";
 
 /** A small, screen-scoped read model; realtime bursts coalesce into one request. */
 export function useGroupChallenges(groupId: string) {
+  // Leaderboard stays mounted underneath the member comparison route. Give
+  // every mounted hook its own Realtime topic so Supabase never reuses an
+  // already-subscribed channel and rejects a second `.on(...)` callback.
+  const subscriberId = useId();
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
@@ -76,7 +80,7 @@ export function useGroupChallenges(groupId: string) {
       }, 180);
     };
     const channel = supabase
-      .channel(`group-challenges:${groupId}`)
+      .channel(`group-challenges:${groupId}:${subscriberId}`)
       .on(
         "postgres_changes",
         {
@@ -92,7 +96,7 @@ export function useGroupChallenges(groupId: string) {
       if (timer) clearTimeout(timer);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [groupId, refresh]);
+  }, [groupId, refresh, subscriberId]);
 
   const save = useCallback(async (input: SaveGroupChallengeInput) => {
     const saved = await saveGroupChallenge(input);

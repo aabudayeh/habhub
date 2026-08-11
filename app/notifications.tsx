@@ -1,14 +1,16 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  AppState,
+  Platform,
   Pressable,
   StyleSheet,
   Switch,
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
 
@@ -25,6 +27,12 @@ import {
   disablePushNotifications,
   enablePushNotifications,
 } from "@/src/notifications/push";
+import {
+  getBatteryOptimizationStatus,
+  isBatteryOptimizationControlSupported,
+  openBatteryOptimizationSettings,
+} from "@/src/notifications/batteryOptimization";
+import type { BatteryOptimizationStatus } from "@/src/notifications/batteryOptimization";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { NotificationSettings } from "@/src/types";
 
@@ -33,12 +41,18 @@ export default function NotificationsScreen() {
   const auth = useAuth();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { t } = useLocalization();
   const value = state.settings.notifications;
   const [permissionNote, setPermissionNote] = useState<string | null>(null);
   const [groupOpen, setGroupOpen] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
   const [trackersOpen, setTrackersOpen] = useState(false);
   const [quietOpen, setQuietOpen] = useState(false);
+  const [batteryOptimizationStatus, setBatteryOptimizationStatus] = useState<
+    BatteryOptimizationStatus | "checking"
+  >(
+    isBatteryOptimizationControlSupported() ? "checking" : "unsupported",
+  );
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => metric.scoreWeight > 0 && metric.dataType !== "text",
   );
@@ -55,6 +69,26 @@ export default function NotificationsScreen() {
   );
   const showGymNotifications =
     state.settings.showGym === true && hasGymTracker;
+  const refreshBatteryOptimization = useCallback(async () => {
+    try {
+      setBatteryOptimizationStatus(await getBatteryOptimizationStatus());
+    } catch {
+      // Keep the user-initiated settings route available if an OEM fails the
+      // status query. Android remains the source of truth after they return.
+      setBatteryOptimizationStatus("enabled");
+    }
+  }, []);
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      setBatteryOptimizationStatus("unsupported");
+      return;
+    }
+    void refreshBatteryOptimization();
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void refreshBatteryOptimization();
+    });
+    return () => subscription.remove();
+  }, [refreshBatteryOptimization]);
   function patch(changes: Partial<NotificationSettings>) {
     updateSettings({ notifications: { ...value, ...changes } });
   }
@@ -117,6 +151,22 @@ export default function NotificationsScreen() {
       Alert.alert("Notifications not enabled", message);
     }
   }
+  async function reviewBatteryOptimization() {
+    try {
+      const opened = await openBatteryOptimizationSettings();
+      if (!opened) {
+        Alert.alert(
+          "Battery settings unavailable",
+          "Android battery settings could not be opened.",
+        );
+      }
+    } catch {
+      Alert.alert(
+        "Battery settings unavailable",
+        "Android battery settings could not be opened.",
+      );
+    }
+  }
   return (
     <Screen keyboardShouldPersistTaps="handled">
       <PageHeader
@@ -146,6 +196,60 @@ export default function NotificationsScreen() {
           </Text>
         ) : null}
       </Card>
+      {Platform.OS === "android" &&
+      batteryOptimizationStatus !== "unsupported" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("Open Android battery optimization settings")}
+          accessibilityHint={t(
+            "Optional. Android controls this setting; HabHub never changes it automatically.",
+          )}
+          onPress={reviewBatteryOptimization}
+          style={[
+            styles.batteryLink,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <View style={[styles.rowIcon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="battery-half-outline" size={20} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <View style={styles.batteryTitleRow}>
+              <Text style={[styles.title, { color: colors.ink }]}>
+                Battery optimization
+              </Text>
+              <View
+                style={[
+                  styles.batteryBadge,
+                  {
+                    backgroundColor:
+                      batteryOptimizationStatus === "disabled"
+                        ? `${accent}20`
+                        : colors.primarySoft,
+                  },
+                ]}
+              >
+                <Text style={[styles.batteryBadgeText, { color: accent }]}>
+                  {batteryOptimizationStatus === "disabled"
+                    ? "Disabled"
+                    : "Review"}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.copyText, { color: colors.muted }]}>
+              {batteryOptimizationStatus === "checking"
+                ? "Checking Android battery settings..."
+                : batteryOptimizationStatus === "disabled"
+                  ? "Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably."
+                  : "Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync."}
+            </Text>
+            <Text style={[styles.batteryFootnote, { color: colors.faint }]}>
+              Optional. Android controls this setting; HabHub never changes it automatically.
+            </Text>
+          </View>
+          <Ionicons name="open-outline" size={18} color={colors.faint} />
+        </Pressable>
+      ) : null}
       <Pressable
         onPress={() => router.navigate("/calendar" as never)}
         style={[
@@ -622,6 +726,37 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
     marginTop: 8,
+  },
+  batteryLink: {
+    minHeight: 78,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 8,
+  },
+  batteryTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  batteryBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  batteryBadgeText: {
+    fontSize: 8,
+    fontWeight: "900",
+  },
+  batteryFootnote: {
+    fontSize: 8,
+    lineHeight: 11,
+    marginTop: 3,
   },
   metricIcon: {
     width: 34,

@@ -33,6 +33,7 @@ class HabHubWidgetConfigActivity : Activity() {
     val existing = HabHubWidgetStore.configuration(this, widgetId)
     val trackerChoices = mutableListOf(
       "__featured__" to getString(R.string.habhub_widget_featured_progress),
+      "__avatar__" to getString(R.string.habhub_widget_status_avatar),
     )
     (snapshot.optJSONArray("catalog") ?: snapshot.optJSONArray("trackers"))?.let { trackers ->
       for (index in 0 until trackers.length()) {

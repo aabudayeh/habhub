@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "محاكي الصورة الرمزية",
+  "Preview a change without saving it.": "عاين التغيير دون حفظه.",
+  "Choose what to change": "اختر ما تريد تغييره",
+  "Open avatar simulator": "افتح محاكي الصورة الرمزية",
+  "Tap to preview changes. Hold for avatar calculation settings.": "اضغط لمعاينة التغييرات. اضغط مطولًا لإعدادات حساب الصورة الرمزية.",
+  "Avatar appearance settings": "إعدادات مظهر الصورة الرمزية",
+  "Avatar calculation source": "مصدر حساب الصورة الرمزية",
+  "BMI": "BMI",
+  "BMI fallback until body fat and lean mass are logged": "يتم استخدام مؤشر كتلة الجسم حتى يتم تسجيل دهون الجسم والكتلة الخالية من الدهون",
+  "Hold to choose the measurements used for this avatar": "اضغط مطولًا لاختيار القياسات المستخدمة لهذه الصورة الرمزية",
   "Challenge wins": "انتصارات التحديات",
   "{value1} challenge win": "{value1} فوز في التحديات",
   "{value1} challenge wins": "{value1} من انتصارات التحديات",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "يمكنك الانضمام إلى هذه المجموعة مباشرةً من المتصفح بدلاً من ذلك."
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "يوفر وصول استخدام Android وقت الشاشة اليومي التقريبي وتفصيلاً حسب التطبيق. يحتفظ HabHub بالتفصيل على هذا الجهاز فقط.",
   "App usage": "استخدام التطبيقات",
+  "Average app usage": "متوسط استخدام التطبيقات اليومي",
   "Approximate Android foreground time · stored only on this device": "وقت تقريبي لظهور التطبيقات في واجهة Android · محفوظ على هذا الجهاز فقط",
   "Checking": "جارٍ التحقق",
   "Device usage": "استخدام الجهاز",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "هاتفك"
   ,"Body-water measurements in kilograms from Health Connect": "قياسات كتلة ماء الجسم بالكيلوغرام من Health Connect"
   ,"Bone-mass measurements in kilograms from Health Connect": "قياسات كتلة العظام بالكيلوغرام من Health Connect"
+  ,"Battery optimization": "تحسين البطارية"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "تم تعطيل تحسين البطارية لتطبيق HabHub. يمكن تشغيل المزامنة المجدولة في الخلفية بموثوقية أكبر."
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "تحسين البطارية مفعّل لتطبيق HabHub. اضغط لمراجعة إعدادات Android لتحسين موثوقية المزامنة المجدولة."
+  ,"Checking Android battery settings...": "جارٍ التحقق من إعدادات بطارية Android..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "اختياري. يتحكم Android في هذا الإعداد؛ ولا يغيّره HabHub تلقائيًا أبدًا."
+  ,"Disabled": "معطّل"
+  ,"Review": "مراجعة"
+  ,"Open Android battery optimization settings": "فتح إعدادات تحسين البطارية في Android"
+  ,"Battery settings unavailable": "إعدادات البطارية غير متاحة"
+  ,"Android battery settings could not be opened.": "تعذر فتح إعدادات بطارية Android."
 }

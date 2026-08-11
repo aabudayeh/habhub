@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "Avatar-Simulator",
+  "Preview a change without saving it.": "Vorschau einer Änderung ohne Speichern.",
+  "Choose what to change": "Wähle aus, was du ändern möchtest",
+  "Open avatar simulator": "Avatar-Simulator öffnen",
+  "Tap to preview changes. Hold for avatar calculation settings.": "Tippe, um Änderungen anzusehen. Halte gedrückt für die Avatar-Berechnungseinstellungen.",
+  "Avatar appearance settings": "Einstellungen für das Avatar-Aussehen",
+  "Avatar calculation source": "Berechnungsquelle des Avatars",
+  "BMI": "BMI",
+  "BMI fallback until body fat and lean mass are logged": "Bis Körperfett und Magermasse protokolliert sind, wird BMI verwendet",
+  "Hold to choose the measurements used for this avatar": "Gedrückt halten, um die Messwerte für diesen Avatar auszuwählen",
   "Challenge wins": "Challenge-Siege",
   "{value1} challenge win": "{value1} Challenge-Sieg",
   "{value1} challenge wins": "{value1} Challenge-Siege",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "Du kannst dieser Gruppe stattdessen direkt im Browser beitreten."
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Android-Nutzungszugriff liefert ungefähre tägliche Bildschirmzeit und eine Aufschlüsselung nach App. HabHub speichert diese nur auf diesem Gerät.",
   "App usage": "App-Nutzung",
+  "Average app usage": "Durchschnittliche tägliche App-Nutzung",
   "Approximate Android foreground time · stored only on this device": "Ungefähre Android-Vordergrundzeit · nur auf diesem Gerät gespeichert",
   "Checking": "Wird geprüft",
   "Device usage": "Gerätenutzung",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "Dein Smartphone"
   ,"Body-water measurements in kilograms from Health Connect": "Messungen der Körperwassermasse in Kilogramm aus Health Connect"
   ,"Bone-mass measurements in kilograms from Health Connect": "Messungen der Knochenmasse in Kilogramm aus Health Connect"
+  ,"Battery optimization": "Akkuoptimierung"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "Die Akkuoptimierung ist für HabHub deaktiviert. Geplante Hintergrundsynchronisierungen können zuverlässiger ausgeführt werden."
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "Die Akkuoptimierung ist für HabHub aktiviert. Tippe, um die Android-Einstellungen für eine zuverlässigere geplante Synchronisierung zu prüfen."
+  ,"Checking Android battery settings...": "Android-Akkueinstellungen werden geprüft..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Optional. Android steuert diese Einstellung; HabHub ändert sie niemals automatisch."
+  ,"Disabled": "Deaktiviert"
+  ,"Review": "Prüfen"
+  ,"Open Android battery optimization settings": "Android-Einstellungen zur Akkuoptimierung öffnen"
+  ,"Battery settings unavailable": "Akkueinstellungen nicht verfügbar"
+  ,"Android battery settings could not be opened.": "Die Android-Akkueinstellungen konnten nicht geöffnet werden."
 }

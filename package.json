@@ -19,15 +19,21 @@
     "validate:auth": "node --no-warnings --experimental-strip-types scripts/validate-auth-errors.mjs",
     "validate:i18n": "node scripts/validate-i18n.mjs",
     "validate:avatar": "node scripts/validate-status-avatar.mjs",
+    "validate:avatar-simulator": "node scripts/validate-status-avatar-simulator.mjs",
     "validate:health": "node --no-warnings --experimental-strip-types scripts/validate-health-dedup.mjs",
     "validate:progress-grid": "node scripts/validate-progress-grid-navigation.mjs",
     "validate:profile-sync": "node --no-warnings --experimental-strip-types scripts/validate-profile-sync.mjs",
     "validate:sync-gates": "node scripts/validate-sync-gates.mjs",
     "validate:native-ui": "node scripts/validate-native-chat-widgets.mjs",
     "validate:challenges": "node --no-warnings --experimental-strip-types scripts/validate-group-challenges.mjs",
-    "validate:onboarding": "node scripts/validate-onboarding-flow.mjs",
-    "check": "pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint",
-    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm typecheck && pnpm lint && pnpm export:web"
+    "validate:onboarding": "node --no-warnings --experimental-strip-types scripts/validate-onboarding-flow.mjs",
+    "validate:journal": "node scripts/validate-journal-editor.mjs",
+    "validate:notifications": "node --no-warnings --experimental-strip-types scripts/validate-notification-scheduling.mjs",
+    "validate:battery": "node scripts/validate-battery-optimization.mjs",
+    "validate:screen-time": "node --no-warnings --experimental-strip-types scripts/validate-screen-time.mjs",
+    "validate:rn-keyboard": "node scripts/validate-rn-keyboard-patch.mjs",
+    "check": "pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm validate:cloud && pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:onboarding && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -86,6 +92,7 @@
     "@types/react": "~19.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
+    "pngjs": "3.4.0",
     "typescript": "~5.9.2"
   },
   "expo": {

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
 import com.facebook.react.bridge.Arguments
@@ -172,6 +173,51 @@ class HabHubNativeModule(
       } catch (error: Exception) {
         promise.reject("usage_query_failed", error)
       }
+    }
+  }
+
+  @ReactMethod
+  fun isIgnoringBatteryOptimizations(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      promise.resolve(true)
+      return
+    }
+    try {
+      val powerManager = reactContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+      promise.resolve(
+        powerManager.isIgnoringBatteryOptimizations(reactContext.packageName),
+      )
+    } catch (error: Exception) {
+      promise.reject("battery_optimization_status_failed", error)
+    }
+  }
+
+  /**
+   * Opens Android's user-managed battery-optimization list. HabHub deliberately
+   * does not request a direct exemption or launch this page automatically.
+   */
+  @ReactMethod
+  fun openBatteryOptimizationSettings(promise: Promise) {
+    try {
+      val packageUri = Uri.parse("package:${reactContext.packageName}")
+      val candidates = listOf(
+        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri),
+        Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS),
+        Intent(Settings.ACTION_SETTINGS),
+      )
+      val opened = candidates.any { candidate ->
+        candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+          reactContext.startActivity(candidate)
+          true
+        } catch (_: Exception) {
+          false
+        }
+      }
+      promise.resolve(opened)
+    } catch (error: Exception) {
+      promise.reject("battery_optimization_settings_unavailable", error)
     }
   }
 
@@ -362,10 +408,14 @@ class HabHubNativeModule(
           // that the display was interactive.
           if (!sawScreenState) screenInteractive = true
         }
-        UsageEvents.Event.ACTIVITY_PAUSED,
-        UsageEvents.Event.ACTIVITY_STOPPED -> {
+        UsageEvents.Event.ACTIVITY_PAUSED -> {
           if (currentPackage == event.packageName) currentPackage = null
         }
+        // Do not clear the package on ACTIVITY_STOPPED. Android commonly emits
+        // it after another Activity in the same package has already resumed;
+        // clearing here loses the entire following foreground interval and
+        // substantially underreports compared with Digital Wellbeing.
+        UsageEvents.Event.ACTIVITY_STOPPED -> Unit
       }
       cursor = timestamp
     }

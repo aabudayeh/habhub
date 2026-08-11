@@ -3,6 +3,7 @@
   <string name="habhub_widget_description">Objectifs du jour et progression du suivi</string>
   <string name="habhub_widget_open_to_update">Ouvrez HabHub pour actualiser</string>
   <string name="habhub_widget_featured_progress">Progression à la une</string>
+  <string name="habhub_widget_status_avatar">Avatar de statut</string>
   <string name="habhub_widget_choose">Choisissez le contenu du widget</string>
   <string name="habhub_widget_tracker">Suivi</string>
   <string name="habhub_widget_add">Ajouter le widget</string>

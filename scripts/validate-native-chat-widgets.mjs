@@ -12,13 +12,13 @@ const manifest = read("android/app/src/main/AndroidManifest.xml");
 
 assert.match(
   chat,
-  /enabled=\{Platform\.OS === "ios"\}[\s\S]*?behavior="padding"/,
-  "Only iOS may apply KeyboardAvoidingView padding",
+  /enabled=\{[\s\S]*?Platform\.OS === "ios" \|\|[\s\S]*?Platform\.OS === "android" && keyboardVisible[\s\S]*?\}[\s\S]*?behavior="padding"/,
+  "Android Chat must enable measured KAV padding only while the IME is visible",
 );
 assert.doesNotMatch(
   chat,
-  /Platform\.OS === "android" && keyboardVisible|behavior=\{Platform\.OS === "ios" \? "padding" : "height"\}/,
-  "Android must not double-count adjustResize with a KAV height",
+  /behavior=\{Platform\.OS === "ios" \? "padding" : "height"\}|behavior="height"/,
+  "Android must not combine adjustResize with a fixed KAV height",
 );
 assert.match(
   chat,
@@ -50,41 +50,45 @@ assert.equal(
 
 const pluginConfig = read("plugins/withHabHubAndroid.js");
 const widgetLayout = read("plugins/habhub-android/res/layout/habhub_widget.xml");
-const requiredResources = [
-  "habhub_widget_badge.xml",
-  "habhub_widget_badge_complete.xml",
-  "habhub_widget_goal.xml",
-  "habhub_widget_goal_complete.xml",
-  "habhub_widget_progress_lime.xml",
-  "habhub_widget_progress_gold.xml",
-];
-for (const resource of requiredResources) {
-  assert.match(pluginConfig, new RegExp(resource.replace(".", "\\.")));
-  assert.ok(
-    fs.existsSync(path.join(root, "plugins/habhub-android/res/drawable", resource)),
-    `Missing plugin resource ${resource}`,
-  );
-  assert.ok(
-    fs.existsSync(path.join(root, "android/app/src/main/res/drawable", resource)),
-    `Missing generated Android resource ${resource}`,
-  );
-}
+const widgetConfig = read(
+  "plugins/habhub-android/java/HabHubWidgetConfigActivity.kt",
+);
+const widgetBridge = read("src/widgets/WidgetSnapshotBridge.tsx");
+const widgetTypes = read("src/widgets/index.ts");
 
-for (const id of [
-  "widget_completion_badge",
-  "widget_badge_value",
-  "widget_progress_lime",
-  "widget_goal_1",
-  "widget_goal_2",
-  "widget_goal_3",
-]) {
-  assert.match(widgetLayout, new RegExp(id));
-}
-assert.match(pluginSource, /if \(oneRow\) View\.GONE else View\.VISIBLE/);
-assert.match(pluginSource, /if \(minWidth < 150\)[\s\S]*widget_goal_2[\s\S]*widget_goal_3/);
-assert.match(pluginSource, /habhub_widget_background_complete/);
-assert.match(pluginSource, /habhub_widget_badge_complete/);
-assert.match(pluginSource, /habhub_widget_goal_complete/);
+assert.match(pluginConfig, /\["layout", "habhub_widget\.xml"\]/);
+assert.match(widgetLayout, /android:id="@\+id\/widget_card_image"/);
+assert.match(widgetLayout, /android:scaleType="fitXY"/);
+assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_badge/);
+
+assert.match(widgetConfig, /"__featured__"[\s\S]*"__avatar__"/);
+assert.match(pluginSource, /"__avatar__" -> snapshot\.optJSONObject\("avatar"\)/);
+assert.match(pluginSource, /paceboard:\/\/status/);
+assert.match(pluginSource, /paceboard:\/\//);
+assert.match(pluginSource, /setImageViewBitmap/);
+assert.match(pluginSource, /LinearGradient/);
+assert.match(pluginSource, /RadialGradient/);
+assert.match(pluginSource, /drawProgressOutline/);
+assert.match(pluginSource, /drawGoalTiles/);
+assert.match(pluginSource, /drawAvatarCard/);
+assert.match(pluginSource, /PorterDuffColorFilter/);
+assert.match(pluginSource, /LruCache<String, Bitmap>/);
+assert.match(pluginSource, /MAX_RENDER_PIXELS/);
+assert.match(pluginSource, /size\.compact/);
+assert.match(pluginSource, /size\.wide/);
+assert.match(pluginSource, /Never block a widget broadcast on a development URL/);
+assert.match(pluginSource, /setContentDescription/);
+assert.match(pluginSource, /GOAL_LIME/);
+assert.match(pluginSource, /GOAL_GOLD/);
 assert.doesNotMatch(pluginSource, /ValueAnimator|ObjectAnimator|AnimationUtils/);
 
-console.log("Native Chat layout and all three RemoteViews widget modes validated.");
+assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);
+assert.match(widgetTypes, /avatarUri\?: string/);
+assert.match(widgetBridge, /Image\.resolveAssetSource\(sprite\)/);
+assert.match(widgetBridge, /statusAvatarAtlasBlend/);
+assert.match(widgetBridge, /statusAvatarProgression/);
+assert.match(widgetBridge, /statusRangeRollup/);
+assert.match(widgetBridge, /configuration\.trackerId === "__avatar__"/);
+assert.match(widgetBridge, /id !== "__featured__" && id !== "__avatar__"/);
+
+console.log("Native Chat layout and static Canvas Featured/Avatar widgets validated.");

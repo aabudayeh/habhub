@@ -1,4 +1,7 @@
-import type { BiologicalSex } from "../types";
+import type {
+  BiologicalSex,
+  StatusAvatarCalculationSource,
+} from "../types";
 
 /**
  * Calibration background (the formulas below remain app-specific morphs):
@@ -34,6 +37,29 @@ export type StatusBodyComposition = {
   leanBodyMassKg?: number;
   sex?: BiologicalSex;
 };
+
+/**
+ * Resolves the user's persisted calculation preference. Body composition is
+ * deliberately all-or-fallback: without both body-fat and lean-mass readings,
+ * the avatar keeps using the predictable BMI path instead of mixing partial
+ * evidence in a way the selected label does not explain.
+ */
+export function statusBodyCompositionForSource(
+  source: StatusAvatarCalculationSource | undefined,
+  composition: StatusBodyComposition,
+): StatusBodyComposition {
+  const hasBodyFat =
+    typeof composition.bodyFatPercent === "number" &&
+    Number.isFinite(composition.bodyFatPercent) &&
+    composition.bodyFatPercent > 0;
+  const hasLeanMass =
+    typeof composition.leanBodyMassKg === "number" &&
+    Number.isFinite(composition.leanBodyMassKg) &&
+    composition.leanBodyMassKg > 0;
+  return source === "body_composition" && hasBodyFat && hasLeanMass
+    ? composition
+    : { sex: composition.sex };
+}
 
 export const STATUS_AVATAR_VIEWBOX = {
   baselineY: 411,

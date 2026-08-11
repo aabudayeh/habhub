@@ -3,6 +3,7 @@
   <string name="habhub_widget_description">Objetivos de hoy y progreso del seguimiento</string>
   <string name="habhub_widget_open_to_update">Abre HabHub para actualizar</string>
   <string name="habhub_widget_featured_progress">Progreso destacado</string>
+  <string name="habhub_widget_status_avatar">Avatar de estado</string>
   <string name="habhub_widget_choose">Elige qué muestra este widget</string>
   <string name="habhub_widget_tracker">Seguimiento</string>
   <string name="habhub_widget_add">Añadir widget</string>

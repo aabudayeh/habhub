@@ -5,6 +5,11 @@ import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { Button, Card } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
+import {
+  averageScreenTimeReport,
+  formatMinuteDuration,
+  screenTimeSampledDayCount,
+} from "@/src/domain/screenTime";
 import { useLocalization } from "@/src/i18n";
 import { translateDomainText } from "@/src/i18n/domain";
 import { notifyScreenTimeAppLimits } from "@/src/notifications/push";
@@ -31,13 +36,9 @@ const dayStart = (value: string) => new Date(`${value}T00:00:00`).getTime();
 const dayEnd = (value: string) => new Date(`${value}T23:59:59.999`).getTime();
 
 function durationLabel(milliseconds: number, language: Parameters<typeof translateDomainText>[0]) {
-  const minutes = Math.max(0, Math.round(milliseconds / 60_000));
   const minuteUnit = translateDomainText(language, "min");
-  if (minutes < 60) return `${minutes} ${minuteUnit}`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
   const hourUnit = translateDomainText(language, "hr");
-  return remainder ? `${hours} ${hourUnit} ${remainder} ${minuteUnit}` : `${hours} ${hourUnit}`;
+  return formatMinuteDuration(milliseconds / 60_000, hourUnit, minuteUnit);
 }
 
 /** Device-only per-app usage and limits; package-level data is never uploaded. */
@@ -105,9 +106,15 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
       }
       const next = await queryScreenTime(from, to, 100);
       if (dates.length === 1) await cacheScreenTimeReport(first, next);
+      const sampledDays = screenTimeSampledDayCount(
+        dates.map(dayStart),
+        next.from,
+        next.to,
+      );
+      const displayed = averageScreenTimeReport(next, sampledDays);
       if (!cancelled) {
-        setReport(next);
-        setLoadState(next.apps.length ? "ready" : "empty");
+        setReport(displayed);
+        setLoadState(displayed.apps.length ? "ready" : "empty");
       }
     }
     void load().catch(() => { if (!cancelled) setLoadState("empty"); });
@@ -160,7 +167,9 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
       <View style={styles.heading}>
         <View style={styles.titleRow}>
           <Ionicons name="apps-outline" size={17} color={accent} />
-          <Text style={[styles.title, { color: colors.ink }]}>App usage</Text>
+          <Text style={[styles.title, { color: colors.ink }]}>
+            {dates.length > 1 ? "Average app usage" : "App usage"}
+          </Text>
         </View>
         {report ? <Text translate={false} style={[styles.total, { color: accent }]}>{durationLabel(report.screenTimeMs, language)}</Text> : null}
       </View>

@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "头像模拟器",
+  "Preview a change without saving it.": "预览更改而不保存。",
+  "Choose what to change": "选择要更改的项目",
+  "Open avatar simulator": "打开头像模拟器",
+  "Tap to preview changes. Hold for avatar calculation settings.": "点按可预览更改。长按可设置头像计算方式。",
+  "Avatar appearance settings": "头像外观设置",
+  "Avatar calculation source": "头像计算来源",
+  "BMI": "BMI",
+  "BMI fallback until body fat and lean mass are logged": "在记录体脂和瘦体重前，将使用 BMI 作为后备",
+  "Hold to choose the measurements used for this avatar": "长按以选择此头像使用的测量数据",
   "Challenge wins": "挑战胜利",
   "{value1} challenge win": "挑战胜利 {value1} 次",
   "{value1} challenge wins": "挑战胜利 {value1} 次",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "你可以直接在浏览器中加入此群组。"
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Android 使用情况访问权限可提供每日大致屏幕时间及各应用明细。HabHub 仅在此设备上保存该明细。",
   "App usage": "应用使用情况",
+  "Average app usage": "每日平均应用使用情况",
   "Approximate Android foreground time · stored only on this device": "Android 前台大致使用时间 · 仅存储在此设备上",
   "Checking": "正在检查",
   "Device usage": "设备使用情况",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "你的手机"
   ,"Body-water measurements in kilograms from Health Connect": "来自 Health Connect 的身体水分质量测量值（千克）"
   ,"Bone-mass measurements in kilograms from Health Connect": "来自 Health Connect 的骨量测量值（千克）"
+  ,"Battery optimization": "电池优化"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "HabHub 的电池优化已关闭，定时后台同步可以更可靠地运行。"
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "HabHub 的电池优化已开启。点击查看 Android 设置，以提高定时同步的可靠性。"
+  ,"Checking Android battery settings...": "正在检查 Android 电池设置..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "可选。此设置由 Android 控制，HabHub 绝不会自动更改。"
+  ,"Disabled": "已关闭"
+  ,"Review": "查看"
+  ,"Open Android battery optimization settings": "打开 Android 电池优化设置"
+  ,"Battery settings unavailable": "电池设置不可用"
+  ,"Android battery settings could not be opened.": "无法打开 Android 电池设置。"
 }

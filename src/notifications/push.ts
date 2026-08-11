@@ -24,6 +24,11 @@ import {
 } from '@/src/domain/metrics';
 import { defaultProgressReminderPercentages } from '@/src/domain/reminders';
 import {
+  goalReminderNotificationId,
+  goalReminderSemanticKey,
+} from '@/src/domain/notificationScheduling';
+import { createLatestAsyncDrain } from '@/src/domain/latestAsyncDrain';
+import {
   averageGymRestSeconds,
   completedGymSets,
   estimatedOneRepMax,
@@ -399,11 +404,62 @@ export async function disablePushNotifications(userId: string) {
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';
 const GOAL_IDS = 'metric-rally-goal-reminder-ids-v1';
+const GOAL_LEGACY_CLEANUP = 'habhub-goal-reminder-cleanup-v2';
 const GYM_IDS = 'metric-rally-gym-notification-ids-v1';
 const GYM_ACHIEVEMENT = 'metric-rally-gym-achievement-v1';
 const PRODUCTIVITY_IDS = 'metric-rally-productivity-notification-ids-v1';
 const PROGRESS_MILESTONES = 'habhub-progress-milestones-v1';
 const SCREEN_TIME_APP_MILESTONES = 'habhub-screen-time-app-milestones-v1';
+
+const legacyGoalCleanupByUser = new Map<string, Promise<void>>();
+
+async function cancelLegacyGoalReminderNotifications(state: AppState) {
+  const cleanupKey = `${GOAL_LEGACY_CLEANUP}:${encodeURIComponent(state.currentUserId)}`;
+  if (await AsyncStorage.getItem(cleanupKey)) return;
+  try {
+    const metricIds = new Set(state.metrics.map((metric) => metric.id));
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    await Promise.all(
+      scheduled.map(async (request) => {
+        const data = request.content.data ?? {};
+        const route = typeof data.route === 'string' ? data.route : '';
+        const directMetric =
+          typeof data.metric === 'string' ? data.metric : undefined;
+        const timerMetricMatch = /[?&]metric=([^&]+)/.exec(route);
+        const timerMetric = timerMetricMatch
+          ? decodeURIComponent(timerMetricMatch[1])
+          : undefined;
+        const legacyMetric = directMetric ?? timerMetric;
+        const isGoalReminder =
+          data.notificationKind === 'goal-reminder' ||
+          (legacyMetric !== 'menstrual_cycle' &&
+            Boolean(legacyMetric && metricIds.has(legacyMetric)) &&
+            (route === '/metric-detail' || route.startsWith('/timer?')));
+        if (!isGoalReminder) return;
+        await Notifications.cancelScheduledNotificationAsync(
+          request.identifier,
+        ).catch(() => undefined);
+      }),
+    );
+    await AsyncStorage.setItem(cleanupKey, 'done');
+  } catch {
+    // Retry the bounded one-time cleanup on the next scheduler pass. New
+    // deterministic identifiers still prevent any additional duplicates.
+  }
+}
+
+function ensureLegacyGoalReminderCleanup(state: AppState) {
+  const userId = state.currentUserId;
+  const existing = legacyGoalCleanupByUser.get(userId);
+  if (existing) return existing;
+  let cleanup: Promise<void>;
+  cleanup = cancelLegacyGoalReminderNotifications(state).finally(() => {
+    if (legacyGoalCleanupByUser.get(userId) === cleanup)
+      legacyGoalCleanupByUser.delete(userId);
+  });
+  legacyGoalCleanupByUser.set(userId, cleanup);
+  return cleanup;
+}
 
 function reminderTime(state: AppState, configured: string) {
   if (!state.settings.notifications.quietHoursEnabled) return configured;
@@ -712,8 +768,9 @@ export async function notifyProgressMilestones(
   await AsyncStorage.setItem(PROGRESS_MILESTONES, JSON.stringify([...firedSet]));
 }
 
-export async function syncGoalNotifications(state: AppState) {
+async function syncGoalNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
+  await ensureLegacyGoalReminderCleanup(state);
   const previous = JSON.parse((await AsyncStorage.getItem(GOAL_IDS)) ?? '[]') as string[];
   await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
   const settings = state.settings.notifications;
@@ -726,6 +783,7 @@ export async function syncGoalNotifications(state: AppState) {
   const now = new Date();
   const today = dateKey(now);
   const ids: string[] = [];
+  const scheduledSemantics = new Set<string>();
   for (let offset = 0; offset < 8 && ids.length < 64; offset += 1) {
     const localDate = dateWithOffsetFrom(today, offset);
     for (const metric of state.metrics) {
@@ -737,7 +795,8 @@ export async function syncGoalNotifications(state: AppState) {
         (offset === 0 && scheduledGoalReached(state, metric, state.currentUserId, localDate))
       ) continue;
       const configured = metric.reminders?.length ? metric.reminders : metric.reminder ? [metric.reminder] : [];
-      for (const reminder of configured.filter((item) => item.enabled)) {
+      for (const [reminderIndex, reminder] of configured.entries()) {
+        if (!reminder.enabled) continue;
         if (
           reminder.schedule &&
           !scheduleAppliesOnDate(
@@ -758,14 +817,40 @@ export async function syncGoalNotifications(state: AppState) {
             ? reminder.label
             : goalReminderBody(state, metric, localDate),
         );
+        const route = reminder.durationMinutes && metric.timerEnabled
+          ? `/timer?metric=${encodeURIComponent(metric.id)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`
+          : '/metric-detail';
+        const semanticKey = goalReminderSemanticKey({
+          userId: state.currentUserId,
+          metricId: metric.id,
+          localDate,
+          time,
+          title: content.title,
+          body: content.body,
+          route,
+        });
+        if (scheduledSemantics.has(semanticKey)) continue;
+        scheduledSemantics.add(semanticKey);
+        const identifier = goalReminderNotificationId({
+          userId: state.currentUserId,
+          metricId: metric.id,
+          reminderIndex,
+          localDate,
+          time,
+        });
         ids.push(await Notifications.scheduleNotificationAsync({
+          identifier,
           content: {
             ...content,
-            data: reminder.durationMinutes && metric.timerEnabled
-              ? {
-                  route: `/timer?metric=${encodeURIComponent(metric.id)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`,
-                }
-              : { route: '/metric-detail', metric: metric.id },
+            data: {
+              ...(reminder.durationMinutes && metric.timerEnabled
+                ? {
+                    route,
+                  }
+                : { route, metric: metric.id }),
+              notificationKind: 'goal-reminder',
+              reminderId: identifier,
+            },
           },
           trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
         }));
@@ -775,6 +860,21 @@ export async function syncGoalNotifications(state: AppState) {
     }
   }
   await AsyncStorage.setItem(GOAL_IDS, JSON.stringify(ids));
+}
+
+/**
+ * Hydration, reconnect, settings and resume can all request a refresh close
+ * together. Drain only one scheduler at a time and coalesce queued work to the
+ * newest immutable state. Combined with deterministic identifiers this makes
+ * scheduling idempotent even if two React effects overlap.
+ */
+const drainGoalNotifications = createLatestAsyncDrain<AppState>(
+  syncGoalNotificationsNow,
+);
+
+export function syncGoalNotifications(state: AppState) {
+  if (Platform.OS === 'web') return Promise.resolve();
+  return drainGoalNotifications(state);
 }
 
 export async function syncCycleNotifications(state: AppState) {
@@ -825,6 +925,10 @@ export async function syncCycleNotifications(state: AppState) {
 
 export async function syncProductivityNotifications(state: AppState) {
   if (Platform.OS === 'web') return;
+  // The one-time goal-reminder migration recognizes legacy timer routes.
+  // Serialize it before calendar/to-do timers are recreated so it can never
+  // cancel a fresh productivity reminder scheduled by a concurrent effect.
+  await ensureLegacyGoalReminderCleanup(state);
   const previous = JSON.parse(
     (await AsyncStorage.getItem(PRODUCTIVITY_IDS)) ?? '[]',
   ) as string[];

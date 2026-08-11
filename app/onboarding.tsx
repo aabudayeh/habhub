@@ -14,7 +14,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAuth } from "@/src/auth/AuthProvider";
@@ -105,15 +105,26 @@ const HEALTH = [
     metrics: ["body_fat", "lean_body_mass", "body_water_mass", "bone_mass"],
   },
 ] as const;
-const GROUP_LABELS: Record<string, string> = {
-  energy: "Weight & energy",
-  activity: "Movement",
-  nutrition: "Food & hydration",
-  body: "Body composition",
-  health: "Health readings",
-  mind: "Mind & focus",
-  gym: "Workout",
-  other: "Other",
+const GOAL_TRACKER_IDS: Record<string, readonly string[]> = {
+  weight: [
+    "weight",
+    "food",
+    "exercise",
+    "deficit",
+    "weekly_deficit_balance",
+  ],
+  activity: [
+    "steps",
+    "exercise",
+    "workout",
+    "workout_duration",
+    "workout_distance",
+  ],
+  gym: ["exercise", "gym_completed", "gym_duration", "gym_total_volume"],
+  learning: ["reading", "study", "work"],
+  health: HEALTH.flatMap((choice) => [...choice.metrics]),
+  nutrition: ["food", "water", "intermittent_fasting"],
+  friends: [],
 };
 const NOT_GOALS = new Set([
   "weight",
@@ -150,10 +161,11 @@ export default function Onboarding() {
     updateEnergyProfile,
     configurePersonalMetrics,
     updateMemberName,
-    replaceState,
+    flushLocalPersistence,
   } = useApp();
   const auth = useAuth();
   const health = useHealthSync();
+  const { t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [step, setStep] = useState(0);
@@ -234,14 +246,15 @@ export default function Onboarding() {
     "number",
   );
   const [customTrackerOpen, setCustomTrackerOpen] = useState(false);
-  const [expanded, setExpanded] = useState<string[]>([]);
+  const [expandedGoals, setExpandedGoals] = useState<string[]>(
+    state.settings.selectedGoals ?? [],
+  );
   const [landingPage, setLandingPage] = useState<LandingPage>(
     (state.settings.selectedGoals ?? []).includes("friends")
       ? "group"
       : "index",
   );
   const previousProposedIds = useRef<Set<string> | null>(null);
-  const knownRecommendationGroups = useRef(new Set<string>());
   const scrollRef = useRef<ScrollView>(null);
   useKeyboardReveal(scrollRef);
   useEffect(() => {
@@ -271,37 +284,9 @@ export default function Onboarding() {
     // To-Dos are available to every new account without becoming a tracked
     // daily goal or taking space on Today until the user chooses that.
     ids.add("todo_completion");
-    if (goals.includes("weight"))
-      [
-        "weight",
-        "food",
-        "exercise",
-        "deficit",
-        "weekly_deficit_balance",
-      ].forEach((id) => ids.add(id));
-    if (goals.includes("activity"))
-      [
-        "steps",
-        "exercise",
-        "workout",
-        "workout_duration",
-        "workout_distance",
-      ].forEach((id) => ids.add(id));
-    if (goals.includes("gym"))
-      [
-        "exercise",
-        "gym_completed",
-        "gym_duration",
-        "gym_total_volume",
-      ].forEach((id) => ids.add(id));
-    if (goals.includes("nutrition"))
-      ["food", "water", "intermittent_fasting"].forEach((id) => ids.add(id));
-    if (goals.includes("health"))
-      HEALTH.forEach((choice) =>
-        choice.metrics.forEach((id) => ids.add(id)),
-      );
-    if (goals.includes("learning"))
-      ["reading", "study", "work"].forEach((id) => ids.add(id));
+    goals.forEach((goalId) =>
+      (GOAL_TRACKER_IDS[goalId] ?? []).forEach((id) => ids.add(id)),
+    );
     return ids;
   }, [goals]);
   const proposed = useMemo(() => {
@@ -318,37 +303,42 @@ export default function Onboarding() {
     );
     return [...presets, ...customPresets];
   }, [state, desired, direction, nextProfile, customPresets]);
-  const grouped = useMemo(
+  const visibleRecommendations = useMemo(
     () =>
-      Object.entries(
-        proposed
-          .filter(
-            (item) =>
-              item.templateId !== "todo_completion" &&
-              !isInternalTracker({
-                id: item.templateId,
-                healthMapping: item.healthMapping,
-              }),
-          )
-          .reduce<Record<string, typeof proposed>>((all, item) => {
-          const key = item.category ?? "other";
-          (all[key] ??= []).push(item);
-          return all;
-          }, {}),
+      proposed.filter(
+        (item) =>
+          item.templateId !== "todo_completion" &&
+          !isInternalTracker({
+            id: item.templateId,
+            healthMapping: item.healthMapping,
+          }),
       ),
     [proposed],
   );
-  useEffect(() => {
-    const newlyAvailable = grouped
-      .map(([group]) => group)
-      .filter((group) => !knownRecommendationGroups.current.has(group));
-    grouped.forEach(([group]) => knownRecommendationGroups.current.add(group));
-    if (!newlyAvailable.length) return;
-    setExpanded((current) => [
-      ...current,
-      ...newlyAvailable.filter((group) => !current.includes(group)),
-    ]);
-  }, [grouped]);
+  const recommendationById = useMemo(
+    () =>
+      new Map(
+        visibleRecommendations.map((item) => [item.templateId, item] as const),
+      ),
+    [visibleRecommendations],
+  );
+  const goalSections = useMemo(
+    () =>
+      GOALS.map((goal) => ({
+        goal,
+        items: (GOAL_TRACKER_IDS[goal.id] ?? [])
+          .map((id) => recommendationById.get(id))
+          .filter((item): item is TrackerPreset => Boolean(item)),
+      })),
+    [recommendationById],
+  );
+  const customTrackerItems = useMemo(
+    () =>
+      customPresets
+        .map((item) => recommendationById.get(item.templateId))
+        .filter((item): item is TrackerPreset => Boolean(item)),
+    [customPresets, recommendationById],
+  );
   const trackedHealthHistoryCount = proposed.filter(
     (item) =>
       selected.includes(item.templateId) &&
@@ -391,8 +381,31 @@ export default function Onboarding() {
   useEffect(() => {
     if (step === 1 && goals.includes("friends")) setLandingPage("group");
   }, [step, goals]);
-  function toggle(id: string, setter = setGoals, current = goals) {
-    setter(
+  function toggleGoal(id: string) {
+    const selecting = !goals.includes(id);
+    setGoals((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+    if (selecting)
+      setExpandedGoals((current) =>
+        current.includes(id) ? current : [...current, id],
+      );
+  }
+  function toggleGoalExpansion(id: string) {
+    setExpandedGoals((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  }
+  function toggleTrackedTracker(id: string) {
+    if (!selected.includes(id))
+      setSelected((current) =>
+        current.includes(id) ? current : [...current, id],
+      );
+    setTrackedSelected((current) =>
       current.includes(id)
         ? current.filter((item) => item !== id)
         : [...current, id],
@@ -503,34 +516,35 @@ export default function Onboarding() {
     settings: Partial<AppState["settings"]>,
     route: string,
   ) {
-    const name = saveDisplayName();
-    const groups = state.groups.map((group) => ({
-      ...group,
-      members: group.members.map((member) =>
-        member.id === state.currentUserId ? { ...member, name } : member,
-      ),
-    }));
-    const next: AppState = {
-      ...state,
-      groups,
-      group:
-        groups.find((group) => group.id === state.group.id) ?? state.group,
-      settings: {
-        ...state.settings,
-        // The picker is local onboarding state until Health Connect returns.
-        // Include it explicitly so Finish cannot restore the old default.
-        healthHistoryDays,
-        ...settings,
-        onboardingComplete: true,
-      },
-    };
-    replaceState(next);
+    saveDisplayName();
+    // Every action above reduces against AppProvider's latest state reference.
+    // Merge completion into that live snapshot instead of replacing it with
+    // this screen's render-time `state`, which could restore stale appearance
+    // settings or erase the tracker/flag choices committed on an earlier step.
+    updateSettings({
+      // The picker is local onboarding state until Health Connect returns.
+      // Include it explicitly so Finish cannot restore the old default.
+      healthHistoryDays,
+      ...settings,
+    });
+    // First durably store the configured profile, appearance, trackers, and
+    // flags while the router still considers onboarding active. Only then may
+    // the completion marker be written or navigation begin.
+    await flushLocalPersistence();
     await markOnboardingCompleted(auth.user?.id ?? state.currentUserId);
+    // The durable marker makes the hand-off restart-safe even if the app closes
+    // before this monotonic setting's follow-up persistence completes.
+    updateSettings({ onboardingComplete: true });
+    await flushLocalPersistence();
     setCompletionRoute(route);
   }
   async function finish() {
     if (finishing) return;
     setFinishing(true);
+    // Reapply the final local picker state immediately before completion. The
+    // earlier profile-step commit exists for Health import, but this final pass
+    // guarantees manual tracker and flag edits are in the durable snapshot.
+    configure();
     await completeOnboarding({
       tutorialComplete: state.settings.onboardingComplete
         ? state.settings.tutorialComplete
@@ -604,9 +618,6 @@ export default function Onboarding() {
     setCustomPresets((current) => [...current, preset]);
     setSelected((current) => [...current, templateId]);
     setTrackedSelected((current) => [...current, templateId]);
-    setExpanded((current) =>
-      current.includes("other") ? current : [...current, "other"],
-    );
     setCustomName("");
     setCustomUnit("");
     setCustomGoal("1");
@@ -686,51 +697,127 @@ export default function Onboarding() {
                   />
                 </View>
                 <View style={styles.goalGrid}>
-                  {GOALS.map((goal) => (
-                    <Pressable
-                      key={goal.id}
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: goals.includes(goal.id) }}
-                      onPress={() => toggle(goal.id)}
-                      style={[
-                        styles.goal,
-                        {
-                          backgroundColor: colors.card,
-                          borderColor: goals.includes(goal.id)
-                            ? accent
-                            : colors.border,
-                        },
-                      ]}
-                    >
+                  {goalSections.map(({ goal, items }) => {
+                    const chosen = goals.includes(goal.id);
+                    const open = expandedGoals.includes(goal.id);
+                    const selectedCount = items.filter((item) =>
+                      selected.includes(item.templateId),
+                    ).length;
+                    return (
                       <View
+                        key={goal.id}
                         style={[
-                          styles.goalIcon,
-                          { backgroundColor: `${accent}18` },
+                          styles.goalChoice,
+                          {
+                            backgroundColor: colors.card,
+                            borderColor: chosen ? accent : colors.border,
+                          },
                         ]}
                       >
-                        <Ionicons name={goal.icon} size={21} color={accent} />
+                        <View style={styles.goalHeading}>
+                          <Pressable
+                            accessibilityRole="checkbox"
+                            accessibilityState={{ checked: chosen }}
+                            accessibilityLabel={goal.title}
+                            onPress={() => toggleGoal(goal.id)}
+                            style={({ pressed }) => [
+                              styles.goalSelect,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <View
+                              style={[
+                                styles.goalIcon,
+                                { backgroundColor: `${accent}18` },
+                              ]}
+                            >
+                              <Ionicons name={goal.icon} size={21} color={accent} />
+                            </View>
+                            <View style={styles.grow}>
+                              <Text style={[styles.goalTitle, { color: colors.ink }]}>
+                                {goal.title}
+                              </Text>
+                              <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                                {goal.copy}
+                              </Text>
+                            </View>
+                            <Ionicons
+                              name={chosen ? "checkmark-circle" : "ellipse-outline"}
+                              size={21}
+                              color={chosen ? accent : colors.faint}
+                            />
+                          </Pressable>
+                          {chosen ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={t(
+                                open ? "Hide trackers" : "Show trackers",
+                              )}
+                              accessibilityState={{ expanded: open }}
+                              hitSlop={6}
+                              onPress={() => toggleGoalExpansion(goal.id)}
+                              style={({ pressed }) => [
+                                styles.goalExpand,
+                                pressed && styles.pressed,
+                              ]}
+                            >
+                              {items.length ? (
+                                <Text
+                                  translate={false}
+                                  style={[styles.goalCount, { color: colors.muted }]}
+                                >
+                                  {selectedCount}/{items.length}
+                                </Text>
+                              ) : null}
+                              <Ionicons
+                                name={open ? "chevron-up" : "chevron-down"}
+                                size={18}
+                                color={colors.faint}
+                              />
+                            </Pressable>
+                          ) : null}
+                        </View>
+                        {chosen && open ? (
+                          <View
+                            style={[
+                              styles.goalRecommendations,
+                              { borderTopColor: colors.border },
+                            ]}
+                          >
+                            {items.length ? (
+                              <>
+                                <View style={styles.trackedGoalTip}>
+                                  <Ionicons name="flag" size={14} color={accent} />
+                                  <Text style={[styles.trackedGoalTipText, { color: colors.muted }]}>
+                                    A filled flag counts this tracker toward your daily tracked goals. The checkbox only adds or removes the tracker.
+                                  </Text>
+                                </View>
+                                {items.map((item) => (
+                                  <OnboardingTrackerRow
+                                    key={item.templateId}
+                                    item={item}
+                                    selected={selected.includes(item.templateId)}
+                                    tracked={trackedSelected.includes(item.templateId)}
+                                    onToggle={() => toggleTracker(item.templateId)}
+                                    onToggleTracked={() =>
+                                      toggleTrackedTracker(item.templateId)
+                                    }
+                                  />
+                                ))}
+                              </>
+                            ) : (
+                              <View style={styles.goalNoTrackers}>
+                                <Ionicons name="people-outline" size={16} color={accent} />
+                                <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                                  No tracker setup is needed for this goal. Friend features stay ready for you.
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        ) : null}
                       </View>
-                      <View style={styles.grow}>
-                        <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                          {goal.title}
-                        </Text>
-                        <Text
-                          style={[styles.goalCopy, { color: colors.muted }]}
-                        >
-                          {goal.copy}
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name={
-                          goals.includes(goal.id)
-                            ? "checkmark-circle"
-                            : "ellipse-outline"
-                        }
-                        size={21}
-                        color={goals.includes(goal.id) ? accent : colors.faint}
-                      />
-                    </Pressable>
-                  ))}
+                    );
+                  })}
                 </View>
               </>
             ) : null}
@@ -858,45 +945,6 @@ export default function Onboarding() {
             ) : null}
             {step === 0 && goals.length ? (
               <>
-                <Title
-                  title="Your starting setup"
-                  copy="Only checked items are added. Other ready-made options stay available under Add."
-                  colors={colors}
-                />
-                <View style={styles.selectActions}>
-                  <Pressable
-                    onPress={() => {
-                      setSelected(proposed.map((item) => item.templateId));
-                      setTrackedSelected(
-                        proposed
-                          .filter(
-                            (item) =>
-                              item.goalEnabled !== false &&
-                              !NOT_GOALS.has(item.templateId),
-                          )
-                          .map((item) => item.templateId),
-                      );
-                    }}
-                  >
-                    <Text style={[styles.action, { color: accent }]}>
-                      Select all
-                    </Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => {
-                      setSelected(
-                        proposed
-                          .filter((item) => item.templateId === "todo_completion")
-                          .map((item) => item.templateId),
-                      );
-                      setTrackedSelected([]);
-                    }}
-                  >
-                    <Text style={[styles.action, { color: accent }]}>
-                      Deselect all
-                    </Text>
-                  </Pressable>
-                </View>
                 <View
                   style={[
                     styles.customTracker,
@@ -1011,188 +1059,30 @@ export default function Onboarding() {
                     </>
                   ) : null}
                 </View>
-                <View
-                  style={[
-                    styles.flagHint,
-                    {
-                      backgroundColor: colors.primarySoft,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Ionicons name="flag" size={16} color={accent} />
-                  <Text style={[styles.flagHintText, { color: colors.ink }]}>
-                    A filled flag counts this tracker toward your daily tracked
-                    goals. The checkbox only adds or removes the tracker.
-                  </Text>
-                </View>
-                {grouped.map(([group, items]) => (
+                {customTrackerItems.length ? (
                   <View
-                    key={group}
                     style={[
-                      styles.group,
+                      styles.customTrackerList,
                       {
                         backgroundColor: colors.card,
                         borderColor: colors.border,
                       },
                     ]}
                   >
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityState={{
-                        expanded: expanded.includes(group),
-                      }}
-                      onPress={() => toggle(group, setExpanded, expanded)}
-                      style={styles.groupHead}
-                    >
-                      <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                        {GROUP_LABELS[group] ?? group}
-                      </Text>
-                      <Text style={[styles.count, { color: colors.muted }]}>
-                        {
-                          items.filter((item) =>
-                            selected.includes(item.templateId),
-                          ).length
+                    {customTrackerItems.map((item) => (
+                      <OnboardingTrackerRow
+                        key={item.templateId}
+                        item={item}
+                        selected={selected.includes(item.templateId)}
+                        tracked={trackedSelected.includes(item.templateId)}
+                        onToggle={() => toggleTracker(item.templateId)}
+                        onToggleTracked={() =>
+                          toggleTrackedTracker(item.templateId)
                         }
-                        /{items.length}
-                      </Text>
-                      <Ionicons
-                        name={
-                          expanded.includes(group)
-                            ? "chevron-up"
-                            : "chevron-down"
-                        }
-                        size={18}
-                        color={colors.faint}
                       />
-                    </Pressable>
-                    {expanded.includes(group)
-                      ? items.map((item) => (
-                          <Pressable
-                            key={item.templateId}
-                            accessibilityRole="checkbox"
-                            accessibilityState={{
-                              checked: selected.includes(item.templateId),
-                            }}
-                            onPress={() => toggleTracker(item.templateId)}
-                            style={[
-                              styles.tracker,
-                              { borderTopColor: colors.border },
-                            ]}
-                          >
-                            <View
-                              style={[
-                                styles.tinyIcon,
-                                { backgroundColor: `${item.color}18` },
-                              ]}
-                            >
-                              <Ionicons
-                                name={
-                                  item.icon as keyof typeof Ionicons.glyphMap
-                                }
-                                size={17}
-                                color={item.color}
-                              />
-                            </View>
-                            <View style={styles.grow}>
-                              <Text
-                                style={[
-                                  styles.goalTitle,
-                                  { color: colors.ink },
-                                ]}
-                              >
-                                {item.name}
-                              </Text>
-                              <Text
-                                style={[
-                                  styles.goalCopy,
-                                  { color: colors.muted },
-                                ]}
-                              >
-                                {item.description}
-                              </Text>
-                              {presetTargetLabel(item) ? (
-                                <Text
-                                  style={[
-                                    styles.targetText,
-                                    { color: colors.muted },
-                                  ]}
-                                >
-                                  <Text style={styles.targetLabel}>Target</Text>
-                                  {` · ${presetTargetLabel(item)}`}
-                                </Text>
-                              ) : null}
-                            </View>
-                            {item.goalEnabled !== false &&
-                            !NOT_GOALS.has(item.templateId) ? (
-                              <Pressable
-                                accessibilityRole="checkbox"
-                                accessibilityState={{
-                                  checked: trackedSelected.includes(
-                                    item.templateId,
-                                  ),
-                                }}
-                                accessibilityLabel={
-                                  trackedSelected.includes(item.templateId)
-                                    ? "Remove from daily tracked goals"
-                                    : "Count as a daily tracked goal"
-                                }
-                                onPress={(event) => {
-                                  event.stopPropagation();
-                                  if (!selected.includes(item.templateId))
-                                    setSelected((current) => [
-                                      ...current,
-                                      item.templateId,
-                                    ]);
-                                  toggle(
-                                    item.templateId,
-                                    setTrackedSelected,
-                                    trackedSelected,
-                                  );
-                                }}
-                                style={[
-                                  styles.goalFlag,
-                                  {
-                                    backgroundColor:
-                                      trackedSelected.includes(item.templateId)
-                                        ? colors.primarySoft
-                                        : colors.canvas,
-                                  },
-                                ]}
-                              >
-                                <Ionicons
-                                  name={
-                                    trackedSelected.includes(item.templateId)
-                                      ? "flag"
-                                      : "flag-outline"
-                                  }
-                                  size={15}
-                                  color={
-                                    trackedSelected.includes(item.templateId)
-                                      ? accent
-                                      : colors.faint
-                                  }
-                                />
-                              </Pressable>
-                            ) : null}
-                            <Ionicons
-                              name={
-                                selected.includes(item.templateId)
-                                  ? "checkbox"
-                                  : "square-outline"
-                              }
-                              size={21}
-                              color={
-                                selected.includes(item.templateId)
-                                  ? accent
-                                  : colors.faint
-                              }
-                            />
-                          </Pressable>
-                        ))
-                      : null}
+                    ))}
                   </View>
-                ))}
+                ) : null}
               </>
             ) : null}
             {step === 2 ? (
@@ -1414,6 +1304,88 @@ export default function Onboarding() {
   );
 }
 
+function OnboardingTrackerRow({
+  item,
+  selected,
+  tracked,
+  onToggle,
+  onToggleTracked,
+}: {
+  item: TrackerPreset;
+  selected: boolean;
+  tracked: boolean;
+  onToggle: () => void;
+  onToggleTracked: () => void;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const canTrack = item.goalEnabled !== false && !NOT_GOALS.has(item.templateId);
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected }}
+      accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`}
+      onPress={onToggle}
+      style={({ pressed }) => [
+        styles.tracker,
+        { borderTopColor: colors.border },
+        pressed && styles.pressed,
+      ]}
+    >
+      <View style={[styles.tinyIcon, { backgroundColor: `${item.color}18` }]}>
+        <Ionicons
+          name={item.icon as keyof typeof Ionicons.glyphMap}
+          size={17}
+          color={item.color}
+        />
+      </View>
+      <View style={styles.grow}>
+        <Text style={[styles.goalTitle, { color: colors.ink }]}>{item.name}</Text>
+        <Text style={[styles.goalCopy, { color: colors.muted }]}>
+          {item.description}
+        </Text>
+        {presetTargetLabel(item) ? (
+          <Text style={[styles.targetText, { color: colors.muted }]}>
+            <Text style={styles.targetLabel}>Target</Text>
+            {` · ${presetTargetLabel(item)}`}
+          </Text>
+        ) : null}
+      </View>
+      {canTrack ? (
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: tracked }}
+          accessibilityLabel={
+            tracked
+              ? `Remove ${item.name} from daily tracked goals`
+              : `Add ${item.name} to daily tracked goals`
+          }
+          hitSlop={5}
+          onPress={(event) => {
+            event.stopPropagation();
+            onToggleTracked();
+          }}
+          style={[
+            styles.goalFlag,
+            { backgroundColor: tracked ? colors.primarySoft : colors.canvas },
+          ]}
+        >
+          <Ionicons
+            name={tracked ? "flag" : "flag-outline"}
+            size={15}
+            color={tracked ? accent : colors.faint}
+          />
+        </Pressable>
+      ) : null}
+      <Ionicons
+        name={selected ? "checkbox" : "square-outline"}
+        size={21}
+        color={selected ? accent : colors.faint}
+      />
+    </Pressable>
+  );
+}
+
 function Title({
   title,
   copy,
@@ -1565,15 +1537,48 @@ const styles = StyleSheet.create({
   },
   subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 },
   goalGrid: { gap: 6 },
-  goal: {
-    minHeight: 59,
+  goalChoice: {
     borderWidth: 1,
     borderRadius: 15,
+    overflow: "hidden",
+  },
+  goalHeading: { flexDirection: "row", alignItems: "stretch" },
+  goalSelect: {
+    flex: 1,
+    minHeight: 59,
     padding: 9,
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
   },
+  goalExpand: {
+    minWidth: 48,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 2,
+  },
+  goalCount: { fontSize: 8, fontWeight: "900" },
+  goalRecommendations: { borderTopWidth: 1, paddingTop: 5 },
+  trackedGoalTip: {
+    minHeight: 30,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  trackedGoalTipText: { flex: 1, fontSize: 8, lineHeight: 12, fontWeight: "700" },
+  goalNoTrackers: {
+    minHeight: 40,
+    paddingHorizontal: 11,
+    paddingBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  pressed: { opacity: 0.72 },
   goalIcon: {
     width: 37,
     height: 37,
@@ -1636,6 +1641,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
     padding: 10,
+    marginTop: 10,
     marginBottom: 8,
   },
   customHeading: {
@@ -1645,33 +1651,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   customField: { flex: 1 },
-  action: { fontSize: 10, fontWeight: "900" },
-  flagHint: {
-    minHeight: 42,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  flagHintText: { flex: 1, fontSize: 9, lineHeight: 13, fontWeight: "800" },
-  group: {
+  customTrackerList: {
     borderWidth: 1,
     borderRadius: 14,
-    marginBottom: 7,
+    marginBottom: 8,
     overflow: "hidden",
   },
-  groupHead: {
-    height: 43,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    gap: 8,
-  },
-  count: { marginLeft: "auto", fontSize: 9, fontWeight: "900" },
   tracker: {
     minHeight: 50,
     borderTopWidth: 1,

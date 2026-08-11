@@ -2,9 +2,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { ScreenTimeReport } from "@/src/screenTime";
 
-// v2 invalidates aggregate UsageStats results that could double-count
-// overlapping foreground intervals. Current reports replay usage events.
-const PREFIX = "habhub:screen-time-report:v2:";
+// v3 invalidates reports produced before the activity-transition fix. Some
+// Android builds emit a delayed ACTIVITY_STOPPED after the next Activity in
+// the same app resumes; treating that event as background undercounted usage.
+const PREFIX = "habhub:screen-time-report:v3:";
 
 export async function cacheScreenTimeReport(
   localDate: string,

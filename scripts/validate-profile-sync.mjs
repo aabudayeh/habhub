@@ -12,6 +12,12 @@ import {
   excludeAlreadyPublishedDailyStatusRows,
 } from "../src/domain/cloudSyncProjection.ts";
 import { cloudAccountEnergyProjection } from "../src/domain/energy.ts";
+import {
+  CLOUD_CONFLICT_MAX_RETRY_MS,
+  cloudConflictBackoffActive,
+  confirmedCloudPublishRevision,
+  nextCloudConflictGate,
+} from "../src/domain/cloudConflict.ts";
 
 const base = {
   name: "Ahmad",
@@ -84,6 +90,54 @@ assert.equal(profileProjectionLagsSnapshot(9, 9), false);
 assert.equal(profileProjectionLagsSnapshot(undefined, 9), true);
 assert.equal(profileProjectionLagsSnapshot(Number.NaN, 9), true);
 assert.equal(profileProjectionLagsSnapshot(undefined, 0), false);
+
+const firstConflict = nextCloudConflictGate(null, "user-1", 1_000, 7);
+assert.deepEqual(firstConflict, {
+  userId: "user-1",
+  attempt: 1,
+  retryAt: 6_000,
+  observedRevision: 7,
+});
+const secondConflict = nextCloudConflictGate(
+  firstConflict,
+  "user-1",
+  2_000,
+  8,
+);
+assert.equal(secondConflict.attempt, 2);
+assert.equal(secondConflict.retryAt, 12_000);
+assert.equal(secondConflict.observedRevision, 8);
+assert.equal(
+  nextCloudConflictGate(secondConflict, "user-1", 3_000).observedRevision,
+  8,
+  "a retry must retain the last revision learned by its conflict refresh",
+);
+let cappedConflict = secondConflict;
+for (let attempt = 0; attempt < 20; attempt += 1)
+  cappedConflict = nextCloudConflictGate(
+    cappedConflict,
+    "user-1",
+    10_000,
+  );
+assert.equal(cappedConflict.attempt, 8);
+assert.equal(
+  cappedConflict.retryAt,
+  10_000 + CLOUD_CONFLICT_MAX_RETRY_MS,
+);
+assert.equal(cloudConflictBackoffActive(firstConflict, "user-1", 5_999), true);
+assert.equal(cloudConflictBackoffActive(firstConflict, "user-1", 6_000), false);
+assert.equal(cloudConflictBackoffActive(firstConflict, "user-2", 5_999), false);
+assert.equal(
+  nextCloudConflictGate(cappedConflict, "user-2", 20_000).attempt,
+  1,
+  "another account must start a new conflict boundary",
+);
+assert.equal(confirmedCloudPublishRevision(9, 9), 9);
+assert.throws(
+  () => confirmedCloudPublishRevision(9, 10),
+  /stale_group_publish: account revision advanced from 9 to 10/,
+);
+assert.throws(() => confirmedCloudPublishRevision(-1, 0), /not available/);
 
 const member = (group, name = "Cached name") => ({
   id: "user-1",
@@ -237,6 +291,36 @@ assert.match(
 );
 assert.match(
   groupCloudSource,
+  /const aliasRevision = confirmedCloudPublishRevision\(\s*publishRevision,\s*await resolveAccountRevision\(client, state\.currentUserId\)/,
+  "alias publication must confirm the account revision immediately before its guarded RPC",
+);
+assert.match(
+  groupCloudSource,
+  /publish_group_member_aliases[\s\S]{0,160}p_expected_revision: aliasRevision/,
+  "alias publication must use the freshly confirmed account revision",
+);
+assert.match(
+  providerSource,
+  /workspaceConflictGateRef[\s\S]{0,500}conflictRefreshRef/,
+  "workspace conflicts must have per-account backoff and single-flight refresh guards",
+);
+assert.match(
+  providerSource,
+  /const conflictGate = workspaceConflictGateRef\.current;[\s\S]{0,300}restoreWorkspaceConflictRetry\(operationUserId\)/,
+  "a successful account pull must preserve an outstanding workspace conflict boundary",
+);
+assert.match(
+  providerSource,
+  /const restoreWorkspaceConflictRetry = useCallback[\s\S]{0,400}setNextRetryAt\(gate\.retryAt\)/,
+  "restoring a conflict boundary must retain its attempt and retry timestamp",
+);
+assert.match(
+  providerSource,
+  /await performSync\(false, true, true\)/,
+  "only an explicit manual sync may bypass the workspace conflict boundary",
+);
+assert.match(
+  groupCloudSource,
   /supplementalStatuses = excludeAlreadyPublishedDailyStatusRows\(\s*fastRecentStatuses,\s*statuses/,
   "the detailed workspace pass must exclude its already-published recent rows",
 );
@@ -257,5 +341,5 @@ assert.match(
 );
 
 console.log(
-  "Profile/cloud no-op validation passed: rename merges, exact metadata projection, status-cache isolation, publication coalescing, and server-side no-op cancellation.",
+  "Profile/cloud validation passed: rename merges, revision-confirmed alias publication, bounded conflict retry, exact metadata projection, status-cache isolation, publication coalescing, and server-side no-op cancellation.",
 );

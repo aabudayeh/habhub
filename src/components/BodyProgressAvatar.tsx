@@ -15,20 +15,29 @@ import {
   type StatusAvatarAtlasBlend,
   type StatusAvatarAtlasSample,
 } from "@/src/domain/statusAvatarAtlas";
-import { statusBodyAppearance } from "@/src/domain/statusAvatar";
+import {
+  statusBodyAppearance,
+  statusBodyCompositionForSource,
+} from "@/src/domain/statusAvatar";
+import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useLocalization } from "@/src/i18n";
 import { useAppColors } from "@/src/theme";
-import type { BiologicalSex, StatusAvatarStyle } from "@/src/types";
+import type {
+  BiologicalSex,
+  StatusAvatarCalculationSource,
+  StatusAvatarStyle,
+} from "@/src/types";
 
 const BODY_WIDTH = 164;
 const BODY_HEIGHT = 250;
 
-// Final original atlases generated for HabHub and bundled entirely on-device.
-const MALE_ATLAS = require("../../assets/images/status-avatar-male-atlas-v1.png") as ImageSourcePropType;
-const FEMALE_ATLAS = require("../../assets/images/status-avatar-female-atlas-v1.png") as ImageSourcePropType;
-
-function atlasSource(variant: StatusAvatarAtlasBlend["variant"]) {
-  return variant === "female" ? FEMALE_ATLAS : MALE_ATLAS;
+function spriteSource(
+  variant: StatusAvatarAtlasBlend["variant"],
+  sample: StatusAvatarAtlasSample,
+) {
+  return STATUS_AVATAR_SPRITES[variant][sample.row][
+    sample.column
+  ] as ImageSourcePropType;
 }
 
 function AtlasCell({
@@ -50,25 +59,22 @@ function AtlasCell({
   // Keep the generated figure's source proportions. Scaling X and Y
   // independently made the body and head look unnaturally long. The viewport
   // clips only transparent atlas padding; the widest source figure still fits.
-  const sourceBodyHeight = config.bodyHeights[sample.row];
-  const sourceBodyTop = config.bodyTops[sample.row];
-  const sourceBodyCenter = config.bodyCenters[sample.row][sample.column];
-  const scale = height / sourceBodyHeight;
+  const scale = height / config.bodyHeight;
 
   return (
     <Image
       fadeDuration={0}
       resizeMode="stretch"
-      source={atlasSource(blend.variant)}
+      source={spriteSource(blend.variant, sample)}
       style={[
         styles.atlasImage,
         {
-          height: config.atlasHeight * scale,
-          left: width / 2 - sourceBodyCenter * scale,
+          height: config.spriteHeight * scale,
+          left: width / 2 - config.bodyCenter * scale,
           opacity: sample.opacity * opacityScale,
           tintColor,
-          top: -sourceBodyTop * scale,
-          width: config.atlasWidth * scale,
+          top: -config.bodyTop * scale,
+          width: config.spriteWidth * scale,
         },
       ]}
     />
@@ -200,6 +206,7 @@ function AtlasBodyLayer({
 
 export function BodyProgressAvatar({
   bodyFatPercent,
+  calculationSource = "bmi",
   heightCm = 170,
   leanBodyMassKg,
   mindTier = 0,
@@ -210,6 +217,7 @@ export function BodyProgressAvatar({
   weightKg = 70,
 }: {
   bodyFatPercent?: number;
+  calculationSource?: StatusAvatarCalculationSource;
   heightCm?: number;
   leanBodyMassKg?: number;
   mindTier?: 0 | 1 | 2 | 3;
@@ -279,12 +287,25 @@ export function BodyProgressAvatar({
   const boundedMuscle = Math.max(0, Math.min(1, muscleProgress));
   const appearance = useMemo(
     () =>
-      statusBodyAppearance(heightCm, weightKg, boundedMuscle, {
-        bodyFatPercent,
-        leanBodyMassKg,
-        sex,
-      }),
-    [bodyFatPercent, boundedMuscle, heightCm, leanBodyMassKg, sex, weightKg],
+      statusBodyAppearance(
+        heightCm,
+        weightKg,
+        boundedMuscle,
+        statusBodyCompositionForSource(calculationSource, {
+          bodyFatPercent,
+          leanBodyMassKg,
+          sex,
+        }),
+      ),
+    [
+      bodyFatPercent,
+      boundedMuscle,
+      calculationSource,
+      heightCm,
+      leanBodyMassKg,
+      sex,
+      weightKg,
+    ],
   );
   const blend = useMemo(
     () =>
@@ -361,17 +382,20 @@ export function BodyProgressAvatar({
           variant={blend.variant}
           width={renderedWidth}
         />
-      </View>
-      <View
-        pointerEvents="none"
-        style={[
-          styles.percentPill,
-          { backgroundColor: colors.card, borderColor: colors.border },
-        ]}
-      >
-        <Text translate={false} style={[styles.percent, { color: colors.ink }]}>
-          {percent}%
-        </Text>
+        <View
+          pointerEvents="none"
+          style={[
+            styles.percentPill,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <Text
+            translate={false}
+            style={[styles.percent, { color: colors.ink }]}
+          >
+            {percent}%
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -404,9 +428,10 @@ const styles = StyleSheet.create({
   },
   percentPill: {
     position: "absolute",
-    right: -8,
-    bottom: 20,
-    minWidth: 49,
+    left: "50%",
+    bottom: 16,
+    width: 50,
+    transform: [{ translateX: -25 }],
     paddingHorizontal: 9,
     paddingVertical: 6,
     borderRadius: 15,

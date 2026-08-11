@@ -494,11 +494,16 @@ function ChatScreen() {
       <GestureDetector gesture={conversationSwipe}>
       <KeyboardAvoidingView
         style={styles.flex}
-        // Android's adjustResize is the single owner of the IME inset. Applying
-        // KeyboardAvoidingView's measured height as well double-counts some OEM
-        // keyboards and can leave a stale half-height after the IME closes.
-        // Web is laid out by its visual viewport; only iOS needs KAV padding.
-        enabled={Platform.OS === "ios"}
+        // `adjustResize` normally moves this scene on Android, but some
+        // navigator/OEM combinations leave the tab scene full-height. Once the
+        // IME has finished opening, KAV supplies only the overlap that remains:
+        // zero for a resized scene, or the uncovered IME inset as a fallback.
+        // Disabling it immediately on close guarantees that no stale keyboard
+        // measurement can strand the composer above its normal tab-bar edge.
+        enabled={
+          Platform.OS === "ios" ||
+          (Platform.OS === "android" && keyboardVisible)
+        }
         behavior="padding"
         keyboardVerticalOffset={0}
       >

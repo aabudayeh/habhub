@@ -686,6 +686,9 @@ export type AppLanguage =
 /** Code-native Status figure treatment; both modes share the same live body geometry. */
 export type StatusAvatarStyle = "silhouette" | "body_model";
 
+/** Personal choice of measurements used to select the Status body sprite. */
+export type StatusAvatarCalculationSource = "bmi" | "body_composition";
+
 export type UserSettings = {
   /** Legacy/manual fallback. Formula variable `baseline` now resolves to calculated daily energy. */
   baselineCalories: number;
@@ -759,6 +762,8 @@ export type UserSettings = {
   showFeaturedCardProgressOutline?: boolean;
   /** Personal visual treatment for the continuously morphed Status figure. */
   statusAvatarStyle?: StatusAvatarStyle;
+  /** Defaults to BMI; composition is used only when both required readings exist. */
+  statusAvatarCalculationSource?: StatusAvatarCalculationSource;
   /** Put the to-do block below goal trackers instead of above them. */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */

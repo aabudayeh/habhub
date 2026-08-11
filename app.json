@@ -2,7 +2,7 @@
   "expo": {
     "name": "HabHub",
     "slug": "metrally",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
     "scheme": "paceboard",
@@ -95,7 +95,8 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 26
+            "minSdkVersion": 26,
+            "buildReactNativeFromSource": true
           }
         }
       ],

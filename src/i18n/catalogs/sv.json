@@ -1,4 +1,14 @@
 {
+  "Avatar simulator": "Avatarsimulator",
+  "Preview a change without saving it.": "Förhandsgranska en ändring utan att spara den.",
+  "Choose what to change": "Välj vad du vill ändra",
+  "Open avatar simulator": "Öppna avatarsimulatorn",
+  "Tap to preview changes. Hold for avatar calculation settings.": "Tryck för att förhandsgranska ändringar. Håll ned för avatarens beräkningsinställningar.",
+  "Avatar appearance settings": "Inställningar för avatarens utseende",
+  "Avatar calculation source": "Beräkningskälla för avataren",
+  "BMI": "BMI",
+  "BMI fallback until body fat and lean mass are logged": "BMI används tills kroppsfett och fettfri massa har loggats",
+  "Hold to choose the measurements used for this avatar": "Håll ned för att välja måtten som används för avataren",
   "Challenge wins": "Utmaningsvinster",
   "{value1} challenge win": "{value1} utmaningsvinst",
   "{value1} challenge wins": "{value1} utmaningsvinster",
@@ -2233,6 +2243,7 @@
   "You can join this group directly in the browser instead.": "Du kan gå med i gruppen direkt i webbläsaren i stället."
   ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Androids användningsåtkomst ger ungefärlig daglig skärmtid och en uppdelning per app. HabHub sparar uppdelningen endast på den här enheten.",
   "App usage": "Appanvändning",
+  "Average app usage": "Genomsnittlig daglig appanvändning",
   "Approximate Android foreground time · stored only on this device": "Ungefärlig Android-tid i förgrunden · sparas endast på den här enheten",
   "Checking": "Kontrollerar",
   "Device usage": "Enhetsanvändning",
@@ -2258,4 +2269,14 @@
   ,"Your phone": "Din telefon"
   ,"Body-water measurements in kilograms from Health Connect": "Mätningar av kroppsvattenmassa i kilogram från Health Connect"
   ,"Bone-mass measurements in kilograms from Health Connect": "Mätningar av benmassa i kilogram från Health Connect"
+  ,"Battery optimization": "Batterioptimering"
+  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "Batterioptimering är avstängd för HabHub. Schemalagd bakgrundssynkronisering kan köras mer tillförlitligt."
+  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "Batterioptimering är på för HabHub. Tryck för att granska Android-inställningarna och få tillförlitligare schemalagd synkronisering."
+  ,"Checking Android battery settings...": "Kontrollerar Androids batteriinställningar..."
+  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Valfritt. Android styr inställningen; HabHub ändrar den aldrig automatiskt."
+  ,"Disabled": "Avstängd"
+  ,"Review": "Granska"
+  ,"Open Android battery optimization settings": "Öppna Androids inställningar för batterioptimering"
+  ,"Battery settings unavailable": "Batteriinställningarna är inte tillgängliga"
+  ,"Android battery settings could not be opened.": "Androids batteriinställningar kunde inte öppnas."
 }

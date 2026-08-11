@@ -85,6 +85,11 @@ import {
   AUTO_SYNC_MAX_INTERACTION_WAIT_MS,
   nextAutoSyncDelay,
 } from "@/src/cloud/autoSyncTiming";
+import {
+  cloudConflictBackoffActive,
+  type CloudConflictGate,
+  nextCloudConflictGate,
+} from "@/src/domain/cloudConflict";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -2232,12 +2237,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const snapshotWriteTargetRevisionRef = useRef(0);
   const syncIsForcedRef = useRef(false);
   const performSyncRef = useRef<
-    ((forceWorkspace?: boolean, forceAttempt?: boolean) => Promise<void>) | null
+    ((
+      forceWorkspace?: boolean,
+      forceAttempt?: boolean,
+      manualAttempt?: boolean,
+    ) => Promise<void>) | null
   >(null);
   const leaderboardPublishPromiseRef = useRef<Promise<void> | null>(null);
   const leaderboardPublishedAtByGroupRef = useRef(new Map<string, number>());
   const cloudRetryAttemptRef = useRef(0);
   const nextRetryAtRef = useRef(0);
+  const workspaceConflictGateRef = useRef<CloudConflictGate | null>(null);
+  const conflictRefreshRef = useRef<{
+    userId: string;
+    promise: Promise<SnapshotRow | null>;
+  } | null>(null);
   const networkAvailableRef = useRef(networkAvailable);
   networkAvailableRef.current = networkAvailable;
   const previousNetworkAvailableRef = useRef(networkAvailable);
@@ -2286,6 +2300,44 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     },
     [],
   );
+
+  const fetchConflictSnapshot = useCallback((userId: string) => {
+    const active = conflictRefreshRef.current;
+    if (active?.userId === userId) return active.promise;
+    let promise: Promise<SnapshotRow | null>;
+    promise = fetchSnapshot(userId).finally(() => {
+      if (conflictRefreshRef.current?.promise === promise)
+        conflictRefreshRef.current = null;
+    });
+    conflictRefreshRef.current = { userId, promise };
+    return promise;
+  }, []);
+
+  const scheduleWorkspaceConflictRetry = useCallback(
+    (userId: string, observedRevision?: number) => {
+      const gate = nextCloudConflictGate(
+        workspaceConflictGateRef.current,
+        userId,
+        Date.now(),
+        observedRevision,
+      );
+      workspaceConflictGateRef.current = gate;
+      cloudRetryAttemptRef.current = gate.attempt;
+      nextRetryAtRef.current = gate.retryAt;
+      setNextRetryAt(gate.retryAt);
+      return gate;
+    },
+    [],
+  );
+
+  const restoreWorkspaceConflictRetry = useCallback((userId: string) => {
+    const gate = workspaceConflictGateRef.current;
+    if (gate?.userId !== userId) return false;
+    cloudRetryAttemptRef.current = gate.attempt;
+    nextRetryAtRef.current = gate.retryAt;
+    setNextRetryAt(gate.retryAt);
+    return true;
+  }, []);
 
   const hasUnsyncedLocalChanges = useCallback(() => {
     const live = stateRef.current;
@@ -2758,6 +2810,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     activityVersionCheckByGroupRef.current.clear();
     historicalHydrationStartedRef.current.clear();
     lastSyncedAtRef.current = null;
+    workspaceConflictGateRef.current = null;
+    conflictRefreshRef.current = null;
+    cloudRetryAttemptRef.current = 0;
+    nextRetryAtRef.current = 0;
+    setNextRetryAt(0);
     setLastSyncedAt(null);
     setAccountBoundaryReadyUserId(null);
     // Clear the previous account from rendered memory immediately, but do not
@@ -2849,7 +2906,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
     // Realtime account updates hydrate behind the currently rendered cache.
     // A global loading state here made every tab appear to reload.
-    setErrorMessage(null);
+    if (workspaceConflictGateRef.current?.userId !== operationUserId)
+      setErrorMessage(null);
     const pullStartAccountHash = stableHash(stateRef.current);
     const accountWasDirty = pullStartAccountHash !== hashRef.current;
     try {
@@ -2895,7 +2953,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       stateRef.current = resolved;
       rememberCloudMergeBase(operationUserId, bound);
       recordServerSyncedAt(remote.updated_at);
-      setPendingChanges(hasUnsyncedLocalChanges());
       // Also seeds the acknowledgement for upgraded clients whose cached and
       // remote durable state already match exactly.
       if (!preserveLocalAccount || resolvedHash === remoteHash)
@@ -2903,10 +2960,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           () => undefined,
         );
       if (!operationIsCurrent()) return;
-      setStatus("synced");
-      cloudRetryAttemptRef.current = 0;
-      nextRetryAtRef.current = 0;
-      setNextRetryAt(0);
+      const conflictGate = workspaceConflictGateRef.current;
+      if (conflictGate?.userId === operationUserId) {
+        setStatus("conflict");
+        setPendingChanges(true);
+        setErrorMessage(
+          "Changes from two devices were merged. Group data will retry automatically; Sync now retries immediately.",
+        );
+        restoreWorkspaceConflictRetry(operationUserId);
+      } else {
+        setStatus("synced");
+        setPendingChanges(hasUnsyncedLocalChanges());
+        cloudRetryAttemptRef.current = 0;
+        nextRetryAtRef.current = 0;
+        setNextRetryAt(0);
+      }
       InteractionManager.runAfterInteractions(() => {
         resolvePrivateMedia(bound)
           .then((mediaState) => {
@@ -2978,6 +3046,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,
+    restoreWorkspaceConflictRetry,
     scheduleGroupReadRetry,
   ]);
 
@@ -3067,6 +3136,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const performSync = useCallback(async (
     forceWorkspace = false,
     forceAttempt = false,
+    manualAttempt = false,
   ) => {
     if (!auth.user || !supabase || initializedUserRef.current !== auth.user.id)
       return;
@@ -3096,15 +3166,24 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       );
       return;
     }
+    const now = Date.now();
+    const conflictBackoffActive =
+      !manualAttempt &&
+      cloudConflictBackoffActive(
+        workspaceConflictGateRef.current,
+        operationUserId,
+        now,
+      );
     const deferGroupRetry =
-      !forceAttempt && nextRetryAtRef.current > Date.now();
+      conflictBackoffActive ||
+      (!forceAttempt && nextRetryAtRef.current > now);
     if (syncPromiseRef.current) {
       const activeSync = syncPromiseRef.current;
       if (!forceAttempt || syncIsForcedRef.current) return activeSync;
       // A pull-to-refresh that lands during a quiet autosave still needs its
       // own freshness assertion after that serialized write completes.
       await activeSync;
-      return performSyncRef.current?.(forceWorkspace, true);
+      return performSyncRef.current?.(forceWorkspace, true, manualAttempt);
     }
     syncIsForcedRef.current = forceAttempt;
     const operation = (async () => {
@@ -3425,17 +3504,23 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             // table is temporarily unavailable, then retry group data later.
             workspaceSynced = false;
             workspaceWarning = `Group data will retry: ${workspaceErrorText || "unknown server error"}`;
-            const attempt = Math.min(
-              8,
-              cloudRetryAttemptRef.current + 1,
-            );
-            cloudRetryAttemptRef.current = attempt;
-            const retryAt =
-              Date.now() +
+            const activeConflictGate = workspaceConflictGateRef.current;
+            let retryAt: number;
+            if (activeConflictGate?.userId === operationUserId) {
+              retryAt = scheduleWorkspaceConflictRetry(operationUserId).retryAt;
+            } else {
+              const attempt = Math.min(
+                8,
+                cloudRetryAttemptRef.current + 1,
+              );
+              cloudRetryAttemptRef.current = attempt;
+              retryAt =
+                Date.now() +
                 Math.min(
                   MAX_CLOUD_RETRY_MS,
                   5_000 * 2 ** (attempt - 1),
                 );
+            }
             nextRetryAtRef.current = retryAt;
             setNextRetryAt(retryAt);
           }
@@ -3553,9 +3638,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(
           !workspaceSynced || !accountMetadataSynced || needsFollowUpSync,
         );
-        setStatus("synced");
+        const workspaceConflictPending =
+          !workspaceSynced &&
+          workspaceConflictGateRef.current?.userId === operationUserId;
+        setStatus(workspaceConflictPending ? "conflict" : "synced");
         if (!deferGroupRetry) setErrorMessage(workspaceWarning);
         if (workspaceSynced && accountMetadataSynced) {
+          workspaceConflictGateRef.current = null;
           cloudRetryAttemptRef.current = 0;
           const retryAt = needsFollowUpSync ? Date.now() + 500 : 0;
           nextRetryAtRef.current = retryAt;
@@ -3579,9 +3668,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const syncErrorText = errorText(error);
         if (/snapshot_conflict/i.test(syncErrorText)) {
           setStatus("conflict");
-          const remote = await fetchSnapshot(operationUserId).catch(() => null);
+          scheduleWorkspaceConflictRetry(operationUserId);
+          const remote = await fetchConflictSnapshot(operationUserId).catch(
+            () => null,
+          );
           if (!operationIsCurrent()) return;
           if (remote) {
+            const activeGate = workspaceConflictGateRef.current;
+            if (activeGate?.userId === operationUserId)
+              workspaceConflictGateRef.current = {
+                ...activeGate,
+                observedRevision: remote.revision,
+              };
             revisionRef.current = remote.revision;
             const merged = mergeStates(
               bindStateToAccount(remote.payload, operationUser),
@@ -3598,18 +3696,26 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             setErrorMessage(
               "Changes from two devices were merged. Sync once more to confirm them.",
             );
-            cloudRetryAttemptRef.current = 1;
-            nextRetryAtRef.current = Date.now() + 5_000;
-            setNextRetryAt(nextRetryAtRef.current);
             return;
           }
+          setPendingChanges(true);
+          setErrorMessage(
+            "Changes from two devices need a fresh copy. Sync will retry automatically.",
+          );
+          return;
         }
         const offline = isTransientCloudError(syncErrorText);
-        const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
-        cloudRetryAttemptRef.current = attempt;
-        const retryAt =
-          Date.now() +
-          Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+        const activeConflictGate = workspaceConflictGateRef.current;
+        let retryAt: number;
+        if (activeConflictGate?.userId === operationUserId) {
+          retryAt = scheduleWorkspaceConflictRetry(operationUserId).retryAt;
+        } else {
+          const attempt = Math.min(8, cloudRetryAttemptRef.current + 1);
+          cloudRetryAttemptRef.current = attempt;
+          retryAt =
+            Date.now() +
+            Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+        }
         nextRetryAtRef.current = retryAt;
         setNextRetryAt(retryAt);
         setStatus(offline ? "offline" : "error");
@@ -3624,11 +3730,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return operation;
   }, [
     auth.user,
+    fetchConflictSnapshot,
     hasUnsyncedLocalChanges,
     mergeRemoteWorkspace,
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,
+    scheduleWorkspaceConflictRetry,
     touchPresence,
   ]);
   performSyncRef.current = performSync;
@@ -3783,9 +3891,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // A successful account read ends the previous startup backoff. Group
         // publication below may establish its own fresh retry, but stale delay
         // from an earlier PGRST003 must not suppress deferred group hydration.
-        cloudRetryAttemptRef.current = 0;
-        nextRetryAtRef.current = 0;
-        setNextRetryAt(0);
+        if (!restoreWorkspaceConflictRetry(user.id)) {
+          cloudRetryAttemptRef.current = 0;
+          nextRetryAtRef.current = 0;
+          setNextRetryAt(0);
+        }
         initializedUserRef.current = user.id;
         remoteInitializationPendingRef.current = false;
         let correctedAccountState = false;
@@ -4039,14 +4149,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           );
           setErrorMessage(friendlySyncError(error));
           setPendingChanges(hasUnsyncedLocalChanges());
-          const attempt = Math.min(
-            8,
-            cloudRetryAttemptRef.current + 1,
-          );
-          cloudRetryAttemptRef.current = attempt;
-          const retryAt =
-            Date.now() +
-            Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+          const activeConflictGate = workspaceConflictGateRef.current;
+          let retryAt: number;
+          if (activeConflictGate?.userId === user.id) {
+            retryAt = scheduleWorkspaceConflictRetry(user.id).retryAt;
+          } else {
+            const attempt = Math.min(
+              8,
+              cloudRetryAttemptRef.current + 1,
+            );
+            cloudRetryAttemptRef.current = attempt;
+            retryAt =
+              Date.now() +
+              Math.min(MAX_CLOUD_RETRY_MS, 5_000 * 2 ** (attempt - 1));
+          }
           nextRetryAtRef.current = retryAt;
           setNextRetryAt(retryAt);
         }
@@ -4074,6 +4190,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recordServerSyncedAt,
     rememberCloudMergeBase,
     replaceState,
+    restoreWorkspaceConflictRetry,
+    scheduleWorkspaceConflictRetry,
     scheduleGroupReadRetry,
   ]);
 
@@ -4714,9 +4832,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     // Connectivity can return while the app remains foregrounded. Reset the
     // offline backoff and drain local writes immediately instead of waiting for
     // another edit, tab change, or app resume.
-    cloudRetryAttemptRef.current = 0;
-    nextRetryAtRef.current = 0;
-    setNextRetryAt(0);
+    if (!restoreWorkspaceConflictRetry(auth.user.id)) {
+      cloudRetryAttemptRef.current = 0;
+      nextRetryAtRef.current = 0;
+      setNextRetryAt(0);
+    }
     // A genuine offline -> online transition starts one new bounded retry
     // window for durable chat rows that exhausted their previous attempt set.
     chatOutboxAttemptsRef.current.clear();
@@ -4747,6 +4867,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recoverChatOutbox,
     refreshGroupActivity,
     refreshMessages,
+    restoreWorkspaceConflictRetry,
     scheduleActivityReadRetry,
     scheduleGroupReadRetry,
   ]);
@@ -5243,9 +5364,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           .catch(() => undefined);
       const initializationPending = remoteInitializationPendingRef.current;
       if (initializationPending) {
-        cloudRetryAttemptRef.current = 0;
-        nextRetryAtRef.current = 0;
-        setNextRetryAt(0);
+        if (!auth.user || !restoreWorkspaceConflictRetry(auth.user.id)) {
+          cloudRetryAttemptRef.current = 0;
+          nextRetryAtRef.current = 0;
+          setNextRetryAt(0);
+        }
         setInitializationAttempt((value) => value + 1);
       }
       const retryGroupId = groupReadRetryGroupIdRef.current;
@@ -5300,6 +5423,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recoverChatOutbox,
     recordServerSyncedAt,
     refreshMessages,
+    restoreWorkspaceConflictRetry,
     scheduleActivityReadRetry,
     scheduleGroupReadRetry,
     status,
@@ -5344,6 +5468,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // be absent even when the private account snapshot is already current.
       syncNow: async () => {
         if (remoteInitializationPendingRef.current) {
+          workspaceConflictGateRef.current = null;
           cloudRetryAttemptRef.current = 0;
           nextRetryAtRef.current = 0;
           setNextRetryAt(0);
@@ -5354,7 +5479,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // Serialize behind an already-running compact publish, then force the
         // normal outbox + recent leaderboard publication immediately.
         await leaderboardPublishPromiseRef.current?.catch(() => undefined);
-        await performSync(false, true);
+        await performSync(false, true, true);
       },
       pullLatest,
       refreshDevices: loadDevices,

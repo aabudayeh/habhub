@@ -36,6 +36,7 @@ import {
   todoAppearsOnDate,
   todoResolvedOnDate,
 } from "./schedule";
+import { formatMinuteDuration } from "./screenTime";
 
 type MetricDateCache<T> = WeakMap<
   AppState,
@@ -2252,6 +2253,7 @@ export function formatMetricValue(
   if (metric.dataType === "boolean") return value > 0 ? "Done" : "Not yet";
   if (metric.dataType === "photo")
     return `${Math.round(value)} photo${Math.round(value) === 1 ? "" : "s"}`;
+  if (metric.id === "screen_time") return formatMinuteDuration(value);
   const rounded =
     Math.abs(value) >= 1000
       ? Math.round(value).toLocaleString(locale)

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { InteractionManager } from "react-native";
+import { Image, InteractionManager } from "react-native";
 
 import { dateKey } from "@/src/domain/date";
 import {
@@ -19,6 +19,16 @@ import {
   GOAL_COMPLETE_COLOR,
 } from "@/src/domain/colors";
 import { completionIndicatorFillMode } from "@/src/domain/completionIndicators";
+import {
+  statusBodyAppearance,
+  statusBodyCompositionForSource,
+} from "@/src/domain/statusAvatar";
+import { statusAvatarAtlasBlend } from "@/src/domain/statusAvatarAtlas";
+import {
+  statusAvatarProgression,
+  statusRangeRollup,
+} from "@/src/domain/status";
+import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricDefinition } from "@/src/types";
 import {
@@ -26,6 +36,7 @@ import {
   getHomeScreenWidgetConfigurations,
   updateHomeScreenWidgets,
   WidgetSnapshot,
+  WidgetAvatarSnapshot,
   WidgetTrackerSnapshot,
 } from "@/src/widgets";
 
@@ -128,7 +139,7 @@ function featuredSnapshot(
     id: "__featured__",
     eyebrow: t(allComplete ? "DAY COMPLETE" : "TODAY'S FOCUS"),
     title: "HabHub",
-    value: `${metToday} / ${tracked.length}`,
+    value: `${metToday} ${t("of")} ${tracked.length}`,
     subtitle: allComplete
       ? t("Every goal reached")
       : tracked.length
@@ -147,6 +158,79 @@ function featuredSnapshot(
     ),
     deepLink: "paceboard://",
     goals: goalRows,
+  };
+}
+
+function avatarSnapshot(
+  state: AppState,
+  today: string,
+  locale: string,
+  t: (source: string) => string,
+  backgroundColor: string,
+  completedBackgroundColor: string,
+): WidgetAvatarSnapshot {
+  const profile =
+    state.energyProfiles?.[state.currentUserId] ?? state.settings.energyProfile;
+  const progression = statusAvatarProgression(
+    state,
+    state.currentUserId,
+    today,
+  );
+  const summary = statusRangeRollup(state, state.currentUserId, [today]);
+  const progress = Math.max(0, Math.min(1, summary.progress));
+  const allComplete =
+    summary.opportunities > 0 && summary.completed === summary.opportunities;
+  const calculationSource =
+    state.settings.statusAvatarCalculationSource ?? "bmi";
+  const appearance = statusBodyAppearance(
+    profile.heightCm,
+    progression.currentWeightKg,
+    progression.muscleProgress,
+    statusBodyCompositionForSource(calculationSource, {
+      bodyFatPercent: progression.currentBodyFatPercent,
+      leanBodyMassKg: progression.currentLeanBodyMassKg,
+      sex: profile.sex,
+    }),
+  );
+  const blend = statusAvatarAtlasBlend(
+    profile.sex,
+    appearance.adiposity,
+    appearance.muscleProgress,
+  );
+  const selected = blend.samples[0];
+  const sprite = STATUS_AVATAR_SPRITES[blend.variant][selected.row][
+    selected.column
+  ];
+  const resolved = Image.resolveAssetSource(sprite);
+  const number = (value: number) =>
+    Number(value.toFixed(1)).toLocaleString(locale);
+  const bodyCompositionLabel =
+    typeof progression.currentBodyFatPercent === "number"
+      ? `${t("Body fat")} ${number(progression.currentBodyFatPercent)}%`
+      : typeof progression.currentLeanBodyMassKg === "number"
+        ? `${t("Lean body mass")} ${number(progression.currentLeanBodyMassKg)} kg`
+        : undefined;
+
+  return {
+    id: "__avatar__",
+    eyebrow: t("Status"),
+    title: t("Status"),
+    value: `${Math.round(progress * 100)}%`,
+    subtitle: t("Tracked goals"),
+    progress,
+    color: allComplete ? ALL_GOALS_COMPLETE_COLOR : GOAL_COMPLETE_COLOR,
+    backgroundColor: allComplete ? completedBackgroundColor : backgroundColor,
+    progressColor: allComplete
+      ? ALL_GOALS_COMPLETE_COLOR
+      : GOAL_COMPLETE_COLOR,
+    allComplete,
+    fillMode: "bottom_up",
+    deepLink: "paceboard://status",
+    avatarUri: resolved?.uri,
+    avatarStyle: state.settings.statusAvatarStyle ?? "silhouette",
+    heightScale: appearance.heightScale,
+    weightLabel: `${t("Weight")} ${number(progression.currentWeightKg)} kg`,
+    bodyCompositionLabel,
   };
 }
 
@@ -186,8 +270,13 @@ export function WidgetSnapshotBridge() {
         const configuredIds = new Set(
           configurations
             .map((configuration) => configuration.trackerId)
-            .filter((id) => id !== "__featured__"),
+            .filter((id) => id !== "__featured__" && id !== "__avatar__"),
         );
+        const needsAvatar =
+          initial ||
+          configurations.some(
+            (configuration) => configuration.trackerId === "__avatar__",
+          );
         const metricsToCalculate =
           initial && configurations.length === 0
             ? selectableMetrics
@@ -203,6 +292,16 @@ export function WidgetSnapshotBridge() {
             accent,
             colors.isDark ? "#806018" : "#B98212",
           ),
+          avatar: needsAvatar
+            ? avatarSnapshot(
+                currentState,
+                today,
+                locale,
+                t,
+                accent,
+                colors.isDark ? "#806018" : "#B98212",
+              )
+            : undefined,
           catalog: selectableMetrics.map((metric) => ({
             id: metric.id,
             title: localizeMetricName(currentState.settings.language, metric),
@@ -221,6 +320,7 @@ export function WidgetSnapshotBridge() {
         };
         const payload = JSON.stringify({
           featured: snapshot.featured,
+          avatar: snapshot.avatar,
           catalog: snapshot.catalog,
           trackers: snapshot.trackers,
         });
@@ -248,6 +348,7 @@ export function WidgetSnapshotBridge() {
     state.currentUserId,
     state.energyProfiles,
     state.entries,
+    state.gymSessions,
     state.metrics,
     state.settings,
     state.trackedGoalPeriods,
