@@ -860,14 +860,18 @@ function reducer(state: AppState, action: Action): AppState {
       // Completing onboarding is monotonic for the current account. A delayed
       // cloud snapshot must never send a user back into the startup flow.
       const hydrated =
-        incoming.currentUserId === state.currentUserId &&
-        state.settings.onboardingComplete &&
-        !incoming.settings.onboardingComplete
+        incoming.currentUserId === state.currentUserId
           ? {
               ...incoming,
               settings: {
                 ...incoming.settings,
-                onboardingComplete: true,
+                onboardingComplete:
+                  state.settings.onboardingComplete ||
+                  incoming.settings.onboardingComplete,
+                onboardingVersion: Math.max(
+                  state.settings.onboardingVersion ?? 0,
+                  incoming.settings.onboardingVersion ?? 0,
+                ),
                 tutorialComplete:
                   state.settings.tutorialComplete ||
                   incoming.settings.tutorialComplete,

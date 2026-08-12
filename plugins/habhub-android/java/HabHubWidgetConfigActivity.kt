@@ -29,19 +29,10 @@ class HabHubWidgetConfigActivity : Activity() {
       return
     }
 
-    val snapshot = HabHubWidgetStore.snapshot(this)
     val existing = HabHubWidgetStore.configuration(this, widgetId)
-    val trackerChoices = mutableListOf(
-      "__featured__" to getString(R.string.habhub_widget_featured_progress),
+    val trackerChoices = listOf(
       "__avatar__" to getString(R.string.habhub_widget_status_avatar),
     )
-    (snapshot.optJSONArray("catalog") ?: snapshot.optJSONArray("trackers"))?.let { trackers ->
-      for (index in 0 until trackers.length()) {
-        trackers.optJSONObject(index)?.let { tracker ->
-          trackerChoices += tracker.optString("id") to tracker.optString("title", "Tracker")
-        }
-      }
-    }
 
     val root = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
@@ -58,7 +49,7 @@ class HabHubWidgetConfigActivity : Activity() {
         text = choice.second
         setTextColor(Color.WHITE)
         isChecked = choice.first == existing.trackerId ||
-          (index == 0 && trackerChoices.none { it.first == existing.trackerId })
+          index == 0
       })
     }
     root.addView(trackerGroup)
@@ -70,7 +61,7 @@ class HabHubWidgetConfigActivity : Activity() {
       setBackgroundColor(Color.rgb(184, 228, 92))
       setOnClickListener {
         val tracker = trackerGroup.findViewById<RadioButton>(trackerGroup.checkedRadioButtonId)
-          ?.tag?.toString() ?: "__featured__"
+          ?.tag?.toString() ?: "__avatar__"
         HabHubWidgetStore.saveConfiguration(
           this@HabHubWidgetConfigActivity,
           widgetId,

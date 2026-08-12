@@ -15,8 +15,9 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { InfoPopover } from "@/src/components/InfoPopover";
+import { NoteDrawingCanvas } from "@/src/components/NoteDrawingCanvas";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import {
   cleanRichNoteValue,
@@ -27,9 +28,27 @@ import {
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import { dateKey } from "@/src/domain/date";
+import {
+  journalDrawingFingerprint,
+  journalDrawingHasInk,
+  normalizeJournalDrawing,
+  undoJournalDrawing,
+} from "@/src/domain/journalDrawing";
 import { trackerGroupLabel } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+
+const DRAWING_COLORS = [
+  "#20252E",
+  "#D64545",
+  "#E87924",
+  "#178C65",
+  "#2877D4",
+  "#7657C8",
+  "#C3488D",
+] as const;
+const DRAWING_WIDTHS = [2, 4, 7] as const;
+const DRAWING_WIDTH_LABELS = ["Thin pen", "Medium pen", "Thick pen"] as const;
 
 export default function NoteEditor() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -37,11 +56,18 @@ export default function NoteEditor() {
   const { state, saveJournalNote, deleteJournalNote } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const existing = (state.journalNotes ?? []).find((note) => note.id === id);
   const [title, setTitle] = useState(existing?.title ?? "");
   const initialBody = existing?.body ?? "";
   const body = useRef(initialBody);
   const [imageUri, setImageUri] = useState(existing?.imageUri);
+  const [drawing, setDrawing] = useState(() =>
+    normalizeJournalDrawing(existing?.drawing),
+  );
+  const [drawingMode, setDrawingMode] = useState(false);
+  const [drawingColor, setDrawingColor] = useState<string>(accent);
+  const [drawingWidth, setDrawingWidth] = useState<number>(4);
   const [metricIds, setMetricIds] = useState(
     existing?.metricIds ?? (existing?.metricId ? [existing.metricId] : []),
   );
@@ -65,6 +91,7 @@ export default function NoteEditor() {
     imageUri,
     metricIds: [...metricIds].sort(),
     labels: [...labels].sort(),
+    drawing: journalDrawingFingerprint(existing?.drawing),
   }).current;
   const existingLabels = [
     ...new Set((state.journalNotes ?? []).flatMap((note) => note.labels ?? [])),
@@ -156,6 +183,7 @@ export default function NoteEditor() {
       title !== initialContent.title ||
       cleanRichNoteValue(body.current) !== initialContent.body ||
       imageUri !== initialContent.imageUri ||
+      journalDrawingFingerprint(drawing) !== initialContent.drawing ||
       !sameValues(metricIds, initialContent.metricIds) ||
       !sameValues(labels, initialContent.labels)
     );
@@ -177,7 +205,11 @@ export default function NoteEditor() {
 
   const save = (exit: () => void = () => router.back()) => {
     const cleanBody = cleanRichNoteValue(body.current);
-    if (!richNoteHasText(cleanBody)) {
+    if (
+      !richNoteHasText(cleanBody) &&
+      !imageUri &&
+      !journalDrawingHasInk(drawing)
+    ) {
       promptOpen.current = false;
       Alert.alert("Write a note", "The note cannot be empty.");
       return false;
@@ -201,6 +233,7 @@ export default function NoteEditor() {
         ]),
       ],
       imageUri,
+      drawing: normalizeJournalDrawing(drawing),
     });
     leave(exit);
     return true;
@@ -309,12 +342,106 @@ export default function NoteEditor() {
         onPress={() => composer.current?.setBlock("quote")}
       />
       <Tool icon="link-outline" onPress={() => setLinkOpen(true)} />
+      <Tool
+        icon="brush-outline"
+        accessibilityLabel="Draw on note"
+        active={drawingMode}
+        onPress={() => {
+          setTextColorOpen(false);
+          setDrawingMode(true);
+          setComposerFocused(false);
+          Keyboard.dismiss();
+        }}
+      />
+    </View>
+  );
+  const hasInk = journalDrawingHasInk(drawing);
+  const drawingColors = [accent, ...DRAWING_COLORS].filter(
+    (color, index, all) =>
+      all.findIndex(
+        (candidate) => candidate.toUpperCase() === color.toUpperCase(),
+      ) === index,
+  );
+  const drawingToolbar = (
+    <View
+      style={[
+        styles.drawingToolbar,
+        { borderColor: colors.border, backgroundColor: colors.card },
+      ]}
+    >
+      <View style={styles.drawingChoices}>
+        {DRAWING_WIDTHS.map((width, index) => (
+          <Pressable
+            key={width}
+            accessibilityLabel={t(DRAWING_WIDTH_LABELS[index])}
+            accessibilityRole="button"
+            accessibilityState={{ selected: drawingWidth === width }}
+            onPress={() => setDrawingWidth(width)}
+            style={[
+              styles.brushChoice,
+              {
+                borderColor:
+                  drawingWidth === width ? drawingColor : colors.border,
+                backgroundColor: colors.canvas,
+              },
+            ]}
+          >
+            <View
+              style={{
+                width: Math.max(5, width + 3),
+                height: Math.max(5, width + 3),
+                borderRadius: 10,
+                backgroundColor: drawingColor,
+              }}
+            />
+          </Pressable>
+        ))}
+      </View>
+      <View style={styles.drawingChoices}>
+        {drawingColors.map((color) => (
+          <Pressable
+            key={color}
+            accessibilityLabel={t("Drawing color")}
+            accessibilityRole="button"
+            accessibilityState={{ selected: drawingColor === color }}
+            onPress={() => setDrawingColor(color)}
+            style={[
+              styles.inkChoice,
+              {
+                backgroundColor: color,
+                borderColor:
+                  drawingColor === color ? colors.ink : colors.border,
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <View style={styles.drawingActions}>
+        <Tool
+          icon="arrow-undo"
+          accessibilityLabel="Undo drawing"
+          disabled={!hasInk}
+          onPress={() => setDrawing(undoJournalDrawing(drawing))}
+        />
+        <Tool
+          icon="trash-outline"
+          accessibilityLabel="Clear"
+          disabled={!hasInk}
+          onPress={() => setDrawing(undefined)}
+        />
+        <Tool
+          icon="checkmark"
+          accessibilityLabel="Done"
+          active
+          onPress={() => setDrawingMode(false)}
+        />
+      </View>
     </View>
   );
   const editorTools = (
     <View style={styles.editorTools}>
-      {toolbar}
-      {textColorOpen ? (
+      {drawingMode ? drawingToolbar : toolbar}
+      {!drawingMode && textColorOpen ? (
         <View
           style={[
             styles.colorMenu,
@@ -325,7 +452,6 @@ export default function NoteEditor() {
             accessibilityLabel="Use default text color"
             onPress={() => {
               composer.current?.setTextColor(undefined);
-              setTextColorOpen(false);
             }}
             style={[styles.colorChoice, { borderColor: colors.border }]}
           >
@@ -346,7 +472,6 @@ export default function NoteEditor() {
               accessibilityLabel={`Use ${color} text`}
               onPress={() => {
                 composer.current?.setTextColor(color);
-                setTextColorOpen(false);
               }}
               style={[
                 styles.colorChoice,
@@ -356,7 +481,7 @@ export default function NoteEditor() {
           ))}
         </View>
       ) : null}
-      {hashtagSuggestions.length ? (
+      {!drawingMode && hashtagSuggestions.length ? (
         <View
           style={[
             styles.tagMenu,
@@ -402,7 +527,11 @@ export default function NoteEditor() {
   return (
     <>
       <Screen
-        fixedTop={keyboardVisible || composerFocused ? editorTools : undefined}
+        fixedTop={
+          keyboardVisible || composerFocused || drawingMode
+            ? editorTools
+            : undefined
+        }
         keyboardDismissMode="none"
         contentContainerStyle={
           keyboardVisible ? styles.keyboardContent : undefined
@@ -474,14 +603,23 @@ export default function NoteEditor() {
               { color: colors.ink, borderColor: colors.border },
             ]}
           />
-          <RichNoteComposer
-            ref={composer}
-            value={initialBody}
-            onChange={change}
-            onEditingChange={setComposerFocused}
-            onHashtagQuery={setHashtagQuery}
-          />
-          {imageUri ? <Image source={imageUri} style={styles.image} /> : null}
+          <View style={styles.noteCanvas}>
+            <RichNoteComposer
+              ref={composer}
+              value={initialBody}
+              onChange={change}
+              onEditingChange={setComposerFocused}
+              onHashtagQuery={setHashtagQuery}
+            />
+            {imageUri ? <Image source={imageUri} style={styles.image} /> : null}
+            <NoteDrawingCanvas
+              drawing={drawing}
+              enabled={drawingMode}
+              color={drawingColor}
+              width={drawingWidth}
+              onChange={setDrawing}
+            />
+          </View>
           <Pressable onPress={pickImage} style={styles.imageButton}>
             <Ionicons name="image-outline" size={17} color={accent} />
             <Text style={[styles.imageText, { color: accent }]}>
@@ -597,19 +735,40 @@ function Tool({
   icon,
   text,
   onPress,
+  accessibilityLabel,
+  active = false,
+  disabled = false,
 }: {
   icon?: keyof typeof Ionicons.glyphMap;
   text?: string;
   onPress: () => void;
+  accessibilityLabel?: string;
+  active?: boolean;
+  disabled?: boolean;
 }) {
   const colors = useAppColors();
+  const accent = useGroupAccent();
+  const t = useTranslation();
   return (
     <Pressable
+      accessibilityLabel={
+        accessibilityLabel ? t(accessibilityLabel) : undefined
+      }
+      accessibilityRole="button"
+      accessibilityState={{ disabled, selected: active }}
+      disabled={disabled}
       onPress={onPress}
-      style={[styles.tool, { backgroundColor: colors.canvas }]}
+      style={[
+        styles.tool,
+        {
+          backgroundColor: active ? colors.primarySoft : colors.canvas,
+          borderColor: active ? accent : "transparent",
+          opacity: disabled ? 0.38 : 1,
+        },
+      ]}
     >
       {icon ? (
-        <Ionicons name={icon} size={14} color={colors.ink} />
+        <Ionicons name={icon} size={14} color={active ? accent : colors.ink} />
       ) : (
         <Text style={[styles.toolText, { color: colors.ink }]}>{text}</Text>
       )}
@@ -620,6 +779,12 @@ function Tool({
 const styles = StyleSheet.create({
   keyboardContent: { paddingBottom: 64 },
   editor: { gap: 8 },
+  noteCanvas: {
+    position: "relative",
+    gap: 8,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
   editorTools: { gap: 5 },
   linkHeading: {
     flexDirection: "row",
@@ -674,6 +839,45 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  drawingToolbar: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 11,
+    padding: 5,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 5,
+    shadowColor: "#000000",
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  drawingChoices: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  drawingActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  brushChoice: {
+    width: 29,
+    height: 29,
+    borderWidth: 1.5,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inkChoice: {
+    width: 23,
+    height: 23,
+    borderWidth: 2,
+    borderRadius: 8,
+  },
   tagRow: {
     minHeight: 30,
     maxWidth: "100%",
@@ -688,6 +892,7 @@ const styles = StyleSheet.create({
     minWidth: 29,
     height: 28,
     borderRadius: 8,
+    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 5,

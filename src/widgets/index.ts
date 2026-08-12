@@ -32,7 +32,7 @@ export type WidgetAvatarSnapshot = WidgetTrackerSnapshot & {
 
 export type WidgetSnapshot = {
   updatedAt: string;
-  featured: WidgetTrackerSnapshot;
+  featured?: WidgetTrackerSnapshot;
   avatar?: WidgetAvatarSnapshot;
   /** Cheap picker metadata; no historical metric payload is duplicated here. */
   catalog: { id: string; title: string }[];

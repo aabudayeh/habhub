@@ -2,24 +2,25 @@ import { Ionicons } from "@expo/vector-icons";
 import { Redirect } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
-import { SafeAreaView } from "react-native-safe-area-context";
-
+import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
-import { Button, Chip, ProgressBar, useKeyboardReveal } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
@@ -29,12 +30,20 @@ import {
   TrackerPreset,
 } from "@/src/domain/trackerCatalog";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
+import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import {
   enablePushNotifications,
   notificationPermissionGranted,
 } from "@/src/notifications/push";
 import { useApp } from "@/src/state/AppProvider";
-import { markOnboardingCompleted } from "@/src/storage/onboardingState";
+import {
+  clearOnboardingDraft,
+  markOnboardingCompleted,
+  ONBOARDING_FLOW_VERSION,
+  OnboardingDraft,
+  readOnboardingDraft,
+  writeOnboardingDraft,
+} from "@/src/storage/onboardingState";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   ActivityLevel,
@@ -88,45 +97,47 @@ const GOALS = [
     copy: "Private groups, friendly rankings, and chat.",
     icon: "people-outline" as const,
   },
-];
-const HEALTH = [
-  { id: "sleep", label: "Sleep", metrics: ["sleep"] },
-  {
-    id: "blood_pressure",
-    label: "Blood pressure & pulse",
-    metrics: ["blood_pressure_systolic", "blood_pressure_diastolic", "pulse"],
-  },
-  { id: "blood_glucose", label: "Blood glucose", metrics: ["blood_glucose"] },
-  { id: "menstrual_cycle", label: "Cycle", metrics: ["menstrual_cycle"] },
-  { id: "pulse", label: "Pulse", metrics: ["pulse"] },
-  {
-    id: "body_composition",
-    label: "Body composition",
-    metrics: ["body_fat", "lean_body_mass", "body_water_mass", "bone_mass"],
-  },
 ] as const;
+
+const HEALTH_TRACKER_IDS = [
+  "sleep",
+  "blood_pressure_systolic",
+  "blood_pressure_diastolic",
+  "pulse",
+  "blood_glucose",
+  "menstrual_cycle",
+  "body_fat",
+  "lean_body_mass",
+  "body_water_mass",
+  "bone_mass",
+] as const;
+
 const GOAL_TRACKER_IDS: Record<string, readonly string[]> = {
-  weight: [
-    "weight",
-    "food",
-    "exercise",
-    "deficit",
-    "weekly_deficit_balance",
-  ],
-  activity: [
-    "steps",
-    "exercise",
-    "workout",
-    "workout_duration",
-    "workout_distance",
-  ],
+  weight: ["weight", "food", "exercise", "deficit", "weekly_deficit_balance"],
+  activity: ["steps", "exercise", "workout", "workout_duration", "workout_distance"],
   gym: ["exercise", "gym_completed", "gym_duration", "gym_total_volume"],
   learning: ["reading", "study", "work"],
-  health: HEALTH.flatMap((choice) => [...choice.metrics]),
+  health: HEALTH_TRACKER_IDS,
   nutrition: ["food", "water", "intermittent_fasting"],
   friends: [],
 };
-const NOT_GOALS = new Set([
+
+/** A useful dashboard even when a new user chooses no specific ambition. */
+const DEFAULT_STARTER_TRACKER_IDS = [
+  "steps",
+  "exercise",
+  "food",
+  "deficit",
+  "weekly_deficit_balance",
+  "todo_completion",
+  "workout",
+  "water",
+  "reading",
+  "study",
+  "work",
+] as const;
+const DEFAULT_TRACKED_GOAL_IDS = ["steps", "exercise", "workout", "water"];
+const NOT_DAILY_GOALS = new Set([
   "weight",
   "weekly_deficit_balance",
   "overall_score",
@@ -168,22 +179,37 @@ export default function Onboarding() {
   const { t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const [step, setStep] = useState(0);
+  const { width } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView>(null);
+  useKeyboardReveal(scrollRef);
+
+  const accountId =
+    auth.user?.id ??
+    (!auth.configured
+      ? `demo:${state.currentUserId}`
+      : state.currentUserId);
+  const memberName =
+    state.group.members.find((member) => member.id === state.currentUserId)
+      ?.name || suggestedAccountName(auth.user ?? { id: state.currentUserId });
+  const profile = state.settings.energyProfile;
+  const [draftReady, setDraftReady] = useState(false);
+  const [step, setStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [finishing, setFinishing] = useState(false);
   const [completionRoute, setCompletionRoute] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState(() =>
-    auth.user
-      ? suggestedAccountName(auth.user)
-      : state.group.members.find((member) => member.id === state.currentUserId)
-          ?.name || suggestedAccountName({ id: state.currentUserId }),
-  );
+  const [displayName, setDisplayName] = useState(memberName);
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );
+  const [selected, setSelected] = useState<string[]>([
+    ...DEFAULT_STARTER_TRACKER_IDS,
+  ]);
+  const [trackedSelected, setTrackedSelected] = useState<string[]>(
+    DEFAULT_TRACKED_GOAL_IDS,
+  );
+  const [expandedGoals, setExpandedGoals] = useState<string[]>([]);
   const [direction, setDirection] = useState<WeightDirection>(
     state.settings.weightDirection ?? "lose",
   );
-  const profile = state.settings.energyProfile;
   const [age, setAge] = useState(String(profile.age));
   const [height, setHeight] = useState(String(profile.heightCm));
   const [weight, setWeight] = useState(String(profile.weightKg));
@@ -195,72 +221,85 @@ export default function Onboarding() {
   const [activity, setActivity] = useState<ActivityLevel>(
     profile.activityLevel,
   );
+  const [landingPage, setLandingPage] = useState<LandingPage>("index");
+  const [startShortTour, setStartShortTour] = useState(true);
   const [pushReady, setPushReady] = useState(
     state.settings.notifications.pushEnabled,
   );
   const [healthReady, setHealthReady] = useState(
     state.settings.healthSync.enabled,
   );
-  const [healthHistoryDays, setHealthHistoryDays] = useState<
-    30 | 90 | 365 | 730
-  >(state.settings.healthHistoryDays ?? 90);
+  const [healthHistoryDays, setHealthHistoryDays] = useState<30 | 90 | 365 | 730>(
+    state.settings.healthHistoryDays ?? 90,
+  );
   const [startHealthGoalsFromHistory, setStartHealthGoalsFromHistory] =
     useState(true);
+  const previousProposedIds = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    setCloudSyncPaused("onboarding", true);
+    return () => setCloudSyncPaused("onboarding", false);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setDraftReady(false);
+    void readOnboardingDraft(accountId).then((draft) => {
+      if (!active) return;
+      if (draft) {
+        setStep(draft.step);
+        setDisplayName(draft.displayName);
+        setGoals(draft.goals);
+        setSelected(draft.selectedTrackerIds);
+        setTrackedSelected(draft.trackedGoalIds);
+        setExpandedGoals(draft.expandedGoalIds);
+        setDirection(draft.direction);
+        setAge(draft.age);
+        setHeight(draft.height);
+        setWeight(draft.weight);
+        setTarget(draft.target);
+        setWeeklyChange(draft.weeklyChange);
+        setSex(draft.sex);
+        setActivity(draft.activity);
+        setLandingPage(draft.landingPage);
+        setStartShortTour(draft.startShortTour);
+        setHealthHistoryDays(draft.healthHistoryDays);
+        setStartHealthGoalsFromHistory(
+          draft.startHealthGoalsFromHistory,
+        );
+        // Restore this account's draft once. Keeping the live dark-mode value
+        // out of this effect's dependencies prevents the final-page switch
+        // from re-running hydration and jumping back to an older draft.
+        updateSettings({ darkMode: draft.darkMode });
+      }
+      previousProposedIds.current = null;
+      setDraftReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [accountId, updateSettings]);
+
   useEffect(() => {
     let active = true;
     void notificationPermissionGranted()
       .then(async (granted) => {
         if (!active || !granted) return;
         setPushReady(true);
-        const notifications = {
-          ...state.settings.notifications,
-          pushEnabled: true,
-        };
         if (!state.settings.notifications.pushEnabled)
-          updateSettings({ notifications });
-        if (auth.user)
-          await enablePushNotifications(
-            auth.user.id,
-            notifications,
-            state.settings.language,
-          ).catch(
-            () => undefined,
-          );
+          updateSettings({
+            notifications: {
+              ...state.settings.notifications,
+              pushEnabled: true,
+            },
+          });
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
-    // Re-register when the physical device is attached to a different cloud
-    // account. Existing OS permission must not require revoking it first.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.user?.id]);
-  const [advancedTutorial, setAdvancedTutorial] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [trackedSelected, setTrackedSelected] = useState<string[]>([]);
-  const [customPresets, setCustomPresets] = useState<TrackerPreset[]>([]);
-  const [customName, setCustomName] = useState("");
-  const [customUnit, setCustomUnit] = useState("");
-  const [customGoal, setCustomGoal] = useState("1");
-  const [customDataType, setCustomDataType] = useState<"number" | "boolean">(
-    "number",
-  );
-  const [customTrackerOpen, setCustomTrackerOpen] = useState(false);
-  const [expandedGoals, setExpandedGoals] = useState<string[]>(
-    state.settings.selectedGoals ?? [],
-  );
-  const [landingPage, setLandingPage] = useState<LandingPage>(
-    (state.settings.selectedGoals ?? []).includes("friends")
-      ? "group"
-      : "index",
-  );
-  const previousProposedIds = useRef<Set<string> | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
-  useKeyboardReveal(scrollRef);
-  useEffect(() => {
-    setCloudSyncPaused("onboarding", true);
-    return () => setCloudSyncPaused("onboarding", false);
-  }, []);
+  }, [state.settings.notifications, updateSettings]);
+
   const nextProfile = useMemo(
     () => ({
       ...profile,
@@ -277,15 +316,32 @@ export default function Onboarding() {
       sex,
       activityLevel: activity,
     }),
-    [profile, age, height, weight, target, weeklyChange, direction, sex, activity],
+    [
+      activity,
+      age,
+      direction,
+      height,
+      profile,
+      sex,
+      target,
+      weeklyChange,
+      weight,
+    ],
   );
+
   const desired = useMemo(() => {
-    const ids = new Set<string>();
-    // To-Dos are available to every new account without becoming a tracked
-    // daily goal or taking space on Today until the user chooses that.
-    ids.add("todo_completion");
+    const ids = new Set<string>(DEFAULT_STARTER_TRACKER_IDS);
     goals.forEach((goalId) =>
       (GOAL_TRACKER_IDS[goalId] ?? []).forEach((id) => ids.add(id)),
+    );
+    return ids;
+  }, [goals]);
+  const recommendedTracked = useMemo(() => {
+    const ids = new Set(DEFAULT_TRACKED_GOAL_IDS);
+    goals.forEach((goalId) =>
+      (GOAL_TRACKER_IDS[goalId] ?? []).forEach((id) => {
+        if (!NOT_DAILY_GOALS.has(id)) ids.add(id);
+      }),
     );
     return ids;
   }, [goals]);
@@ -298,20 +354,17 @@ export default function Onboarding() {
         weightDirection: direction,
       },
     } as AppState;
-    const presets = trackerPresets(adjusted, true).filter((item) =>
+    return trackerPresets(adjusted, true).filter((item) =>
       desired.has(item.templateId),
     );
-    return [...presets, ...customPresets];
-  }, [state, desired, direction, nextProfile, customPresets]);
+  }, [desired, direction, nextProfile, state]);
   const visibleRecommendations = useMemo(
     () =>
-      proposed.filter(
-        (item) =>
-          item.templateId !== "todo_completion" &&
-          !isInternalTracker({
-            id: item.templateId,
-            healthMapping: item.healthMapping,
-          }),
+      proposed.filter((item) =>
+        !isInternalTracker({
+          id: item.templateId,
+          healthMapping: item.healthMapping,
+        }),
       ),
     [proposed],
   );
@@ -322,22 +375,15 @@ export default function Onboarding() {
       ),
     [visibleRecommendations],
   );
-  const goalSections = useMemo(
+  const selectedGoalSections = useMemo(
     () =>
-      GOALS.map((goal) => ({
+      GOALS.filter((goal) => goals.includes(goal.id)).map((goal) => ({
         goal,
         items: (GOAL_TRACKER_IDS[goal.id] ?? [])
           .map((id) => recommendationById.get(id))
           .filter((item): item is TrackerPreset => Boolean(item)),
       })),
-    [recommendationById],
-  );
-  const customTrackerItems = useMemo(
-    () =>
-      customPresets
-        .map((item) => recommendationById.get(item.templateId))
-        .filter((item): item is TrackerPreset => Boolean(item)),
-    [customPresets, recommendationById],
+    [goals, recommendationById],
   );
   const trackedHealthHistoryCount = proposed.filter(
     (item) =>
@@ -349,16 +395,23 @@ export default function Onboarding() {
     direction === "maintain" ||
     (direction === "lose" && nextProfile.targetWeightKg < nextProfile.weightKg) ||
     (direction === "gain" && nextProfile.targetWeightKg > nextProfile.weightKg);
+
   useEffect(() => {
+    if (!draftReady) return;
     const nextIds = new Set(proposed.map((item) => item.templateId));
     const previousIds = previousProposedIds.current;
-    const added = previousIds
-      ? proposed.filter((item) => !previousIds.has(item.templateId))
-      : proposed;
-    const removed = previousIds
-      ? [...previousIds].filter((id) => !nextIds.has(id))
-      : [];
     previousProposedIds.current = nextIds;
+    if (!previousIds) {
+      setSelected((current) =>
+        current.filter((id) => nextIds.has(id)),
+      );
+      setTrackedSelected((current) =>
+        current.filter((id) => nextIds.has(id)),
+      );
+      return;
+    }
+    const added = proposed.filter((item) => !previousIds.has(item.templateId));
+    const removed = [...previousIds].filter((id) => !nextIds.has(id));
     if (!added.length && !removed.length) return;
     const removedSet = new Set(removed);
     setSelected((current) => [
@@ -370,36 +423,110 @@ export default function Onboarding() {
     setTrackedSelected((current) => [
       ...current.filter((id) => !removedSet.has(id)),
       ...added
-        .filter(
-          (item) =>
-            item.goalEnabled !== false && !NOT_GOALS.has(item.templateId),
-        )
         .map((item) => item.templateId)
-        .filter((id) => !current.includes(id)),
+        .filter(
+          (id) => recommendedTracked.has(id) && !current.includes(id),
+        ),
     ]);
-  }, [proposed]);
+  }, [draftReady, proposed, recommendedTracked]);
+
   useEffect(() => {
-    if (step === 1 && goals.includes("friends")) setLandingPage("group");
-  }, [step, goals]);
+    if (!draftReady || finishing) return;
+    const timer = setTimeout(() => {
+      void writeOnboardingDraft(accountId, draftSnapshot(step)).catch(
+        () => undefined,
+      );
+    }, 180);
+    return () => clearTimeout(timer);
+    // draftSnapshot deliberately observes every local picker below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    accountId,
+    activity,
+    age,
+    direction,
+    displayName,
+    draftReady,
+    expandedGoals,
+    finishing,
+    goals,
+    healthHistoryDays,
+    height,
+    landingPage,
+    selected,
+    sex,
+    startHealthGoalsFromHistory,
+    startShortTour,
+    state.settings.darkMode,
+    step,
+    target,
+    trackedSelected,
+    weeklyChange,
+    weight,
+  ]);
+
+  function draftSnapshot(nextStep: 0 | 1 | 2 | 3 | 4): OnboardingDraft {
+    return {
+      version: ONBOARDING_FLOW_VERSION,
+      step: nextStep,
+      displayName,
+      goals,
+      selectedTrackerIds: selected,
+      trackedGoalIds: trackedSelected,
+      expandedGoalIds: expandedGoals,
+      direction,
+      age,
+      height,
+      weight,
+      target,
+      weeklyChange,
+      sex,
+      activity,
+      landingPage,
+      darkMode: state.settings.darkMode,
+      startShortTour,
+      healthHistoryDays,
+      startHealthGoalsFromHistory,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   function toggleGoal(id: string) {
-    const selecting = !goals.includes(id);
+    const enabling = !goals.includes(id);
     setGoals((current) =>
       current.includes(id)
         ? current.filter((item) => item !== id)
         : [...current, id],
     );
-    if (selecting)
-      setExpandedGoals((current) =>
-        current.includes(id) ? current : [...current, id],
+    if (id === "friends") {
+      if (enabling) {
+        setLandingPage("group");
+      } else if (landingPage === "group") {
+        setLandingPage("index");
+      }
+    }
+  }
+
+  function toggleTracker(id: string) {
+    const linkedIds =
+      id === "blood_pressure_systolic"
+        ? ["blood_pressure_systolic", "blood_pressure_diastolic"]
+        : [id];
+    if (selected.includes(id)) {
+      setSelected((current) =>
+        current.filter((item) => !linkedIds.includes(item)),
       );
+      setTrackedSelected((current) =>
+        current.filter((item) => !linkedIds.includes(item)),
+      );
+      return;
+    }
+    setSelected((current) => [
+      ...current,
+      ...linkedIds.filter((item) => !current.includes(item)),
+    ]);
   }
-  function toggleGoalExpansion(id: string) {
-    setExpandedGoals((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id],
-    );
-  }
+
   function toggleTrackedTracker(id: string) {
     if (!selected.includes(id))
       setSelected((current) =>
@@ -411,6 +538,7 @@ export default function Onboarding() {
         : [...current, id],
     );
   }
+
   function metricDefinitions(): MetricDefinition[] {
     const today = dateKey();
     return proposed
@@ -425,8 +553,12 @@ export default function Onboarding() {
         dataType: item.dataType,
         aggregation: item.aggregation,
         goal: { ...item.goal },
+        adaptiveGoalTarget: item.adaptiveGoalTarget
+          ? { ...item.adaptiveGoalTarget }
+          : undefined,
         goalEnabled: item.goalEnabled,
         goalRange: item.goalRange,
+        goalProgressMode: item.goalProgressMode,
         category: item.category,
         healthMapping: item.healthMapping,
         gymMapping: item.gymMapping,
@@ -451,6 +583,7 @@ export default function Onboarding() {
         activeFrom: today,
       }));
   }
+
   function configure() {
     const metrics = metricDefinitions();
     configurePersonalMetrics(
@@ -463,21 +596,107 @@ export default function Onboarding() {
       selectedGoals: goals,
       weightDirection: direction,
       showLeaderboard: goals.includes("friends"),
-      showChat: goals.includes("friends"),
-      showGym: goals.includes("gym"),
+      showChat: true,
+      showGym: true,
       defaultLandingPage: landingPage,
     });
     updateEnergyProfile(nextProfile);
   }
+
+  async function saveDisplayName() {
+    const name =
+      displayName.trim().replace(/\s+/g, " ").slice(0, 40) ||
+      suggestedAccountName(auth.user ?? { id: state.currentUserId });
+    updateMemberName(state.currentUserId, name);
+    if (auth.status === "signedIn")
+      await auth.updateDisplayName(name);
+  }
+
+  async function completeOnboarding(
+    shortTour: boolean,
+    route: string,
+  ) {
+    configure();
+    await saveDisplayName();
+    updateSettings({
+      healthHistoryDays,
+      onboardingVersion: ONBOARDING_FLOW_VERSION,
+      tutorialComplete: !shortTour,
+      tutorialGuideId: shortTour ? "essential" : undefined,
+      tutorialGuideRunId: shortTour ? Date.now() : undefined,
+      defaultLandingPage: landingPage,
+    });
+    await flushLocalPersistence();
+    await markOnboardingCompleted(accountId);
+    updateSettings({ onboardingComplete: true });
+    await flushLocalPersistence();
+    await clearOnboardingDraft(accountId);
+    setCloudSyncPaused("onboarding", false);
+    setCompletionRoute(route);
+  }
+
+  async function finish(shortTour = startShortTour) {
+    if (finishing) return;
+    setFinishing(true);
+    try {
+      await completeOnboarding(
+        shortTour,
+        shortTour
+          ? "/"
+          : landingPage === "index"
+            ? "/"
+            : `/${landingPage}`,
+      );
+    } catch (error) {
+      setFinishing(false);
+      Alert.alert(
+        "Setup could not be saved",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    }
+  }
+
+  async function continueFlow() {
+    if (finishing) return;
+    if (step === 4) {
+      await finish();
+      return;
+    }
+    const next = (step + 1) as 1 | 2 | 3 | 4;
+    await writeOnboardingDraft(accountId, draftSnapshot(next)).catch(
+      () => undefined,
+    );
+    setStep(next);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  }
+
+  async function skipSetup() {
+    if (finishing) return;
+    setFinishing(true);
+    try {
+      await completeOnboarding(true, "/");
+    } catch (error) {
+      setFinishing(false);
+      Alert.alert(
+        "Setup could not be saved",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    }
+  }
+
   async function enablePush() {
     try {
       if (auth.user)
-        await enablePushNotifications(auth.user.id, {
+        await enablePushNotifications(
+          auth.user.id,
+          { ...state.settings.notifications, pushEnabled: true },
+          state.settings.language,
+        );
+      updateSettings({
+        notifications: {
           ...state.settings.notifications,
           pushEnabled: true,
-        }, state.settings.language);
-      updateSettings({
-        notifications: { ...state.settings.notifications, pushEnabled: true },
+        },
       });
       setPushReady(true);
     } catch (error) {
@@ -487,6 +706,7 @@ export default function Onboarding() {
       );
     }
   }
+
   async function enableHealth() {
     try {
       await health.connect({
@@ -502,143 +722,21 @@ export default function Onboarding() {
       );
     }
   }
-  function saveDisplayName() {
-    const name =
-      displayName.trim().replace(/\s+/g, " ").slice(0, 40) ||
-      suggestedAccountName(auth.user ?? { id: state.currentUserId });
-    if (name !== displayName) setDisplayName(name);
-    updateMemberName(state.currentUserId, name);
-    if (auth.status === "signedIn")
-      void auth.updateDisplayName(name).catch(() => undefined);
-    return name;
-  }
-  async function completeOnboarding(
-    settings: Partial<AppState["settings"]>,
-    route: string,
-  ) {
-    saveDisplayName();
-    // Every action above reduces against AppProvider's latest state reference.
-    // Merge completion into that live snapshot instead of replacing it with
-    // this screen's render-time `state`, which could restore stale appearance
-    // settings or erase the tracker/flag choices committed on an earlier step.
-    updateSettings({
-      // The picker is local onboarding state until Health Connect returns.
-      // Include it explicitly so Finish cannot restore the old default.
-      healthHistoryDays,
-      ...settings,
-    });
-    // First durably store the configured profile, appearance, trackers, and
-    // flags while the router still considers onboarding active. Only then may
-    // the completion marker be written or navigation begin.
-    await flushLocalPersistence();
-    await markOnboardingCompleted(auth.user?.id ?? state.currentUserId);
-    // The durable marker makes the hand-off restart-safe even if the app closes
-    // before this monotonic setting's follow-up persistence completes.
-    updateSettings({ onboardingComplete: true });
-    await flushLocalPersistence();
-    setCompletionRoute(route);
-  }
-  async function finish() {
-    if (finishing) return;
-    setFinishing(true);
-    // Reapply the final local picker state immediately before completion. The
-    // earlier profile-step commit exists for Health import, but this final pass
-    // guarantees manual tracker and flag edits are in the durable snapshot.
-    configure();
-    await completeOnboarding({
-      tutorialComplete: state.settings.onboardingComplete
-        ? state.settings.tutorialComplete
-        : false,
-      advancedTutorialComplete: advancedTutorial,
-      defaultLandingPage: landingPage,
-    }, landingPage === "index" ? "/" : `/${landingPage}`);
-  }
-  function toggleTracker(id: string) {
-    const linkedIds =
-      id === "blood_pressure_systolic"
-        ? ["blood_pressure_systolic", "blood_pressure_diastolic"]
-        : [id];
-    if (selected.includes(id)) {
-      setSelected((current) =>
-        current.filter((item) => !linkedIds.includes(item)),
-      );
-      setTrackedSelected((current) =>
-        current.filter((item) => !linkedIds.includes(item)),
-      );
-    } else
-      setSelected((current) => [
-        ...current,
-        ...linkedIds.filter((item) => !current.includes(item)),
-      ]);
-  }
-  function addCustomTracker() {
-    const name = customName.trim();
-    const target = customDataType === "boolean" ? 1 : Number(customGoal);
-    if (
-      !name ||
-      (customDataType === "number" &&
-        (!Number.isFinite(target) || target <= 0))
-    ) {
-      Alert.alert(
-        "Finish the tracker",
-        customDataType === "number"
-          ? "Add a name and a goal above zero."
-          : "Add a tracker name.",
-      );
-      return;
-    }
-    const base =
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "_")
-        .replace(/^_+|_+$/g, "") || "custom";
-    const templateId = `${base}_${Date.now().toString(36)}`;
-    const preset: TrackerPreset = {
-      templateId,
-      name,
-      icon: "sparkles-outline",
-      color: "#7756D9",
-      unit: customDataType === "number" ? customUnit.trim() : "",
-      dataType: customDataType,
-      aggregation: customDataType === "number" ? "sum" : "max",
-      goal:
-        customDataType === "number"
-          ? { kind: "at_least", target }
-          : { kind: "complete", target: 1 },
-      goalEnabled: true,
-      category: "other",
-      manualEntry: true,
-      rankingDirection: "higher",
-      defaultVisibility: "group",
-      description:
-        customDataType === "number"
-          ? `Personal daily target: ${target}${customUnit.trim() ? ` ${customUnit.trim()}` : ""}.`
-          : "Mark Yes when this is complete for the day.",
-    };
-    setCustomPresets((current) => [...current, preset]);
-    setSelected((current) => [...current, templateId]);
-    setTrackedSelected((current) => [...current, templateId]);
-    setCustomName("");
-    setCustomUnit("");
-    setCustomGoal("1");
-    setCustomDataType("number");
-  }
-  async function continueFlow() {
-    if (step === 0) saveDisplayName();
-    if (step === 1) configure();
-    if (step === 3) await finish();
-    else setStep((value) => value + 1);
-  }
-  async function skipSetup() {
-    if (finishing) return;
-    setFinishing(true);
-    await completeOnboarding({
-      tutorialComplete: state.settings.onboardingComplete
-        ? state.settings.tutorialComplete
-        : false,
-    }, "/");
-  }
+
   if (completionRoute) return <Redirect href={completionRoute as never} />;
+  if (!draftReady)
+    return (
+      <SafeAreaView
+        style={[styles.loading, { backgroundColor: colors.canvas }]}
+      >
+        <View style={[styles.mark, { backgroundColor: accent }]}>
+          <Ionicons name="navigate" size={20} color={palette.white} />
+        </View>
+        <ActivityIndicator color={accent} />
+        <Text style={[styles.loadingText, { color: colors.muted }]}>Restoring setup…</Text>
+      </SafeAreaView>
+    );
+
   return (
     <SafeAreaView
       style={[styles.safe, { backgroundColor: colors.canvas }]}
@@ -655,142 +753,189 @@ export default function Onboarding() {
             </View>
             <Text style={[styles.brand, { color: colors.ink }]}>HABHUB</Text>
             <Text style={[styles.step, { color: colors.muted }]}>
-              {step + 1}/4
+              {step + 1}/5
             </Text>
           </View>
-          <ProgressBar progress={(step + 1) / 4} color={accent} />
+          <ProgressBar progress={(step + 1) / 5} color={accent} />
           <ScrollView
             ref={scrollRef}
             style={styles.body}
             contentContainerStyle={styles.bodyContent}
-            showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
             {step === 0 ? (
               <>
                 <Title
-                  title="What would you like to change?"
-                  copy="Choose only what matters now. HabHub builds the rest for you."
+                  title="What matters to you?"
+                  copy="Pick any priorities that feel useful. You can also continue with a balanced starter setup."
                   colors={colors}
                 />
-                <View style={styles.nameField}>
-                  <Text style={[styles.nameLabel, { color: colors.ink }]}>
-                    What should we call you?
-                  </Text>
-                  <TextInput
-                    value={displayName}
-                    onChangeText={setDisplayName}
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                    maxLength={40}
-                    placeholder="Your name"
-                    placeholderTextColor={colors.faint}
-                    returnKeyType="done"
-                    style={[
-                      styles.input,
-                      {
-                        color: colors.ink,
-                        borderColor: colors.border,
-                        backgroundColor: colors.card,
-                      },
-                    ]}
-                  />
+                <Text style={[styles.nameLabel, { color: colors.ink }]}>What should we call you?</Text>
+                <TextInput
+                  value={displayName}
+                  onChangeText={setDisplayName}
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  maxLength={40}
+                  placeholder="Your name"
+                  placeholderTextColor={colors.faint}
+                  returnKeyType="done"
+                  style={[
+                    styles.input,
+                    {
+                      color: colors.ink,
+                      borderColor: colors.border,
+                      backgroundColor: colors.card,
+                    },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.defaultNotice,
+                    { backgroundColor: colors.primarySoft },
+                  ]}
+                >
+                  <Ionicons name="sparkles" size={17} color={accent} />
+                  <View style={styles.grow}>
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>A balanced setup is already selected</Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>Steps, active energy, food, balance, to-dos, workouts, water, reading, study, and work stay available. Your priorities only refine what is tracked each day.</Text>
+                  </View>
                 </View>
                 <View style={styles.goalGrid}>
-                  {goalSections.map(({ goal, items }) => {
+                  {GOALS.map((goal) => {
                     const chosen = goals.includes(goal.id);
-                    const open = expandedGoals.includes(goal.id);
-                    const selectedCount = items.filter((item) =>
-                      selected.includes(item.templateId),
-                    ).length;
                     return (
-                      <View
+                      <Pressable
                         key={goal.id}
-                        style={[
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: chosen }}
+                        accessibilityLabel={goal.title}
+                        onPress={() => toggleGoal(goal.id)}
+                        style={({ pressed }) => [
                           styles.goalChoice,
                           {
                             backgroundColor: colors.card,
                             borderColor: chosen ? accent : colors.border,
                           },
+                          pressed && styles.pressed,
                         ]}
                       >
-                        <View style={styles.goalHeading}>
-                          <Pressable
-                            accessibilityRole="checkbox"
-                            accessibilityState={{ checked: chosen }}
-                            accessibilityLabel={goal.title}
-                            onPress={() => toggleGoal(goal.id)}
-                            style={({ pressed }) => [
-                              styles.goalSelect,
-                              pressed && styles.pressed,
+                        <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
+                          <Ionicons name={goal.icon} size={21} color={accent} />
+                        </View>
+                        <View style={styles.grow}>
+                          <Text style={[styles.goalTitle, { color: colors.ink }]}>{goal.title}</Text>
+                          <Text style={[styles.goalCopy, { color: colors.muted }]}>{goal.copy}</Text>
+                        </View>
+                        <Ionicons
+                          name={chosen ? "checkmark-circle" : "ellipse-outline"}
+                          size={21}
+                          color={chosen ? accent : colors.faint}
+                        />
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
+
+            {step === 1 ? (
+              <>
+                <Title
+                  title="Your starter dashboard"
+                  copy="This is the simple result of your choices. Nothing here is permanent."
+                  colors={colors}
+                />
+                <View style={styles.legend}>
+                  <Legend icon="checkmark-circle" label="Added to HabHub" color={accent} colors={colors} />
+                  <Legend icon="flag" label="Tracked each day" color={accent} colors={colors} />
+                </View>
+                <View
+                  style={[
+                    styles.setupStats,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                  ]}
+                >
+                  <SetupStat value={selected.length} label="trackers ready" colors={colors} />
+                  <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+                  <SetupStat value={trackedSelected.length} label="daily goals" colors={colors} />
+                </View>
+                <Text style={[styles.sectionLabel, { color: colors.ink }]}>Recommended setup</Text>
+                <View style={styles.metricGrid}>
+                  {visibleRecommendations.map((item) => (
+                    <MetricSummaryCard
+                      key={item.templateId}
+                      item={item}
+                      selected={selected.includes(item.templateId)}
+                      tracked={trackedSelected.includes(item.templateId)}
+                      width={
+                        width < 360
+                          ? "100%"
+                          : width >= 760
+                            ? "31.5%"
+                            : "48.5%"
+                      }
+                      onToggle={() => toggleTracker(item.templateId)}
+                      onToggleTracked={() => toggleTrackedTracker(item.templateId)}
+                    />
+                  ))}
+                </View>
+                {selectedGoalSections.length ? (
+                  <>
+                    <Text style={[styles.sectionLabel, { color: colors.ink }]}>Fine-tune a priority</Text>
+                    <Text style={[styles.sectionHelp, { color: colors.muted }]}>Optional. Open a chosen priority only if you want to change its suggested trackers or daily flags.</Text>
+                    <View style={styles.goalDetails}>
+                      {selectedGoalSections.map(({ goal, items }) => {
+                        const open = expandedGoals.includes(goal.id);
+                        return (
+                          <View
+                            key={goal.id}
+                            style={[
+                              styles.detailCard,
+                              { backgroundColor: colors.card, borderColor: colors.border },
                             ]}
                           >
-                            <View
-                              style={[
-                                styles.goalIcon,
-                                { backgroundColor: `${accent}18` },
-                              ]}
-                            >
-                              <Ionicons name={goal.icon} size={21} color={accent} />
-                            </View>
-                            <View style={styles.grow}>
-                              <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                                {goal.title}
-                              </Text>
-                              <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                                {goal.copy}
-                              </Text>
-                            </View>
-                            <Ionicons
-                              name={chosen ? "checkmark-circle" : "ellipse-outline"}
-                              size={21}
-                              color={chosen ? accent : colors.faint}
-                            />
-                          </Pressable>
-                          {chosen ? (
                             <Pressable
                               accessibilityRole="button"
-                              accessibilityLabel={t(
-                                open ? "Hide trackers" : "Show trackers",
-                              )}
                               accessibilityState={{ expanded: open }}
-                              hitSlop={6}
-                              onPress={() => toggleGoalExpansion(goal.id)}
-                              style={({ pressed }) => [
-                                styles.goalExpand,
-                                pressed && styles.pressed,
-                              ]}
+                              accessibilityLabel={open ? "Hide trackers" : "Show trackers"}
+                              onPress={() =>
+                                setExpandedGoals((current) =>
+                                  current.includes(goal.id)
+                                    ? current.filter((id) => id !== goal.id)
+                                    : [...current, goal.id],
+                                )
+                              }
+                              style={styles.detailHeading}
                             >
-                              {items.length ? (
-                                <Text
-                                  translate={false}
-                                  style={[styles.goalCount, { color: colors.muted }]}
-                                >
-                                  {selectedCount}/{items.length}
+                              <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
+                                <Ionicons name={goal.icon} size={20} color={accent} />
+                              </View>
+                              <View style={styles.grow}>
+                                <Text style={[styles.goalTitle, { color: colors.ink }]}>{goal.title}</Text>
+                                <Text style={[styles.goalCopy, { color: colors.muted }]}>
+                                  {items.length
+                                    ? t("{selected} of {total} suggested trackers added")
+                                        .replace(
+                                          "{selected}",
+                                          String(
+                                            items.filter((item) =>
+                                              selected.includes(item.templateId),
+                                            ).length,
+                                          ),
+                                        )
+                                        .replace("{total}", String(items.length))
+                                    : t("No tracker setup is needed for this priority.")}
                                 </Text>
-                              ) : null}
-                              <Ionicons
-                                name={open ? "chevron-up" : "chevron-down"}
-                                size={18}
-                                color={colors.faint}
-                              />
+                              </View>
+                              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.faint} />
                             </Pressable>
-                          ) : null}
-                        </View>
-                        {chosen && open ? (
-                          <View
-                            style={[
-                              styles.goalRecommendations,
-                              { borderTopColor: colors.border },
-                            ]}
-                          >
-                            {items.length ? (
-                              <>
+                            {open && items.length ? (
+                              <View style={[styles.detailRows, { borderTopColor: colors.border }]}>
                                 <View style={styles.trackedGoalTip}>
                                   <Ionicons name="flag" size={14} color={accent} />
-                                  <Text style={[styles.trackedGoalTipText, { color: colors.muted }]}>
-                                    A filled flag counts this tracker toward your daily tracked goals. The checkbox only adds or removes the tracker.
-                                  </Text>
+                                  <Text style={[styles.trackedGoalTipText, { color: colors.muted }]}>A filled flag makes the tracker part of daily completion. The checkmark only controls whether it is available in HabHub.</Text>
                                 </View>
                                 {items.map((item) => (
                                   <OnboardingTrackerRow
@@ -799,297 +944,86 @@ export default function Onboarding() {
                                     selected={selected.includes(item.templateId)}
                                     tracked={trackedSelected.includes(item.templateId)}
                                     onToggle={() => toggleTracker(item.templateId)}
-                                    onToggleTracked={() =>
-                                      toggleTrackedTracker(item.templateId)
-                                    }
+                                    onToggleTracked={() => toggleTrackedTracker(item.templateId)}
                                   />
                                 ))}
-                              </>
-                            ) : (
-                              <View style={styles.goalNoTrackers}>
-                                <Ionicons name="people-outline" size={16} color={accent} />
-                                <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                                  No tracker setup is needed for this goal. Friend features stay ready for you.
-                                </Text>
                               </View>
-                            )}
+                            ) : null}
                           </View>
-                        ) : null}
-                      </View>
-                    );
-                  })}
-                </View>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : null}
               </>
             ) : null}
-            {step === 1 ? (
+
+            {step === 2 ? (
               <>
                 <Title
-                  title="A little about you"
-                  copy="Used privately for relevant targets and estimates."
+                  title="Optional personal setup"
+                  copy="Add profile details only when they help calculate your weight plan. You can change them later."
                   colors={colors}
                 />
                 {goals.includes("weight") ? (
-                  <>
-                    <Text style={[styles.label, { color: colors.ink }]}>
-                      Direction
-                    </Text>
+                  <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Text style={[styles.sectionLabel, { color: colors.ink }]}>Weight plan</Text>
                     <View style={styles.wrap}>
-                      <Chip
-                        label="Lose"
-                        selected={direction === "lose"}
-                        onPress={() => setDirection("lose")}
-                      />
-                      <Chip
-                        label="Maintain"
-                        selected={direction === "maintain"}
-                        onPress={() => setDirection("maintain")}
-                      />
-                      <Chip
-                        label="Gain"
-                        selected={direction === "gain"}
-                        onPress={() => setDirection("gain")}
-                      />
-                    </View>
-                    <View style={styles.fields}>
-                      <Field
-                        label="Age"
-                        value={age}
-                        set={setAge}
-                        colors={colors}
-                      />
-                      <Field
-                        label="Height cm"
-                        value={height}
-                        set={setHeight}
-                        colors={colors}
-                      />
-                    </View>
-                    <View style={styles.fields}>
-                      <Field
-                        label="Current kg"
-                        value={weight}
-                        set={setWeight}
-                        colors={colors}
-                      />
-                      <Field
-                        label="Target kg"
-                        value={target}
-                        set={setTarget}
-                        colors={colors}
-                      />
-                    </View>
-                    <View style={styles.wrap}>
-                      {(
-                        ["female", "male", "unspecified"] as BiologicalSex[]
-                      ).map((item) => (
-                        <Chip
-                          key={item}
-                          label={
-                            item === "unspecified"
-                              ? "Prefer not to say"
-                              : item[0].toUpperCase() + item.slice(1)
-                          }
-                          selected={sex === item}
-                          onPress={() => setSex(item)}
-                        />
+                      {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
+                        <Chip key={item} label={item[0].toUpperCase() + item.slice(1)} selected={direction === item} onPress={() => setDirection(item)} />
                       ))}
                     </View>
-                    <Text style={[styles.label, { color: colors.ink }]}>
-                      Usual activity
-                    </Text>
-                    <View style={styles.wrap}>
-                      {(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map(
-                        (item) => (
-                          <Chip
-                            key={item}
-                            label={ACTIVITY_LABELS[item]}
-                            selected={activity === item}
-                            onPress={() => setActivity(item)}
-                          />
-                        ),
-                      )}
+                    <View style={styles.fields}>
+                      <Field label="Age" value={age} set={setAge} colors={colors} />
+                      <Field label="Height cm" value={height} set={setHeight} colors={colors} />
                     </View>
-                    {!targetIsValid ? (
-                      <Text style={[styles.validation, { color: palette.red }]}>
-                        {direction === "lose"
-                          ? "Choose a target below your current weight."
-                          : "Choose a target above your current weight."}
-                      </Text>
-                    ) : null}
+                    <View style={styles.fields}>
+                      <Field label="Current kg" value={weight} set={setWeight} colors={colors} />
+                      <Field label="Target kg" value={target} set={setTarget} colors={colors} />
+                    </View>
+                    <View style={styles.wrap}>
+                      {(["female", "male", "unspecified"] as BiologicalSex[]).map((item) => (
+                        <Chip key={item} label={item === "unspecified" ? "Prefer not to say" : item[0].toUpperCase() + item.slice(1)} selected={sex === item} onPress={() => setSex(item)} />
+                      ))}
+                    </View>
+                    <Text style={[styles.fieldGroupLabel, { color: colors.ink }]}>Usual activity</Text>
+                    <View style={styles.wrap}>
+                      {(Object.keys(ACTIVITY_LABELS) as ActivityLevel[]).map((item) => (
+                        <Chip key={item} label={ACTIVITY_LABELS[item]} selected={activity === item} onPress={() => setActivity(item)} />
+                      ))}
+                    </View>
                     {direction !== "maintain" ? (
                       <>
-                        <Text style={[styles.label, { color: colors.ink }]}>
-                          Desired {direction === "gain" ? "gain" : "loss"} per week
-                        </Text>
+                        <Text style={[styles.fieldGroupLabel, { color: colors.ink }]}>Desired {direction === "gain" ? "gain" : "loss"} per week</Text>
                         <View style={styles.wrap}>
                           {[0.25, 0.5, 0.75, 1].map((rate) => (
-                            <Chip
-                              key={rate}
-                              label={`${rate} kg`}
-                              selected={Number(weeklyChange) === rate}
-                              onPress={() => setWeeklyChange(String(rate))}
-                            />
+                            <Chip key={rate} label={`${rate} kg`} selected={Number(weeklyChange) === rate} onPress={() => setWeeklyChange(String(rate))} />
                           ))}
                         </View>
                       </>
                     ) : null}
-                  </>
-                ) : (
-                  <Empty
-                    copy="No body profile is needed for these goals."
-                    colors={colors}
-                    accent={accent}
-                  />
-                )}
-              </>
-            ) : null}
-            {step === 0 && goals.length ? (
-              <>
-                <View
-                  style={[
-                    styles.customTracker,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ expanded: customTrackerOpen }}
-                    onPress={() => setCustomTrackerOpen((value) => !value)}
-                    style={styles.customHeading}
-                  >
-                    <Ionicons name="sparkles-outline" size={18} color={accent} />
-                    <View style={styles.grow}>
-                      <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                        Add a custom tracker
-                      </Text>
-                      <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                        {customTrackerOpen
-                          ? "Start simple here; icons, formulas, and schedules remain available in Customize trackers."
-                          : "Optional · expand only if the ready-made trackers do not fit."}
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={customTrackerOpen ? "chevron-up" : "chevron-down"}
-                      size={18}
-                      color={colors.faint}
-                    />
-                  </Pressable>
-                  {customTrackerOpen ? (
-                    <>
-                  <TextInput
-                    value={customName}
-                    onChangeText={setCustomName}
-                    placeholder="Tracker name"
-                    placeholderTextColor={colors.faint}
-                    style={[
-                      styles.input,
-                      {
-                        color: colors.ink,
-                        borderColor: colors.border,
-                        backgroundColor: colors.canvas,
-                      },
-                    ]}
-                  />
-                  <View style={styles.customTypeChoices}>
-                    <View style={styles.customTypeChoice}>
-                      <Chip
-                        label="A number"
-                        icon="calculator-outline"
-                        selected={customDataType === "number"}
-                        onPress={() => setCustomDataType("number")}
-                      />
-                    </View>
-                    <View style={styles.customTypeChoice}>
-                      <Chip
-                        label="Yes or no"
-                        icon="checkmark-circle-outline"
-                        selected={customDataType === "boolean"}
-                        onPress={() => setCustomDataType("boolean")}
-                      />
-                    </View>
+                    {!targetIsValid ? (
+                      <Text style={[styles.validation, { color: palette.red }]}>{direction === "lose" ? "Choose a target below your current weight." : "Choose a target above your current weight."}</Text>
+                    ) : null}
                   </View>
-                  {customDataType === "number" ? (
-                    <View style={styles.fields}>
-                      <TextInput
-                        value={customGoal}
-                        onChangeText={setCustomGoal}
-                        keyboardType="decimal-pad"
-                        placeholder="Daily goal"
-                        placeholderTextColor={colors.faint}
-                        style={[
-                          styles.input,
-                          styles.customField,
-                          {
-                            color: colors.ink,
-                            borderColor: colors.border,
-                            backgroundColor: colors.canvas,
-                          },
-                        ]}
-                      />
-                      <TextInput
-                        value={customUnit}
-                        onChangeText={setCustomUnit}
-                        placeholder="Unit (optional)"
-                        placeholderTextColor={colors.faint}
-                        style={[
-                          styles.input,
-                          styles.customField,
-                          {
-                            color: colors.ink,
-                            borderColor: colors.border,
-                            backgroundColor: colors.canvas,
-                          },
-                        ]}
-                      />
+                ) : null}
+                {!goals.includes("weight") ? (
+                  <View style={[styles.defaultNotice, { backgroundColor: colors.primarySoft }]}>
+                    <Ionicons name="checkmark-circle" size={20} color={accent} />
+                    <View style={styles.grow}>
+                      <Text style={[styles.goalTitle, { color: colors.ink }]}>No extra profile details needed</Text>
+                      <Text style={[styles.goalCopy, { color: colors.muted }]}>Your selected setup can work without age, height, weight, or body details.</Text>
                     </View>
-                  ) : (
-                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                      Mark Yes when you complete it for the day.
-                    </Text>
-                  )}
-                  <Button
-                    label="Add custom tracker"
-                    icon="add-circle-outline"
-                    size="small"
-                    onPress={addCustomTracker}
-                  />
-                    </>
-                  ) : null}
-                </View>
-                {customTrackerItems.length ? (
-                  <View
-                    style={[
-                      styles.customTrackerList,
-                      {
-                        backgroundColor: colors.card,
-                        borderColor: colors.border,
-                      },
-                    ]}
-                  >
-                    {customTrackerItems.map((item) => (
-                      <OnboardingTrackerRow
-                        key={item.templateId}
-                        item={item}
-                        selected={selected.includes(item.templateId)}
-                        tracked={trackedSelected.includes(item.templateId)}
-                        onToggle={() => toggleTracker(item.templateId)}
-                        onToggleTracked={() =>
-                          toggleTrackedTracker(item.templateId)
-                        }
-                      />
-                    ))}
                   </View>
                 ) : null}
               </>
             ) : null}
-            {step === 2 ? (
+
+            {step === 3 ? (
               <>
                 <Title
-                  title="Connect when you are ready"
-                  copy="Both permissions are optional and can be changed later."
+                  title="Connect what helps"
+                  copy="Notifications and health connections are optional. Set them up now or return to Settings later."
                   colors={colors}
                 />
                 <PermissionCard
@@ -1103,44 +1037,38 @@ export default function Onboarding() {
                 />
                 <PermissionCard
                   icon="heart-outline"
-                  title="Health data"
-                  copy="Import selected data from Apple Health or Health Connect."
+                  title={
+                    Platform.OS === "ios"
+                      ? "Apple Health"
+                      : Platform.OS === "android"
+                        ? "Health Connect"
+                        : "Health data"
+                  }
+                  copy={
+                    Platform.OS === "ios"
+                      ? "Import selected data from Apple Health."
+                      : Platform.OS === "android"
+                        ? "Import selected data from Health Connect."
+                        : "Import selected data from Apple Health or Health Connect on your phone."
+                  }
                   done={healthReady}
                   action={enableHealth}
                   colors={colors}
                   accent={accent}
                 />
-                <View
-                  style={[
-                    styles.healthImportOptions,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.goalTitle, { color: colors.ink }]}>History to import</Text>
-                  <Text style={[styles.goalCopy, { color: colors.muted }]}>Imported after setup in small monthly batches so HabHub stays responsive.</Text>
+                <View style={[styles.importCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.goalTitle, { color: colors.ink }]}>Health history</Text>
+                  <Text style={[styles.goalCopy, { color: colors.muted }]}>Choose how much to import after connecting. Small monthly batches keep setup responsive.</Text>
                   <View style={styles.wrap}>
-                    {([
-                      [30, "30 days"],
-                      [90, "3 months"],
-                      [365, "1 year"],
-                      [730, "2 years"],
-                    ] as const).map(([days, label]) => (
-                      <Chip
-                        key={days}
-                        label={label}
-                        selected={healthHistoryDays === days}
-                        onPress={() => setHealthHistoryDays(days)}
-                      />
+                    {([[30, "30 days"], [90, "3 months"], [365, "1 year"], [730, "2 years"]] as const).map(([days, label]) => (
+                      <Chip key={days} label={label} selected={healthHistoryDays === days} onPress={() => setHealthHistoryDays(days)} />
                     ))}
                   </View>
                   {trackedHealthHistoryCount > 0 ? (
-                    <View style={styles.healthGoalHistoryRow}>
+                    <View style={[styles.switchRow, { borderTopColor: colors.border }]}>
                       <View style={styles.grow}>
-                        <Text style={[styles.goalTitle, { color: colors.ink }]}>Start tracked goals with imported history</Text>
-                        <Text style={[styles.goalCopy, { color: colors.muted }]}>For {trackedHealthHistoryCount} connected tracked goal{trackedHealthHistoryCount === 1 ? "" : "s"}, use the first available imported reading instead of today.</Text>
+                        <Text style={[styles.goalTitle, { color: colors.ink }]}>Use imported history for goal starts</Text>
+                        <Text style={[styles.goalCopy, { color: colors.muted }]}>Applies only to connected trackers currently flagged as daily goals.</Text>
                       </View>
                       <Switch
                         value={startHealthGoalsFromHistory}
@@ -1153,148 +1081,79 @@ export default function Onboarding() {
                 </View>
               </>
             ) : null}
-            {step === 3 ? (
+
+            {step === 4 ? (
               <>
                 <Title
-                  title="You are ready"
-                  copy="Three quick ideas are enough to start."
+                  title="Ready when you are"
+                  copy="Choose where HabHub opens and whether to start the short basic guide."
                   colors={colors}
                 />
-                <View style={styles.tutorial}>
-                  <Tip
-                    number="1"
-                    title="Today keeps the focus small"
-                    copy="Tap an item for its history; hold it to rearrange or remove it."
-                    colors={colors}
-                    accent={accent}
-                  />
-                  <Tip
-                    number="2"
-                    title="Log only what is manual"
-                    copy="Connected health items update when the app opens or you pull down."
-                    colors={colors}
-                    accent={accent}
-                  />
-                  <Tip
-                    number="3"
-                    title="Advanced stays out of the way"
-                    copy="Add ready-made items, formulas, sharing, and group rules only when needed."
-                    colors={colors}
-                    accent={accent}
-                  />
+                <View style={[styles.readySummary, { backgroundColor: colors.primarySoft }]}>
+                  <Ionicons name="checkmark-circle" size={28} color={accent} />
+                  <View style={styles.grow}>
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>{selected.length} trackers are ready</Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>{trackedSelected.length} are flagged for daily completion. You can change both in edit mode or Settings.</Text>
+                  </View>
                 </View>
-                <Pressable
-                  onPress={() => setAdvancedTutorial((value) => !value)}
-                  style={styles.advanced}
-                >
-                  <Ionicons
-                    name={advancedTutorial ? "checkbox" : "square-outline"}
-                    size={21}
-                    color={advancedTutorial ? accent : colors.faint}
-                  />
-                  <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                    Continue to advanced customization
-                  </Text>
-                </Pressable>
-              </>
-            ) : null}
-            {step === 3 ? (
-              <View style={styles.landing}>
-                <Text style={[styles.label, { color: colors.ink }]}>
-                  Open HabHub on
-                </Text>
+                <Text style={[styles.sectionLabel, { color: colors.ink }]}>After setup</Text>
+                <TourChoice
+                  selected={startShortTour}
+                  icon="compass-outline"
+                   title="Start the basic guide"
+                   copy="Recommended. A short walkthrough points out Today, logging, Progress, and display controls without changing your entries."
+                  onPress={() => setStartShortTour(true)}
+                />
+                <TourChoice
+                  selected={!startShortTour}
+                  icon="rocket-outline"
+                   title="Finish without the guide"
+                   copy="Open your chosen page now. You can replay the basic guide from Quick Guide later."
+                  onPress={() => setStartShortTour(false)}
+                />
+                <Text style={[styles.sectionLabel, { color: colors.ink }]}>Open HabHub on</Text>
                 <View style={styles.wrap}>
-                  <Chip
-                    label="Today"
-                    icon="today-outline"
-                    selected={landingPage === "index"}
-                    onPress={() => setLandingPage("index")}
-                  />
-                  {goals.includes("friends") ? (
-                    <Chip
-                      label="Leaderboard"
-                      icon="people-outline"
-                      selected={landingPage === "group"}
-                      onPress={() => setLandingPage("group")}
-                    />
-                  ) : null}
-                  <Chip
-                    label="Progress"
-                    icon="stats-chart-outline"
-                    selected={landingPage === "insights"}
-                    onPress={() => setLandingPage("insights")}
-                  />
-                  <Chip
-                    label="Log"
-                    icon="add-circle-outline"
-                    selected={landingPage === "log"}
-                    onPress={() => setLandingPage("log")}
-                  />
+                  <Chip label="Today" icon="today-outline" selected={landingPage === "index"} onPress={() => setLandingPage("index")} />
+                  {goals.includes("friends") ? <Chip label="Leaderboard" icon="people-outline" selected={landingPage === "group"} onPress={() => setLandingPage("group")} /> : null}
+                  <Chip label="Progress" icon="stats-chart-outline" selected={landingPage === "insights"} onPress={() => setLandingPage("insights")} />
+                  <Chip label="Log" icon="add-circle-outline" selected={landingPage === "log"} onPress={() => setLandingPage("log")} />
                 </View>
-                <View
-                  style={[
-                    styles.darkModeChoice,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                >
-                  <View style={styles.darkModeCopy}>
-                    <Text style={[styles.goalTitle, { color: colors.ink }]}>
-                      Start in dark mode
-                    </Text>
-                    <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                      Enabled by default. You can change it any time.
-                    </Text>
+                <View style={[styles.switchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={styles.grow}>
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>Start in dark mode</Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>This choice is saved with your setup.</Text>
                   </View>
                   <Switch
                     value={state.settings.darkMode}
                     onValueChange={(darkMode) => updateSettings({ darkMode })}
-                    trackColor={{
-                      false: colors.border,
-                      true: `${accent}88`,
-                    }}
-                    thumbColor={
-                      state.settings.darkMode ? accent : colors.faint
-                    }
+                    trackColor={{ false: colors.border, true: `${accent}88` }}
+                    thumbColor={state.settings.darkMode ? accent : colors.faint}
                   />
                 </View>
-              </View>
+              </>
             ) : null}
           </ScrollView>
           <View style={styles.footer}>
             {step > 0 ? (
               <Pressable
                 disabled={finishing}
-                onPress={() => setStep((value) => value - 1)}
+                accessibilityRole="button"
+                 onPress={() => setStep((value) => Math.max(0, value - 1) as 0 | 1 | 2 | 3)}
                 style={styles.back}
               >
-                <Text style={[styles.backText, { color: colors.muted }]}>
-                  Back
-                </Text>
+                <Text style={[styles.backText, { color: colors.muted }]}>Back</Text>
               </Pressable>
             ) : (
-              <Pressable
-                disabled={finishing}
-                onPress={skipSetup}
-                style={styles.back}
-              >
-                <Text style={[styles.backText, { color: colors.muted }]}>
-                  Skip
-                </Text>
+              <Pressable disabled={finishing} accessibilityRole="button" onPress={() => void skipSetup()} style={styles.back}>
+                <Text style={[styles.backText, { color: colors.muted }]}>Skip</Text>
               </Pressable>
             )}
             <View style={styles.next}>
               <Button
-                label={step === 3 ? "Start using HabHub" : "Continue"}
-                disabled={
-                  finishing ||
-                  (step === 0 && (!displayName.trim() || !goals.length)) ||
-                  (step === 1 && goals.includes("weight") && !targetIsValid)
-                }
+                label={step === 4 ? "Start using HabHub" : "Continue"}
+                disabled={finishing || !displayName.trim() || (step === 2 && goals.includes("weight") && !targetIsValid)}
                 loading={finishing}
-                onPress={continueFlow}
+                onPress={() => void continueFlow()}
               />
             </View>
           </View>
@@ -1304,439 +1163,58 @@ export default function Onboarding() {
   );
 }
 
-function OnboardingTrackerRow({
-  item,
-  selected,
-  tracked,
-  onToggle,
-  onToggleTracked,
-}: {
-  item: TrackerPreset;
-  selected: boolean;
-  tracked: boolean;
-  onToggle: () => void;
-  onToggleTracked: () => void;
-}) {
+function MetricSummaryCard({ item, selected, tracked, width, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; width: "31.5%" | "48.5%" | "100%"; onToggle: () => void; onToggleTracked: () => void }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const canTrack = item.goalEnabled !== false && !NOT_GOALS.has(item.templateId);
+  const canTrack = item.goalEnabled !== false && !NOT_DAILY_GOALS.has(item.templateId);
   return (
     <Pressable
       accessibilityRole="checkbox"
       accessibilityState={{ checked: selected }}
       accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`}
       onPress={onToggle}
-      style={({ pressed }) => [
-        styles.tracker,
-        { borderTopColor: colors.border },
-        pressed && styles.pressed,
-      ]}
+      style={({ pressed }) => [styles.metricCard, { width, backgroundColor: colors.card, borderColor: selected ? `${accent}88` : colors.border, opacity: selected ? 1 : 0.55 }, pressed && styles.pressed]}
     >
-      <View style={[styles.tinyIcon, { backgroundColor: `${item.color}18` }]}>
-        <Ionicons
-          name={item.icon as keyof typeof Ionicons.glyphMap}
-          size={17}
-          color={item.color}
-        />
+      <View style={[styles.metricIcon, { backgroundColor: `${item.color}18` }]}><Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={17} color={item.color} /></View>
+      <View style={styles.grow}><Text numberOfLines={1} style={[styles.metricName, { color: colors.ink }]}>{item.name}</Text><Text numberOfLines={1} style={[styles.metricState, { color: colors.muted }]}>{tracked ? "Daily goal" : "Available"}</Text></View>
+      <View style={styles.trackerActions}>
+        {canTrack ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: tracked }} accessibilityLabel={tracked ? `Remove ${item.name} from daily tracked goals` : `Add ${item.name} to daily tracked goals`} hitSlop={7} onPress={(event) => { event.stopPropagation(); onToggleTracked(); }} style={[styles.miniFlag, { backgroundColor: tracked ? colors.primarySoft : colors.canvas }]}><Ionicons name={tracked ? "flag" : "flag-outline"} size={13} color={tracked ? accent : colors.faint} /></Pressable> : null}
+        <Ionicons name={selected ? "checkmark-circle" : "ellipse-outline"} size={18} color={selected ? accent : colors.faint} />
       </View>
-      <View style={styles.grow}>
-        <Text style={[styles.goalTitle, { color: colors.ink }]}>{item.name}</Text>
-        <Text style={[styles.goalCopy, { color: colors.muted }]}>
-          {item.description}
-        </Text>
-        {presetTargetLabel(item) ? (
-          <Text style={[styles.targetText, { color: colors.muted }]}>
-            <Text style={styles.targetLabel}>Target</Text>
-            {` · ${presetTargetLabel(item)}`}
-          </Text>
-        ) : null}
-      </View>
-      {canTrack ? (
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: tracked }}
-          accessibilityLabel={
-            tracked
-              ? `Remove ${item.name} from daily tracked goals`
-              : `Add ${item.name} to daily tracked goals`
-          }
-          hitSlop={5}
-          onPress={(event) => {
-            event.stopPropagation();
-            onToggleTracked();
-          }}
-          style={[
-            styles.goalFlag,
-            { backgroundColor: tracked ? colors.primarySoft : colors.canvas },
-          ]}
-        >
-          <Ionicons
-            name={tracked ? "flag" : "flag-outline"}
-            size={15}
-            color={tracked ? accent : colors.faint}
-          />
-        </Pressable>
-      ) : null}
-      <Ionicons
-        name={selected ? "checkbox" : "square-outline"}
-        size={21}
-        color={selected ? accent : colors.faint}
-      />
     </Pressable>
   );
 }
 
-function Title({
-  title,
-  copy,
-  colors,
-}: {
-  title: string;
-  copy: string;
-  colors: ReturnType<typeof useAppColors>;
-}) {
+function OnboardingTrackerRow({ item, selected, tracked, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; onToggle: () => void; onToggleTracked: () => void }) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const canTrack = item.goalEnabled !== false && !NOT_DAILY_GOALS.has(item.templateId);
   return (
-    <>
-      <Text style={[styles.title, { color: colors.ink }]}>{title}</Text>
-      <Text style={[styles.subtitle, { color: colors.muted }]}>{copy}</Text>
-    </>
-  );
-}
-function Field({
-  label,
-  value,
-  set,
-  colors,
-}: {
-  label: string;
-  value: string;
-  set: (value: string) => void;
-  colors: ReturnType<typeof useAppColors>;
-}) {
-  return (
-    <View style={styles.grow}>
-      <Text style={[styles.fieldLabel, { color: colors.muted }]}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={set}
-        keyboardType="decimal-pad"
-        style={[
-          styles.input,
-          {
-            color: colors.ink,
-            borderColor: colors.border,
-            backgroundColor: colors.card,
-          },
-        ]}
-      />
-    </View>
-  );
-}
-function Empty({
-  copy,
-  colors,
-  accent,
-}: {
-  copy: string;
-  colors: ReturnType<typeof useAppColors>;
-  accent: string;
-}) {
-  return (
-    <View style={[styles.empty, { backgroundColor: colors.card }]}>
-      <Ionicons name="shield-checkmark-outline" size={28} color={accent} />
-      <Text style={[styles.goalTitle, { color: colors.ink }]}>{copy}</Text>
-    </View>
-  );
-}
-function PermissionCard({
-  icon,
-  title,
-  copy,
-  done,
-  action,
-  colors,
-  accent,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  copy: string;
-  done: boolean;
-  action: () => void;
-  colors: ReturnType<typeof useAppColors>;
-  accent: string;
-}) {
-  return (
-    <Pressable
-      onPress={action}
-      style={[
-        styles.permission,
-        {
-          backgroundColor: colors.card,
-          borderColor: done ? accent : colors.border,
-        },
-      ]}
-    >
-      <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
-        <Ionicons name={icon} size={22} color={accent} />
+    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`} onPress={onToggle} style={({ pressed }) => [styles.tracker, { borderTopColor: colors.border }, pressed && styles.pressed]}>
+      <View style={[styles.tinyIcon, { backgroundColor: `${item.color}18` }]}><Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={17} color={item.color} /></View>
+      <View style={styles.grow}><Text style={[styles.goalTitle, { color: colors.ink }]}>{item.name}</Text><Text style={[styles.goalCopy, { color: colors.muted }]}>{item.description}</Text>{presetTargetLabel(item) ? <Text style={[styles.targetText, { color: colors.muted }]}><Text style={styles.targetLabel}>Target</Text>{` · ${presetTargetLabel(item)}`}</Text> : null}</View>
+      <View style={styles.trackerActions}>
+        {canTrack ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: tracked }} accessibilityLabel={tracked ? `Remove ${item.name} from daily tracked goals` : `Add ${item.name} to daily tracked goals`} hitSlop={6} onPress={(event) => { event.stopPropagation(); onToggleTracked(); }} style={[styles.goalFlag, { backgroundColor: tracked ? colors.primarySoft : colors.canvas }]}><Ionicons name={tracked ? "flag" : "flag-outline"} size={15} color={tracked ? accent : colors.faint} /></Pressable> : null}
+        <Ionicons name={selected ? "checkbox" : "square-outline"} size={21} color={selected ? accent : colors.faint} />
       </View>
-      <View style={styles.grow}>
-        <Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text>
-        <Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text>
-      </View>
-      <Text style={[styles.done, { color: done ? accent : colors.muted }]}>
-        {done ? "Connected" : "Set up"}
-      </Text>
     </Pressable>
   );
 }
-function Tip({
-  number,
-  title,
-  copy,
-  colors,
-  accent,
-}: {
-  number: string;
-  title: string;
-  copy: string;
-  colors: ReturnType<typeof useAppColors>;
-  accent: string;
-}) {
-  return (
-    <View style={styles.tip}>
-      <View style={[styles.number, { backgroundColor: accent }]}>
-        <Text style={styles.numberText}>{number}</Text>
-      </View>
-      <View style={styles.grow}>
-        <Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text>
-        <Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text>
-      </View>
-    </View>
-  );
+
+function Title({ title, copy, colors }: { title: string; copy: string; colors: ReturnType<typeof useAppColors> }) { return <><Text style={[styles.title, { color: colors.ink }]}>{title}</Text><Text style={[styles.subtitle, { color: colors.muted }]}>{copy}</Text></>; }
+function Legend({ icon, label, color, colors }: { icon: keyof typeof Ionicons.glyphMap; label: string; color: string; colors: ReturnType<typeof useAppColors> }) { return <View style={styles.legendItem}><Ionicons name={icon} size={15} color={color} /><Text style={[styles.legendText, { color: colors.muted }]}>{label}</Text></View>; }
+function SetupStat({ value, label, colors }: { value: number; label: string; colors: ReturnType<typeof useAppColors> }) { return <View style={styles.setupStat}><Text translate={false} style={[styles.setupValue, { color: colors.ink }]}>{value}</Text><Text style={[styles.setupLabel, { color: colors.muted }]}>{label}</Text></View>; }
+function Field({ label, value, set, colors }: { label: string; value: string; set: (value: string) => void; colors: ReturnType<typeof useAppColors> }) { return <View style={styles.grow}><Text style={[styles.fieldLabel, { color: colors.muted }]}>{label}</Text><TextInput value={value} onChangeText={set} keyboardType="decimal-pad" style={[styles.input, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]} /></View>; }
+
+function PermissionCard({ icon, title, copy, done, action, colors, accent }: { icon: keyof typeof Ionicons.glyphMap; title: string; copy: string; done: boolean; action: () => void; colors: ReturnType<typeof useAppColors>; accent: string }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${title}. ${done ? "Connected" : "Set up"}`} onPress={action} style={({ pressed }) => [styles.permission, { backgroundColor: colors.card, borderColor: done ? accent : colors.border }, pressed && styles.pressed]}><View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}><Ionicons name={icon} size={22} color={accent} /></View><View style={styles.grow}><Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text><Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text></View><Text style={[styles.done, { color: done ? accent : colors.muted }]}>{done ? "Connected" : "Set up"}</Text></Pressable>;
 }
+
+function TourChoice({ selected, icon, title, copy, onPress }: { selected: boolean; icon: keyof typeof Ionicons.glyphMap; title: string; copy: string; onPress: () => void }) {
+  const colors = useAppColors(); const accent = useGroupAccent();
+  return <Pressable accessibilityRole="radio" accessibilityState={{ checked: selected }} onPress={onPress} style={({ pressed }) => [styles.tourChoice, { backgroundColor: colors.card, borderColor: selected ? accent : colors.border }, pressed && styles.pressed]}><View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}><Ionicons name={icon} size={21} color={accent} /></View><View style={styles.grow}><Text style={[styles.goalTitle, { color: colors.ink }]}>{title}</Text><Text style={[styles.goalCopy, { color: colors.muted }]}>{copy}</Text></View><Ionicons name={selected ? "radio-button-on" : "radio-button-off"} size={21} color={selected ? accent : colors.faint} /></Pressable>;
+}
+
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  page: { flex: 1, paddingHorizontal: 18, paddingBottom: 8 },
-  top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 },
-  mark: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 },
-  step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" },
-  body: { flex: 1 },
-  bodyContent: { paddingTop: 15, paddingBottom: 12 },
-  title: {
-    fontSize: 25,
-    lineHeight: 30,
-    fontWeight: "900",
-    letterSpacing: -0.6,
-  },
-  subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 },
-  goalGrid: { gap: 6 },
-  goalChoice: {
-    borderWidth: 1,
-    borderRadius: 15,
-    overflow: "hidden",
-  },
-  goalHeading: { flexDirection: "row", alignItems: "stretch" },
-  goalSelect: {
-    flex: 1,
-    minHeight: 59,
-    padding: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-  },
-  goalExpand: {
-    minWidth: 48,
-    paddingHorizontal: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 2,
-  },
-  goalCount: { fontSize: 8, fontWeight: "900" },
-  goalRecommendations: { borderTopWidth: 1, paddingTop: 5 },
-  trackedGoalTip: {
-    minHeight: 30,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-  },
-  trackedGoalTipText: { flex: 1, fontSize: 8, lineHeight: 12, fontWeight: "700" },
-  goalNoTrackers: {
-    minHeight: 40,
-    paddingHorizontal: 11,
-    paddingBottom: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  pressed: { opacity: 0.72 },
-  goalIcon: {
-    width: 37,
-    height: 37,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  goalTitle: { fontSize: 11, fontWeight: "900" },
-  nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 },
-  goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 },
-  targetText: { fontSize: 8, lineHeight: 12, marginTop: 2 },
-  targetLabel: { fontSize: 8, fontWeight: "900" },
-  grow: { flex: 1 },
-  label: { fontSize: 10, fontWeight: "900", marginTop: 6, marginBottom: 6 },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
-  fields: { flexDirection: "row", gap: 8 },
-  customTypeChoices: {
-    flexDirection: "row",
-    gap: 14,
-    marginTop: 2,
-    marginBottom: 14,
-  },
-  customTypeChoice: { flex: 1 },
-  fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 },
-  nameField: { marginBottom: 10 },
-  validation: { fontSize: 9, fontWeight: "800", marginBottom: 8 },
-  input: {
-    height: 41,
-    borderWidth: 1,
-    borderRadius: 11,
-    paddingHorizontal: 10,
-    fontSize: 12,
-    fontWeight: "800",
-    marginBottom: 8,
-  },
-  empty: {
-    alignItems: "center",
-    padding: 24,
-    borderRadius: 17,
-    gap: 6,
-    marginTop: 16,
-  },
-  choiceList: { gap: 5 },
-  choice: {
-    height: 40,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  selectActions: {
-    flexDirection: "row",
-    gap: 16,
-    justifyContent: "flex-end",
-    marginVertical: 9,
-  },
-  customTracker: {
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 10,
-    marginTop: 10,
-    marginBottom: 8,
-  },
-  customHeading: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-  customField: { flex: 1 },
-  customTrackerList: {
-    borderWidth: 1,
-    borderRadius: 14,
-    marginBottom: 8,
-    overflow: "hidden",
-  },
-  tracker: {
-    minHeight: 50,
-    borderTopWidth: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  goalFlag: {
-    width: 29,
-    height: 29,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tinyIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  permission: {
-    minHeight: 85,
-    borderWidth: 1,
-    borderRadius: 17,
-    padding: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 9,
-  },
-  done: { fontSize: 10, fontWeight: "900" },
-  tutorial: { gap: 13, marginTop: 7 },
-  tip: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
-  number: {
-    width: 29,
-    height: 29,
-    borderRadius: 9,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  numberText: { color: palette.white, fontSize: 11, fontWeight: "900" },
-  advanced: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 20,
-  },
-  healthImportOptions: {
-    borderWidth: 1,
-    borderRadius: 17,
-    padding: 12,
-    marginBottom: 9,
-  },
-  healthGoalHistoryRow: {
-    minHeight: 48,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(127,127,127,.24)",
-    paddingTop: 9,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  landing: { marginTop: 14 },
-  darkModeChoice: {
-    minHeight: 54,
-    marginTop: 6,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  darkModeCopy: { flex: 1 },
-  footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 },
-  back: { padding: 11 },
-  backText: { fontSize: 11, fontWeight: "900" },
-  next: { flex: 1 },
+  safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 53, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, fontWeight: "900" }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, goalDetails: { gap: 7, marginBottom: 12 }, detailCard: { borderWidth: 1, borderRadius: 15, overflow: "hidden" }, detailHeading: { minHeight: 57, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, detailRows: { borderTopWidth: 1 }, trackedGoalTip: { minHeight: 34, paddingHorizontal: 10, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 7 }, trackedGoalTipText: { flex: 1, fontSize: 8, lineHeight: 12, fontWeight: "700" }, tracker: { minHeight: 51, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 9, paddingVertical: 7 }, tinyIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" }, goalFlag: { width: 29, height: 29, borderRadius: 9, alignItems: "center", justifyContent: "center" }, targetText: { fontSize: 8, lineHeight: 12, marginTop: 2 }, targetLabel: { fontSize: 8, fontWeight: "900" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
 });

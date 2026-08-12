@@ -461,6 +461,23 @@ export type JournalNote = {
   labels?: string[];
   entryId?: string;
   imageUri?: string;
+  /**
+   * A bounded vector layer drawn over the note body and optional image.
+   * Coordinates are normalized so the private account snapshot remains
+   * portable across phone and web canvas sizes.
+   */
+  drawing?: JournalDrawing;
+};
+export type JournalDrawingPoint = [x: number, y: number];
+export type JournalDrawingStroke = {
+  id: string;
+  color: string;
+  width: number;
+  points: JournalDrawingPoint[];
+};
+export type JournalDrawing = {
+  version: 1;
+  strokes: JournalDrawingStroke[];
 };
 export type TimerLap = { id: string; seconds: number; recordedAt: string };
 export type ActivityTimer = {
@@ -799,9 +816,11 @@ export type UserSettings = {
   /** Optional assistant entry point; cloud AI is proxied through a server function. */
   showAiAssistant?: boolean;
   onboardingComplete: boolean;
+  /** Persisted schema marker for account-safe first-run setup. */
+  onboardingVersion?: number;
   tutorialComplete: boolean;
   advancedTutorialComplete: boolean;
-  /** Active replay selected from Quick Guide; absent uses the onboarding tour. */
+  /** Active basic-guide replay selected from Quick Guide. */
   tutorialGuideId?: string;
   /** Changes for every replay so the overlay reliably returns to step one. */
   tutorialGuideRunId?: number;

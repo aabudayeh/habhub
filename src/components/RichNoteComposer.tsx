@@ -12,6 +12,7 @@ import {
   NativeSyntheticEvent,
   Pressable,
   StyleSheet,
+  Text as NativeText,
   TextInput as NativeTextInput,
   TextInputKeyPressEventData,
   TextInputSelectionChangeEventData,
@@ -22,7 +23,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { useAppColors, useGroupAccent } from "@/src/theme";
+import { useAppColors, useFontScale, useGroupAccent } from "@/src/theme";
 
 type Block = "text" | "h1" | "h2" | "bullet" | "check" | "quote";
 type Inline = "bold" | "italic" | "strike" | "link";
@@ -286,8 +287,10 @@ export const RichNoteComposer = forwardRef<
 ) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const fontScale = useFontScale();
   const [active, setActive] = useState({ line: 0, run: 0 });
   const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
   const [focusRequest, setFocusRequest] = useState(0);
   const inputs = useRef<Record<string, NativeTextInput | null>>({});
   const selections = useRef<Record<string, TextSelection>>({});
@@ -300,6 +303,7 @@ export const RichNoteComposer = forwardRef<
   const lines = useMemo(() => rawLines.map(parseLine), [rawLines]);
   const commit = useCallback(
     (next: string) => {
+      draftRef.current = next;
       setDraft(next);
       onChange(next);
     },
@@ -308,11 +312,11 @@ export const RichNoteComposer = forwardRef<
 
   const replaceLine = useCallback(
     (index: number, next: ParsedLine) => {
-      const updated = [...rawLines];
+      const updated = draftRef.current.split("\n");
       updated[index] = serializeLine(next);
       commit(updated.join("\n"));
     },
-    [commit, rawLines],
+    [commit],
   );
 
   const focus = useCallback(
@@ -353,6 +357,7 @@ export const RichNoteComposer = forwardRef<
     ref,
     () => ({
       replaceValue: (nextValue) => {
+        draftRef.current = nextValue;
         setDraft(nextValue);
         onChange(nextValue);
       },
@@ -453,7 +458,8 @@ export const RichNoteComposer = forwardRef<
     runIndex: number,
     nextText: string,
   ) => {
-    const current = lines[lineIndex] ?? parseLine("");
+    const currentRawLines = draftRef.current.split("\n");
+    const current = parseLine(currentRawLines[lineIndex] ?? "");
     const activeRun = current.runs[runIndex] ?? parseRun("");
     const normalizedText = nextText.replace(/\r\n?/g, "\n");
     const parts = normalizedText.split("\n");
@@ -502,7 +508,7 @@ export const RichNoteComposer = forwardRef<
         runs: finalRuns,
       }),
     ];
-    const updated = [...rawLines];
+    const updated = [...currentRawLines];
     updated.splice(lineIndex, 1, ...inserted);
     commit(updated.join("\n"));
     const destinationLine = lineIndex + parts.length - 1;
@@ -517,36 +523,33 @@ export const RichNoteComposer = forwardRef<
     event: NativeSyntheticEvent<TextInputKeyPressEventData>,
   ) => {
     if (event.nativeEvent.key !== "Backspace") return;
-    const line = lines[lineIndex];
+    const currentRawLines = draftRef.current.split("\n");
+    const line = parseLine(currentRawLines[lineIndex] ?? "");
     const run = line?.runs[runIndex];
-    if (run?.text) {
-      const selection = selections.current[`${lineIndex}:${runIndex}`] ?? {
-        start: run.text.length,
-        end: run.text.length,
-      };
-      if (selection.start !== 0 || selection.end !== 0 || runIndex === 0)
-        return;
-
-      // Native inputs cannot backspace across the boundary between two
-      // differently styled runs. Delete from the preceding run ourselves and
-      // keep the caret at the same visual position in this sentence.
+    if (!run) return;
+    const selection = selections.current[`${lineIndex}:${runIndex}`] ?? {
+      start: run.text.length,
+      end: run.text.length,
+    };
+    if (selection.start === 0 && selection.end === 0 && runIndex > 0) {
+      // Keep the active native input mounted while key-repeat crosses styled
+      // runs. Removing/refocusing that input makes Android pause a held
+      // Backspace at every bold/italic/color boundary.
       const runs = [...line.runs];
-      const previous = runs[runIndex - 1];
+      let previousIndex = runIndex - 1;
+      while (previousIndex >= 0 && !runs[previousIndex].text) {
+        previousIndex -= 1;
+      }
+      if (previousIndex < 0) return;
+      const previous = runs[previousIndex];
       const characters = [...previous.text];
       characters.pop();
-      let targetRun = runIndex;
-      if (characters.length) {
-        runs[runIndex - 1] = { ...previous, text: characters.join("") };
-      } else {
-        runs.splice(runIndex - 1, 1);
-        targetRun -= 1;
-      }
-      const result = normalizeRuns(runs, targetRun, { start: 0, end: 0 });
-      replaceLine(lineIndex, { ...line, runs: result.runs });
-      setActive({ line: lineIndex, run: result.run });
-      focus(lineIndex, result.run, result.selection);
+      runs[previousIndex] = { ...previous, text: characters.join("") };
+      replaceLine(lineIndex, { ...line, runs });
+      selections.current[`${lineIndex}:${runIndex}`] = { start: 0, end: 0 };
       return;
     }
+    if (run.text) return;
     if (line.runs.length > 1) {
       const runs = line.runs.filter((_, index) => index !== runIndex);
       replaceLine(lineIndex, { ...line, runs });
@@ -568,12 +571,13 @@ export const RichNoteComposer = forwardRef<
       return;
     }
     if (lineIndex <= 0) return;
-    const updated = [...rawLines];
+    const updated = [...currentRawLines];
     updated.splice(lineIndex, 1);
     commit(updated.join("\n"));
-    const previousRun = Math.max(0, lines[lineIndex - 1].runs.length - 1);
+    const previousLine = parseLine(currentRawLines[lineIndex - 1] ?? "");
+    const previousRun = Math.max(0, previousLine.runs.length - 1);
     setActive({ line: lineIndex - 1, run: previousRun });
-    const previousText = lines[lineIndex - 1].runs[previousRun]?.text ?? "";
+    const previousText = previousLine.runs[previousRun]?.text ?? "";
     focus(lineIndex - 1, previousRun, {
       start: previousText.length,
       end: previousText.length,
@@ -628,20 +632,32 @@ export const RichNoteComposer = forwardRef<
                 run.inline.has("link") && styles.link,
                 line.checked && styles.checked,
               ];
+              const fontSize =
+                line.block === "h1" ? 20 : line.block === "h2" ? 16 : 13;
+              const lineHeight =
+                line.block === "h1" ? 27 : line.block === "h2" ? 23 : 20;
               return (
                 <View
                   key={key}
                   style={[styles.run, line.runs.length === 1 && styles.onlyRun]}
                 >
-                  {line.runs.length > 1 ? (
-                    <Text
-                      translate={false}
-                      numberOfLines={1}
-                      style={[styles.input, styles.runMeasure, formattedStyles]}
-                    >
-                      {run.text || EMPTY_RUN}
-                    </Text>
-                  ) : null}
+                  <NativeText
+                    allowFontScaling={false}
+                    style={[
+                      styles.input,
+                      styles.runMeasure,
+                      formattedStyles,
+                      {
+                        color: run.inline.has("link")
+                          ? "#2877D4"
+                          : (run.textColor ?? colors.ink),
+                        fontSize: fontSize * fontScale,
+                        lineHeight: lineHeight * fontScale,
+                      },
+                    ]}
+                  >
+                    {`${run.text}${EMPTY_RUN}`}
+                  </NativeText>
                   <TextInput
                     ref={(input) => {
                       inputs.current[key] = input;
@@ -671,7 +687,7 @@ export const RichNoteComposer = forwardRef<
                       backspace(lineIndex, runIndex, event)
                     }
                     multiline
-                    numberOfLines={1}
+                    scrollEnabled={false}
                     enterKeyHint="enter"
                     submitBehavior="newline"
                     placeholder={
@@ -682,13 +698,14 @@ export const RichNoteComposer = forwardRef<
                     placeholderTextColor={colors.faint}
                     style={[
                       styles.input,
-                      line.runs.length > 1 && styles.inlineRunInput,
+                      styles.overlayRunInput,
+                      formattedStyles,
                       {
                         color: run.inline.has("link")
                           ? "#2877D4"
                           : (run.textColor ?? colors.ink),
+                        lineHeight: lineHeight * fontScale,
                       },
-                      formattedStyles,
                     ]}
                   />
                 </View>
@@ -721,19 +738,26 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   run: {
+    flexShrink: 1,
     minWidth: 1,
     maxWidth: "100%",
     minHeight: 24,
     position: "relative",
   },
   onlyRun: { flex: 1 },
-  runMeasure: { opacity: 0 },
-  inlineRunInput: {
+  runMeasure: {
+    opacity: 0,
+    paddingRight: 3,
+  },
+  overlayRunInput: {
     position: "absolute",
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
+    width: "100%",
+    maxWidth: "100%",
+    overflow: "hidden",
   },
   marker: {
     width: 17,
@@ -749,13 +773,15 @@ const styles = StyleSheet.create({
   },
   input: {
     minHeight: 24,
-    paddingVertical: 2,
+    paddingVertical: 1,
     paddingHorizontal: 0,
-    fontSize: 10,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 20,
+    includeFontPadding: false,
+    textAlignVertical: "top",
   },
-  h1: { fontSize: 17, lineHeight: 21, fontWeight: "900" },
-  h2: { fontSize: 14, lineHeight: 18, fontWeight: "900" },
+  h1: { fontSize: 20, lineHeight: 27, fontWeight: "900" },
+  h2: { fontSize: 16, lineHeight: 23, fontWeight: "900" },
   bold: { fontWeight: "900" },
   italic: { fontStyle: "italic" },
   strike: { textDecorationLine: "line-through", opacity: 0.68 },

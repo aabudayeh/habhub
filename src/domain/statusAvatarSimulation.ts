@@ -30,9 +30,10 @@ export type StatusAvatarSimulationInput = {
 
 export type StatusAvatarSimulationBaseline = {
   bodyFatPercent: number;
-  fatMassKg: number;
+  bodyFatWasLogged: boolean;
   heightCm: number;
   leanBodyMassKg: number;
+  leanMassWasLogged: boolean;
   muscleProgress: number;
   sex: BiologicalSex;
   weightKg: number;
@@ -46,14 +47,30 @@ export type StatusAvatarSimulationRange = {
   unit: "" | "%" | "kg";
 };
 
+export type StatusAvatarSimulationState = {
+  enabled: Record<StatusAvatarSimulationMetric, boolean>;
+  values: Record<StatusAvatarSimulationMetric, number>;
+};
+
+export type StatusAvatarSimulationConsistency =
+  | { status: "ok" }
+  | {
+      differenceKg: number;
+      impliedWeightKg?: number;
+      status: "conflict";
+    };
+
 export type StatusAvatarSimulationPreview = {
+  bmi: number;
   bodyFatPercent?: number;
   calculationSource: StatusAvatarCalculationSource;
+  consistency: StatusAvatarSimulationConsistency;
+  enabled: StatusAvatarSimulationState["enabled"];
   heightCm: number;
   leanBodyMassKg?: number;
   muscleProgress: number;
   sex: BiologicalSex;
-  value: number;
+  values: StatusAvatarSimulationState["values"];
   weightKg: number;
 };
 
@@ -75,10 +92,14 @@ function defaultBodyFatPercent(sex: BiologicalSex) {
   return 26;
 }
 
+function hasPositiveMeasurement(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 /**
- * Produces a safe, internally consistent baseline for the visual-only avatar
- * simulator. Missing composition readings are replaced with deliberately
- * ordinary neutral values; the fallback is never written to profile or logs.
+ * Produces safe starting values for a visual-only simulation. Fallback body
+ * composition values remain marked as unlogged so they are disabled at first
+ * and never masquerade as measurements.
  */
 export function statusAvatarSimulationBaseline(
   input: StatusAvatarSimulationInput,
@@ -94,23 +115,26 @@ export function statusAvatarSimulationBaseline(
     35,
     250,
   );
+  const bodyFatWasLogged = hasPositiveMeasurement(input.bodyFatPercent);
   const bodyFatPercent = bounded(
     safeNumber(input.bodyFatPercent, defaultBodyFatPercent(sex)),
     1,
     75,
   );
   const inferredLeanMassKg = weightKg * (1 - bodyFatPercent / 100);
+  const leanMassWasLogged = hasPositiveMeasurement(input.leanBodyMassKg);
   const leanBodyMassKg = bounded(
     safeNumber(input.leanBodyMassKg, inferredLeanMassKg),
     10,
-    Math.max(10, weightKg - 0.5),
+    220,
   );
 
   return {
     bodyFatPercent,
-    fatMassKg: Math.max(0.5, weightKg - leanBodyMassKg),
+    bodyFatWasLogged,
     heightCm,
     leanBodyMassKg,
+    leanMassWasLogged,
     muscleProgress: bounded(safeNumber(input.muscleProgress, 0), 0, 1),
     sex,
     weightKg,
@@ -175,23 +199,22 @@ export function statusAvatarSimulationRange(
     };
   }
 
+  // Lean mass is its own visual signal. Its range is height-normalized and is
+  // deliberately not silently constrained by the currently selected body-fat
+  // or total-weight sliders. Inconsistent combinations are reported below.
   const minimumFromHeight = 10 * heightSquared;
   const maximumFromHeight = 30 * heightSquared;
-  const maximumForTotalMass = Math.max(10, 250 - baseline.fatMassKg);
   return {
     initialValue: roundToStep(baseline.leanBodyMassKg, 0.5),
     maximumValue: roundToStep(
       Math.max(
         baseline.leanBodyMassKg,
-        Math.min(220, maximumForTotalMass, maximumFromHeight),
+        Math.min(220, maximumFromHeight),
       ),
       0.5,
     ),
     minimumValue: roundToStep(
-      Math.min(
-        baseline.leanBodyMassKg,
-        Math.max(10, 35 - baseline.fatMassKg, minimumFromHeight),
-      ),
+      Math.min(baseline.leanBodyMassKg, Math.max(10, minimumFromHeight)),
       0.5,
     ),
     step: 0.5,
@@ -199,86 +222,155 @@ export function statusAvatarSimulationRange(
   };
 }
 
-/**
- * Resolves one independent what-if control into the existing avatar renderer.
- * Weight and BMI deliberately follow the BMI path. Composition controls create
- * the missing companion value locally so they work even with no logged body
- * composition. Nothing returned here is a profile or health-log mutation.
- */
-export function statusAvatarSimulationPreview(
+function normalizedValue(
   metric: StatusAvatarSimulationMetric,
   requestedValue: number,
   baseline: StatusAvatarSimulationBaseline,
-): StatusAvatarSimulationPreview {
+) {
   const range = statusAvatarSimulationRange(metric, baseline);
-  const value = bounded(
+  return bounded(
     roundToStep(safeNumber(requestedValue, range.initialValue), range.step),
     range.minimumValue,
     range.maximumValue,
   );
-  const heightM = baseline.heightCm / 100;
+}
 
-  if (metric === "weight") {
-    return {
-      calculationSource: "bmi",
-      heightCm: baseline.heightCm,
-      muscleProgress: baseline.muscleProgress,
-      sex: baseline.sex,
-      value,
-      weightKg: value,
-    };
-  }
-
-  if (metric === "bmi") {
-    return {
-      calculationSource: "bmi",
-      heightCm: baseline.heightCm,
-      muscleProgress: baseline.muscleProgress,
-      sex: baseline.sex,
-      value,
-      weightKg: bounded(value * heightM * heightM, 35, 250),
-    };
-  }
-
-  if (metric === "body_fat") {
-    // Hold lean mass steady so the slider isolates a visual fat-gain/loss
-    // scenario. Total mass is synthesized only for this preview.
-    const syntheticWeightKg = bounded(
-      baseline.leanBodyMassKg / Math.max(0.05, 1 - value / 100),
-      35,
-      250,
-    );
-    return {
-      bodyFatPercent: value,
-      calculationSource: "body_composition",
-      heightCm: baseline.heightCm,
-      leanBodyMassKg: Math.min(
-        baseline.leanBodyMassKg,
-        syntheticWeightKg - 0.5,
-      ),
-      muscleProgress: baseline.muscleProgress,
-      sex: baseline.sex,
-      value,
-      weightKg: syntheticWeightKg,
-    };
-  }
-
-  // Hold baseline fat mass steady so this becomes a visual lean-mass change,
-  // not a simultaneous fat-gain scenario.
-  const syntheticWeightKg = bounded(value + baseline.fatMassKg, 35, 250);
-  const bodyFatPercent = bounded(
-    (baseline.fatMassKg / syntheticWeightKg) * 100,
-    1,
-    75,
-  );
+export function statusAvatarSimulationInitialState(
+  baseline: StatusAvatarSimulationBaseline,
+  calculationSource: StatusAvatarCalculationSource = "bmi",
+): StatusAvatarSimulationState {
+  const values = Object.fromEntries(
+    STATUS_AVATAR_SIMULATION_METRICS.map(({ id }) => [
+      id,
+      statusAvatarSimulationRange(id, baseline).initialValue,
+    ]),
+  ) as StatusAvatarSimulationState["values"];
+  const useLoggedComposition =
+    calculationSource === "body_composition";
   return {
+    enabled: {
+      // Weight and BMI are two views of the same size signal at the fixed
+      // profile height. Keep both available: moving either slider updates the
+      // other, while each switch only simulates whether that value is present.
+      bmi: true,
+      body_fat: useLoggedComposition && baseline.bodyFatWasLogged,
+      lean_body_mass: useLoggedComposition && baseline.leanMassWasLogged,
+      weight: true,
+    },
+    values,
+  };
+}
+
+/**
+ * Updates one slider. Weight and BMI are the same total-mass fact at a fixed
+ * height, so their displayed values move together. Body fat and lean mass are
+ * never derived from one another.
+ */
+export function statusAvatarSimulationSetValue(
+  state: StatusAvatarSimulationState,
+  metric: StatusAvatarSimulationMetric,
+  requestedValue: number,
+  baseline: StatusAvatarSimulationBaseline,
+): StatusAvatarSimulationState {
+  const value = normalizedValue(metric, requestedValue, baseline);
+  const values = { ...state.values, [metric]: value };
+  const heightM = baseline.heightCm / 100;
+  const heightSquared = heightM * heightM;
+  if (metric === "weight")
+    values.bmi = normalizedValue("bmi", value / heightSquared, baseline);
+  else if (metric === "bmi")
+    values.weight = normalizedValue("weight", value * heightSquared, baseline);
+  return { enabled: { ...state.enabled }, values };
+}
+
+/**
+ * Every switch represents only whether that input is available to the visual
+ * simulation. No switch is mutually exclusive: notably, weight and BMI remain
+ * linked views of the same value and body fat and lean mass remain independent.
+ */
+export function statusAvatarSimulationSetEnabled(
+  state: StatusAvatarSimulationState,
+  metric: StatusAvatarSimulationMetric,
+  enabled: boolean,
+): StatusAvatarSimulationState {
+  return {
+    enabled: { ...state.enabled, [metric]: enabled },
+    values: { ...state.values },
+  };
+}
+
+function compositionConsistency(
+  enabled: StatusAvatarSimulationState["enabled"],
+  weightKg: number,
+  bodyFatPercent: number | undefined,
+  leanBodyMassKg: number | undefined,
+): StatusAvatarSimulationConsistency {
+  if (!enabled.lean_body_mass || leanBodyMassKg === undefined)
+    return { status: "ok" };
+  if (!enabled.body_fat || bodyFatPercent === undefined) {
+    const differenceKg = Math.max(0, leanBodyMassKg - weightKg);
+    return differenceKg > 0.5
+      ? { differenceKg, status: "conflict" }
+      : { status: "ok" };
+  }
+  const impliedWeightKg =
+    leanBodyMassKg / Math.max(0.05, 1 - bodyFatPercent / 100);
+  const differenceKg = Math.abs(impliedWeightKg - weightKg);
+  const toleranceKg = Math.max(3, weightKg * 0.08);
+  return differenceKg > toleranceKg
+    ? { differenceKg, impliedWeightKg, status: "conflict" }
+    : { status: "ok" };
+}
+
+/**
+ * Resolves all enabled what-if controls together. No slider mutates profile or
+ * log data, and no body-fat/lean-mass value is synthesized from its companion.
+ * When a combination cannot describe one physical total, the renderer keeps
+ * the two visual signals independent and returns an explicit conflict for UI.
+ */
+export function statusAvatarSimulationPreview(
+  state: StatusAvatarSimulationState,
+  baseline: StatusAvatarSimulationBaseline,
+): StatusAvatarSimulationPreview {
+  const heightM = baseline.heightCm / 100;
+  const heightSquared = heightM * heightM;
+  const values = Object.fromEntries(
+    STATUS_AVATAR_SIMULATION_METRICS.map(({ id }) => [
+      id,
+      normalizedValue(id, state.values[id], baseline),
+    ]),
+  ) as StatusAvatarSimulationState["values"];
+  const enabled = { ...state.enabled };
+  const weightKg = enabled.weight
+    ? values.weight
+    : enabled.bmi
+      ? bounded(values.bmi * heightSquared, 35, 250)
+      : baseline.weightKg;
+  const bmi = weightKg / heightSquared;
+  const bodyFatPercent = enabled.body_fat ? values.body_fat : undefined;
+  const leanBodyMassKg = enabled.lean_body_mass
+    ? values.lean_body_mass
+    : undefined;
+
+  return {
+    bmi,
     bodyFatPercent,
-    calculationSource: "body_composition",
+    calculationSource:
+      bodyFatPercent !== undefined || leanBodyMassKg !== undefined
+        ? "body_composition"
+        : "bmi",
+    consistency: compositionConsistency(
+      enabled,
+      weightKg,
+      bodyFatPercent,
+      leanBodyMassKg,
+    ),
+    enabled,
     heightCm: baseline.heightCm,
-    leanBodyMassKg: Math.min(value, syntheticWeightKg - 0.5),
+    leanBodyMassKg,
     muscleProgress: baseline.muscleProgress,
     sex: baseline.sex,
-    value,
-    weightKg: syntheticWeightKg,
+    values,
+    weightKg,
   };
 }

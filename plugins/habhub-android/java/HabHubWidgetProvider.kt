@@ -93,15 +93,16 @@ object HabHubWidgetStore {
     range: String,
   ) {
     preferences(context).edit()
-      .putString("$TRACKER_PREFIX$widgetId", trackerId.ifBlank { "__featured__" })
+      // Status is the single supported widget. Normalize older Featured and
+      // per-tracker configurations as soon as the launcher touches them.
+      .putString("$TRACKER_PREFIX$widgetId", "__avatar__")
       .putString("$RANGE_PREFIX$widgetId", normalizedRange(range))
       .apply()
   }
 
   fun configuration(context: Context, widgetId: Int) = HabHubWidgetConfiguration(
     widgetId,
-    preferences(context).getString("$TRACKER_PREFIX$widgetId", "__featured__")
-      ?: "__featured__",
+    "__avatar__",
     normalizedRange(
       preferences(context).getString("$RANGE_PREFIX$widgetId", "week") ?: "week",
     ),
@@ -191,11 +192,7 @@ object HabHubWidgetRenderer {
     val manager = AppWidgetManager.getInstance(context)
     val configuration = HabHubWidgetStore.configuration(context, widgetId)
     val snapshot = HabHubWidgetStore.snapshot(context)
-    val selected = when (configuration.trackerId) {
-      "__featured__" -> snapshot.optJSONObject("featured")
-      "__avatar__" -> snapshot.optJSONObject("avatar")
-      else -> findTracker(snapshot.optJSONArray("trackers"), configuration.trackerId)
-    }
+    val selected = snapshot.optJSONObject("avatar")
     val item = selected ?: emptySnapshot(context, configuration.trackerId)
     val size = widgetSize(context, manager, widgetId)
     val views = RemoteViews(context.packageName, R.layout.habhub_widget)

@@ -1464,6 +1464,7 @@ export function createInitialState(): AppState {
       activityTimerAlertMinutes: [30, 60],
       showAiAssistant: false,
       onboardingComplete: false,
+      onboardingVersion: 3,
       tutorialComplete: false,
       advancedTutorialComplete: false,
       selectedGoals: [],

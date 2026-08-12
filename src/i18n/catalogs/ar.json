@@ -2,6 +2,12 @@
   "Avatar simulator": "محاكي الصورة الرمزية",
   "Preview a change without saving it.": "عاين التغيير دون حفظه.",
   "Choose what to change": "اختر ما تريد تغييره",
+  "About this estimate": "??? ??? ???????",
+  "Estimate only. This is not a scan, scientific measurement, or prediction of your body.": "????? ???. ??? ??? ????? ?? ?????? ?????? ?? ?????? ???? ????.",
+  "Profile height": "??? ????? ??????",
+  "Weight and BMI are linked through this height; use either one for total size.": "????? ????? ????? ???? ????? ???? ?????? ?????? ?????? ????? ?????.",
+  "These values do not describe one possible body. The preview keeps fat and lean signals independent; adjust or disable a slider.": "??? ????? ?? ??? ????? ?????? ??????. ???? ???????? ?????? ?????? ??????? ??????? ?? ?????? ??????? ???? ???? ????? ?? ?????.",
+  "Controls": "????? ??????",
   "Open avatar simulator": "افتح محاكي الصورة الرمزية",
   "Tap to preview changes. Hold for avatar calculation settings.": "اضغط لمعاينة التغييرات. اضغط مطولًا لإعدادات حساب الصورة الرمزية.",
   "Avatar appearance settings": "إعدادات مظهر الصورة الرمزية",
@@ -2240,8 +2246,8 @@
   "Invite copied": "تم نسخ الدعوة",
   "Open installed app": "فتح التطبيق المثبّت",
   "The invite link is ready to paste.": "رابط الدعوة جاهز للصق.",
-  "You can join this group directly in the browser instead.": "يمكنك الانضمام إلى هذه المجموعة مباشرةً من المتصفح بدلاً من ذلك."
-  ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "يوفر وصول استخدام Android وقت الشاشة اليومي التقريبي وتفصيلاً حسب التطبيق. يحتفظ HabHub بالتفصيل على هذا الجهاز فقط.",
+  "You can join this group directly in the browser instead.": "يمكنك الانضمام إلى هذه المجموعة مباشرةً من المتصفح بدلاً من ذلك.",
+  "Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "يوفر وصول استخدام Android وقت الشاشة اليومي التقريبي وتفصيلاً حسب التطبيق. يحتفظ HabHub بالتفصيل على هذا الجهاز فقط.",
   "App usage": "استخدام التطبيقات",
   "Average app usage": "متوسط استخدام التطبيقات اليومي",
   "Approximate Android foreground time · stored only on this device": "وقت تقريبي لظهور التطبيقات في واجهة Android · محفوظ على هذا الجهاز فقط",
@@ -2256,27 +2262,27 @@
   "Private on this device": "خاص على هذا الجهاز",
   "{value} used {value}% of today's limit.": "استخدم {value} ‏{value}٪ من حد اليوم.",
   "{value} reached today's limit.": "وصل {value} إلى حد اليوم.",
-  "{value} reached {value}% of today's limit.": "وصل {value} إلى ‏{value}٪ من حد اليوم."
-  ,"No timer is running.": "لا يوجد مؤقت قيد التشغيل."
-  ,"Nothing scheduled today.": "لا توجد عناصر مجدولة اليوم."
-  ,"Open full schedule": "فتح الجدول الكامل"
-  ,"Start or manage timers": "بدء المؤقتات أو إدارتها"
-  ,"Today’s schedule": "جدول اليوم"
-  ,"Data sources": "مصادر البيانات"
-  ,"Choose which apps can contribute imported health data.": "اختر التطبيقات التي يمكنها إضافة بيانات صحية مستوردة."
-  ,"Could not update data source": "تعذر تحديث مصدر البيانات"
-  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "تظل المصادر الجديدة مفعّلة حتى توقفها. تؤدي إعادة تفعيل المصدر إلى استعادة السجل المحدد في الخلفية."
-  ,"Your phone": "هاتفك"
-  ,"Body-water measurements in kilograms from Health Connect": "قياسات كتلة ماء الجسم بالكيلوغرام من Health Connect"
-  ,"Bone-mass measurements in kilograms from Health Connect": "قياسات كتلة العظام بالكيلوغرام من Health Connect"
-  ,"Battery optimization": "تحسين البطارية"
-  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "تم تعطيل تحسين البطارية لتطبيق HabHub. يمكن تشغيل المزامنة المجدولة في الخلفية بموثوقية أكبر."
-  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "تحسين البطارية مفعّل لتطبيق HabHub. اضغط لمراجعة إعدادات Android لتحسين موثوقية المزامنة المجدولة."
-  ,"Checking Android battery settings...": "جارٍ التحقق من إعدادات بطارية Android..."
-  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "اختياري. يتحكم Android في هذا الإعداد؛ ولا يغيّره HabHub تلقائيًا أبدًا."
-  ,"Disabled": "معطّل"
-  ,"Review": "مراجعة"
-  ,"Open Android battery optimization settings": "فتح إعدادات تحسين البطارية في Android"
-  ,"Battery settings unavailable": "إعدادات البطارية غير متاحة"
-  ,"Android battery settings could not be opened.": "تعذر فتح إعدادات بطارية Android."
+  "{value} reached {value}% of today's limit.": "وصل {value} إلى ‏{value}٪ من حد اليوم.",
+  "No timer is running.": "لا يوجد مؤقت قيد التشغيل.",
+  "Nothing scheduled today.": "لا توجد عناصر مجدولة اليوم.",
+  "Open full schedule": "فتح الجدول الكامل",
+  "Start or manage timers": "بدء المؤقتات أو إدارتها",
+  "Today’s schedule": "جدول اليوم",
+  "Data sources": "مصادر البيانات",
+  "Choose which apps can contribute imported health data.": "اختر التطبيقات التي يمكنها إضافة بيانات صحية مستوردة.",
+  "Could not update data source": "تعذر تحديث مصدر البيانات",
+  "New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "تظل المصادر الجديدة مفعّلة حتى توقفها. تؤدي إعادة تفعيل المصدر إلى استعادة السجل المحدد في الخلفية.",
+  "Your phone": "هاتفك",
+  "Body-water measurements in kilograms from Health Connect": "قياسات كتلة ماء الجسم بالكيلوغرام من Health Connect",
+  "Bone-mass measurements in kilograms from Health Connect": "قياسات كتلة العظام بالكيلوغرام من Health Connect",
+  "Battery optimization": "تحسين البطارية",
+  "Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "تم تعطيل تحسين البطارية لتطبيق HabHub. يمكن تشغيل المزامنة المجدولة في الخلفية بموثوقية أكبر.",
+  "Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "تحسين البطارية مفعّل لتطبيق HabHub. اضغط لمراجعة إعدادات Android لتحسين موثوقية المزامنة المجدولة.",
+  "Checking Android battery settings...": "جارٍ التحقق من إعدادات بطارية Android...",
+  "Optional. Android controls this setting; HabHub never changes it automatically.": "اختياري. يتحكم Android في هذا الإعداد؛ ولا يغيّره HabHub تلقائيًا أبدًا.",
+  "Disabled": "معطّل",
+  "Review": "مراجعة",
+  "Open Android battery optimization settings": "فتح إعدادات تحسين البطارية في Android",
+  "Battery settings unavailable": "إعدادات البطارية غير متاحة",
+  "Android battery settings could not be opened.": "تعذر فتح إعدادات بطارية Android."
 }

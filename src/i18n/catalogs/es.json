@@ -2,6 +2,12 @@
   "Avatar simulator": "Simulador de avatar",
   "Preview a change without saving it.": "Previsualiza un cambio sin guardarlo.",
   "Choose what to change": "Elige qué quieres cambiar",
+  "About this estimate": "Acerca de esta estimaci?n",
+  "Estimate only. This is not a scan, scientific measurement, or prediction of your body.": "Solo es una estimaci?n. No es un escaneo, una medici?n cient?fica ni una predicci?n de tu cuerpo.",
+  "Profile height": "Altura del perfil",
+  "Weight and BMI are linked through this height; use either one for total size.": "El peso y el IMC est?n vinculados mediante esta altura; usa uno de ellos para el tama?o total.",
+  "These values do not describe one possible body. The preview keeps fat and lean signals independent; adjust or disable a slider.": "Estos valores no describen un ?nico cuerpo posible. La vista previa mantiene independientes las se?ales de grasa y masa magra; ajusta o desactiva un control.",
+  "Controls": "Controles",
   "Open avatar simulator": "Abrir simulador de avatar",
   "Tap to preview changes. Hold for avatar calculation settings.": "Toca para previsualizar cambios. Mantén pulsado para configurar el cálculo del avatar.",
   "Avatar appearance settings": "Ajustes de apariencia del avatar",
@@ -2240,8 +2246,8 @@
   "Invite copied": "Invitación copiada",
   "Open installed app": "Abrir la aplicación instalada",
   "The invite link is ready to paste.": "El enlace de invitación está listo para pegar.",
-  "You can join this group directly in the browser instead.": "Puedes unirte a este grupo directamente desde el navegador."
-  ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "El acceso de uso de Android ofrece un tiempo de pantalla diario aproximado y un desglose por aplicación. HabHub guarda el desglose solo en este dispositivo.",
+  "You can join this group directly in the browser instead.": "Puedes unirte a este grupo directamente desde el navegador.",
+  "Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "El acceso de uso de Android ofrece un tiempo de pantalla diario aproximado y un desglose por aplicación. HabHub guarda el desglose solo en este dispositivo.",
   "App usage": "Uso de aplicaciones",
   "Average app usage": "Uso diario promedio de aplicaciones",
   "Approximate Android foreground time · stored only on this device": "Tiempo aproximado en primer plano de Android · guardado solo en este dispositivo",
@@ -2256,27 +2262,27 @@
   "Private on this device": "Privado en este dispositivo",
   "{value} used {value}% of today's limit.": "{value} usó el {value}% del límite de hoy.",
   "{value} reached today's limit.": "{value} alcanzó el límite de hoy.",
-  "{value} reached {value}% of today's limit.": "{value} alcanzó el {value}% del límite de hoy."
-  ,"No timer is running.": "No hay ningún temporizador en marcha."
-  ,"Nothing scheduled today.": "No hay nada programado para hoy."
-  ,"Open full schedule": "Abrir horario completo"
-  ,"Start or manage timers": "Iniciar o gestionar temporizadores"
-  ,"Today’s schedule": "Horario de hoy"
-  ,"Data sources": "Fuentes de datos"
-  ,"Choose which apps can contribute imported health data.": "Elige qué aplicaciones pueden aportar datos de salud importados."
-  ,"Could not update data source": "No se pudo actualizar la fuente de datos"
-  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Las fuentes nuevas permanecen activadas hasta que las desactives. Al volver a activar una fuente, se restaura en segundo plano el historial seleccionado."
-  ,"Your phone": "Tu teléfono"
-  ,"Body-water measurements in kilograms from Health Connect": "Mediciones de masa de agua corporal en kilogramos desde Health Connect"
-  ,"Bone-mass measurements in kilograms from Health Connect": "Mediciones de masa ósea en kilogramos desde Health Connect"
-  ,"Battery optimization": "Optimización de batería"
-  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "La optimización de batería está desactivada para HabHub. La sincronización programada en segundo plano puede funcionar de forma más fiable."
-  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "La optimización de batería está activada para HabHub. Toca para revisar los ajustes de Android y mejorar la sincronización programada."
-  ,"Checking Android battery settings...": "Comprobando los ajustes de batería de Android..."
-  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Opcional. Android controla este ajuste; HabHub nunca lo cambia automáticamente."
-  ,"Disabled": "Desactivada"
-  ,"Review": "Revisar"
-  ,"Open Android battery optimization settings": "Abrir los ajustes de optimización de batería de Android"
-  ,"Battery settings unavailable": "Ajustes de batería no disponibles"
-  ,"Android battery settings could not be opened.": "No se pudieron abrir los ajustes de batería de Android."
+  "{value} reached {value}% of today's limit.": "{value} alcanzó el {value}% del límite de hoy.",
+  "No timer is running.": "No hay ningún temporizador en marcha.",
+  "Nothing scheduled today.": "No hay nada programado para hoy.",
+  "Open full schedule": "Abrir horario completo",
+  "Start or manage timers": "Iniciar o gestionar temporizadores",
+  "Today’s schedule": "Horario de hoy",
+  "Data sources": "Fuentes de datos",
+  "Choose which apps can contribute imported health data.": "Elige qué aplicaciones pueden aportar datos de salud importados.",
+  "Could not update data source": "No se pudo actualizar la fuente de datos",
+  "New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Las fuentes nuevas permanecen activadas hasta que las desactives. Al volver a activar una fuente, se restaura en segundo plano el historial seleccionado.",
+  "Your phone": "Tu teléfono",
+  "Body-water measurements in kilograms from Health Connect": "Mediciones de masa de agua corporal en kilogramos desde Health Connect",
+  "Bone-mass measurements in kilograms from Health Connect": "Mediciones de masa ósea en kilogramos desde Health Connect",
+  "Battery optimization": "Optimización de batería",
+  "Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "La optimización de batería está desactivada para HabHub. La sincronización programada en segundo plano puede funcionar de forma más fiable.",
+  "Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "La optimización de batería está activada para HabHub. Toca para revisar los ajustes de Android y mejorar la sincronización programada.",
+  "Checking Android battery settings...": "Comprobando los ajustes de batería de Android...",
+  "Optional. Android controls this setting; HabHub never changes it automatically.": "Opcional. Android controla este ajuste; HabHub nunca lo cambia automáticamente.",
+  "Disabled": "Desactivada",
+  "Review": "Revisar",
+  "Open Android battery optimization settings": "Abrir los ajustes de optimización de batería de Android",
+  "Battery settings unavailable": "Ajustes de batería no disponibles",
+  "Android battery settings could not be opened.": "No se pudieron abrir los ajustes de batería de Android."
 }

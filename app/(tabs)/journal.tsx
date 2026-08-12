@@ -19,6 +19,7 @@ import {
   PeriodChoiceBar,
 } from "@/src/components/PeriodNavigator";
 import { RichNoteText } from "@/src/components/RichNoteText";
+import { NoteDrawingPreview } from "@/src/components/NoteDrawingCanvas";
 import { useLocale } from "@/src/i18n";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { dateKey } from "@/src/domain/date";
@@ -30,6 +31,7 @@ import {
 import { trackerGroupLabel } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+import type { JournalDrawing } from "@/src/types";
 
 type JournalItem = {
   id: string;
@@ -40,6 +42,7 @@ type JournalItem = {
   metricId?: string;
   filterIds: string[];
   imageUri?: string;
+  drawing?: JournalDrawing;
   editable: boolean;
 };
 
@@ -126,6 +129,7 @@ function JournalPage() {
           : ["unlabelled"]),
       ],
       imageUri: note.imageUri,
+      drawing: note.drawing,
       editable: true,
     }));
     const entries = state.entries
@@ -359,10 +363,22 @@ function JournalPage() {
                   color={accent}
                 />
               </View>
-              <RichNoteText body={item.body} numberOfLines={4} />
-              {item.imageUri ? (
-                <Image source={item.imageUri} style={styles.image} />
-              ) : null}
+              <View
+                style={[
+                  styles.notePreviewCanvas,
+                  item.drawing && !item.body.trim() && !item.imageUri
+                    ? styles.drawingOnlyPreview
+                    : undefined,
+                ]}
+              >
+                {item.body.trim() ? (
+                  <RichNoteText body={item.body} numberOfLines={4} />
+                ) : null}
+                {item.imageUri ? (
+                  <Image source={item.imageUri} style={styles.image} />
+                ) : null}
+                <NoteDrawingPreview drawing={item.drawing} />
+              </View>
             </Card>
           </Pressable>
         ))}
@@ -421,6 +437,8 @@ const styles = StyleSheet.create({
   noteTitle: { fontSize: 10, fontWeight: "900" },
   noteDate: { fontSize: 7, marginTop: 2 },
   noteBody: { fontSize: 9, lineHeight: 14 },
+  notePreviewCanvas: { position: "relative", gap: 7 },
+  drawingOnlyPreview: { minHeight: 120 },
   image: { width: "100%", height: 120, borderRadius: 12 },
   empty: { textAlign: "center", fontSize: 9, fontWeight: "700" },
 });

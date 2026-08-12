@@ -52,6 +52,11 @@ export type StatusAvatarProgression = {
   muscleProgress: number;
 };
 
+export type StatusAvatarBodyProgression = Omit<
+  StatusAvatarProgression,
+  "mindTier"
+>;
+
 function latestMeasurementAtOrBefore(
   state: AppState,
   metricId: string,
@@ -310,11 +315,11 @@ export function statusRangeRollup(
  * than the currently visible range. This lets the same person visibly evolve
  * without making a week/month switch erase earned progression.
  */
-export function statusAvatarProgression(
+export function statusAvatarBodyProgression(
   state: AppState,
   userId: string,
   anchorDate: string,
-): StatusAvatarProgression {
+): StatusAvatarBodyProgression {
   const profile = state.energyProfiles?.[userId] ?? state.settings.energyProfile;
   const isCurrentDate = anchorDate >= dateKey();
   const currentWeightKg =
@@ -339,6 +344,21 @@ export function statusAvatarProgression(
     userId,
     anchorDate,
   );
+
+  return {
+    currentBodyFatPercent,
+    currentLeanBodyMassKg,
+    currentWeightKg,
+    muscleProgress,
+  };
+}
+
+export function statusAvatarProgression(
+  state: AppState,
+  userId: string,
+  anchorDate: string,
+): StatusAvatarProgression {
+  const body = statusAvatarBodyProgression(state, userId, anchorDate);
 
   const mindMetrics = state.metrics.filter(
     (metric) => metric.category === "mind" && metric.goalEnabled !== false,
@@ -372,10 +392,7 @@ export function statusAvatarProgression(
           : 0;
 
   return {
-    currentBodyFatPercent,
-    currentLeanBodyMassKg,
-    currentWeightKg,
+    ...body,
     mindTier,
-    muscleProgress,
   };
 }

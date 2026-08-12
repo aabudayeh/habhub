@@ -128,6 +128,7 @@ function LogScreen() {
   const [visibility, setVisibility] = useState<Visibility>(
     selected?.defaultVisibility ?? "group",
   );
+  const [privacyMenuOpen, setPrivacyMenuOpen] = useState(false);
   const [privacyInfoOpen, setPrivacyInfoOpen] = useState(false);
   const [entryImage, setEntryImage] = useState<string | null>(null);
   const now = new Date();
@@ -688,6 +689,9 @@ function LogScreen() {
       : visibility === "status"
         ? "Friends see goal met / not met only—not the value, note, label, or image."
         : "Your group can see the exact value, note, label, and attached image.";
+  const selectedPrivacyOption =
+    privacyOptions.find((option) => option.value === visibility) ??
+    privacyOptions[0];
 
   return (
     <Screen
@@ -877,6 +881,17 @@ function LogScreen() {
                 <TextInput
                   value={label}
                   onChangeText={setLabel}
+                  enterKeyHint="search"
+                  returnKeyType="search"
+                  submitBehavior="submit"
+                  onSubmitEditing={() =>
+                    openLogChild(() =>
+                      router.navigate({
+                        pathname: "/food-search",
+                        params: { q: label },
+                      }),
+                    )
+                  }
                   placeholder="Food, product, or brand"
                   placeholderTextColor={colors.faint}
                   style={[styles.foodNameInput, { color: colors.ink }]}
@@ -1396,35 +1411,71 @@ function LogScreen() {
             </Text>
           </Pressable>
           <View style={styles.fieldLabelRow}>
-            <Text style={[styles.fieldLabel, { color: colors.muted }]}>
-              Who can see it?
-            </Text>
+            <Text style={[styles.fieldLabel, { color: colors.muted }]}>Who can see it?</Text>
             <Pressable
               accessibilityLabel="Explain sharing options"
               onPress={() => setPrivacyInfoOpen((open) => !open)}
               hitSlop={7}
             >
               <Ionicons
-                name={
-                  privacyInfoOpen
-                    ? "information-circle"
-                    : "information-circle-outline"
-                }
+                name={privacyInfoOpen ? "information-circle" : "information-circle-outline"}
                 size={16}
                 color={accent}
               />
             </Pressable>
           </View>
-          <View style={styles.privacyRow}>
-            {privacyOptions.map((option) => (
-              <Chip
-                key={option.value}
-                label={option.label}
-                icon={option.icon}
-                selected={visibility === option.value}
-                onPress={() => setVisibility(option.value)}
+          <View
+            style={[
+              styles.privacyMenu,
+              { borderColor: colors.border, backgroundColor: colors.card },
+            ]}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Who can see it?"
+              accessibilityValue={{ text: selectedPrivacyOption.label }}
+              accessibilityState={{ expanded: privacyMenuOpen }}
+              onPress={() => setPrivacyMenuOpen((open) => !open)}
+              style={styles.privacyMenuButton}
+            >
+              <Ionicons name={selectedPrivacyOption.icon} size={17} color={accent} />
+              <Text style={[styles.privacyMenuValue, { color: colors.ink }]}>
+                {selectedPrivacyOption.label}
+              </Text>
+              <Ionicons
+                name={privacyMenuOpen ? "chevron-up" : "chevron-down"}
+                size={16}
+                color={colors.muted}
               />
-            ))}
+            </Pressable>
+            {privacyMenuOpen ? (
+              <View style={[styles.privacyMenuList, { borderTopColor: colors.border }]}>
+                {privacyOptions.map((option) => {
+                  const selectedOption = visibility === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selectedOption }}
+                      onPress={() => {
+                        setVisibility(option.value);
+                        setPrivacyMenuOpen(false);
+                      }}
+                      style={[
+                        styles.privacyMenuOption,
+                        selectedOption && { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons name={option.icon} size={16} color={selectedOption ? accent : colors.muted} />
+                      <Text style={[styles.privacyMenuOptionText, { color: colors.ink }]}>
+                        {option.label}
+                      </Text>
+                      {selectedOption ? <Ionicons name="checkmark" size={16} color={accent} /> : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
           </View>
           {privacyInfoOpen ? <View
             style={[
@@ -1733,12 +1784,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  privacyRow: {
+  privacyMenu: { borderWidth: 1, borderRadius: 13, marginBottom: 10, overflow: "hidden" },
+  privacyMenuButton: {
+    minHeight: 42,
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 7,
-    marginBottom: 10,
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 11,
   },
+  privacyMenuValue: { flex: 1, ...typography.body, fontWeight: "800" },
+  privacyMenuList: { borderTopWidth: 1, padding: 5, gap: 2 },
+  privacyMenuOption: {
+    minHeight: 38,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 9,
+    paddingHorizontal: 8,
+  },
+  privacyMenuOptionText: { flex: 1, ...typography.body, fontWeight: "700" },
   privacyBox: {
     flexDirection: "row",
     alignItems: "flex-start",

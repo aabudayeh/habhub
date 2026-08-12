@@ -40,13 +40,14 @@ export type StatusBodyComposition = {
 
 /**
  * Resolves the user's persisted calculation preference. Body composition is
- * deliberately all-or-fallback: without both body-fat and lean-mass readings,
- * the avatar keeps using the predictable BMI path instead of mixing partial
- * evidence in a way the selected label does not explain.
+ * normally remains all-or-fallback for the saved Status preference. The
+ * visual-only simulator may explicitly opt into partial independent signals,
+ * where body fat affects adiposity and lean mass affects muscularity only.
  */
 export function statusBodyCompositionForSource(
   source: StatusAvatarCalculationSource | undefined,
   composition: StatusBodyComposition,
+  allowPartial = false,
 ): StatusBodyComposition {
   const hasBodyFat =
     typeof composition.bodyFatPercent === "number" &&
@@ -56,9 +57,14 @@ export function statusBodyCompositionForSource(
     typeof composition.leanBodyMassKg === "number" &&
     Number.isFinite(composition.leanBodyMassKg) &&
     composition.leanBodyMassKg > 0;
-  return source === "body_composition" && hasBodyFat && hasLeanMass
-    ? composition
-    : { sex: composition.sex };
+  if (source !== "body_composition") return { sex: composition.sex };
+  if (!allowPartial && (!hasBodyFat || !hasLeanMass))
+    return { sex: composition.sex };
+  return {
+    bodyFatPercent: hasBodyFat ? composition.bodyFatPercent : undefined,
+    leanBodyMassKg: hasLeanMass ? composition.leanBodyMassKg : undefined,
+    sex: composition.sex,
+  };
 }
 
 export const STATUS_AVATAR_VIEWBOX = {
@@ -416,18 +422,10 @@ export function statusBodyAppearance(
     composition.leanBodyMassKg > 0
       ? bounded(composition.leanBodyMassKg, 10, safeWeightKg)
       : undefined;
-  // Lean mass alone also identifies the remaining non-lean mass. Prefer a
-  // directly supplied body-fat percentage when both exist, but do not throw
-  // away composition information merely because only lean mass was logged.
-  const resolvedBodyFat =
-    measuredBodyFat ??
-    (explicitLeanMass === undefined
-      ? undefined
-      : bounded(
-          ((safeWeightKg - explicitLeanMass) / safeWeightKg) * 100,
-          1,
-          75,
-        ));
+  // Do not infer fatness from lean mass. The two optional composition signals
+  // are independent: measured body fat changes adiposity, while an absent
+  // body-fat signal leaves the predictable BMI fallback in place.
+  const resolvedBodyFat = measuredBodyFat;
   const adiposity =
     resolvedBodyFat === undefined
       ? bodyMass

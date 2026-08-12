@@ -205,24 +205,30 @@ function AtlasBodyLayer({
 }
 
 export function BodyProgressAvatar({
+  allowPartialComposition = false,
   bodyFatPercent,
   calculationSource = "bmi",
+  displayScale = 1,
   heightCm = 170,
   leanBodyMassKg,
   mindTier = 0,
   muscleProgress = 0,
   progress,
+  showProgressLabel = true,
   sex = "unspecified",
   visualStyle = "silhouette",
   weightKg = 70,
 }: {
+  allowPartialComposition?: boolean;
   bodyFatPercent?: number;
   calculationSource?: StatusAvatarCalculationSource;
+  displayScale?: number;
   heightCm?: number;
   leanBodyMassKg?: number;
   mindTier?: 0 | 1 | 2 | 3;
   muscleProgress?: number;
   progress: number;
+  showProgressLabel?: boolean;
   sex?: BiologicalSex;
   visualStyle?: StatusAvatarStyle;
   weightKg?: number;
@@ -284,6 +290,10 @@ export function BodyProgressAvatar({
   }, [clamped, reduceMotion]);
 
   const percent = Math.round(clamped * 100);
+  const boundedDisplayScale = Math.max(
+    0.5,
+    Math.min(1, Number.isFinite(displayScale) ? displayScale : 1),
+  );
   const boundedMuscle = Math.max(0, Math.min(1, muscleProgress));
   const appearance = useMemo(
     () =>
@@ -291,13 +301,18 @@ export function BodyProgressAvatar({
         heightCm,
         weightKg,
         boundedMuscle,
-        statusBodyCompositionForSource(calculationSource, {
-          bodyFatPercent,
-          leanBodyMassKg,
-          sex,
-        }),
+        statusBodyCompositionForSource(
+          calculationSource,
+          {
+            bodyFatPercent,
+            leanBodyMassKg,
+            sex,
+          },
+          allowPartialComposition,
+        ),
       ),
     [
+      allowPartialComposition,
       bodyFatPercent,
       boundedMuscle,
       calculationSource,
@@ -316,8 +331,10 @@ export function BodyProgressAvatar({
       ),
     [appearance.adiposity, appearance.muscleProgress, sex],
   );
-  const renderedWidth = BODY_WIDTH;
-  const renderedHeight = Math.round(BODY_HEIGHT * appearance.heightScale);
+  const renderedWidth = BODY_WIDTH * boundedDisplayScale;
+  const renderedHeight = Math.round(
+    BODY_HEIGHT * appearance.heightScale * boundedDisplayScale,
+  );
   const progressHeight = Math.max(
     0,
     Math.min(renderedHeight, renderedHeight * renderedProgress),
@@ -330,7 +347,13 @@ export function BodyProgressAvatar({
       accessibilityRole="progressbar"
       accessibilityLabel={`${t("Tracked goals")}: ${percent}%`}
       accessibilityValue={{ min: 0, max: 100, now: percent, text: `${percent}%` }}
-      style={styles.frame}
+      style={[
+        styles.frame,
+        {
+          height: 302 * boundedDisplayScale,
+          width: BODY_WIDTH * boundedDisplayScale,
+        },
+      ]}
     >
       <View
         pointerEvents="none"
@@ -382,20 +405,23 @@ export function BodyProgressAvatar({
           variant={blend.variant}
           width={renderedWidth}
         />
-        <View
-          pointerEvents="none"
-          style={[
-            styles.percentPill,
-            { backgroundColor: colors.card, borderColor: colors.border },
-          ]}
-        >
-          <Text
-            translate={false}
-            style={[styles.percent, { color: colors.ink }]}
+        {showProgressLabel ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.percentPill,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
           >
-            {percent}%
-          </Text>
-        </View>
+            <Text
+              numberOfLines={1}
+              translate={false}
+              style={[styles.percent, { color: colors.ink }]}
+            >
+              {percent}%
+            </Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -430,13 +456,13 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: "50%",
     bottom: 16,
-    width: 50,
-    transform: [{ translateX: -25 }],
-    paddingHorizontal: 9,
+    width: 60,
+    transform: [{ translateX: -30 }],
+    paddingHorizontal: 6,
     paddingVertical: 6,
     borderRadius: 15,
     borderWidth: 1,
     alignItems: "center",
   },
-  percent: { fontSize: 12, fontWeight: "900" },
+  percent: { flexShrink: 0, fontSize: 12, lineHeight: 15, fontWeight: "900" },
 });

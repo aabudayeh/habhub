@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -10,8 +11,8 @@ import {
   PanResponder,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -21,75 +22,131 @@ import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import {
   STATUS_AVATAR_SIMULATION_METRICS,
   statusAvatarSimulationBaseline,
+  statusAvatarSimulationInitialState,
   statusAvatarSimulationPreview,
   statusAvatarSimulationRange,
+  statusAvatarSimulationSetEnabled,
+  statusAvatarSimulationSetValue,
   type StatusAvatarSimulationMetric,
+  type StatusAvatarSimulationRange,
 } from "@/src/domain/statusAvatarSimulation";
 import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
-import type { BiologicalSex, StatusAvatarStyle } from "@/src/types";
+import type {
+  BiologicalSex,
+  StatusAvatarCalculationSource,
+  StatusAvatarStyle,
+} from "@/src/types";
 
 function SimulationSlider({
   accessibilityLabel,
+  disabled,
   maximumValue,
   minimumValue,
   onChange,
+  secondary = false,
   step,
   unit,
   value,
 }: {
   accessibilityLabel: string;
+  disabled: boolean;
   maximumValue: number;
   minimumValue: number;
   onChange: (value: number) => void;
+  secondary?: boolean;
   step: number;
   unit: string;
   value: number;
 }) {
   const colors = useAppColors();
-  const [trackWidth, setTrackWidth] = useState(1);
+  const trackWidthRef = useRef(1);
+  const dragStartXRef = useRef(0);
+  const progressRef = useRef(0);
+  const lastEmittedValueRef = useRef(value);
+  const configurationRef = useRef({
+    disabled,
+    maximumValue,
+    minimumValue,
+    onChange,
+    step,
+  });
+  configurationRef.current = {
+    disabled,
+    maximumValue,
+    minimumValue,
+    onChange,
+    step,
+  };
+  lastEmittedValueRef.current = value;
   const span = Math.max(step, maximumValue - minimumValue);
-  const progress = Math.max(
-    0,
-    Math.min(1, (value - minimumValue) / span),
+  const progress = Math.max(0, Math.min(1, (value - minimumValue) / span));
+  progressRef.current = progress;
+  const updateFromXRef = useRef<(x: number) => void>(() => undefined);
+  updateFromXRef.current = (x: number) => {
+    const configuration = configurationRef.current;
+    if (configuration.disabled) return;
+    const width = Math.max(1, trackWidthRef.current);
+    const fraction = Math.max(0, Math.min(1, x / width));
+    const raw =
+      configuration.minimumValue +
+      fraction * (configuration.maximumValue - configuration.minimumValue);
+    const stepped =
+      Math.round(raw / configuration.step) * configuration.step;
+    const nextValue = Math.max(
+      configuration.minimumValue,
+      Math.min(configuration.maximumValue, stepped),
+    );
+    if (nextValue === lastEmittedValueRef.current) return;
+    lastEmittedValueRef.current = nextValue;
+    configuration.onChange(nextValue);
+  };
+  // Keep one responder for the lifetime of the slider. Recreating it while a
+  // state update is rendering interrupts pointer capture on Android and web.
+  const responderRef = useRef<ReturnType<typeof PanResponder.create> | null>(
+    null,
   );
-  const updateFromX = useCallback(
-    (x: number) => {
-      const fraction = Math.max(0, Math.min(1, x / trackWidth));
-      const raw = minimumValue + fraction * (maximumValue - minimumValue);
-      const stepped = Math.round(raw / step) * step;
-      onChange(Math.max(minimumValue, Math.min(maximumValue, stepped)));
-    },
-    [maximumValue, minimumValue, onChange, step, trackWidth],
-  );
-  const responder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: (event) =>
-          updateFromX(event.nativeEvent.locationX),
-        onPanResponderMove: (event) =>
-          updateFromX(event.nativeEvent.locationX),
-        onPanResponderTerminationRequest: () => false,
-      }),
-    [updateFromX],
-  );
+  if (!responderRef.current) {
+    responderRef.current = PanResponder.create({
+      onStartShouldSetPanResponder: () =>
+        !configurationRef.current.disabled,
+      onStartShouldSetPanResponderCapture: () =>
+        !configurationRef.current.disabled,
+      onMoveShouldSetPanResponder: () => !configurationRef.current.disabled,
+      onMoveShouldSetPanResponderCapture: () =>
+        !configurationRef.current.disabled,
+      onPanResponderGrant: (event) => {
+        const locationX = Number(event.nativeEvent.locationX);
+        dragStartXRef.current = Number.isFinite(locationX)
+          ? locationX
+          : trackWidthRef.current * progressRef.current;
+        updateFromXRef.current(dragStartXRef.current);
+      },
+      onPanResponderMove: (_, gestureState) =>
+        updateFromXRef.current(dragStartXRef.current + gestureState.dx),
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+    });
+  }
+  const responder = responderRef.current;
   const accessibilityStep = Math.max(
     step,
     Math.round((span / 20) / step) * step,
   );
   const accessibleValue = `${value.toFixed(step < 1 ? 1 : 0)}${unit ? ` ${unit}` : ""}`;
   const adjust = useCallback(
-    (direction: -1 | 1) =>
+    (direction: -1 | 1) => {
+      if (disabled) return;
       onChange(
         Math.max(
           minimumValue,
           Math.min(maximumValue, value + direction * accessibilityStep),
         ),
-      ),
+      );
+    },
     [
       accessibilityStep,
+      disabled,
       maximumValue,
       minimumValue,
       onChange,
@@ -111,7 +168,7 @@ function SimulationSlider({
                 : key === "ArrowLeft" || key === "ArrowDown"
                   ? -1
                   : 0;
-            if (!direction) return;
+            if (!direction || disabled) return;
             event.preventDefault?.();
             adjust(direction);
           },
@@ -124,13 +181,14 @@ function SimulationSlider({
       accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="adjustable"
+      accessibilityState={{ disabled }}
       accessibilityValue={{
         max: maximumValue,
         min: minimumValue,
         now: value,
         text: accessibleValue,
       }}
-      focusable
+      focusable={!disabled}
       onAccessibilityAction={(event) => {
         const direction =
           event.nativeEvent.actionName === "increment"
@@ -141,26 +199,42 @@ function SimulationSlider({
         if (!direction) return;
         adjust(direction);
       }}
-      onLayout={(event) =>
-        setTrackWidth(Math.max(1, event.nativeEvent.layout.width))
-      }
-      style={styles.sliderTouchTarget}
+      onLayout={(event) => {
+        trackWidthRef.current = Math.max(1, event.nativeEvent.layout.width);
+      }}
+      style={[
+        styles.sliderTouchTarget,
+        secondary && styles.sliderTouchTargetSecondary,
+        disabled && styles.controlDisabled,
+      ]}
       {...webKeyboardProps}
       {...responder.panHandlers}
     >
-      <View style={[styles.sliderTrack, { backgroundColor: colors.border }]}>
+      <View
+        pointerEvents="none"
+        style={[
+          styles.sliderTrack,
+          secondary && styles.sliderTrackSecondary,
+          { backgroundColor: colors.border },
+        ]}
+      >
         <View
           style={[
             styles.sliderFill,
-            { backgroundColor: GOAL_COMPLETE_COLOR, width: `${progress * 100}%` },
+            secondary && styles.sliderFillSecondary,
+            {
+              backgroundColor: disabled ? colors.muted : GOAL_COMPLETE_COLOR,
+              width: `${progress * 100}%`,
+            },
           ]}
         />
         <View
           style={[
             styles.sliderThumb,
+            secondary && styles.sliderThumbSecondary,
             {
               backgroundColor: colors.card,
-              borderColor: GOAL_COMPLETE_COLOR,
+              borderColor: disabled ? colors.muted : GOAL_COMPLETE_COLOR,
               left: `${progress * 100}%`,
             },
           ]}
@@ -170,8 +244,124 @@ function SimulationSlider({
   );
 }
 
+function MetricToggle({
+  enabled,
+  label,
+  onChange,
+}: {
+  enabled: boolean;
+  label: string;
+  onChange: (enabled: boolean) => void;
+}) {
+  const colors = useAppColors();
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: enabled }}
+      hitSlop={6}
+      onPress={() => onChange(!enabled)}
+      style={({ pressed }) => [
+        styles.toggle,
+        {
+          backgroundColor: enabled ? GOAL_COMPLETE_COLOR : colors.border,
+        },
+        pressed && styles.pressed,
+      ]}
+    >
+      <View
+        style={[
+          styles.toggleThumb,
+          {
+            backgroundColor: colors.card,
+            transform: [{ translateX: enabled ? 14 : 0 }],
+          },
+        ]}
+      />
+    </Pressable>
+  );
+}
+
+function SimulationMetricRow({
+  enabled,
+  formatter,
+  last,
+  label,
+  onChange,
+  onToggle,
+  range,
+  secondary = false,
+  value,
+}: {
+  enabled: boolean;
+  formatter: Intl.NumberFormat;
+  last: boolean;
+  label: string;
+  onChange: (value: number) => void;
+  onToggle: (enabled: boolean) => void;
+  range: StatusAvatarSimulationRange;
+  secondary?: boolean;
+  value: number;
+}) {
+  const colors = useAppColors();
+  const { t } = useLocalization();
+  const displayValue = `${formatter.format(value)}${range.unit ? ` ${range.unit}` : ""}`;
+  return (
+    <View
+      style={[
+        styles.metricRow,
+        secondary && styles.metricRowSecondary,
+        !last && { borderBottomColor: colors.border },
+        last && styles.metricRowLast,
+      ]}
+    >
+      <View
+        style={[styles.metricHeader, secondary && styles.metricHeaderSecondary]}
+      >
+        <Text
+          translate={false}
+          numberOfLines={1}
+          style={[
+            styles.metricLabel,
+            secondary && styles.metricLabelSecondary,
+            { color: secondary ? colors.muted : colors.ink },
+          ]}
+        >
+          {t(label)}
+        </Text>
+        <View style={styles.metricHeaderValue}>
+          <Text
+            translate={false}
+            numberOfLines={1}
+            style={[
+              styles.metricValue,
+              secondary && styles.metricValueSecondary,
+              { color: enabled ? colors.ink : colors.muted },
+            ]}
+          >
+            {displayValue}
+          </Text>
+          <MetricToggle enabled={enabled} label={t(label)} onChange={onToggle} />
+        </View>
+      </View>
+      <SimulationSlider
+        accessibilityLabel={t(label)}
+        disabled={!enabled}
+        maximumValue={range.maximumValue}
+        minimumValue={range.minimumValue}
+        onChange={onChange}
+        secondary={secondary}
+        step={range.step}
+        unit={range.unit}
+        value={value}
+      />
+    </View>
+  );
+}
+
 export function StatusAvatarSimulator({
   bodyFatPercent,
+  calculationSource = "bmi",
   heightCm,
   leanBodyMassKg,
   mindTier = 0,
@@ -184,6 +374,7 @@ export function StatusAvatarSimulator({
   weightKg,
 }: {
   bodyFatPercent?: number;
+  calculationSource?: StatusAvatarCalculationSource;
   heightCm?: number;
   leanBodyMassKg?: number;
   mindTier?: 0 | 1 | 2 | 3;
@@ -197,6 +388,9 @@ export function StatusAvatarSimulator({
 }) {
   const colors = useAppColors();
   const { locale, t } = useLocalization();
+  const { height: windowHeight } = useWindowDimensions();
+  const [infoOpen, setInfoOpen] = useState(false);
+  const avatarScale = windowHeight < 620 ? 0.5 : windowHeight < 720 ? 0.61 : 0.68;
   const baseline = useMemo(
     () =>
       statusAvatarSimulationBaseline({
@@ -216,21 +410,23 @@ export function StatusAvatarSimulator({
       weightKg,
     ],
   );
-  const [metric, setMetric] =
-    useState<StatusAvatarSimulationMetric>("weight");
-  const [value, setValue] = useState(baseline.weightKg);
-  const [selectorMenuOpen, setSelectorMenuOpen] = useState(false);
-  const range = useMemo(
-    () => statusAvatarSimulationRange(metric, baseline),
-    [baseline, metric],
+  const [simulation, setSimulation] = useState(() =>
+    statusAvatarSimulationInitialState(baseline, calculationSource),
+  );
+  const ranges = useMemo(
+    () =>
+      Object.fromEntries(
+        STATUS_AVATAR_SIMULATION_METRICS.map(({ id }) => [
+          id,
+          statusAvatarSimulationRange(id, baseline),
+        ]),
+      ) as Record<StatusAvatarSimulationMetric, StatusAvatarSimulationRange>,
+    [baseline],
   );
   const preview = useMemo(
-    () => statusAvatarSimulationPreview(metric, value, baseline),
-    [baseline, metric, value],
+    () => statusAvatarSimulationPreview(simulation, baseline),
+    [baseline, simulation],
   );
-  const selectedDefinition =
-    STATUS_AVATAR_SIMULATION_METRICS.find((item) => item.id === metric) ??
-    STATUS_AVATAR_SIMULATION_METRICS[0];
   const formatter = useMemo(
     () =>
       new Intl.NumberFormat(locale, {
@@ -242,20 +438,25 @@ export function StatusAvatarSimulator({
 
   useEffect(() => {
     if (!visible) return;
-    const nextRange = statusAvatarSimulationRange("weight", baseline);
-    setMetric("weight");
-    setValue(nextRange.initialValue);
-    setSelectorMenuOpen(false);
-  }, [baseline, visible]);
+    setSimulation(
+      statusAvatarSimulationInitialState(baseline, calculationSource),
+    );
+    setInfoOpen(false);
+  }, [baseline, calculationSource, visible]);
 
-  const chooseMetric = useCallback(
-    (nextMetric: StatusAvatarSimulationMetric) => {
-      const nextRange = statusAvatarSimulationRange(nextMetric, baseline);
-      setMetric(nextMetric);
-      setValue(nextRange.initialValue);
-      setSelectorMenuOpen(false);
-    },
+  const changeMetric = useCallback(
+    (metric: StatusAvatarSimulationMetric, value: number) =>
+      setSimulation((current) =>
+        statusAvatarSimulationSetValue(current, metric, value, baseline),
+      ),
     [baseline],
+  );
+  const toggleMetric = useCallback(
+    (metric: StatusAvatarSimulationMetric, enabled: boolean) =>
+      setSimulation((current) =>
+        statusAvatarSimulationSetEnabled(current, metric, enabled),
+      ),
+    [],
   );
 
   return (
@@ -282,9 +483,27 @@ export function StatusAvatarSimulator({
         >
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <Text style={[styles.title, { color: colors.ink }]}>
-                Avatar simulator
-              </Text>
+              <View style={styles.titleRow}>
+                <Text style={[styles.title, { color: colors.ink }]}>
+                  Avatar simulator
+                </Text>
+                <Pressable
+                  accessibilityLabel={t("About this estimate")}
+                  accessibilityRole="button"
+                  hitSlop={7}
+                  onPress={() => setInfoOpen((open) => !open)}
+                  style={({ pressed }) => [
+                    styles.infoButton,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={18}
+                    color={colors.muted}
+                  />
+                </Pressable>
+              </View>
               <Text style={[styles.subtitle, { color: colors.muted }]}>
                 Preview a change without saving it.
               </Text>
@@ -304,17 +523,46 @@ export function StatusAvatarSimulator({
             </Pressable>
           </View>
 
-          <ScrollView
-            bounces={false}
-            contentContainerStyle={styles.content}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.scroll}
-          >
-            <View style={styles.avatarPreview}>
+          <View style={styles.content}>
+            {infoOpen ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setInfoOpen(false)}
+                style={[
+                  styles.infoNotice,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: colors.primary,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="information-circle"
+                  size={16}
+                  color={colors.primary}
+                />
+                <View style={styles.infoCopy}>
+                  <Text style={[styles.infoText, { color: colors.ink }]}>
+                    Estimate only. This is not a scan, scientific measurement, or prediction of your body.
+                  </Text>
+                  <Text style={[styles.infoDetail, { color: colors.muted }]}>
+                    Weight and BMI are linked through this height; use either one for total size.
+                  </Text>
+                </View>
+              </Pressable>
+            ) : null}
+
+            <View
+              style={[
+                styles.avatarPreview,
+                { height: Math.round(302 * avatarScale) },
+              ]}
+            >
               <BodyProgressAvatar
+                allowPartialComposition
                 bodyFatPercent={preview.bodyFatPercent}
                 calculationSource={preview.calculationSource}
+                displayScale={avatarScale}
                 heightCm={preview.heightCm}
                 leanBodyMassKg={preview.leanBodyMassKg}
                 mindTier={mindTier}
@@ -326,118 +574,63 @@ export function StatusAvatarSimulator({
               />
             </View>
 
-            <View style={styles.selectorSection}>
-              <Text style={[styles.fieldLabel, { color: colors.muted }]}>
-                Choose what to change
-              </Text>
-              <Pressable
-                accessibilityHint={
-                  selectorMenuOpen ? t("Close menu") : t("Open selection")
-                }
-                accessibilityRole="button"
-                accessibilityState={{ expanded: selectorMenuOpen }}
-                onPress={() => setSelectorMenuOpen((open) => !open)}
-                style={({ pressed }) => [
-                  styles.selectorButton,
-                  { backgroundColor: colors.canvas, borderColor: colors.border },
-                  pressed && styles.pressed,
+            <Text
+              numberOfLines={1}
+              style={[styles.disclaimer, { color: colors.muted }]}
+            >
+              Estimate only. This is not a scan, scientific measurement, or prediction of your body.
+            </Text>
+
+            <View
+              style={[
+                styles.metricList,
+                { backgroundColor: colors.canvas, borderColor: colors.border },
+              ]}
+            >
+              <View
+                accessibilityLabel={`${t("Weight")} ${t("BMI")}`}
+                style={[
+                  styles.linkedSizeGroup,
+                  { borderBottomColor: colors.border },
                 ]}
               >
-                <Text
-                  translate={false}
-                  style={[styles.selectorText, { color: colors.ink }]}
-                >
-                  {t(selectedDefinition.label)}
-                </Text>
-                <Ionicons
-                  name={selectorMenuOpen ? "chevron-up" : "chevron-down"}
-                  size={17}
-                  color={colors.muted}
+                <SimulationMetricRow
+                  enabled={preview.enabled.weight}
+                  formatter={formatter}
+                  last={false}
+                  label="Weight"
+                  onChange={(value) => changeMetric("weight", value)}
+                  onToggle={(enabled) => toggleMetric("weight", enabled)}
+                  range={ranges.weight}
+                  value={preview.values.weight}
                 />
-              </Pressable>
-              {selectorMenuOpen ? (
-                <View
-                  accessibilityRole="radiogroup"
-                  style={[
-                    styles.selectorMenu,
-                    { backgroundColor: colors.canvas, borderColor: colors.border },
-                  ]}
-                >
-                  {STATUS_AVATAR_SIMULATION_METRICS.map((item) => {
-                    const selected = item.id === metric;
-                    return (
-                      <Pressable
-                        key={item.id}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected }}
-                        onPress={() => chooseMetric(item.id)}
-                        style={({ pressed }) => [
-                          styles.selectorOption,
-                          selected && { backgroundColor: colors.primarySoft },
-                          pressed && styles.pressed,
-                        ]}
-                      >
-                        <Text
-                          translate={false}
-                          style={[
-                            styles.selectorOptionText,
-                            { color: colors.ink },
-                          ]}
-                        >
-                          {t(item.label)}
-                        </Text>
-                        <Ionicons
-                          name={
-                            selected
-                              ? "radio-button-on"
-                              : "radio-button-off"
-                          }
-                          size={18}
-                          color={
-                            selected ? GOAL_COMPLETE_COLOR : colors.muted
-                          }
-                        />
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ) : null}
-            </View>
-
-            <View style={styles.valueBlock}>
-              <Text
-                translate={false}
-                style={[styles.value, { color: colors.ink }]}
-              >
-                {formatter.format(preview.value)}
-                {range.unit ? ` ${range.unit}` : ""}
-              </Text>
-              <SimulationSlider
-                accessibilityLabel={t(selectedDefinition.label)}
-                maximumValue={range.maximumValue}
-                minimumValue={range.minimumValue}
-                onChange={setValue}
-                step={range.step}
-                unit={range.unit}
-                value={preview.value}
-              />
-              <View style={styles.rangeLabels}>
-                <Text
-                  translate={false}
-                  style={[styles.rangeLabel, { color: colors.muted }]}
-                >
-                  {formatter.format(range.minimumValue)}
-                </Text>
-                <Text
-                  translate={false}
-                  style={[styles.rangeLabel, { color: colors.muted }]}
-                >
-                  {formatter.format(range.maximumValue)}
-                </Text>
+                <SimulationMetricRow
+                  enabled={preview.enabled.bmi}
+                  formatter={formatter}
+                  last
+                  label="BMI"
+                  onChange={(value) => changeMetric("bmi", value)}
+                  onToggle={(enabled) => toggleMetric("bmi", enabled)}
+                  range={ranges.bmi}
+                  secondary
+                  value={preview.values.bmi}
+                />
               </View>
+              {STATUS_AVATAR_SIMULATION_METRICS.slice(2).map((item, index) => (
+                <SimulationMetricRow
+                  key={item.id}
+                  enabled={preview.enabled[item.id]}
+                  formatter={formatter}
+                  last={index === 1}
+                  label={item.label}
+                  onChange={(value) => changeMetric(item.id, value)}
+                  onToggle={(enabled) => toggleMetric(item.id, enabled)}
+                  range={ranges[item.id]}
+                  value={preview.values[item.id]}
+                />
+              ))}
             </View>
-
-          </ScrollView>
+          </View>
 
           <View style={[styles.footer, { borderTopColor: colors.border }]}>
             <Pressable
@@ -466,127 +659,157 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(4, 10, 28, 0.76)",
-    paddingHorizontal: 12,
-    paddingVertical: 18,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   sheet: {
     width: "100%",
-    maxWidth: 380,
-    maxHeight: "96%",
+    maxWidth: 400,
+    maxHeight: "99%",
     borderWidth: 1,
     borderRadius: 24,
     overflow: "hidden",
   },
   header: {
-    minHeight: 64,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    paddingHorizontal: 15,
-    paddingTop: 13,
-    paddingBottom: 9,
+    paddingHorizontal: 12,
+    paddingTop: 7,
+    paddingBottom: 5,
   },
   headerCopy: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   title: { fontSize: 17, lineHeight: 22, fontWeight: "900" },
-  subtitle: { marginTop: 2, fontSize: 9, lineHeight: 13, fontWeight: "700" },
+  infoButton: { width: 26, height: 26, alignItems: "center", justifyContent: "center" },
+  subtitle: { marginTop: -1, fontSize: 9, lineHeight: 13, fontWeight: "700" },
   closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
   },
   content: {
+    position: "relative",
     alignItems: "stretch",
-    paddingHorizontal: 15,
-    paddingBottom: 12,
+    paddingHorizontal: 11,
+    paddingBottom: 6,
   },
-  scroll: { flexShrink: 1 },
-  avatarPreview: {
-    height: 270,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },
-  selectorSection: { zIndex: 2 },
-  fieldLabel: {
-    marginBottom: 6,
-    fontSize: 9,
-    lineHeight: 12,
-    fontWeight: "900",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  selectorButton: {
-    minHeight: 43,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: 1,
-    borderRadius: 13,
-    paddingHorizontal: 12,
-  },
-  selectorText: { fontSize: 12, lineHeight: 16, fontWeight: "900" },
-  selectorMenu: {
-    marginTop: 6,
-    borderWidth: 1,
-    borderRadius: 14,
-    overflow: "hidden",
-  },
-  selectorOption: {
-    minHeight: 40,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 12,
-  },
-  selectorOptionText: { fontSize: 11, lineHeight: 15, fontWeight: "800" },
-  valueBlock: { alignItems: "stretch", paddingTop: 12 },
-  value: {
-    alignSelf: "center",
-    fontSize: 24,
-    lineHeight: 29,
-    fontWeight: "900",
-    fontVariant: ["tabular-nums"],
-  },
-  sliderTouchTarget: {
-    height: 48,
-    justifyContent: "center",
-    marginTop: 2,
-  },
-  sliderTrack: { height: 8, borderRadius: 4 },
-  sliderFill: { height: 8, borderRadius: 4 },
-  sliderThumb: {
+  infoNotice: {
     position: "absolute",
-    top: -8,
-    width: 24,
-    height: 24,
-    marginLeft: -12,
-    borderRadius: 12,
-    borderWidth: 4,
-  },
-  rangeLabels: {
-    marginTop: -5,
+    zIndex: 5,
+    top: 4,
+    left: 18,
+    right: 18,
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 7,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
-  rangeLabel: { fontSize: 8, lineHeight: 11, fontWeight: "800" },
-  footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 15,
-    paddingVertical: 11,
-  },
-  doneButton: {
-    minHeight: 42,
+  infoCopy: { flex: 1, gap: 3 },
+  infoText: { flex: 1, fontSize: 9, lineHeight: 13, fontWeight: "700" },
+  infoDetail: { fontSize: 8, lineHeight: 12, fontWeight: "700" },
+  avatarPreview: {
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 14,
+    overflow: "hidden",
   },
-  doneText: {
-    color: palette.ink,
+  disclaimer: {
+    marginTop: 1,
+    textAlign: "center",
+    fontSize: 7,
+    lineHeight: 10,
+    fontWeight: "700",
+  },
+  metricList: {
+    marginTop: 5,
+    borderWidth: 1,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  linkedSizeGroup: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  metricRow: {
+    minHeight: 49,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 9,
+    paddingTop: 2,
+    paddingBottom: 1,
+  },
+  metricRowSecondary: {
+    minHeight: 42,
+    paddingLeft: 20,
+    paddingTop: 0,
+  },
+  metricRowLast: { borderBottomWidth: 0 },
+  metricHeader: {
+    minHeight: 21,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  metricHeaderSecondary: { minHeight: 17 },
+  metricLabel: { flex: 1, minWidth: 0, fontSize: 10, lineHeight: 14, fontWeight: "900" },
+  metricLabelSecondary: { fontSize: 8, lineHeight: 11, fontWeight: "800" },
+  metricHeaderValue: { flexDirection: "row", alignItems: "center", gap: 7 },
+  metricValue: {
+    minWidth: 56,
+    textAlign: "right",
     fontSize: 11,
     lineHeight: 15,
     fontWeight: "900",
+    fontVariant: ["tabular-nums"],
   },
+  metricValueSecondary: { fontSize: 9, lineHeight: 12 },
+  toggle: {
+    width: 34,
+    height: 20,
+    borderRadius: 10,
+    padding: 2,
+    justifyContent: "center",
+  },
+  toggleThumb: { width: 16, height: 16, borderRadius: 8 },
+  sliderTouchTarget: { height: 27, justifyContent: "center" },
+  sliderTouchTargetSecondary: { height: 24 },
+  sliderTrack: { height: 6, borderRadius: 3 },
+  sliderTrackSecondary: { height: 4, borderRadius: 2 },
+  sliderFill: { height: 6, borderRadius: 3 },
+  sliderFillSecondary: { height: 4, borderRadius: 2 },
+  sliderThumb: {
+    position: "absolute",
+    top: -6,
+    width: 18,
+    height: 18,
+    marginLeft: -9,
+    borderRadius: 9,
+    borderWidth: 2,
+  },
+  sliderThumbSecondary: {
+    top: -5,
+    width: 14,
+    height: 14,
+    marginLeft: -7,
+    borderRadius: 7,
+  },
+  controlDisabled: { opacity: 0.48 },
+  footer: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  doneButton: {
+    minHeight: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 14,
+  },
+  doneText: { color: palette.ink, fontSize: 11, lineHeight: 15, fontWeight: "900" },
   pressed: { opacity: 0.72, transform: [{ scale: 0.99 }] },
 });

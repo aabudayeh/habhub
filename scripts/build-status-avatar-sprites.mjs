@@ -194,6 +194,11 @@ function alphaBounds(image, threshold = 4) {
   };
 }
 
+function smoothStep(edge0, edge1, value) {
+  const progress = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return progress * progress * (3 - 2 * progress);
+}
+
 function fatRegionWeight(normalizedY) {
   if (normalizedY < 0.12) return 0;
   if (normalizedY < 0.2) return 0.25;
@@ -288,20 +293,21 @@ function midpointSprite(
       1 +
       ((rowWidthRatio - 1) * rowFraction + rowFraction * 0.006) *
         muscleRegionWeight(normalizedY);
+    const rawExtensionDelta =
+      adiposityExtension * 0.038 * fatRegionWeight(normalizedY);
     for (let x = 0; x < OUTPUT_WIDTH; x += 1) {
-      // Once the approved source atlas reaches its fullest anchor, seven more
-      // states keep widening the abdomen/hips/legs. The taper leaves the fixed
-      // arm pose and canvas edges undisturbed, preventing clipping while the
-      // central mass remains visibly progressive.
-      const distanceFromEdge = BODY_CENTER - 10 - Math.abs(x - BODY_CENTER);
-      const centralTaper = Math.max(0, Math.min(1, distanceFromEdge / 42));
-      const extensionTaper = normalizedY < 0.6 ? centralTaper : 1;
-      const extensionScale =
-        1 +
-        adiposityExtension *
-          0.038 *
-          fatRegionWeight(normalizedY) *
-          extensionTaper;
+      const distanceFromCenter = Math.abs(x - BODY_CENTER);
+      // A stable, smoothly tapered central band widens the torso but reaches
+      // zero before the outer forearms. This prevents the below-elbow drift in
+      // very high adiposity states without detecting changing alpha edges (an
+      // approach that produced visible seams). Below the hands, the taper
+      // smoothly releases so hips and legs can retain the full progression.
+      const centralTaper =
+        1 - smoothStep(76, 100, distanceFromCenter);
+      const upperBodyGuard = 1 - smoothStep(0.55, 0.66, normalizedY);
+      const extensionWeight =
+        1 - upperBodyGuard * (1 - centralTaper);
+      const extensionScale = 1 + rawExtensionDelta * extensionWeight;
       const horizontalScale = adiposityScale * muscleScale * extensionScale;
       const mappedX = BODY_CENTER + (x - BODY_CENTER) / horizontalScale;
       const offset = (y * OUTPUT_WIDTH + x) * 4;

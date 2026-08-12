@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  type GestureResponderEvent,
   Pressable,
   type StyleProp,
   StyleSheet,
@@ -29,7 +28,6 @@ import {
 import { useAppColors } from "@/src/theme";
 import { AppState, HistoryRange, MetricDefinition } from "@/src/types";
 import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
-import { yearHeatmapDateAtPoint } from "@/src/domain/progressGrid";
 
 const NOT_LOGGED = "#9CA3AF";
 const LOGGED_NO_GOAL = "#F59E0B";
@@ -69,54 +67,21 @@ export type TrackedGoalsHeatmapModel = {
 
 function YearHeatmapGrid({
   accessibilityLabel,
-  cells,
-  cellHeight,
-  cellWidth,
-  gap,
-  onLongPress,
-  onSelect,
   style,
   children,
 }: {
   accessibilityLabel: string;
-  cells: (string | null)[];
-  cellHeight: number;
-  cellWidth: number;
-  gap: number;
-  onLongPress?: () => void;
-  onSelect?: (date: string) => void;
   style: StyleProp<ViewStyle>;
   children: React.ReactNode;
 }) {
-  const onPress = (event: GestureResponderEvent) => {
-    // Keep a full-year grid lightweight: one delegated press target replaces
-    // 365 nested Pressables while retaining exact day selection.
-    event.stopPropagation();
-    if (!onSelect) return;
-    const date = yearHeatmapDateAtPoint(
-      cells,
-      event.nativeEvent.locationX,
-      event.nativeEvent.locationY,
-      cellWidth,
-      cellHeight,
-      gap,
-    );
-    if (date) onSelect(date);
-  };
-  if (!onSelect && !onLongPress) return <View style={style}>{children}</View>;
   return (
-    <Pressable
-      accessibilityRole="button"
+    <View
+      accessible
       accessibilityLabel={accessibilityLabel}
-      onPress={onPress}
-      onLongPress={(event) => {
-        event.stopPropagation();
-        onLongPress?.();
-      }}
       style={style}
     >
       {children}
-    </Pressable>
+    </View>
   );
 }
 
@@ -502,12 +467,6 @@ export function TrackedGoalsHeatmap({
         accessibilityLabel={t(
           `Select a day from the ${t("Tracked goals")} year grid`,
         )}
-        cells={cells}
-        cellHeight={cellHeight}
-        cellWidth={cellWidth}
-        gap={gap}
-        onLongPress={range === "year" ? onLongPress : undefined}
-        onSelect={range === "year" ? onSelect : undefined}
         style={[
           styles.grid,
           compact &&
@@ -556,11 +515,10 @@ export function TrackedGoalsHeatmap({
             borderColor:
               date === selectedDate ? GOAL_COMPLETE_COLOR : colors.ink,
           };
-          return range === "year" ? (
-            <View key={date} pointerEvents="none" style={cellStyle} />
-          ) : (
+          return (
             <Pressable
               key={date}
+              accessibilityLabel={`${t("Tracked goals")}, ${date}`}
               disabled={!onSelect && !onLongPress}
               accessibilityState={{ selected: date === selectedDate }}
               onPress={(event) => {
@@ -697,12 +655,6 @@ export function GoalHeatmap({
         accessibilityLabel={t(
           `Select a day from the ${t(metric.name)} year grid`,
         )}
-        cells={cells}
-        cellHeight={cellHeight}
-        cellWidth={cellWidth}
-        gap={gap}
-        onLongPress={range === "year" ? onLongPress : undefined}
-        onSelect={range === "year" ? onSelect : undefined}
         style={[
           styles.grid,
           compact &&
@@ -773,11 +725,7 @@ export function GoalHeatmap({
                 style={StyleSheet.absoluteFillObject}
               />
             ) : null;
-          return range === "year" ? (
-            <View key={date} pointerEvents="none" style={cellStyle}>
-              {split}
-            </View>
-          ) : (
+          return (
             <Pressable
               key={date}
               accessibilityLabel={`${metric.name}, ${date}${

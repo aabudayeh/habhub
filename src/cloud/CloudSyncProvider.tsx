@@ -1293,13 +1293,21 @@ function mergeStates(
   const tutorialComplete =
     remote.settings.tutorialComplete ||
     local.settings.tutorialComplete;
+  const advancedTutorialComplete =
+    remote.settings.advancedTutorialComplete ||
+    local.settings.advancedTutorialComplete;
   const settings = mergeRecordFromBase(
     remote.settings as unknown as Record<string, unknown>,
     local.settings as unknown as Record<string, unknown>,
     base?.settings,
   ) as unknown as AppState["settings"];
   settings.onboardingComplete = onboardingComplete;
+  settings.onboardingVersion = Math.max(
+    remote.settings.onboardingVersion ?? 0,
+    local.settings.onboardingVersion ?? 0,
+  );
   settings.tutorialComplete = tutorialComplete;
+  settings.advancedTutorialComplete = advancedTutorialComplete;
   settings.progressGridDateNavigatorCollapsed =
     local.settings.progressGridDateNavigatorCollapsed;
   settings.pendingDeletedEntryIds = mergeCollectionFromBase(

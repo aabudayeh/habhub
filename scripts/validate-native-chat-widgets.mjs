@@ -61,8 +61,14 @@ assert.match(widgetLayout, /android:id="@\+id\/widget_card_image"/);
 assert.match(widgetLayout, /android:scaleType="fitXY"/);
 assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_badge/);
 
-assert.match(widgetConfig, /"__featured__"[\s\S]*"__avatar__"/);
-assert.match(pluginSource, /"__avatar__" -> snapshot\.optJSONObject\("avatar"\)/);
+assert.match(widgetConfig, /trackerChoices = listOf\([\s\S]*"__avatar__"/);
+assert.doesNotMatch(widgetConfig, /"__featured__"/);
+assert.match(pluginSource, /val selected = snapshot\.optJSONObject\("avatar"\)/);
+assert.match(
+  pluginSource,
+  /fun configuration\([\s\S]*?HabHubWidgetConfiguration\([\s\S]*?"__avatar__"/,
+  "legacy widget configurations must render the Status avatar",
+);
 assert.match(pluginSource, /paceboard:\/\/status/);
 assert.match(pluginSource, /paceboard:\/\//);
 assert.match(pluginSource, /setImageViewBitmap/);
@@ -86,9 +92,22 @@ assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);
 assert.match(widgetTypes, /avatarUri\?: string/);
 assert.match(widgetBridge, /Image\.resolveAssetSource\(sprite\)/);
 assert.match(widgetBridge, /statusAvatarAtlasBlend/);
-assert.match(widgetBridge, /statusAvatarProgression/);
 assert.match(widgetBridge, /statusRangeRollup/);
-assert.match(widgetBridge, /configuration\.trackerId === "__avatar__"/);
-assert.match(widgetBridge, /id !== "__featured__" && id !== "__avatar__"/);
+assert.match(widgetBridge, /statusAvatarBodyProgression/);
+assert.doesNotMatch(widgetBridge, /statusAvatarProgression\(/);
+assert.match(widgetBridge, /catalog: \[\]/);
+assert.match(widgetBridge, /trackers: \[\]/);
+assert.match(widgetBridge, /NativeAppState\.addEventListener/);
+assert.match(widgetBridge, /scheduleDayBoundary/);
+assert.match(widgetBridge, /if \(dirtyRef\.current\) queueRef\.current\(100\)/);
+assert.doesNotMatch(widgetBridge, /InteractionManager/);
+assert.match(widgetBridge, /getHomeScreenWidgetConfigurations\(\)/);
+assert.match(widgetBridge, /const seededRef = useRef\(false\)/);
+assert.match(
+  widgetBridge,
+  /if \(configurations\.length === 0 && seededRef\.current\) return/,
+);
+assert.match(widgetBridge, /seededRef\.current \? 320 : 1_200/);
+assert.match(widgetBridge, /scheduleDayBoundary\(\);\s*queueRef\.current\(1_200\)/);
 
-console.log("Native Chat layout and static Canvas Featured/Avatar widgets validated.");
+console.log("Native Chat layout and live Status-avatar widgets validated.");

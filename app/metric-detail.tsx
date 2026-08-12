@@ -597,6 +597,7 @@ export default function TrackerDetail() {
   return (
     <Screen>
       <PageHeader
+        tutorialId="metric-detail-header"
         title={tracker.name}
         translateTitle={false}
         showMenu={false}

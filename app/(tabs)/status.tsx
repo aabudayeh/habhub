@@ -160,16 +160,17 @@ function StatusBodyFact({
     >
       <Text
         numberOfLines={1}
-        style={[styles.bodyFactLabel, { color: colors.muted }]}
+        style={styles.bodyFactText}
       >
-        {label}:
-      </Text>
-      <Text
-        translate={false}
-        numberOfLines={1}
-        style={[styles.bodyFactValue, { color: colors.ink }]}
-      >
-        {value}
+        <Text style={[styles.bodyFactLabel, { color: colors.muted }]}>
+          {label}:{" "}
+        </Text>
+        <Text
+          translate={false}
+          style={[styles.bodyFactValue, { color: colors.ink }]}
+        >
+          {value}
+        </Text>
       </Text>
     </View>
   );
@@ -302,15 +303,13 @@ export default function StatusPage() {
           label: "Body fat",
           value: `${avatarProgression.currentBodyFatPercent.toFixed(1)}%`,
         }
-      : typeof avatarProgression.currentLeanBodyMassKg === "number"
-        ? {
-            label: "Lean body mass",
-            value: `${avatarProgression.currentLeanBodyMassKg.toFixed(1)} kg`,
-          }
-        : {
-            label: "Body fat",
-            value: "—",
-          };
+      : {
+          label: "Body fat",
+          value: "—",
+        };
+  const completionPercent = Math.round(
+    Math.max(0, Math.min(1, summary.progress)) * 100,
+  );
   const bodyCompositionReady =
     typeof avatarProgression.currentBodyFatPercent === "number" &&
     Number.isFinite(avatarProgression.currentBodyFatPercent) &&
@@ -372,6 +371,7 @@ export default function StatusPage() {
     <GestureDetector gesture={swipe}>
       <Screen>
         <PageHeader
+          tutorialId="status-header"
           title="Status"
           showMenu
         />
@@ -462,6 +462,15 @@ export default function StatusPage() {
                   pressed && styles.avatarHeld,
                 ]}
               >
+                {member ? (
+                  <Text
+                    translate={false}
+                    numberOfLines={1}
+                    style={[styles.personName, { color: colors.ink }]}
+                  >
+                    {memberDisplayName(state, member)}
+                  </Text>
+                ) : null}
                 <BodyProgressAvatar
                   bodyFatPercent={avatarProgression.currentBodyFatPercent}
                   calculationSource={avatarCalculationSource}
@@ -470,6 +479,7 @@ export default function StatusPage() {
                   mindTier={avatarProgression.mindTier}
                   muscleProgress={avatarProgression.muscleProgress}
                   progress={summary.progress}
+                  showProgressLabel={false}
                   sex={state.settings.energyProfile.sex}
                   visualStyle={state.settings.statusAvatarStyle ?? "silhouette"}
                   weightKg={avatarProgression.currentWeightKg}
@@ -499,6 +509,31 @@ export default function StatusPage() {
                 label="Weight"
                 value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
               />
+              <View
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
+              />
+              <View
+                accessible
+                accessibilityLabel={`${t("Tracked goals")}: ${completionPercent}%`}
+                accessibilityRole="progressbar"
+                accessibilityValue={{
+                  min: 0,
+                  max: 100,
+                  now: completionPercent,
+                  text: `${completionPercent}%`,
+                }}
+                style={styles.completionFact}
+              >
+                <Text
+                  translate={false}
+                  numberOfLines={1}
+                  style={[styles.completionPercent, { color: colors.ink }]}
+                >
+                  {completionPercent}%
+                </Text>
+              </View>
               <View
                 accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants"
@@ -585,15 +620,6 @@ export default function StatusPage() {
                 ) : null}
               </View>
             ) : null}
-            {member ? (
-              <Text
-                translate={false}
-                numberOfLines={1}
-                style={[styles.personName, { color: colors.ink }]}
-              >
-                {memberDisplayName(state, member)}
-              </Text>
-            ) : null}
           </View>
 
           {remainingGoals.length ? (
@@ -611,6 +637,7 @@ export default function StatusPage() {
         </Card>
         <StatusAvatarSimulator
           bodyFatPercent={avatarProgression.currentBodyFatPercent}
+          calculationSource={avatarCalculationSource}
           heightCm={state.settings.energyProfile.heightCm}
           leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
           mindTier={avatarProgression.mindTier}
@@ -654,18 +681,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    flexWrap: "wrap",
-    columnGap: 8,
-    rowGap: 3,
+    flexWrap: "nowrap",
+    columnGap: 7,
     marginTop: 1,
+    paddingHorizontal: 4,
   },
   bodyFact: {
     minHeight: 22,
-    flexDirection: "row",
+    flex: 1,
+    minWidth: 0,
     alignItems: "center",
     justifyContent: "center",
-    gap: 4,
   },
+  bodyFactText: { flexShrink: 1, textAlign: "center" },
   bodyFactLabel: {
     fontSize: 9,
     lineHeight: 13,
@@ -674,6 +702,18 @@ const styles = StyleSheet.create({
   bodyFactValue: {
     fontSize: 11,
     lineHeight: 14,
+    fontWeight: "900",
+  },
+  completionFact: {
+    width: 48,
+    minHeight: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completionPercent: {
+    flexShrink: 0,
+    fontSize: 13,
+    lineHeight: 16,
     fontWeight: "900",
   },
   bodyFactDivider: { width: 1, height: 13 },
@@ -703,7 +743,17 @@ const styles = StyleSheet.create({
   avatarSourceDone: { minHeight: 30, justifyContent: "center", paddingHorizontal: 5 },
   avatarSourceDoneText: { fontSize: 10, lineHeight: 13, fontWeight: "800" },
   avatarSourceFallback: { textAlign: "center", fontSize: 9, lineHeight: 12, fontWeight: "700" },
-  personName: { marginTop: 8, maxWidth: "82%", fontSize: 16, fontWeight: "900" },
+  personName: {
+    position: "absolute",
+    zIndex: 2,
+    top: 0,
+    left: 3,
+    right: 3,
+    textAlign: "center",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
   goalGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

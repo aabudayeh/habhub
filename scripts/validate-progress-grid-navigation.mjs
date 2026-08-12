@@ -20,8 +20,7 @@ vm.runInNewContext(`(function (module, exports) { ${output}\n})(module, exports)
   exports,
 });
 
-const { progressGridNavigationSettings, yearHeatmapDateAtPoint } =
-  module.exports;
+const { progressGridNavigationSettings } = module.exports;
 
 for (const range of ["week", "month", "year"]) {
   assert.deepEqual(
@@ -34,21 +33,6 @@ for (const range of ["week", "month", "year"]) {
   );
 }
 
-const cells = [
-  null,
-  null,
-  "2026-01-01",
-  "2026-01-02",
-  "2026-01-03",
-  "2026-01-04",
-  "2026-01-05",
-  "2026-01-06",
-];
-assert.equal(yearHeatmapDateAtPoint(cells, 2, 14, 5, 5, 1), "2026-01-01");
-assert.equal(yearHeatmapDateAtPoint(cells, 7, 2, 5, 5, 1), "2026-01-06");
-assert.equal(yearHeatmapDateAtPoint(cells, 2, 2, 5, 5, 1), undefined);
-assert.equal(yearHeatmapDateAtPoint(cells, -1, 2, 5, 5, 1), undefined);
-assert.equal(yearHeatmapDateAtPoint(cells, 2, 50, 5, 5, 1), undefined);
 
 const todaySource = fs.readFileSync(
   path.join(root, "app", "(tabs)", "index.tsx"),
@@ -67,8 +51,21 @@ const progressSource = fs.readFileSync(
   path.join(root, "app", "(tabs)", "insights.tsx"),
   "utf8",
 );
-assert.match(progressSource, /selectedDate=\{anchor\}/);
-assert.match(progressSource, /onSelect=\{editing \? undefined : onSelectDate\}/);
+assert.doesNotMatch(
+  progressSource,
+  /selectedDate=\{anchor\}/,
+  "Progress squares should not gain a selection-only outline",
+);
+assert.ok(
+  (progressSource.match(/onSelect=\{editing \? undefined : onOpenDay\}/g) ?? [])
+    .length >= 2,
+  "Tracked and individual goal-map squares must open daily detail directly",
+);
+assert.doesNotMatch(
+  progressSource,
+  /selectGridDate|onSelectDate/,
+  "Progress must not retain the old selection-only square behavior",
+);
 assert.match(
   progressSource,
   /onPress=\{\(\) => onOpenDay\(anchor\)\}/,
@@ -86,8 +83,13 @@ const heatmapSource = fs.readFileSync(
 );
 assert.match(
   heatmapSource,
-  /function YearHeatmapGrid[\s\S]*?const onPress[\s\S]*?event\.stopPropagation\(\);[\s\S]*?yearHeatmapDateAtPoint/,
-  "A year-cell tap must not reach the outer tracker-card navigation",
+  /function YearHeatmapGrid[\s\S]*?<View[\s\S]*?\{children\}[\s\S]*?<\/View>/,
+  "the year grid wrapper must leave exact day interaction to its cells",
+);
+assert.match(
+  heatmapSource,
+  /range === "year"[\s\S]{0,900}width: cellWidth[\s\S]{0,180}height: cellHeight[\s\S]{0,1800}<Pressable[\s\S]{0,900}onPress=\{\(event\) => \{[\s\S]{0,180}event\.stopPropagation\(\);[\s\S]{0,120}onSelect\?\.\(date\)/,
+  "every exact-size year square must be its own day action without expanding its geometry",
 );
 assert.match(
   heatmapSource,

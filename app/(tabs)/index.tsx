@@ -26,6 +26,7 @@ import {
 } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
+import Svg, { Rect } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
 import {
   LocalizedAlert as Alert,
@@ -2657,19 +2658,25 @@ function HeroProgressOutline({
   const normalized = Math.max(0, Math.min(1, progress));
   const [size, setSize] = useState({ width: 0, height: 0 });
   const stroke = 2;
+  const radius = 19;
   const fullOutline = (offsetLeft = 0, offsetTop = 0) => (
-    <View
-      style={[
-        styles.heroOutlineStroke,
-        {
-          borderColor: color,
-          width: size.width,
-          height: size.height,
-          left: offsetLeft,
-          top: offsetTop,
-        },
-      ]}
-    />
+    <Svg
+      width={size.width}
+      height={size.height}
+      style={[styles.heroOutlineSvg, { left: offsetLeft, top: offsetTop }]}
+    >
+      <Rect
+        x={stroke / 2}
+        y={stroke / 2}
+        width={Math.max(0, size.width - stroke)}
+        height={Math.max(0, size.height - stroke)}
+        rx={radius}
+        ry={radius}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+      />
+    </Svg>
   );
 
   let clockwiseSegments: React.ReactNode = null;
@@ -2679,90 +2686,25 @@ function HeroProgressOutline({
     size.width > 0 &&
     size.height > 0
   ) {
-    let remaining = normalized * (2 * size.width + 2 * size.height);
-    const take = (length: number) => {
-      const used = Math.max(0, Math.min(length, remaining));
-      remaining -= used;
-      return used;
-    };
-    const topRight = take(size.width / 2);
-    const right = take(size.height);
-    const bottom = take(size.width);
-    const left = take(size.height);
-    const topLeft = take(size.width / 2);
+    const straightWidth = Math.max(0, size.width - stroke - radius * 2);
+    const straightHeight = Math.max(0, size.height - stroke - radius * 2);
+    const perimeter = 2 * (straightWidth + straightHeight) + 2 * Math.PI * radius;
     clockwiseSegments = (
-      <>
-        {topRight > 0 ? (
-          <View
-            style={[
-              styles.heroOutlineSegment,
-              {
-                backgroundColor: color,
-                left: size.width / 2,
-                top: 0,
-                width: topRight,
-                height: stroke,
-              },
-            ]}
-          />
-        ) : null}
-        {right > 0 ? (
-          <View
-            style={[
-              styles.heroOutlineSegment,
-              {
-                backgroundColor: color,
-                right: 0,
-                top: 0,
-                width: stroke,
-                height: right,
-              },
-            ]}
-          />
-        ) : null}
-        {bottom > 0 ? (
-          <View
-            style={[
-              styles.heroOutlineSegment,
-              {
-                backgroundColor: color,
-                right: 0,
-                bottom: 0,
-                width: bottom,
-                height: stroke,
-              },
-            ]}
-          />
-        ) : null}
-        {left > 0 ? (
-          <View
-            style={[
-              styles.heroOutlineSegment,
-              {
-                backgroundColor: color,
-                left: 0,
-                bottom: 0,
-                width: stroke,
-                height: left,
-              },
-            ]}
-          />
-        ) : null}
-        {topLeft > 0 ? (
-          <View
-            style={[
-              styles.heroOutlineSegment,
-              {
-                backgroundColor: color,
-                left: size.width / 2 - topLeft,
-                top: 0,
-                width: topLeft,
-                height: stroke,
-              },
-            ]}
-          />
-        ) : null}
-      </>
+      <Svg width={size.width} height={size.height} style={styles.heroOutlineSvg}>
+        <Rect
+          x={stroke / 2}
+          y={stroke / 2}
+          width={Math.max(0, size.width - stroke)}
+          height={Math.max(0, size.height - stroke)}
+          rx={radius}
+          ry={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={[perimeter * normalized, perimeter]}
+        />
+      </Svg>
     );
   }
 
@@ -3092,15 +3034,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     overflow: "hidden",
   },
-  heroOutlineStroke: {
-    position: "absolute",
-    borderRadius: 20,
-    borderWidth: 2,
-  },
-  heroOutlineSegment: {
-    position: "absolute",
-    borderRadius: 2,
-  },
+  heroOutlineSvg: { position: "absolute" },
   heroTop: {
     flexDirection: "row",
     justifyContent: "space-between",

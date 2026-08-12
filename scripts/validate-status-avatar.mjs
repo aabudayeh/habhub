@@ -139,7 +139,7 @@ assert.match(
 );
 assert.match(
   componentSource,
-  /calculationSource = "bmi"[\s\S]*statusBodyCompositionForSource\(calculationSource/,
+  /calculationSource = "bmi"[\s\S]*statusBodyCompositionForSource\([\s\S]{0,80}calculationSource/,
   "missing avatar source preferences must follow the BMI calculation path",
 );
 assert.match(
@@ -164,13 +164,23 @@ assert.match(
 );
 assert.match(
   componentSource,
-  /styles\.avatarViewport[\s\S]{0,5000}styles\.percentPill/,
-  "the avatar percentage must render inside the shared avatar viewport",
+  /showProgressLabel = true[\s\S]*showProgressLabel \? \([\s\S]{0,700}styles\.percentPill/,
+  "the reusable avatar may render its progress label when requested",
 );
 assert.match(
   componentSource,
-  /percentPill:[\s\S]{0,180}left: "50%"[\s\S]{0,180}translateX: -25/,
-  "the avatar percentage must stay centered rather than hanging off the right edge",
+  /numberOfLines=\{1\}[\s\S]{0,180}styles\.percent[\s\S]*percentPill:[\s\S]{0,180}left: "50%"[\s\S]{0,180}width: 60[\s\S]{0,100}translateX: -30/,
+  "the avatar percentage must keep 100% on one centered line",
+);
+assert.match(
+  statusPageSource,
+  /<BodyProgressAvatar[\s\S]{0,600}showProgressLabel=\{false\}[\s\S]{0,1600}<StatusBodyFact[\s\S]{0,350}label="Weight"[\s\S]{0,1000}styles\.completionFact[\s\S]{0,500}\{completionPercent\}%[\s\S]{0,1000}<StatusBodyFact[\s\S]{0,300}label=\{bodyCompositionStat\.label\}/,
+  "Status must place one-line completion percent between Weight and Body fat instead of over the avatar",
+);
+assert.match(
+  statusPageSource,
+  /styles\.avatarColumn[\s\S]{0,450}styles\.personName[\s\S]{0,350}<BodyProgressAvatar/,
+  "the member name must use the free space directly above the avatar",
 );
 assert.doesNotMatch(
   statusPageSource,
@@ -242,6 +252,11 @@ assert.match(
   /Premultiplied-alpha separable Lanczos[\s\S]*midpointSprite[\s\S]*horizontalScale/,
   "the generator must supersample approved anchors and bake geometric midpoints",
 );
+assert.match(
+  spriteGeneratorSource,
+  /centralTaper[\s\S]{0,500}upperBodyGuard[\s\S]{0,300}extensionWeight/,
+  "extended adiposity must widen the central body without dragging forearms away from elbows",
+);
 assert.doesNotMatch(
   spriteGeneratorSource,
   /tmp[/\\]|https?:\/\//,
@@ -269,6 +284,7 @@ for (const variant of ["female", "male"]) {
   );
   const hashes = new Set();
   const alphaAreas = new Map();
+  const lowerArmBounds = new Map();
   for (const file of files) {
     const filePath = path.join(directory, file);
     const buffer = fs.readFileSync(filePath);
@@ -308,6 +324,19 @@ for (const variant of ["female", "male"]) {
       `${variant}/${file} must retain transparent side safety and never clip`,
     );
     alphaAreas.set(file, alphaArea);
+    lowerArmBounds.set(
+      file,
+      [206, 231, 256].map((y) => {
+        let rowLeft = image.width;
+        let rowRight = -1;
+        for (let x = 0; x < image.width; x += 1) {
+          if (image.data[(y * image.width + x) * 4 + 3] <= 16) continue;
+          rowLeft = Math.min(rowLeft, x);
+          rowRight = Math.max(rowRight, x);
+        }
+        return [rowLeft, rowRight];
+      }),
+    );
     hashes.add(crypto.createHash("sha256").update(image.data).digest("hex"));
   }
   assert.equal(
@@ -322,14 +351,29 @@ for (const variant of ["female", "male"]) {
     });
     extensionAreas.slice(1).forEach((area, index) =>
       assert.ok(
-        area > extensionAreas[index],
-        `${variant} extended adiposity area must increase at muscle row ${row}, column ${index + 13}`,
+        area >= extensionAreas[index] * 0.99,
+        `${variant} extended adiposity area must remain visually progressive at muscle row ${row}, column ${index + 13}`,
       ),
     );
     assert.ok(
-      extensionAreas.at(-1) >= extensionAreas[0] * 1.13,
+      extensionAreas.at(-1) >= extensionAreas[0] * 1.08,
       `${variant} a19 must be visibly fuller than the approved a12 endpoint`,
     );
+    const approvedArmBounds = lowerArmBounds.get(
+      `m${String(row).padStart(2, "0")}-a12.png`,
+    );
+    for (let column = 13; column < 20; column += 1) {
+      const extendedArmBounds = lowerArmBounds.get(
+        `m${String(row).padStart(2, "0")}-a${column}.png`,
+      );
+      extendedArmBounds.forEach(([left, right], index) => {
+        const [approvedLeft, approvedRight] = approvedArmBounds[index];
+        assert.ok(
+          left >= approvedLeft - 3 && right <= approvedRight + 3,
+          `${variant} extended lower arms must stay tucked at muscle row ${row}, column ${column}`,
+        );
+      });
+    }
   }
   const manifestRequires = [
     ...spriteManifestSource.matchAll(
@@ -551,9 +595,9 @@ const leanMassOnly = statusBodyAppearance(178, 100, 0.2, {
   sex: "male",
 });
 assert.ok(
-  leanMassOnly.adiposity < weightOnly.adiposity &&
+  leanMassOnly.adiposity === weightOnly.adiposity &&
     leanMassOnly.muscleProgress > weightOnly.muscleProgress,
-  "lean mass alone must separate fat and lean signals instead of looking like weight alone",
+  "lean mass alone must change muscle without silently assuming body fat",
 );
 const bodyFatWithoutLean = statusBodyAppearance(178, 82, 0.42, {
   bodyFatPercent: 18,

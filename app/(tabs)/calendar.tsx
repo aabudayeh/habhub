@@ -584,9 +584,9 @@ function SchedulePage() {
               events={(eventsByDate[date] ?? []).filter(
                 (event) => !event.time,
               )}
-              slotEvents={(eventsByDate[date] ?? []).filter(
-                (event) => !event.time,
-              )}
+              // The ALL cell is a daily overview, even though its compact grid
+              // preview only has room for genuinely all-day blocks.
+              slotEvents={eventsByDate[date] ?? []}
               date={date}
               editing={editing}
               expanded={expandedRows.has("all")}
@@ -676,7 +676,7 @@ function SchedulePage() {
                   {slotMenu
                     ? `${t(friendlyDate(slotMenu.date, locale))} · ${
                         slotMenu.hour === null
-                          ? t("All day")
+                          ? t("All")
                           : scheduleSlotWindow(
                               slotMenu.hour,
                               state.settings.timeFormat,

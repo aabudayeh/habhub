@@ -468,11 +468,6 @@ function Insights() {
     });
   }
 
-  const selectGridDate = useCallback(
-    (day: string) => setHistoryAnchor(day),
-    [setHistoryAnchor],
-  );
-
   function trackedProgress(day: string) {
     const summary = trackedGoalSummary(state, state.currentUserId, day);
     return summary.total ? summary.met / summary.total : 0;
@@ -610,7 +605,6 @@ function Insights() {
         onModeChange={setProgressMode}
         onRangeChange={setHistoryRange}
         onOpenDay={openDay}
-        onSelectDate={selectGridDate}
         onOpenEditor={beginEditing}
         editing={editing}
         onDoneEditing={finishEditing}
@@ -1152,7 +1146,6 @@ function GoalMapProgress({
   onModeChange,
   onRangeChange,
   onOpenDay,
-  onSelectDate,
   onOpenEditor,
   editing,
   onDoneEditing,
@@ -1175,7 +1168,6 @@ function GoalMapProgress({
   onModeChange: (mode: ProgressViewMode) => void;
   onRangeChange: (range: HistoryRange) => void;
   onOpenDay: (date: string) => void;
-  onSelectDate: (date: string) => void;
   onOpenEditor: () => void;
   editing: boolean;
   onDoneEditing: () => void;
@@ -1557,8 +1549,7 @@ function GoalMapProgress({
                 dates={dates}
                 range={range}
                 compact={compact}
-                selectedDate={anchor}
-                onSelect={editing ? undefined : onSelectDate}
+                onSelect={editing ? undefined : onOpenDay}
                 onLongPress={editing ? undefined : onOpenEditor}
                 model={trackedModel}
               />
@@ -1805,8 +1796,7 @@ function GoalMapProgress({
                   dates={dates}
                   range={range}
                   compact={compact}
-                  selectedDate={anchor}
-                  onSelect={editing ? undefined : onSelectDate}
+                  onSelect={editing ? undefined : onOpenDay}
                   onLongPress={editing ? undefined : onOpenEditor}
                   model={heatmapModel}
                   completionOnly={

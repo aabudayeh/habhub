@@ -991,26 +991,6 @@ export default function MemberProfile() {
               </Pressable>
             }
           />
-          {member.id === state.currentUserId && badgeOptions.length ? (
-            <MetricSelector
-              title="Choose up to 5 showcase badges"
-              items={badgeOptions}
-              selectedIds={
-                showcase.length
-                  ? showcase
-                  : displayedBadges.map((badge) => badge.id)
-              }
-              onChange={(ids) => {
-                if (ids.length <= 5)
-                  updateSettings({
-                    badgeShowcaseByGroup: {
-                      ...state.settings.badgeShowcaseByGroup,
-                      [state.group.id]: ids,
-                    },
-                  });
-              }}
-            />
-          ) : null}
           <Card style={styles.badgeShowcaseCard}>
             <View style={styles.badgeList}>
               {displayedBadges.length ? displayedBadges.map((badge) => (
@@ -1041,6 +1021,26 @@ export default function MemberProfile() {
               )}
             </View>
           </Card>
+          {member.id === state.currentUserId && badgeOptions.length ? (
+            <MetricSelector
+              title="Choose up to 5 showcase badges"
+              items={badgeOptions}
+              selectedIds={
+                showcase.length
+                  ? showcase
+                  : displayedBadges.map((badge) => badge.id)
+              }
+              onChange={(ids) => {
+                if (ids.length <= 5)
+                  updateSettings({
+                    badgeShowcaseByGroup: {
+                      ...state.settings.badgeShowcaseByGroup,
+                      [state.group.id]: ids,
+                    },
+                  });
+              }}
+            />
+          ) : null}
         </>
       <Pressable onPress={() => setPhotosOpen((open) => !open)}>
         <Card style={styles.collapseHeader}>

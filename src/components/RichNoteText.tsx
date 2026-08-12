@@ -146,19 +146,19 @@ function renderInlineParts(value: string): React.ReactNode[] {
     if (/^\*\*.*\*\*$|^__.*__$/.test(part))
       return (
         <Text key={index} translate={false} style={styles.bold}>
-          {part.slice(2, -2)}
+          {renderInlineParts(part.slice(2, -2))}
         </Text>
       );
     if (/^~~.*~~$/.test(part))
       return (
         <Text key={index} translate={false} style={styles.strike}>
-          {part.slice(2, -2)}
+          {renderInlineParts(part.slice(2, -2))}
         </Text>
       );
     if (/^\*.*\*$|^_.*_$/.test(part))
       return (
         <Text key={index} translate={false} style={styles.italic}>
-          {part.slice(1, -1)}
+          {renderInlineParts(part.slice(1, -1))}
         </Text>
       );
     const link = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);

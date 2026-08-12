@@ -25,6 +25,7 @@ export function shouldWaitForOnboardingAuthority({
   return (
     cloudSyncStatus === "disabled" ||
     cloudSyncStatus === "initializing" ||
+    cloudSyncStatus === "syncing" ||
     cloudSyncStatus === "offline" ||
     cloudSyncStatus === "error"
   );

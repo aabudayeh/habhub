@@ -1,165 +1,32 @@
 import { useEffect, useRef } from "react";
-import { Image, InteractionManager } from "react-native";
+import { AppState as NativeAppState, Image } from "react-native";
 
 import { dateKey } from "@/src/domain/date";
-import {
-  displayGoalProgress,
-  effectiveGoalTarget,
-  formatMetricValue,
-  hasMetricData,
-  isMetricTrackedOnDate,
-  safeMetricValue,
-  scheduledGoalReached,
-} from "@/src/domain/metrics";
-import { localizeMetricName, localizeMetricUnit } from "@/src/i18n/domain";
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import {
   ALL_GOALS_COMPLETE_COLOR,
   GOAL_COMPLETE_COLOR,
 } from "@/src/domain/colors";
-import { completionIndicatorFillMode } from "@/src/domain/completionIndicators";
 import {
   statusBodyAppearance,
   statusBodyCompositionForSource,
 } from "@/src/domain/statusAvatar";
 import { statusAvatarAtlasBlend } from "@/src/domain/statusAvatarAtlas";
 import {
-  statusAvatarProgression,
+  statusAvatarBodyProgression,
   statusRangeRollup,
 } from "@/src/domain/status";
 import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { AppState, MetricDefinition } from "@/src/types";
+import { AppState } from "@/src/types";
 import {
   areHomeScreenWidgetsSupported,
   getHomeScreenWidgetConfigurations,
   updateHomeScreenWidgets,
   WidgetSnapshot,
   WidgetAvatarSnapshot,
-  WidgetTrackerSnapshot,
 } from "@/src/widgets";
-
-function trackerSnapshot(
-  state: AppState,
-  metric: MetricDefinition,
-  today: string,
-  language: AppState["settings"]["language"],
-  locale: string,
-  t: (source: string) => string,
-  backgroundColor: string,
-): WidgetTrackerSnapshot {
-  const value = safeMetricValue(state, metric, state.currentUserId, today);
-  const available = hasMetricData(state, metric, state.currentUserId, today);
-  const target = effectiveGoalTarget(
-    state,
-    metric,
-    state.currentUserId,
-    today,
-  );
-  const localizedMetric = {
-    ...metric,
-    name: localizeMetricName(language, metric),
-    unit: localizeMetricUnit(language, metric),
-  };
-  const progress = available
-    ? displayGoalProgress(metric, value, target)
-    : 0;
-  const remaining = Math.max(0, target - value);
-  return {
-    id: metric.id,
-    eyebrow: localizedMetric.name,
-    title: localizedMetric.name,
-    value: available
-      ? formatMetricValue(localizedMetric, value, locale)
-      : t("Not yet available"),
-    subtitle:
-      available && metric.goalEnabled !== false
-        ? `${formatMetricValue(localizedMetric, remaining, locale)} ${t("remaining")}`
-        : t("Tap to open HabHub"),
-    progress: Math.max(0, Math.min(3, progress)),
-    color: metric.color,
-    backgroundColor,
-    progressColor: GOAL_COMPLETE_COLOR,
-    deepLink: `paceboard://metric-detail?metric=${encodeURIComponent(metric.id)}&date=${today}`,
-  };
-}
-
-function featuredSnapshot(
-  state: AppState,
-  today: string,
-  language: AppState["settings"]["language"],
-  locale: string,
-  t: (source: string) => string,
-  backgroundColor: string,
-  completedBackgroundColor: string,
-): WidgetTrackerSnapshot {
-  const tracked = state.metrics.filter(
-    (metric) =>
-      metric.goalEnabled !== false &&
-      metric.dataType !== "text" &&
-      isMetricTrackedOnDate(state, metric, today),
-  );
-  const metToday = tracked.filter(
-    (metric) =>
-      hasMetricData(state, metric, state.currentUserId, today) &&
-      scheduledGoalReached(state, metric, state.currentUserId, today),
-  ).length;
-  const allComplete = tracked.length > 0 && metToday === tracked.length;
-  const goalRows = tracked.slice(0, 3).map((metric) => {
-    const available = hasMetricData(state, metric, state.currentUserId, today);
-    const value = available
-      ? safeMetricValue(state, metric, state.currentUserId, today)
-      : 0;
-    const target = effectiveGoalTarget(
-      state,
-      metric,
-      state.currentUserId,
-      today,
-    );
-    const localizedMetric = {
-      ...metric,
-      name: localizeMetricName(language, metric),
-      unit: localizeMetricUnit(language, metric),
-    };
-    return {
-      title: localizedMetric.name,
-      value: available
-        ? `${formatMetricValue(localizedMetric, value, locale)} / ${formatMetricValue(localizedMetric, target, locale)}`
-        : t("Not yet available"),
-      progress: available
-        ? Math.max(0, Math.min(1, displayGoalProgress(metric, value, target)))
-        : 0,
-      met:
-        available &&
-        scheduledGoalReached(state, metric, state.currentUserId, today),
-    };
-  });
-  return {
-    id: "__featured__",
-    eyebrow: t(allComplete ? "DAY COMPLETE" : "TODAY'S FOCUS"),
-    title: "HabHub",
-    value: `${metToday} ${t("of")} ${tracked.length}`,
-    subtitle: allComplete
-      ? t("Every goal reached")
-      : tracked.length
-        ? `${tracked.length - metToday} ${t("remaining")}`
-        : t("Choose your first goal"),
-    progress: tracked.length ? metToday / tracked.length : 0,
-    color: allComplete ? ALL_GOALS_COMPLETE_COLOR : GOAL_COMPLETE_COLOR,
-    backgroundColor: allComplete ? completedBackgroundColor : backgroundColor,
-    progressColor: allComplete
-      ? ALL_GOALS_COMPLETE_COLOR
-      : GOAL_COMPLETE_COLOR,
-    allComplete,
-    fillMode: completionIndicatorFillMode(
-      state.settings.completionIndicatorIcon,
-      state.settings.completionIndicatorFillMode ?? "auto",
-    ),
-    deepLink: "paceboard://",
-    goals: goalRows,
-  };
-}
 
 function avatarSnapshot(
   state: AppState,
@@ -171,7 +38,9 @@ function avatarSnapshot(
 ): WidgetAvatarSnapshot {
   const profile =
     state.energyProfiles?.[state.currentUserId] ?? state.settings.energyProfile;
-  const progression = statusAvatarProgression(
+  // Widgets never render the earned mind tier. Use the body-only projection
+  // so an ordinary widget refresh cannot scan years of mind-goal history.
+  const progression = statusAvatarBodyProgression(
     state,
     state.currentUserId,
     today,
@@ -241,105 +110,132 @@ export function WidgetSnapshotBridge() {
   const accent = useGroupAccent();
   const colors = useAppColors();
   const lastPayloadRef = useRef("");
-  const initialSnapshotPublishedRef = useRef(false);
   const stateRef = useRef(state);
+  const hydratedRef = useRef(hydrated);
+  const localeRef = useRef(locale);
+  const translationRef = useRef(t);
+  const accentRef = useRef(accent);
+  const darkRef = useRef(colors.isDark);
+  const seededRef = useRef(false);
+  const mountedRef = useRef(false);
+  const dirtyRef = useRef(false);
+  const publishingRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publishRef = useRef<() => Promise<void>>(async () => undefined);
+  const queueRef = useRef<(delay?: number) => void>(() => undefined);
   stateRef.current = state;
+  hydratedRef.current = hydrated;
+  localeRef.current = locale;
+  translationRef.current = t;
+  accentRef.current = accent;
+  darkRef.current = colors.isDark;
+
+  queueRef.current = (delay = 320) => {
+    dirtyRef.current = true;
+    if (!mountedRef.current || publishingRef.current || timerRef.current) return;
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      void publishRef.current();
+    }, delay);
+  };
+
+  publishRef.current = async () => {
+    if (
+      !mountedRef.current ||
+      !hydratedRef.current ||
+      !areHomeScreenWidgetsSupported()
+    )
+      return;
+    if (publishingRef.current) {
+      dirtyRef.current = true;
+      return;
+    }
+    publishingRef.current = true;
+    dirtyRef.current = false;
+    try {
+      const configurations = await getHomeScreenWidgetConfigurations().catch(
+        () => [],
+      );
+      // Seed one Status snapshot per process so adding the first widget while
+      // HabHub is closed never produces an empty card. After that, no launcher
+      // widget means ordinary app updates skip all avatar/history work.
+      if (configurations.length === 0 && seededRef.current) return;
+      const currentState = stateRef.current;
+      const currentLocale = localeRef.current;
+      const translate = translationRef.current;
+      const currentAccent = accentRef.current;
+      const avatar = avatarSnapshot(
+        currentState,
+        dateKey(),
+        currentLocale,
+        translate,
+        currentAccent,
+        darkRef.current ? "#806018" : "#B98212",
+      );
+      const snapshot: WidgetSnapshot = {
+        updatedAt: new Date().toISOString(),
+        avatar,
+        // Legacy fields remain empty for backwards-compatible native parsing;
+        // every existing configuration is migrated to the Status avatar.
+        catalog: [],
+        trackers: [],
+      };
+      const payload = JSON.stringify({ avatar });
+      if (payload === lastPayloadRef.current) {
+        seededRef.current = true;
+        return;
+      }
+      const updated = await updateHomeScreenWidgets(snapshot).catch(() => false);
+      if (updated) {
+        lastPayloadRef.current = payload;
+        seededRef.current = true;
+      }
+    } finally {
+      publishingRef.current = false;
+      if (dirtyRef.current) queueRef.current(100);
+    }
+  };
+
   useEffect(() => {
-    // Native widgets do not exist in Expo Go, iOS, or web. Check before doing
-    // any historical calculations so ordinary navigation stays inexpensive.
-    if (!hydrated || !areHomeScreenWidgetsSupported()) return;
-    let interactionTask: ReturnType<typeof InteractionManager.runAfterInteractions> | null = null;
-    const timer = setTimeout(() => {
-      interactionTask = InteractionManager.runAfterInteractions(() => {
-        void (async () => {
-        const currentState = stateRef.current;
-        const today = dateKey();
-        const selectableMetrics = currentState.metrics.filter(
-          (metric) =>
-            metric.activeFrom <= today &&
-            (metric.sections.today ||
-              isMetricTrackedOnDate(currentState, metric, today)),
-        );
-        const initial = !initialSnapshotPublishedRef.current;
-        const configurations = await getHomeScreenWidgetConfigurations().catch(
-          () => [],
-        );
-        // With no launcher widgets, one process-local seed is enough to give
-        // the native configuration picker localized choices.
-        if (!initial && configurations.length === 0) return;
-        const configuredIds = new Set(
-          configurations
-            .map((configuration) => configuration.trackerId)
-            .filter((id) => id !== "__featured__" && id !== "__avatar__"),
-        );
-        const needsAvatar =
-          initial ||
-          configurations.some(
-            (configuration) => configuration.trackerId === "__avatar__",
-          );
-        const metricsToCalculate =
-          initial && configurations.length === 0
-            ? selectableMetrics
-            : selectableMetrics.filter((metric) => configuredIds.has(metric.id));
-        const snapshot: WidgetSnapshot = {
-          updatedAt: new Date().toISOString(),
-          featured: featuredSnapshot(
-            currentState,
-            today,
-            currentState.settings.language,
-            locale,
-            t,
-            accent,
-            colors.isDark ? "#806018" : "#B98212",
-          ),
-          avatar: needsAvatar
-            ? avatarSnapshot(
-                currentState,
-                today,
-                locale,
-                t,
-                accent,
-                colors.isDark ? "#806018" : "#B98212",
-              )
-            : undefined,
-          catalog: selectableMetrics.map((metric) => ({
-            id: metric.id,
-            title: localizeMetricName(currentState.settings.language, metric),
-          })),
-          trackers: metricsToCalculate.map((metric) =>
-            trackerSnapshot(
-              currentState,
-              metric,
-              today,
-              currentState.settings.language,
-              locale,
-              t,
-              accent,
-            ),
-          ),
-        };
-        const payload = JSON.stringify({
-          featured: snapshot.featured,
-          avatar: snapshot.avatar,
-          catalog: snapshot.catalog,
-          trackers: snapshot.trackers,
-        });
-        if (payload === lastPayloadRef.current) {
-          initialSnapshotPublishedRef.current = true;
-          return;
-        }
-        const updated = await updateHomeScreenWidgets(snapshot).catch(() => false);
-        if (updated) {
-          lastPayloadRef.current = payload;
-          initialSnapshotPublishedRef.current = true;
-        }
-        })();
-      });
-    }, 1_200);
-    return () => {
-      clearTimeout(timer);
-      interactionTask?.cancel();
+    mountedRef.current = true;
+    let dayBoundaryTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleDayBoundary = () => {
+      const now = new Date();
+      const nextDay = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        2,
+      );
+      dayBoundaryTimer = setTimeout(() => {
+        queueRef.current(0);
+        scheduleDayBoundary();
+      }, Math.max(1_000, nextDay.getTime() - now.getTime()));
     };
+    const subscription = NativeAppState.addEventListener("change", (next) => {
+      // Flush the latest in-memory values before suspension and refresh again
+      // on resume after cloud/health hydration.
+      if (next === "active") queueRef.current(0);
+      else if (next === "inactive" || next === "background")
+        void publishRef.current();
+    });
+    scheduleDayBoundary();
+    queueRef.current(1_200);
+    return () => {
+      mountedRef.current = false;
+      subscription.remove();
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (dayBoundaryTimer) clearTimeout(dayBoundaryTimer);
+      timerRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    // A fixed trailing timer is never canceled by newer state. This prevents a
+    // busy sync stream from starving widget updates indefinitely.
+    queueRef.current(seededRef.current ? 320 : 1_200);
   }, [
     accent,
     colors.isDark,

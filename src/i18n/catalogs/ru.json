@@ -2,6 +2,12 @@
   "Avatar simulator": "Симулятор аватара",
   "Preview a change without saving it.": "Просмотрите изменение без сохранения.",
   "Choose what to change": "Выберите, что изменить",
+  "About this estimate": "?? ???? ??????",
+  "Estimate only. This is not a scan, scientific measurement, or prediction of your body.": "??? ???? ??????, ? ?? ????????????, ??????? ????????? ??? ??????? ???????? ???? ?????? ????.",
+  "Profile height": "???? ?? ???????",
+  "Weight and BMI are linked through this height; use either one for total size.": "??? ? ??? ??????? ????? ???? ????; ??????????? ???? ?? ??? ??? ?????? ???????.",
+  "These values do not describe one possible body. The preview keeps fat and lean signals independent; adjust or disable a slider.": "??? ???????? ?? ????????? ???? ????????? ????????? ????. ???????????? ????????? ????????????? ??????? ? ?????????? ?????; ???????? ??? ????????? ????????.",
+  "Controls": "?????????",
   "Open avatar simulator": "Открыть симулятор аватара",
   "Tap to preview changes. Hold for avatar calculation settings.": "Коснитесь для просмотра изменений. Удерживайте для настроек расчёта аватара.",
   "Avatar appearance settings": "Настройки внешнего вида аватара",
@@ -2240,8 +2246,8 @@
   "Invite copied": "Приглашение скопировано",
   "Open installed app": "Открыть установленное приложение",
   "The invite link is ready to paste.": "Ссылка-приглашение готова к вставке.",
-  "You can join this group directly in the browser instead.": "Вы можете присоединиться к этой группе прямо в браузере."
-  ,"Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Доступ к статистике использования Android показывает приблизительное экранное время за день и разбивку по приложениям. HabHub хранит разбивку только на этом устройстве.",
+  "You can join this group directly in the browser instead.": "Вы можете присоединиться к этой группе прямо в браузере.",
+  "Android Usage Access provides approximate daily screen time and an app-by-app breakdown. HabHub stores the breakdown only on this device.": "Доступ к статистике использования Android показывает приблизительное экранное время за день и разбивку по приложениям. HabHub хранит разбивку только на этом устройстве.",
   "App usage": "Использование приложений",
   "Average app usage": "Среднее ежедневное использование приложений",
   "Approximate Android foreground time · stored only on this device": "Приблизительное время приложений на экране Android · хранится только на этом устройстве",
@@ -2256,27 +2262,27 @@
   "Private on this device": "Лично на этом устройстве",
   "{value} used {value}% of today's limit.": "{value}: использовано {value}% дневного лимита.",
   "{value} reached today's limit.": "{value}: дневной лимит достигнут.",
-  "{value} reached {value}% of today's limit.": "{value}: достигнуто {value}% дневного лимита."
-  ,"No timer is running.": "Нет запущенных таймеров."
-  ,"Nothing scheduled today.": "На сегодня ничего не запланировано."
-  ,"Open full schedule": "Открыть полное расписание"
-  ,"Start or manage timers": "Запустить таймеры или управлять ими"
-  ,"Today’s schedule": "Расписание на сегодня"
-  ,"Data sources": "Источники данных"
-  ,"Choose which apps can contribute imported health data.": "Выберите приложения, из которых можно импортировать данные о здоровье."
-  ,"Could not update data source": "Не удалось обновить источник данных"
-  ,"New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Новые источники остаются включёнными, пока вы их не отключите. При повторном включении источника выбранная история восстанавливается в фоновом режиме."
-  ,"Your phone": "Ваш телефон"
-  ,"Body-water measurements in kilograms from Health Connect": "Измерения массы воды в организме в килограммах из Health Connect"
-  ,"Bone-mass measurements in kilograms from Health Connect": "Измерения костной массы в килограммах из Health Connect"
-  ,"Battery optimization": "Оптимизация батареи"
-  ,"Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "Оптимизация батареи для HabHub отключена. Плановая фоновая синхронизация может работать надёжнее."
-  ,"Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "Оптимизация батареи для HabHub включена. Нажмите, чтобы проверить настройки Android для более надёжной плановой синхронизации."
-  ,"Checking Android battery settings...": "Проверяем настройки батареи Android..."
-  ,"Optional. Android controls this setting; HabHub never changes it automatically.": "Необязательно. Эта настройка управляется Android; HabHub никогда не изменяет её автоматически."
-  ,"Disabled": "Отключена"
-  ,"Review": "Проверить"
-  ,"Open Android battery optimization settings": "Открыть настройки оптимизации батареи Android"
-  ,"Battery settings unavailable": "Настройки батареи недоступны"
-  ,"Android battery settings could not be opened.": "Не удалось открыть настройки батареи Android."
+  "{value} reached {value}% of today's limit.": "{value}: достигнуто {value}% дневного лимита.",
+  "No timer is running.": "Нет запущенных таймеров.",
+  "Nothing scheduled today.": "На сегодня ничего не запланировано.",
+  "Open full schedule": "Открыть полное расписание",
+  "Start or manage timers": "Запустить таймеры или управлять ими",
+  "Today’s schedule": "Расписание на сегодня",
+  "Data sources": "Источники данных",
+  "Choose which apps can contribute imported health data.": "Выберите приложения, из которых можно импортировать данные о здоровье.",
+  "Could not update data source": "Не удалось обновить источник данных",
+  "New sources stay enabled until you turn them off. Re-enabling a source restores the selected history in the background.": "Новые источники остаются включёнными, пока вы их не отключите. При повторном включении источника выбранная история восстанавливается в фоновом режиме.",
+  "Your phone": "Ваш телефон",
+  "Body-water measurements in kilograms from Health Connect": "Измерения массы воды в организме в килограммах из Health Connect",
+  "Bone-mass measurements in kilograms from Health Connect": "Измерения костной массы в килограммах из Health Connect",
+  "Battery optimization": "Оптимизация батареи",
+  "Battery optimization is disabled for HabHub. Scheduled background sync can run more reliably.": "Оптимизация батареи для HabHub отключена. Плановая фоновая синхронизация может работать надёжнее.",
+  "Battery optimization is on for HabHub. Tap to review Android settings for more reliable scheduled sync.": "Оптимизация батареи для HabHub включена. Нажмите, чтобы проверить настройки Android для более надёжной плановой синхронизации.",
+  "Checking Android battery settings...": "Проверяем настройки батареи Android...",
+  "Optional. Android controls this setting; HabHub never changes it automatically.": "Необязательно. Эта настройка управляется Android; HabHub никогда не изменяет её автоматически.",
+  "Disabled": "Отключена",
+  "Review": "Проверить",
+  "Open Android battery optimization settings": "Открыть настройки оптимизации батареи Android",
+  "Battery settings unavailable": "Настройки батареи недоступны",
+  "Android battery settings could not be opened.": "Не удалось открыть настройки батареи Android."
 }

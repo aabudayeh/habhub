@@ -238,6 +238,11 @@ assert.match(
   /challengeCloud\.save\(input\)/,
   "friend-created challenges must update the shared read model immediately",
 );
+assert.ok(
+  memberComparison.indexOf("<Card style={styles.badgeShowcaseCard}") <
+    memberComparison.indexOf('title="Choose up to 5 showcase badges"'),
+  "the self-profile badge chooser belongs below the badge showcase card",
+);
 assert.match(
   challengeEditor,
   /challenge\?\.participantIds \?\?[\s\S]*initialParticipantIds \?\?/,

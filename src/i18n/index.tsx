@@ -10,6 +10,7 @@ import { showWebAlert } from "@/src/components/webAlertStore";
 
 import { AppLanguage } from "@/src/types";
 import { translateDomainText } from "@/src/i18n/domain";
+import { onboardingBasicTranslationRows } from "@/src/i18n/onboardingBasic";
 import arGenerated from "@/src/i18n/catalogs/ar.json";
 import deGenerated from "@/src/i18n/catalogs/de.json";
 import esGenerated from "@/src/i18n/catalogs/es.json";
@@ -278,6 +279,12 @@ const generatedCatalogs: Record<SecondaryLanguage, Record<string, string>> = {
 // Shared screen, menu, editor, and accessibility copy. Tuple rows make it
 // difficult to accidentally add a phrase to only some offline catalogs.
 const commonTranslationRows = [
+  ["Draw on note", "ارسم على الملاحظة", "Dibujar en la nota", "在笔记上绘制", "Rita på anteckningen", "Auf der Notiz zeichnen", "Рисовать в заметке", "Dessiner sur la note"],
+  ["Drawing color", "لون الرسم", "Color de dibujo", "绘图颜色", "Ritfärg", "Zeichenfarbe", "Цвет рисунка", "Couleur du dessin"],
+  ["Thin pen", "قلم رفيع", "Lápiz fino", "细笔", "Tunn penna", "Dünner Stift", "Тонкое перо", "Stylo fin"],
+  ["Medium pen", "قلم متوسط", "Lápiz mediano", "中等粗细的笔", "Mellantjock penna", "Mittlerer Stift", "Среднее перо", "Stylo moyen"],
+  ["Thick pen", "قلم عريض", "Lápiz grueso", "粗笔", "Tjock penna", "Dicker Stift", "Толстое перо", "Stylo épais"],
+  ["Undo drawing", "التراجع عن الرسم", "Deshacer dibujo", "撤销绘图", "Ångra ritning", "Zeichnung rückgängig machen", "Отменить рисунок", "Annuler le dessin"],
   ["Close dialog", "إغلاق النافذة", "Cerrar diálogo", "关闭对话框", "Stäng dialogrutan", "Dialog schließen", "Закрыть диалог", "Fermer la boîte de dialogue"],
   ["Not available yet", "غير متاح بعد", "Aún no disponible", "尚不可用", "Inte tillgängligt än", "Noch nicht verfügbar", "Пока недоступно", "Pas encore disponible"],
   ["Not available", "غير متاح", "No disponible", "不可用", "Inte tillgängligt", "Nicht verfügbar", "Недоступно", "Indisponible"],
@@ -534,6 +541,7 @@ const templateTranslationRows = [
 
 const allTranslationRows = [
   ...commonTranslationRows,
+  ...onboardingBasicTranslationRows,
   ...templateTranslationRows,
 ] as const;
 
