@@ -4,6 +4,7 @@ import path from "node:path";
 
 const read = (path) => fs.readFileSync(path, "utf8");
 const appConfig = JSON.parse(read("app.json"));
+const easConfig = JSON.parse(read("eas.json"));
 const packageJson = JSON.parse(read("package.json"));
 const workspace = read("pnpm-workspace.yaml");
 const lockfile = read("pnpm-lock.yaml");
@@ -44,6 +45,16 @@ assert.equal(
   packageJson.scripts?.["eas-build-post-install"],
   "pnpm doctor && pnpm validate:rn-keyboard",
   "EAS must run Expo Doctor and the native keyboard packaging guard before Gradle",
+);
+assert.equal(
+  easConfig.build?.preview?.env?.ORG_GRADLE_PROJECT_reactNativeArchitectures,
+  "arm64-v8a",
+  "Preview source builds must stay arm64-only to fit the EAS build deadline",
+);
+assert.equal(
+  easConfig.build?.production?.env?.ORG_GRADLE_PROJECT_reactNativeArchitectures,
+  undefined,
+  "The internal preview ABI limit must not silently narrow production builds",
 );
 assert.match(
   lockfile,
