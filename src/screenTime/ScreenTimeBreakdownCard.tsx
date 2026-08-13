@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Button, Card } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import {
   averageScreenTimeReport,
   formatMinuteDuration,
+  screenTimeTrackerSamples,
   screenTimeSampledDayCount,
 } from "@/src/domain/screenTime";
 import { useLocalization } from "@/src/i18n";
@@ -29,6 +31,7 @@ import {
 } from "@/src/screenTime/appLimits";
 import { cacheScreenTimeReport, readCachedScreenTimeReport } from "@/src/screenTime/cache";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 type LoadState = "loading" | "ready" | "permission" | "empty";
@@ -43,7 +46,8 @@ function durationLabel(milliseconds: number, language: Parameters<typeof transla
 
 /** Device-only per-app usage and limits; package-level data is never uploaded. */
 export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
-  const { state } = useApp();
+  const { state, setDeviceScreenTimeRange } = useApp();
+  const tutorial = useTutorialSandbox();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { language, t } = useLocalization();
@@ -65,16 +69,32 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
   };
 
   useEffect(() => {
+    if (tutorial.active) {
+      setLimits([]);
+      return;
+    }
     let cancelled = false;
     void readScreenTimeAppLimits(state.currentUserId).then((next) => {
       if (!cancelled) setLimits(next);
     });
     return () => { cancelled = true; };
-  }, [state.currentUserId]);
+  }, [state.currentUserId, tutorial.active]);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (tutorial.active && tutorial.bundle) {
+        const sampledDays = Math.max(1, dates.length);
+        const displayed = averageScreenTimeReport(
+          tutorial.bundle.screenTimeReport,
+          sampledDays,
+        );
+        if (!cancelled) {
+          setReport(displayed);
+          setLoadState(displayed.apps.length ? "ready" : "empty");
+        }
+        return;
+      }
       if (Platform.OS !== "android" || !isScreenTimeSupported()) {
         if (!cancelled) setLoadState("empty");
         return;
@@ -91,6 +111,8 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
         if (cached && !cancelled) {
           setReport(cached);
           setLoadState(cached.apps.length ? "ready" : "empty");
+          const samples = screenTimeTrackerSamples(cached.days);
+          if (samples.length) setDeviceScreenTimeRange(samples);
         }
         if (cached && first !== dateKey()) return;
       }
@@ -106,11 +128,13 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
       }
       const next = await queryScreenTime(from, to, 100);
       if (dates.length === 1) await cacheScreenTimeReport(first, next);
-      const sampledDays = screenTimeSampledDayCount(
-        dates.map(dayStart),
-        next.from,
-        next.to,
-      );
+      const samples = screenTimeTrackerSamples(next.days);
+      if (samples.length) setDeviceScreenTimeRange(samples);
+      const sampledDays = next.days?.length || screenTimeSampledDayCount(
+          dates.map(dayStart),
+          next.from,
+          next.to,
+        );
       const displayed = averageScreenTimeReport(next, sampledDays);
       if (!cancelled) {
         setReport(displayed);
@@ -121,7 +145,7 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
     return () => { cancelled = true; };
     // rangeKey represents the date array without retriggering on an unstable array identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeKey]);
+  }, [rangeKey, tutorial.active, tutorial.bundle]);
 
   const visibleApps = useMemo(() => {
     const apps = report?.apps ?? [];
@@ -140,6 +164,18 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
 
   async function saveLimit(app: ScreenTimeAppUsage) {
     if (!validDraft || saving) return;
+    if (tutorial.active) {
+      setLimits((current) => [
+        ...current.filter((item) => item.packageName !== app.packageName),
+        {
+          packageName: app.packageName,
+          appName: app.appName,
+          targetMinutes: Number(draftMinutes),
+        },
+      ]);
+      setEditingPackage(null);
+      return;
+    }
     setSaving(true);
     try {
       setLimits(await saveScreenTimeAppLimit(state.currentUserId, {
@@ -154,6 +190,13 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
 
   async function removeLimit(packageName: string) {
     if (saving) return;
+    if (tutorial.active) {
+      setLimits((current) =>
+        current.filter((item) => item.packageName !== packageName),
+      );
+      setEditingPackage(null);
+      return;
+    }
     setSaving(true);
     try {
       setLimits(await removeScreenTimeAppLimit(state.currentUserId, packageName));
@@ -161,20 +204,22 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
     } finally { setSaving(false); }
   }
 
-  if (Platform.OS !== "android") return null;
+  if (Platform.OS !== "android" && !tutorial.active) return null;
   return (
     <Card style={styles.card}>
-      <View style={styles.heading}>
-        <View style={styles.titleRow}>
-          <Ionicons name="apps-outline" size={17} color={accent} />
-          <Text style={[styles.title, { color: colors.ink }]}>
-            {dates.length > 1 ? "Average app usage" : "App usage"}
-          </Text>
+      <TutorialTarget id="screen-time-breakdown">
+        <View style={styles.heading}>
+          <View style={styles.titleRow}>
+            <Ionicons name="apps-outline" size={17} color={accent} />
+            <Text style={[styles.title, { color: colors.ink }]}>
+              {dates.length > 1 ? "Average app usage" : "App usage"}
+            </Text>
+          </View>
+          {report ? <Text translate={false} style={[styles.total, { color: accent }]}>{durationLabel(report.screenTimeMs, language)}</Text> : null}
         </View>
-        {report ? <Text translate={false} style={[styles.total, { color: accent }]}>{durationLabel(report.screenTimeMs, language)}</Text> : null}
-      </View>
+      </TutorialTarget>
       {loadState === "permission" ? (
-        <Pressable accessibilityRole="button" onPress={() => void requestScreenTimeAccess()} style={[styles.permission, { borderColor: colors.border }]}>
+        <Pressable accessibilityRole="button" onPress={() => { if (!tutorial.active) void requestScreenTimeAccess(); }} style={[styles.permission, { borderColor: colors.border }]}>
           <Text style={[styles.message, { color: colors.muted }]}>Enable Android Usage Access to see the private app breakdown.</Text>
           <Text style={[styles.enable, { color: accent }]}>Enable</Text>
         </Pressable>
@@ -185,8 +230,9 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
       ) : (
         <>
           <Text translate={false} style={[styles.mostUsed, { color: colors.muted }]}>{t("Most used")}: {visibleApps[0].appName}</Text>
-          <View style={styles.list}>
-            {visibleApps.map((app) => {
+          <TutorialTarget id="screen-time-app-list">
+            <View style={styles.list}>
+              {visibleApps.map((app) => {
               const limit = limits.find((item) => item.packageName === app.packageName);
               const targetProgress = limit ? app.foregroundMs / 60_000 / limit.targetMinutes : null;
               const fillColor = targetProgress !== null && targetProgress >= 1 ? "#EF4444" : targetProgress !== null && targetProgress >= 0.9 ? "#F59E0B" : accent;
@@ -215,8 +261,9 @@ export function ScreenTimeBreakdownCard({ dates }: { dates: string[] }) {
                   ) : null}
                 </View>
               );
-            })}
-          </View>
+              })}
+            </View>
+          </TutorialTarget>
           <Text style={[styles.privacy, { color: colors.faint }]}>Approximate Android foreground time · stored only on this device</Text>
           {isToday ? <Text style={[styles.privacy, { color: colors.faint }]}>App limits stay on this device.</Text> : null}
         </>

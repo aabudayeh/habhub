@@ -68,7 +68,7 @@ const { statusBodyAppearance } = avatar.module;
 assert.deepEqual(
   STATUS_AVATAR_SIMULATION_METRICS.map((item) => item.id),
   ["weight", "bmi", "body_fat", "lean_body_mass"],
-  "the simulator must expose exactly the four requested controls",
+  "the simulation model must retain the four body-composition signals",
 );
 
 const fallback = statusAvatarSimulationBaseline(Object.freeze({}));
@@ -83,7 +83,7 @@ const fallbackState = statusAvatarSimulationInitialState(fallback, "bmi");
 assert.deepEqual(
   fallbackState.enabled,
   { bmi: true, body_fat: false, lean_body_mass: false, weight: true },
-  "unlogged composition must begin off while linked weight and BMI stay available",
+  "unlogged composition must begin off while weight and its derived BMI stay available",
 );
 
 const baseline = statusAvatarSimulationBaseline({
@@ -335,18 +335,18 @@ assert.match(
 );
 assert.match(
   componentSource,
-  /styles\.linkedSizeGroup[\s\S]*label="Weight"[\s\S]*changeMetric\("weight"[\s\S]*label="BMI"[\s\S]*changeMetric\("bmi"[\s\S]*secondary[\s\S]*STATUS_AVATAR_SIMULATION_METRICS\.slice\(2\)\.map/,
-  "Weight and secondary BMI must share one group while both composition sliders remain visible",
+  /label="Weight"[\s\S]*changeMetric\("weight"[\s\S]*toggleable=\{false\}[\s\S]*STATUS_AVATAR_SIMULATION_METRICS\.slice\(2\)\.map/,
+  "Weight must remain the single total-size control while both composition sliders stay visible",
 );
-assert.match(
+assert.doesNotMatch(
   componentSource,
-  /metricRowSecondary[\s\S]*metricLabelSecondary[\s\S]*sliderTrackSecondary[\s\S]*sliderThumbSecondary/,
-  "BMI must use a compact secondary row and visual slider treatment",
+  /label="BMI"|changeMetric\("bmi"/,
+  "BMI must remain derived from weight and profile height rather than appear as a second slider",
 );
 assert.doesNotMatch(
   componentSource,
   /<ScrollView|styles\.scroll|metricCard/,
-  "the four controls must fit one modal page without a scroll view or per-slider cards",
+  "the three visible controls must fit one modal page without a scroll view or per-slider cards",
 );
 assert.match(
   componentSource,
@@ -380,8 +380,8 @@ assert.match(
 );
 assert.match(
   componentSource,
-  /Weight and BMI are linked through this height[\s\S]*allowPartialComposition/,
-  "the preview must use independent signals and retain the profile-height linkage in its info disclosure",
+  /Weight uses your profile height for total size[\s\S]*allowPartialComposition/,
+  "the preview must retain the profile-height linkage in its compact info disclosure",
 );
 assert.doesNotMatch(
   componentSource,
@@ -392,6 +392,11 @@ assert.match(
   componentSource,
   /information-circle-outline[\s\S]*Estimate only\./,
   "a compact info control must disclose that the avatar is an estimate",
+);
+assert.match(
+  componentSource,
+  /<BodyProgressAvatar[\s\S]*showProgressLabel=\{false\}/,
+  "the simulator preview must not overlay the tracked-goal percentage",
 );
 assert.match(
   bodyComponentSource,

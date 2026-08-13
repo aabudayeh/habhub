@@ -15,6 +15,7 @@ import { isAllowedThemeColor, normalizeHexColor } from "@/src/domain/colors";
 import { COMPLETION_INDICATOR_OPTIONS } from "@/src/domain/completionIndicators";
 import { supportedLanguages, useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   AppLanguage,
@@ -66,6 +67,7 @@ type ToggleKey =
 
 export default function DisplaySettings() {
   const { state, updateSettings } = useApp();
+  const tutorial = useTutorial();
   const { t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -79,6 +81,9 @@ export default function DisplaySettings() {
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [indicatorOpen, setIndicatorOpen] = React.useState(false);
   const [navigationOpen, setNavigationOpen] = React.useState(false);
+  React.useEffect(() => {
+    if (tutorial.activeStep?.target === "display-layout") setGeneralOpen(true);
+  }, [tutorial.activeStep?.target]);
   const normalizedCustomColor = normalizeHexColor(customColor);
   const allowedCustomColor =
     normalizedCustomColor && isAllowedThemeColor(normalizedCustomColor)
@@ -599,6 +604,19 @@ export default function DisplaySettings() {
             : null}
         </Card>
       </CollapsibleSection>
+
+      <TutorialTarget id="display-widgets-info">
+        <Card style={styles.widgetInfo}>
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="accessibility-outline" size={19} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>Status Avatar widget</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>{"On Android, add it from the launcher's widget picker. HabHub refreshes it from the latest app snapshot."}</Text>
+          </View>
+          <Ionicons name="phone-portrait-outline" size={18} color={colors.faint} />
+        </Card>
+      </TutorialTarget>
     </Screen>
   );
 }
@@ -714,6 +732,12 @@ const styles = StyleSheet.create({
   chips: { flexDirection: "row", gap: 6 },
   navigationRow: { minHeight: 44, borderTopWidth: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   navigationHeading: { borderBottomWidth: 0 },
+  widgetInfo: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
   pageText: { flex: 1, fontSize: 10, fontWeight: "900" },
   orderButton: { width: 34, height: 34, alignItems: "center", justifyContent: "center" },
 });

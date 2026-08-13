@@ -3,15 +3,24 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   deleteGroupChallenge,
   loadGroupChallenges,
+  respondToGroupChallenge,
   saveGroupChallenge,
+  sendGroupChallengeAcceptedPush,
+  sendGroupChallengeStartedPush,
+  GroupChallengeResponse,
   SaveGroupChallengeInput,
 } from "@/src/cloud/groupChallenges";
+import { groupChallengeSourceId } from "@/src/domain/groupChallenges";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { supabase } from "@/src/lib/supabase";
+import { useApp } from "@/src/state/AppProvider";
 import { GroupChallenge } from "@/src/types";
+import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 
 /** A small, screen-scoped read model; realtime bursts coalesce into one request. */
 export function useGroupChallenges(groupId: string) {
+  const tutorial = useTutorialSandbox();
+  const { state } = useApp();
   // Leaderboard stays mounted underneath the member comparison route. Give
   // every mounted hook its own Realtime topic so Supabase never reuses an
   // already-subscribed channel and rejects a second `.on(...)` callback.
@@ -19,6 +28,8 @@ export function useGroupChallenges(groupId: string) {
   const [challenges, setChallenges] = useState<GroupChallenge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const challengesRef = useRef<GroupChallenge[]>([]);
+  challengesRef.current = challenges;
   const requestRef = useRef<Promise<void> | null>(null);
   const trailingRefreshRef = useRef(false);
   const refreshRunnerRef = useRef<() => void>(() => undefined);
@@ -26,6 +37,15 @@ export function useGroupChallenges(groupId: string) {
   groupIdRef.current = groupId;
 
   const refresh = useCallback(() => {
+    if (tutorial.active) {
+      setChallenges(
+        (tutorial.bundle?.groupChallenges ?? []).filter(
+          (challenge) => challenge.groupId === groupId,
+        ),
+      );
+      setError(undefined);
+      return Promise.resolve();
+    }
     if (!isCloudGroupId(groupId) || !supabase) {
       setChallenges([]);
       setError(undefined);
@@ -54,7 +74,7 @@ export function useGroupChallenges(groupId: string) {
       });
     requestRef.current = request;
     return request;
-  }, [groupId]);
+  }, [groupId, tutorial.active, tutorial.bundle]);
   refreshRunnerRef.current = () => void refresh();
 
   useEffect(() => {
@@ -67,7 +87,7 @@ export function useGroupChallenges(groupId: string) {
   }, [refresh]);
 
   useEffect(() => {
-    if (!supabase || !isCloudGroupId(groupId)) return;
+    if (tutorial.active || !supabase || !isCloudGroupId(groupId)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const queueRefresh = () => {
       if (timer) clearTimeout(timer);
@@ -96,24 +116,103 @@ export function useGroupChallenges(groupId: string) {
       if (timer) clearTimeout(timer);
       supabase?.removeChannel(channel).catch(() => undefined);
     };
-  }, [groupId, refresh, subscriberId]);
+  }, [groupId, refresh, subscriberId, tutorial.active]);
 
   const save = useCallback(async (input: SaveGroupChallengeInput) => {
+    if (tutorial.active) {
+      const now = new Date().toISOString();
+      const saved: GroupChallenge = {
+        id: input.id ?? `tutorial-challenge-${Date.now()}`,
+        groupId: input.groupId,
+        creatorId: state.currentUserId,
+        metricId: input.metricId,
+        title: input.title?.trim() || undefined,
+        target: input.target,
+        localDate: input.localDate,
+        participantIds: [...new Set(input.participantIds)],
+        acceptedParticipantIds: [state.currentUserId],
+        declinedParticipantIds: [],
+        recurrence: input.recurrence,
+        createdAt: now,
+        updatedAt: now,
+      };
+      setChallenges((current) => [
+        saved,
+        ...current.filter((challenge) => challenge.id !== saved.id),
+      ]);
+      return saved;
+    }
+    const isNew = !input.id;
     const saved = await saveGroupChallenge(input);
     if (groupIdRef.current === saved.groupId)
       setChallenges((current) => [
         saved,
         ...current.filter((challenge) => challenge.id !== saved.id),
       ]);
+    if (isNew)
+      await sendGroupChallengeStartedPush(saved).catch(() => undefined);
     return saved;
-  }, []);
+  }, [state.currentUserId, tutorial.active]);
+
+  const respond = useCallback(async (
+    id: string,
+    response: GroupChallengeResponse,
+  ) => {
+    const sourceId =
+      challengesRef.current.find((challenge) => challenge.id === id)
+        ?.sourceChallengeId ?? id;
+    if (tutorial.active) {
+      let saved: GroupChallenge | undefined;
+      setChallenges((current) =>
+        current.map((challenge) => {
+          if (groupChallengeSourceId(challenge) !== sourceId) return challenge;
+          const accepted = new Set(challenge.acceptedParticipantIds ?? []);
+          const declined = new Set(challenge.declinedParticipantIds ?? []);
+          if (response === "accepted") {
+            accepted.add(state.currentUserId);
+            declined.delete(state.currentUserId);
+          } else {
+            declined.add(state.currentUserId);
+            accepted.delete(state.currentUserId);
+          }
+          saved = {
+            ...challenge,
+            acceptedParticipantIds: [...accepted],
+            declinedParticipantIds: [...declined],
+            updatedAt: new Date().toISOString(),
+          };
+          return saved;
+        }),
+      );
+      return saved;
+    }
+    const saved = await respondToGroupChallenge(sourceId, response);
+    if (groupIdRef.current === saved.groupId)
+      setChallenges((current) => [
+        saved,
+        ...current.filter(
+          (challenge) => groupChallengeSourceId(challenge) !== saved.id,
+        ),
+      ]);
+    if (response === "accepted")
+      await sendGroupChallengeAcceptedPush(
+        saved,
+        state.currentUserId,
+      ).catch(() => undefined);
+    return saved;
+  }, [state.currentUserId, tutorial.active]);
 
   const remove = useCallback(async (id: string) => {
-    await deleteGroupChallenge(id);
+    const sourceId =
+      challengesRef.current.find((challenge) => challenge.id === id)
+        ?.sourceChallengeId ?? id;
+    if (!tutorial.active) await deleteGroupChallenge(sourceId);
     setChallenges((current) =>
-      current.filter((challenge) => challenge.id !== id),
+      current.filter(
+        (challenge) => groupChallengeSourceId(challenge) !== sourceId,
+      ),
     );
-  }, []);
+  }, [tutorial.active]);
 
-  return { challenges, loading, error, refresh, save, remove };
+  return { challenges, loading, error, refresh, save, respond, remove };
 }

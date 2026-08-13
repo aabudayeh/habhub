@@ -15,6 +15,7 @@ import {
 import {
   healthSourceEnabled,
   healthSourcePriority,
+  preferredHealthSourceOrigin,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
@@ -729,60 +730,56 @@ export const healthConnectAdapter: HealthAdapter = {
           if (type === "workouts") return workoutImports;
           if (type === "steps") {
             const preferences = Object.values(sourcePreferences ?? {});
-            const hasDisabledSource = preferences.some(
-              (preference) => preference.enabled === false,
-            );
-            let discoveredOrigins: string[] = [];
-            if (hasDisabledSource) {
-              // Inclusion filters are the only source selector Health Connect
-              // exposes. Discover new writers over a bounded recent window so
-              // unknown apps remain enabled by default without loading a full
-              // year of granular StepsRecord rows before daily aggregation.
-              const discoveryEnd = new Date();
-              const discoveryStart = new Date(
-                discoveryEnd.getTime() - 7 * 24 * 60 * 60 * 1000,
-              );
-              try {
-                const recentRecords = await readPages("Steps", {
-                  ...options,
-                  timeRangeFilter: {
-                    operator: "between",
-                    startTime: discoveryStart.toISOString(),
-                    endTime: discoveryEnd.toISOString(),
-                  },
-                });
-                discoveredOrigins = recentRecords.map((record) => origin(record));
-              } catch {
-                // If discovery is unavailable, fall back to the requested raw
-                // range so a disabled writer can never leak into the import.
-                const rawRecords = await readSafe("Steps");
-                return enabledRecords(rawRecords).map((record) =>
-                  convert(type, record),
-                );
-              }
-            }
-            const observedOrigins = [
-              ...new Set([
-                ...preferences.map((preference) => preference.origin),
-                ...discoveredOrigins,
-              ].filter(Boolean)),
-            ];
-            const enabledOrigins = observedOrigins.filter((item) =>
-              healthSourceEnabled(item, sourcePreferences),
-            );
-            if (hasDisabledSource && !enabledOrigins.length) {
-              successfulReads += 1;
-              return [];
-            }
+            // Health Connect's unfiltered COUNT_TOTAL can combine several
+            // writers. That is useful for a general fitness total, but it does
+            // not necessarily equal the source the user sees in Samsung
+            // Health. First ask the cheap daily aggregate for the writers that
+            // actually contributed in this requested (including historical)
+            // range. Then rerun it for one canonical enabled writer, Samsung
+            // first. This avoids loading thousands of granular Steps records
+            // and prevents stale/current-only discovery from choosing the
+            // wrong source for a historical chunk.
             try {
-              const groups = await aggregateGroupByPeriod({
+              const unfilteredGroups = await aggregateGroupByPeriod({
                 recordType: "Steps",
                 timeRangeFilter: options.timeRangeFilter,
                 timeRangeSlicer: { period: "DAYS", length: 1 },
-                ...(hasDisabledSource
-                  ? { dataOriginFilter: enabledOrigins }
-                  : {}),
               });
+              const contributedOrigins = [
+                ...new Set(
+                  unfilteredGroups.flatMap((group) =>
+                    group.result.dataOrigins ?? [],
+                  ),
+                ),
+              ];
+              const observedOrigins = [
+                ...new Set([
+                  ...contributedOrigins,
+                  ...preferences.map((preference) => preference.origin),
+                ].filter(Boolean)),
+              ];
+              const selectedOrigin = preferredHealthSourceOrigin(
+                contributedOrigins.length
+                  ? contributedOrigins
+                  : observedOrigins,
+                "steps",
+                sourcePreferences,
+              );
+              if (observedOrigins.length && !selectedOrigin) {
+                successfulReads += 1;
+                return [];
+              }
+              const groups =
+                selectedOrigin &&
+                (contributedOrigins.length !== 1 ||
+                  contributedOrigins[0] !== selectedOrigin)
+                  ? await aggregateGroupByPeriod({
+                      recordType: "Steps",
+                      timeRangeFilter: options.timeRangeFilter,
+                      timeRangeSlicer: { period: "DAYS", length: 1 },
+                      dataOriginFilter: [selectedOrigin],
+                    })
+                  : unfilteredGroups;
               successfulReads += 1;
               return groups.flatMap((group): HealthImportRecord[] => {
                 const count = Number(group.result.COUNT_TOTAL ?? 0);
@@ -791,7 +788,9 @@ export const healthConnectAdapter: HealthAdapter = {
                   ...new Set(
                     (group.result.dataOrigins?.length
                       ? group.result.dataOrigins
-                      : enabledOrigins
+                      : selectedOrigin
+                        ? [selectedOrigin]
+                        : []
                     ).filter(Boolean),
                   ),
                 ].sort(
@@ -812,11 +811,11 @@ export const healthConnectAdapter: HealthAdapter = {
                     endTime: recordedAt,
                     value: Math.round(count),
                     unit: "steps",
-                    origin: sources[0] ?? "Health Connect",
-                    sourceOrigins: sources,
+                    origin: selectedOrigin ?? sources[0] ?? "Health Connect",
+                    sourceOrigins: observedOrigins,
                     note:
-                      sources.length > 1
-                        ? "Health Connect combined overlapping step sources without double counting."
+                      selectedOrigin && observedOrigins.length > 1
+                        ? `Using only ${selectedOrigin} so other step writers are not double counted.`
                         : undefined,
                   },
                 ];

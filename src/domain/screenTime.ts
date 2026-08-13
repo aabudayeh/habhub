@@ -7,6 +7,87 @@ export type ScreenTimeLikeReport<TApp extends ScreenTimeLikeApp> = {
   apps: TApp[];
 };
 
+export type ScreenTimeDailySample = {
+  localDate: string;
+  from: number;
+  to: number;
+  screenTimeMs: number;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Android's UsageStats fallback can return an expanded aggregation bucket
+ * instead of the exact requested window. A single calendar-day tracker value
+ * can never exceed the length of that day, so reject impossible legacy/native
+ * values at the domain boundary as well as in the native implementation.
+ */
+export function boundedScreenTimeMs(value: number, windowMs = DAY_MS) {
+  if (!Number.isFinite(value) || !Number.isFinite(windowMs) || windowMs <= 0)
+    return 0;
+  return Math.max(0, Math.min(value, windowMs));
+}
+
+/** Converts native daily samples into private tracker rows without totals. */
+export function screenTimeTrackerSamples(
+  samples: readonly ScreenTimeDailySample[] | undefined,
+) {
+  return (samples ?? [])
+    .filter(
+      (sample) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(sample.localDate) &&
+        Number.isFinite(sample.from) &&
+        Number.isFinite(sample.to) &&
+        sample.to > sample.from,
+    )
+    .map((sample) => ({
+      localDate: sample.localDate,
+      minutes:
+        Math.round(
+          (boundedScreenTimeMs(
+            sample.screenTimeMs,
+            sample.to - sample.from,
+          ) /
+            60_000) *
+            10,
+        ) / 10,
+      // `to` is exclusive and is normally the following local midnight.
+      // Keep the imported entry timestamp inside the day it represents.
+      recordedAt: new Date(Math.max(sample.from, sample.to - 1)).toISOString(),
+    }));
+}
+
+/** Removes values written by the pre-v4 expanded-bucket implementation. */
+export function repairLegacyScreenTimeEntries<
+  TEntry extends {
+    metricId: string;
+    sourceOrigin?: string;
+    value: number | boolean | string;
+  },
+>(entries: readonly TEntry[]): TEntry[] {
+  let changed = false;
+  const repaired = entries.filter((entry) => {
+    if (
+      entry.metricId !== "screen_time" ||
+      entry.sourceOrigin !== "android_usage_stats"
+    )
+      return true;
+    if (
+      typeof entry.value === "number" &&
+      Number.isFinite(entry.value) &&
+      entry.value >= 0 &&
+      entry.value <= 1_440
+    )
+      return true;
+    // Clamping 44 hours to 24 would still display a fabricated historical
+    // value. Drop only the corrupted device-owned row; the next range query
+    // recreates the date from a bounded native daily sample.
+    changed = true;
+    return false;
+  });
+  return changed ? repaired : (entries as TEntry[]);
+}
+
 /**
  * Converts a calendar-range UsageStats report into a per-day report. Android
  * returns totals for the queried interval, while HabHub's range UI compares

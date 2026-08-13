@@ -13,6 +13,7 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 import { ReorderItem } from "@/src/components/ReorderItem";
@@ -223,6 +224,7 @@ export default function Customize() {
           />
         }
       />
+      <TutorialTarget id="customize-tabs">
       <Card style={styles.tabs}>
         {tabs.map((item) => (
           <Pressable
@@ -251,12 +253,14 @@ export default function Customize() {
           </Pressable>
         ))}
       </Card>
+      </TutorialTarget>
 
       {tab === "trackers" ? (
         <>
           <SectionHeader
             title="Your trackers"
             action={
+              <TutorialTarget id="customize-add">
               <Pressable
                 onPress={() =>
                   router.push({
@@ -267,6 +271,7 @@ export default function Customize() {
               >
                 <Text style={[styles.link, { color: accent }]}>+ Add</Text>
               </Pressable>
+              </TutorialTarget>
             }
           />
           <Card style={styles.list}>

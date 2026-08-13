@@ -328,25 +328,6 @@ function exerciseTrackerPresets(): TrackerPreset[] {
 
 const GYM_TRACKER_PRESETS: TrackerPreset[] = [
   gymPreset({
-    templateId: "gym_completed",
-    name: "Workout completed",
-    unit: "",
-    dataType: "boolean",
-    goal: { kind: "complete", target: 1 },
-    goalEnabled: true,
-    gymMapping: { kind: "session_completed" },
-    description: "Workout · completed at least one set in this session.",
-  }),
-  gymPreset({
-    templateId: "gym_duration",
-    name: "Workout duration",
-    unit: "min",
-    aggregation: "sum",
-    goal: { kind: "at_least", target: 45 },
-    gymMapping: { kind: "session_duration" },
-    description: "Workout · total saved session duration for the day.",
-  }),
-  gymPreset({
     templateId: "gym_total_volume",
     name: "Workout volume",
     unit: "kg",
@@ -382,7 +363,8 @@ function presetDescription(id: string) {
   if (id === 'food') return 'Meals, calories, macros, vitamins, minerals, search and barcode scan.';
   if (id === 'deficit') return 'Profile-aware energy result; unavailable until food is recorded.';
   if (id === 'exercise') return 'One activity-calorie total from health data, workouts and step estimates.';
-  if (id === 'workout') return 'Workout sessions with type, duration, distance and calories.';
+  if (id === 'workout') return 'One workout tracker completed by saved gym sessions or compatible connected-health workouts.';
+  if (id === 'workout_duration') return 'One duration total from saved gym sessions and compatible connected-health workouts.';
   if (id === 'pulse') return 'Daily average pulse; no target until you choose a personal range.';
   if (id.startsWith('blood_pressure')) return 'One combined systolic/diastolic reading with editable preferred ranges.';
   if (id === 'sleep') return 'Sleep duration with a ready-made 7–9 hour target range.';

@@ -9,7 +9,7 @@ export type HealthImportRecord = {
   value: number | boolean;
   unit: string;
   origin?: string;
-  /** All writers represented by an OS aggregate; `origin` is its display source. */
+  /** Writers observed for source controls; `origin` is the selected value source. */
   sourceOrigins?: string[];
   label?: string;
   /** Stable app-owned key normalized from the native workout classification. */

@@ -41,12 +41,14 @@ import {
   randomMessage,
 } from "@/src/domain/social";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 
 function ChatScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const params = useLocalSearchParams<{ recipient?: string | string[] }>();
   const requestedRecipient = Array.isArray(params.recipient)
     ? params.recipient[0]
@@ -469,6 +471,7 @@ function ChatScreen() {
     );
   }
   async function chooseImage() {
+    if (tutorialSandbox) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.8,
@@ -905,6 +908,7 @@ function ChatScreen() {
                 onPress={() => suggest("reminder")}
               />
             </View>
+            <TutorialTarget id="chat-composer">
             <View
               style={[
                 styles.composer,
@@ -962,6 +966,7 @@ function ChatScreen() {
                 <Ionicons name="arrow-up" size={18} color={palette.white} />
               </Pressable>
             </View>
+            </TutorialTarget>
           </View>
         </View>
       </KeyboardAvoidingView>

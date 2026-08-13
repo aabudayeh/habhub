@@ -25,6 +25,7 @@ import { useLocale } from "@/src/i18n";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
@@ -725,6 +726,7 @@ function PerformancePage() {
         }
       />
 
+      <TutorialTarget id="performance-range">
       <Card style={styles.rangeCard}>
       <View style={styles.rangeBar}>
         {RANGES.map((item) => (
@@ -752,6 +754,7 @@ function PerformancePage() {
         ))}
       </View>
       </Card>
+      </TutorialTarget>
       <SelectionMenu
         title="Compare with"
         items={COMPARISON_OPTIONS}
@@ -890,6 +893,7 @@ function PerformancePage() {
 
       {rows.length ? (
         <>
+          <TutorialTarget id="performance-filters">
           <Card style={styles.momentum}>
             <View style={styles.momentumTop}>
               <View>
@@ -1001,6 +1005,7 @@ function PerformancePage() {
               </Pressable>
             </View>
           </Card>
+          </TutorialTarget>
 
           <View style={styles.insightGrid}>
             <Pressable
@@ -1067,6 +1072,7 @@ function PerformancePage() {
           Hold a tile to organize this page.
         </Text>
       </View>
+      <TutorialTarget id="performance-edit">
       <View style={styles.rows}>
         {rows.map((row, index) => (
           <PerformanceTile
@@ -1091,6 +1097,7 @@ function PerformancePage() {
           />
         ))}
       </View>
+      </TutorialTarget>
 
       {editing ? (
         <Pressable

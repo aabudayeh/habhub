@@ -30,7 +30,11 @@ import {
   longestStreakWithRest,
 } from "./streaks";
 import { unrecordedStepActivity } from "./health";
-import { automaticFastProgress, fastingProgressForDate } from "./fasting";
+import {
+  activeFastingHours,
+  automaticFastProgress,
+  fastingProgressForDate,
+} from "./fasting";
 import {
   scheduleAppliesOnDate,
   todoAppearsOnDate,
@@ -179,16 +183,18 @@ export function metricValue(
   }
   if (
     Boolean(metric.fastingSettings) &&
-    localDate === dateKey() &&
-    entriesForDay(state.entries, metric.id, userId, localDate).length === 0
+    localDate === dateKey()
   ) {
-    const automatic = automaticFastProgress(
+    const liveHours = activeFastingHours(
       state,
       userId,
       new Date(),
       metric.id,
     );
-    if (automatic.active) return automatic.minutes / 60;
+    // A newly started/resumed fast is today's live value even if an earlier
+    // completed session still exists in history. Otherwise that old row can
+    // leave the featured progress square at 100% until the active fast ends.
+    if (liveHours !== undefined) return liveHours;
   }
   if (metric.id === "cycle_day")
     return cycleForecast(state, userId, localDate).cycleDay;
@@ -278,9 +284,11 @@ export function safeMetricValue(
 ): number {
   if (
     Boolean(metric.fastingSettings) &&
-    localDate === dateKey() &&
-    entriesForDay(state.entries, metric.id, userId, localDate).length === 0
+    localDate === dateKey()
   )
+    // Live fasting progress changes with the clock, even while an earlier
+    // completed session remains in today's Entries. Never reuse that day's
+    // cached metric value for the featured card.
     return metricValue(state, metric, userId, localDate);
   return cachedMetricDateValue(
     metricValueCache,

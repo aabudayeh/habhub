@@ -18,7 +18,12 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import kotlin.concurrent.thread
+import kotlin.math.roundToLong
 
 class HabHubNativeModule(
   private val reactContext: ReactApplicationContext,
@@ -26,6 +31,19 @@ class HabHubNativeModule(
   private data class ForegroundUsage(
     var foregroundMs: Long = 0L,
     var lastTimeUsed: Long = 0L,
+  )
+
+  private data class EventUsageResult(
+    val rowsByDay: Map<String, Map<String, ForegroundUsage>>,
+    val coveredDays: Set<String>,
+  )
+
+  private data class UsageDay(
+    val localDate: String,
+    val from: Long,
+    val to: Long,
+    val rows: Map<String, ForegroundUsage>,
+    val calculationMethod: String,
   )
 
   override fun getName() = "HabHubAndroid"
@@ -105,53 +123,51 @@ class HabHubNativeModule(
         require(safeFrom < safeTo) { "Usage range must have a positive duration." }
         val manager = reactContext.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val packageManager = reactContext.packageManager
-        val eventRows = usageFromForegroundEvents(manager, safeFrom, safeTo)
-        val aggregateRows = if (eventRows.isEmpty()) {
-          manager.queryAndAggregateUsageStats(safeFrom, safeTo)
-            .values
-            .asSequence()
-            .filter { it.totalTimeInForeground > 0L }
-            .associate {
-              it.packageName to ForegroundUsage(
-                foregroundMs = it.totalTimeInForeground.coerceAtLeast(0L),
-                lastTimeUsed = it.lastTimeUsed,
-              )
-            }
-        } else {
-          eventRows
+        val eventUsage = usageFromForegroundEvents(manager, safeFrom, safeTo)
+        val dailyFallback = usageFromDailyAggregates(manager, safeFrom, safeTo)
+        val days = localDayWindows(safeFrom, safeTo).mapNotNull { window ->
+          val localDate = localDateKey(window.first)
+          val eventCovered = eventUsage.coveredDays.contains(localDate)
+          val sourceRows = if (eventCovered) {
+            eventUsage.rowsByDay[localDate].orEmpty()
+          } else {
+            dailyFallback[localDate] ?: return@mapNotNull null
+          }
+          UsageDay(
+            localDate = localDate,
+            from = window.first,
+            to = window.second,
+            rows = normalizedUsageRows(sourceRows, window.second - window.first),
+            calculationMethod = if (eventCovered) "foreground_events" else "aggregate_fallback",
+          )
         }
-        val rows = aggregateRows
-          .asSequence()
-          .filter { (packageName, usage) ->
-            usage.foregroundMs > 0L && !excludedUsagePackage(packageName)
+        val combinedRows = mutableMapOf<String, ForegroundUsage>()
+        days.forEach { day ->
+          day.rows.forEach { (packageName, usage) ->
+            val combined = combinedRows.getOrPut(packageName) { ForegroundUsage() }
+            combined.foregroundMs += usage.foregroundMs
+            combined.lastTimeUsed = maxOf(combined.lastTimeUsed, usage.lastTimeUsed)
           }
-          .sortedByDescending { (_, usage) -> usage.foregroundMs }
-          .toList()
-        val apps = Arguments.createArray()
-        val total = rows.sumOf { (_, usage) -> usage.foregroundMs }
-        rows.take(limit.toInt().coerceIn(1, 500)).forEach { (packageName, usage) ->
-          val info = try {
-            packageManager.getApplicationInfo(packageName, 0)
-          } catch (_: Exception) {
-            null
-          }
-          apps.pushMap(
+        }
+        val rows = combinedRows.entries.sortedByDescending { it.value.foregroundMs }
+        val total = days.sumOf { day -> day.rows.values.sumOf { it.foregroundMs } }
+        val apps = usageApps(
+          packageManager,
+          rows.map { it.key to it.value },
+          limit.toInt().coerceIn(1, 500),
+        )
+        val dailyReports = Arguments.createArray()
+        days.forEach { day ->
+          dailyReports.pushMap(
             Arguments.createMap().apply {
-              putString("packageName", packageName)
-              putString(
-                "appName",
-                info?.let { packageManager.getApplicationLabel(it).toString() }
-                  ?: packageName,
+              putString("localDate", day.localDate)
+              putDouble("from", day.from.toDouble())
+              putDouble("to", day.to.toDouble())
+              putDouble(
+                "screenTimeMs",
+                day.rows.values.sumOf { it.foregroundMs }.toDouble(),
               )
-              putDouble("foregroundMs", usage.foregroundMs.toDouble())
-              putDouble("lastTimeUsed", usage.lastTimeUsed.toDouble())
-              putString("category", appCategory(info))
-              putBoolean(
-                "isSystemApp",
-                info?.let {
-                  it.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                } ?: false,
-              )
+              putString("calculationMethod", day.calculationMethod)
             },
           )
         }
@@ -165,9 +181,14 @@ class HabHubNativeModule(
             putBoolean("approximate", true)
             putString(
               "calculationMethod",
-              if (eventRows.isEmpty()) "aggregate_fallback" else "foreground_events",
+              when {
+                days.all { it.calculationMethod == "foreground_events" } -> "foreground_events"
+                days.all { it.calculationMethod == "aggregate_fallback" } -> "aggregate_fallback"
+                else -> "mixed"
+              },
             )
             putArray("apps", apps)
+            putArray("days", dailyReports)
           },
         )
       } catch (error: Exception) {
@@ -355,11 +376,13 @@ class HabHubNativeModule(
     manager: UsageStatsManager,
     from: Long,
     to: Long,
-  ): Map<String, ForegroundUsage> {
+  ): EventUsageResult {
     val dayMs = 24L * 60L * 60L * 1000L
     val lookback = (from - dayMs).coerceAtLeast(0L)
-    val events = manager.queryEvents(lookback, to) ?: return emptyMap()
-    val rows = mutableMapOf<String, ForegroundUsage>()
+    val events = manager.queryEvents(lookback, to)
+      ?: return EventUsageResult(emptyMap(), emptySet())
+    val rowsByDay = mutableMapOf<String, MutableMap<String, ForegroundUsage>>()
+    val coveredDays = mutableSetOf<String>()
     val event = UsageEvents.Event()
     var currentPackage: String? = null
     var screenInteractive = Build.VERSION.SDK_INT < Build.VERSION_CODES.P
@@ -368,18 +391,25 @@ class HabHubNativeModule(
     var cursor = lookback
 
     fun accrue(until: Long) {
-      val start = maxOf(cursor, from)
+      var start = maxOf(cursor, from)
       val end = minOf(until, to)
       val packageName = currentPackage
-      if (
-        packageName != null &&
-        screenInteractive &&
-        keyguardHidden &&
-        end > start
-      ) {
-        val usage = rows.getOrPut(packageName) { ForegroundUsage() }
-        usage.foregroundMs += end - start
-        usage.lastTimeUsed = maxOf(usage.lastTimeUsed, end)
+      while (end > start) {
+        val segmentEnd = minOf(end, nextLocalMidnight(start))
+        if (
+          packageName != null &&
+          screenInteractive &&
+          keyguardHidden &&
+          segmentEnd > start
+        ) {
+          val localDate = localDateKey(start)
+          val rows = rowsByDay.getOrPut(localDate) { mutableMapOf() }
+          val usage = rows.getOrPut(packageName) { ForegroundUsage() }
+          usage.foregroundMs += segmentEnd - start
+          usage.lastTimeUsed = maxOf(usage.lastTimeUsed, segmentEnd)
+          coveredDays.add(localDate)
+        }
+        start = segmentEnd
       }
     }
 
@@ -388,12 +418,21 @@ class HabHubNativeModule(
       val timestamp = event.timeStamp.coerceIn(lookback, to)
       if (timestamp < cursor) continue
       accrue(timestamp)
+      if (timestamp >= from) coveredDays.add(localDateKey(timestamp))
       when (event.eventType) {
         UsageEvents.Event.SCREEN_INTERACTIVE -> {
           screenInteractive = true
           sawScreenState = true
         }
-        UsageEvents.Event.SCREEN_NON_INTERACTIVE,
+        UsageEvents.Event.SCREEN_NON_INTERACTIVE -> {
+          screenInteractive = false
+          sawScreenState = true
+          // Keep the resumed package across display-off. Several Samsung and
+          // vendor builds do not emit another ACTIVITY_RESUMED when the user
+          // unlocks back into the same activity; clearing it here drops the
+          // entire next foreground session compared with Digital Wellbeing.
+          // A real pause/resume transition still updates the package normally.
+        }
         UsageEvents.Event.DEVICE_SHUTDOWN -> {
           screenInteractive = false
           sawScreenState = true
@@ -420,7 +459,135 @@ class HabHubNativeModule(
       cursor = timestamp
     }
     accrue(to)
-    return rows
+    return EventUsageResult(rowsByDay, coveredDays)
+  }
+
+  private fun localDateKey(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(timestamp))
+
+  private fun nextLocalMidnight(timestamp: Long): Long {
+    val calendar = Calendar.getInstance().apply {
+      timeInMillis = timestamp
+      set(Calendar.HOUR_OF_DAY, 0)
+      set(Calendar.MINUTE, 0)
+      set(Calendar.SECOND, 0)
+      set(Calendar.MILLISECOND, 0)
+      add(Calendar.DAY_OF_YEAR, 1)
+    }
+    return calendar.timeInMillis.coerceAtLeast(timestamp + 1)
+  }
+
+  private fun localDayWindows(from: Long, to: Long): List<Pair<Long, Long>> {
+    val windows = mutableListOf<Pair<Long, Long>>()
+    var cursor = from
+    while (cursor < to) {
+      val end = minOf(to, nextLocalMidnight(cursor))
+      windows.add(cursor to end)
+      cursor = end
+    }
+    return windows
+  }
+
+  /**
+   * Usage events are retained for only a few days. For older dates request
+   * DAILY buckets explicitly and proportionally clip any OEM-expanded bucket
+   * to each requested local day. queryAndAggregateUsageStats is deliberately
+   * avoided because it may return an entire weekly/monthly bucket for a
+   * single-day request (the source of impossible 44-hour values).
+   */
+  private fun usageFromDailyAggregates(
+    manager: UsageStatsManager,
+    from: Long,
+    to: Long,
+  ): Map<String, Map<String, ForegroundUsage>> {
+    val rowsByDay = mutableMapOf<String, MutableMap<String, ForegroundUsage>>()
+    val windows = localDayWindows(from, to)
+    val stats = manager.queryUsageStats(
+      UsageStatsManager.INTERVAL_DAILY,
+      from,
+      to,
+    ) ?: return emptyMap()
+    stats.forEach usageLoop@{ usage ->
+      if (usage.totalTimeInForeground <= 0L || excludedUsagePackage(usage.packageName))
+        return@usageLoop
+      val bucketStart = usage.firstTimeStamp.takeIf { it > 0L } ?: from
+      val bucketEnd = usage.lastTimeStamp.takeIf { it > bucketStart } ?: to
+      val bucketDuration = maxOf(1L, bucketEnd - bucketStart)
+      windows.forEach windowLoop@{ window ->
+        val overlapStart = maxOf(window.first, bucketStart)
+        val overlapEnd = minOf(window.second, bucketEnd)
+        val overlap = overlapEnd - overlapStart
+        if (overlap <= 0L) return@windowLoop
+        val clipped = (
+          usage.totalTimeInForeground.toDouble() * overlap.toDouble() /
+            bucketDuration.toDouble()
+        ).roundToLong().coerceAtMost(overlap)
+        if (clipped <= 0L) return@windowLoop
+        val rows = rowsByDay.getOrPut(localDateKey(window.first)) { mutableMapOf() }
+        val row = rows.getOrPut(usage.packageName) { ForegroundUsage() }
+        row.foregroundMs += clipped
+        row.lastTimeUsed = maxOf(
+          row.lastTimeUsed,
+          usage.lastTimeUsed.coerceIn(window.first, window.second),
+        )
+      }
+    }
+    return rowsByDay
+  }
+
+  private fun normalizedUsageRows(
+    source: Map<String, ForegroundUsage>,
+    maximumMs: Long,
+  ): Map<String, ForegroundUsage> {
+    val bounded = source
+      .filter { (packageName, usage) ->
+        usage.foregroundMs > 0L && !excludedUsagePackage(packageName)
+      }
+      .mapValues { (_, usage) ->
+        ForegroundUsage(
+          foregroundMs = usage.foregroundMs.coerceIn(0L, maximumMs),
+          lastTimeUsed = usage.lastTimeUsed,
+        )
+      }
+    val total = bounded.values.sumOf { it.foregroundMs }
+    if (total <= maximumMs || total <= 0L) return bounded
+    val scale = maximumMs.toDouble() / total.toDouble()
+    return bounded.mapValues { (_, usage) ->
+      usage.copy(foregroundMs = (usage.foregroundMs * scale).roundToLong())
+    }
+  }
+
+  private fun usageApps(
+    packageManager: android.content.pm.PackageManager,
+    rows: List<Pair<String, ForegroundUsage>>,
+    limit: Int,
+  ) = Arguments.createArray().apply {
+    rows.take(limit).forEach { (packageName, usage) ->
+      val info = try {
+        packageManager.getApplicationInfo(packageName, 0)
+      } catch (_: Exception) {
+        null
+      }
+      pushMap(
+        Arguments.createMap().apply {
+          putString("packageName", packageName)
+          putString(
+            "appName",
+            info?.let { packageManager.getApplicationLabel(it).toString() }
+              ?: packageName,
+          )
+          putDouble("foregroundMs", usage.foregroundMs.toDouble())
+          putDouble("lastTimeUsed", usage.lastTimeUsed.toDouble())
+          putString("category", appCategory(info))
+          putBoolean(
+            "isSystemApp",
+            info?.let {
+              it.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            } ?: false,
+          )
+        },
+      )
+    }
   }
 
   private fun excludedUsagePackage(packageName: String): Boolean {

@@ -5,6 +5,8 @@ import {
   isBloodPressureSystolic,
 } from "@/src/domain/trackerCatalog";
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
+import { consolidateWorkoutTrackers } from "@/src/domain/workoutTrackers";
+import { repairLegacyScreenTimeEntries } from "@/src/domain/screenTime";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -172,6 +174,13 @@ export function upgradeStateV21(
   defaults: AppState,
   sourceVersion = Number(state.version ?? 1),
 ): AppState {
+  // This alias repair is intentionally version-independent. An offline older
+  // device can upload a v24-shaped snapshot that still contains the retired
+  // gym summary ids, and it must converge on the same canonical trackers.
+  state = consolidateWorkoutTrackers(state, defaults);
+  const screenTimeEntries = repairLegacyScreenTimeEntries(state.entries);
+  if (screenTimeEntries !== state.entries)
+    state = { ...state, entries: screenTimeEntries };
   // Preset-backed repairs are deliberately idempotent. Earlier v23 builds
   // could persist the BP parent without its compound SYS/DIA definition, so
   // version alone is not proof that the repair is present.

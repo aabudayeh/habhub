@@ -2,6 +2,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useEffect } from "react";
 
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 /**
  * Hold an edit/reorder network gate only while its mounted tab is visible.
@@ -10,8 +11,10 @@ import { setCloudSyncPaused } from "@/src/cloud/syncGate";
  */
 export function useFocusedCloudSyncPause(reason: string, paused: boolean) {
   const navigation = useNavigation();
+  const tutorialSandbox = useTutorialSandboxActive();
 
   useEffect(() => {
+    if (tutorialSandbox) return;
     const applyFocusedState = () =>
       setCloudSyncPaused(reason, paused && navigation.isFocused());
     const releaseOnBlur = () => setCloudSyncPaused(reason, false);
@@ -30,5 +33,5 @@ export function useFocusedCloudSyncPause(reason: string, paused: boolean) {
       unsubscribeBlur();
       releaseOnBlur();
     };
-  }, [navigation, paused, reason]);
+  }, [navigation, paused, reason, tutorialSandbox]);
 }

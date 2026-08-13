@@ -15,6 +15,7 @@ import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { NutritionDetails } from "@/src/types";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 type NutritionEstimate = NutritionDetails & {
   calories: number;
@@ -23,6 +24,7 @@ type NutritionEstimate = NutritionDetails & {
 };
 
 export default function MetRalAiScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const {
     state,
     logMetric,
@@ -125,7 +127,7 @@ export default function MetRalAiScreen() {
       setReply(local);
       return;
     }
-    if (!supabase) {
+    if (tutorialSandbox || !supabase) {
       setReply(
         "That request needs the optional cloud AI function. Local commands still work: “log 30 reading”, “add todo buy groceries”, “create tracker meditation goal 10”, or “remind me 19:00 to stretch”.",
       );
@@ -150,6 +152,12 @@ export default function MetRalAiScreen() {
   }
 
   async function chooseFoodPhoto() {
+    if (tutorialSandbox) {
+      setReply(
+        "Photo picking and cloud estimation are disabled in this practice preview. Your real library and account stay untouched.",
+      );
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.72,

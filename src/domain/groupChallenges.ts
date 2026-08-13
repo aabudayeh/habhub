@@ -4,11 +4,16 @@ import {
   sharedMetricResult,
 } from "@/src/domain/metrics";
 import { statusForDay } from "@/src/domain/dataIndex";
+import { dateWithOffsetFrom } from "@/src/domain/date";
 import {
+  acceptedChallengeParticipantIds,
   challengeWinnerIds,
   challengeValueOutcome,
   compareChallengeValues,
+  groupChallengeOccurrenceId,
+  groupChallengeSourceId,
 } from "@/src/domain/groupChallengeRules";
+import { scheduleAppliesOnDate } from "@/src/domain/schedule";
 import {
   AppState,
   GroupChallenge,
@@ -16,16 +21,83 @@ import {
   MetricDefinition,
 } from "@/src/types";
 export {
+  acceptedChallengeParticipantIds,
   challengeCardId,
   challengeIdFromCard,
   challengeWinnerIds,
   challengeValueOutcome,
   compareChallengeValues,
+  declinedChallengeParticipantIds,
+  groupChallengeOccurrenceId,
+  groupChallengeResponseDeadline,
+  groupChallengeParticipation,
+  groupChallengeSourceId,
   isChallengeMetric,
   mergedLeaderboardCardOrder,
   validChallengeDate,
+  validChallengeRecurrence,
   validateGroupChallenge,
 } from "@/src/domain/groupChallengeRules";
+
+/**
+ * Recurrence remains one private/RLS-safe cloud row. Screens derive bounded
+ * dated occurrences locally, so an invitation response applies to the series
+ * without multiplying realtime subscriptions or writes.
+ */
+export function expandGroupChallengeOccurrences(
+  challenges: readonly GroupChallenge[],
+  fromDate: string,
+  throughDate: string,
+  limit = 200,
+) {
+  if (fromDate > throughDate) return [];
+  const expanded: GroupChallenge[] = [];
+  for (const challenge of challenges) {
+    if (!challenge.recurrence || challenge.recurrence.mode === "once") {
+      if (
+        challenge.localDate >= fromDate &&
+        challenge.localDate <= throughDate
+      )
+        expanded.push(challenge);
+      continue;
+    }
+    const first = challenge.localDate > fromDate ? challenge.localDate : fromDate;
+    const last = challenge.recurrence.endDate && challenge.recurrence.endDate < throughDate
+      ? challenge.recurrence.endDate
+      : throughDate;
+    for (
+      let date = first, guard = 0;
+      date <= last && guard <= 366;
+      date = dateWithOffsetFrom(date, 1), guard += 1
+    ) {
+      if (
+        !scheduleAppliesOnDate(
+          challenge.recurrence,
+          challenge.localDate,
+          date,
+        )
+      )
+        continue;
+      expanded.push(
+        date === challenge.localDate
+          ? challenge
+          : {
+              ...challenge,
+              id: groupChallengeOccurrenceId(challenge.id, date),
+              sourceChallengeId: groupChallengeSourceId(challenge),
+              localDate: date,
+            },
+      );
+    }
+  }
+  return expanded
+    .sort(
+      (left, right) =>
+        right.localDate.localeCompare(left.localDate) ||
+        left.id.localeCompare(right.id),
+    )
+    .slice(0, Math.max(0, Math.floor(limit)));
+}
 
 export function canManageGroupChallenge(
   challenge: GroupChallenge,
@@ -63,7 +135,7 @@ export function groupChallengeProgress(
   challenge: GroupChallenge,
   metric: MetricDefinition,
 ): ChallengeMemberProgress[] {
-  const invited = new Set(challenge.participantIds);
+  const invited = new Set(acceptedChallengeParticipantIds(challenge));
   return state.group.members
     .filter((member) => invited.has(member.id))
     .map((member): ChallengeMemberProgress => {
@@ -142,7 +214,13 @@ export function resolvedGroupChallengeWins(
 ): ResolvedChallengeWin[] {
   const seen = new Set<string>();
   const resolved: ResolvedChallengeWin[] = [];
-  for (const challenge of challenges) {
+  const earliest = challenges
+    .map((challenge) => challenge.localDate)
+    .sort()[0];
+  const occurrences = earliest
+    ? expandGroupChallengeOccurrences(challenges, earliest, throughDate, 5_000)
+    : [];
+  for (const challenge of occurrences) {
     if (
       seen.has(challenge.id) ||
       challenge.groupId !== state.group.id ||
@@ -156,7 +234,10 @@ export function resolvedGroupChallengeWins(
     );
     if (!metric) continue;
     const rows = groupChallengeProgress(state, challenge, metric);
-    if (rows.length !== new Set(challenge.participantIds).size) continue;
+    if (
+      rows.length !== new Set(acceptedChallengeParticipantIds(challenge)).size
+    )
+      continue;
     const winnerIds = challengeWinnerIds(
       rows,
       challenge.target,

@@ -26,11 +26,12 @@ import { ACTIVITY_LABELS } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
 import {
   isInternalTracker,
+  trackerGroupLabel,
   trackerPresets,
   TrackerPreset,
 } from "@/src/domain/trackerCatalog";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
-import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
+import { LocalizedAlert as Alert } from "@/src/i18n";
 import {
   enablePushNotifications,
   notificationPermissionGranted,
@@ -115,7 +116,10 @@ const HEALTH_TRACKER_IDS = [
 const GOAL_TRACKER_IDS: Record<string, readonly string[]> = {
   weight: ["weight", "food", "exercise", "deficit", "weekly_deficit_balance"],
   activity: ["steps", "exercise", "workout", "workout_duration", "workout_distance"],
-  gym: ["exercise", "gym_completed", "gym_duration", "gym_total_volume"],
+  // Workout and Workout duration are shared by the gym workspace and connected
+  // health. Workout volume remains available later, but is intentionally not a
+  // first-run recommendation.
+  gym: ["exercise", "workout", "workout_duration"],
   learning: ["reading", "study", "work"],
   health: HEALTH_TRACKER_IDS,
   nutrition: ["food", "water", "intermittent_fasting"],
@@ -176,7 +180,6 @@ export default function Onboarding() {
   } = useApp();
   const auth = useAuth();
   const health = useHealthSync();
-  const { t } = useLocalization();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { width } = useWindowDimensions();
@@ -368,23 +371,14 @@ export default function Onboarding() {
       ),
     [proposed],
   );
-  const recommendationById = useMemo(
-    () =>
-      new Map(
-        visibleRecommendations.map((item) => [item.templateId, item] as const),
-      ),
-    [visibleRecommendations],
-  );
-  const selectedGoalSections = useMemo(
-    () =>
-      GOALS.filter((goal) => goals.includes(goal.id)).map((goal) => ({
-        goal,
-        items: (GOAL_TRACKER_IDS[goal.id] ?? [])
-          .map((id) => recommendationById.get(id))
-          .filter((item): item is TrackerPreset => Boolean(item)),
-      })),
-    [goals, recommendationById],
-  );
+  const groupedRecommendations = useMemo(() => {
+    const groups = new Map<string, TrackerPreset[]>();
+    visibleRecommendations.forEach((item) => {
+      const label = trackerGroupLabel(item);
+      groups.set(label, [...(groups.get(label) ?? []), item]);
+    });
+    return [...groups.entries()];
+  }, [visibleRecommendations]);
   const trackedHealthHistoryCount = proposed.filter(
     (item) =>
       selected.includes(item.templateId) &&
@@ -539,6 +533,36 @@ export default function Onboarding() {
     );
   }
 
+  function showTrackerInfo(item: TrackerPreset) {
+    const target = presetTargetLabel(item);
+    Alert.alert(
+      item.name,
+      [
+        item.description,
+        target
+          ? `${trackedSelected.includes(item.templateId) ? "Daily goal" : "Available"} - ${target}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
+  }
+
+  function chooseHealthGoalHistory(value: boolean) {
+    setStartHealthGoalsFromHistory(value);
+    // The choice remains authoritative even if permission was granted before
+    // the user changed this switch. The deferred import reads this one-shot
+    // flag only after onboarding has closed.
+    if (!value || healthReady)
+      updateSettings({
+        healthSync: {
+          ...state.settings.healthSync,
+          backfillTrackedGoalsOnFirstImport: value || undefined,
+          backfillTrackedGoalsEmptyReadCount: undefined,
+        },
+      });
+  }
+
   function metricDefinitions(): MetricDefinition[] {
     const today = dateKey();
     return proposed
@@ -591,6 +615,7 @@ export default function Onboarding() {
       metrics
         .filter((item) => trackedSelected.includes(item.id))
         .map((item) => item.id),
+      startHealthGoalsFromHistory ? "history" : "today",
     );
     updateSettings({
       selectedGoals: goals,
@@ -790,18 +815,6 @@ export default function Onboarding() {
                     },
                   ]}
                 />
-                <View
-                  style={[
-                    styles.defaultNotice,
-                    { backgroundColor: colors.primarySoft },
-                  ]}
-                >
-                  <Ionicons name="sparkles" size={17} color={accent} />
-                  <View style={styles.grow}>
-                    <Text style={[styles.goalTitle, { color: colors.ink }]}>A balanced setup is already selected</Text>
-                    <Text style={[styles.goalCopy, { color: colors.muted }]}>Steps, active energy, food, balance, to-dos, workouts, water, reading, study, and work stay available. Your priorities only refine what is tracked each day.</Text>
-                  </View>
-                </View>
                 <View style={styles.goalGrid}>
                   {GOALS.map((goal) => {
                     const chosen = goals.includes(goal.id);
@@ -862,99 +875,32 @@ export default function Onboarding() {
                   <SetupStat value={trackedSelected.length} label="daily goals" colors={colors} />
                 </View>
                 <Text style={[styles.sectionLabel, { color: colors.ink }]}>Recommended setup</Text>
-                <View style={styles.metricGrid}>
-                  {visibleRecommendations.map((item) => (
-                    <MetricSummaryCard
-                      key={item.templateId}
-                      item={item}
-                      selected={selected.includes(item.templateId)}
-                      tracked={trackedSelected.includes(item.templateId)}
-                      width={
-                        width < 360
-                          ? "100%"
-                          : width >= 760
-                            ? "31.5%"
-                            : "48.5%"
-                      }
-                      onToggle={() => toggleTracker(item.templateId)}
-                      onToggleTracked={() => toggleTrackedTracker(item.templateId)}
-                    />
-                  ))}
-                </View>
-                {selectedGoalSections.length ? (
-                  <>
-                    <Text style={[styles.sectionLabel, { color: colors.ink }]}>Fine-tune a priority</Text>
-                    <Text style={[styles.sectionHelp, { color: colors.muted }]}>Optional. Open a chosen priority only if you want to change its suggested trackers or daily flags.</Text>
-                    <View style={styles.goalDetails}>
-                      {selectedGoalSections.map(({ goal, items }) => {
-                        const open = expandedGoals.includes(goal.id);
-                        return (
-                          <View
-                            key={goal.id}
-                            style={[
-                              styles.detailCard,
-                              { backgroundColor: colors.card, borderColor: colors.border },
-                            ]}
-                          >
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityState={{ expanded: open }}
-                              accessibilityLabel={open ? "Hide trackers" : "Show trackers"}
-                              onPress={() =>
-                                setExpandedGoals((current) =>
-                                  current.includes(goal.id)
-                                    ? current.filter((id) => id !== goal.id)
-                                    : [...current, goal.id],
-                                )
-                              }
-                              style={styles.detailHeading}
-                            >
-                              <View style={[styles.goalIcon, { backgroundColor: `${accent}18` }]}>
-                                <Ionicons name={goal.icon} size={20} color={accent} />
-                              </View>
-                              <View style={styles.grow}>
-                                <Text style={[styles.goalTitle, { color: colors.ink }]}>{goal.title}</Text>
-                                <Text style={[styles.goalCopy, { color: colors.muted }]}>
-                                  {items.length
-                                    ? t("{selected} of {total} suggested trackers added")
-                                        .replace(
-                                          "{selected}",
-                                          String(
-                                            items.filter((item) =>
-                                              selected.includes(item.templateId),
-                                            ).length,
-                                          ),
-                                        )
-                                        .replace("{total}", String(items.length))
-                                    : t("No tracker setup is needed for this priority.")}
-                                </Text>
-                              </View>
-                              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={colors.faint} />
-                            </Pressable>
-                            {open && items.length ? (
-                              <View style={[styles.detailRows, { borderTopColor: colors.border }]}>
-                                <View style={styles.trackedGoalTip}>
-                                  <Ionicons name="flag" size={14} color={accent} />
-                                  <Text style={[styles.trackedGoalTipText, { color: colors.muted }]}>A filled flag makes the tracker part of daily completion. The checkmark only controls whether it is available in HabHub.</Text>
-                                </View>
-                                {items.map((item) => (
-                                  <OnboardingTrackerRow
-                                    key={item.templateId}
-                                    item={item}
-                                    selected={selected.includes(item.templateId)}
-                                    tracked={trackedSelected.includes(item.templateId)}
-                                    onToggle={() => toggleTracker(item.templateId)}
-                                    onToggleTracked={() => toggleTrackedTracker(item.templateId)}
-                                  />
-                                ))}
-                              </View>
-                            ) : null}
-                          </View>
-                        );
-                      })}
+                <Text style={[styles.sectionHelp, { color: colors.muted }]}>Tap a tracker to learn what it records. Use the flag for daily completion and the checkmark to add or remove it.</Text>
+                {groupedRecommendations.map(([label, items]) => (
+                  <View key={label} style={styles.metricGroup}>
+                    <Text style={[styles.metricGroupLabel, { color: colors.muted }]}>{label}</Text>
+                    <View style={styles.metricGrid}>
+                      {items.map((item) => (
+                        <MetricSummaryCard
+                          key={item.templateId}
+                          item={item}
+                          selected={selected.includes(item.templateId)}
+                          tracked={trackedSelected.includes(item.templateId)}
+                          width={
+                            width < 360
+                              ? "100%"
+                              : width >= 760
+                                ? "31.5%"
+                                : "48.5%"
+                          }
+                          onShowInfo={() => showTrackerInfo(item)}
+                          onToggle={() => toggleTracker(item.templateId)}
+                          onToggleTracked={() => toggleTrackedTracker(item.templateId)}
+                        />
+                      ))}
                     </View>
-                  </>
-                ) : null}
+                  </View>
+                ))}
               </>
             ) : null}
 
@@ -1072,12 +1018,31 @@ export default function Onboarding() {
                       </View>
                       <Switch
                         value={startHealthGoalsFromHistory}
-                        onValueChange={setStartHealthGoalsFromHistory}
+                        onValueChange={chooseHealthGoalHistory}
                         trackColor={{ false: colors.border, true: `${accent}88` }}
                         thumbColor={startHealthGoalsFromHistory ? accent : colors.faint}
                       />
                     </View>
                   ) : null}
+                </View>
+                <Text style={[styles.sectionLabel, { color: colors.ink }]}>Open HabHub on</Text>
+                <View style={styles.wrap}>
+                  <Chip label="Today" icon="today-outline" selected={landingPage === "index"} onPress={() => setLandingPage("index")} />
+                  {goals.includes("friends") ? <Chip label="Leaderboard" icon="people-outline" selected={landingPage === "group"} onPress={() => setLandingPage("group")} /> : null}
+                  <Chip label="Progress" icon="stats-chart-outline" selected={landingPage === "insights"} onPress={() => setLandingPage("insights")} />
+                  <Chip label="Log" icon="add-circle-outline" selected={landingPage === "log"} onPress={() => setLandingPage("log")} />
+                </View>
+                <View style={[styles.switchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={styles.grow}>
+                    <Text style={[styles.goalTitle, { color: colors.ink }]}>Start in dark mode</Text>
+                    <Text style={[styles.goalCopy, { color: colors.muted }]}>This choice is saved with your setup.</Text>
+                  </View>
+                  <Switch
+                    value={state.settings.darkMode}
+                    onValueChange={(darkMode) => updateSettings({ darkMode })}
+                    trackColor={{ false: colors.border, true: `${accent}88` }}
+                    thumbColor={state.settings.darkMode ? accent : colors.faint}
+                  />
                 </View>
               </>
             ) : null}
@@ -1086,7 +1051,7 @@ export default function Onboarding() {
               <>
                 <Title
                   title="Ready when you are"
-                  copy="Choose where HabHub opens and whether to start the short basic guide."
+                  copy="Choose whether to start the short basic guide."
                   colors={colors}
                 />
                 <View style={[styles.readySummary, { backgroundColor: colors.primarySoft }]}>
@@ -1111,25 +1076,6 @@ export default function Onboarding() {
                    copy="Open your chosen page now. You can replay the basic guide from Quick Guide later."
                   onPress={() => setStartShortTour(false)}
                 />
-                <Text style={[styles.sectionLabel, { color: colors.ink }]}>Open HabHub on</Text>
-                <View style={styles.wrap}>
-                  <Chip label="Today" icon="today-outline" selected={landingPage === "index"} onPress={() => setLandingPage("index")} />
-                  {goals.includes("friends") ? <Chip label="Leaderboard" icon="people-outline" selected={landingPage === "group"} onPress={() => setLandingPage("group")} /> : null}
-                  <Chip label="Progress" icon="stats-chart-outline" selected={landingPage === "insights"} onPress={() => setLandingPage("insights")} />
-                  <Chip label="Log" icon="add-circle-outline" selected={landingPage === "log"} onPress={() => setLandingPage("log")} />
-                </View>
-                <View style={[styles.switchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={styles.grow}>
-                    <Text style={[styles.goalTitle, { color: colors.ink }]}>Start in dark mode</Text>
-                    <Text style={[styles.goalCopy, { color: colors.muted }]}>This choice is saved with your setup.</Text>
-                  </View>
-                  <Switch
-                    value={state.settings.darkMode}
-                    onValueChange={(darkMode) => updateSettings({ darkMode })}
-                    trackColor={{ false: colors.border, true: `${accent}88` }}
-                    thumbColor={state.settings.darkMode ? accent : colors.faint}
-                  />
-                </View>
               </>
             ) : null}
           </ScrollView>
@@ -1163,39 +1109,23 @@ export default function Onboarding() {
   );
 }
 
-function MetricSummaryCard({ item, selected, tracked, width, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; width: "31.5%" | "48.5%" | "100%"; onToggle: () => void; onToggleTracked: () => void }) {
+function MetricSummaryCard({ item, selected, tracked, width, onShowInfo, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; width: "31.5%" | "48.5%" | "100%"; onShowInfo: () => void; onToggle: () => void; onToggleTracked: () => void }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const canTrack = item.goalEnabled !== false && !NOT_DAILY_GOALS.has(item.templateId);
   return (
     <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: selected }}
-      accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`}
-      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityLabel={`About ${item.name}`}
+      accessibilityHint={item.description}
+      onPress={onShowInfo}
       style={({ pressed }) => [styles.metricCard, { width, backgroundColor: colors.card, borderColor: selected ? `${accent}88` : colors.border, opacity: selected ? 1 : 0.55 }, pressed && styles.pressed]}
     >
       <View style={[styles.metricIcon, { backgroundColor: `${item.color}18` }]}><Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={17} color={item.color} /></View>
-      <View style={styles.grow}><Text numberOfLines={1} style={[styles.metricName, { color: colors.ink }]}>{item.name}</Text><Text numberOfLines={1} style={[styles.metricState, { color: colors.muted }]}>{tracked ? "Daily goal" : "Available"}</Text></View>
+      <View style={styles.grow}><Text style={[styles.metricName, { color: colors.ink }]}>{item.name}</Text><Text style={[styles.metricState, { color: colors.muted }]}>{tracked ? "Daily goal" : "Available"}</Text></View>
       <View style={styles.trackerActions}>
         {canTrack ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: tracked }} accessibilityLabel={tracked ? `Remove ${item.name} from daily tracked goals` : `Add ${item.name} to daily tracked goals`} hitSlop={7} onPress={(event) => { event.stopPropagation(); onToggleTracked(); }} style={[styles.miniFlag, { backgroundColor: tracked ? colors.primarySoft : colors.canvas }]}><Ionicons name={tracked ? "flag" : "flag-outline"} size={13} color={tracked ? accent : colors.faint} /></Pressable> : null}
-        <Ionicons name={selected ? "checkmark-circle" : "ellipse-outline"} size={18} color={selected ? accent : colors.faint} />
-      </View>
-    </Pressable>
-  );
-}
-
-function OnboardingTrackerRow({ item, selected, tracked, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; onToggle: () => void; onToggleTracked: () => void }) {
-  const colors = useAppColors();
-  const accent = useGroupAccent();
-  const canTrack = item.goalEnabled !== false && !NOT_DAILY_GOALS.has(item.templateId);
-  return (
-    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`} onPress={onToggle} style={({ pressed }) => [styles.tracker, { borderTopColor: colors.border }, pressed && styles.pressed]}>
-      <View style={[styles.tinyIcon, { backgroundColor: `${item.color}18` }]}><Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={17} color={item.color} /></View>
-      <View style={styles.grow}><Text style={[styles.goalTitle, { color: colors.ink }]}>{item.name}</Text><Text style={[styles.goalCopy, { color: colors.muted }]}>{item.description}</Text>{presetTargetLabel(item) ? <Text style={[styles.targetText, { color: colors.muted }]}><Text style={styles.targetLabel}>Target</Text>{` · ${presetTargetLabel(item)}`}</Text> : null}</View>
-      <View style={styles.trackerActions}>
-        {canTrack ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: tracked }} accessibilityLabel={tracked ? `Remove ${item.name} from daily tracked goals` : `Add ${item.name} to daily tracked goals`} hitSlop={6} onPress={(event) => { event.stopPropagation(); onToggleTracked(); }} style={[styles.goalFlag, { backgroundColor: tracked ? colors.primarySoft : colors.canvas }]}><Ionicons name={tracked ? "flag" : "flag-outline"} size={15} color={tracked ? accent : colors.faint} /></Pressable> : null}
-        <Ionicons name={selected ? "checkbox" : "square-outline"} size={21} color={selected ? accent : colors.faint} />
+        <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} accessibilityLabel={`${selected ? "Remove" : "Add"} ${item.name}`} hitSlop={7} onPress={(event) => { event.stopPropagation(); onToggle(); }} style={styles.metricCheck}><Ionicons name={selected ? "checkmark-circle" : "ellipse-outline"} size={18} color={selected ? accent : colors.faint} /></Pressable>
       </View>
     </Pressable>
   );
@@ -1216,5 +1146,5 @@ function TourChoice({ selected, icon, title, copy, onPress }: { selected: boolea
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 53, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, fontWeight: "900" }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, goalDetails: { gap: 7, marginBottom: 12 }, detailCard: { borderWidth: 1, borderRadius: 15, overflow: "hidden" }, detailHeading: { minHeight: 57, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, detailRows: { borderTopWidth: 1 }, trackedGoalTip: { minHeight: 34, paddingHorizontal: 10, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 7 }, trackedGoalTipText: { flex: 1, fontSize: 8, lineHeight: 12, fontWeight: "700" }, tracker: { minHeight: 51, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 9, paddingVertical: 7 }, tinyIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" }, goalFlag: { width: 29, height: 29, borderRadius: 9, alignItems: "center", justifyContent: "center" }, targetText: { fontSize: 8, lineHeight: 12, marginTop: 2 }, targetLabel: { fontSize: 8, fontWeight: "900" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
+  safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1, minWidth: 0 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGroup: { marginBottom: 5 }, metricGroupLabel: { fontSize: 9, fontWeight: "900", letterSpacing: 0.4, marginBottom: 5 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 57, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, lineHeight: 12, fontWeight: "900", flexShrink: 1 }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, metricCheck: { width: 21, height: 23, alignItems: "center", justifyContent: "center" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
 });

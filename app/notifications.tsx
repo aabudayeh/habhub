@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { TimeInput } from "@/src/components/TimeInput";
@@ -35,9 +36,11 @@ import {
 import type { BatteryOptimizationStatus } from "@/src/notifications/batteryOptimization";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { NotificationSettings } from "@/src/types";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 export default function NotificationsScreen() {
   const { state, updateSettings, updateMetric } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
   const auth = useAuth();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -70,6 +73,10 @@ export default function NotificationsScreen() {
   const showGymNotifications =
     state.settings.showGym === true && hasGymTracker;
   const refreshBatteryOptimization = useCallback(async () => {
+    if (tutorialSandbox) {
+      setBatteryOptimizationStatus("unsupported");
+      return;
+    }
     try {
       setBatteryOptimizationStatus(await getBatteryOptimizationStatus());
     } catch {
@@ -77,7 +84,7 @@ export default function NotificationsScreen() {
       // status query. Android remains the source of truth after they return.
       setBatteryOptimizationStatus("enabled");
     }
-  }, []);
+  }, [tutorialSandbox]);
   useEffect(() => {
     if (Platform.OS !== "android") {
       setBatteryOptimizationStatus("unsupported");
@@ -122,6 +129,11 @@ export default function NotificationsScreen() {
   }
   async function togglePush() {
     const next = !value.pushEnabled;
+    if (tutorialSandbox) {
+      patch({ pushEnabled: next });
+      setPermissionNote("Tutorial preview only - device settings are unchanged.");
+      return;
+    }
     if (!next) {
       patch({ pushEnabled: false });
       if (auth.user) await disablePushNotifications(auth.user.id);
@@ -152,6 +164,10 @@ export default function NotificationsScreen() {
     }
   }
   async function reviewBatteryOptimization() {
+    if (tutorialSandbox) {
+      setPermissionNote("Tutorial preview only - Android settings were not opened.");
+      return;
+    }
     try {
       const opened = await openBatteryOptimizationSettings();
       if (!opened) {
@@ -182,23 +198,26 @@ export default function NotificationsScreen() {
           />
         }
       />
-      <Card>
-        <ToggleRow
-          icon="notifications"
-          title="Push notifications"
-          copy="Master switch for notifications on this device"
-          enabled={value.pushEnabled}
-          onPress={togglePush}
-        />
-        {permissionNote ? (
-          <Text style={[styles.permissionNote, { color: colors.muted }]}>
-            {permissionNote}
-          </Text>
-        ) : null}
-      </Card>
-      {Platform.OS === "android" &&
-      batteryOptimizationStatus !== "unsupported" ? (
-        <Pressable
+      <TutorialTarget id="notifications-controls">
+        <Card>
+          <ToggleRow
+            icon="notifications"
+            title="Push notifications"
+            copy="Master switch for notifications on this device"
+            enabled={value.pushEnabled}
+            onPress={togglePush}
+          />
+          {permissionNote ? (
+            <Text style={[styles.permissionNote, { color: colors.muted }]}>
+              {permissionNote}
+            </Text>
+          ) : null}
+        </Card>
+      </TutorialTarget>
+      {(tutorialSandbox || Platform.OS === "android") &&
+      (tutorialSandbox || batteryOptimizationStatus !== "unsupported") ? (
+        <TutorialTarget id="battery-optimization">
+          <Pressable
           accessibilityRole="button"
           accessibilityLabel={t("Open Android battery optimization settings")}
           accessibilityHint={t(
@@ -248,7 +267,8 @@ export default function NotificationsScreen() {
             </Text>
           </View>
           <Ionicons name="open-outline" size={18} color={colors.faint} />
-        </Pressable>
+          </Pressable>
+        </TutorialTarget>
       ) : null}
       <Pressable
         onPress={() => router.navigate("/calendar" as never)}

@@ -30,10 +30,13 @@ import {
 } from "@/src/domain/invites";
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { shareText } from "@/src/lib/shareText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function GroupsScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const { state, joinGroup, switchGroup, leaveGroup } = useApp();
   const auth = useAuth();
   const cloud = useCloudSync();
@@ -52,6 +55,7 @@ export default function GroupsScreen() {
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
 
   async function shareInvite() {
+    if (tutorialSandbox) return;
     if (activeIsPersonal) return;
     if (!inviteReady) {
       await cloud.refreshGroup().catch(() => undefined);
@@ -158,6 +162,7 @@ export default function GroupsScreen() {
           />
         }
       />
+      <TutorialTarget id="groups-list">
       <View style={styles.list}>
         {cloud.pendingGroup ? (
           <Card style={[styles.group, { borderColor: accent }]}>
@@ -246,6 +251,7 @@ export default function GroupsScreen() {
           );
         })}
       </View>
+      </TutorialTarget>
       <Card style={styles.invite}>
         <View style={styles.group}>
           <Avatar

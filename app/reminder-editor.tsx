@@ -11,6 +11,7 @@ import { LocalizedAlert as Alert } from "@/src/i18n";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { dateKey } from "@/src/domain/date";
 import {
@@ -364,6 +365,7 @@ export default function ReminderEditor() {
         </View>
       </Card>
 
+      <TutorialTarget id="reminder-editor">
       <Card style={styles.card}>
         <Pressable
           onPress={() => setCalendarOpen((open) => !open)}
@@ -542,6 +544,7 @@ export default function ReminderEditor() {
           </View>
         ) : null}
       </Card>
+      </TutorialTarget>
       <Pressable
         onPress={save}
         style={[styles.save, { backgroundColor: accent }]}

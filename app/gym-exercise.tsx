@@ -7,6 +7,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { useLocale, useLocalization } from "@/src/i18n";
 import { localizeExerciseName, localizeMuscleLabel } from "@/src/i18n/domain";
 import { DraftNumberInput } from "@/src/components/DraftNumberInput";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   Button,
   Card,
@@ -138,6 +139,7 @@ export default function GymExerciseScreen() {
         <Chip label="All" selected={period === 0} onPress={() => setPeriod(0)} />
       </View>
 
+      <TutorialTarget id="gym-exercise-progress">
       <Card style={[styles.trendCard, { borderColor: trendColor }]}>
         <View style={styles.trendHeading}>
           <View style={[styles.statusDot, { backgroundColor: trendColor }]} />
@@ -152,6 +154,7 @@ export default function GymExerciseScreen() {
         </View>
         <ExerciseLineChart history={history} color={accent} locale={locale} />
       </Card>
+      </TutorialTarget>
 
       <View style={styles.stats}>
         <Stat

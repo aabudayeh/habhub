@@ -17,6 +17,7 @@ import { localizeMetricName } from "@/src/i18n/domain";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   adjacentPeriod,
   DateRangeNavigator,
@@ -63,6 +64,7 @@ import {
   metricVisualProgress,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, MetricEntry, PhotoUpdate } from "@/src/types";
 
@@ -472,7 +474,15 @@ export default function LeaderboardDetail() {
                   ? palette.red
                   : accent;
           return (
-            <Card key={row.member.id} style={styles.memberCard}>
+            <TutorialTarget
+              key={row.member.id}
+              id={
+                index === 0
+                  ? "leaderboard-detail-chart"
+                  : `leaderboard-detail-member-${row.member.id}`
+              }
+            >
+            <Card style={styles.memberCard}>
               <Pressable
                 onPress={() =>
                   router.navigate({
@@ -714,6 +724,7 @@ export default function LeaderboardDetail() {
                 dates={dates}
               />
             </Card>
+            </TutorialTarget>
           );
         })}
       </View>
@@ -833,6 +844,7 @@ function PhotoCompare({
   memberId: string;
   dates: string[];
 }) {
+  const tutorialSandbox = useTutorialSandboxActive();
   const accent = useGroupAccent();
   const colors = useAppColors();
   const visible = useMemo(
@@ -864,6 +876,7 @@ function PhotoCompare({
   const collageRef = useRef<ViewShot>(null);
   const Share = {
     share: async (_options: { message: string }) => {
+      if (tutorialSandbox) return;
       const uri = await collageRef.current?.capture?.();
       if (!uri) throw new Error("Could not create comparison image.");
       await Sharing.shareAsync(uri, {
@@ -901,6 +914,7 @@ function PhotoCompare({
   }
 
   async function save() {
+    if (tutorialSandbox) return;
     const photos = [primary, comparison].filter(Boolean) as PhotoUpdate[];
     if (photos.length < 2) return;
     if (Platform.OS !== "web") {

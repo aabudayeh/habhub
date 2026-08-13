@@ -6,6 +6,10 @@ import {
 } from "react-native";
 
 import { dateKey } from "@/src/domain/date";
+import {
+  boundedScreenTimeMs,
+  screenTimeTrackerSamples,
+} from "@/src/domain/screenTime";
 import { notifyScreenTimeAppLimits } from "@/src/notifications/push";
 import { cacheScreenTimeReport } from "@/src/screenTime/cache";
 import {
@@ -14,6 +18,7 @@ import {
   queryTodayScreenTime,
 } from "@/src/screenTime";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 const FOREGROUND_REFRESH_MS = 5 * 60 * 1000;
 
@@ -23,6 +28,7 @@ const FOREGROUND_REFRESH_MS = 5 * 60 * 1000;
  */
 export function ScreenTimeSyncBridge() {
   const { state, hydrated, setDeviceScreenTime } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
   const stateRef = useRef(state);
   const setDeviceScreenTimeRef = useRef(setDeviceScreenTime);
   const syncingRef = useRef(false);
@@ -32,6 +38,7 @@ export function ScreenTimeSyncBridge() {
   const sync = useCallback(async () => {
     if (
       Platform.OS !== "android" ||
+      tutorialSandbox ||
       NativeAppState.currentState !== "active" ||
       !hydrated ||
       syncingRef.current ||
@@ -51,7 +58,17 @@ export function ScreenTimeSyncBridge() {
         report,
         localDate,
       ).catch(() => undefined);
-      const minutes = Math.round((report.screenTimeMs / 60000) * 10) / 10;
+      const daily = screenTimeTrackerSamples(report.days).find(
+        (sample) => sample.localDate === localDate,
+      );
+      const minutes = daily?.minutes ??
+        Math.round(
+          (boundedScreenTimeMs(report.screenTimeMs, report.to - report.from) /
+            60000) *
+            10,
+        ) /
+          10;
+      const recordedAt = daily?.recordedAt ?? new Date(report.to).toISOString();
       const existing = stateRef.current.entries.find(
         (entry) =>
           entry.userId === stateRef.current.currentUserId &&
@@ -63,7 +80,7 @@ export function ScreenTimeSyncBridge() {
         setDeviceScreenTimeRef.current(
           localDate,
           minutes,
-          new Date(report.to).toISOString(),
+          recordedAt,
         );
       }
     } catch {
@@ -71,7 +88,7 @@ export function ScreenTimeSyncBridge() {
     } finally {
       syncingRef.current = false;
     }
-  }, [hydrated]);
+  }, [hydrated, tutorialSandbox]);
 
   useEffect(() => {
     let queued = false;

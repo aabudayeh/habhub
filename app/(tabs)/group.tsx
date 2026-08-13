@@ -27,6 +27,7 @@ import { shareText } from "@/src/lib/shareText";
 import { ReorderItem } from "@/src/components/ReorderItem";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
@@ -72,14 +73,21 @@ import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import {
   canManageGroupChallenge,
-  challengeCardId,
+  acceptedChallengeParticipantIds,
   challengeIdFromCard,
+  declinedChallengeParticipantIds,
+  expandGroupChallengeOccurrences,
+  groupChallengeParticipation,
   groupChallengeProgress,
+  groupChallengeResponseDeadline,
+  groupChallengeSourceId,
   isChallengeMetric,
   mergedLeaderboardCardOrder,
 } from "@/src/domain/groupChallenges";
 import { formatMetricValue } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState, GroupChallenge, MetricDefinition, Visibility } from "@/src/types";
 
@@ -92,6 +100,8 @@ if (
 }
 
 function LeaderboardScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const { state, updateMetric, updateSettings } = useApp();
   const cloud = useCloudSyncActions();
   const colors = useAppColors();
@@ -136,7 +146,8 @@ function LeaderboardScreen() {
   const canManageGroup =
     currentMember?.role === "owner" || currentMember?.role === "admin";
   const personalSetup = isPersonalSetupGroup(state.group);
-  const challengesEnabled = !personalSetup && isCloudGroupId(state.group.id);
+  const challengesEnabled =
+    tutorialSandbox || (!personalSetup && isCloudGroupId(state.group.id));
   const challengeCloud = useGroupChallenges(state.group.id);
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
   const tracked = useMemo(
@@ -221,12 +232,34 @@ function LeaderboardScreen() {
     [anchor, period, weekStartsOn],
   );
   const visibleChallenges = useMemo(() => {
-    const visibleDates = new Set(dates);
-    return challengeCloud.challenges.filter(
-      (challenge) =>
-        period === "overall" || visibleDates.has(challenge.localDate),
-    );
-  }, [challengeCloud.challenges, dates, period]);
+    const sortedDates = [...dates].sort();
+    const firstChallengeDate = challengeCloud.challenges
+      .map((challenge) => challenge.localDate)
+      .sort()[0];
+    const fromDate =
+      period === "overall"
+        ? (firstChallengeDate ?? anchor)
+        : (sortedDates[0] ?? anchor);
+    const throughDate =
+      period === "overall"
+        ? anchor
+        : (sortedDates.at(-1) ?? anchor);
+    return expandGroupChallengeOccurrences(
+      challengeCloud.challenges,
+      fromDate,
+      throughDate,
+    ).filter((challenge) => {
+      const participation = groupChallengeParticipation(
+        challenge,
+        state.currentUserId,
+      );
+      return (
+        participation === "creator" ||
+        participation === "accepted" ||
+        groupChallengeResponseDeadline(challenge) >= dateKey()
+      );
+    });
+  }, [anchor, challengeCloud.challenges, dates, period, state.currentUserId]);
   const savedCardOrder =
     state.settings.leaderboardCardOrderByGroup?.[state.group.id];
   const allCardIds = useMemo(
@@ -234,9 +267,9 @@ function LeaderboardScreen() {
       mergedLeaderboardCardOrder(
         savedCardOrder,
         selected,
-        challengeCloud.challenges,
+        visibleChallenges,
       ),
-    [challengeCloud.challenges, savedCardOrder, selected],
+    [savedCardOrder, selected, visibleChallenges],
   );
   const orderedCardIds = useMemo(
     () => {
@@ -375,6 +408,7 @@ function LeaderboardScreen() {
     [calendarOpen, editing, period],
   );
   async function invite() {
+    if (tutorialSandbox) return;
     if (personalSetup) return;
     if (!inviteReady) {
       await cloud.refreshGroup().catch(() => undefined);
@@ -502,10 +536,23 @@ function LeaderboardScreen() {
       );
       return;
     }
-    setEditingChallenge(challenge);
+    if (!challenge) {
+      tutorial.reportEvent({
+        actionId: "tutorial.challenge.open-create",
+        scope: "isolated-preview",
+      });
+    }
+    setEditingChallenge(
+      challenge
+        ? challengeCloud.challenges.find(
+            (candidate) => candidate.id === groupChallengeSourceId(challenge),
+          ) ?? challenge
+        : undefined,
+    );
     setChallengeEditorOpen(true);
   }
   function confirmDeleteChallenge(challenge: GroupChallenge) {
+    const sourceId = groupChallengeSourceId(challenge);
     Alert.alert(
       "Delete challenge?",
       "This removes the challenge card for every invited member. Tracker data is not changed.",
@@ -516,18 +563,26 @@ function LeaderboardScreen() {
           style: "destructive",
           onPress: () => {
             challengeCloud
-              .remove(challenge.id)
+              .remove(sourceId)
               .then(() => {
-                const cardId = challengeCardId(challenge.id);
+                const isChallengeSeriesCard = (id: string) => {
+                  const challengeId = challengeIdFromCard(id);
+                  return (
+                    challengeId === sourceId ||
+                    challengeId?.startsWith(`${sourceId}@`) === true
+                  );
+                };
                 updateSettings({
                   leaderboardPinnedMetricIdsByGroup: {
                     ...(state.settings.leaderboardPinnedMetricIdsByGroup ?? {}),
-                    [state.group.id]: pinnedIds.filter((id) => id !== cardId),
+                    [state.group.id]: pinnedIds.filter(
+                      (id) => !isChallengeSeriesCard(id),
+                    ),
                   },
                   leaderboardCardOrderByGroup: {
                     ...(state.settings.leaderboardCardOrderByGroup ?? {}),
                     [state.group.id]: (savedCardOrder ?? []).filter(
-                      (id) => id !== cardId,
+                      (id) => !isChallengeSeriesCard(id),
                     ),
                   },
                 });
@@ -587,11 +642,13 @@ function LeaderboardScreen() {
           ) : (
             <View style={styles.headerActions}>
               {challengesEnabled ? (
-                <IconButton
-                  icon="trophy-outline"
-                  label="Create challenge"
-                  onPress={() => openChallengeEditor()}
-                />
+                <TutorialTarget id="leaderboard-create-challenge">
+                  <IconButton
+                    icon="trophy-outline"
+                    label="Create challenge"
+                    onPress={() => openChallengeEditor()}
+                  />
+                </TutorialTarget>
               ) : null}
               <IconButton
                 icon="sparkles-outline"
@@ -659,6 +716,8 @@ function LeaderboardScreen() {
             state.currentUserId,
             currentMember,
           );
+          const editable =
+            manageable && groupChallengeResponseDeadline(challenge) >= dateKey();
           return (
             <ReorderItem key={id} active={draggingCardId === id}>
               <EditableRankingCard
@@ -669,7 +728,7 @@ function LeaderboardScreen() {
                 onMove={(target) => move(id, target)}
                 onSendBelow={() => move(id, displayedSelected.length - 1)}
                 onRemove={manageable ? () => confirmDeleteChallenge(challenge) : undefined}
-                onEdit={manageable ? () => openChallengeEditor(challenge) : undefined}
+                onEdit={editable ? () => openChallengeEditor(challenge) : undefined}
                 pinned={pinnedIds.includes(id)}
                 onPin={() => togglePin(id)}
                 onDragStart={() => setDraggingCardId(id)}
@@ -686,6 +745,11 @@ function LeaderboardScreen() {
                   editing={editing}
                   pinned={pinnedIds.includes(id)}
                   onLongPress={() => setEditing(true)}
+                  onRespond={(response) =>
+                    challengeCloud
+                      .respond(groupChallengeSourceId(challenge), response)
+                      .then(() => undefined)
+                  }
                 />
               </EditableRankingCard>
             </ReorderItem>
@@ -728,6 +792,13 @@ function LeaderboardScreen() {
               onDragEnd={() => {
                 setDraggingCardId(null);
               }}
+            >
+            <TutorialTarget
+              id={
+                cardIndex === 0
+                  ? "leaderboard-cards"
+                  : `leaderboard-card-${id}`
+              }
             >
             <Card style={styles.ranking}>
             <Pressable
@@ -943,6 +1014,7 @@ function LeaderboardScreen() {
               );
             })}
             </Card>
+            </TutorialTarget>
             </EditableRankingCard>
           </ReorderItem>
         );
@@ -998,9 +1070,11 @@ function LeaderboardScreen() {
           </View>
         </>
       ) : (
-        <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
-          <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
-        </Pressable>
+        <TutorialTarget id="leaderboard-edit">
+          <Pressable onPress={() => setEditing(true)} style={styles.editHint}>
+            <Text style={[styles.hint, { color: colors.muted }]}>Hold a ranking card to edit what Leaderboard shows</Text>
+          </Pressable>
+        </TutorialTarget>
       )}
       {!editing ? <View style={styles.actions}>
         <Pressable
@@ -1072,6 +1146,7 @@ function ChallengeRankingCard({
   editing,
   pinned,
   onLongPress,
+  onRespond,
 }: {
   challenge: GroupChallenge;
   state: AppState;
@@ -1081,18 +1156,43 @@ function ChallengeRankingCard({
   editing: boolean;
   pinned: boolean;
   onLongPress: () => void;
+  onRespond: (response: "accepted" | "declined") => Promise<void>;
 }) {
+  const [responding, setResponding] = useState<"accepted" | "declined">();
   const rows = useMemo(
     () => (metric ? groupChallengeProgress(state, challenge, metric) : []),
     [challenge, metric, state],
   );
   const complete = rows.filter((row) => row.complete).length;
+  const participation = groupChallengeParticipation(
+    challenge,
+    state.currentUserId,
+  );
+  const acceptedCount = acceptedChallengeParticipantIds(challenge).length;
+  const declinedCount = declinedChallengeParticipantIds(challenge).length;
+  const awaitingCount = Math.max(
+    0,
+    challenge.participantIds.length - acceptedCount - declinedCount,
+  );
   const title =
     challenge.title?.trim() ||
     (metric ? `${metric.name} challenge` : "Group challenge");
   const targetLabel = metric
     ? formatMetricValue(metric, challenge.target)
     : String(challenge.target);
+  async function respond(response: "accepted" | "declined") {
+    setResponding(response);
+    try {
+      await onRespond(response);
+    } catch (reason) {
+      Alert.alert(
+        "Could not update invitation",
+        reason instanceof Error ? reason.message : String(reason),
+      );
+    } finally {
+      setResponding(undefined);
+    }
+  }
   return (
     <Card style={[styles.ranking, styles.challengeCard]}>
       <Pressable disabled={editing} onLongPress={onLongPress} style={styles.challengeHead}>
@@ -1106,15 +1206,56 @@ function ChallengeRankingCard({
           </View>
           <Text numberOfLines={1} style={[styles.title, { color: colors.ink }]}>{title}</Text>
           <Text style={[styles.challengeMeta, { color: colors.muted }]}>
-            {friendlyDate(challenge.localDate)} · {targetLabel} · {rows.length} invited
+            {friendlyDate(challenge.localDate)} · {targetLabel} · {acceptedCount}/{challenge.participantIds.length} joined
+            {challenge.recurrence ? " · repeats" : ""}
+            {awaitingCount ? ` · ${awaitingCount} awaiting` : ""}
           </Text>
         </View>
-        <View style={[styles.completePill, { backgroundColor: complete === rows.length && rows.length ? `${palette.lime}35` : colors.primarySoft }]}>
-          <Text style={[styles.completePillText, { color: complete === rows.length && rows.length ? colors.ink : accent }]}>
+        <View style={[styles.completePill, { backgroundColor: complete === rows.length && rows.length >= 2 ? `${palette.lime}35` : colors.primarySoft }]}>
+          <Text style={[styles.completePillText, { color: complete === rows.length && rows.length >= 2 ? colors.ink : accent }]}>
             {complete}/{rows.length}
           </Text>
         </View>
       </Pressable>
+      {!editing &&
+      (participation === "invited" || participation === "declined") ? (
+        <View style={[styles.challengeInvite, { borderTopColor: colors.border }]}>
+          <View style={styles.challengeInviteCopy}>
+            <Text style={[styles.name, { color: colors.ink }]}>
+              {participation === "declined"
+                ? "Invitation declined"
+                : "You are invited"}
+            </Text>
+            <Text style={[styles.detail, { color: colors.muted }]}>
+              {challenge.recurrence
+                ? "Your answer applies to every repeat in this series."
+                : "Join to appear in this challenge ranking."}
+            </Text>
+          </View>
+          {participation === "invited" ? (
+            <Pressable
+              disabled={Boolean(responding)}
+              accessibilityRole="button"
+              accessibilityLabel="Decline challenge"
+              onPress={() => void respond("declined")}
+              style={[styles.challengeResponse, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.challengeResponseText, { color: colors.muted }]}>Decline</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            disabled={Boolean(responding)}
+            accessibilityRole="button"
+            accessibilityLabel="Accept challenge"
+            onPress={() => void respond("accepted")}
+            style={[styles.challengeResponse, { borderColor: accent, backgroundColor: colors.primarySoft }]}
+          >
+            <Text style={[styles.challengeResponseText, { color: accent }]}>
+              {responding === "accepted" ? "Joining…" : "Accept"}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
       {!metric ? (
         <View style={[styles.challengeUnavailable, { borderTopColor: colors.border }]}>
           <Text style={[styles.detail, { color: colors.muted }]}>This tracker is no longer available.</Text>
@@ -1350,6 +1491,10 @@ const styles = StyleSheet.create({
   challengeMeta: { fontSize: 8, lineHeight: 11, marginTop: 2, fontWeight: "700" },
   completePill: { minWidth: 43, height: 31, borderRadius: 12, alignItems: "center", justifyContent: "center", paddingHorizontal: 7 },
   completePillText: { fontSize: 10, fontWeight: "900" },
+  challengeInvite: { minHeight: 51, paddingHorizontal: 7, paddingVertical: 7, borderTopWidth: 1, flexDirection: "row", alignItems: "center", gap: 6 },
+  challengeInviteCopy: { flex: 1, minWidth: 0 },
+  challengeResponse: { minHeight: 31, borderRadius: 10, borderWidth: 1, paddingHorizontal: 9, alignItems: "center", justifyContent: "center" },
+  challengeResponseText: { fontSize: 8, fontWeight: "900" },
   challengeRow: { minHeight: 48, paddingHorizontal: 5, paddingVertical: 7, borderTopWidth: 1, borderRadius: 12, flexDirection: "row", alignItems: "center", gap: 7 },
   challengeRank: { width: 23, fontSize: 10, fontWeight: "900" },
   challengeMemberCopy: { flex: 1, minWidth: 0 },

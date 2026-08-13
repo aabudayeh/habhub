@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useLocale } from "@/src/i18n";
 
 import { dateKey } from "@/src/domain/date";
@@ -21,6 +22,7 @@ export function MonthCalendar({
   rangeStart,
   rangeEnd,
   rangeAccent,
+  tutorialDayTarget,
 }: {
   selectedDate: string;
   onSelect: (date: string) => void;
@@ -38,6 +40,8 @@ export function MonthCalendar({
   rangeStart?: string;
   rangeEnd?: string;
   rangeAccent?: string;
+  /** Highlights the currently selected day for a guided tutorial. */
+  tutorialDayTarget?: string;
 }) {
   const colors = useAppColors();
   const locale = useLocale();
@@ -137,12 +141,14 @@ export function MonthCalendar({
           const vacation = vacationDay?.(day.key) ?? false;
           const isRangeStart = Boolean(rangeStart && day.key === rangeStart);
           const isRangeEnd = Boolean(rangeEnd && day.key === rangeEnd);
-          return (
+          const tutorialTargeted =
+            Boolean(tutorialDayTarget) && day.key === selectedDate;
+          const dayButton = (
             <Pressable
-              key={day.key}
               onPress={() => onSelect(day.key)}
               style={[
                 styles.day,
+                tutorialTargeted && styles.tutorialDayButton,
                 status === "met" && {
                   backgroundColor: colors.isDark ? "#26351E" : "#EDF7D5",
                 },
@@ -238,6 +244,17 @@ export function MonthCalendar({
               ) : null}
             </Pressable>
           );
+          return tutorialTargeted ? (
+            <TutorialTarget
+              key={day.key}
+              id={tutorialDayTarget!}
+              style={styles.tutorialDayTarget}
+            >
+              {dayButton}
+            </TutorialTarget>
+          ) : (
+            React.cloneElement(dayButton, { key: day.key })
+          );
         })}
       </View>
     </View>
@@ -276,6 +293,15 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingTop: 5,
     borderRadius: 12,
+  },
+  tutorialDayTarget: {
+    width: "14.285%",
+    aspectRatio: 1,
+    minHeight: 50,
+  },
+  tutorialDayButton: {
+    width: "100%",
+    height: "100%",
   },
   selected: { backgroundColor: palette.primary },
   dayText: { color: palette.ink, fontSize: 12, fontWeight: "800", zIndex: 1 },

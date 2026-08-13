@@ -414,13 +414,22 @@ export type TodoReminder = {
 /** A dated, exact-value competition shared only with explicitly invited members. */
 export type GroupChallenge = {
   id: string;
+  /** The persisted series row when `id` identifies a generated occurrence. */
+  sourceChallengeId?: string;
   groupId: string;
   creatorId: string;
   metricId: string;
   title?: string;
   target: number;
   localDate: string;
+  /** Everyone invited to the challenge; this also remains the RLS audience. */
   participantIds: string[];
+  /** The creator is accepted at creation; invitees opt in explicitly. */
+  acceptedParticipantIds?: string[];
+  /** Declined invitees stay in the RLS audience so clients can invalidate safely. */
+  declinedParticipantIds?: string[];
+  /** A bounded recurring series; generated occurrences are never persisted. */
+  recurrence?: GoalSchedule;
   createdAt: string;
   updatedAt: string;
 };

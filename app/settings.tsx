@@ -33,6 +33,8 @@ import { useApp } from "@/src/state/AppProvider";
 import { ScreenTimeAccessCard } from "@/src/screenTime/ScreenTimeAccessCard";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { HealthDataType, SyncMode } from "@/src/types";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 const syncModes: {
   id: SyncMode;
@@ -190,6 +192,7 @@ const statusCopy = {
 } as const;
 
 export default function SettingsScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const { state, updateSettings, resetDemo } = useApp();
   const auth = useAuth();
   const cloud = useCloudSync();
@@ -244,6 +247,9 @@ export default function SettingsScreen() {
             ? "Registering the background request on this device..."
             : "Background scheduling is unavailable right now. App-open checks and Sync now still work.";
   async function exportData() {
+    if (tutorialSandbox) {
+      return;
+    }
     const portable = {
       ...state,
       groups: state.groups.map((group) => ({
@@ -297,7 +303,9 @@ export default function SettingsScreen() {
           />
         }
       />
-      <SectionHeader title="Cloud account" />
+      <TutorialTarget id="settings-cloud-account">
+        <SectionHeader title="Cloud account" />
+      </TutorialTarget>
       {auth.status === "signedIn" ? (
         <Card>
           <View style={styles.heading}>
@@ -482,7 +490,9 @@ export default function SettingsScreen() {
         </Card>
       )}
 
-      <SectionHeader title="Connected health data" />
+      <TutorialTarget id="settings-health">
+        <SectionHeader title="Connected health data" />
+      </TutorialTarget>
       <Card>
         <View style={styles.heading}>
           <View style={styles.icon}>

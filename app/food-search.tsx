@@ -24,23 +24,49 @@ import {
   PageHeader,
   Screen,
 } from "@/src/components/ui";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   foodByBarcode,
   FoodProduct,
   searchFoods,
 } from "@/src/food/openFoodFacts";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 
 export default function FoodSearchScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
+  if (tutorialSandbox) return <FoodSearchContent tutorialSandbox />;
+  return <FoodSearchWithCamera />;
+}
+
+function FoodSearchWithCamera() {
+  const [permission, requestPermission] = useCameraPermissions();
+  return (
+    <FoodSearchContent
+      tutorialSandbox={false}
+      permission={permission}
+      requestPermission={requestPermission}
+    />
+  );
+}
+
+function FoodSearchContent({
+  tutorialSandbox,
+  permission,
+  requestPermission,
+}: {
+  tutorialSandbox: boolean;
+  permission?: ReturnType<typeof useCameraPermissions>[0];
+  requestPermission?: ReturnType<typeof useCameraPermissions>[1];
+}) {
   const params = useLocalSearchParams<{ q?: string; mode?: string }>();
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [mode, setMode] = useState<"search" | "scan">(
-    params.mode === "scan" ? "scan" : "search",
+    !tutorialSandbox && params.mode === "scan" ? "scan" : "search",
   );
-  const [permission, requestPermission] = useCameraPermissions();
   const [query, setQuery] = useState(params.q ?? "");
   const [results, setResults] = useState<FoodProduct[]>([]);
   const [loading, setLoading] = useState(false);
@@ -83,6 +109,7 @@ export default function FoodSearchScreen() {
     try {
       const found = await searchFoods(normalized, {
         recentLabels: recentFoodLabels,
+        offlineOnly: tutorialSandbox,
       });
       if (sequence !== searchSequence.current) return;
       setResults(found);
@@ -107,7 +134,10 @@ export default function FoodSearchScreen() {
       searchedInitially.current = true;
       const sequence = ++searchSequence.current;
       setLoading(true);
-      searchFoods(params.q, { recentLabels: recentFoodLabels })
+      searchFoods(params.q, {
+        recentLabels: recentFoodLabels,
+        offlineOnly: tutorialSandbox,
+      })
         .then((found) => {
           if (sequence !== searchSequence.current) return;
           setResults(found);
@@ -124,7 +154,7 @@ export default function FoodSearchScreen() {
           if (sequence === searchSequence.current) setLoading(false);
         });
     }
-  }, [mode, params.q, recentFoodLabels]);
+  }, [mode, params.q, recentFoodLabels, tutorialSandbox]);
 
   function choose(product: FoodProduct) {
     setSelected(product);
@@ -139,7 +169,7 @@ export default function FoodSearchScreen() {
     setLoading(true);
     setError(null);
     try {
-      const product = await foodByBarcode(code);
+      const product = tutorialSandbox ? null : await foodByBarcode(code);
       if (product) choose(product);
       else
         setError(
@@ -210,7 +240,13 @@ export default function FoodSearchScreen() {
           label="Scan barcode"
           icon="barcode-outline"
           selected={mode === "scan"}
-          onPress={() => setMode("scan")}
+          onPress={() => {
+            if (!tutorialSandbox) setMode("scan");
+            else
+              setError(
+                "Camera scanning is disabled in the tutorial preview. Search the bundled foods instead.",
+              );
+          }}
         />
       </View>
       {selected ? (
@@ -289,7 +325,12 @@ export default function FoodSearchScreen() {
               <Text style={[styles.name, { color: colors.ink }]}>
                 Camera access is needed to scan a barcode.
               </Text>
-              <Button label="Allow camera" onPress={requestPermission} />
+              <Button
+                label="Allow camera"
+                onPress={() => {
+                  if (!tutorialSandbox) void requestPermission?.();
+                }}
+              />
             </View>
           ) : (
             <>
@@ -337,6 +378,7 @@ export default function FoodSearchScreen() {
           <Text style={[styles.meta, { color: colors.muted }]}>{error}</Text>
         </Card>
       ) : null}
+      <TutorialTarget id="food-search-results">
       <View style={styles.results}>
         {results.map((product) => (
           <Pressable key={product.code} onPress={() => choose(product)}>
@@ -397,6 +439,7 @@ export default function FoodSearchScreen() {
           </Pressable>
         ))}
       </View>
+      </TutorialTarget>
       <Text style={[styles.attribution, { color: colors.faint }]}>
         Results may use Open Food Facts, USDA FoodData Central, FatSecret, or
         offline staples. Community data should be checked against the package

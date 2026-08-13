@@ -10,9 +10,11 @@ import { Avatar, Card, IconButton, PageHeader, Screen } from '@/src/components/u
 import { memberRoleLabel } from '@/src/domain/members';
 import { useLocalization } from '@/src/i18n';
 import { useApp } from '@/src/state/AppProvider';
+import { useTutorialSandboxActive } from '@/src/tutorial/TutorialSandboxContext';
 import { palette, useAppColors, useGroupAccent } from '@/src/theme';
 
 export default function ProfileScreen(){
+  const tutorialSandbox=useTutorialSandboxActive();
   const {state,updateMemberAvatar,updateMemberName}=useApp();
   const colors=useAppColors();
   const accent=useGroupAccent();
@@ -35,6 +37,7 @@ export default function ProfileScreen(){
     setEditingName(false);
   }
   async function choosePhoto(){
+    if(tutorialSandbox)return;
     const result=await ImagePicker.launchImageLibraryAsync({mediaTypes:['images'],quality:.8,base64:Platform.OS==='web'});
     if(result.canceled)return;
     const asset=result.assets[0];

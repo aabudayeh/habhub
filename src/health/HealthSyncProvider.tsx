@@ -64,6 +64,41 @@ type HealthSyncContextValue = {
 
 const HealthSyncContext = createContext<HealthSyncContextValue | null>(null);
 
+const tutorialHealthUnavailable: HealthAdapterAvailability = {
+  available: false,
+  provider: null,
+  title: 'Tutorial demo',
+  detail: 'Health data is disabled in the tutorial preview.',
+};
+
+const disabledHealthAction = async () => undefined;
+const disabledHealthContext: HealthSyncContextValue = {
+  status: 'unavailable',
+  availability: tutorialHealthUnavailable,
+  lastSyncedAt: null,
+  importedCount: 0,
+  errorMessage: null,
+  backgroundRegistration: 'disabled',
+  sourceOrigins: [],
+  sourceOptions: [],
+  connect: disabledHealthAction,
+  syncNow: disabledHealthAction,
+  syncHistory: disabledHealthAction,
+  setSyncMode: disabledHealthAction,
+  setSourceEnabled: disabledHealthAction,
+  disconnect: disabledHealthAction,
+  openSettings: disabledHealthAction,
+};
+
+/** Shadows the live/native health provider inside the tutorial sandbox. */
+export function TutorialHealthSyncBoundary({ children }: PropsWithChildren) {
+  return (
+    <HealthSyncContext.Provider value={disabledHealthContext}>
+      {children}
+    </HealthSyncContext.Provider>
+  );
+}
+
 function syncStart(
   lastSyncedAt: string | null,
   fullRefresh = false,
@@ -527,8 +562,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       const historyBackfillAlreadyPending =
         latest.healthSync.backfillTrackedGoalsOnFirstImport === true;
       const shouldArmHistoryBackfill =
-        historyBackfillAlreadyPending ||
-        options?.startTrackedGoalsAtFirstData === true;
+        options === undefined
+          ? historyBackfillAlreadyPending
+          : options.startTrackedGoalsAtFirstData === true;
       const initialHistoryImportPending =
         options !== undefined || !persistedRef.current.lastSyncedAt;
       const healthSync = {

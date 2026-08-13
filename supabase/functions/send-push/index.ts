@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'|'winner'|'membership'; audience?:'admins'|'user'|'group'|'group_including_sender'; title:string; body:string; titles?:Record<string,string>; bodies?:Record<string,string>; recipientId?:string; metricId?:string; data?:Record<string,string> };
+type Payload = { eventKey:string; clientMessageId?:string; groupId:string; category:'chat'|'metric'|'lead'|'winner'|'membership'|'challenge'; audience?:'admins'|'user'|'group'|'group_including_sender'; title:string; body:string; titles?:Record<string,string>; bodies?:Record<string,string>; recipientId?:string; metricId?:string; data?:Record<string,string> };
 const cors={ 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type' };
 
 Deno.serve(async(req)=>{
@@ -12,10 +12,30 @@ Deno.serve(async(req)=>{
     const {data:{user},error:userError}=await admin.auth.getUser(auth.replace(/^Bearer\s+/i,''));
     if(userError||!user)return json({error:'Unauthorized'},401);
     const payload=await req.json() as Payload;
+    let challengeRecipientIds:string[]|undefined;
     const {data:membership}=await admin.from('group_members').select('user_id, role, status').eq('group_id',payload.groupId).eq('user_id',user.id).maybeSingle();
     if(!membership)return json({error:'Not a group member'},403);
     if(payload.category!=='membership'&&membership.status!=='active')return json({error:'Membership is pending'},403);
     if(payload.category==='membership'&&payload.audience==='user'&&!['owner','admin'].includes(membership.role))return json({error:'Admin role required'},403);
+    if(payload.category==='challenge'){
+      const challengeId=payload.data?.challengeId;
+      const challengeEvent=payload.data?.challengeEvent;
+      if(!challengeId||!['started','accepted'].includes(challengeEvent??'')||(challengeEvent==='accepted'&&!payload.recipientId))return json({error:'Invalid challenge notification'},400);
+      const {data:challenge,error:challengeError}=await admin.from('group_challenges').select('group_id, creator_id, participant_ids, accepted_participant_ids').eq('id',challengeId).eq('group_id',payload.groupId).is('deleted_at',null).maybeSingle();
+      if(challengeError)throw challengeError;
+      const participants=Array.isArray(challenge?.participant_ids)?challenge.participant_ids:[];
+      challengeRecipientIds=participants.filter((participantId:string)=>participantId!==user.id);
+      const accepted=Array.isArray(challenge?.accepted_participant_ids)?challenge.accepted_participant_ids:[];
+      const expectedEventKey=challengeEvent==='started'
+        ? `challenge-started:${challengeId}`
+        : `challenge-accepted:${challengeId}:${user.id}`;
+      const authorized=challengeEvent==='started'
+        ? challenge?.creator_id===user.id&&!payload.recipientId
+        : participants.includes(user.id)&&accepted.includes(user.id)&&challenge?.creator_id===payload.recipientId&&payload.recipientId!==user.id;
+      if(!authorized||payload.eventKey!==expectedEventKey)return json({error:'Challenge notification is not authorized'},403);
+      const copy=challengePushCopy(challengeEvent as 'started'|'accepted');
+      payload.title=copy.titles.en;payload.body=copy.bodies.en;payload.titles=copy.titles;payload.bodies=copy.bodies;
+    }
     if(payload.category==='chat'&&payload.clientMessageId){
       const {data:stored,error:messageError}=await admin.from('messages').select('created_at').eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId).maybeSingle();
       if(messageError)throw messageError;
@@ -42,6 +62,7 @@ Deno.serve(async(req)=>{
     if(payload.audience!=='group_including_sender')members=members.neq('user_id',user.id);
     members=members.eq('status','active');
     if(payload.category==='membership'&&payload.audience==='admins')members=members.in('role',['owner','admin']);
+    if(payload.category==='challenge'&&payload.data?.challengeEvent==='started')members=members.in('user_id',challengeRecipientIds??[]);
     if(payload.recipientId)members=members.eq('user_id',payload.recipientId);
     const {data:recipients,error:memberError}=await members;if(memberError)throw memberError;
     const ids=(recipients??[]).map((item)=>item.user_id);
@@ -81,7 +102,17 @@ Deno.serve(async(req)=>{
     return json({error:error instanceof Error?error.message:String(error)},500);
   }
 });
-function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='membership'&&settings.groupMembership===false)return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if(payload.category==='winner'&&settings.badgesAndWinners===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
+function allowed(settings:Record<string,unknown>,payload:Payload){if(settings.pushEnabled===false||inQuietHours(settings))return false;const mutedGroups=Array.isArray(settings.mutedGroupIds)?settings.mutedGroupIds:[];if(mutedGroups.includes(payload.groupId))return false;const conversationId=payload.data?.conversationId;const mutedChats=Array.isArray(settings.mutedConversationIds)?settings.mutedConversationIds:[];if(payload.category==='chat'&&(settings.chatMessages===false||conversationId&&mutedChats.includes(conversationId)))return false;if(payload.category==='membership'&&settings.groupMembership===false)return false;if(payload.category==='lead'&&settings.leadChanges===false)return false;if((payload.category==='winner'||payload.category==='challenge')&&settings.badgesAndWinners===false)return false;if(payload.category==='metric'&&settings.groupMetricActivity===false)return false;const ids=Array.isArray(settings.metricIds)?settings.metricIds:[];return !payload.metricId||!ids.length||ids.includes(payload.metricId);}
+function challengePushCopy(event:'started'|'accepted'){
+  if(event==='accepted')return {
+    titles:{en:'Challenge accepted',ar:'تم قبول التحدي',es:'Reto aceptado','zh-Hans':'挑战已接受',sv:'Utmaning accepterad',de:'Challenge angenommen',ru:'Вызов принят',fr:'Défi accepté'},
+    bodies:{en:'A friend accepted your challenge.',ar:'قبل صديق تحديك.',es:'Un amigo aceptó tu reto.','zh-Hans':'一位好友接受了你的挑战。',sv:'En vän accepterade din utmaning.',de:'Ein Freund hat deine Challenge angenommen.',ru:'Друг принял ваш вызов.',fr:'Un ami a accepté votre défi.'},
+  };
+  return {
+    titles:{en:'Challenge started',ar:'بدأ التحدي',es:'Reto iniciado','zh-Hans':'挑战已开始',sv:'Utmaning startad',de:'Challenge gestartet',ru:'Вызов начат',fr:'Défi lancé'},
+    bodies:{en:'Open HabHub to accept or decline.',ar:'افتح HabHub للقبول أو الرفض.',es:'Abre HabHub para aceptar o rechazar.','zh-Hans':'打开 HabHub 接受或拒绝。',sv:'Öppna HabHub för att acceptera eller avböja.',de:'Öffne HabHub, um anzunehmen oder abzulehnen.',ru:'Откройте HabHub, чтобы принять или отклонить.',fr:'Ouvrez HabHub pour accepter ou refuser.'},
+  };
+}
 function pushLanguage(settings:Record<string,unknown>){const language=String(settings.language||'en');return ['en','ar','es','zh-Hans','sv','de','ru','fr'].includes(language)?language:'en';}
 function inQuietHours(settings:Record<string,unknown>){if(settings.quietHoursEnabled!==true)return false;try{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:String(settings.timezone||'UTC'),hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());const now=Number(parts.find((part)=>part.type==='hour')?.value||0)*60+Number(parts.find((part)=>part.type==='minute')?.value||0);const minutes=(value:unknown)=>{const [hour,minute]=String(value||'').split(':').map(Number);return Number.isFinite(hour)&&Number.isFinite(minute)?hour*60+minute:0;};const start=minutes(settings.quietHoursStart),end=minutes(settings.quietHoursEnd);return start===end?false:start<end?now>=start&&now<end:now>=start||now<end;}catch{return false;}}
 function json(body:unknown,status=200){return new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});}

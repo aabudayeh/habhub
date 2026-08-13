@@ -20,6 +20,7 @@ import {
 import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { AppState } from "@/src/types";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
   areHomeScreenWidgetsSupported,
   getHomeScreenWidgetConfigurations,
@@ -106,6 +107,7 @@ function avatarSnapshot(
 /** Keeps Android widgets current without blocking navigation or app startup. */
 export function WidgetSnapshotBridge() {
   const { state, hydrated } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
   const { locale, t } = useLocalization();
   const accent = useGroupAccent();
   const colors = useAppColors();
@@ -142,6 +144,7 @@ export function WidgetSnapshotBridge() {
   publishRef.current = async () => {
     if (
       !mountedRef.current ||
+      tutorialSandbox ||
       !hydratedRef.current ||
       !areHomeScreenWidgetsSupported()
     )

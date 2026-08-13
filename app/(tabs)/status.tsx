@@ -24,6 +24,10 @@ import {
 } from "@/src/components/PeriodNavigator";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { StatusAvatarSimulator } from "@/src/components/StatusAvatarSimulator";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import { Card, PageHeader, Screen } from "@/src/components/ui";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
@@ -160,17 +164,16 @@ function StatusBodyFact({
     >
       <Text
         numberOfLines={1}
-        style={styles.bodyFactText}
+        style={[styles.bodyFactLabel, { color: colors.muted }]}
       >
-        <Text style={[styles.bodyFactLabel, { color: colors.muted }]}>
-          {label}:{" "}
-        </Text>
-        <Text
-          translate={false}
-          style={[styles.bodyFactValue, { color: colors.ink }]}
-        >
-          {value}
-        </Text>
+        {label}
+      </Text>
+      <Text
+        translate={false}
+        numberOfLines={1}
+        style={[styles.bodyFactValue, { color: colors.ink }]}
+      >
+        {value}
       </Text>
     </View>
   );
@@ -178,6 +181,7 @@ function StatusBodyFact({
 
 export default function StatusPage() {
   const { state, updateSettings } = useApp();
+  const tutorial = useTutorial();
   const colors = useAppColors();
   const { t } = useLocalization();
   const { width: viewportWidth } = useWindowDimensions();
@@ -435,6 +439,8 @@ export default function StatusPage() {
                 ))}
               </View>
 
+              <TutorialTarget id="status-avatar-source">
+              <TutorialTarget id="status-avatar">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("Open avatar simulator")}
@@ -453,6 +459,10 @@ export default function StatusPage() {
                   if (avatarLongPressRef.current) return;
                   setAvatarSourceEditorOpen(false);
                   setAvatarSimulatorOpen(true);
+                  tutorial.reportEvent({
+                    actionId: "tutorial.status.open-simulator",
+                    scope: "isolated-preview",
+                  });
                 }}
                 onPressIn={() => {
                   avatarLongPressRef.current = false;
@@ -485,6 +495,8 @@ export default function StatusPage() {
                   weightKg={avatarProgression.currentWeightKg}
                 />
               </Pressable>
+              </TutorialTarget>
+              </TutorialTarget>
 
               <View
                 style={[
@@ -687,28 +699,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   bodyFact: {
-    minHeight: 22,
+    minHeight: 30,
     flex: 1,
     minWidth: 0,
     alignItems: "center",
     justifyContent: "center",
   },
-  bodyFactText: { flexShrink: 1, textAlign: "center" },
   bodyFactLabel: {
+    flexShrink: 0,
+    textAlign: "center",
     fontSize: 9,
-    lineHeight: 13,
+    lineHeight: 11,
     fontWeight: "800",
   },
   bodyFactValue: {
+    flexShrink: 0,
+    textAlign: "center",
     fontSize: 11,
     lineHeight: 14,
     fontWeight: "900",
   },
   completionFact: {
     width: 48,
-    minHeight: 22,
+    minHeight: 30,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-end",
+    paddingBottom: 2,
   },
   completionPercent: {
     flexShrink: 0,

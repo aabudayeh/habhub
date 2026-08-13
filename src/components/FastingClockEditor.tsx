@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PanResponder, Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   advanceTwelveHourDial,
   formatClockTime,
@@ -12,6 +13,7 @@ import {
 } from "@/src/domain/date";
 import { useLocalization } from "@/src/i18n";
 import { palette, useAppColors } from "@/src/theme";
+import { useOptionalTutorial } from "@/src/tutorial/TutorialContext";
 
 const DAY_MINUTES = 24 * 60;
 const HALF_DAY_MINUTES = 12 * 60;
@@ -88,6 +90,7 @@ export function FastingClockEditor({
 }) {
   const colors = useAppColors();
   const { t } = useLocalization();
+  const tutorial = useOptionalTutorial();
   const [open, setOpen] = useState(false);
   const [draftStart, setDraftStart] = useState(parseClock(startTime));
   const [draftDuration, setDraftDuration] = useState(
@@ -122,6 +125,10 @@ export function FastingClockEditor({
     setDraftStart(nextStart);
     setDraftDuration(nextDuration);
   }, [fastingMinutes, startTime]);
+
+  useEffect(() => {
+    if (tutorial?.activeStep?.target === "fasting-clock") setOpen(true);
+  }, [tutorial?.activeStep?.target]);
 
   const measureCenter = useCallback(() =>
     dialRef.current?.measureInWindow((x, y, width, height) => {
@@ -291,7 +298,8 @@ export function FastingClockEditor({
   const eatingText = durationText(DAY_MINUTES - draftDuration, locale);
 
   return (
-    <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.card }]}>
+    <TutorialTarget id="fasting-clock">
+      <View style={[styles.card, { borderColor: colors.border, backgroundColor: colors.card }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
@@ -488,7 +496,8 @@ export function FastingClockEditor({
           </View>
         </View>
       ) : null}
-    </View>
+      </View>
+    </TutorialTarget>
   );
 }
 

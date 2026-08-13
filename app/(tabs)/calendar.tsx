@@ -23,6 +23,10 @@ import { InfoPopover } from "@/src/components/InfoPopover";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
+import {
   scheduleEventsForDate,
   scheduleEventsForHourSlot,
   ScheduleEvent,
@@ -61,7 +65,6 @@ const DEFAULT_SCHEDULE_ACTIVITY_IDS = new Set([
   "food",
   "workout",
   "workout_duration",
-  "gym_completed",
   "sleep",
 ]);
 
@@ -84,6 +87,7 @@ function SchedulePage() {
   const accent = useGroupAccent();
   const locale = useLocale();
   const { t } = useLocalization();
+  const tutorial = useTutorial();
   const [anchor, setAnchor] = useState(dateKey());
   const [editing, setEditing] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -387,6 +391,7 @@ function SchedulePage() {
               label="Explain Schedule"
               message="Tap an item to edit it. Double-tap or hold any slot to add another to-do or reminder. Tap a row label to reveal crowded rows, and hold the calendar background to enter edit mode."
             />
+            <TutorialTarget id="schedule-view">
             <SelectionMenu
               title="Schedule view"
               items={filterItems}
@@ -398,6 +403,8 @@ function SchedulePage() {
               multiple={false}
               compactIcon
             />
+            </TutorialTarget>
+            <TutorialTarget id="schedule-edit">
             <Pressable
               onPress={() => setEditing((value) => !value)}
               style={[
@@ -411,6 +418,7 @@ function SchedulePage() {
                 color={accent}
               />
             </Pressable>
+            </TutorialTarget>
           </View>
         }
       />
@@ -526,6 +534,7 @@ function SchedulePage() {
         delayLongPress={450}
         onLongPress={() => setEditing(true)}
       >
+      <TutorialTarget id="schedule-grid">
       <Card style={styles.gridCard}>
         <View style={[styles.headerRow, { borderBottomColor: colors.border }]}>
           <View style={styles.hourHeader} />
@@ -590,9 +599,15 @@ function SchedulePage() {
               date={date}
               editing={editing}
               expanded={expandedRows.has("all")}
-              onOpenSlot={(events) =>
-                setSlotMenu({ date, hour: null, events })
-              }
+              tutorialId={date === dates[0] ? "schedule-all-slot" : undefined}
+              onOpenSlot={(events) => {
+                setSlotMenu({ date, hour: null, events });
+                if (date === dates[0])
+                  tutorial.reportEvent({
+                    actionId: "tutorial.schedule.open-all",
+                    scope: "isolated-preview",
+                  });
+              }}
               onCreate={(date) => createInSlot(date)}
             />
           ))}
@@ -634,20 +649,31 @@ function SchedulePage() {
                 date={date}
                 editing={editing}
                 expanded={expandedRows.has(String(hour))}
+                tutorialId={
+                  hour === hours[0] && date === dates[0]
+                    ? "schedule-hour-slot"
+                    : undefined
+                }
                 onOpenSlot={(events) =>
                   setSlotMenu({ date, hour, events })
                 }
-                onCreate={(date) =>
+                onCreate={(date) => {
                   createInSlot(
                     date,
                     `${String(hour).padStart(2, "0")}:00`,
-                  )
-                }
+                  );
+                  if (hour === hours[0] && date === dates[0])
+                    tutorial.reportEvent({
+                      actionId: "tutorial.schedule.open-slot-menu",
+                      scope: "isolated-preview",
+                    });
+                }}
               />
             ))}
           </View>
         ))}
       </Card>
+      </TutorialTarget>
       </Pressable>
       <Modal
         transparent
@@ -964,6 +990,7 @@ function ScheduleCell({
   expanded,
   onOpenSlot,
   onCreate,
+  tutorialId,
 }: {
   events: ScheduleEvent[];
   slotEvents: ScheduleEvent[];
@@ -972,6 +999,7 @@ function ScheduleCell({
   expanded: boolean;
   onOpenSlot: (events: ScheduleEvent[]) => void;
   onCreate: (date: string) => void;
+  tutorialId?: string;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -1010,7 +1038,7 @@ function ScheduleCell({
       onOpenSlot(slotEvents);
     }, 325);
   };
-  return (
+  const cell = (
     <Pressable
       delayLongPress={380}
       onLongPress={(press) => {
@@ -1153,6 +1181,11 @@ function ScheduleCell({
       ) : null}
     </Pressable>
   );
+  return tutorialId ? (
+    <TutorialTarget id={tutorialId} style={styles.cellTarget}>
+      {cell}
+    </TutorialTarget>
+  ) : cell;
 }
 
 function scheduleEventWindow(
@@ -1351,6 +1384,7 @@ const styles = StyleSheet.create({
     gap: 2,
     position: "relative",
   },
+  cellTarget: { flex: 1, minWidth: 0 },
   event: { borderRadius: 5, paddingHorizontal: 3, paddingVertical: 2 },
   durationEvent: {
     position: "absolute",

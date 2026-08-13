@@ -108,6 +108,21 @@ export function healthSourcePriority(
   return 25;
 }
 
+/** Chooses one canonical writer for OS aggregates that must match a source UI. */
+export function preferredHealthSourceOrigin(
+  origins: readonly string[],
+  type: HealthDataType,
+  preferences?: Record<string, HealthSourcePreference>,
+) {
+  return [...new Set(origins.filter(Boolean))]
+    .filter((origin) => healthSourceEnabled(origin, preferences))
+    .sort(
+      (left, right) =>
+        healthSourcePriority(left, type) - healthSourcePriority(right, type) ||
+        left.localeCompare(right),
+    )[0];
+}
+
 function sameInterval(left: HealthImportRecord, right: HealthImportRecord) {
   const leftStart = finiteTime(left.startTime);
   const rightStart = finiteTime(right.startTime);

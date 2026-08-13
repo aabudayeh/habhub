@@ -6,6 +6,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import {
   Avatar,
@@ -198,6 +199,7 @@ export default function BadgesScreen() {
         }
       />
 
+      <TutorialTarget id="badge-cabinet">
       <Card style={styles.summaryCard}>
         <View style={styles.summaryHeading}>
           <View
@@ -230,6 +232,7 @@ export default function BadgesScreen() {
           ))}
         </View>
       </Card>
+      </TutorialTarget>
 
       <View style={styles.menus}>
         <SelectionMenu
@@ -549,12 +552,16 @@ const styles = StyleSheet.create({
   progressRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    marginTop: 6,
+    alignSelf: "flex-start",
+    gap: 5,
+    marginTop: 4,
+    paddingHorizontal: 5,
+    minHeight: 17,
+    borderRadius: 8,
   },
   progressTrack: {
-    flex: 1,
-    height: 5,
+    width: 58,
+    height: 4,
     borderRadius: 4,
     overflow: "hidden",
   },

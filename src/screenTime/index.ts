@@ -17,8 +17,21 @@ export type ScreenTimeReport = {
   /** Android app-foreground totals are the closest public proxy for screen use. */
   screenTimeMs: number;
   approximate: true;
-  calculationMethod?: "foreground_events" | "aggregate_fallback";
+  calculationMethod?:
+    | "foreground_events"
+    | "aggregate_fallback"
+    | "mixed";
   apps: ScreenTimeAppUsage[];
+  /** Exact local-day samples used by tracker charts and Entries. */
+  days?: ScreenTimeDailyUsage[];
+};
+
+export type ScreenTimeDailyUsage = {
+  localDate: string;
+  from: number;
+  to: number;
+  screenTimeMs: number;
+  calculationMethod: "foreground_events" | "aggregate_fallback";
 };
 
 type HabHubAndroidModule = {

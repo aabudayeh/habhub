@@ -281,9 +281,11 @@ type Action =
     }
   | {
       type: "deviceScreenTime";
-      localDate: string;
-      minutes: number;
-      recordedAt: string;
+      samples: {
+        localDate: string;
+        minutes: number;
+        recordedAt: string;
+      }[];
     }
   | { type: "addMetric"; metric: NewMetric }
   | { type: "addMetrics"; metrics: NewMetric[] }
@@ -314,6 +316,7 @@ type Action =
       type: "configurePersonalMetrics";
       metrics: MetricDefinition[];
       trackedGoalIds: string[];
+      historyMode: "today" | "history";
     }
   | {
       type: "updateGroupMetric";
@@ -1026,21 +1029,33 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "deviceScreenTime": {
       const metric = state.metrics.find((candidate) => candidate.id === "screen_time");
-      if (!metric || !Number.isFinite(action.minutes)) return state;
-      const id = `screen-time:${state.currentUserId}:${action.localDate}`;
-      const entry: MetricEntry = {
-        id,
-        metricId: metric.id,
-        userId: state.currentUserId,
-        value: Math.max(0, action.minutes),
-        localDate: action.localDate,
-        recordedAt: action.recordedAt,
-        visibility: "private",
-        source: "imported",
-        sourceOrigin: "android_usage_stats",
-        sourceRecordId: id,
-        sourceUpdatedAt: action.recordedAt,
-      };
+      if (!metric) return state;
+      const samples = new Map(
+        action.samples
+          .filter(
+            (sample) =>
+              /^\d{4}-\d{2}-\d{2}$/.test(sample.localDate) &&
+              Number.isFinite(sample.minutes),
+          )
+          .map((sample) => [sample.localDate, sample] as const),
+      );
+      if (!samples.size) return state;
+      const entries: MetricEntry[] = [...samples.values()].map((sample) => {
+        const id = `screen-time:${state.currentUserId}:${sample.localDate}`;
+        return {
+          id,
+          metricId: metric.id,
+          userId: state.currentUserId,
+          value: Math.max(0, Math.min(1_440, sample.minutes)),
+          localDate: sample.localDate,
+          recordedAt: sample.recordedAt,
+          visibility: "private",
+          source: "imported",
+          sourceOrigin: "android_usage_stats",
+          sourceRecordId: id,
+          sourceUpdatedAt: sample.recordedAt,
+        };
+      });
       return {
         ...state,
         entries: [
@@ -1049,11 +1064,11 @@ function reducer(state: AppState, action: Action): AppState {
               !(
                 candidate.userId === state.currentUserId &&
                 candidate.metricId === metric.id &&
-                candidate.localDate === action.localDate &&
+                samples.has(candidate.localDate) &&
                 candidate.sourceOrigin === "android_usage_stats"
               ),
           ),
-          entry,
+          ...entries,
         ],
       };
     }
@@ -1497,7 +1512,9 @@ function reducer(state: AppState, action: Action): AppState {
         ...metric,
         order,
         activeFrom: action.trackedGoalIds.includes(metric.id)
-          ? goalHistoryStart(configuredState, metric)
+          ? action.historyMode === "history"
+            ? goalHistoryStart(configuredState, metric)
+            : today
           : today,
       }));
       return syncPersonalSetupGroup({
@@ -2619,6 +2636,13 @@ type AppContextValue = {
     minutes: number,
     recordedAt: string,
   ) => void;
+  setDeviceScreenTimeRange: (
+    samples: {
+      localDate: string;
+      minutes: number;
+      recordedAt: string;
+    }[],
+  ) => void;
   addMetric: (metric: NewMetric) => void;
   addMetrics: (metrics: NewMetric[]) => void;
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
@@ -2641,6 +2665,7 @@ type AppContextValue = {
   configurePersonalMetrics: (
     metrics: MetricDefinition[],
     trackedGoalIds: string[],
+    historyMode: "today" | "history",
   ) => void;
   updateGroupMetric: (
     metricId: string,
@@ -2719,9 +2744,21 @@ type AppContextValue = {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-export function AppProvider({ children }: PropsWithChildren) {
-  const [state, dispatch] = useReducer(reducer, undefined, createInitialState);
-  const [hydrated, setHydrated] = useState(false);
+export function AppProvider({
+  children,
+  initialState,
+  persistence = "durable",
+}: PropsWithChildren<{
+  initialState?: AppState;
+  persistence?: "durable" | "ephemeral";
+}>) {
+  const ephemeral = persistence === "ephemeral";
+  const [state, dispatch] = useReducer(
+    reducer,
+    undefined,
+    () => initialState ?? createInitialState(),
+  );
+  const [hydrated, setHydrated] = useState(ephemeral);
   const persistenceStateRef = useRef(state);
   const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -2746,6 +2783,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   persistenceStateRef.current = state;
 
   const persistLatestState = useCallback((immediate = false): Promise<void> => {
+    if (ephemeral) return Promise.resolve();
     // AppState may emit inactive and background in quick succession, while a
     // resume can overlap the tail of the background write. JSON.stringify is
     // synchronous, so coalescing here prevents duplicate full-state
@@ -2802,9 +2840,10 @@ export function AppProvider({ children }: PropsWithChildren) {
       });
     persistenceWriteRef.current = write;
     return write;
-  }, []);
+  }, [ephemeral]);
 
   const queuePersistenceAfterInteractions = useCallback(() => {
+    if (ephemeral) return;
     if (persistenceTaskRef.current) return;
     let completed = false;
     let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
@@ -2838,9 +2877,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     } else {
       task.cancel();
     }
-  }, [persistLatestState]);
+  }, [ephemeral, persistLatestState]);
 
   const scheduleDeferredPersistence = useCallback(() => {
+    if (ephemeral) return;
     if (NativeAppState.currentState !== "active") {
       void persistLatestState(true).catch(() => undefined);
       return;
@@ -2862,9 +2902,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     // A short coalescing window preserves near-immediate offline durability
     // while avoiding a full year-cache JSON.stringify for every rapid tap.
     persistenceTimerRef.current = setTimeout(persistWhenIdle, 850);
-  }, [persistLatestState, queuePersistenceAfterInteractions]);
+  }, [ephemeral, persistLatestState, queuePersistenceAfterInteractions]);
 
   useEffect(() => {
+    if (ephemeral) return;
     AsyncStorage.getItem(APP_STORAGE_KEY)
       .then(async (saved) => {
         if (saved) {
@@ -3290,10 +3331,10 @@ export function AppProvider({ children }: PropsWithChildren) {
       })
       .catch(() => undefined)
       .finally(() => setHydrated(true));
-  }, []);
+  }, [ephemeral]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || ephemeral) return;
     const previous = persistenceObservedStateRef.current;
     persistenceObservedStateRef.current = state;
     if (previous && !localPersistenceChanged(previous, state)) return;
@@ -3301,10 +3342,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     persistenceRevisionRef.current += 1;
     if (NativeAppState.currentState !== "active") return;
     scheduleDeferredPersistence();
-  }, [hydrated, scheduleDeferredPersistence, state]);
+  }, [ephemeral, hydrated, scheduleDeferredPersistence, state]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || ephemeral) return;
     const clearQueuedPersistence = () => {
       if (persistenceTimerRef.current) {
         clearTimeout(persistenceTimerRef.current);
@@ -3389,7 +3430,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       subscription.remove();
       clearQueuedPersistence();
     };
-  }, [hydrated, persistLatestState, queuePersistenceAfterInteractions]);
+  }, [ephemeral, hydrated, persistLatestState, queuePersistenceAfterInteractions]);
 
   useEffect(
     () => () => {
@@ -3413,6 +3454,10 @@ export function AppProvider({ children }: PropsWithChildren) {
       const committed = { ...next, lastSavedAt: new Date().toISOString() };
       persistenceStateRef.current = committed;
       persistenceObservedStateRef.current = committed;
+      if (ephemeral) {
+        dispatch({ type: "replaceLocal", state: committed });
+        return Promise.resolve();
+      }
       persistenceDirtyRef.current = true;
       persistenceRevisionRef.current += 1;
       dispatch({ type: "replaceLocal", state: committed });
@@ -3420,7 +3465,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       scheduleDeferredPersistence();
       return Promise.resolve();
     },
-    [persistLatestState, scheduleDeferredPersistence],
+    [ephemeral, persistLatestState, scheduleDeferredPersistence],
   );
 
   const commitAction = useCallback(
@@ -3503,6 +3548,7 @@ export function AppProvider({ children }: PropsWithChildren) {
         }),
       );
       return commitReducedState(next, true).then(async () => {
+        if (ephemeral) return;
         // Historical repairs must remain silent. Only a current-day value
         // crossing a configured threshold can emit an immediate milestone.
         if (entries.some((entry) => entry.localDate === dateKey())) {
@@ -3510,11 +3556,11 @@ export function AppProvider({ children }: PropsWithChildren) {
         }
       });
     },
-    [commitReducedState],
+    [commitReducedState, ephemeral],
   );
   const flushLocalPersistenceAction = useCallback(
-    () => persistLatestState(true),
-    [persistLatestState],
+    () => (ephemeral ? Promise.resolve() : persistLatestState(true)),
+    [ephemeral, persistLatestState],
   );
 
   const value = useMemo<AppContextValue>(
@@ -3535,13 +3581,14 @@ export function AppProvider({ children }: PropsWithChildren) {
           }),
         );
         void commitReducedState(next)
-          .then(() =>
-            notifyProgressMilestones(
+          .then(() => {
+            if (ephemeral) return;
+            return notifyProgressMilestones(
               previous,
               next,
               details?.localDate ?? dateKey(),
-            ),
-          )
+            );
+          })
           .catch(() => undefined);
       },
       setDeviceScreenTime: (localDate, minutes, recordedAt) => {
@@ -3550,14 +3597,27 @@ export function AppProvider({ children }: PropsWithChildren) {
           previous,
           reducer(previous, {
             type: "deviceScreenTime",
-            localDate,
-            minutes,
-            recordedAt,
+            samples: [{ localDate, minutes, recordedAt }],
           }),
         );
         void commitReducedState(next)
-          .then(() => notifyProgressMilestones(previous, next, localDate))
+          .then(() => {
+            if (ephemeral) return;
+            return notifyProgressMilestones(previous, next, localDate);
+          })
           .catch(() => undefined);
+      },
+      setDeviceScreenTimeRange: (samples) => {
+        if (!samples.length) return;
+        const previous = persistenceStateRef.current;
+        const next = withLocalDeletionTombstones(
+          previous,
+          reducer(previous, { type: "deviceScreenTime", samples }),
+        );
+        // Range hydration is a background import, not a user log action. Keep
+        // it silent so opening Screen Time cannot race the foreground bridge
+        // and emit duplicate progress notifications for today's sample.
+        void commitReducedState(next).catch(() => undefined);
       },
       addMetric: (metric) => void commitAction({ type: "addMetric", metric }),
       addMetrics: (metrics) =>
@@ -3584,8 +3644,13 @@ export function AppProvider({ children }: PropsWithChildren) {
           historyMode,
           startDate,
         }),
-      configurePersonalMetrics: (metrics, trackedGoalIds) =>
-        void commitAction({ type: "configurePersonalMetrics", metrics, trackedGoalIds }),
+      configurePersonalMetrics: (metrics, trackedGoalIds, historyMode) =>
+        void commitAction({
+          type: "configurePersonalMetrics",
+          metrics,
+          trackedGoalIds,
+          historyMode,
+        }),
       updateGroupMetric: (metricId, changes) =>
         void commitAction({ type: "updateGroupMetric", metricId, changes }),
       addGroupMetric: (metric) => void commitAction({ type: "addGroupMetric", metric }),
@@ -3693,6 +3758,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     [
       commitAction,
       commitReducedState,
+      ephemeral,
       flushLocalPersistenceAction,
       hydrated,
       importHealthEntriesAction,

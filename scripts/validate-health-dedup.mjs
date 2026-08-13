@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   deduplicateHealthImportRecords,
   healthSourceId,
+  preferredHealthSourceOrigin,
 } from "../src/domain/healthDedup.ts";
 
 const record = (overrides = {}) => ({
@@ -35,6 +36,27 @@ const mirroredSteps = deduplicateHealthImportRecords([
 assert.equal(mirroredSteps.length, 1);
 assert.equal(mirroredSteps[0].value, 1254);
 assert.equal(healthSourceId(mirroredSteps[0].origin), "samsung-health");
+
+const stepOrigins = [
+  "com.google.android.apps.fitness",
+  "com.android.healthconnect.phone.random",
+  "com.sec.android.app.shealth",
+];
+assert.equal(
+  preferredHealthSourceOrigin(stepOrigins, "steps"),
+  "com.sec.android.app.shealth",
+  "Samsung must be the canonical daily step source when it is enabled",
+);
+assert.equal(
+  preferredHealthSourceOrigin(stepOrigins, "steps", {
+    "samsung-health": {
+      origin: "com.sec.android.app.shealth",
+      enabled: false,
+    },
+  }),
+  "com.google.android.apps.fitness",
+  "a disabled Samsung source must fall through to the next enabled writer",
+);
 
 const meals = deduplicateHealthImportRecords([
   record({
@@ -98,6 +120,21 @@ assert.deepEqual(
 const androidHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "healthConnect.android.ts"),
   "utf8",
+);
+assert.match(
+  androidHealthSource,
+  /dataOriginFilter: \[selectedOrigin\]/,
+  "daily step aggregation must filter to the canonical source",
+);
+assert.match(
+  androidHealthSource,
+  /const contributedOrigins =/,
+  "the canonical source must be discovered from the requested historical range",
+);
+assert.doesNotMatch(
+  androidHealthSource,
+  /readPages\("Steps",/,
+  "step source discovery must not load thousands of granular records",
 );
 const appleHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "appleHealth.ios.ts"),

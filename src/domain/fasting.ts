@@ -1,5 +1,10 @@
-import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
-import { AppState, FastingRuntimeSetting, MetricDefinition, MetricEntry } from "@/src/types";
+import { dateKey, dateWithOffsetFrom } from "./date";
+import type {
+  AppState,
+  FastingRuntimeSetting,
+  MetricDefinition,
+  MetricEntry,
+} from "../types";
 
 const AUTO_FAST_PREFIX = "fasting-auto-food-";
 const MANUAL_FAST_PREFIX = "fasting-manual-";
@@ -598,6 +603,17 @@ function reconcileAutomaticFastingMetric(
   });
 
   return changed ? { ...next, entries } : next;
+}
+
+/** Live fast value used by cards/charts before any completed same-day row. */
+export function activeFastingHours(
+  state: AppState,
+  userId: string,
+  now = new Date(),
+  metricId = "intermittent_fasting",
+) {
+  const progress = automaticFastProgress(state, userId, now, metricId);
+  return progress.active ? progress.minutes / 60 : undefined;
 }
 
 /**

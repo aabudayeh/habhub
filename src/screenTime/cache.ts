@@ -2,10 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { ScreenTimeReport } from "@/src/screenTime";
 
-// v3 invalidates reports produced before the activity-transition fix. Some
-// Android builds emit a delayed ACTIVITY_STOPPED after the next Activity in
-// the same app resumes; treating that event as background undercounted usage.
-const PREFIX = "habhub:screen-time-report:v3:";
+// v4 invalidates expanded UsageStats buckets that could exceed 24 hours for a
+// selected day and adds the exact daily samples used by charts and Entries.
+const PREFIX = "habhub:screen-time-report:v4:";
 
 export async function cacheScreenTimeReport(
   localDate: string,

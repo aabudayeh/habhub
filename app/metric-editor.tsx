@@ -16,6 +16,7 @@ import {
 import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import { TimeInput } from "@/src/components/TimeInput";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 import {
   Button,
@@ -44,6 +45,7 @@ import {
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
 import { metricVisualization } from "@/src/domain/visualization";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   Aggregation,
@@ -286,6 +288,7 @@ export default function TrackerEditor() {
     setTrackedGoal,
     setMetricSection,
   } = useApp();
+  const tutorial = useTutorial();
   const sourceMetrics = groupScope
     ? (state.group.metricConfiguration ?? [])
     : state.metrics;
@@ -651,6 +654,26 @@ export default function TrackerEditor() {
   );
   const [customProgressReminder, setCustomProgressReminder] = useState("");
   const [validation, setValidation] = useState<string | null>(null);
+  const activeTutorialTarget = tutorial.activeStep?.target;
+  useEffect(() => {
+    if (
+      activeTutorialTarget === "metric-editor-visuals" ||
+      activeTutorialTarget === "metric-editor-submetrics" ||
+      activeTutorialTarget === "metric-editor-behavior" ||
+      activeTutorialTarget === "metric-editor-formula"
+    ) {
+      setAdvanced(true);
+    }
+    if (activeTutorialTarget === "metric-editor-visuals") setVisualsOpen(true);
+    if (activeTutorialTarget === "metric-editor-submetrics")
+      setSubmetricsOpen(true);
+    if (
+      activeTutorialTarget === "metric-editor-behavior" ||
+      activeTutorialTarget === "metric-editor-formula"
+    ) {
+      setBehaviorOpen(true);
+    }
+  }, [activeTutorialTarget]);
   const draftSignature = JSON.stringify({
     presetId,
     selectedPresetIds,
@@ -896,7 +919,7 @@ export default function TrackerEditor() {
     );
     setValidation(null);
   }
-  function validate() {
+  function validate(reportTutorialAction = false) {
     try {
       const known = Object.fromEntries(
         sourceMetrics.map((item) => [item.id, 1]),
@@ -915,6 +938,12 @@ export default function TrackerEditor() {
         ),
       });
       setValidation(`Looks good · example ${Number(result.toFixed(1))}`);
+      if (reportTutorialAction) {
+        tutorial.reportEvent({
+          actionId: "tutorial.metric.validate-formula",
+          scope: "isolated-preview",
+        });
+      }
       return true;
     } catch (error) {
       const message =
@@ -1398,23 +1427,32 @@ export default function TrackerEditor() {
   function renderFormulaEditor() {
     if (dataType !== "calculated") return null;
     return (
-      <>
-        <TextInput
-          value={formula}
-          onChangeText={(value) => {
-            setFormula(value);
-            setValidation(null);
-          }}
-          autoCapitalize="none"
-          multiline
-          placeholder="Choose values below, then add + or −"
-          placeholderTextColor={colors.faint}
-          style={[
-            styles.input,
-            styles.formula,
-            { color: colors.ink, borderColor: colors.border },
-          ]}
-        />
+      <View style={styles.formulaEditor}>
+        <TutorialTarget id="metric-editor-formula">
+          <View style={styles.formulaPractice}>
+            <TextInput
+              value={formula}
+              onChangeText={(value) => {
+                setFormula(value);
+                setValidation(null);
+              }}
+              autoCapitalize="none"
+              multiline
+              placeholder="Choose values below, then add + or −"
+              placeholderTextColor={colors.faint}
+              style={[
+                styles.input,
+                styles.formula,
+                { color: colors.ink, borderColor: colors.border },
+              ]}
+            />
+            <Button
+              label="Check calculation"
+              variant="ghost"
+              onPress={() => validate(true)}
+            />
+          </View>
+        </TutorialTarget>
         <Text style={[styles.mini, { color: colors.muted }]}>
           AVAILABLE VALUES
         </Text>
@@ -1442,11 +1480,6 @@ export default function TrackerEditor() {
             ),
           )}
         </View>
-        <Button
-          label="Check calculation"
-          variant="ghost"
-          onPress={validate}
-        />
         {validation ? (
           <Text
             style={[
@@ -1461,7 +1494,7 @@ export default function TrackerEditor() {
             {validation}
           </Text>
         ) : null}
-      </>
+      </View>
     );
   }
   let deferredSubmetrics: React.ReactNode = null;
@@ -1495,43 +1528,45 @@ export default function TrackerEditor() {
         }
       />
       {!tracker ? (
-        <MetricSelector
-          title="Choose a ready-made tracker"
-          items={presets.map((preset) => ({
-            id: preset.templateId,
-            label: preset.name,
-            icon: preset.icon as keyof typeof Ionicons.glyphMap,
-            color: preset.color,
-            sublabel: preset.description,
-            group: preset.category === "gym" ? "Workout" : "Ready-made",
-          }))}
-          selectedIds={selectedPresetIds}
-          onChange={(ids) => {
-            setSelectedPresetIds(ids);
-            if (!ids.length) {
-              clearPreset();
-              return;
+        <TutorialTarget id="metric-editor-basics">
+          <MetricSelector
+            title="Choose a ready-made tracker"
+            items={presets.map((preset) => ({
+              id: preset.templateId,
+              label: preset.name,
+              icon: preset.icon as keyof typeof Ionicons.glyphMap,
+              color: preset.color,
+              sublabel: preset.description,
+              group: preset.category === "gym" ? "Workout" : "Ready-made",
+            }))}
+            selectedIds={selectedPresetIds}
+            onChange={(ids) => {
+              setSelectedPresetIds(ids);
+              if (!ids.length) {
+                clearPreset();
+                return;
+              }
+              if (ids.length === 1) {
+                const preset = presets.find(
+                  (item) => item.templateId === ids[0],
+                );
+                if (preset) applyPreset(preset);
+                return;
+              }
+              setPresetId("");
+            }}
+            multiple
+            allowClear
+            showSelectAll={false}
+            collapsibleGroups={
+              state.settings.showGym &&
+              presets.some((preset) => preset.category === "gym")
+                ? ["Workout"]
+                : []
             }
-            if (ids.length === 1) {
-              const preset = presets.find(
-                (item) => item.templateId === ids[0],
-              );
-              if (preset) applyPreset(preset);
-              return;
-            }
-            setPresetId("");
-          }}
-          multiple
-          allowClear
-          showSelectAll={false}
-          collapsibleGroups={
-            state.settings.showGym &&
-            presets.some((preset) => preset.category === "gym")
-              ? ["Workout"]
-              : []
-          }
-          emptyLabel="Or create your own below"
-        />
+            emptyLabel="Or create your own below"
+          />
+        </TutorialTarget>
       ) : null}
       {bulkPresetMode ? (
         <Card>
@@ -1774,22 +1809,24 @@ export default function TrackerEditor() {
             stay controlled by each workout&apos;s visibility.
           </Text>
         ) : null}
-        <ChoicePicker
-          label="Entry type"
-          value={dataType}
-          open={entryTypeOpen}
-          setOpen={setEntryTypeOpen}
-          options={[
-            { id: "number", label: "Number", icon: "calculator-outline" },
-            { id: "boolean", label: "Done / not done", icon: "checkbox-outline" },
-            { id: "text", label: "Note", icon: "document-text-outline" },
-            { id: "photo", label: "Photo", icon: "camera-outline" },
-            { id: "calculated", label: "Calculated", icon: "code-slash-outline" },
-          ]}
-          onChange={(value) => setDataType(value as MetricDataType)}
-          colors={colors}
-          accent={accent}
-        />
+        <TutorialTarget id="metric-editor-entry">
+          <ChoicePicker
+            label="Entry type"
+            value={dataType}
+            open={entryTypeOpen}
+            setOpen={setEntryTypeOpen}
+            options={[
+              { id: "number", label: "Number", icon: "calculator-outline" },
+              { id: "boolean", label: "Done / not done", icon: "checkbox-outline" },
+              { id: "text", label: "Note", icon: "document-text-outline" },
+              { id: "photo", label: "Photo", icon: "camera-outline" },
+              { id: "calculated", label: "Calculated", icon: "code-slash-outline" },
+            ]}
+            onChange={(value) => setDataType(value as MetricDataType)}
+            colors={colors}
+            accent={accent}
+          />
+        </TutorialTarget>
         {dataType === "number" ? (
           <ChoicePicker
             label="Multiple entries"
@@ -1824,22 +1861,24 @@ export default function TrackerEditor() {
             accent={accent}
           />
         ) : null}
-        <View style={[styles.switchRow, { borderColor: colors.border }]}>
-          <View style={styles.grow}>
-            <Text style={[styles.rowTitle, { color: colors.ink }]}>
-              Set a target
-            </Text>
-            <Text style={[styles.help, { color: colors.muted }]}>
-              Turn this off for readings you only want to observe.
-            </Text>
+        <TutorialTarget id="metric-editor-goal">
+          <View style={[styles.switchRow, { borderColor: colors.border }]}>
+            <View style={styles.grow}>
+              <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                Set a target
+              </Text>
+              <Text style={[styles.help, { color: colors.muted }]}>
+                Turn this off for readings you only want to observe.
+              </Text>
+            </View>
+            <Switch
+              value={goalEnabled}
+              onValueChange={setGoalEnabled}
+              trackColor={{ false: colors.border, true: `${accent}88` }}
+              thumbColor={goalEnabled ? accent : colors.faint}
+            />
           </View>
-          <Switch
-            value={goalEnabled}
-            onValueChange={setGoalEnabled}
-            trackColor={{ false: colors.border, true: `${accent}88` }}
-            thumbColor={goalEnabled ? accent : colors.faint}
-          />
-        </View>
+        </TutorialTarget>
         {goalEnabled && dataType !== "text" && !isFastingTracker ? (
           <>
             {(presetId || tracker?.id) === "blood_pressure_systolic" ? (
@@ -2216,30 +2255,32 @@ export default function TrackerEditor() {
             </View>
           ) : null}
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
-            <Pressable
-              onPress={() => setVisualsOpen((open) => !open)}
-              style={styles.collapseHeading}
-            >
-              <View style={styles.grow}>
-                <View style={styles.submetricTitleRow}>
-                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                    Charts &amp; visuals
+            <TutorialTarget id="metric-editor-visuals">
+              <Pressable
+                onPress={() => setVisualsOpen((open) => !open)}
+                style={styles.collapseHeading}
+              >
+                <View style={styles.grow}>
+                  <View style={styles.submetricTitleRow}>
+                    <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                      Charts &amp; visuals
+                    </Text>
+                    <InfoPopover
+                      label="About chart customization"
+                      message="Chart and submetric customization is in beta and may not behave as expected for every custom tracker. If something looks wrong, send feedback from Settings so it can be fixed."
+                    />
+                  </View>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Tracker detail and goal-map display
                   </Text>
-                  <InfoPopover
-                    label="About chart customization"
-                    message="Chart and submetric customization is in beta and may not behave as expected for every custom tracker. If something looks wrong, send feedback from Settings so it can be fixed."
-                  />
                 </View>
-                <Text style={[styles.help, { color: colors.muted }]}>
-                  Tracker detail and goal-map display
-                </Text>
-              </View>
-              <Ionicons
-                name={visualsOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={colors.faint}
-              />
-            </Pressable>
+                <Ionicons
+                  name={visualsOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color={colors.faint}
+                />
+              </Pressable>
+            </TutorialTarget>
             {visualsOpen ? (
               <View style={styles.visualChoices}>
                 <VisualChoice
@@ -2289,32 +2330,34 @@ export default function TrackerEditor() {
           {(() => {
             deferredSubmetrics = (
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
-            <Pressable
-              onPress={() => setSubmetricsOpen((open) => !open)}
-              style={styles.collapseHeading}
-            >
-              <View style={styles.grow}>
-                <View style={styles.submetricTitleRow}>
-                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                    Submetrics
+            <TutorialTarget id="metric-editor-submetrics">
+              <Pressable
+                onPress={() => setSubmetricsOpen((open) => !open)}
+                style={styles.collapseHeading}
+              >
+                <View style={styles.grow}>
+                  <View style={styles.submetricTitleRow}>
+                    <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                      Submetrics
+                    </Text>
+                    <InfoPopover
+                      label="How submetrics work"
+                      message="Submetrics store related inputs together in one tracker. For example, blood pressure can collect systolic, diastolic and pulse, while selected fields can also update linked trackers. This beta feature may not cover every custom setup yet; report unexpected behavior from Settings."
+                    />
+                  </View>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    {submetrics.length
+                      ? `${submetrics.length} linked field${submetrics.length === 1 ? "" : "s"}`
+                      : "Optional compound inputs such as blood pressure or nutrition"}
                   </Text>
-                  <InfoPopover
-                    label="How submetrics work"
-                    message="Submetrics store related inputs together in one tracker. For example, blood pressure can collect systolic, diastolic and pulse, while selected fields can also update linked trackers. This beta feature may not cover every custom setup yet; report unexpected behavior from Settings."
-                  />
                 </View>
-                <Text style={[styles.help, { color: colors.muted }]}>
-                  {submetrics.length
-                    ? `${submetrics.length} linked field${submetrics.length === 1 ? "" : "s"}`
-                    : "Optional compound inputs such as blood pressure or nutrition"}
-                </Text>
-              </View>
-              <Ionicons
-                name={submetricsOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={colors.faint}
-              />
-            </Pressable>
+                <Ionicons
+                  name={submetricsOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color={colors.faint}
+                />
+              </Pressable>
+            </TutorialTarget>
             {submetricsOpen ? (
               <View style={[styles.submetricList, { borderTopColor: colors.border }]}>
                 {submetrics.length ? (
@@ -2865,24 +2908,26 @@ export default function TrackerEditor() {
             }}
           >
           <View style={[styles.advancedSection, { borderColor: colors.border }]}>
-            <Pressable
-              onPress={() => setBehaviorOpen((open) => !open)}
-              style={styles.collapseHeading}
-            >
-              <View style={styles.grow}>
-                <Text style={[styles.rowTitle, { color: colors.ink }]}>
-                  Goal behavior &amp; reminders
-                </Text>
-                <Text style={[styles.help, { color: colors.muted }]}>
-                  Start date, schedule and reminder times
-                </Text>
-              </View>
-              <Ionicons
-                name={behaviorOpen ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={colors.faint}
-              />
-            </Pressable>
+            <TutorialTarget id="metric-editor-behavior">
+              <Pressable
+                onPress={() => setBehaviorOpen((open) => !open)}
+                style={styles.collapseHeading}
+              >
+                <View style={styles.grow}>
+                  <Text style={[styles.rowTitle, { color: colors.ink }]}>
+                    Goal behavior &amp; reminders
+                  </Text>
+                  <Text style={[styles.help, { color: colors.muted }]}>
+                    Start date, schedule and reminder times
+                  </Text>
+                </View>
+                <Ionicons
+                  name={behaviorOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color={colors.faint}
+                />
+              </Pressable>
+            </TutorialTarget>
             {behaviorOpen ? (
               <>
             {!groupScope && goalEnabled && dataType !== "text" ? (
@@ -3545,7 +3590,7 @@ export default function TrackerEditor() {
             <Button label="Delete" variant="danger" onPress={remove} />
           </View>
         ) : null}
-        <View style={styles.grow}>
+        <TutorialTarget id="metric-editor-save" style={styles.grow}>
           <Button
             label={
               tracker
@@ -3561,7 +3606,7 @@ export default function TrackerEditor() {
             icon="checkmark"
             onPress={() => save()}
           />
-        </View>
+        </TutorialTarget>
       </View>
     </Screen>
   );
@@ -4181,6 +4226,8 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
   advancedPanel: { gap: 0 },
+  formulaEditor: { gap: 8 },
+  formulaPractice: { gap: 8 },
   advancedSection: {
     borderTopWidth: 1,
     marginTop: 8,

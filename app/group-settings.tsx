@@ -85,6 +85,10 @@ export default function GroupSettings() {
   );
   const aliases = state.settings.memberNicknamesByGroup?.[state.group.id] ?? {};
   const [groupNameDraft, setGroupNameDraft] = useState(state.group.name);
+  const [groupColorOpen, setGroupColorOpen] = useState(false);
+  const [groupColorDraft, setGroupColorDraft] = useState(
+    state.group.themeColor ?? palette.primary,
+  );
   const observedGroupId = useRef(state.group.id);
   const observedGroupName = useRef(state.group.name);
   const allowExit = useRef(false);
@@ -127,6 +131,11 @@ export default function GroupSettings() {
       groupChanged || current === previousName ? state.group.name : current,
     );
   }, [state.group.id, state.group.name]);
+
+  useEffect(() => {
+    setGroupColorDraft(state.group.themeColor ?? palette.primary);
+    setGroupColorOpen(false);
+  }, [state.group.id, state.group.themeColor]);
 
   function persistNicknameDrafts() {
     state.group.members.forEach((member) => {
@@ -282,6 +291,7 @@ export default function GroupSettings() {
         eyebrow={state.group.name}
         translateEyebrow={false}
         title="Group settings"
+        tutorialId="group-settings"
         subtitle="Competition rules belong to this group and apply to every member."
         showMenu={false}
         action={
@@ -372,16 +382,63 @@ export default function GroupSettings() {
 
       <SectionHeader title="Group color" />
       <Card style={styles.colorPicker}>
-        <ColorSpectrumPicker
-          value={state.group.themeColor ?? palette.primary}
-          disabled={!canEdit}
-          onChange={setGroupTheme}
-        />
-        <Text style={[styles.meta, { color: colors.muted }]}>
-          {canEdit
-            ? "This becomes the shared group accent. Members can still choose a personal override."
-            : "Only a group admin can change the shared accent."}
-        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: groupColorOpen }}
+          accessibilityLabel={groupColorOpen ? "Hide group color picker" : "Show group color picker"}
+          onPress={() => {
+            if (groupColorOpen)
+              setGroupColorDraft(state.group.themeColor ?? palette.primary);
+            setGroupColorOpen((open) => !open);
+          }}
+          style={styles.colorDisclosure}
+        >
+          <View style={[styles.colorPreview, { backgroundColor: state.group.themeColor ?? palette.primary }]} />
+          <View style={styles.copy}>
+            <Text style={[styles.name, { color: colors.ink }]}>Shared accent</Text>
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              {(state.group.themeColor ?? palette.primary).toUpperCase()} · {canEdit ? "Tap to customize" : "Admin managed"}
+            </Text>
+          </View>
+          <Ionicons name={groupColorOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+        </Pressable>
+        {groupColorOpen ? (
+          <View style={[styles.colorPickerBody, { borderTopColor: colors.border }]}>
+            <ColorSpectrumPicker
+              value={groupColorDraft}
+              disabled={!canEdit}
+              onChange={setGroupColorDraft}
+            />
+            <View style={styles.colorFooter}>
+              <Text style={[styles.meta, styles.colorHelp, { color: colors.muted }]}>
+                {canEdit
+                  ? "Apply once when the color is ready. Members can still choose a personal override."
+                  : "Only a group admin can change the shared accent."}
+              </Text>
+              {canEdit ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Apply group color"
+                  disabled={groupColorDraft === (state.group.themeColor ?? palette.primary)}
+                  onPress={() => {
+                    setGroupTheme(groupColorDraft);
+                    setGroupColorOpen(false);
+                  }}
+                  style={[
+                    styles.colorApply,
+                    {
+                      backgroundColor: groupColorDraft === (state.group.themeColor ?? palette.primary)
+                        ? colors.border
+                        : accent,
+                    },
+                  ]}
+                >
+                  <Text style={styles.colorApplyText}>Apply</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
       </Card>
 
       <SectionHeader
@@ -747,7 +804,14 @@ const styles = StyleSheet.create({
   name: { fontSize: 11, fontWeight: "900" },
   meta: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   link: { fontSize: 10, fontWeight: "900" },
-  colorPicker: { gap: 9 },
+  colorPicker: { padding: 0, overflow: "hidden" },
+  colorDisclosure: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 11, paddingVertical: 8 },
+  colorPreview: { width: 30, height: 30, borderRadius: 10 },
+  colorPickerBody: { borderTopWidth: StyleSheet.hairlineWidth, padding: 11, gap: 8 },
+  colorFooter: { flexDirection: "row", alignItems: "center", gap: 8 },
+  colorHelp: { flex: 1 },
+  colorApply: { minHeight: 34, borderRadius: 11, paddingHorizontal: 13, alignItems: "center", justifyContent: "center" },
+  colorApplyText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   colors: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   swatch: {
     width: 36,

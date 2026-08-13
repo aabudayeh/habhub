@@ -37,7 +37,10 @@ import { GoalHeatmap } from "@/src/components/GoalHeatmap";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
-import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import {
   todoAppearsOnDate,
   todoResolvedOnDate,
@@ -88,6 +91,7 @@ import {
 } from "@/src/cloud/CloudSyncProvider";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   CompletionFillMode,
@@ -154,6 +158,8 @@ function Today() {
     updateMetric,
     updateSettings,
   } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const health = useHealthSync();
   const cloud = useCloudSyncActions();
   const cloudStatus = useCloudSyncStatus();
@@ -198,7 +204,12 @@ function Today() {
     exitingEditMode.current = false;
     setCompletionSortEnabled(false);
     setEditing(true);
-  }, []);
+    if (tutorialSandbox)
+      tutorial.reportEvent({
+        actionId: "tutorial.today.enter-edit",
+        scope: "isolated-preview",
+      });
+  }, [tutorial, tutorialSandbox]);
   const finishEditing = useCallback(() => {
     if (exitingEditMode.current) return;
     exitingEditMode.current = true;
@@ -458,6 +469,14 @@ function Today() {
         };
       }
 
+      if (tutorialSandbox) {
+        setLiquidAnimatedGoalIds([]);
+        return () => {
+          cancelled = true;
+          goalLiquidReveal.stopAnimation();
+          goalLiquidMotion.stopAnimation();
+        };
+      }
       AsyncStorage.getItem(goalLiquidStorageKey)
         .then((saved) => {
           if (cancelled) return;
@@ -470,10 +489,11 @@ function Today() {
             })
             .map(([id]) => id);
 
-          AsyncStorage.setItem(
-            goalLiquidStorageKey,
-            JSON.stringify(current),
-          ).catch(() => undefined);
+          if (!tutorialSandbox)
+            AsyncStorage.setItem(
+              goalLiquidStorageKey,
+              JSON.stringify(current),
+            ).catch(() => undefined);
 
           if (reduceMotion || !changedGoalIds.length) {
             setLiquidAnimatedGoalIds([]);
@@ -536,6 +556,7 @@ function Today() {
       goalLiquidStorageKey,
       reduceMotion,
       showGoalsToday,
+      tutorialSandbox,
     ]),
   );
   const celebration = useRef(new Animated.Value(0)).current;
@@ -564,6 +585,7 @@ function Today() {
       let cancelled = false;
       let clearTiles: ReturnType<typeof setTimeout> | undefined;
       let clearConfetti: ReturnType<typeof setTimeout> | undefined;
+      if (tutorialSandbox) return;
       AsyncStorage.getItem(celebrationStorageKey)
         .then((saved) => {
           if (cancelled) return;
@@ -607,10 +629,11 @@ function Today() {
               duration,
             );
           }
-          AsyncStorage.setItem(
-            celebrationStorageKey,
-            [...completed].sort().join("|"),
-          ).catch(() => undefined);
+          if (!tutorialSandbox)
+            AsyncStorage.setItem(
+              celebrationStorageKey,
+              [...completed].sort().join("|"),
+            ).catch(() => undefined);
         })
         .catch(() => undefined);
       return () => {
@@ -621,7 +644,7 @@ function Today() {
         celebration.setValue(0);
         setConfettiVisible(false);
       };
-    }, [celebration, celebrationStorageKey]),
+    }, [celebration, celebrationStorageKey, tutorialSandbox]),
   );
   const celebrateTodo = useCallback(
     (todoId: string) => {
@@ -643,6 +666,14 @@ function Today() {
         celebration.setValue(0);
         setConfettiVisible(false);
       }, duration + 500);
+      if (tutorialSandbox) {
+        if (todoId === "tutorial-todo-groceries")
+          tutorial.reportEvent({
+            actionId: "tutorial.today.complete-todo",
+            scope: "isolated-preview",
+          });
+        return;
+      }
       AsyncStorage.getItem(celebrationStorageKey)
         .then((saved) => {
           const completed = new Set((saved ?? "").split("|").filter(Boolean));
@@ -654,7 +685,7 @@ function Today() {
         })
         .catch(() => undefined);
     },
-    [celebration, celebrationStorageKey],
+    [celebration, celebrationStorageKey, tutorial, tutorialSandbox],
   );
   const tileHeight = Math.max(
     52,
@@ -949,6 +980,7 @@ function Today() {
         </AnimatedPressable>
         </TutorialTarget>
         {showGoalsToday && goals.allMet ? (
+          <TutorialTarget id="today-all-complete">
           <Celebration
             title="All goals complete"
             copy="Perfect Day badge earned for completing every tracked goal today."
@@ -965,8 +997,10 @@ function Today() {
               } as never)
             }
           />
+          </TutorialTarget>
         ) : null}
         {state.settings.todosBelowGoals !== true ? (
+          <TutorialTarget id="today-todo-list">
           <TodoTodayList
             localDate={today}
             onComplete={celebrateTodo}
@@ -975,10 +1009,15 @@ function Today() {
             visibleOverride={customTodoVisible}
             todoIds={customTodoIds}
           />
+          </TutorialTarget>
         ) : null}
+        <TutorialTarget id="today-edit">
         <View style={styles.sectionRow}>
           <Pressable
             accessibilityLabel="Customize Today"
+            onPress={() => {
+              if (tutorialSandbox && !editing) beginEditing();
+            }}
             delayLongPress={325}
             onLongPress={() => {
               if (!editing) beginEditing();
@@ -1007,6 +1046,7 @@ function Today() {
                 />
               </Pressable>
             ) : null}
+            <TutorialTarget id="today-filter">
             <Pressable
               onPress={() => setShowViewFilters(true)}
               delayLongPress={325}
@@ -1026,8 +1066,11 @@ function Today() {
                 {activeTrackerViewLabel(state, "today")}
               </Text>
             </Pressable>
+            </TutorialTarget>
           </View>
         </View>
+        </TutorialTarget>
+        <TutorialTarget id="today-tracker-list">
         <View style={styles.list}>
           {primary.map((item, index) => (
             <ReorderItem
@@ -1059,7 +1102,15 @@ function Today() {
                 historyExpanded={expandedHistoryIds.includes(item.id)}
                 onEdit={beginEditing}
                 onMove={(target) =>
-                  reorderMetric(item.id, visible[target]?.order ?? target)
+                  {
+                    if (target === index) return;
+                    reorderMetric(item.id, visible[target]?.order ?? target);
+                    if (tutorialSandbox)
+                      tutorial.reportEvent({
+                        actionId: "tutorial.today.reorder",
+                        scope: "isolated-preview",
+                      });
+                  }
                 }
                 onRemove={() => remove(item)}
                 onPin={() => updateMetric(item.id, { pinnedTodayAt: item.pinnedTodayAt ? undefined : new Date().toISOString() })}
@@ -1072,14 +1123,32 @@ function Today() {
                         { text: "Cancel", style: "cancel" },
                         {
                           text: "From today",
-                          onPress: () =>
-                            setTrackedGoal(item.id, false, "today"),
+                          onPress: () => {
+                            setTrackedGoal(item.id, false, "today");
+                            if (
+                              tutorialSandbox &&
+                              item.id === "tutorial_meditation"
+                            )
+                              tutorial.reportEvent({
+                                actionId: "tutorial.today.toggle-tracked",
+                                scope: "isolated-preview",
+                              });
+                          },
                         },
                         {
                           text: "Remove history",
                           style: "destructive",
-                          onPress: () =>
-                            setTrackedGoal(item.id, false, "history"),
+                          onPress: () => {
+                            setTrackedGoal(item.id, false, "history");
+                            if (
+                              tutorialSandbox &&
+                              item.id === "tutorial_meditation"
+                            )
+                              tutorial.reportEvent({
+                                actionId: "tutorial.today.toggle-tracked",
+                                scope: "isolated-preview",
+                              });
+                          },
                         },
                       ],
                     );
@@ -1091,14 +1160,32 @@ function Today() {
                     [
                       { text: "Cancel", style: "cancel" },
                       {
-                        text: "Apply to history",
-                        onPress: () =>
-                          setTrackedGoal(item.id, true, "history"),
+                          text: "Apply to history",
+                          onPress: () => {
+                            setTrackedGoal(item.id, true, "history");
+                            if (
+                              tutorialSandbox &&
+                              item.id === "tutorial_meditation"
+                            )
+                              tutorial.reportEvent({
+                                actionId: "tutorial.today.toggle-tracked",
+                                scope: "isolated-preview",
+                              });
+                          },
                       },
                       {
-                        text: "Start today",
-                        onPress: () =>
-                          setTrackedGoal(item.id, true, "today"),
+                          text: "Start today",
+                          onPress: () => {
+                            setTrackedGoal(item.id, true, "today");
+                            if (
+                              tutorialSandbox &&
+                              item.id === "tutorial_meditation"
+                            )
+                              tutorial.reportEvent({
+                                actionId: "tutorial.today.toggle-tracked",
+                                scope: "isolated-preview",
+                              });
+                          },
                       },
                       {
                         text: "Choose date",
@@ -1127,10 +1214,13 @@ function Today() {
                 onDragEnd={() => {
                   setDraggingMetricId(null);
                 }}
+                tutorialGoalFlag={item.id === "tutorial_meditation"}
+                tutorialReorder={index === 0}
               />
             </ReorderItem>
           ))}
         </View>
+        </TutorialTarget>
         {extra.length ? (
           <Pressable
             onPress={() => setShowMore(true)}
@@ -1149,6 +1239,7 @@ function Today() {
           </Pressable>
         ) : null}
         {state.settings.todosBelowGoals === true ? (
+          <TutorialTarget id="today-todo-list">
           <TodoTodayList
             localDate={today}
             onComplete={celebrateTodo}
@@ -1157,8 +1248,10 @@ function Today() {
             visibleOverride={customTodoVisible}
             todoIds={customTodoIds}
           />
+          </TutorialTarget>
         ) : null}
         {editing ? (
+          <TutorialTarget id="today-edit-menu">
           <View style={styles.editActions}>
             <Pressable
               onPress={() => setShowAddTiles(true)}
@@ -1193,6 +1286,7 @@ function Today() {
                 Create tracker
               </Text>
             </Pressable>
+            <TutorialTarget id="today-tracked-goals" style={styles.editActionTarget}>
             <Pressable
               onPress={() => router.navigate("/customize?tab=goals" as never)}
               style={[styles.add, styles.editActionButton, { borderColor: accent }]}
@@ -1211,6 +1305,7 @@ function Today() {
                 Tracked goals
               </Text>
             </Pressable>
+            </TutorialTarget>
             <Pressable
               onPress={() => setShowHistoryOptions(true)}
               style={[styles.add, styles.editActionButton, { borderColor: accent }]}
@@ -1240,6 +1335,7 @@ function Today() {
               </Text>
             </Pressable>
           </View>
+          </TutorialTarget>
         ) : null}
       </ScrollView>
       <Modal
@@ -1770,6 +1866,8 @@ function TrackerRow({
   onDragHover,
   onDragCancel,
   onDragEnd,
+  tutorialGoalFlag,
+  tutorialReorder,
 }: {
   item: MetricDefinition;
   index: number;
@@ -1800,6 +1898,8 @@ function TrackerRow({
   onDragHover: (target: number) => void;
   onDragCancel: () => void;
   onDragEnd: () => void;
+  tutorialGoalFlag: boolean;
+  tutorialReorder: boolean;
 }) {
   const locale = useLocale();
   const { t } = useLocalization();
@@ -2005,7 +2105,37 @@ function TrackerRow({
         applicable,
         weekly,
         locale,
-      );
+       );
+  const dragHandle = (
+    <View collapsable={false} style={styles.drag}>
+      <Ionicons
+        name="reorder-three-outline"
+        size={24}
+        color={colors.faint}
+      />
+    </View>
+  );
+  const trackedToggle = (
+    <Pressable
+      accessibilityLabel={
+        trackedGoal
+          ? `Remove ${item.name} from tracked goals`
+          : `Add ${item.name} to tracked goals`
+      }
+      onPress={onTrackedToggle}
+      hitSlop={8}
+      style={[
+        styles.editTracker,
+        { borderColor: trackedGoal ? item.color : accent },
+      ]}
+    >
+      <Ionicons
+        name={trackedGoal ? "flag" : "flag-outline"}
+        size={14}
+        color={trackedGoal ? item.color : accent}
+      />
+    </Pressable>
+  );
   return (
     <Reanimated.View
       style={[
@@ -2065,13 +2195,9 @@ function TrackerRow({
     >
       {editing ? (
         <GestureDetector gesture={smoothDrag.gesture}>
-        <View collapsable={false} style={styles.drag}>
-          <Ionicons
-            name="reorder-three-outline"
-            size={24}
-            color={colors.faint}
-          />
-        </View>
+        {tutorialReorder ? (
+          <TutorialTarget id="today-reorder">{dragHandle}</TutorialTarget>
+        ) : dragHandle}
         </GestureDetector>
       ) : (
         <View style={[styles.icon, { backgroundColor: `${item.color}18` }]}>
@@ -2294,25 +2420,11 @@ function TrackerRow({
           >
             <Ionicons name="create-outline" size={15} color={accent} />
           </Pressable>
-          <Pressable
-            accessibilityLabel={
-              trackedGoal
-                ? `Remove ${item.name} from tracked goals`
-                : `Add ${item.name} to tracked goals`
-            }
-            onPress={onTrackedToggle}
-            hitSlop={8}
-            style={[
-              styles.editTracker,
-              { borderColor: trackedGoal ? item.color : accent },
-            ]}
-          >
-            <Ionicons
-              name={trackedGoal ? "flag" : "flag-outline"}
-              size={14}
-              color={trackedGoal ? item.color : accent}
-            />
-          </Pressable>
+          {tutorialGoalFlag ? (
+            <TutorialTarget id="today-goal-flag">
+              {trackedToggle}
+            </TutorialTarget>
+          ) : trackedToggle}
           <Pressable onPress={onRemove} hitSlop={10} style={styles.remove}>
             <Ionicons name="remove" size={17} color={palette.white} />
           </Pressable>
@@ -2968,6 +3080,11 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   editActionButton: {
+    flexBasis: "48%",
+    flexGrow: 1,
+    minWidth: 0,
+  },
+  editActionTarget: {
     flexBasis: "48%",
     flexGrow: 1,
     minWidth: 0,

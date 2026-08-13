@@ -291,6 +291,7 @@ function SimulationMetricRow({
   onToggle,
   range,
   secondary = false,
+  toggleable = true,
   value,
 }: {
   enabled: boolean;
@@ -301,6 +302,7 @@ function SimulationMetricRow({
   onToggle: (enabled: boolean) => void;
   range: StatusAvatarSimulationRange;
   secondary?: boolean;
+  toggleable?: boolean;
   value: number;
 }) {
   const colors = useAppColors();
@@ -341,7 +343,13 @@ function SimulationMetricRow({
           >
             {displayValue}
           </Text>
-          <MetricToggle enabled={enabled} label={t(label)} onChange={onToggle} />
+          {toggleable ? (
+            <MetricToggle
+              enabled={enabled}
+              label={t(label)}
+              onChange={onToggle}
+            />
+          ) : null}
         </View>
       </View>
       <SimulationSlider
@@ -546,7 +554,7 @@ export function StatusAvatarSimulator({
                     Estimate only. This is not a scan, scientific measurement, or prediction of your body.
                   </Text>
                   <Text style={[styles.infoDetail, { color: colors.muted }]}>
-                    Weight and BMI are linked through this height; use either one for total size.
+                    Weight uses your profile height for total size. Body fat and lean mass can be adjusted or disabled independently.
                   </Text>
                 </View>
               </Pressable>
@@ -568,6 +576,7 @@ export function StatusAvatarSimulator({
                 mindTier={mindTier}
                 muscleProgress={preview.muscleProgress}
                 progress={progress}
+                showProgressLabel={false}
                 sex={preview.sex}
                 visualStyle={visualStyle}
                 weightKg={preview.weightKg}
@@ -587,35 +596,17 @@ export function StatusAvatarSimulator({
                 { backgroundColor: colors.canvas, borderColor: colors.border },
               ]}
             >
-              <View
-                accessibilityLabel={`${t("Weight")} ${t("BMI")}`}
-                style={[
-                  styles.linkedSizeGroup,
-                  { borderBottomColor: colors.border },
-                ]}
-              >
-                <SimulationMetricRow
-                  enabled={preview.enabled.weight}
-                  formatter={formatter}
-                  last={false}
-                  label="Weight"
-                  onChange={(value) => changeMetric("weight", value)}
-                  onToggle={(enabled) => toggleMetric("weight", enabled)}
-                  range={ranges.weight}
-                  value={preview.values.weight}
-                />
-                <SimulationMetricRow
-                  enabled={preview.enabled.bmi}
-                  formatter={formatter}
-                  last
-                  label="BMI"
-                  onChange={(value) => changeMetric("bmi", value)}
-                  onToggle={(enabled) => toggleMetric("bmi", enabled)}
-                  range={ranges.bmi}
-                  secondary
-                  value={preview.values.bmi}
-                />
-              </View>
+              <SimulationMetricRow
+                enabled
+                formatter={formatter}
+                last={false}
+                label="Weight"
+                onChange={(value) => changeMetric("weight", value)}
+                onToggle={() => undefined}
+                range={ranges.weight}
+                toggleable={false}
+                value={preview.values.weight}
+              />
               {STATUS_AVATAR_SIMULATION_METRICS.slice(2).map((item, index) => (
                 <SimulationMetricRow
                   key={item.id}
@@ -731,9 +722,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
     overflow: "hidden",
-  },
-  linkedSizeGroup: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   metricRow: {
     minHeight: 49,

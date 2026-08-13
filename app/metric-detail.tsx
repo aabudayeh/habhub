@@ -15,6 +15,7 @@ import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { FastingClockEditor } from "@/src/components/FastingClockEditor";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   Card,
   IconButton,
@@ -90,6 +91,7 @@ import {
   fastingProgressForDate,
 } from "@/src/domain/fasting";
 import { ScreenTimeBreakdownCard } from "@/src/screenTime/ScreenTimeBreakdownCard";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -99,6 +101,18 @@ const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string 
   { id: "year", label: "Year" },
   { id: "overall", label: "All time" },
 ];
+
+function OptionalTutorialTarget({
+  enabled,
+  id,
+  children,
+}: React.PropsWithChildren<{ enabled: boolean; id: string }>) {
+  return enabled ? (
+    <TutorialTarget id={id}>{children}</TutorialTarget>
+  ) : (
+    <>{children}</>
+  );
+}
 
 export default function TrackerDetail() {
   const { metric: trackerId, date, period: requestedPeriod } = useLocalSearchParams<{
@@ -115,6 +129,7 @@ export default function TrackerDetail() {
     startFast,
     endFast,
   } = useApp();
+  const tutorial = useTutorial();
   const locale = useLocale();
   const { language, t } = useLocalization();
   const colors = useAppColors();
@@ -822,7 +837,8 @@ export default function TrackerDetail() {
         ) : null}
       </View>
       {canSkipToday || canAddEntry || tracker.timerEnabled || isFasting ? (
-        <View style={styles.detailQuickActions}>
+        <OptionalTutorialTarget enabled={isFasting} id="fasting-controls">
+          <View style={styles.detailQuickActions}>
           {canSkipToday ? (
             <Pressable
               onPress={() =>
@@ -887,11 +903,14 @@ export default function TrackerDetail() {
               accessibilityLabel={
                 fastingProgress?.active ? "End fast" : "Start fast"
               }
-              onPress={() =>
-                fastingProgress?.active
-                  ? endFast(tracker.id)
-                  : startFast(tracker.id)
-              }
+              onPress={() => {
+                if (fastingProgress?.active) endFast(tracker.id);
+                else startFast(tracker.id);
+                tutorial.reportEvent({
+                  actionId: "tutorial.fasting.toggle",
+                  scope: "isolated-preview",
+                });
+              }}
               style={[
                 styles.skipToday,
                 {
@@ -961,7 +980,8 @@ export default function TrackerDetail() {
               </Text>
             </Pressable>
           ) : null}
-        </View>
+          </View>
+        </OptionalTutorialTarget>
       ) : null}
       {tracker.id === "screen_time" ? (
         <ScreenTimeBreakdownCard dates={dates} />
@@ -988,7 +1008,8 @@ export default function TrackerDetail() {
         />
       ) : null}
       <Card style={styles.summary}>
-        <View style={styles.summaryTop}>
+        <TutorialTarget id="metric-detail-summary">
+          <View style={styles.summaryTop}>
           <View>
             <Text style={[styles.label, { color: colors.faint }]}>
               {dates.length === 1
@@ -1038,7 +1059,8 @@ export default function TrackerDetail() {
               color={tracker.color}
             />
           </View>
-        </View>
+          </View>
+        </TutorialTarget>
         {weightStats && dates.length === 1 ? (
           <View style={styles.weightJourney}>
             <View style={styles.weightJourneyLabels}>
@@ -1151,7 +1173,8 @@ export default function TrackerDetail() {
         isFasting &&
         fastingProgress?.startedAt &&
         visualization.detailDay !== "none" ? (
-          <View style={styles.dayProgress}>
+          <TutorialTarget id="metric-detail-chart">
+            <View style={styles.dayProgress}>
             <FastingProgressBar
               startedAt={fastingProgress.startedAt}
               endedAt={fastingProgress.endedAt}
@@ -1164,7 +1187,8 @@ export default function TrackerDetail() {
                 fastingProgress.endedOutsideEatingWindow
               }
             />
-          </View>
+            </View>
+          </TutorialTarget>
         ) : null}
         {dates.length === 1 &&
         displayAvailable &&
@@ -1174,7 +1198,8 @@ export default function TrackerDetail() {
         !weightStats &&
         !journeyStats &&
         visualization.detailDay !== "none" ? (
-          <View style={styles.dayProgress}>
+          <TutorialTarget id="metric-detail-chart">
+            <View style={styles.dayProgress}>
             {progressSubmetrics.length && !isBloodPressure ? (
               progressSubmetrics.map((submetric) => {
                 const definition = submetricAsMetric(tracker, submetric);
@@ -1292,7 +1317,8 @@ export default function TrackerDetail() {
             ) : null}
               </>
             )}
-          </View>
+            </View>
+          </TutorialTarget>
         ) : null}
         {dates.length > 1 &&
         displayAvailable &&

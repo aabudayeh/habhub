@@ -40,6 +40,8 @@ export type FoodProduct = {
 export type FoodSearchOptions = {
   /** Newest first. Used only as a small, on-device tie-breaker. */
   recentLabels?: string[];
+  /** Tutorial previews use the bundled catalogue and never contact a vendor. */
+  offlineOnly?: boolean;
 };
 
 type RawProduct = {
@@ -652,6 +654,7 @@ export async function searchFoods(
 ): Promise<FoodProduct[]> {
   const term = query.trim();
   if (term.length < 2) return [];
+  if (options.offlineOnly) return rankFoods(OFFLINE, term, options);
   const key = `${languageCode}-${regionCode}:${term.toLocaleLowerCase()}`;
   const cached = await cachedProducts(key);
   if (cached.fresh)

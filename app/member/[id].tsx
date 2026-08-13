@@ -26,6 +26,7 @@ import { localizeMetricName } from "@/src/i18n/domain";
 
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
@@ -80,6 +81,7 @@ import {
 } from "@/src/domain/metrics";
 import { isChallengeMetric } from "@/src/domain/groupChallenges";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors } from "@/src/theme";
 
 export default function MemberProfile() {
@@ -767,6 +769,7 @@ export default function MemberProfile() {
           </View>
         </>
       ) : null}
+      <TutorialTarget id="comparison-stats">
       {member.id === state.currentUserId ? (
         <>
           <SectionHeader title="Your competitive stats" />
@@ -858,6 +861,7 @@ export default function MemberProfile() {
           </Text>
         </Card>
       ) : null}
+      </TutorialTarget>
       <View style={styles.metricCards}>
         {metrics.map((metric) => (
           <Card key={metric.id} style={styles.chartCard}>
@@ -1022,6 +1026,7 @@ export default function MemberProfile() {
             </View>
           </Card>
           {member.id === state.currentUserId && badgeOptions.length ? (
+            <TutorialTarget id="badge-showcase-picker">
             <MetricSelector
               title="Choose up to 5 showcase badges"
               items={badgeOptions}
@@ -1040,6 +1045,7 @@ export default function MemberProfile() {
                   });
               }}
             />
+            </TutorialTarget>
           ) : null}
         </>
       <Pressable onPress={() => setPhotosOpen((open) => !open)}>
@@ -1219,6 +1225,7 @@ function ProfilePhotoCompare({
   personId: string;
   dates: string[];
 }) {
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const person = state.group.members.find((item) => item.id === personId)!;
   const visible = state.photos
@@ -1263,6 +1270,7 @@ function ProfilePhotoCompare({
     return entry ? `${Number(entry.value).toFixed(1)} kg` : "No weight log";
   }
   async function save() {
+    if (tutorialSandbox) return;
     if (!primary || !comparison) return;
     if (Platform.OS !== "web") {
       const uri = await collageRef.current?.capture?.();

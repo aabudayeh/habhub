@@ -25,6 +25,7 @@ import {
   syncLiveActivityTimerNotifications,
 } from "@/src/notifications/liveTimer";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 const OVERLAY_WIDTH = 178;
@@ -32,6 +33,7 @@ const OVERLAY_HEIGHT = 46;
 
 export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   const { state, updateSettings } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
   const { language, t } = useLocalization();
   const timers = useMemo(
     () =>
@@ -122,6 +124,7 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     if (!timer) initialized.current = false;
   }, [timer]);
   useEffect(() => {
+    if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active")
       void dismissLiveActivityTimerNotifications();
     else
@@ -137,11 +140,12 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
         );
     });
     return () => subscription.remove();
-  }, []);
+  }, [tutorialSandbox]);
   useEffect(() => {
+    if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active") return;
     void syncLiveActivityTimerNotifications(notificationDescriptors);
-  }, [notificationDescriptors]);
+  }, [notificationDescriptors, tutorialSandbox]);
   useEffect(() => {
     if (!initialized.current) return;
     const next = clamp(positionRef.current.x, positionRef.current.y);

@@ -20,6 +20,7 @@ import {
 } from "@/src/components/PeriodNavigator";
 import { RichNoteText } from "@/src/components/RichNoteText";
 import { NoteDrawingPreview } from "@/src/components/NoteDrawingCanvas";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useLocale } from "@/src/i18n";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { dateKey } from "@/src/domain/date";
@@ -162,8 +163,8 @@ function JournalPage() {
             body: session.notes,
             localDate: session.localDate,
             createdAt: session.recordedAt,
-            metricId: "gym_completed",
-            filterIds: ["gym", "gym_completed"],
+            metricId: "workout",
+            filterIds: ["gym", "workout"],
             editable: false,
           }]
         : []),
@@ -329,9 +330,12 @@ function JournalPage() {
         emptyLabel="All notes"
       />
       <View style={styles.notes}>
-        {items.map((item) => (
-          <Pressable
+        {items.map((item, index) => (
+          <TutorialTarget
             key={item.id}
+            id={index === 0 ? "journal-notes" : `journal-note-${item.id}`}
+          >
+          <Pressable
             onPress={() =>
               item.editable
                 ? router.navigate({
@@ -381,6 +385,7 @@ function JournalPage() {
               </View>
             </Card>
           </Pressable>
+          </TutorialTarget>
         ))}
         {!items.length ? (
           <Card>

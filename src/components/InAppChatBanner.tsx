@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "@/src/components/AppText";
 import { memberDisplayName } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 type Banner = {
@@ -22,6 +23,7 @@ const RECENT_MESSAGE_MS = 2 * 60 * 1000;
 
 export function InAppChatBanner() {
   const { state, hydrated } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const insets = useSafeAreaInsets();
@@ -103,7 +105,7 @@ export function InAppChatBanner() {
   }, [hydrated, show, state.currentUserId, state.group, state.messages]);
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
+    if (tutorialSandbox || Platform.OS === "web") return;
     const subscription = Notifications.addNotificationReceivedListener(
       (notification) => {
         const content = notification.request.content;
@@ -123,7 +125,7 @@ export function InAppChatBanner() {
       },
     );
     return () => subscription.remove();
-  }, [show]);
+  }, [show, tutorialSandbox]);
 
   useEffect(
     () => () => {

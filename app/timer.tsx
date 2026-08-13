@@ -13,12 +13,17 @@ import { localizeMetricName } from "@/src/i18n/domain";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
+import {
   activityTimerDisplaySeconds,
   activityTimerElapsedSeconds,
   formatActivityTimer,
 } from "@/src/domain/activityTimer";
 import { dateKey } from "@/src/domain/date";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityTimer } from "@/src/types";
 
@@ -103,6 +108,8 @@ async function scheduleTimerNotifications({
 }
 
 export default function ActivityTimerPage() {
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const params = useLocalSearchParams<{
     metric?: string;
     date?: string;
@@ -130,7 +137,10 @@ export default function ActivityTimerPage() {
   const [selectedTimerId, setSelectedTimerId] = useState(
     params.timer ?? state.activeTimer?.id ?? timers[0]?.id ?? "",
   );
-  const [creatingNew, setCreatingNew] = useState(timers.length === 0);
+  const [creatingNew, setCreatingNew] = useState(
+    (tutorialSandbox && tutorial.activeStep?.target === "timer-setup") ||
+      timers.length === 0,
+  );
   const timer = creatingNew
     ? undefined
     : timers.find((item) => item.id === selectedTimerId) ?? timers[0];
@@ -146,13 +156,16 @@ export default function ActivityTimerPage() {
   );
   const [metricId, setMetricId] = useState(
     timer?.metricId ??
+      (tutorialSandbox && metrics.some((item) => item.id === "reading")
+        ? "reading"
+        : undefined) ??
       (params.metric && metrics.some((item) => item.id === params.metric)
         ? params.metric
         : metrics[0]?.id) ??
       "",
   );
   const [mode, setMode] = useState<ActivityTimer["mode"]>(
-    timer?.mode ?? "stopwatch",
+    timer?.mode ?? (tutorialSandbox ? "countdown" : "stopwatch"),
   );
   const plannedDate = /^\d{4}-\d{2}-\d{2}$/.test(params.date ?? "")
     ? params.date!
@@ -169,6 +182,10 @@ export default function ActivityTimerPage() {
     const interval = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(interval);
   }, []);
+  useEffect(() => {
+    if (tutorialSandbox && tutorial.activeStep?.target === "timer-setup")
+      setCreatingNew(true);
+  }, [tutorial.activeStep?.target, tutorialSandbox]);
   useEffect(() => {
     if (creatingNew || !timers.length) return;
     if (!timers.some((item) => item.id === selectedTimerId))
@@ -190,7 +207,9 @@ export default function ActivityTimerPage() {
     if (!metric)
       return Alert.alert("Choose a timed tracker", "Add one first if needed.");
     const targetSeconds = mode === "countdown" ? targetMinutes * 60 : undefined;
-    const notifications = await scheduleTimerNotifications({
+    const notifications = tutorialSandbox
+      ? { notificationId: undefined, notificationIds: [] }
+      : await scheduleTimerNotifications({
       title: localizeMetricName(language, metric),
       mode,
       targetSeconds,
@@ -211,12 +230,17 @@ export default function ActivityTimerPage() {
       laps: [],
       ...notifications,
     });
+    if (tutorialSandbox)
+      tutorial.reportEvent({
+        actionId: "tutorial.timer.start",
+        scope: "isolated-preview",
+      });
     setSelectedTimerId(id);
     setCreatingNew(false);
   };
   const pause = async () => {
     if (!timer) return;
-    await cancelTimerNotifications(timer);
+    if (!tutorialSandbox) await cancelTimerNotifications(timer);
     setActivityTimer({
       ...timer,
       accumulatedSeconds: activityTimerElapsedSeconds(timer),
@@ -228,7 +252,9 @@ export default function ActivityTimerPage() {
   };
   const resume = async () => {
     if (!timer || !metric) return;
-    const notifications = await scheduleTimerNotifications({
+    const notifications = tutorialSandbox
+      ? { notificationId: undefined, notificationIds: [] }
+      : await scheduleTimerNotifications({
       title: localizeMetricName(language, metric),
       mode: timer.mode,
       targetSeconds: timer.targetSeconds,
@@ -260,7 +286,7 @@ export default function ActivityTimerPage() {
   };
   const finish = async (target = timer) => {
     if (!target) return;
-    await cancelTimerNotifications(target);
+    if (!tutorialSandbox) await cancelTimerNotifications(target);
     const seconds =
       target.mode === "countdown"
         ? Math.min(
@@ -390,6 +416,7 @@ export default function ActivityTimerPage() {
       ) : null}
       {timer && metric ? (
         <>
+          <TutorialTarget id="timer-active">
           <Card style={styles.live}>
             <Text translate={false} style={[styles.metric, { color: accent }]}>
               {localizeMetricName(language, metric)}
@@ -425,6 +452,7 @@ export default function ActivityTimerPage() {
               </Pressable>
             </View>
           </Card>
+          </TutorialTarget>
           {timer.laps.length ? (
             <Card style={styles.laps}>
               {timer.laps.map((item, index) => (
@@ -442,6 +470,7 @@ export default function ActivityTimerPage() {
         </>
       ) : (
         <>
+          <TutorialTarget id="timer-setup">
           <Card style={styles.setup}>
             {params.date ? (
               <Text style={[styles.helper, { color: colors.muted }]}>Planned for {plannedDate}. Confirm Start when you are ready.</Text>
@@ -591,6 +620,7 @@ export default function ActivityTimerPage() {
               </Text>
             </Pressable>
           </Card>
+          </TutorialTarget>
           <Pressable onPress={start} style={[styles.start, { backgroundColor: accent }]}>
             <Ionicons name="play" size={18} color="#FFFFFF" />
             <Text style={styles.startText}>Start timer</Text>

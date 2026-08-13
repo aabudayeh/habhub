@@ -18,16 +18,23 @@ import { InAppChatBanner } from "@/src/components/InAppChatBanner";
 import { WebAlertHost } from "@/src/components/WebAlertHost";
 import {
   TutorialProvider,
-  TutorialSpotlight,
-} from "@/src/components/TutorialSpotlight";
+  useTutorial,
+} from "@/src/tutorial/TutorialContext";
+import { TUTORIAL_GUIDES } from "@/src/tutorial/guides";
+import { TutorialAppStateBoundary } from "@/src/tutorial/TutorialAppStateBoundary";
+import { TutorialSpotlight } from "@/src/components/TutorialSpotlight";
 import "react-native-reanimated";
 
 import { AuthProvider, useAuth } from "@/src/auth/AuthProvider";
 import {
   CloudSyncProvider,
+  TutorialCloudSyncBoundary,
   useCloudSyncStatus,
 } from "@/src/cloud/CloudSyncProvider";
-import { HealthSyncProvider } from "@/src/health/HealthSyncProvider";
+import {
+  HealthSyncProvider,
+  TutorialHealthSyncBoundary,
+} from "@/src/health/HealthSyncProvider";
 import { AppProvider, useApp } from "@/src/state/AppProvider";
 import { LocalizationProvider } from "@/src/i18n";
 import { WebDocumentMetadata } from "@/src/i18n/WebDocumentMetadata";
@@ -66,7 +73,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={styles.root}>
       <AuthProvider>
         <AppProvider>
-          <AppLocalizationBridge />
+          <TutorialProvider guides={TUTORIAL_GUIDES}>
+            <AppLocalizationBridge />
+          </TutorialProvider>
         </AppProvider>
       </AuthProvider>
     </GestureHandlerRootView>
@@ -75,22 +84,34 @@ export default function RootLayout() {
 
 function AppLocalizationBridge() {
   const { state } = useApp();
+  const tutorial = useTutorial();
+  const tutorialActive = Boolean(tutorial.activeSession);
   return (
     <LocalizationProvider language={state.settings.language}>
       <WebDocumentMetadata />
-      <ScreenTimeSyncBridge />
-      <WidgetSnapshotBridge />
-      <HealthSyncProvider>
-        <CloudSyncProvider>
-          <RootNavigator />
-        </CloudSyncProvider>
-      </HealthSyncProvider>
+      {tutorialActive ? null : <ScreenTimeSyncBridge />}
+      {tutorialActive ? null : <WidgetSnapshotBridge />}
+      {tutorialActive ? (
+        <TutorialHealthSyncBoundary>
+          <TutorialCloudSyncBoundary>
+            <RootNavigator />
+          </TutorialCloudSyncBoundary>
+        </TutorialHealthSyncBoundary>
+      ) : (
+        <HealthSyncProvider>
+          <CloudSyncProvider>
+            <RootNavigator />
+          </CloudSyncProvider>
+        </HealthSyncProvider>
+      )}
     </LocalizationProvider>
   );
 }
 
 function RootNavigator() {
   const auth = useAuth();
+  const tutorial = useTutorial();
+  const tutorialActive = Boolean(tutorial.activeSession);
   const cloudSyncStatus = useCloudSyncStatus();
   const { state, hydrated, updateSettings } = useApp();
   const segments = useSegments();
@@ -145,6 +166,7 @@ function RootNavigator() {
   cycleStateRef.current = state;
   const cycleNotificationKey = `${cycleSignature}|${state.currentUserId}|${state.settings.notifications.pushEnabled}|${state.settings.notifications.cyclePredictions}|${state.settings.notifications.cyclePhaseUpdates}|${state.settings.notifications.cycleReminderDays}`;
   useEffect(() => {
+    if (tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncCycleNotifications(cycleStateRef.current).catch(
@@ -153,7 +175,7 @@ function RootNavigator() {
       1200,
     );
     return () => clearTimeout(timer);
-  }, [cycleNotificationKey]);
+  }, [cycleNotificationKey, tutorialActive]);
   const goalReminderKey = useMemo(
     () =>
       JSON.stringify({
@@ -187,6 +209,7 @@ function RootNavigator() {
     ],
   );
   useEffect(() => {
+    if (tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncGoalNotifications(cycleStateRef.current).catch(
@@ -195,7 +218,7 @@ function RootNavigator() {
       1800,
     );
     return () => clearTimeout(timer);
-  }, [goalReminderKey]);
+  }, [goalReminderKey, tutorialActive]);
   const gymNotificationKey = useMemo(
     () =>
       JSON.stringify({
@@ -230,6 +253,7 @@ function RootNavigator() {
     ],
   );
   useEffect(() => {
+    if (tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncGymNotifications(cycleStateRef.current).catch(
@@ -238,7 +262,7 @@ function RootNavigator() {
       1800,
     );
     return () => clearTimeout(timer);
-  }, [gymNotificationKey]);
+  }, [gymNotificationKey, tutorialActive]);
   const productivityNotificationKey = useMemo(
     () =>
       JSON.stringify({
@@ -261,6 +285,7 @@ function RootNavigator() {
     ],
   );
   useEffect(() => {
+    if (tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncProductivityNotifications(cycleStateRef.current).catch(
@@ -269,7 +294,7 @@ function RootNavigator() {
       1800,
     );
     return () => clearTimeout(timer);
-  }, [productivityNotificationKey]);
+  }, [productivityNotificationKey, tutorialActive]);
   const pushRegistrationUserId = auth.user?.id;
   const pushRegistrationKey = useMemo(
     () =>
@@ -315,6 +340,7 @@ function RootNavigator() {
   useEffect(() => {
     if (
       Platform.OS === "web" ||
+      tutorialActive ||
       !pushRegistrationUserId ||
       !state.settings.notifications.pushEnabled
     )
@@ -346,13 +372,18 @@ function RootNavigator() {
     pushRegistrationUserId,
     pushRegistrationKey,
     state.settings.notifications.pushEnabled,
+    tutorialActive,
   ]);
   useEffect(() => {
-    if (Platform.OS === "web") return;
+    if (tutorialActive || Platform.OS === "web") return;
     const open = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;
       const route = data?.route;
-      if (route === "/chat" && typeof data?.senderId === "string") {
+      if (
+        route === "/chat" &&
+        data?.conversationType === "direct" &&
+        typeof data?.senderId === "string"
+      ) {
         router.push({
           pathname: "/chat",
           params: { recipient: data.senderId },
@@ -379,7 +410,7 @@ function RootNavigator() {
       if (response) open(response);
     });
     return () => subscription.remove();
-  }, []);
+  }, [tutorialActive]);
   const safeDefaultLandingPage = useMemo(() => {
     const target = state.settings.defaultLandingPage ?? "index";
     const visible = {
@@ -523,7 +554,15 @@ function RootNavigator() {
         <FontScaleProvider scale={state.settings.fontScale ?? 1}>
           <CompactModeProvider compact={state.settings.compactMode}>
             <ThemeProvider value={activeTheme}>
-            <TutorialProvider>
+            <View
+              aria-hidden={tutorialActive}
+              accessibilityElementsHidden={tutorialActive}
+              importantForAccessibility={
+                tutorialActive ? "no-hide-descendants" : "auto"
+              }
+              style={styles.tutorialRouteLayer}
+            >
+            <TutorialRouteBoundary>
             <Stack screenOptions={stackScreenOptions}>
               <Stack.Screen name="sign-in" options={{ animation: "fade" }} />
               <Stack.Screen
@@ -642,9 +681,10 @@ function RootNavigator() {
             />
             <InAppChatBanner />
             <WebAlertHost />
+            </TutorialRouteBoundary>
+            </View>
             <TutorialSpotlight />
             <StatusBar style={state.settings.darkMode ? "light" : "dark"} />
-            </TutorialProvider>
             </ThemeProvider>
           </CompactModeProvider>
         </FontScaleProvider>
@@ -653,8 +693,22 @@ function RootNavigator() {
   );
 }
 
+function TutorialRouteBoundary({ children }: React.PropsWithChildren) {
+  const tutorial = useTutorial();
+  if (!tutorial.activeSession) return <>{children}</>;
+  return (
+    <TutorialAppStateBoundary
+      runId={tutorial.activeSession.runId}
+      anchorDate={tutorial.activeSession.demoAnchorDate}
+    >
+      {children}
+    </TutorialAppStateBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  tutorialRouteLayer: { flex: 1 },
   loading: {
     flex: 1,
     alignItems: "center",

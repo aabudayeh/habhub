@@ -9,6 +9,7 @@ import {
 } from "@/src/components/AppText";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -289,7 +290,7 @@ export default function ViewFilters() {
           </View>
         </Card>
       ) : (
-        <>
+        <TutorialTarget id="today-view-filter-list">
           {[
             [TRACKED_ONLY_FILTER, "Tracked goals only", "Updates automatically"],
             [ALL_AVAILABLE_TRACKERS_FILTER, "All trackers", "Every available tracker"],
@@ -393,7 +394,7 @@ export default function ViewFilters() {
               Create a custom view
             </Text>
           </Pressable>
-        </>
+        </TutorialTarget>
       )}
     </Screen>
   );

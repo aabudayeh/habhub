@@ -11,6 +11,7 @@ import { showWebAlert } from "@/src/components/webAlertStore";
 import { AppLanguage } from "@/src/types";
 import { translateDomainText } from "@/src/i18n/domain";
 import { onboardingBasicTranslationRows } from "@/src/i18n/onboardingBasic";
+import { tutorialChromeTranslationRows } from "@/src/i18n/tutorialChrome";
 import arGenerated from "@/src/i18n/catalogs/ar.json";
 import deGenerated from "@/src/i18n/catalogs/de.json";
 import esGenerated from "@/src/i18n/catalogs/es.json";
@@ -542,6 +543,7 @@ const templateTranslationRows = [
 const allTranslationRows = [
   ...commonTranslationRows,
   ...onboardingBasicTranslationRows,
+  ...tutorialChromeTranslationRows,
   ...templateTranslationRows,
 ] as const;
 

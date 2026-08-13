@@ -1,4 +1,53 @@
+import type { GoalSchedule, GroupChallenge } from "@/src/types";
+
 export const CHALLENGE_CARD_PREFIX = "challenge:";
+
+export type GroupChallengeParticipation =
+  | "creator"
+  | "accepted"
+  | "invited"
+  | "declined"
+  | "not_invited";
+
+/** Old rows predate invitations and therefore remain accepted for compatibility. */
+export function acceptedChallengeParticipantIds(challenge: GroupChallenge) {
+  return [
+    ...new Set(
+      challenge.acceptedParticipantIds ?? challenge.participantIds,
+    ),
+  ].filter((id) => challenge.participantIds.includes(id));
+}
+
+export function declinedChallengeParticipantIds(challenge: GroupChallenge) {
+  return [...new Set(challenge.declinedParticipantIds ?? [])].filter((id) =>
+    challenge.participantIds.includes(id),
+  );
+}
+
+export function groupChallengeParticipation(
+  challenge: GroupChallenge,
+  userId: string,
+): GroupChallengeParticipation {
+  if (challenge.creatorId === userId) return "creator";
+  if (!challenge.participantIds.includes(userId)) return "not_invited";
+  if (acceptedChallengeParticipantIds(challenge).includes(userId))
+    return "accepted";
+  if (declinedChallengeParticipantIds(challenge).includes(userId))
+    return "declined";
+  return "invited";
+}
+
+export function groupChallengeSourceId(challenge: GroupChallenge) {
+  return challenge.sourceChallengeId ?? challenge.id;
+}
+
+export function groupChallengeOccurrenceId(id: string, localDate: string) {
+  return `${id}@${localDate}`;
+}
+
+export function groupChallengeResponseDeadline(challenge: GroupChallenge) {
+  return challenge.recurrence?.anchorDate ?? challenge.localDate;
+}
 
 type ChallengeMetricShape = {
   dataType: string;
@@ -105,6 +154,65 @@ export function validChallengeDate(value: string) {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+export function validChallengeRecurrence(
+  recurrence: GoalSchedule | undefined,
+  localDate: string,
+) {
+  if (!recurrence || recurrence.mode === "once") return true;
+  if (
+    ![
+      "daily",
+      "selected_days",
+      "every_other_day",
+      "interval_days",
+      "days_of_month",
+    ].includes(recurrence.mode)
+  )
+    return false;
+  if (
+    recurrence.anchorDate !== localDate ||
+    !recurrence.endDate ||
+    !validChallengeDate(recurrence.endDate) ||
+    recurrence.endDate < localDate
+  )
+    return false;
+  const durationDays = Math.round(
+    (new Date(`${recurrence.endDate}T12:00:00Z`).getTime() -
+      new Date(`${localDate}T12:00:00Z`).getTime()) /
+      86_400_000,
+  );
+  if (durationDays > 366) return false;
+  if (recurrence.mode === "selected_days")
+    return (
+      (recurrence.daysOfWeek?.length ?? 0) > 0 &&
+      recurrence.daysOfWeek!.every(
+        (day, index, days) =>
+          Number.isInteger(day) &&
+          day >= 0 &&
+          day <= 6 &&
+          days.indexOf(day) === index,
+      )
+    );
+  if (recurrence.mode === "days_of_month")
+    return (
+      (recurrence.daysOfMonth?.length ?? 0) > 0 &&
+      recurrence.daysOfMonth!.every(
+        (day, index, days) =>
+          Number.isInteger(day) &&
+          day >= 1 &&
+          day <= 31 &&
+          days.indexOf(day) === index,
+      )
+    );
+  if (recurrence.mode === "interval_days")
+    return (
+      Number.isInteger(recurrence.intervalDays) &&
+      (recurrence.intervalDays ?? 0) >= 2 &&
+      (recurrence.intervalDays ?? 0) <= 31
+    );
+  return true;
+}
+
 export function validateGroupChallenge(input: {
   title?: string;
   target: number;
@@ -112,16 +220,23 @@ export function validateGroupChallenge(input: {
   metric?: ChallengeMetricShape;
   participantIds: string[];
   creatorId: string;
+  recurrence?: GoalSchedule;
+  today?: string;
 }) {
   if (!input.metric || !isChallengeMetric(input.metric))
     return "Choose a numerical group tracker.";
   if (!Number.isFinite(input.target) || input.target <= 0 || input.target > 1e12)
     return "Enter a target greater than zero.";
   if (!validChallengeDate(input.localDate)) return "Choose a valid date.";
+  if (input.today && input.localDate < input.today)
+    return "Choose today or a future date.";
+  if (!validChallengeRecurrence(input.recurrence, input.localDate))
+    return "Choose a repeat end date within one year.";
   if ((input.title?.trim().length ?? 0) > 80)
     return "Keep the challenge title under 80 characters.";
   const participants = new Set([...input.participantIds, input.creatorId]);
   if (participants.size < 2) return "Choose at least one friend.";
+  if (participants.size > 50) return "Choose no more than 49 friends.";
   return undefined;
 }
 

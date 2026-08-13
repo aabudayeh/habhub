@@ -6,11 +6,15 @@ import { shouldWaitForOnboardingAuthority } from "../src/domain/onboarding.ts";
 const source = fs.readFileSync("app/onboarding.tsx", "utf8");
 const rootSource = fs.readFileSync("app/_layout.tsx", "utf8");
 const guideSource = fs.readFileSync("src/components/TutorialSpotlight.tsx", "utf8");
+const basicGuideSource = fs.readFileSync("src/tutorial/basicGuide.ts", "utf8");
+const tutorialContextSource = fs.readFileSync(
+  "src/tutorial/TutorialContext.tsx",
+  "utf8",
+);
 const quickGuideSource = fs.readFileSync("app/quick-guide.tsx", "utf8");
 const storageSource = fs.readFileSync("src/storage/onboardingState.ts", "utf8");
 const providerSource = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const cloudSource = fs.readFileSync("src/cloud/CloudSyncProvider.tsx", "utf8");
-const typesSource = fs.readFileSync("src/types.ts", "utf8");
 const seedSource = fs.readFileSync("src/data/seed.ts", "utf8");
 const onboardingTranslationSource = fs.readFileSync(
   "src/i18n/onboardingBasic.ts",
@@ -36,11 +40,6 @@ for (const [step, title] of [
 assert.match(source, /if \(step === 4\)[\s\S]*?await finish\(\)/);
 assert.match(source, /label=\{step === 4 \? "Start using HabHub" : "Continue"\}/);
 assert.doesNotMatch(source, /label="Finish with this setup"/);
-assert.match(
-  source,
-  /t\("\{selected\} of \{total\} suggested trackers added"\)[\s\S]{0,700}\.replace\([\s\S]{0,150}"\{selected\}"[\s\S]{0,700}\.replace\("\{total\}"/,
-  "the tracker summary must localize and interpolate selected/total independently",
-);
 assert.match(
   onboardingTranslationSource,
   /"\{selected\} of \{total\} suggested trackers added"/,
@@ -73,8 +72,10 @@ assert.match(connectionPage, /Health Connect/);
 assert.match(connectionPage, /Health history/);
 assert.match(connectionPage, /healthHistoryDays === days/);
 assert.match(connectionPage, /startHealthGoalsFromHistory/);
-assert.match(finalPage, /Open HabHub on/);
-assert.match(finalPage, /Start in dark mode/);
+assert.match(connectionPage, /Open HabHub on/);
+assert.match(connectionPage, /Start in dark mode/);
+assert.doesNotMatch(finalPage, /Open HabHub on/);
+assert.doesNotMatch(finalPage, /Start in dark mode/);
 assert.match(finalPage, /Start the basic guide/);
 assert.match(finalPage, /Finish without the guide/);
 
@@ -98,6 +99,11 @@ assert.match(source, /await saveDisplayName\(\)/);
 assert.match(source, /startTrackedGoalsAtFirstData:[\s\S]*?startHealthGoalsFromHistory/);
 assert.match(
   source,
+  /configurePersonalMetrics\([\s\S]*?startHealthGoalsFromHistory \? "history" : "today"/,
+  "declining imported goal history must start tracked goals today",
+);
+assert.match(
+  source,
   /id === "friends"[\s\S]*?if \(enabling\)[\s\S]*?setLandingPage\("group"\)[\s\S]*?landingPage === "group"[\s\S]*?setLandingPage\("index"\)/,
   "Removing Friends must not preserve a hidden Leaderboard landing page",
 );
@@ -106,31 +112,34 @@ assert.match(
   source,
   /const DEFAULT_STARTER_TRACKER_IDS = \[[\s\S]*?"steps"[\s\S]*?"exercise"[\s\S]*?"food"[\s\S]*?"deficit"[\s\S]*?"weekly_deficit_balance"[\s\S]*?"todo_completion"[\s\S]*?"workout"[\s\S]*?"water"[\s\S]*?"reading"[\s\S]*?"study"[\s\S]*?"work"/,
 );
-assert.match(source, /A filled flag makes the tracker part of daily completion/);
+assert.doesNotMatch(source, /A balanced setup is already selected/);
+assert.doesNotMatch(source, /Fine-tune a priority/);
+assert.match(source, /groupedRecommendations\.map/);
+assert.match(source, /trackerGroupLabel\(item\)/);
+assert.match(source, /Tap a tracker to learn what it records/);
+assert.match(source, /onShowInfo=\{\(\) => showTrackerInfo\(item\)\}/);
+assert.doesNotMatch(source, /numberOfLines=\{1\}[\s\S]{0,120}metricName/);
 assert.match(source, /width < 360[\s\S]*?\? "100%"/);
+assert.doesNotMatch(
+  source.match(/gym: \[([^\]]+)\]/)?.[1] ?? "",
+  /gym_completed|gym_duration|gym_total_volume/,
+  "onboarding gym recommendations must use the canonical workout trackers without workout volume",
+);
 
 const summaryCard = source.slice(
   source.indexOf("function MetricSummaryCard"),
-  source.indexOf("function OnboardingTrackerRow"),
-);
-const trackerRow = source.slice(
-  source.indexOf("function OnboardingTrackerRow"),
   source.indexOf("function Title"),
 );
-for (const [name, block, selectionIcon] of [
-  ["summary card", summaryCard, '<Ionicons name={selected ? "checkmark-circle"'],
-  ["expanded tracker row", trackerRow, '<Ionicons name={selected ? "checkbox"'],
-]) {
-  assert.match(block, /style=\{styles\.trackerActions\}/, `${name} needs one compact action group`);
-  assert.match(block, /event\.stopPropagation\(\)/, `${name} flag must not toggle tracker selection`);
-  const flagIndex = block.indexOf("styles.goalFlag") >= 0
-    ? block.indexOf("styles.goalFlag")
-    : block.indexOf("styles.miniFlag");
-  const checkIndex = block.indexOf(selectionIcon);
-  assert.ok(flagIndex >= 0 && checkIndex > flagIndex, `${name} flag must sit immediately left of the far-right selection mark`);
-  assert.match(block, /accessibilityRole="checkbox"/);
-  assert.match(block, /accessibilityState=\{\{ checked: tracked \}\}/);
-}
+assert.match(summaryCard, /style=\{styles\.trackerActions\}/);
+assert.match(summaryCard, /event\.stopPropagation\(\)/);
+assert.ok(
+  summaryCard.indexOf("styles.miniFlag") <
+    summaryCard.indexOf("styles.metricCheck"),
+  "the tracked-goal flag must sit left of the standard selection checkmark",
+);
+assert.match(summaryCard, /accessibilityRole="button"/);
+assert.match(summaryCard, /accessibilityHint=\{item\.description\}/);
+assert.match(summaryCard, /accessibilityState=\{\{ checked: tracked \}\}/);
 
 const firstFlushIndex = source.indexOf("await flushLocalPersistence();");
 const markerIndex = source.indexOf("await markOnboardingCompleted(accountId);");
@@ -155,8 +164,8 @@ assert.match(storageSource, /draft\.version === ONBOARDING_FLOW_VERSION/);
 assert.match(storageSource, /completedAt: new Date\(\)\.toISOString\(\)/);
 
 assert.match(rootSource, /const cloudAccountHydrating = shouldWaitForOnboardingAuthority/);
-assert.match(rootSource, /<TutorialProvider>[\s\S]*?<TutorialSpotlight \/>[\s\S]*?<\/TutorialProvider>/);
-assert.doesNotMatch(rootSource, /TutorialDemoBoundary|AppStatePreviewProvider/);
+assert.match(rootSource, /<TutorialProvider guides=\{TUTORIAL_GUIDES\}>/);
+assert.match(rootSource, /<TutorialSpotlight \/>/);
 
 for (const status of ["disabled", "initializing", "syncing", "offline", "error"])
   assert.equal(
@@ -186,54 +195,40 @@ assert.equal(
   false,
 );
 
-assert.match(guideSource, /export const BASIC_TUTORIAL_GUIDE/);
-assert.match(guideSource, /const BASIC_STEPS: readonly TutorialStep\[\]/);
-const basicSteps = guideSource.slice(
-  guideSource.indexOf("const BASIC_STEPS"),
-  guideSource.indexOf("function landingPath"),
+assert.match(basicGuideSource, /export const BASIC_TUTORIAL_GUIDE/);
+const basicSteps = basicGuideSource.slice(
+  basicGuideSource.indexOf("steps: ["),
+  basicGuideSource.indexOf("export const DEFAULT_TUTORIAL_GUIDES"),
 );
-assert.equal(
-  [...basicSteps.matchAll(/\n    target: /g)].length,
-  9,
-  "The deferred release must contain only the nine-step basic walkthrough",
+assert.ok(
+  [...basicSteps.matchAll(/\n      target: /g)].length >= 9,
+  "Onboarding must retain a basic walkthrough across the essential app pages",
 );
 for (const target of [
   "today-hero",
-  "tab-log",
   "log-header",
-  "tab-insights",
-  "progress-visual",
-  "menu-button",
-  "menu-display",
-  "personal-theme",
+  "progress-modes",
+  "leaderboard-cards",
+  "workout-modes",
+  "chat-header",
+  "menu-profile",
   "display-layout",
 ])
   assert.match(basicSteps, new RegExp(`target: "${target}"`));
-assert.match(guideSource, /tutorialComplete: true/);
-assert.match(guideSource, /tutorialGuideId: undefined/);
-assert.match(guideSource, /tutorialGuideRunId: undefined/);
+assert.match(tutorialContextSource, /tutorialComplete:/);
+assert.match(
+  tutorialContextSource,
+  /updateSettings\(\s*tutorialCloseSettings\(session\.guideId, completed/,
+);
 assert.match(guideSource, /accessibilityViewIsModal/);
-assert.match(guideSource, /accessibilityLabel="Skip basic guide"/);
+assert.match(
+  guideSource,
+  /accessibilityLabel=\{t\("Skip \{name\}"\)\.replace\("\{name\}", displayGuide\.title\)\}/,
+);
 
-assert.match(quickGuideSource, /BASIC_TUTORIAL_GUIDE/);
-assert.match(quickGuideSource, /function startBasicGuide\(\)/);
-assert.match(quickGuideSource, /tutorialGuideId: BASIC_TUTORIAL_GUIDE\.id/);
-assert.match(quickGuideSource, /tutorialGuideRunId: Date\.now\(\)/);
-assert.doesNotMatch(quickGuideSource, /modules|featured|TUTORIAL_GUIDES|completedGuide/i);
-
-const extensiveTutorialTerms = /FULL_GUIDE|TUTORIAL_MODULE|pageGuide\(|createTutorialDemoState|tutorialVersion|tutorialCompletedGuideIds|Demo preview|temporary demo|safe demo/i;
-for (const [name, text] of [
-  ["onboarding", source],
-  ["spotlight", guideSource],
-  ["quick guide", quickGuideSource],
-  ["root layout", rootSource],
-  ["app provider", providerSource],
-  ["cloud merge", cloudSource],
-  ["settings type", typesSource],
-])
-  assert.doesNotMatch(text, extensiveTutorialTerms, `${name} must not retain deferred extensive/demo tutorial infrastructure`);
-assert.equal(fs.existsSync("src/domain/tutorial.ts"), false);
-assert.equal(fs.existsSync("src/i18n/onboardingTutorial.ts"), false);
+assert.match(quickGuideSource, /localizedGuides\.map\(\(guide\) =>/);
+assert.match(quickGuideSource, /startGuide\(guide\.id, \{ resume \}\)/);
+assert.match(quickGuideSource, /progressByGuide/);
 
 assert.match(providerSource, /onboardingVersion: Math\.max/);
 assert.match(cloudSource, /settings\.onboardingVersion = Math\.max/);

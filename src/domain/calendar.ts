@@ -491,7 +491,7 @@ export function scheduleEventsForDate(
       ),
       kind: "gym" as const,
       metricId:
-        state.metrics.find((metric) => metric.id === "gym_completed")?.id ??
+        state.metrics.find((metric) => metric.id === "workout")?.id ??
         state.metrics.find((metric) => metric.id === "workout_duration")?.id,
       color: "#8B5CF6",
       completed: true,

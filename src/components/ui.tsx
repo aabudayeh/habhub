@@ -1,7 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import React, { PropsWithChildren, ReactNode, useEffect, useRef } from "react";
+import React, {
+  PropsWithChildren,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -34,7 +40,10 @@ import {
   useCompactMode,
   useGroupAccent,
 } from "@/src/theme";
-import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  TutorialScrollProvider,
+  TutorialTarget,
+} from "@/src/components/TutorialSpotlight";
 
 export function Screen({
   children,
@@ -43,6 +52,8 @@ export function Screen({
   fixedTop,
   refreshControl,
   refreshEnabled = true,
+  onScroll,
+  scrollEventThrottle,
   ...props
 }: ScrollViewProps & {
   scrollRef?: React.RefObject<ScrollView | null>;
@@ -53,6 +64,8 @@ export function Screen({
   const colors = useAppColors();
   const internalRef = useRef<ScrollView>(null);
   const activeRef = scrollRef ?? internalRef;
+  const scrollViewportRef = useRef<View>(null);
+  const scrollOffsetRef = useRef(0);
   const insets = useSafeAreaInsets();
   const basePaddingBottom = compact ? 90 : 120;
   const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
@@ -62,6 +75,18 @@ export function Screen({
     Math.max(basePaddingBottom, userPaddingBottom ?? basePaddingBottom) +
     insets.bottom;
   useKeyboardReveal(activeRef);
+  const revealTutorialTarget = useCallback(
+    (targetWindowY: number) => {
+      scrollViewportRef.current?.measureInWindow((_x, scrollWindowY) => {
+        const nextY = Math.max(
+          0,
+          scrollOffsetRef.current + targetWindowY - scrollWindowY - 80,
+        );
+        activeRef.current?.scrollTo({ y: nextY, animated: true });
+      });
+    },
+    [activeRef],
+  );
   return (
     // A tab scene already ends above the bottom bar. Adding a second bottom
     // safe-area inset here produced a canvas-coloured strip above the bar.
@@ -86,30 +111,43 @@ export function Screen({
             <View style={styles.content}>{fixedTop}</View>
           </View>
         ) : null}
-        <ScrollView
-          ref={activeRef}
-          style={{ backgroundColor: colors.canvas }}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-          automaticallyAdjustKeyboardInsets
-          refreshControl={
-            Platform.OS !== "web" && refreshEnabled
-              ? refreshControl ?? (
-                  <DefaultRefreshControl />
-                )
-              : undefined
-          }
-          contentContainerStyle={[
-            styles.screen,
-            compact && styles.screenCompact,
-            { paddingBottom },
-            contentContainerStyle,
-          ]}
-          {...props}
-        >
-          <View style={styles.content}>{children}</View>
-        </ScrollView>
+        <View ref={scrollViewportRef} collapsable={false} style={styles.safe}>
+          <ScrollView
+            ref={activeRef}
+            style={{ backgroundColor: colors.canvas }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            automaticallyAdjustKeyboardInsets
+            onScroll={(event) => {
+              scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+              onScroll?.(event);
+            }}
+            scrollEventThrottle={
+              typeof scrollEventThrottle === "number"
+                ? Math.min(scrollEventThrottle, 16)
+                : 16
+            }
+            refreshControl={
+              Platform.OS !== "web" && refreshEnabled
+                ? refreshControl ?? (
+                    <DefaultRefreshControl />
+                  )
+                : undefined
+            }
+            contentContainerStyle={[
+              styles.screen,
+              compact && styles.screenCompact,
+              { paddingBottom },
+              contentContainerStyle,
+            ]}
+            {...props}
+          >
+            <TutorialScrollProvider reveal={revealTutorialTarget}>
+              <View style={styles.content}>{children}</View>
+            </TutorialScrollProvider>
+          </ScrollView>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

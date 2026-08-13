@@ -91,6 +91,7 @@ function milestoneStatus(count: number): BadgeStatus {
 
 type BadgeCache = {
   anchor: string;
+  today: string;
   challenges: readonly GroupChallenge[];
   group: AppState["group"];
   metrics: AppState["metrics"];
@@ -120,9 +121,11 @@ export function buildBadges(
   state: AppState,
   anchor = dateKey(),
   challenges: readonly GroupChallenge[] = EMPTY_GROUP_CHALLENGES,
+  today = dateKey(),
 ): EarnedBadge[] {
   if (
     badgeCache?.anchor === anchor &&
+    badgeCache.today === today &&
     badgeCache.challenges === challenges &&
     badgeCache.group === state.group &&
     badgeCache.metrics === state.metrics &&
@@ -614,7 +617,7 @@ export function buildBadges(
     state,
     challenges,
     anchor,
-    dateKey(),
+    today,
   );
   const challengeWinBadges = state.group.members.map((member): EarnedBadge => {
     const memberWins = resolvedChallengeWins.filter((win) =>
@@ -793,6 +796,7 @@ export function buildBadges(
   ];
   badgeCache = {
     anchor,
+    today,
     challenges,
     group: state.group,
     metrics: state.metrics,

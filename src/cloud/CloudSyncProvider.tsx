@@ -207,6 +207,44 @@ const CloudSyncContext = createContext<CloudSyncContextValue | null>(null);
 const CloudSyncActionsContext = createContext<CloudSyncActions | null>(null);
 const CloudSyncStatusContext = createContext<CloudSyncStatus>("disabled");
 
+const disabledCloudAction = async () => undefined;
+const disabledCloudContext: CloudSyncContextValue = {
+  status: "disabled",
+  lastSyncedAt: null,
+  errorMessage: null,
+  pendingChanges: false,
+  pendingGroup: null,
+  devices: [],
+  syncNow: disabledCloudAction,
+  pullLatest: disabledCloudAction,
+  refreshDevices: disabledCloudAction,
+  forgetDevice: disabledCloudAction,
+  deleteAccount: disabledCloudAction,
+  createGroup: disabledCloudAction,
+  joinGroup: async () => "active",
+  switchGroup: disabledCloudAction,
+  leaveGroup: disabledCloudAction,
+  refreshGroup: disabledCloudAction,
+  refreshActivity: disabledCloudAction,
+  refreshMessages: disabledCloudAction,
+  syncMessagesNow: disabledCloudAction,
+  approveMember: disabledCloudAction,
+  removeMember: disabledCloudAction,
+};
+
+/** Shadows live cloud providers for real routes rendered in tutorial practice. */
+export function TutorialCloudSyncBoundary({ children }: PropsWithChildren) {
+  return (
+    <CloudSyncStatusContext.Provider value="disabled">
+      <CloudSyncActionsContext.Provider value={disabledCloudContext}>
+        <CloudSyncContext.Provider value={disabledCloudContext}>
+          {children}
+        </CloudSyncContext.Provider>
+      </CloudSyncActionsContext.Provider>
+    </CloudSyncStatusContext.Provider>
+  );
+}
+
 function parsePendingGroup(value: string | null): PendingGroupRequest | null {
   if (!value) return null;
   try {
@@ -3758,7 +3796,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       remoteInitializationPendingRef.current ||
       !networkAvailableRef.current ||
       NativeAppState.currentState !== "active" ||
-      isCloudSyncPaused()
+      isCloudSyncPaused() ||
+      cloudConflictBackoffActive(
+        workspaceConflictGateRef.current,
+        auth.user.id,
+        Date.now(),
+      )
     )
       return;
     const current = stateRef.current;
@@ -5776,7 +5819,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
         await sendMembershipPush({
           groupId,
-          eventKey: `membership-approved:${groupId}:${userId}`,
+          // A member can leave and later be approved again. Keep event-level
+          // deduplication without permanently suppressing future approvals.
+          eventKey: `membership-approved:${groupId}:${userId}:${Date.now()}`,
           audience: "user",
           recipientId: userId,
           title: `Welcome to ${stateRef.current.group.name}`,

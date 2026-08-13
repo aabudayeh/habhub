@@ -12,6 +12,7 @@ import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   Card,
   Chip,
@@ -531,6 +532,7 @@ export default function TodoEditor() {
           ))}
         </View>
       </Card>
+      <TutorialTarget id="todo-timing">
       <Card style={styles.form}>
         <Pressable
           onPress={toggleDeadline}
@@ -583,6 +585,7 @@ export default function TodoEditor() {
           </>
         ) : null}
       </Card>
+      </TutorialTarget>
       <Card style={styles.form}>
         <Pressable
           onPress={() => setHasTimeBlock((value) => !value)}
@@ -703,6 +706,7 @@ export default function TodoEditor() {
           />
         ) : null}
       </Card> : null}
+      <TutorialTarget id="todo-repeat-reminders">
       <Card style={styles.form}>
         <Pressable
           onPress={() => setRemindersOpen((open) => !open)}
@@ -1096,6 +1100,7 @@ export default function TodoEditor() {
         ) : null}
         </> : null}
       </Card>
+      </TutorialTarget>
       <Pressable onPress={() => save()} style={[styles.save, { backgroundColor: accent }]}>
         <Text style={styles.saveText}>Save to-do</Text>
       </Pressable>

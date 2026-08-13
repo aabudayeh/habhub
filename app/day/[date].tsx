@@ -16,6 +16,7 @@ import { localizeMetricName } from "@/src/i18n/domain";
 import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   Button,
   Card,
@@ -52,6 +53,7 @@ import {
 } from "@/src/domain/schedule";
 import { isVacationDate, VACATION_COLOR } from "@/src/domain/vacation";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   AppState,
@@ -63,6 +65,7 @@ import {
 const TRACKED = "tracked_goals";
 
 export default function DayDetail() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const params = useLocalSearchParams<{ date: string; metrics?: string }>();
   const { state, toggleTodo } = useApp();
   const colors = useAppColors();
@@ -162,6 +165,7 @@ export default function DayDetail() {
   const collageRef = useRef<ViewShot>(null);
   const Share = {
     share: async (_options: { message: string }) => {
+      if (tutorialSandbox) return;
       const uri = await collageRef.current?.capture?.();
       if (!uri) throw new Error("Could not create the comparison image.");
       await Sharing.shareAsync(uri, {
@@ -250,6 +254,7 @@ export default function DayDetail() {
   }
 
   async function saveCollage() {
+    if (tutorialSandbox) return;
     if (collage.length < 2) return;
     if (Platform.OS !== "web") {
       await Share.share({
@@ -321,6 +326,7 @@ export default function DayDetail() {
           />
         }
       />
+      <TutorialTarget id="daily-detail-summary">
       <Card style={styles.dateCard}>
         <View style={styles.dateNav}>
           <Pressable
@@ -448,6 +454,7 @@ export default function DayDetail() {
           </View>
         ) : null}
       </Card>
+      </TutorialTarget>
       {isVacationDate(state, state.currentUserId, day) ? (
         <Card style={styles.vacation}>
           <Ionicons name="airplane" size={18} color={VACATION_COLOR} />
@@ -461,6 +468,7 @@ export default function DayDetail() {
           </View>
         </Card>
       ) : null}
+      <TutorialTarget id="daily-detail-filter">
       <MetricSelector
         items={available.map((metric) => ({
           id: metric.id,
@@ -478,6 +486,7 @@ export default function DayDetail() {
         title="What to show"
         emptyLabel="No logs on this day"
       />
+      </TutorialTarget>
       {showTracked ? <TrackedCard state={state} day={day} /> : null}
       {dayTodos.length ? (
         <Card style={styles.todoCard}>

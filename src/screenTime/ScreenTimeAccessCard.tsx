@@ -10,8 +10,10 @@ import {
   requestScreenTimeAccess,
 } from "@/src/screenTime";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 export function ScreenTimeAccessCard() {
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [status, setStatus] = useState<
@@ -19,13 +21,17 @@ export function ScreenTimeAccessCard() {
   >("checking");
 
   const refresh = useCallback(async () => {
+    if (tutorialSandbox) {
+      setStatus("granted");
+      return;
+    }
     if (!isScreenTimeSupported()) {
       setStatus("unsupported");
       return;
     }
     setStatus((current) => (current === "granted" ? current : "checking"));
     setStatus((await hasScreenTimeAccess()) ? "granted" : "missing");
-  }, []);
+  }, [tutorialSandbox]);
 
   useEffect(() => {
     if (Platform.OS !== "android") return;
@@ -74,7 +80,9 @@ export function ScreenTimeAccessCard() {
             label={status === "granted" ? "Review usage access" : "Enable usage access"}
             icon="settings-outline"
             variant={status === "granted" ? "ghost" : "primary"}
-            onPress={() => void requestScreenTimeAccess()}
+            onPress={() => {
+              if (!tutorialSandbox) void requestScreenTimeAccess();
+            }}
           />
         )}
       </Card>

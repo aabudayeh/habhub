@@ -26,6 +26,7 @@ import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { Button, Card, Chip, PageHeader, ProgressBar, Screen, SectionHeader } from "@/src/components/ui";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   dateKey,
   dateWithOffsetFrom,
@@ -81,6 +82,8 @@ import {
 } from "@/src/notifications/workoutTimer";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { readableTextColor } from "@/src/domain/colors";
 import {
@@ -458,6 +461,8 @@ function GymScreen() {
     saveGymSession,
     deleteGymSession,
   } = useApp();
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const locale = useLocale();
@@ -500,6 +505,16 @@ function GymScreen() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [workoutTimer, setWorkoutTimer] = useState<WorkoutTimer | null>(null);
   const [timerNow, setTimerNow] = useState(Date.now());
+  const activeTutorialTarget = tutorial.activeStep?.target;
+  useEffect(() => {
+    if (activeTutorialTarget === "workout-templates") {
+      setSessionDetailsOpen(true);
+      setTemplatesOpen(true);
+    }
+    if (activeTutorialTarget === "workout-exercises" && exercises[0]) {
+      setOpenExerciseId(exercises[0].id);
+    }
+  }, [activeTutorialTarget, exercises]);
   const [appActivity, setAppActivity] = useState(
     NativeAppState.currentState,
   );
@@ -1188,6 +1203,10 @@ function GymScreen() {
 
   useEffect(() => {
     if (!hydrated || workoutDraftReady) return;
+    if (tutorialSandbox) {
+      setWorkoutDraftReady(true);
+      return;
+    }
     let cancelled = false;
     void AsyncStorage.getItem(workoutDraftKey(state.currentUserId))
       .then((stored) => {
@@ -1222,10 +1241,10 @@ function GymScreen() {
     return () => {
       cancelled = true;
     };
-  }, [hydrated, state.currentUserId, workoutDraftReady]);
+  }, [hydrated, state.currentUserId, tutorialSandbox, workoutDraftReady]);
 
   useEffect(() => {
-    if (!workoutDraftReady) return;
+    if (tutorialSandbox || !workoutDraftReady) return;
     const key = workoutDraftKey(state.currentUserId);
     if (!workoutTimer) {
       void AsyncStorage.removeItem(key).catch(() => undefined);
@@ -1261,6 +1280,7 @@ function GymScreen() {
     sessionNotes,
     setStartDelaySeconds,
     state.currentUserId,
+    tutorialSandbox,
     visibility,
     workoutDraftReady,
     workoutTimer,
@@ -1278,7 +1298,7 @@ function GymScreen() {
   );
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
+    if (tutorialSandbox || Platform.OS === "web") return;
     const handle = (response: Notifications.NotificationResponse) => {
       if (response.notification.request.content.data?.workoutTimer !== true)
         return;
@@ -1312,7 +1332,7 @@ function GymScreen() {
       if (response) handle(response);
     });
     return () => subscription.remove();
-  }, [enqueueNativeTimerActions]);
+  }, [enqueueNativeTimerActions, tutorialSandbox]);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
@@ -1363,7 +1383,8 @@ function GymScreen() {
     // Prepare the Android channel, action categories, and background handler
     // while React is fully active. Waiting until the screen-lock AppState event
     // leaves some OEMs too little time before JS is suspended.
-    void configureWorkoutTimerNotification().catch(() => undefined);
+    if (!tutorialSandbox)
+      void configureWorkoutTimerNotification().catch(() => undefined);
     const now = Date.now();
     setDuration("");
     setTimerNow(now);
@@ -1419,6 +1440,17 @@ function GymScreen() {
       )
         advanceWorkoutTimer();
       return;
+    }
+    const exercise = exercises.find((item) => item.id === exerciseId);
+    if (
+      !set.completed &&
+      (exercise?.exerciseKey === "back_squat" ||
+        exercise?.name.toLocaleLowerCase().includes("squat"))
+    ) {
+      tutorial.reportEvent({
+        actionId: "tutorial.workout.complete-set",
+        scope: "isolated-preview",
+      });
     }
     updateSet(exerciseId, set.id, { completed: !set.completed });
   }
@@ -2143,6 +2175,7 @@ function GymScreen() {
     : null;
 
   useEffect(() => {
+    if (tutorialSandbox) return;
     const handleActivity = (next: typeof appActivity) => {
       setAppActivity(next);
       // Android can suspend React before the state-driven effect commits when
@@ -2162,10 +2195,11 @@ function GymScreen() {
       handleActivity,
     );
     return () => subscription.remove();
-  }, []);
+  }, [tutorialSandbox]);
 
   useEffect(() => {
     if (
+      tutorialSandbox ||
       !workoutDraftReady ||
       !workoutTimer ||
       appActivity !== "active"
@@ -2177,9 +2211,11 @@ function GymScreen() {
     enqueueNativeTimerActions,
     workoutDraftReady,
     workoutTimer,
+    tutorialSandbox,
   ]);
 
   useEffect(() => {
+    if (tutorialSandbox) return;
     if (!workoutTimer) {
       void dismissWorkoutTimerNotification(true);
       return;
@@ -2211,6 +2247,7 @@ function GymScreen() {
     workoutTimer?.phase,
     workoutTimer?.setId,
     workoutTimer,
+    tutorialSandbox,
   ]);
   const workoutTimerBar = workoutTimer ? (
     <View
@@ -2308,6 +2345,7 @@ function GymScreen() {
                   <Ionicons name="alarm-outline" size={15} color={accent} />
                 </Pressable>
               ) : null}
+              <TutorialTarget id="workout-modes">
               <View
                 accessibilityRole="tablist"
                 style={[
@@ -2354,6 +2392,7 @@ function GymScreen() {
                   },
                 )}
               </View>
+              </TutorialTarget>
             </View>
           }
         />
@@ -2530,6 +2569,7 @@ function GymScreen() {
                   </ScrollView>
                 </View>
               ) : null}
+              <TutorialTarget id="workout-session-details">
               <Pressable
                 onPress={() => setSessionDetailsOpen((value) => !value)}
                 style={[styles.detailsToggle, { borderColor: colors.border }]}
@@ -2548,9 +2588,11 @@ function GymScreen() {
                   color={accent}
                 />
               </Pressable>
+              </TutorialTarget>
               {sessionDetailsOpen ? (
                 <>
               {plans.length ? (
+                <TutorialTarget id="workout-templates">
                 <View
                   style={[
                     styles.templateMenu,
@@ -2590,6 +2632,15 @@ function GymScreen() {
                         key={plan.id}
                         onPress={() => {
                           loadPlan(plan);
+                          if (
+                            plan.name.trim().toLocaleLowerCase() ===
+                            "full-body strength"
+                          ) {
+                            tutorial.reportEvent({
+                              actionId: "tutorial.workout.choose-template",
+                              scope: "isolated-preview",
+                            });
+                          }
                           setTemplatesOpen(false);
                         }}
                         style={styles.templateChoice}
@@ -2620,6 +2671,7 @@ function GymScreen() {
                     </View>
                   ) : null}
                 </View>
+                </TutorialTarget>
               ) : null}
               <TextInput
                 value={sessionName}
@@ -2742,6 +2794,7 @@ function GymScreen() {
             </Card>
 
             {exercises.length && !workoutTimer ? (
+              <TutorialTarget id="workout-guided-timer">
               <Card style={styles.guidedTimerCard}>
                 <View style={styles.timerStartRow}>
                   <Pressable
@@ -2809,6 +2862,7 @@ function GymScreen() {
                   </View>
                 ) : null}
               </Card>
+              </TutorialTarget>
             ) : null}
 
             <SectionHeader
@@ -2996,13 +3050,25 @@ function GymScreen() {
                           }}
                         >
                           <View style={styles.setRow}>
-                            <Pressable onPress={() => toggleSet(exercise.id, set)}>
-                              <Ionicons
-                                name={set.completed ? "checkmark-circle" : "ellipse-outline"}
-                                size={25}
-                                color={set.completed ? palette.lime : colors.faint}
-                              />
-                            </Pressable>
+                            {exerciseIndex === 0 && setIndex === 0 ? (
+                              <TutorialTarget id="workout-exercises">
+                                <Pressable onPress={() => toggleSet(exercise.id, set)}>
+                                  <Ionicons
+                                    name={set.completed ? "checkmark-circle" : "ellipse-outline"}
+                                    size={25}
+                                    color={set.completed ? palette.lime : colors.faint}
+                                  />
+                                </Pressable>
+                              </TutorialTarget>
+                            ) : (
+                              <Pressable onPress={() => toggleSet(exercise.id, set)}>
+                                <Ionicons
+                                  name={set.completed ? "checkmark-circle" : "ellipse-outline"}
+                                  size={25}
+                                  color={set.completed ? palette.lime : colors.faint}
+                                />
+                              </Pressable>
+                            )}
                             {trackingMode === "load_reps" ? (
                               <DraftNumberInput
                                 value={set.weightKg}
@@ -3287,6 +3353,7 @@ function GymScreen() {
                     <Chip label="Private" selected={visibility === "private"} onPress={() => setVisibility("private")} />
                   </View>
                 </View>
+                <TutorialTarget id="workout-save">
                 <View style={styles.bottomActions}>
                   <View style={styles.actionCell}>
                     <Button
@@ -3332,6 +3399,7 @@ function GymScreen() {
                     />
                   </View>
                 </View>
+                </TutorialTarget>
               </>
             ) : null}
           </>

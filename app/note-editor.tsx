@@ -26,6 +26,7 @@ import {
   richNoteHasText,
 } from "@/src/components/RichNoteComposer";
 import { Card, IconButton, PageHeader, Screen } from "@/src/components/ui";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import { dateKey } from "@/src/domain/date";
 import {
@@ -36,6 +37,8 @@ import {
 } from "@/src/domain/journalDrawing";
 import { trackerGroupLabel } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
 const DRAWING_COLORS = [
@@ -51,6 +54,8 @@ const DRAWING_WIDTHS = [2, 4, 7] as const;
 const DRAWING_WIDTH_LABELS = ["Thin pen", "Medium pen", "Thick pen"] as const;
 
 export default function NoteEditor() {
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const navigation = useNavigation();
   const { state, saveJournalNote, deleteJournalNote } = useApp();
@@ -83,6 +88,9 @@ export default function NoteEditor() {
   const redo = useRef<string[]>([]);
   const lastUndoAt = useRef(0);
   const composer = useRef<RichNoteComposerHandle>(null);
+  const activeTutorialTarget = tutorial.activeStep?.target;
+  const tutorialFormatting = activeTutorialTarget === "note-formatting";
+  const tutorialDrawing = activeTutorialTarget === "note-drawing";
   const allowExit = useRef(false);
   const promptOpen = useRef(false);
   const initialContent = useRef({
@@ -145,6 +153,17 @@ export default function NoteEditor() {
     };
   }, []);
 
+  React.useEffect(() => {
+    if (tutorialDrawing) {
+      setTextColorOpen(false);
+      setDrawingMode(true);
+      setComposerFocused(false);
+      Keyboard.dismiss();
+    } else if (tutorialFormatting) {
+      setDrawingMode(false);
+    }
+  }, [tutorialDrawing, tutorialFormatting]);
+
   const change = useCallback((next: string) => {
     if (next === body.current) return;
     const now = Date.now();
@@ -164,6 +183,7 @@ export default function NoteEditor() {
   }, []);
 
   const pickImage = async () => {
+    if (tutorialSandbox) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.82,
@@ -191,7 +211,10 @@ export default function NoteEditor() {
   const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
   hasUnsavedChangesRef.current = hasUnsavedChanges;
   useWebBeforeUnload(
-    () => !allowExit.current && hasUnsavedChangesRef.current(),
+    () =>
+      !tutorialSandbox &&
+      !allowExit.current &&
+      hasUnsavedChangesRef.current(),
   );
 
   const leave = (exit: () => void) => {
@@ -240,6 +263,12 @@ export default function NoteEditor() {
   };
 
   const requestClose = (exit: () => void = () => router.back()) => {
+    // Tutorial edits live only in the throwaway preview. Moving to the next
+    // guided page should never interrupt the tour with a real-data save prompt.
+    if (tutorialSandbox) {
+      leave(exit);
+      return;
+    }
     if (!hasUnsavedChanges()) {
       leave(exit);
       return;
@@ -283,12 +312,17 @@ export default function NoteEditor() {
   React.useEffect(
     () =>
       navigation.addListener("beforeRemove", (event) => {
-        if (allowExit.current || !hasUnsavedChangesRef.current()) return;
+        if (
+          tutorialSandbox ||
+          allowExit.current ||
+          !hasUnsavedChangesRef.current()
+        )
+          return;
         event.preventDefault();
         if (promptOpen.current) return;
         requestCloseRef.current(() => navigation.dispatch(event.data.action));
       }),
-    [navigation],
+    [navigation, tutorialSandbox],
   );
 
   const toolbar = (
@@ -325,7 +359,18 @@ export default function NoteEditor() {
       />
       <Tool text="H1" onPress={() => composer.current?.setBlock("h1")} />
       <Tool text="H2" onPress={() => composer.current?.setBlock("h2")} />
-      <Tool text="B" onPress={() => composer.current?.toggleInline("bold")} />
+      <Tool
+        text="B"
+        onPress={() => {
+          composer.current?.toggleInline("bold");
+          if (richNoteHasText(composer.current?.getValue() ?? "")) {
+            tutorial.reportEvent({
+              actionId: "tutorial.journal.format",
+              scope: "isolated-preview",
+            });
+          }
+        }}
+      />
       <Tool text="I" onPress={() => composer.current?.toggleInline("italic")} />
       <Tool text="S" onPress={() => composer.current?.toggleInline("strike")} />
       <Tool
@@ -528,7 +573,9 @@ export default function NoteEditor() {
     <>
       <Screen
         fixedTop={
-          keyboardVisible || composerFocused || drawingMode
+          !tutorialFormatting &&
+          !tutorialDrawing &&
+          (keyboardVisible || composerFocused || drawingMode)
             ? editorTools
             : undefined
         }
@@ -558,6 +605,7 @@ export default function NoteEditor() {
               message="Type # followed by a word to create a searchable Journal label. Linking a tracker also groups this note with that tracker."
             />
           </View>
+          <TutorialTarget id="note-trackers-labels">
           <SelectionMenu
             title="Trackers and labels"
             items={[
@@ -593,6 +641,7 @@ export default function NoteEditor() {
             }}
             emptyLabel="No links"
           />
+          </TutorialTarget>
           <TextInput
             value={title}
             onChangeText={setTitle}
@@ -603,7 +652,11 @@ export default function NoteEditor() {
               { color: colors.ink, borderColor: colors.border },
             ]}
           />
+          <TutorialTarget id="note-formatting">
+          {tutorialFormatting ? toolbar : null}
+          <TutorialTarget id="note-drawing">
           <View style={styles.noteCanvas}>
+            {tutorialDrawing ? drawingToolbar : null}
             <RichNoteComposer
               ref={composer}
               value={initialBody}
@@ -620,6 +673,8 @@ export default function NoteEditor() {
               onChange={setDrawing}
             />
           </View>
+          </TutorialTarget>
+          </TutorialTarget>
           <Pressable onPress={pickImage} style={styles.imageButton}>
             <Ionicons name="image-outline" size={17} color={accent} />
             <Text style={[styles.imageText, { color: accent }]}>

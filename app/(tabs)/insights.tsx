@@ -18,11 +18,15 @@ import { AppText as Text } from "@/src/components/AppText";
 import { useLocale, useTranslation } from "@/src/i18n";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
 import { TrackerViewFilterSheet } from "@/src/components/TrackerViewFilterSheet";
 import { InfoPopover } from "@/src/components/InfoPopover";
-import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import {
@@ -169,12 +173,19 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+function holdProgressCloudSync(tutorialSandbox: boolean) {
+  if (tutorialSandbox) return;
+  setCloudSyncPaused("progress-edit", true);
+}
+
 function Insights() {
   const { state, updateSettings } = useApp();
   const locale = useLocale();
   const t = useTranslation();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const tutorial = useTutorial();
+  const tutorialSandbox = useTutorialSandboxActive();
   const today = dateKey();
   const metrics = state.metrics.filter(
     (metric) =>
@@ -370,9 +381,9 @@ function Insights() {
 
   const beginEditing = useCallback(() => {
     // Pause before the first drag event can mutate local draft ordering.
-    setCloudSyncPaused("progress-edit", true);
+    holdProgressCloudSync(tutorialSandbox);
     setEditing(true);
-  }, []);
+  }, [tutorialSandbox]);
 
   const finishEditing = useCallback(() => {
     const pendingOrder = orderDraftRef.current;
@@ -465,6 +476,10 @@ function Insights() {
         // so the day view cannot infer them from entry IDs alone.
         metrics: selectedIds.join(","),
       },
+    });
+    tutorial.reportEvent({
+      actionId: "tutorial.progress.open-day",
+      scope: "isolated-preview",
     });
   }
 
@@ -709,13 +724,15 @@ function Insights() {
               label="Explain month view"
               message="Each color is one selected tracker. Tap a date to open that day's filtered log."
             />
+            <TutorialTarget id="progress-range">
             <RangeCycleButton
               range="month"
               ranges={["week", "month"]}
               onChange={setHistoryRange}
             />
+            </TutorialTarget>
           </View>
-          <MonthCalendar
+            <MonthCalendar
             selectedDate={today}
             monthDate={historyAnchor}
             onMonthChange={setHistoryAnchor}
@@ -726,10 +743,11 @@ function Insights() {
               trackedGoalSummary(state, state.currentUserId, day).allMet
             }
             trackedGoalColor={TRACKED_COLOR}
-            vacationDay={(day) =>
-              isVacationDate(state, state.currentUserId, day)
-            }
-          />
+              vacationDay={(day) =>
+                isVacationDate(state, state.currentUserId, day)
+              }
+              tutorialDayTarget="progress-grid-cell"
+            />
           <View style={styles.legendWrap}>
             {legendItems.map((item) => (
               <View
@@ -758,11 +776,13 @@ function Insights() {
               label="Explain week view"
               message="Each color is one selected tracker. Swipe or use the arrows to change weeks, then tap a day for its filtered log."
             />
+            <TutorialTarget id="progress-range">
             <RangeCycleButton
               range="week"
               ranges={["week", "month"]}
               onChange={setHistoryRange}
             />
+            </TutorialTarget>
           </View>
           <View style={styles.weekNav}>
             <Pressable
@@ -894,6 +914,7 @@ function Insights() {
         }
       />
       </View>
+      <TutorialTarget id="progress-overview-card">
       <View style={styles.summaries}>
         {progressCardIds.map((itemId, index) =>
           itemId === TRACKED ? (
@@ -928,6 +949,7 @@ function Insights() {
           ),
         )}
       </View>
+      </TutorialTarget>
       {editing ? (
         <View style={styles.editActions}>
           <Pressable
@@ -973,12 +995,14 @@ function Insights() {
           </Pressable>
         </View>
       ) : (
+        <TutorialTarget id="progress-edit">
         <Pressable
           onPress={beginEditing}
           style={styles.editHint}
         >
           <Text style={[styles.hint, { color: colors.muted }]}>Hold a summary to edit what Progress shows</Text>
         </Pressable>
+        </TutorialTarget>
       )}
       <AddTrackerModal
         visible={showPicker}
@@ -1876,6 +1900,7 @@ function MapReorderCard({
   children: React.ReactNode;
 }) {
   const colors = useAppColors();
+  const tutorialSandbox = useTutorialSandboxActive();
   const step = useRef(112);
   const smoothDrag = useSmoothReorderGesture({
     enabled: editing,
@@ -1883,7 +1908,7 @@ function MapReorderCard({
     count,
     initialStep: step.current,
     onMove,
-    onStart: () => setCloudSyncPaused("progress-edit", true),
+    onStart: () => holdProgressCloudSync(tutorialSandbox),
   });
   const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   return (
@@ -1970,6 +1995,7 @@ function TrackedSummary({
   onPin: () => void;
 }) {
   const colors = useAppColors();
+  const tutorialSandbox = useTutorialSandboxActive();
   const step = useRef(93);
   const smoothDrag = useSmoothReorderGesture({
     enabled: editing,
@@ -1977,7 +2003,7 @@ function TrackedSummary({
     count,
     initialStep: step.current,
     onMove,
-    onStart: () => setCloudSyncPaused("progress-edit", true),
+    onStart: () => holdProgressCloudSync(tutorialSandbox),
   });
   const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   const totals = dates.map((date) =>
@@ -2144,6 +2170,7 @@ function MetricSummary({
   onPin: () => void;
 }) {
   const locale = useLocale();
+  const tutorialSandbox = useTutorialSandboxActive();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const dragStep = useRef(93);
@@ -2153,7 +2180,7 @@ function MetricSummary({
     count,
     initialStep: dragStep.current,
     onMove,
-    onStart: () => setCloudSyncPaused("progress-edit", true),
+    onStart: () => holdProgressCloudSync(tutorialSandbox),
   });
   const wiggle = useEditWiggle(editing && !smoothDrag.dragging);
   const periodStats = metricPeriodStats(

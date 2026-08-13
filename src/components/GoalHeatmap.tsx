@@ -76,8 +76,8 @@ function YearHeatmapGrid({
 }) {
   return (
     <View
-      accessible
-      accessibilityLabel={accessibilityLabel}
+      accessible={false}
+      accessibilityHint={accessibilityLabel}
       style={style}
     >
       {children}

@@ -98,6 +98,7 @@ export default function MenuScreen() {
             <Ionicons name="close" size={22} color={colors.ink} />
           </Pressable>
         </View>
+        <TutorialTarget id="menu-profile">
         <Pressable
           onPress={() => router.replace("/profile")}
           style={[styles.profile, { borderBottomColor: colors.border }]}
@@ -123,6 +124,7 @@ export default function MenuScreen() {
           </View>
           <Ionicons name="chevron-forward" size={19} color={colors.faint} />
         </Pressable>
+        </TutorialTarget>
         <View style={styles.list}>
           {items.map((item) => {
             const row = (
@@ -155,12 +157,22 @@ export default function MenuScreen() {
                 />
               </Pressable>
             );
-            return item.label === "Display" ? (
-              <TutorialTarget key={item.label} id="menu-display">
+            if (item.path === "/display-settings")
+              return (
+                <TutorialTarget key={item.label} id="menu-display">
+                  {row}
+                </TutorialTarget>
+              );
+            if (item.path === "/customize")
+              return (
+                <TutorialTarget key={item.label} id="menu-customize">
+                  {row}
+                </TutorialTarget>
+              );
+            return (
+              <React.Fragment key={item.label}>
                 {row}
-              </TutorialTarget>
-            ) : (
-              <React.Fragment key={item.label}>{row}</React.Fragment>
+              </React.Fragment>
             );
           })}
         </View>

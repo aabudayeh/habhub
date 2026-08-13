@@ -21,6 +21,10 @@ import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import { dateKey } from "@/src/domain/date";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
@@ -29,6 +33,7 @@ import {
   safeMetricValue,
 } from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
   palette,
   typography,
@@ -50,6 +55,8 @@ const privacyOptions: {
 ];
 
 function LogScreen() {
+  const tutorialSandbox = useTutorialSandboxActive();
+  const tutorial = useTutorial();
   const params = useLocalSearchParams<{
     metric?: string;
     date?: string;
@@ -129,7 +136,6 @@ function LogScreen() {
     selected?.defaultVisibility ?? "group",
   );
   const [privacyMenuOpen, setPrivacyMenuOpen] = useState(false);
-  const [privacyInfoOpen, setPrivacyInfoOpen] = useState(false);
   const [entryImage, setEntryImage] = useState<string | null>(null);
   const now = new Date();
   const [logDate, setLogDate] = useState(params.date ?? dateKey());
@@ -290,6 +296,7 @@ function LogScreen() {
     selected?.id === "steps" || selected?.aggregation === "latest";
 
   async function pickImage(setter: (uri: string) => void) {
+    if (tutorialSandbox) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.8,
@@ -484,6 +491,16 @@ function LogScreen() {
       : (derivedMainValue ?? Number.NaN);
     if (!Number.isFinite(number) || number < 0) {
       Alert.alert("Check the value", "Enter a positive number.");
+      return false;
+    }
+    if (
+      selected.id === "water" &&
+      (number <= 0 || Math.abs(number * 4 - Math.round(number * 4)) > 0.000001)
+    ) {
+      Alert.alert(
+        "Check the value",
+        "Use whole 250 ml cups.",
+      );
       return false;
     }
     if (
@@ -683,12 +700,6 @@ function LogScreen() {
       }),
     [navigation],
   );
-  const privacyCopy =
-    visibility === "private"
-      ? "Only you can read this entry, its note, and image."
-      : visibility === "status"
-        ? "Friends see goal met / not met only—not the value, note, label, or image."
-        : "Your group can see the exact value, note, label, and attached image.";
   const selectedPrivacyOption =
     privacyOptions.find((option) => option.value === visibility) ??
     privacyOptions[0];
@@ -770,26 +781,79 @@ function LogScreen() {
                   : formatMetricValue(selected, numericToday)}
               </Text>
             </View>
+            <TutorialTarget id="log-visibility">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Who can see it?"
+                accessibilityValue={{ text: selectedPrivacyOption.label }}
+                accessibilityState={{ expanded: privacyMenuOpen }}
+                onPress={() => setPrivacyMenuOpen((open) => !open)}
+                style={[
+                  styles.defaultPill,
+                  { backgroundColor: colors.primarySoft },
+                ]}
+              >
+                <Ionicons
+                  name={selectedPrivacyOption.icon}
+                  size={13}
+                  color={accent}
+                />
+                <Text style={styles.defaultText}>Default</Text>
+                <Ionicons
+                  name={privacyMenuOpen ? "chevron-up" : "chevron-down"}
+                  size={13}
+                  color={accent}
+                />
+              </Pressable>
+            </TutorialTarget>
+          </View>
+          {privacyMenuOpen ? (
             <View
               style={[
-                styles.defaultPill,
-                { backgroundColor: colors.primarySoft },
+                styles.headingPrivacyMenu,
+                { borderColor: colors.border, backgroundColor: colors.card },
               ]}
             >
-              <Ionicons
-                name={
-                  selected.defaultVisibility === "private"
-                    ? "lock-closed"
-                    : selected.defaultVisibility === "status"
-                      ? "shield-checkmark"
-                      : "people"
-                }
-                size={12}
-                color={accent}
-              />
-              <Text style={styles.defaultText}>Default</Text>
+              {privacyOptions.map((option) => {
+                const selectedOption = visibility === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: selectedOption }}
+                    onPress={() => {
+                      setVisibility(option.value);
+                      setPrivacyMenuOpen(false);
+                      if (option.value === "status")
+                        tutorial.reportEvent({
+                          actionId: "tutorial.log.visibility",
+                          scope: "isolated-preview",
+                        });
+                    }}
+                    style={[
+                      styles.privacyMenuOption,
+                      selectedOption && { backgroundColor: colors.primarySoft },
+                    ]}
+                  >
+                    <Ionicons
+                      name={option.icon}
+                      size={16}
+                      color={selectedOption ? accent : colors.muted}
+                    />
+                    <Text
+                      style={[styles.privacyMenuOptionText, { color: colors.ink }]}
+                    >
+                      {option.label}
+                    </Text>
+                    {selectedOption ? (
+                      <Ionicons name="checkmark" size={16} color={accent} />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
             </View>
-          </View>
+          ) : null}
+          <TutorialTarget id="log-date-time">
           <View style={styles.dateCard}>
             <View style={styles.dateTopRow}>
               <Pressable
@@ -859,6 +923,7 @@ function LogScreen() {
               </View>
             ) : null}
           </View>
+          </TutorialTarget>
           {selected.id === "food" ? (
             <>
               <Text style={[styles.fieldLabel, { color: colors.muted }]}>Meal</Text>
@@ -875,6 +940,7 @@ function LogScreen() {
               <Text style={[styles.fieldLabel, { color: colors.muted }]}>
                 What did you eat?
               </Text>
+              <TutorialTarget id="log-food-search">
               <View
                 style={[styles.foodNameRow, { borderColor: colors.border }]}
               >
@@ -928,6 +994,7 @@ function LogScreen() {
                   <Ionicons name="barcode-outline" size={19} color={accent} />
                 </Pressable>
               </View>
+              </TutorialTarget>
               <Text style={[styles.fieldLabel, { color: colors.muted }]}>
                 Calories
               </Text>
@@ -1011,18 +1078,32 @@ function LogScreen() {
               </View>
             </>
           ) : mainValueEnabled ? (
-            <View style={styles.numberWrap}>
-              <TextInput
-                accessibilityLabel={`${selected.name} value`}
-                keyboardType="decimal-pad"
-                value={value}
-                onChangeText={setValue}
-                placeholder={replaceMode ? "Day's total" : "Amount to add"}
-                placeholderTextColor={palette.faint}
-                style={[styles.numberInput, { color: colors.ink }]}
-              />
-              <Text style={styles.unit}>{selected.unit}</Text>
-            </View>
+            <>
+              {selected.id === "water" ? (
+                <View style={styles.waterAmounts}>
+                  {[0.25, 0.5, 0.75, 1].map((amount) => (
+                    <Chip
+                      key={amount}
+                      label={String(amount)}
+                      selected={Number(value) === amount}
+                      onPress={() => setValue(String(amount))}
+                    />
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.numberWrap}>
+                <TextInput
+                  accessibilityLabel={`${selected.name} value`}
+                  keyboardType="decimal-pad"
+                  value={value}
+                  onChangeText={setValue}
+                  placeholder={replaceMode ? "Day's total" : "Amount to add"}
+                  placeholderTextColor={palette.faint}
+                  style={[styles.numberInput, { color: colors.ink }]}
+                />
+                <Text style={styles.unit}>{selected.unit}</Text>
+              </View>
+            </>
           ) : null}
           {selected.submetrics?.length &&
           selected.id !== "food" &&
@@ -1410,94 +1491,6 @@ function LogScreen() {
               {entryImage ? "Change attached image" : "Attach an image"}
             </Text>
           </Pressable>
-          <View style={styles.fieldLabelRow}>
-            <Text style={[styles.fieldLabel, { color: colors.muted }]}>Who can see it?</Text>
-            <Pressable
-              accessibilityLabel="Explain sharing options"
-              onPress={() => setPrivacyInfoOpen((open) => !open)}
-              hitSlop={7}
-            >
-              <Ionicons
-                name={privacyInfoOpen ? "information-circle" : "information-circle-outline"}
-                size={16}
-                color={accent}
-              />
-            </Pressable>
-          </View>
-          <View
-            style={[
-              styles.privacyMenu,
-              { borderColor: colors.border, backgroundColor: colors.card },
-            ]}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Who can see it?"
-              accessibilityValue={{ text: selectedPrivacyOption.label }}
-              accessibilityState={{ expanded: privacyMenuOpen }}
-              onPress={() => setPrivacyMenuOpen((open) => !open)}
-              style={styles.privacyMenuButton}
-            >
-              <Ionicons name={selectedPrivacyOption.icon} size={17} color={accent} />
-              <Text style={[styles.privacyMenuValue, { color: colors.ink }]}>
-                {selectedPrivacyOption.label}
-              </Text>
-              <Ionicons
-                name={privacyMenuOpen ? "chevron-up" : "chevron-down"}
-                size={16}
-                color={colors.muted}
-              />
-            </Pressable>
-            {privacyMenuOpen ? (
-              <View style={[styles.privacyMenuList, { borderTopColor: colors.border }]}>
-                {privacyOptions.map((option) => {
-                  const selectedOption = visibility === option.value;
-                  return (
-                    <Pressable
-                      key={option.value}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: selectedOption }}
-                      onPress={() => {
-                        setVisibility(option.value);
-                        setPrivacyMenuOpen(false);
-                      }}
-                      style={[
-                        styles.privacyMenuOption,
-                        selectedOption && { backgroundColor: colors.primarySoft },
-                      ]}
-                    >
-                      <Ionicons name={option.icon} size={16} color={selectedOption ? accent : colors.muted} />
-                      <Text style={[styles.privacyMenuOptionText, { color: colors.ink }]}>
-                        {option.label}
-                      </Text>
-                      {selectedOption ? <Ionicons name="checkmark" size={16} color={accent} /> : null}
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : null}
-          </View>
-          {privacyInfoOpen ? <View
-            style={[
-              styles.privacyBox,
-              { backgroundColor: colors.primarySoft },
-            ]}
-          >
-            <Ionicons
-              name={
-                visibility === "private"
-                  ? "lock-closed"
-                  : visibility === "status"
-                    ? "shield-checkmark"
-                    : "people"
-              }
-              size={16}
-              color={accent}
-            />
-            <Text style={[styles.privacyText, { color: colors.muted }]}>
-              {privacyCopy}
-            </Text>
-          </View> : null}
           <Button
             label={
               replaceMode
@@ -1616,12 +1609,20 @@ const styles = StyleSheet.create({
   currentValue: { color: palette.muted, ...typography.supporting, marginTop: 2 },
   defaultPill: {
     flexDirection: "row",
+    alignItems: "center",
     gap: 4,
     backgroundColor: palette.primarySoft,
     borderRadius: 10,
     padding: 6,
   },
   defaultText: { color: palette.primary, ...typography.supporting, fontWeight: "800" },
+  headingPrivacyMenu: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 4,
+    marginTop: -3,
+    marginBottom: 9,
+  },
   numberWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -1705,6 +1706,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 8,
     marginBottom: 8,
+  },
+  waterAmounts: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 5,
+    marginBottom: 7,
   },
   nutritionDisclosureCopy: { flex: 1 },
   nutritionDisclosureTitle: {
