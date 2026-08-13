@@ -36,6 +36,10 @@ const quickGuideSource = fs.readFileSync("app/quick-guide.tsx", "utf8");
 const uiSource = fs.readFileSync("src/components/ui.tsx", "utf8");
 const rootLayoutSource = fs.readFileSync("app/_layout.tsx", "utf8");
 const guideSource = fs.readFileSync("src/tutorial/guides.ts", "utf8");
+const basicGuideSource = fs.readFileSync("src/tutorial/basicGuide.ts", "utf8");
+const todaySource = fs.readFileSync("app/(tabs)/index.tsx", "utf8");
+const menuSource = fs.readFileSync("app/menu.tsx", "utf8");
+const customizeSource = fs.readFileSync("app/customize.tsx", "utf8");
 
 assert.equal(tutorialRoutePath("/metric-detail?id=screen-time"), "/metric-detail");
 assert.equal(tutorialRoutePath("/insights/#grid"), "/insights");
@@ -53,6 +57,43 @@ assert.equal(
     navigation: { before: "/metric-detail?id=screen-time" },
   }),
   true,
+);
+assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].id, "essential.navigation");
+assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].target, "tab-index");
+for (const actionId of [
+  "tutorial.navigation.open-menu",
+  "tutorial.navigation.open-customize",
+  "tutorial.navigation.close-customize",
+  "tutorial.today.open-filter-sheet",
+  "tutorial.today.open-filter-manager",
+  "tutorial.navigation.open-display",
+]) {
+  assert.match(basicGuideSource, new RegExp(actionId.replaceAll(".", "\\.")));
+  assert.match(
+    `${todaySource}\n${menuSource}\n${customizeSource}\n${uiSource}`,
+    new RegExp(actionId.replaceAll(".", "\\.")),
+    `${actionId} must be reported by a real, isolated control.`,
+  );
+}
+assert.doesNotMatch(
+  menuSource,
+  /router\.replace\(item\.path/,
+  "The transparent menu must close before presenting its destination modal.",
+);
+assert.match(
+  menuSource,
+  /InteractionManager\.runAfterInteractions\([\s\S]{0,180}openDestination/,
+  "The next menu destination must wait until the outgoing native drawer transition is idle.",
+);
+assert.match(
+  todaySource,
+  /showViewFilters \? \([\s\S]{0,220}styles\.viewFilterOverlay/,
+  "The Today filter practice surface must remain in-tree so the root tutorial spotlight stays above it.",
+);
+assert.doesNotMatch(
+  todaySource,
+  /<Modal[\s\S]{0,120}visible=\{showViewFilters\}/,
+  "A native Modal would cover the tutorial callout for the filter-manager practice step.",
 );
 const anchoredDayStep = {
   id: "anchored-day",
@@ -231,8 +272,18 @@ assert.match(spotlightSource, /accessibilityLabel=\{t\("Previous tutorial step"\
 assert.match(spotlightSource, /requestTargetReveal\(targetId\)/);
 assert.match(
   spotlightSource,
+  /if \(!active \|\| !pageSettled \|\| waitingForRoute \|\| !targetId\) return;/,
+  "Every mounted tutorial target must request reveal after the page settles, even when its measured rect is below the viewport",
+);
+assert.doesNotMatch(
+  spotlightSource,
   /if \(!active \|\| rect \|\| waitingForRoute \|\| !targetId\) return;/,
-  "Optional as well as required anchors must request an off-screen reveal",
+  "A positive off-screen rect must not suppress target reveal",
+);
+assert.match(
+  spotlightSource,
+  /outsideUsableViewport[\s\S]{0,240}windowHeight - 88[\s\S]{0,360}scrollContext\?\.reveal\(lastWindowY\.current\)/,
+  "A target measured below the real scroll viewport must schedule its own reveal after the page preview beat",
 );
 assert.match(
   spotlightSource,
@@ -241,7 +292,20 @@ assert.match(
 );
 assert.match(
   spotlightSource,
-  /routeForStep\(previous, activeSession!\.demoAnchorDate\)/,
+  /setTimeout\(\(\) => router\.navigate\(route as never\), 420\)/,
+  "Route enforcement must wait for the real control before navigating.",
+);
+assert.match(spotlightSource, /settledPath\.current === pathname/);
+assert.match(spotlightSource, /reduceMotion \? 0 : 950/);
+assert.match(
+  spotlightSource,
+  /function back\(\)[\s\S]{0,180}previousStep\(\);/,
+  "Back must let the previous step's route settle instead of replacing a modal immediately.",
+);
+assert.doesNotMatch(
+  spotlightSource,
+  /function advance\(\)[\s\S]{0,900}router\.replace/,
+  "Advancing must not race React Navigation with an immediate route replacement.",
 );
 assert.match(
   spotlightSource,
@@ -250,11 +314,64 @@ assert.match(
 );
 assert.match(spotlightSource, /localizedTutorialGuide\(activeGuide, language\)/);
 assert.match(quickGuideSource, /localizedTutorialGuides\(guides, language\)/);
-assert.match(uiSource, /<TutorialScrollProvider reveal=\{revealTutorialTarget\}>/);
+assert.match(
+  uiSource,
+  /<TutorialScrollProvider[\s\S]{0,120}reveal=\{revealTutorialTarget\}[\s\S]{0,120}setActiveTargetMeasurer=\{setTutorialTargetMeasurer\}/,
+);
 assert.match(uiSource, /scrollOffsetRef\.current \+ targetWindowY - scrollWindowY - 80/);
 assert.match(uiSource, /onScroll\?\.\(event\)/, "Screen must preserve its caller's onScroll callback");
+assert.match(
+  uiSource,
+  /onScroll=\{\(event\) => \{[\s\S]{0,180}scheduleTutorialTargetMeasure\(\);/,
+  "Screen scrolls must keep the active spotlight aligned with its real control",
+);
+assert.match(
+  uiSource,
+  /onScrollEndDrag=\{\(event\) => \{[\s\S]{0,120}flushTutorialTargetMeasure\(\);[\s\S]{0,120}onScrollEndDrag\?\.\(event\)/,
+  "Screen must remeasure at drag end and preserve the caller's handler",
+);
+assert.match(
+  uiSource,
+  /onMomentumScrollEnd=\{\(event\) => \{[\s\S]{0,120}flushTutorialTargetMeasure\(\);[\s\S]{0,120}onMomentumScrollEnd\?\.\(event\)/,
+  "Screen must remeasure at momentum end and preserve the caller's handler",
+);
+assert.match(
+  spotlightSource,
+  /scrollContext\?\.setActiveTargetMeasurer\(instanceId, measureNow\)/,
+  "An active target in a Screen must register a current-position measurer",
+);
+assert.match(
+  spotlightSource,
+  /scrollContext\?\.setActiveTargetMeasurer\(instanceId\);/,
+  "A target must unregister its scroll measurer when its step ends",
+);
 assert.match(uiSource, /Math\.min\(scrollEventThrottle, 16\)/);
 assert.match(spotlightSource, /pointerEvents=\{canPassThrough \? "none" : "auto"\}/);
+assert.match(
+  spotlightSource,
+  /onTutorialActivate\?: \(\) => void/,
+  "A real tutorial target may expose its existing action through the cutout",
+);
+assert.match(
+  spotlightSource,
+  /requestTargetActivation\(targetId\)/,
+  "The cutout must activate an explicitly registered real control",
+);
+assert.match(
+  contextSource,
+  /const requestTargetActivation = useCallback[\s\S]{0,500}activate\(\);[\s\S]{0,80}return true/,
+  "Target activation must run only a registered control callback",
+);
+assert.match(
+  todaySource,
+  /<TutorialTarget[\s\S]{0,120}id="today-filter"[\s\S]{0,120}onTutorialActivate=\{openViewFilters\}/,
+  "The filter practice must expose the same action used by its real button",
+);
+assert.match(
+  todaySource,
+  /onPress=\{openViewFilters\}/,
+  "Tutorial and ordinary filter activation must share one handler",
+);
 assert.match(
   spotlightSource,
   /accessibilityViewIsModal\s+aria-modal/,
@@ -290,7 +407,7 @@ assert.match(
   /actionId: "tutorial\.progress\.open-day"[\s\S]{0,120}autoAdvance: true/,
   "The day-opening practice must advance before route enforcement can undo its navigation",
 );
-assert.match(spotlightSource, /canPassThrough && !practiceComplete/);
+assert.match(spotlightSource, /realPracticeAvailable && !practiceComplete/);
 assert.match(
   spotlightSource,
   /const enabled = activeTargetId === id;/,

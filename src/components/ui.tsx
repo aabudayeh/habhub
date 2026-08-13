@@ -43,6 +43,7 @@ import {
 import {
   TutorialScrollProvider,
   TutorialTarget,
+  useOptionalTutorial,
 } from "@/src/components/TutorialSpotlight";
 
 export function Screen({
@@ -53,6 +54,8 @@ export function Screen({
   refreshControl,
   refreshEnabled = true,
   onScroll,
+  onScrollEndDrag,
+  onMomentumScrollEnd,
   scrollEventThrottle,
   ...props
 }: ScrollViewProps & {
@@ -66,6 +69,8 @@ export function Screen({
   const activeRef = scrollRef ?? internalRef;
   const scrollViewportRef = useRef<View>(null);
   const scrollOffsetRef = useRef(0);
+  const tutorialTargetMeasurersRef = useRef(new Map<number, () => void>());
+  const tutorialMeasureFrameRef = useRef<number | null>(null);
   const insets = useSafeAreaInsets();
   const basePaddingBottom = compact ? 90 : 120;
   const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
@@ -86,6 +91,37 @@ export function Screen({
       });
     },
     [activeRef],
+  );
+  const setTutorialTargetMeasurer = useCallback(
+    (instanceId: number, measure?: () => void) => {
+      if (measure) tutorialTargetMeasurersRef.current.set(instanceId, measure);
+      else tutorialTargetMeasurersRef.current.delete(instanceId);
+    },
+    [],
+  );
+  const measureTutorialTargets = useCallback(() => {
+    tutorialTargetMeasurersRef.current.forEach((measure) => measure());
+  }, []);
+  const scheduleTutorialTargetMeasure = useCallback(() => {
+    if (tutorialMeasureFrameRef.current !== null) return;
+    tutorialMeasureFrameRef.current = requestAnimationFrame(() => {
+      tutorialMeasureFrameRef.current = null;
+      measureTutorialTargets();
+    });
+  }, [measureTutorialTargets]);
+  const flushTutorialTargetMeasure = useCallback(() => {
+    if (tutorialMeasureFrameRef.current !== null) {
+      cancelAnimationFrame(tutorialMeasureFrameRef.current);
+      tutorialMeasureFrameRef.current = null;
+    }
+    measureTutorialTargets();
+  }, [measureTutorialTargets]);
+  useEffect(
+    () => () => {
+      if (tutorialMeasureFrameRef.current !== null)
+        cancelAnimationFrame(tutorialMeasureFrameRef.current);
+    },
+    [],
   );
   return (
     // A tab scene already ends above the bottom bar. Adding a second bottom
@@ -121,7 +157,16 @@ export function Screen({
             automaticallyAdjustKeyboardInsets
             onScroll={(event) => {
               scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+              scheduleTutorialTargetMeasure();
               onScroll?.(event);
+            }}
+            onScrollEndDrag={(event) => {
+              flushTutorialTargetMeasure();
+              onScrollEndDrag?.(event);
+            }}
+            onMomentumScrollEnd={(event) => {
+              flushTutorialTargetMeasure();
+              onMomentumScrollEnd?.(event);
             }}
             scrollEventThrottle={
               typeof scrollEventThrottle === "number"
@@ -143,7 +188,10 @@ export function Screen({
             ]}
             {...props}
           >
-            <TutorialScrollProvider reveal={revealTutorialTarget}>
+            <TutorialScrollProvider
+              reveal={revealTutorialTarget}
+              setActiveTargetMeasurer={setTutorialTargetMeasurer}
+            >
               <View style={styles.content}>{children}</View>
             </TutorialScrollProvider>
           </ScrollView>
@@ -173,11 +221,13 @@ export function useKeyboardReveal(
 export function PageHeader({
   eyebrow,
   title,
+  subtitle,
   action,
   showMenu = true,
   tutorialId,
   translateTitle = true,
   translateEyebrow = true,
+  translateSubtitle = true,
 }: {
   eyebrow?: string;
   title: string;
@@ -187,7 +237,9 @@ export function PageHeader({
   tutorialId?: string;
   translateTitle?: boolean;
   translateEyebrow?: boolean;
+  translateSubtitle?: boolean;
 }) {
+  const tutorial = useOptionalTutorial();
   const accent = useGroupAccent();
   const colors = useAppColors();
   const compact = useCompactMode();
@@ -215,6 +267,18 @@ export function PageHeader({
         >
           {title}
         </Text>
+        {subtitle ? (
+          <Text
+            translate={translateSubtitle}
+            style={[
+              styles.subtitle,
+              compact && styles.subtitleCompact,
+              { color: colors.muted },
+            ]}
+          >
+            {subtitle}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.headerActions}>
         {action}
@@ -223,7 +287,13 @@ export function PageHeader({
           <IconButton
             icon="menu-outline"
             label="Open menu"
-            onPress={() => router.navigate("/menu" as never)}
+            onPress={() => {
+              router.navigate("/menu" as never);
+              tutorial?.reportEvent({
+                actionId: "tutorial.navigation.open-menu",
+                scope: "isolated-preview",
+              });
+            }}
           />
           </TutorialTarget>
         ) : null}
@@ -630,10 +700,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
-    paddingTop: 14,
-    marginBottom: 22,
+    paddingTop: 8,
+    marginBottom: 14,
   },
-  headerCompact: { paddingTop: 8, marginBottom: 13 },
+  headerCompact: { paddingTop: 5, marginBottom: 9 },
   headerCopy: { flex: 1 },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   eyebrow: {

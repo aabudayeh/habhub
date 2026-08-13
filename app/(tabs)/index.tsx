@@ -13,6 +13,7 @@ import {
   AccessibilityInfo,
   Animated,
   BackHandler,
+  findNodeHandle,
   Modal,
   PanResponder,
   Platform,
@@ -38,6 +39,7 @@ import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
 import {
+  TutorialScrollProvider,
   TutorialTarget,
   useTutorial,
 } from "@/src/components/TutorialSpotlight";
@@ -64,6 +66,7 @@ import {
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import {
+  canBeTrackedGoal,
   effectiveGoalTarget,
   formatMetricValue,
   goalProgress,
@@ -79,6 +82,10 @@ import {
   weightProgressStats,
   weeklyDeficitBalance,
 } from "@/src/domain/metrics";
+import {
+  estimateWeightPlan,
+  weightManagementSummaryVisible,
+} from "@/src/domain/weightPlan";
 import {
   compoundMetricValues,
   formatCompoundMetricValue,
@@ -160,6 +167,7 @@ function Today() {
   } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
+  const reportTutorialEvent = tutorial.reportEvent;
   const health = useHealthSync();
   const cloud = useCloudSyncActions();
   const cloudStatus = useCloudSyncStatus();
@@ -176,7 +184,62 @@ function Today() {
   const [showDayEnd, setShowDayEnd] = useState(false);
   const [showHistoryOptions, setShowHistoryOptions] = useState(false);
   const [expandedHistoryIds, setExpandedHistoryIds] = useState<string[]>([]);
+  const todayScrollRef = useRef<ScrollView>(null);
+  const todayScrollOffsetRef = useRef(0);
+  const tutorialTargetMeasurersRef = useRef(new Map<number, () => void>());
+  const tutorialMeasureFrameRef = useRef<number | null>(null);
+  const setTutorialTargetMeasurer = useCallback(
+    (instanceId: number, measure?: () => void) => {
+      if (measure) tutorialTargetMeasurersRef.current.set(instanceId, measure);
+      else tutorialTargetMeasurersRef.current.delete(instanceId);
+    },
+    [],
+  );
+  const measureTutorialTargets = useCallback(() => {
+    tutorialTargetMeasurersRef.current.forEach((measure) => measure());
+  }, []);
+  const scheduleTutorialTargetMeasure = useCallback(() => {
+    if (tutorialMeasureFrameRef.current !== null) return;
+    tutorialMeasureFrameRef.current = requestAnimationFrame(() => {
+      tutorialMeasureFrameRef.current = null;
+      measureTutorialTargets();
+    });
+  }, [measureTutorialTargets]);
+  const flushTutorialTargetMeasure = useCallback(() => {
+    if (tutorialMeasureFrameRef.current !== null) {
+      cancelAnimationFrame(tutorialMeasureFrameRef.current);
+      tutorialMeasureFrameRef.current = null;
+    }
+    measureTutorialTargets();
+  }, [measureTutorialTargets]);
+  const revealTutorialTarget = useCallback((targetWindowY: number) => {
+    const node = findNodeHandle(todayScrollRef.current);
+    if (node === null) return;
+    UIManager.measureInWindow(node, (_x, scrollWindowY) => {
+      todayScrollRef.current?.scrollTo({
+        y: Math.max(
+          0,
+          todayScrollOffsetRef.current + targetWindowY - scrollWindowY - 80,
+        ),
+        animated: true,
+      });
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (tutorialMeasureFrameRef.current !== null)
+        cancelAnimationFrame(tutorialMeasureFrameRef.current);
+    },
+    [],
+  );
   const [showViewFilters, setShowViewFilters] = useState(false);
+  const openViewFilters = useCallback(() => {
+    setShowViewFilters(true);
+    reportTutorialEvent({
+      actionId: "tutorial.today.open-filter-sheet",
+      scope: "isolated-preview",
+    });
+  }, [reportTutorialEvent]);
   const todaySwipeResponder = useMemo(
     () =>
       PanResponder.create({
@@ -248,6 +311,34 @@ function Today() {
   const goals = trackedGoalSummary(state, state.currentUserId, today);
   const showGoalsToday = state.settings.showGoalsToday !== false;
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
+  const showWeightSummary = weightManagementSummaryVisible(state.settings);
+  const currentWeightPlan = showWeightSummary
+    ? weightProgressStats(state, state.currentUserId, today)
+    : undefined;
+  const weightPlan = currentWeightPlan
+    ? estimateWeightPlan({
+        anchorDate: today,
+        currentWeightKg: currentWeightPlan.currentWeight,
+        direction: state.settings.weightDirection ?? "lose",
+        targetWeightKg: state.settings.energyProfile.targetWeightKg,
+        weeklyChangeKg: state.settings.energyProfile.desiredWeeklyLossKg,
+      })
+    : undefined;
+  const expectedWeightDate = weightPlan?.expectedGoalDate
+    ? new Intl.DateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+      }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
+    : undefined;
+  const weightPlanLabel = weightPlan
+    ? weightPlan.direction === "maintain"
+      ? `Maintaining ${weightPlan.targetWeightKg.toFixed(1)} kg`
+      : weightPlan.reached
+        ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg reached`
+        : expectedWeightDate
+          ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg · est. ${expectedWeightDate}`
+          : undefined
+    : undefined;
   const activeTodayView = (state.settings.trackerViewFilters ?? []).find(
     (filter) => filter.id === state.settings.activeTodayTrackerViewFilterId,
   );
@@ -265,8 +356,16 @@ function Today() {
     todoResolvedOnDate(todo, today),
   ).length;
   const heroUsesGoals = showGoalsToday;
-  const heroMet = heroUsesGoals ? goals.met : completedTodayTodos;
   const heroTotal = heroUsesGoals ? goals.total : todayTodos.length;
+  const tutorialCompletionPreview =
+    tutorialSandbox &&
+    tutorial.activeStep?.id === "full.today.all-complete" &&
+    heroTotal > 0;
+  const heroMet = tutorialCompletionPreview
+    ? heroTotal
+    : heroUsesGoals
+      ? goals.met
+      : completedTodayTodos;
   const heroProgress = heroTotal ? heroMet / heroTotal : 0;
   const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
@@ -449,6 +548,19 @@ function Today() {
       subscription.remove();
     };
   }, []);
+  const tutorialTargetId =
+    tutorial.activeStep?.anchor?.target ?? tutorial.activeStep?.target;
+  useEffect(() => {
+    if (
+      !tutorialSandbox ||
+      !["today-goal-flag", "today-reorder", "today-edit-menu"].includes(
+        tutorialTargetId ?? "",
+      )
+    )
+      return;
+    setCompletionSortEnabled(false);
+    setEditing(true);
+  }, [tutorialSandbox, tutorialTargetId]);
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -560,10 +672,24 @@ function Today() {
     ]),
   );
   const celebration = useRef(new Animated.Value(0)).current;
+  const allGoalsDismissalKey = `habhub-all-goals-dismissed-v1:${state.currentUserId}:${today}`;
+  const [allGoalsDismissed, setAllGoalsDismissed] = useState(false);
   const [confettiVisible, setConfettiVisible] = useState(false);
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
   const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
+  useEffect(() => {
+    let active = true;
+    setAllGoalsDismissed(false);
+    void AsyncStorage.getItem(allGoalsDismissalKey)
+      .then((saved) => {
+        if (active) setAllGoalsDismissed(saved === "1");
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [allGoalsDismissalKey]);
   const completedGoalIds = goals.metrics
     .filter((item) => scheduledGoalReached(state, item, state.currentUserId, today))
     .map((item) => item.id)
@@ -737,6 +863,7 @@ function Today() {
         <ConfettiBurst progress={celebration} special={celebrationSpecial} />
       ) : null}
       <ScrollView
+        ref={todayScrollRef}
         refreshControl={
           <RefreshControl
             enabled={!editing}
@@ -760,7 +887,18 @@ function Today() {
         }
         contentContainerStyle={styles.page}
         showsVerticalScrollIndicator={false}
+        onScroll={(event) => {
+          todayScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+          scheduleTutorialTargetMeasure();
+        }}
+        onScrollEndDrag={flushTutorialTargetMeasure}
+        onMomentumScrollEnd={flushTutorialTargetMeasure}
+        scrollEventThrottle={16}
       >
+        <TutorialScrollProvider
+          reveal={revealTutorialTarget}
+          setActiveTargetMeasurer={setTutorialTargetMeasurer}
+        >
         <View style={styles.header}>
           <View style={styles.headerIdentity}>
             <Text style={[styles.eyebrow, { color: accent }]}>
@@ -824,7 +962,16 @@ function Today() {
                 />
               </>
             )}
-            <Pressable onPress={() => router.navigate("/menu")}>
+            <TutorialTarget id="menu-button">
+            <Pressable
+              onPress={() => {
+                router.navigate("/menu");
+                tutorial.reportEvent({
+                  actionId: "tutorial.navigation.open-menu",
+                  scope: "isolated-preview",
+                });
+              }}
+            >
               <Avatar
                 initials={user.initials}
                 color={accent}
@@ -832,6 +979,7 @@ function Today() {
                 size={39}
               />
             </Pressable>
+            </TutorialTarget>
           </View>
         </View>
         <TutorialTarget id="today-hero">
@@ -858,7 +1006,7 @@ function Today() {
             />
           ) : null}
           <View style={styles.heroTop}>
-            <View>
+            <View style={styles.heroCopy}>
               <Text
                 style={[
                   styles.heroEyebrow,
@@ -904,6 +1052,22 @@ function Today() {
                       ? "Choose your first goal"
                       : "No to-dos today"}
               </Text>
+              {weightPlanLabel ? (
+                <View style={styles.heroWeightPlan}>
+                  <Ionicons
+                    name={weightPlan?.direction === "maintain" ? "remove-outline" : "calendar-outline"}
+                    size={11}
+                    color="rgba(255,255,255,.82)"
+                  />
+                  <Text
+                    preserveColor
+                    numberOfLines={1}
+                    style={styles.heroWeightPlanText}
+                  >
+                    {weightPlanLabel}
+                  </Text>
+                </View>
+              ) : null}
             </View>
             <CompletionShapeIndicator
               icon={state.settings.completionIndicatorIcon}
@@ -979,7 +1143,8 @@ function Today() {
           ) : null}
         </AnimatedPressable>
         </TutorialTarget>
-        {showGoalsToday && goals.allMet ? (
+        {showGoalsToday &&
+        (tutorialCompletionPreview || (goals.allMet && !allGoalsDismissed)) ? (
           <TutorialTarget id="today-all-complete">
           <Celebration
             title="All goals complete"
@@ -996,6 +1161,16 @@ function Today() {
                 },
               } as never)
             }
+            onDismiss={
+              tutorialCompletionPreview
+                ? undefined
+                : () => {
+                    setAllGoalsDismissed(true);
+                    void AsyncStorage.setItem(allGoalsDismissalKey, "1").catch(
+                      () => undefined,
+                    );
+                  }
+            }
           />
           </TutorialTarget>
         ) : null}
@@ -1011,8 +1186,8 @@ function Today() {
           />
           </TutorialTarget>
         ) : null}
-        <TutorialTarget id="today-edit">
         <View style={styles.sectionRow}>
+          <TutorialTarget id="today-edit">
           <Pressable
             accessibilityLabel="Customize Today"
             onPress={() => {
@@ -1025,6 +1200,7 @@ function Today() {
           >
             <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
           </Pressable>
+          </TutorialTarget>
           <View style={styles.sectionActions}>
             {editing ? (
               <Pressable
@@ -1046,9 +1222,15 @@ function Today() {
                 />
               </Pressable>
             ) : null}
-            <TutorialTarget id="today-filter">
+            <TutorialTarget
+              id="today-filter"
+              onTutorialActivate={openViewFilters}
+            >
             <Pressable
-              onPress={() => setShowViewFilters(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Open Today view picker"
+              accessibilityState={{ expanded: showViewFilters }}
+              onPress={openViewFilters}
               delayLongPress={325}
               onLongPress={() => {
                 if (!editing) beginEditing();
@@ -1069,7 +1251,6 @@ function Today() {
             </TutorialTarget>
           </View>
         </View>
-        </TutorialTarget>
         <TutorialTarget id="today-tracker-list">
         <View style={styles.list}>
           {primary.map((item, index) => (
@@ -1337,17 +1518,19 @@ function Today() {
           </View>
           </TutorialTarget>
         ) : null}
+        </TutorialScrollProvider>
       </ScrollView>
-      <Modal
-        transparent
-        animationType="fade"
-        visible={showViewFilters}
-        onRequestClose={() => setShowViewFilters(false)}
-      >
-        <Pressable
-          style={styles.backdrop}
-          onPress={() => setShowViewFilters(false)}
+      {showViewFilters ? (
+        <View
+          accessibilityViewIsModal
+          style={styles.viewFilterOverlay}
         >
+          <Pressable
+            accessibilityLabel="Close Today view picker"
+            accessibilityRole="button"
+            onPress={() => setShowViewFilters(false)}
+            style={StyleSheet.absoluteFill}
+          />
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
             <View style={styles.sheetHandle} />
             <Text style={[styles.sheetTitle, { color: colors.ink }]}>
@@ -1386,6 +1569,7 @@ function Today() {
                 ) : null}
               </Pressable>
             ))}
+            <TutorialTarget id="today-filter-manage">
             <Pressable
               onPress={() => {
                 setShowViewFilters(false);
@@ -1393,6 +1577,10 @@ function Today() {
                   pathname: "/view-filters",
                   params: { scope: "today" },
                 } as never);
+                tutorial.reportEvent({
+                  actionId: "tutorial.today.open-filter-manager",
+                  scope: "isolated-preview",
+                });
               }}
               style={[styles.manageFilters, { borderColor: accent }]}
             >
@@ -1401,9 +1589,10 @@ function Today() {
                 Manage custom views
               </Text>
             </Pressable>
+            </TutorialTarget>
           </View>
-        </Pressable>
-      </Modal>
+        </View>
+      ) : null}
       <Modal
         transparent
         animationType="fade"
@@ -2115,7 +2304,7 @@ function TrackerRow({
       />
     </View>
   );
-  const trackedToggle = (
+  const trackedToggle = canBeTrackedGoal(item) ? (
     <Pressable
       accessibilityLabel={
         trackedGoal
@@ -2135,7 +2324,7 @@ function TrackerRow({
         color={trackedGoal ? item.color : accent}
       />
     </Pressable>
-  );
+  ) : null;
   return (
     <Reanimated.View
       style={[
@@ -2715,12 +2904,14 @@ function Celebration({
   copy,
   special = false,
   colors,
+  onDismiss,
   onPress,
 }: {
   title: string;
   copy: string;
   special?: boolean;
   colors: ReturnType<typeof useAppColors>;
+  onDismiss?: () => void;
   onPress: () => void;
 }) {
   return (
@@ -2752,7 +2943,22 @@ function Celebration({
           {copy}
         </Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color={special ? "#806316" : colors.muted} />
+      {onDismiss ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss all goals complete"
+          hitSlop={8}
+          onPress={(event) => {
+            event.stopPropagation();
+            onDismiss();
+          }}
+          style={styles.celebrationDismiss}
+        >
+          <Ionicons name="close" size={18} color={special ? "#806316" : colors.muted} />
+        </Pressable>
+      ) : (
+        <Ionicons name="chevron-forward" size={18} color={special ? "#806316" : colors.muted} />
+      )}
     </Pressable>
   );
 }
@@ -3158,6 +3364,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 11,
   },
+  heroCopy: { flex: 1, minWidth: 0, paddingRight: 8 },
   heroEyebrow: {
     color: "rgba(255,255,255,.72)",
     fontSize: 8,
@@ -3172,6 +3379,20 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   heroTitle: { color: palette.white, fontSize: 11, fontWeight: "800" },
+  heroWeightPlan: {
+    minHeight: 18,
+    marginTop: 3,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  heroWeightPlanText: {
+    flexShrink: 1,
+    color: "rgba(255,255,255,.82)",
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: "800",
+  },
   completionShape: {
     width: COMPLETION_INDICATOR_SIZE,
     height: COMPLETION_INDICATOR_SIZE,
@@ -3333,6 +3554,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  celebrationDismiss: {
+    width: 32,
+    height: 32,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   rowWithHistory: {
     borderBottomWidth: 0,
     borderBottomLeftRadius: 0,
@@ -3451,6 +3679,13 @@ const styles = StyleSheet.create({
   addText: { fontSize: 10, fontWeight: "900" },
   backdrop: {
     flex: 1,
+    backgroundColor: "rgba(10,15,12,.52)",
+    justifyContent: "flex-end",
+  },
+  viewFilterOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 80,
+    elevation: 80,
     backgroundColor: "rgba(10,15,12,.52)",
     justifyContent: "flex-end",
   },

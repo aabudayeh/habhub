@@ -840,42 +840,6 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
     gymPlans: [gymPlans[1]],
   };
   const entries = tutorialEntries(anchorDate);
-  // The complete-day tutorial step needs the featured card's real all-met
-  // state, not a text-only fallback. Keep the grocery To-Do incomplete so its
-  // independent practice step remains available.
-  const completedAnchorValues: Record<string, number | boolean> = {
-    steps: 12_000,
-    food: 1_200,
-    exercise: 420,
-    water: 3,
-    workout: true,
-    reading: 45,
-    tutorial_meditation: 20,
-    tutorial_wellbeing: 8,
-  };
-  for (const [metricId, value] of Object.entries(completedAnchorValues)) {
-    const existing = entries.filter(
-      (entry) =>
-        entry.localDate === anchorDate &&
-        entry.userId === TUTORIAL_DEMO_USER_ID &&
-        entry.metricId === metricId,
-    );
-    existing.forEach((entry, index) => {
-      entry.value = index === 0 ? value : typeof value === "number" ? 0 : false;
-    });
-    if (!existing.length)
-      entries.push(
-        makeEntry(
-          anchorDate,
-          0,
-          TUTORIAL_DEMO_USER_ID,
-          metricId,
-          value,
-          "private",
-          { label: "Tutorial complete-day fixture" },
-        ),
-      );
-  }
   for (const offset of [-2, -1]) {
     const workout = entries.find(
       (entry) =>
@@ -1028,32 +992,9 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
     todos: tutorialTodos(anchorDate),
     journalNotes: tutorialJournal(anchorDate),
     calendarReminders: tutorialReminders(anchorDate),
-    activityTimers: [
-      {
-        id: "tutorial-timer-reading",
-        metricId: "reading",
-        mode: "countdown",
-        targetSeconds: 30 * 60,
-        autoLog: true,
-        startedAt: instant(anchorDate, 0, "17:35"),
-        status: "paused",
-        accumulatedSeconds: 12 * 60,
-        pausedAt: instant(anchorDate, 0, "17:47"),
-        laps: [],
-      },
-      {
-        id: "tutorial-timer-work",
-        metricId: "work",
-        mode: "stopwatch",
-        autoLog: false,
-        startedAt: instant(anchorDate, 0, "17:50"),
-        status: "running",
-        accumulatedSeconds: 5 * 60,
-        laps: [
-          { id: "tutorial-lap-1", seconds: 180, recordedAt: instant(anchorDate, 0, "17:53") },
-        ],
-      },
-    ],
+    // Timers are created only when the timer tutorial reaches its practice
+    // step. Starting the tour must never show a leftover live timer overlay.
+    activityTimers: [],
     activeTimer: undefined,
     settings: {
       ...base.settings,

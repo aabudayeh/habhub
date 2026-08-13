@@ -281,6 +281,8 @@ export type MetricEntry = {
   sourceRecordId?: string;
   sourceOrigin?: string;
   sourceUpdatedAt?: string;
+  /** Account snapshot revision that published this shared cloud projection. */
+  sourceRevision?: number;
 };
 
 export type NutritionDetails = {
@@ -312,6 +314,8 @@ export type PhotoUpdate = {
   visibility: Visibility;
   capturedAt?: string;
   storagePath?: string;
+  /** Account snapshot revision that published this shared cloud projection. */
+  sourceRevision?: number;
 };
 
 export type ChatMessage = {
@@ -346,10 +350,14 @@ export type DailyMetricStatus = {
   goalEligible?: boolean;
   /** Exact daily value is populated only when the member shared exact values. */
   exactValue?: number;
+  /** Version 2 exact values were derived from exact-visible sources only. */
+  privacyProjectionVersion?: number;
   /** Distinguishes a real status-only measurement from an empty daily snapshot. */
   hasData?: boolean;
   /** Last cloud update for this member's daily group snapshot. */
   syncedAt?: string;
+  /** Account snapshot revision that published this shared cloud projection. */
+  sourceRevision?: number;
 };
 
 export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
@@ -834,6 +842,10 @@ export type UserSettings = {
   /** Changes for every replay so the overlay reliably returns to step one. */
   tutorialGuideRunId?: number;
   selectedGoals: string[];
+  /** Whether this person wants a lose, maintain, or gain weight plan. */
+  weightManagementEnabled?: boolean;
+  /** Show the compact weight/body-fat/target summary on Today and Status. */
+  showWeightManagementSummary?: boolean;
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
   /** Personal Start/End state keyed by intermittent-fasting metric id. */
@@ -864,6 +876,8 @@ export type UserSettings = {
   leaderboardPinnedMetricIdsByGroup?: Record<string, string[]>;
   /** Unified metric/challenge card order. Unknown ids are ignored during rendering. */
   leaderboardCardOrderByGroup?: Record<string, string[]>;
+  /** Personal calendar range shown inside expanded Leaderboard member rows. */
+  leaderboardGridRangeByGroup?: Record<string, HistoryRange>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
   comparisonPeriodByGroup: Record<
     string,
@@ -887,6 +901,8 @@ export type UserSettings = {
   deletedPhotoIds?: string[];
   /** Durable local-first outbox for administrator-owned group configuration. */
   pendingGroupConfigurationIds?: string[];
+  /** Tracker privacy revocations awaiting a revision-checked group fence. */
+  pendingMetricPrivacyFenceIdsByGroup?: Record<string, string[]>;
   /** Legacy v6 aliases retained only while migrating stored demo state. */
   memberNicknames?: Record<string, string>;
   notifications: NotificationSettings;

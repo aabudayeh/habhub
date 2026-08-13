@@ -95,6 +95,117 @@ function literalValue(node) {
   return value && ts.isStringLiteralLike(value) ? value.text : undefined;
 }
 
+function declarationInitializer(file, declarationName, issues) {
+  const source = sourceFile(file);
+  let initializer;
+  let matches = 0;
+
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(source) === declarationName
+    ) {
+      matches += 1;
+      initializer = unwrap(node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(source);
+  const relativeFile = path.relative(root, file).replaceAll("\\", "/");
+  if (matches !== 1 || !initializer) {
+    issues.push(
+      `${relativeFile} must declare ${declarationName} exactly once with a literal initializer.`,
+    );
+  }
+  return { initializer, source };
+}
+
+function trackerPresetDescriptions(issues) {
+  const file = path.join(root, "src", "domain", "trackerCatalog.ts");
+  const { initializer } = declarationInitializer(
+    file,
+    "TRACKER_PRESET_DESCRIPTIONS",
+    issues,
+  );
+  if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
+    issues.push(
+      "src/domain/trackerCatalog.ts TRACKER_PRESET_DESCRIPTIONS must remain an object literal so localization coverage can be audited.",
+    );
+    return new Map();
+  }
+
+  const descriptions = new Map();
+  for (const property of initializer.properties) {
+    if (!ts.isPropertyAssignment(property)) {
+      issues.push(
+        `${locationOf(file, property)} tracker descriptions cannot use spreads or computed shorthand.`,
+      );
+      continue;
+    }
+    const id = propertyName(property.name);
+    const description = literalValue(property.initializer);
+    if (!id || description === undefined) {
+      issues.push(
+        `${locationOf(file, property)} tracker description must use a literal id and English string.`,
+      );
+      continue;
+    }
+    if (descriptions.has(id)) {
+      issues.push(`${locationOf(file, property)} duplicates tracker description ${id}.`);
+      continue;
+    }
+    if (normalizeCopy(description).split(/\s+/).length < 6) {
+      issues.push(
+        `${locationOf(file, property)} tracker description ${id} is too short to explain the metric meaningfully.`,
+      );
+    }
+    descriptions.set(id, description);
+  }
+  return descriptions;
+}
+
+function defaultMetricIds(issues) {
+  const file = path.join(root, "src", "data", "seed.ts");
+  const { initializer } = declarationInitializer(
+    file,
+    "BASE_METRICS",
+    issues,
+  );
+  if (!initializer || !ts.isArrayLiteralExpression(initializer)) {
+    issues.push(
+      "src/data/seed.ts BASE_METRICS must remain an array literal so built-in tracker localization can be audited.",
+    );
+    return new Set();
+  }
+
+  const ids = new Set();
+  for (const element of initializer.elements) {
+    const metric = unwrap(element);
+    if (!metric || !ts.isObjectLiteralExpression(metric)) {
+      issues.push(
+        `${locationOf(file, element)} BASE_METRICS entries must remain object literals.`,
+      );
+      continue;
+    }
+    const idProperty = metric.properties.find(
+      (property) =>
+        ts.isPropertyAssignment(property) && propertyName(property.name) === "id",
+    );
+    const id =
+      idProperty && ts.isPropertyAssignment(idProperty)
+        ? literalValue(idProperty.initializer)
+        : undefined;
+    if (!id) {
+      issues.push(`${locationOf(file, element)} built-in tracker needs a literal id.`);
+      continue;
+    }
+    if (ids.has(id)) issues.push(`${locationOf(file, element)} duplicates built-in tracker ${id}.`);
+    ids.add(id);
+  }
+  return ids;
+}
+
 function jsxTagName(node) {
   if (ts.isIdentifier(node.tagName)) return node.tagName.text;
   return node.tagName.getText();
@@ -654,6 +765,79 @@ for (const file of walkFiles(path.join(root, "src", "i18n"))) {
   );
 }
 collectCatalogsFromJson(path.join(root, "src", "i18n", "catalogs"), catalogs, catalogIssues);
+
+const descriptionsByTracker = trackerPresetDescriptions(catalogIssues);
+const builtInTrackerIds = defaultMetricIds(catalogIssues);
+for (const id of builtInTrackerIds) {
+  if (!descriptionsByTracker.has(id)) {
+    catalogIssues.push(
+      `Built-in tracker ${id} is missing a meaningful TRACKER_PRESET_DESCRIPTIONS entry.`,
+    );
+  }
+}
+for (const id of descriptionsByTracker.keys()) {
+  if (!builtInTrackerIds.has(id)) {
+    catalogIssues.push(
+      `TRACKER_PRESET_DESCRIPTIONS contains stale or unknown built-in tracker ${id}.`,
+    );
+  }
+}
+for (const [id, description] of descriptionsByTracker) {
+  for (const language of languages) {
+    const translation = catalogs[language].get(description);
+    if (!translation) {
+      catalogIssues.push(
+        `${language} is missing the dynamic onboarding description for tracker ${id}: ${JSON.stringify(description)}.`,
+      );
+      continue;
+    }
+    if (
+      normalizeCopy(translation).localeCompare(normalizeCopy(description), "en", {
+        sensitivity: "base",
+      }) === 0
+    ) {
+      catalogIssues.push(
+        `${language} falls back to English for the dynamic onboarding description of tracker ${id}.`,
+      );
+    }
+  }
+}
+
+const runtimeI18nSource = fs.readFileSync(
+  path.join(root, "src", "i18n", "index.tsx"),
+  "utf8",
+);
+for (const language of languages) {
+  if (!runtimeI18nSource.includes(`@/src/i18n/catalogs/${language}.json`)) {
+    catalogIssues.push(
+      `src/i18n/index.tsx must import the ${language} generated catalog used by dynamic tracker descriptions.`,
+    );
+  }
+}
+if (
+  !runtimeI18nSource.includes(
+    "const generatedDirect = generatedCatalogs[language][content]",
+  )
+) {
+  catalogIssues.push(
+    "translateUiText must resolve dynamic text through the generated catalogs.",
+  );
+}
+
+const onboardingSource = fs.readFileSync(
+  path.join(root, "app", "onboarding.tsx"),
+  "utf8",
+);
+if (!/\{t\(infoTracker\.description\)\}/.test(onboardingSource)) {
+  catalogIssues.push(
+    "Onboarding must explicitly translate the dynamically selected tracker description.",
+  );
+}
+if (!/accessibilityHint=\{t\(item\.description\)\}/.test(onboardingSource)) {
+  catalogIssues.push(
+    "Onboarding tracker accessibility hints must translate their dynamic descriptions.",
+  );
+}
 
 const catalogKeys = new Set(
   languages.flatMap((language) => [...catalogs[language].keys()]),

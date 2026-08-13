@@ -63,6 +63,8 @@ import {
   formatMetricValue,
   metricVisualProgress,
 } from "@/src/domain/metrics";
+import { statusForDay } from "@/src/domain/dataIndex";
+import { canUseCachedSharedRaw } from "@/src/domain/sharedMetricPrivacy";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
@@ -114,9 +116,29 @@ export default function LeaderboardDetail() {
     if (!detailsReady) return [];
     const dateSet = new Set(dates);
     const shared = state.entries.filter(
-      (entry) =>
-        dateSet.has(entry.localDate) &&
-        (entry.userId === state.currentUserId || entry.visibility === "group"),
+      (entry) => {
+        if (!dateSet.has(entry.localDate)) return false;
+        if (entry.userId === state.currentUserId) return true;
+        if (entry.visibility !== "group") return false;
+        const authoritativeStatus = statusForDay(
+          state.dailyMetricStatuses,
+          state.group.id,
+          entry.metricId,
+          entry.userId,
+          entry.localDate,
+        );
+        const verifiedExactValue =
+          authoritativeStatus?.visibility === "group" &&
+          authoritativeStatus.privacyProjectionVersion === 2
+            ? authoritativeStatus.exactValue
+            : undefined;
+        return canUseCachedSharedRaw(
+          entry.userId,
+          state.currentUserId,
+          authoritativeStatus?.visibility,
+          verifiedExactValue,
+        );
+      },
     );
     const sharedKeys = new Set(
       shared.map(
@@ -131,6 +153,8 @@ export default function LeaderboardDetail() {
           status.groupId === state.group.id &&
           status.userId !== state.currentUserId &&
           dateSet.has(status.localDate) &&
+          status.visibility === "group" &&
+          status.privacyProjectionVersion === 2 &&
           status.exactValue !== undefined &&
           !sharedKeys.has(
             `${status.userId}\u0000${status.metricId}\u0000${status.localDate}`,

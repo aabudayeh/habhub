@@ -5,7 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud';
 import { dateKey } from '@/src/domain/date';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
-import { enabledHealthDataTypes, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import { mergeHealthSourcePreferences } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
@@ -84,7 +84,7 @@ TaskManager.defineTask(TASK_NAME, async () => {
     const entries = mapHealthRecordsToEntries(
       records,
       state.currentUserId,
-      'group',
+      healthVisibilityByMetric(state.metrics),
       state.metrics,
       state.settings.energyProfile,
       sourcePreferences,

@@ -1,6 +1,6 @@
 import type { DailyMetricStatus, MetricEntry } from "@/src/types";
 
-export const GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 1;
+export const GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 2;
 export const DEFAULT_GROUP_ACTIVITY_CACHE_LIMIT = 8;
 
 export type GroupActivityCachePayload = {

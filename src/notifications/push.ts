@@ -354,6 +354,80 @@ export async function notificationPermissionGranted() {
   );
 }
 
+/**
+ * Stronger than OS permission: proves this build obtained an Expo token and,
+ * when cloud sync is configured, successfully registered it for this account.
+ * Onboarding uses this so a seeded `pushEnabled` preference cannot be mistaken
+ * for a completed device setup.
+ */
+export async function notificationSetupComplete(userId?: string) {
+  if (!(await notificationPermissionGranted())) return false;
+  const projectId = pushProjectId();
+  if (!projectId) return false;
+  const token = await AsyncStorage.getItem(tokenCacheKey(projectId));
+  if (!token) return false;
+  if (!supabase) return true;
+  if (!userId) return false;
+  const accountKey = registrationAccountKey(userId, projectId);
+  if (disabledPushRegistrationAccounts.has(accountKey)) return false;
+  const cacheKey = registrationCacheKey(userId, projectId);
+  const signatureMatchesCurrentDevice = (acknowledgement: {
+    signature?: string;
+    registeredAt?: number;
+  }) => {
+    if (
+      typeof acknowledgement.signature !== 'string' ||
+      !Number.isFinite(acknowledgement.registeredAt) ||
+      Date.now() - Number(acknowledgement.registeredAt) >=
+        PUSH_REGISTRATION_TTL_MS
+    )
+      return false;
+    try {
+      const signature = JSON.parse(acknowledgement.signature) as {
+        userId?: string;
+        projectId?: string;
+        token?: string;
+        platform?: string;
+      };
+      return (
+        signature.userId === userId &&
+        signature.projectId === projectId &&
+        signature.token === token &&
+        signature.platform === Platform.OS
+      );
+    } catch {
+      return false;
+    }
+  };
+  const inMemory = pushRegistrationMemory.get(cacheKey);
+  let acknowledgement: { signature?: string; registeredAt?: number } | undefined =
+    inMemory;
+  try {
+    if (!acknowledgement) {
+      const raw = await AsyncStorage.getItem(cacheKey);
+      if (!raw) return false;
+      acknowledgement = JSON.parse(raw) as {
+        signature?: string;
+        registeredAt?: number;
+      };
+    }
+    if (!signatureMatchesCurrentDevice(acknowledgement)) return false;
+    // The owner-readable token row is the authoritative setup truth. This
+    // keeps a locally cached acknowledgement from showing Connected after a
+    // server cleanup, token invalidation, or account recreation.
+    const { data, error } = await supabase
+      .from('device_push_tokens')
+      .select('token, platform')
+      .eq('user_id', userId)
+      .eq('token', token)
+      .eq('platform', Platform.OS)
+      .maybeSingle();
+    return !error && Boolean(data);
+  } catch {
+    return false;
+  }
+}
+
 export async function updatePushPreferences(
   userId: string,
   preferences: NotificationSettings,

@@ -2,12 +2,22 @@ import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import React from "react";
-import { PanResponder, Pressable, StyleSheet, View } from "react-native";
+import {
+  InteractionManager,
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 import { AppText as Text } from "@/src/components/AppText";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar } from "@/src/components/ui";
-import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, shadow, useAppColors, useGroupAccent } from "@/src/theme";
@@ -52,6 +62,7 @@ const items = [
 ];
 
 export default function MenuScreen() {
+  const tutorial = useTutorial();
   const { state } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -69,6 +80,40 @@ export default function MenuScreen() {
         },
       }),
     [],
+  );
+  const openItem = React.useCallback(
+    (path: (typeof items)[number]["path"]) => {
+      const actionId =
+        path === "/customize"
+          ? "tutorial.navigation.open-customize"
+          : path === "/display-settings"
+            ? "tutorial.navigation.open-display"
+            : undefined;
+      // Close the transparent drawer before presenting the destination modal.
+      // Replacing the drawer while Android is animating it can leave a blank
+      // native surface, especially inside the tutorial sandbox.
+      router.back();
+      const openDestination = () => {
+        router.navigate(path as never);
+        if (actionId)
+          tutorial.reportEvent({
+            actionId,
+            scope: "isolated-preview",
+          });
+      };
+      if (Platform.OS === "web") {
+        setTimeout(openDestination, 0);
+      } else {
+        // React Navigation's transparent drawer is still a native transition
+        // after `back()` returns. Waiting for interactions prevents presenting
+        // the next modal against the outgoing surface (an Android blank-screen
+        // failure seen in the guided flow).
+        void InteractionManager.runAfterInteractions(() => {
+          setTimeout(openDestination, 80);
+        });
+      }
+    },
+    [tutorial],
   );
   return (
     <View style={styles.overlay} {...closeSwipe.panHandlers}>
@@ -129,9 +174,7 @@ export default function MenuScreen() {
           {items.map((item) => {
             const row = (
               <Pressable
-                onPress={() => {
-                  router.replace(item.path as never);
-                }}
+                onPress={() => openItem(item.path)}
                 style={({ pressed }) => [
                   styles.item,
                   pressed && styles.pressed,

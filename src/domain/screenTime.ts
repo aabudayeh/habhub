@@ -57,6 +57,33 @@ export function screenTimeTrackerSamples(
     }));
 }
 
+/**
+ * Keeps a retained-history refresh from replacing hundreds of unchanged rows.
+ * The caller supplies only the current user's Android-owned rows, which keeps
+ * this calculation platform-independent and makes the eventual store write a
+ * single, minimal batch.
+ */
+export function changedScreenTimeTrackerSamples<
+  TSample extends { localDate: string; minutes: number },
+  TEntry extends {
+    localDate: string;
+    value: number | boolean | string;
+  },
+>(samples: readonly TSample[], existingEntries: readonly TEntry[]) {
+  const currentByDate = new Map(
+    existingEntries
+      .filter(
+        (entry) =>
+          typeof entry.value === "number" && Number.isFinite(entry.value),
+      )
+      .map((entry) => [entry.localDate, Number(entry.value)] as const),
+  );
+  return samples.filter((sample) => {
+    const current = currentByDate.get(sample.localDate);
+    return current === undefined || Math.abs(current - sample.minutes) >= 0.05;
+  });
+}
+
 /** Removes values written by the pre-v4 expanded-bucket implementation. */
 export function repairLegacyScreenTimeEntries<
   TEntry extends {

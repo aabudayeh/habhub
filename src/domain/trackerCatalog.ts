@@ -358,7 +358,60 @@ const GYM_TRACKER_PRESETS: TrackerPreset[] = [
   ),
 ];
 
-function presetDescription(id: string) {
+export const TRACKER_PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  steps: "Your total steps for each day. A phone can import them from connected health; web users can enter the day's total manually.",
+  food: "Calories and nutrients from meals, snacks, food search, or barcode scans. It also powers your energy balance.",
+  exercise: "Active energy burned through movement. HabHub combines compatible health data and saved workouts without counting the same activity twice.",
+  deficit: "Calories burned minus calories eaten for the day. It is calculated after food is logged and adapts to your weight direction.",
+  water: "Drinks recorded in 250 ml cups. Daily entries add together toward your hydration target.",
+  workout: "Whether you completed a workout that day. Saved HabHub sessions and compatible connected-health workouts can update it.",
+  weight: "Your body-weight trend and progress toward a target. It is a long-term directional tracker, not a daily goal to complete.",
+  protein: "Protein eaten across all logged food, shown in grams. It supports muscle repair and can have a personal daily target.",
+  fat: "Dietary fat across logged food, shown in grams. Use it for reference or set a personal intake target.",
+  carbs: "Carbohydrates across logged food, shown in grams. Use it to understand daily energy intake or follow a personal target.",
+  fiber: "Fiber across logged food, shown in grams. It helps you monitor a nutrient linked with digestion and fullness.",
+  sodium: "Sodium across logged food, shown in milligrams. It is useful for observing intake or following a clinician-informed limit.",
+  progress_photo: "Private progress photos tied to a date, with an optional caption and weight. Sharing remains under your control.",
+  workout_duration: "Minutes spent working out. Saved HabHub sessions and compatible connected-health workouts contribute to one daily total.",
+  body_fat: "Measured body-fat percentage from a scale, connected health source, or manual reading. It describes body composition over time.",
+  lean_body_mass: "Your measured non-fat body mass in kilograms. Compatible scales can import it, or you can record a reading manually.",
+  body_water_mass: "Body-water mass in kilograms from compatible connected scales. It is a measurement trend, not a hydration log.",
+  bone_mass: "Estimated bone mass in kilograms from compatible connected scales. Treat it as a device-reported trend rather than a diagnosis.",
+  blood_pressure_systolic: "A paired systolic and diastolic blood-pressure reading. HabHub keeps both numbers together and lets you personalize the preferred range.",
+  blood_pressure_diastolic: "The lower number in a blood-pressure reading. It is stored with the systolic value rather than shown as a separate tracker.",
+  pulse: "Heart rate in beats per minute. Connected readings can be summarized for the day, with a personal preferred range if useful.",
+  workout_calories: "Active calories attributed specifically to workout sessions. Compatible connected-health sessions can provide this value.",
+  workout_distance: "Distance covered during compatible workouts such as walking, running, or cycling, combined into a daily total.",
+  sugar: "Total sugar across logged food, shown in grams. Use it for reference or set a personal daily limit.",
+  saturated_fat: "Saturated fat across logged food, shown in grams. It can be observed or compared with a personal limit.",
+  cholesterol: "Dietary cholesterol across logged food, shown in milligrams. It is available for reference or a personal target.",
+  potassium: "Potassium across logged food, shown in milligrams. It helps you review this nutrient across meals and days.",
+  calcium: "Calcium across logged food, shown in milligrams. It helps you review intake from meals and supplements you record.",
+  iron: "Iron across logged food, shown in milligrams. Use it to observe intake against a target that suits your needs.",
+  magnesium: "Magnesium across logged food, shown in milligrams. It summarizes the nutrient from all food entries that day.",
+  vitamin_c: "Vitamin C across logged food, shown in milligrams. It summarizes the nutrient from all food entries that day.",
+  vitamin_d: "Vitamin D across logged food, shown in micrograms. It summarizes food and supplements you choose to record.",
+  vitamin_b12: "Vitamin B12 across logged food, shown in micrograms. It summarizes food and supplements you choose to record.",
+  weekly_deficit_balance: "Your accumulated energy deficit or surplus across the current week. It is a weekly reference, not another daily task.",
+  sleep: "How long you slept each night. A phone can import compatible sleep sessions, or you can log the duration manually.",
+  blood_glucose: "Blood-glucose readings in millimoles per litre. HabHub records the trend without assigning a universal target.",
+  menstrual_cycle: "A private cycle overview built from period-start history. It supports cycle-day and next-period estimates on this device.",
+  menstrual_flow: "A private record of period flow for a particular day. It contributes to your cycle history without being a completion goal.",
+  cycle_symptoms: "Private notes about symptoms on a cycle day. Use them to notice patterns across your own history.",
+  cycle_day: "The estimated day within your current menstrual cycle, calculated from your recorded period starts.",
+  days_until_period: "An estimate of days until the next period, based on your own recorded cycle history rather than a fixed universal cycle.",
+  overall_score: "A combined summary of the tracked goals you chose. It changes with your personal goal set and available daily data.",
+  todo_completion: "The share of scheduled to-dos resolved that day. To-dos remain separate from tracker entries and their own reminders.",
+  intermittent_fasting: "A fasting timer with a configurable fasting and eating window. You can end it manually or optionally with the first food entry.",
+  reading: "Minutes spent reading. Log time manually or use the activity timer to build a daily and long-term record.",
+  study: "Minutes spent studying or practising. Log time manually or use the activity timer to follow consistency.",
+  work: "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.",
+  screen_time: "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.",
+};
+
+export function presetDescription(id: string) {
+  const description = TRACKER_PRESET_DESCRIPTIONS[id];
+  if (description) return description;
   if (id === 'steps') return 'Automatic daily steps from your connected health source.';
   if (id === 'food') return 'Meals, calories, macros, vitamins, minerals, search and barcode scan.';
   if (id === 'deficit') return 'Profile-aware energy result; unavailable until food is recorded.';

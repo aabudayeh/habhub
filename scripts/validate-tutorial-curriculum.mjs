@@ -436,7 +436,11 @@ assert.ok(first.appState.gymSessions?.length >= 5);
 assert.ok(first.appState.todos?.length >= 4);
 assert.ok(first.appState.journalNotes?.length >= 2);
 assert.ok(first.appState.calendarReminders?.length >= 4);
-assert.ok(first.appState.activityTimers?.length >= 2);
+assert.equal(
+  first.appState.activityTimers?.length ?? 0,
+  0,
+  "The tutorial must not start with a stale live/paused activity timer.",
+);
 assert.ok(first.groupChallenges.length >= 4);
 const completeDaySummary = trackedGoalSummary(
     first.appState,
@@ -445,8 +449,13 @@ const completeDaySummary = trackedGoalSummary(
   );
 assert.equal(
   completeDaySummary.allMet,
-  true,
-  "The complete-day step must render its real all-goals visual",
+  false,
+  "The initial tutorial page must not start gold with every goal complete.",
+);
+assert.match(
+  fs.readFileSync("app/(tabs)/index.tsx", "utf8"),
+  /activeStep\?\.id === "full\.today\.all-complete"/,
+  "The full guide must reveal its completion example only at that step.",
 );
 
 const metricIds = new Set(first.appState.metrics.map((metric) => metric.id));

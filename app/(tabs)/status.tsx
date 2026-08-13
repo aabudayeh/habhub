@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React, {
   useCallback,
@@ -43,8 +44,12 @@ import {
   statusRangeRollup,
   type StatusMetricRollup,
 } from "@/src/domain/status";
+import {
+  estimateWeightPlan,
+  weightManagementSummaryVisible,
+} from "@/src/domain/weightPlan";
 import { localizeMetricName } from "@/src/i18n/domain";
-import { useLocalization } from "@/src/i18n";
+import { useLocale, useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors } from "@/src/theme";
 
@@ -184,6 +189,7 @@ export default function StatusPage() {
   const tutorial = useTutorial();
   const colors = useAppColors();
   const { t } = useLocalization();
+  const locale = useLocale();
   const { width: viewportWidth } = useWindowDimensions();
   const roomyStatus = viewportWidth >= 480;
   const narrowStatus = viewportWidth < 360;
@@ -301,6 +307,32 @@ export default function StatusPage() {
     },
     [calculationAnchor, calculationInputs],
   );
+  const showWeightSummary = weightManagementSummaryVisible(state.settings);
+  const weightPlan = showWeightSummary
+    ? estimateWeightPlan({
+        anchorDate: dateKey(),
+        currentWeightKg: avatarProgression.currentWeightKg,
+        direction: state.settings.weightDirection ?? "lose",
+        targetWeightKg: state.settings.energyProfile.targetWeightKg,
+        weeklyChangeKg: state.settings.energyProfile.desiredWeeklyLossKg,
+      })
+    : undefined;
+  const expectedWeightDate = weightPlan?.expectedGoalDate
+    ? new Intl.DateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
+    : undefined;
+  const weightPlanLabel = weightPlan
+    ? weightPlan.direction === "maintain"
+      ? `Maintaining around ${weightPlan.targetWeightKg.toFixed(1)} kg`
+      : weightPlan.reached
+        ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg reached`
+        : expectedWeightDate
+          ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg · estimate ${expectedWeightDate}`
+          : undefined
+    : undefined;
   const bodyCompositionStat =
     typeof avatarProgression.currentBodyFatPercent === "number"
       ? {
@@ -517,15 +549,19 @@ export default function StatusPage() {
               </View>
             </View>
             <View style={styles.bodyFacts}>
-              <StatusBodyFact
-                label="Weight"
-                value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
-              />
-              <View
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
-              />
+              {showWeightSummary ? (
+                <>
+                  <StatusBodyFact
+                    label="Weight"
+                    value={`${avatarProgression.currentWeightKg.toFixed(1)} kg`}
+                  />
+                  <View
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                    style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
+                  />
+                </>
+              ) : null}
               <View
                 accessible
                 accessibilityLabel={`${t("Tracked goals")}: ${completionPercent}%`}
@@ -546,16 +582,26 @@ export default function StatusPage() {
                   {completionPercent}%
                 </Text>
               </View>
-              <View
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-                style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
-              />
-              <StatusBodyFact
-                label={bodyCompositionStat.label}
-                value={bodyCompositionStat.value}
-              />
+              {showWeightSummary ? (
+                <>
+                  <View
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                    style={[styles.bodyFactDivider, { backgroundColor: colors.border }]}
+                  />
+                  <StatusBodyFact
+                    label={bodyCompositionStat.label}
+                    value={bodyCompositionStat.value}
+                  />
+                </>
+              ) : null}
             </View>
+            {showWeightSummary && weightPlanLabel ? (
+              <View style={[styles.weightPlanLine, { backgroundColor: colors.primarySoft }]}>
+                <Ionicons name={weightPlan?.direction === "maintain" ? "remove-outline" : "calendar-outline"} size={13} color={colors.primary} />
+                <Text numberOfLines={1} style={[styles.weightPlanText, { color: colors.ink }]}>{weightPlanLabel}</Text>
+              </View>
+            ) : null}
             {avatarSourceEditorOpen ? (
               <View
                 accessibilityLabel={t("Avatar calculation source")}
@@ -733,6 +779,22 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   bodyFactDivider: { width: 1, height: 13 },
+  weightPlanLine: {
+    maxWidth: 330,
+    minHeight: 27,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  weightPlanText: {
+    flexShrink: 1,
+    fontSize: 8,
+    lineHeight: 11,
+    fontWeight: "800",
+  },
   avatarSourceEditor: {
     maxWidth: 330,
     width: "92%",

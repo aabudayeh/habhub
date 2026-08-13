@@ -47,6 +47,22 @@ export type LeaderboardPeriod =
   | "overall"
   | "custom";
 
+function authorizedSharedStatus(
+  state: AppState,
+  metricId: string,
+  userId: string,
+  localDate: string,
+) {
+  const status = statusForDay(
+    state.dailyMetricStatuses,
+    state.group.id,
+    metricId,
+    userId,
+    localDate,
+  );
+  return status?.visibility === "private" ? undefined : status;
+}
+
 type AllTimeDatesCacheBucket = {
   statuses: AppState["dailyMetricStatuses"];
   gymSessions: AppState["gymSessions"];
@@ -389,13 +405,7 @@ function metGoalOnDate(
   const status =
     userId === state.currentUserId
       ? undefined
-      : statusForDay(
-          state.dailyMetricStatuses,
-          state.group.id,
-          metric.id,
-          userId,
-          date,
-        );
+      : authorizedSharedStatus(state, metric.id, userId, date);
   const goalMetric =
     userId === state.currentUserId
       ? (state.metrics.find((item) => item.id === metric.id) ?? metric)
@@ -529,9 +539,8 @@ function calculatePeriodMetricResult(
       goalEligible:
         subjectUserId === state.currentUserId
           ? isMetricTrackedOnDate(state, goalMetric, date)
-          : (statusForDay(
-              state.dailyMetricStatuses,
-              state.group.id,
+          : (authorizedSharedStatus(
+              state,
               metric.id,
               subjectUserId,
               date,
@@ -554,13 +563,7 @@ function calculatePeriodMetricResult(
   const statusForDate = (date: string) =>
     subjectUserId === state.currentUserId
       ? undefined
-      : statusForDay(
-          state.dailyMetricStatuses,
-          state.group.id,
-          metric.id,
-          subjectUserId,
-          date,
-        );
+      : authorizedSharedStatus(state, metric.id, subjectUserId, date);
   const progressValues = goalResults.flatMap(({ date, result }) => {
     const status = statusForDate(date);
     if (
@@ -854,14 +857,16 @@ function hasPeriodData(
   userId: string,
   date: string,
 ) {
+  const sharedStatus = authorizedSharedStatus(
+    state,
+    metric.id,
+    userId,
+    date,
+  );
   if (
-    statusForDay(
-      state.dailyMetricStatuses,
-      state.group.id,
-      metric.id,
-      userId,
-      date,
-    )?.exactValue !== undefined
+    sharedStatus?.visibility === "group" &&
+    sharedStatus.privacyProjectionVersion === 2 &&
+    sharedStatus.exactValue !== undefined
   )
     return true;
   if (metric.dataType === "boolean")

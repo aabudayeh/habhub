@@ -371,7 +371,12 @@ assert.match(
   "new challenges must honor the caller's initial participant selection",
 );
 assert.match(challengeEditor, /Invited members choose to accept or decline\./);
-assert.match(challengeEditor, /repeatMode === "daily"/);
+assert.match(challengeEditor, /recurrence\?\.mode === "daily"/);
+assert.match(challengeEditor, /repeatMode === "selected_days"/);
+assert.match(challengeEditor, /repeatMode === "interval_days"/);
+assert.match(challengeEditor, /repeatMode === "days_of_month"/);
+assert.match(challengeEditor, /\["every_other_day", "Every other"\]/);
+assert.match(challengeEditor, /mode: repeatMode/);
 assert.match(challengeEditor, /endDate: repeatUntil/);
 assert.match(
   groupScreen,

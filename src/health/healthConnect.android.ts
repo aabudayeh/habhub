@@ -15,7 +15,7 @@ import {
 import {
   healthSourceEnabled,
   healthSourcePriority,
-  preferredHealthSourceOrigin,
+  localCalendarAggregateRange,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
@@ -730,19 +730,26 @@ export const healthConnectAdapter: HealthAdapter = {
           if (type === "workouts") return workoutImports;
           if (type === "steps") {
             const preferences = Object.values(sourcePreferences ?? {});
-            // Health Connect's unfiltered COUNT_TOTAL can combine several
-            // writers. That is useful for a general fitness total, but it does
-            // not necessarily equal the source the user sees in Samsung
-            // Health. First ask the cheap daily aggregate for the writers that
-            // actually contributed in this requested (including historical)
-            // range. Then rerun it for one canonical enabled writer, Samsung
-            // first. This avoids loading thousands of granular Steps records
-            // and prevents stale/current-only discovery from choosing the
-            // wrong source for a historical chunk.
+            const hasDisabledSource = preferences.some(
+              (preference) => preference.enabled === false,
+            );
+            const stepRange = localCalendarAggregateRange(from, to);
+            const stepTimeRangeFilter = {
+              operator: "between" as const,
+              startTime: stepRange.from.toISOString(),
+              endTime: stepRange.to.toISOString(),
+            };
+            // Steps are cumulative Activity data. Health Connect's unfiltered
+            // aggregate is the platform-authoritative total: it applies the
+            // user's Activity app priority and removes overlaps across phone,
+            // watch, Samsung Health, and other writers. Filtering to one raw
+            // writer here bypasses that platform dedupe and can differ from
+            // the total shown by Samsung Health. Only add an origin filter
+            // when the user explicitly disables a writer in HabHub.
             try {
               const unfilteredGroups = await aggregateGroupByPeriod({
                 recordType: "Steps",
-                timeRangeFilter: options.timeRangeFilter,
+                timeRangeFilter: stepTimeRangeFilter,
                 timeRangeSlicer: { period: "DAYS", length: 1 },
               });
               const contributedOrigins = [
@@ -758,26 +765,20 @@ export const healthConnectAdapter: HealthAdapter = {
                   ...preferences.map((preference) => preference.origin),
                 ].filter(Boolean)),
               ];
-              const selectedOrigin = preferredHealthSourceOrigin(
-                contributedOrigins.length
-                  ? contributedOrigins
-                  : observedOrigins,
-                "steps",
-                sourcePreferences,
+              const enabledOrigins = observedOrigins.filter((candidate) =>
+                healthSourceEnabled(candidate, sourcePreferences),
               );
-              if (observedOrigins.length && !selectedOrigin) {
+              if (hasDisabledSource && observedOrigins.length && !enabledOrigins.length) {
                 successfulReads += 1;
                 return [];
               }
               const groups =
-                selectedOrigin &&
-                (contributedOrigins.length !== 1 ||
-                  contributedOrigins[0] !== selectedOrigin)
+                hasDisabledSource && enabledOrigins.length
                   ? await aggregateGroupByPeriod({
                       recordType: "Steps",
-                      timeRangeFilter: options.timeRangeFilter,
+                      timeRangeFilter: stepTimeRangeFilter,
                       timeRangeSlicer: { period: "DAYS", length: 1 },
-                      dataOriginFilter: [selectedOrigin],
+                      dataOriginFilter: enabledOrigins,
                     })
                   : unfilteredGroups;
               successfulReads += 1;
@@ -788,9 +789,7 @@ export const healthConnectAdapter: HealthAdapter = {
                   ...new Set(
                     (group.result.dataOrigins?.length
                       ? group.result.dataOrigins
-                      : selectedOrigin
-                        ? [selectedOrigin]
-                        : []
+                      : enabledOrigins
                     ).filter(Boolean),
                   ),
                 ].sort(
@@ -811,11 +810,11 @@ export const healthConnectAdapter: HealthAdapter = {
                     endTime: recordedAt,
                     value: Math.round(count),
                     unit: "steps",
-                    origin: selectedOrigin ?? sources[0] ?? "Health Connect",
+                    origin: sources[0] ?? "Health Connect",
                     sourceOrigins: observedOrigins,
                     note:
-                      selectedOrigin && observedOrigins.length > 1
-                        ? `Using only ${selectedOrigin} so other step writers are not double counted.`
+                      hasDisabledSource
+                        ? "Health Connect excluded step writers disabled in HabHub."
                         : undefined,
                   },
                 ];

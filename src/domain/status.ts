@@ -11,6 +11,7 @@ import { entriesForMetric } from "./dataIndex";
 import { dateKey, dateRangeEnding } from "./date";
 import { catalogExercise, exerciseFromActivityName } from "./exerciseCatalog";
 import {
+  canBeTrackedGoal,
   effectiveGoalTarget,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
@@ -209,7 +210,7 @@ export function statusAllTimeDates(
   anchorDate: string,
 ) {
   const metrics = state.metrics.filter(
-    (metric) => metric.goalEnabled !== false && metric.dataType !== "text",
+    (metric) => canBeTrackedGoal(metric) && metric.goalEnabled !== false,
   );
   const metricIds = metrics.map((metric) => metric.id);
   const dataDates = allTimePeriodDates(state, anchorDate, metricIds, [userId]);
@@ -249,7 +250,7 @@ export function statusRangeRollup(
   let progressTotal = 0;
   const metrics = state.metrics
     .filter(
-      (metric) => metric.goalEnabled !== false && metric.dataType !== "text",
+      (metric) => canBeTrackedGoal(metric) && metric.goalEnabled !== false,
     )
     .map((metric): StatusMetricRollup => {
       let metricCompleted = 0;

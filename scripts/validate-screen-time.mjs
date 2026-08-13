@@ -4,6 +4,7 @@ import fs from "node:fs";
 import {
   averageScreenTimeReport,
   boundedScreenTimeMs,
+  changedScreenTimeTrackerSamples,
   formatMinuteDuration,
   repairLegacyScreenTimeEntries,
   screenTimeTrackerSamples,
@@ -24,6 +25,21 @@ assert.equal(average.apps[0].foregroundMs, 1_080_000);
 assert.equal(average.apps[1].foregroundMs, 720_000);
 assert.equal(averageScreenTimeReport(report, 1), report);
 assert.equal(formatMinuteDuration(125), "2 hr 5 min");
+assert.deepEqual(
+  changedScreenTimeTrackerSamples(
+    [
+      { localDate: "2026-08-11", minutes: 60 },
+      { localDate: "2026-08-12", minutes: 90 },
+      { localDate: "2026-08-13", minutes: 12.5 },
+    ],
+    [
+      { localDate: "2026-08-11", value: 60 },
+      { localDate: "2026-08-12", value: 85 },
+    ],
+  ).map((sample) => sample.localDate),
+  ["2026-08-12", "2026-08-13"],
+  "history hydration must omit unchanged device-owned days",
+);
 assert.equal(formatMinuteDuration(60), "1 hr");
 assert.equal(formatMinuteDuration(42), "42 min");
 assert.equal(
@@ -157,11 +173,38 @@ assert.match(
 );
 assert.match(native, /UsageStatsManager\.INTERVAL_DAILY/);
 assert.doesNotMatch(native, /manager\.queryAndAggregateUsageStats\(/);
+assert.match(native, /val maxWindow = 730L \* 24L/);
+assert.match(
+  native,
+  /packageName == null \|\| !screenInteractive \|\| !keyguardHidden \|\| end <= start/,
+  "event fallback must skip long intervals that cannot accrue screen time",
+);
+assert.match(
+  native,
+  /val sourceRows = aggregateRows[\s\S]{0,180}eventUsage\.rowsByDay/,
+  "daily aggregates must win over an incomplete retained event stream",
+);
+assert.doesNotMatch(
+  native,
+  /windows\.forEach windowLoop/,
+  "historical fallback must not scan every selected day for every usage row",
+);
 assert.match(native, /putArray\("days", dailyReports\)/);
 assert.match(native, /normalizedUsageRows\(sourceRows, window\.second - window\.first\)/);
 
 const cache = fs.readFileSync("src/screenTime/cache.ts", "utf8");
-assert.match(cache, /screen-time-report:v4:/);
+assert.match(cache, /screen-time-report:v5:/);
+
+const bridge = fs.readFileSync(
+  "src/screenTime/ScreenTimeSyncBridge.tsx",
+  "utf8",
+);
+assert.match(bridge, /const AVAILABLE_HISTORY_DAYS = 730/);
+assert.match(bridge, /queryScreenTime\(from, to, 150\)/);
+assert.match(bridge, /await waitForInteractionIdle\(\)/);
+assert.match(bridge, /changedScreenTimeTrackerSamples\(/);
+assert.match(bridge, /setDeviceScreenTimeRangeRef\.current\(changed\)/);
+assert.match(bridge, /screen-time-history:v2:/);
 
 const detail = fs.readFileSync("src/screenTime/ScreenTimeBreakdownCard.tsx", "utf8");
 assert.match(detail, /screenTimeTrackerSamples\(next\.days\)/);

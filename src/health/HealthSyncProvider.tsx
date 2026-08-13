@@ -4,7 +4,7 @@ import { AppState as NativeAppState, InteractionManager } from 'react-native';
 
 import { dateKey } from '@/src/domain/date';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
-import { enabledHealthDataTypes, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
   healthSourceId,
   mergeHealthSourcePreferences,
@@ -236,12 +236,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             await AsyncStorage.removeItem(statusKey);
           }
         }
-        // Builds before device-local connection persistence did not save an
-        // explicit flag. Recover those installations once from Android's
-        // actual granted read permissions. Never override an explicit false,
-        // because Disconnect intentionally leaves system permissions intact.
+        // Reconcile persisted intent with current native grants on every
+        // startup. Access can be revoked in system settings while HabHub is
+        // closed, so a cached true must not keep showing Connected. Never turn
+        // an explicit false back on merely because permissions remain after
+        // the user chose Disconnect inside HabHub.
         if (
-          restored.connectionEnabled === undefined &&
+          restored.connectionEnabled !== false &&
           nextAvailability.available &&
           nativeHealthAdapter.grantedConnectionState
         ) {
@@ -253,7 +254,23 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             )
             .catch(() => null);
           if (cancelled) return;
-          if (granted?.connected) {
+          if (
+            restored.connectionEnabled === true &&
+            granted?.connected === false
+          ) {
+            restored = {
+              ...restored,
+              connectionEnabled: false,
+              backgroundAccess: false,
+            };
+            await AsyncStorage.setItem(
+              statusKey,
+              JSON.stringify(restored),
+            ).catch(() => undefined);
+          } else if (
+            restored.connectionEnabled === undefined &&
+            granted?.connected
+          ) {
             restored = {
               ...restored,
               connectionEnabled: true,
@@ -398,7 +415,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
-            'group',
+            healthVisibilityByMetric(current.metrics),
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,
@@ -434,7 +451,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
-            'group',
+            healthVisibilityByMetric(current.metrics),
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,
@@ -470,7 +487,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           const entries = mapHealthRecordsToEntries(
             records,
             current.currentUserId,
-            'group',
+            healthVisibilityByMetric(current.metrics),
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,

@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   AppState as NativeAppState,
   InteractionManager,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -32,6 +33,7 @@ import {
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
+import { manualStepEntriesEligibleForReplacement } from "@/src/domain/healthDedup";
 import {
   normalizeEnergyProfile,
   recommendedDailyDeficit,
@@ -39,6 +41,7 @@ import {
   recommendedDailyIntakeForDirection,
 } from "@/src/domain/energy";
 import {
+  canBeTrackedGoal,
   effectiveGoalTarget,
   goalCelebrationTiming,
   goalReached,
@@ -93,6 +96,19 @@ export const APP_STORAGE_KEY = "paceboard-state-v1";
 const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
 const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 
+/**
+ * Reducer authorization for the one supported manual device-owned value.
+ * The token is module-private and minted only at the context boundary after
+ * the web Log screen explicitly identifies its request.
+ */
+const WEB_LOG_MANUAL_STEPS_CAPABILITY = Symbol("web-log-manual-steps");
+type WebLogManualStepsCapability = typeof WEB_LOG_MANUAL_STEPS_CAPABILITY;
+
+type LogMetricRequest = {
+  source: "web-log-ui";
+  deviceOwnedMetric: "steps";
+};
+
 export function appAccountStorageKey(accountId: string) {
   return `${APP_ACCOUNT_STORAGE_KEY_PREFIX}${accountId}`;
 }
@@ -109,14 +125,21 @@ export async function readPersistedAccountState(accountId: string) {
 }
 
 function stateForLocalPersistence(state: AppState): AppState {
-  if (!isCloudGroupId(state.group.id)) return state;
   // Shared member history has its own bounded, per-group cache. Persisting it
   // again inside the monolithic app snapshot made JSON serialization grow with
-  // every member and could block Android's JS thread after app switching.
+  // every member and could block Android's JS thread after app switching. This
+  // account boundary remains in force after leaving/switching a cloud group so
+  // the previous group's values and signed photo URLs cannot survive there.
   return {
     ...state,
     entries: state.entries.filter(
       (entry) => entry.userId === state.currentUserId,
+    ),
+    photos: state.photos.filter(
+      (photo) => photo.userId === state.currentUserId,
+    ),
+    messages: state.messages.filter(
+      (message) => message.senderId === state.currentUserId,
     ),
     dailyMetricStatuses: state.dailyMetricStatuses.filter(
       (status) => status.userId === state.currentUserId,
@@ -278,6 +301,7 @@ type Action =
       visibility: Visibility;
       details?: EntryDetails;
       mode: "add" | "replace";
+      manualDeviceEntryCapability?: WebLogManualStepsCapability;
     }
   | {
       type: "deviceScreenTime";
@@ -894,32 +918,46 @@ function reducer(state: AppState, action: Action): AppState {
       const metric = state.metrics.find(
         (candidate) => candidate.id === action.metricId,
       );
-      if (metric?.id === "steps" || metric?.manualEntry === false) return state;
+      // Device-owned rows remain reducer-protected even if a caller bypasses
+      // the native UI or a malformed cloud definition flips manualEntry.
+      // Only the provider-minted, web Log capability can replace daily Steps.
+      const authorizedWebSteps =
+        metric?.id === "steps" &&
+        action.mode === "replace" &&
+        typeof action.value === "number" &&
+        Number.isFinite(action.value) &&
+        action.value >= 0 &&
+        action.manualDeviceEntryCapability ===
+          WEB_LOG_MANUAL_STEPS_CAPABILITY;
+      if (
+        (metric?.id === "steps" || metric?.manualEntry === false) &&
+        !authorizedWebSteps
+      )
+        return state;
       const previousValue = metric
         ? safeMetricValue(state, metric, state.currentUserId, localDate)
         : 0;
-      const cleanedEntries =
+      const replacementCandidates =
         action.mode === "replace"
           ? state.entries.filter(
               (entry) =>
-                !(
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === action.metricId &&
-                  entry.localDate === localDate
-                ),
+                entry.userId === state.currentUserId &&
+                entry.metricId === action.metricId &&
+                entry.localDate === localDate,
             )
-          : state.entries;
-      const replacedEntryIds =
-        action.mode === "replace"
-          ? state.entries
-              .filter(
-                (entry) =>
-                  entry.userId === state.currentUserId &&
-                  entry.metricId === action.metricId &&
-                  entry.localDate === localDate,
-              )
-              .map((entry) => entry.id)
           : [];
+      // Web Steps is a fallback that may coexist with a later phone aggregate.
+      // Editing it replaces only provenance-free manual rows. In particular,
+      // an imported row is neither removed locally nor sent to the deletion
+      // outbox, and authoritativeStepEntries keeps displaying that phone row.
+      const entriesToReplace = authorizedWebSteps
+        ? manualStepEntriesEligibleForReplacement(replacementCandidates)
+        : replacementCandidates;
+      const replacedEntries = new Set(entriesToReplace);
+      const cleanedEntries = replacedEntries.size
+        ? state.entries.filter((entry) => !replacedEntries.has(entry))
+        : state.entries;
+      const replacedEntryIds = entriesToReplace.map((entry) => entry.id);
       const changedAt = new Date().toISOString();
       let nextState: AppState = {
         ...state,
@@ -1180,6 +1218,30 @@ function reducer(state: AppState, action: Action): AppState {
       );
       if (action.changes.defaultVisibility) {
         const changedAt = new Date().toISOString();
+        const privacyFenceRequired =
+          previousMetric?.defaultVisibility === "group" &&
+          action.changes.defaultVisibility !== "group" &&
+          isCloudGroupId(state.group.id);
+        const pendingFencesByGroup = {
+          ...(next.settings.pendingMetricPrivacyFenceIdsByGroup ?? {}),
+        };
+        if (privacyFenceRequired) {
+          pendingFencesByGroup[state.group.id] = [
+            ...new Set([
+              ...(pendingFencesByGroup[state.group.id] ?? []),
+              action.metricId,
+            ]),
+          ];
+        } else if (
+          action.changes.defaultVisibility === "group" &&
+          isCloudGroupId(state.group.id)
+        ) {
+          const remaining = (pendingFencesByGroup[state.group.id] ?? []).filter(
+            (metricId) => metricId !== action.metricId,
+          );
+          if (remaining.length) pendingFencesByGroup[state.group.id] = remaining;
+          else delete pendingFencesByGroup[state.group.id];
+        }
         next = {
           ...next,
           entries: next.entries.map((entry) =>
@@ -1192,6 +1254,15 @@ function reducer(state: AppState, action: Action): AppState {
                 }
               : entry,
           ),
+          dailyMetricStatuses: next.dailyMetricStatuses.map((status) =>
+            status.userId === state.currentUserId &&
+            status.metricId === action.metricId
+              ? {
+                  ...status,
+                  visibility: action.changes.defaultVisibility!,
+                }
+              : status,
+          ),
           photos:
             action.metricId === "progress_photo"
               ? next.photos.map((photo) =>
@@ -1203,6 +1274,10 @@ function reducer(state: AppState, action: Action): AppState {
                     : photo,
                 )
               : next.photos,
+          settings: {
+            ...next.settings,
+            pendingMetricPrivacyFenceIdsByGroup: pendingFencesByGroup,
+          },
         };
       }
       if (
@@ -1419,6 +1494,7 @@ function reducer(state: AppState, action: Action): AppState {
         (candidate) => candidate.id === action.metricId,
       );
       if (!metric) return state;
+      if (action.value && !canBeTrackedGoal(metric)) return state;
       return withPersonalMetrics(
         state,
         state.metrics.map((metric) =>
@@ -1508,10 +1584,14 @@ function reducer(state: AppState, action: Action): AppState {
     case "configurePersonalMetrics": {
       const today = dateKey();
       const configuredState = { ...state, metrics: action.metrics };
+      const trackedGoalIds = action.trackedGoalIds.filter((id) => {
+        const metric = action.metrics.find((candidate) => candidate.id === id);
+        return metric ? canBeTrackedGoal(metric) : false;
+      });
       const metrics = action.metrics.map((metric, order) => ({
         ...metric,
         order,
-        activeFrom: action.trackedGoalIds.includes(metric.id)
+        activeFrom: trackedGoalIds.includes(metric.id)
           ? action.historyMode === "history"
             ? goalHistoryStart(configuredState, metric)
             : today
@@ -1523,7 +1603,7 @@ function reducer(state: AppState, action: Action): AppState {
         trackedGoalPeriods: Object.fromEntries(
           metrics.map((metric) => [
             metric.id,
-            action.trackedGoalIds.includes(metric.id)
+            trackedGoalIds.includes(metric.id)
               ? [{ from: metric.activeFrom }]
               : [],
           ]),
@@ -2630,6 +2710,7 @@ type AppContextValue = {
     visibility: Visibility,
     mode?: "add" | "replace",
     details?: EntryDetails,
+    request?: LogMetricRequest,
   ) => void;
   setDeviceScreenTime: (
     localDate: string,
@@ -3567,8 +3648,23 @@ export function AppProvider({
     () => ({
       state,
       hydrated,
-      logMetric: (metricId, entryValue, visibility, mode = "add", details) => {
+      logMetric: (
+        metricId,
+        entryValue,
+        visibility,
+        mode = "add",
+        details,
+        request,
+      ) => {
         const previous = persistenceStateRef.current;
+        const manualDeviceEntryCapability =
+          Platform.OS === "web" &&
+          metricId === "steps" &&
+          mode === "replace" &&
+          request?.source === "web-log-ui" &&
+          request.deviceOwnedMetric === "steps"
+            ? WEB_LOG_MANUAL_STEPS_CAPABILITY
+            : undefined;
         const next = withLocalDeletionTombstones(
           previous,
           reducer(previous, {
@@ -3578,6 +3674,7 @@ export function AppProvider({
             visibility,
             mode,
             details,
+            manualDeviceEntryCapability,
           }),
         );
         void commitReducedState(next)

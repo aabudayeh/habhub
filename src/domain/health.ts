@@ -96,10 +96,29 @@ function entryFor(
   };
 }
 
+export type HealthImportVisibility =
+  | Visibility
+  | Readonly<Record<string, Visibility>>;
+
+function importedMetricVisibility(
+  visibility: HealthImportVisibility,
+  metricId: string,
+) {
+  return typeof visibility === "string"
+    ? visibility
+    : (visibility[metricId] ?? "group");
+}
+
+export function healthVisibilityByMetric(metrics: readonly MetricDefinition[]) {
+  return Object.fromEntries(
+    metrics.map((metric) => [metric.id, metric.defaultVisibility]),
+  ) as Record<string, Visibility>;
+}
+
 export function mapHealthRecordsToEntries(
   records: HealthImportRecord[],
   userId: string,
-  visibility: Visibility = 'group',
+  visibility: HealthImportVisibility = 'group',
   metrics?:MetricDefinition[],
   profileOrWeight: StepActivityProfile | number = 70,
   sourcePreferences?: Record<string, HealthSourcePreference>,
@@ -128,7 +147,7 @@ export function mapHealthRecordsToEntries(
     if(metrics){
       for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
-        const entry=entryFor(record,userId,metric.id,value,visibility,record.nutrition);
+        const entry=entryFor(record,userId,metric.id,value,importedMetricVisibility(visibility,metric.id),record.nutrition);
         entries.push(entry);entryById.set(entry.id,entry);
       }
       for(const metric of (compoundByType.get(record.type) ?? []).filter((item)=>
@@ -167,7 +186,7 @@ export function mapHealthRecordsToEntries(
           userId,
           metric.id,
           submetricValues[primary.id],
-          visibility,
+          importedMetricVisibility(visibility,metric.id),
           record.nutrition,
         );
         entry.submetricValues=submetricValues;
@@ -175,36 +194,36 @@ export function mapHealthRecordsToEntries(
       }
       continue;
     }
-    if (record.type === 'steps' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'steps', Number(record.value), visibility));
-    if (record.type === 'active_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'exercise', Number(record.value), visibility));
-    if (record.type === 'weight' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'weight', Number(record.value), visibility));
-    if (record.type === 'water' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'water', Number(record.value), visibility));
+    if (record.type === 'steps' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'steps', Number(record.value), importedMetricVisibility(visibility,'steps')));
+    if (record.type === 'active_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'exercise', Number(record.value), importedMetricVisibility(visibility,'exercise')));
+    if (record.type === 'weight' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'weight', Number(record.value), importedMetricVisibility(visibility,'weight')));
+    if (record.type === 'water' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'water', Number(record.value), importedMetricVisibility(visibility,'water')));
     if (record.type === 'workouts' && record.workoutRecordKind !== 'segment' && Number(record.value)>0) {
-      entries.push(entryFor(record, userId, 'workout', true, visibility));
-      entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, visibility));
-      if((record.measurements?.activeCalories??0)>0)entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),visibility));
-      if((record.measurements?.distanceKm??0)>0)entries.push(entryFor(record,userId,'workout_distance',Math.round(record.measurements!.distanceKm!*100)/100,visibility));
+      entries.push(entryFor(record, userId, 'workout', true, importedMetricVisibility(visibility,'workout')));
+      entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, importedMetricVisibility(visibility,'workout_duration')));
+      if((record.measurements?.activeCalories??0)>0)entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),importedMetricVisibility(visibility,'workout_calories')));
+      if((record.measurements?.distanceKm??0)>0)entries.push(entryFor(record,userId,'workout_distance',Math.round(record.measurements!.distanceKm!*100)/100,importedMetricVisibility(visibility,'workout_distance')));
     }
-    if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,visibility));
-    if (record.type === 'lean_body_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'lean_body_mass',Math.round(Number(record.value)*10)/10,visibility));
-    if (record.type === 'body_water_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_water_mass',Math.round(Number(record.value)*10)/10,visibility));
-    if (record.type === 'bone_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'bone_mass',Math.round(Number(record.value)*10)/10,visibility));
-    if (record.type === 'heart_rate' && Number(record.value)>0) entries.push(entryFor(record,userId,'pulse',Math.round(Number(record.value)),visibility));
+    if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'body_fat')));
+    if (record.type === 'lean_body_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'lean_body_mass',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'lean_body_mass')));
+    if (record.type === 'body_water_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_water_mass',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'body_water_mass')));
+    if (record.type === 'bone_mass' && Number(record.value)>0) entries.push(entryFor(record,userId,'bone_mass',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'bone_mass')));
+    if (record.type === 'heart_rate' && Number(record.value)>0) entries.push(entryFor(record,userId,'pulse',Math.round(Number(record.value)),importedMetricVisibility(visibility,'pulse')));
     if (record.type === 'blood_pressure') {
       const systolic=record.measurements?.systolic??Number(record.value);const diastolic=record.measurements?.diastolic;
-      if(systolic>0)entries.push(entryFor(record,userId,'blood_pressure_systolic',Math.round(systolic),visibility));
-      if(typeof diastolic==='number'&&diastolic>0)entries.push(entryFor(record,userId,'blood_pressure_diastolic',Math.round(diastolic),visibility));
+      if(systolic>0)entries.push(entryFor(record,userId,'blood_pressure_systolic',Math.round(systolic),importedMetricVisibility(visibility,'blood_pressure_systolic')));
+      if(typeof diastolic==='number'&&diastolic>0)entries.push(entryFor(record,userId,'blood_pressure_diastolic',Math.round(diastolic),importedMetricVisibility(visibility,'blood_pressure_diastolic')));
     }
     if (record.type !== 'nutrition') continue;
     const nutrition = record.nutrition;
-    if (Number(record.value) > 0) entries.push(entryFor(record, userId, 'food', Number(record.value), visibility, nutrition));
+    if (Number(record.value) > 0) entries.push(entryFor(record, userId, 'food', Number(record.value), importedMetricVisibility(visibility,'food'), nutrition));
     const macroEntries: [keyof NutritionDetails, string][] = [
       ['proteinG', 'protein'], ['fatG', 'fat'], ['carbsG', 'carbs'], ['fiberG', 'fiber'], ['sodiumMg', 'sodium'],
       ['sugarG','sugar'],['saturatedFatG','saturated_fat'],['cholesterolMg','cholesterol'],['potassiumMg','potassium'],['calciumMg','calcium'],['ironMg','iron'],['magnesiumMg','magnesium'],['vitaminCMg','vitamin_c'],['vitaminDMcg','vitamin_d'],['vitaminB12Mcg','vitamin_b12'],
     ];
     for (const [field, metricId] of macroEntries) {
       const value = nutrition?.[field];
-      if (typeof value === 'number' && value > 0) entries.push(entryFor(record, userId, metricId, ['sodium','cholesterol','potassium','calcium','magnesium'].includes(metricId)?Math.round(value):Math.round(value*10)/10, visibility));
+      if (typeof value === 'number' && value > 0) entries.push(entryFor(record, userId, metricId, ['sodium','cholesterol','potassium','calcium','magnesium'].includes(metricId)?Math.round(value):Math.round(value*10)/10, importedMetricVisibility(visibility,metricId)));
     }
   }
   return appendStepFallbackEntries(entries,userId,visibility,metrics,profileOrWeight);
@@ -444,7 +463,7 @@ export function unrecordedStepActivity(
   };
 }
 
-function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:Visibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number){
+function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:HealthImportVisibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number){
   if(!metrics)return entries;
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
@@ -460,7 +479,7 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     if(steps<=0)continue;
     const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
     const stepEntry=dayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
-    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility,source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
+    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;
       if(mapping?.dataType==='active_energy'&&mapping.field==='value'){

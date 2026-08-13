@@ -230,8 +230,15 @@ export function validateGroupChallenge(input: {
   if (!validChallengeDate(input.localDate)) return "Choose a valid date.";
   if (input.today && input.localDate < input.today)
     return "Choose today or a future date.";
-  if (!validChallengeRecurrence(input.recurrence, input.localDate))
+  if (!validChallengeRecurrence(input.recurrence, input.localDate)) {
+    if (input.recurrence?.mode === "selected_days")
+      return "Choose at least one weekday to repeat on.";
+    if (input.recurrence?.mode === "interval_days")
+      return "Choose a repeat interval from 2 to 31 days.";
+    if (input.recurrence?.mode === "days_of_month")
+      return "Enter one or more month dates from 1 to 31.";
     return "Choose a repeat end date within one year.";
+  }
   if ((input.title?.trim().length ?? 0) > 80)
     return "Keep the challenge title under 80 characters.";
   const participants = new Set([...input.participantIds, input.creatorId]);

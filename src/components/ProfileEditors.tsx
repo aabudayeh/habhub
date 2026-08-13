@@ -16,6 +16,7 @@ import {
   recommendedDailyIntakeForDirection,
 } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
+import { weightManagementEnabled } from "@/src/domain/weightPlan";
 import { VACATION_COLOR } from "@/src/domain/vacation";
 import {
   isMetricTrackedOnDate,
@@ -38,6 +39,7 @@ export function EnergyProfileEditor() {
   const activity = Math.round(calculateDailyActivity(profile));
   const daily = Math.round(calculateDailyEnergy(profile));
   const direction = state.settings.weightDirection ?? "lose";
+  const managesWeight = weightManagementEnabled(state.settings);
   const [collapsed, setCollapsed] = React.useState(true);
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
@@ -54,7 +56,12 @@ export function EnergyProfileEditor() {
       }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
     : null;
   function setDirection(next: WeightDirection) {
-    updateSettings({ weightDirection: next });
+    updateSettings({
+      weightDirection: next,
+      weightManagementEnabled: true,
+      showWeightManagementSummary:
+        state.settings.showWeightManagementSummary ?? true,
+    });
     updateEnergyProfile({
       targetWeightKg:
         next === "maintain"
@@ -81,22 +88,27 @@ export function EnergyProfileEditor() {
         </Text>
         <Text style={[styles.label, { color: colors.ink }]}>Weight direction</Text>
         <View style={styles.chips}>
+          <Chip
+            label="Not managing"
+            selected={!managesWeight}
+            onPress={() => updateSettings({ weightManagementEnabled: false })}
+          />
           {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
             <Chip
               key={item}
               label={item[0].toUpperCase() + item.slice(1)}
-              selected={direction === item}
+              selected={managesWeight && direction === item}
               onPress={() => setDirection(item)}
             />
           ))}
         </View>
-        <Text style={[styles.help, { color: colors.muted }]}>
+        {managesWeight ? <Text style={[styles.help, { color: colors.muted }]}>
           {direction === "lose"
             ? "Target weight must be below your current weight."
             : direction === "gain"
               ? "Target weight must be above your current weight."
               : "Maintenance keeps target weight equal to current weight."}
-        </Text>
+        </Text> : null}
         <View style={styles.grid}>
           {[
             {
@@ -253,7 +265,7 @@ export function EnergyProfileEditor() {
             <Text style={[styles.unit, { color: colors.muted }]}>kcal/day</Text>
           </View>
         ) : null}
-        {direction !== "maintain" ? (
+        {managesWeight && direction !== "maintain" ? (
           <>
             <Text style={[styles.label, { color: colors.ink }]}>Planned weight {direction === "gain" ? "gain" : "loss"} per week</Text>
             <View style={styles.chips}>

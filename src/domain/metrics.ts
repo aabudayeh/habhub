@@ -1,4 +1,9 @@
-import { AppState, MetricDefinition, MetricEntry } from "@/src/types";
+import {
+  AppState,
+  MetricDefinition,
+  MetricEntry,
+  Visibility,
+} from "@/src/types";
 import {
   calendarWeekRange,
   dateKey,
@@ -41,6 +46,13 @@ import {
   todoResolvedOnDate,
 } from "./schedule";
 import { formatMinuteDuration } from "./screenTime";
+import { authoritativeStepEntries } from "./healthDedup";
+import {
+  aggregateMetricEntries,
+  aggregateVisibleMetricEntries,
+  authoritativeSharedExactValue,
+  canUseCachedSharedRaw,
+} from "./sharedMetricPrivacy";
 
 type MetricDateCache<T> = WeakMap<
   AppState,
@@ -93,28 +105,7 @@ function aggregate(
   entries: MetricEntry[],
   method: MetricDefinition["aggregation"],
 ): number {
-  const numbers = entries
-    .map((entry) =>
-      entry.value === true
-        ? 1
-        : entry.value === false
-          ? 0
-          : Number(entry.value),
-    )
-    .filter(Number.isFinite);
-  if (!numbers.length) return 0;
-  switch (method) {
-    case "latest":
-      return numbers[numbers.length - 1];
-    case "average":
-      return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
-    case "max":
-      return Math.max(...numbers);
-    case "min":
-      return Math.min(...numbers);
-    default:
-      return numbers.reduce((sum, value) => sum + value, 0);
-  }
+  return aggregateMetricEntries(entries, method) ?? 0;
 }
 
 export function metricValue(
@@ -207,7 +198,13 @@ export function metricValue(
     const sameDay = entriesForDay(state.entries, metric.id, userId, localDate)
       .slice()
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
-    if (sameDay.length) return aggregate(sameDay, metric.aggregation);
+    if (sameDay.length)
+      return aggregate(
+        metric.id === "steps"
+          ? authoritativeStepEntries(sameDay)
+          : sameDay,
+        metric.aggregation,
+      );
     if (metric.stepFallback) {
       const steps = state.metrics.find(
         (candidate) =>
@@ -347,13 +344,17 @@ function adaptiveValuesForDates(
     .map((date) => {
       if (hasMetricData(state, metric, userId, date))
         return safeMetricValue(state, metric, userId, date);
-      return statusForDay(
+      const sharedStatus = statusForDay(
         state.dailyMetricStatuses,
         state.group.id,
         metric.id,
         userId,
         date,
-      )?.exactValue;
+      );
+      return sharedStatus?.visibility === "group" &&
+        sharedStatus.privacyProjectionVersion === 2
+        ? sharedStatus.exactValue
+        : undefined;
     })
     .filter((value): value is number =>
       typeof value === "number" && Number.isFinite(value),
@@ -372,6 +373,127 @@ function pushHeap(heap: number[], value: number, maxHeap: boolean) {
     [heap[parent], heap[index]] = [heap[index], heap[parent]];
     index = parent;
   }
+}
+
+function numericMetricEntries(entries: MetricEntry[]) {
+  return entries.filter(
+    (entry) =>
+      typeof entry.value === "boolean" || Number.isFinite(Number(entry.value)),
+  );
+}
+
+/**
+ * Derive a daily value from only the contributions the owner allowed a group
+ * member to use. This deliberately does not attempt to publish calculated or
+ * step-fallback values: those can depend on profile fields or differently
+ * visible trackers, so an isolated exact value cannot be proven here.
+ */
+function visibilityFilteredMetricValue(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+  allowedVisibilities: ReadonlySet<Visibility>,
+): number | undefined {
+  if (metric.dataType === "calculated") return undefined;
+
+  if (metric.dataType === "photo") {
+    const visiblePhotos = photosForDay(state.photos, userId, localDate).filter(
+      (photo) => allowedVisibilities.has(photo.visibility),
+    );
+    return visiblePhotos.length ? visiblePhotos.length : undefined;
+  }
+
+  const visibleEntries = entriesForDay(
+    state.entries,
+    metric.id,
+    userId,
+    localDate,
+  )
+    .filter((entry) => allowedVisibilities.has(entry.visibility))
+    .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+
+  if (metric.gymMapping) {
+    const visibleGymSessions = (state.gymSessions ?? []).filter(
+      (session) =>
+        session.userId === userId &&
+        session.localDate === localDate &&
+        allowedVisibilities.has(session.visibility),
+    );
+    const gymState =
+      visibleGymSessions.length === (state.gymSessions ?? []).length
+        ? state
+        : { ...state, gymSessions: visibleGymSessions };
+    const localHasData = hasGymMetricData(
+      gymState,
+      metric.gymMapping,
+      userId,
+      localDate,
+    );
+    const localValue = localHasData
+      ? gymMetricValue(gymState, metric.gymMapping, userId, localDate)
+      : 0;
+    const externalEntries = numericMetricEntries(
+      visibleEntries.filter((entry) => !entry.id.startsWith("gym-sync:")),
+    );
+    if (!externalEntries.length) return localHasData ? localValue : undefined;
+    const externalValue = aggregate(externalEntries, metric.aggregation);
+    if (!localHasData) return externalValue;
+    if (
+      metric.gymMapping.kind === "session_completed" ||
+      metric.gymMapping.kind === "exercise_one_rep_max" ||
+      metric.aggregation === "max"
+    )
+      return Math.max(localValue, externalValue);
+    if (metric.aggregation === "min")
+      return Math.min(localValue, externalValue);
+    return localValue + externalValue;
+  }
+
+  const directValue = aggregateVisibleMetricEntries(
+    visibleEntries,
+    metric.aggregation,
+    allowedVisibilities,
+    metric.id === "steps",
+  );
+  if (directValue !== undefined) return directValue;
+
+  // A fallback estimate is a function of several trackers. With no explicit
+  // visible row, publishing it would make private inputs observable.
+  if (metric.stepFallback) return undefined;
+  return undefined;
+}
+
+/** Exact daily aggregate made solely from exact group-visible contributions. */
+export function groupVisibleMetricValue(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  return visibilityFilteredMetricValue(
+    state,
+    metric,
+    userId,
+    localDate,
+    new Set<Visibility>(["group"]),
+  );
+}
+
+/** Daily aggregate usable for goal-status projection, excluding private rows. */
+export function statusVisibleMetricValue(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  localDate: string,
+) {
+  return visibilityFilteredMetricValue(
+    state,
+    metric,
+    userId,
+    localDate,
+    new Set<Visibility>(["group", "status"]),
+  );
 }
 
 function popHeap(heap: number[], maxHeap: boolean) {
@@ -432,6 +554,8 @@ function adaptiveAllTimeHistory(
       status.groupId === state.group.id &&
       status.metricId === metric.id &&
       status.userId === userId &&
+      status.visibility === "group" &&
+      status.privacyProjectionVersion === 2 &&
       status.exactValue !== undefined
     )
       candidateDates.add(status.localDate);
@@ -884,14 +1008,19 @@ export function sharedMetricResult(
   viewerUserId: string,
   localDate: string,
 ): SharedMetricResult {
-  const value =
-    metric.dataType === "photo" && subjectUserId !== viewerUserId
-      ? photosForDay(state.photos, subjectUserId, localDate).filter(
-          (photo) => photo.visibility === "group",
-        ).length
-      : safeMetricValue(state, metric, subjectUserId, localDate);
-  if (subjectUserId === viewerUserId)
-    return { mode: "exact", value, label: formatMetricValue(metric, value) };
+  if (subjectUserId === viewerUserId) {
+    const ownValue = safeMetricValue(
+      state,
+      metric,
+      subjectUserId,
+      localDate,
+    );
+    return {
+      mode: "exact",
+      value: ownValue,
+      label: formatMetricValue(metric, ownValue),
+    };
+  }
 
   const entries = entriesForDay(
     state.entries,
@@ -910,24 +1039,51 @@ export function sharedMetricResult(
     metric.dataType === "photo"
       ? photosForDay(state.photos, subjectUserId, localDate)
       : [];
-  const visibility =
-    metric.dataType === "photo"
-      ? photoEntries.some((photo) => photo.visibility === "group")
-        ? "group"
-        : "private"
-      : metric.dataType === "calculated"
-        ? metric.defaultVisibility
-        : entries.some((entry) => entry.visibility === "group")
-          ? "group"
-          : entries.some((entry) => entry.visibility === "status")
-            ? "status"
-            : "private";
+  const verifiedProjectionValue =
+    sharedStatus?.visibility === "group" &&
+    sharedStatus.privacyProjectionVersion === 2
+      ? sharedStatus.exactValue
+      : undefined;
+  const localExactValue = canUseCachedSharedRaw(
+    subjectUserId,
+    viewerUserId,
+    sharedStatus?.visibility,
+    verifiedProjectionValue,
+  )
+    ? groupVisibleMetricValue(
+        state,
+        metric,
+        subjectUserId,
+        localDate,
+      )
+    : undefined;
+  const authoritativeExactValue = authoritativeSharedExactValue(
+    verifiedProjectionValue,
+    localExactValue,
+  );
 
-  if (sharedStatus?.exactValue !== undefined)
+  if (sharedStatus?.visibility === "private")
+    return { mode: "private", value: 0, label: "Private" };
+  if (
+    sharedStatus?.visibility === "status" &&
+    sharedStatus.hasData !== false
+  )
+    return {
+      mode: "status",
+      value: 0,
+      label: sharedStatus.goalReached ? "Goal met" : "In progress",
+    };
+  // Projection v2 is the owner's authoritative group-only daily aggregate.
+  // Prefer it over cached raw rows: Health/sensor totals intentionally publish
+  // only this compact projection, while an older web fallback row can linger
+  // until the next foreground reconciliation.
+  if (
+    authoritativeExactValue !== undefined
+  )
     return {
       mode: "exact",
-      value: sharedStatus.exactValue,
-      label: formatMetricValue(metric, sharedStatus.exactValue),
+      value: authoritativeExactValue,
+      label: formatMetricValue(metric, authoritativeExactValue),
     };
   if (
     subjectUserId !== viewerUserId &&
@@ -940,22 +1096,35 @@ export function sharedMetricResult(
       value: 0,
       label: sharedStatus.goalReached ? "Goal met" : "In progress",
     };
-  if (visibility === "group")
-    return { mode: "exact", value, label: formatMetricValue(metric, value) };
-  if (visibility === "status") {
+  const hasStatusVisibility =
+    entries.some((entry) => entry.visibility === "status") ||
+    photoEntries.some((photo) => photo.visibility === "status") ||
+    (metric.dataType === "calculated" &&
+      metric.defaultVisibility === "status");
+  if (hasStatusVisibility) {
+    const visibleStatusValue = statusVisibleMetricValue(
+      state,
+      metric,
+      subjectUserId,
+      localDate,
+    );
     return {
       mode: "status",
-      value,
-      label: goalReached(
-        metric,
-        value,
-        effectiveGoalTarget(state, metric, subjectUserId, localDate),
-      )
-        ? "Goal met"
-        : "In progress",
+      // Status-only sharing is a presentation state, never an alternate path
+      // for callers to read the underlying aggregate.
+      value: 0,
+      label:
+        visibleStatusValue !== undefined &&
+        goalReached(
+          metric,
+          visibleStatusValue,
+          effectiveGoalTarget(state, metric, subjectUserId, localDate),
+        )
+          ? "Goal met"
+          : "In progress",
     };
   }
-  return { mode: "private", value, label: "Private" };
+  return { mode: "private", value: 0, label: "Private" };
 }
 
 export function goalProgress(
@@ -1080,6 +1249,9 @@ export function goalReached(
   value: number,
   targetOverride = metric.goal.target,
 ): boolean {
+  // Weight is a long-term directional measurement, not a box to complete on
+  // one day. Its target still drives journey progress and planning copy.
+  if (metric.id === "weight") return false;
   if (metric.goalEnabled === false) return false;
   if (metric.goalRange)
     return value >= metric.goalRange.min && value <= metric.goalRange.max;
@@ -1103,6 +1275,13 @@ export function goalReached(
     default:
       return value >= targetOverride;
   }
+}
+
+/** Whether a tracker can count toward the daily tracked-goal result. */
+export function canBeTrackedGoal(
+  metric: Pick<MetricDefinition, "dataType" | "id">,
+) {
+  return metric.id !== "weight" && metric.dataType !== "text";
 }
 
 /** Whether a result can be judged on this date, independent of its value. */
@@ -1723,6 +1902,7 @@ export function scheduledGoalReached(
   userId: string,
   localDate: string,
 ) {
+  if (metric.id === "weight") return false;
   if (isVacationDate(state, userId, localDate)) return true;
   if (
     entriesForDay(state.entries, metric.id, userId, localDate).some(
@@ -1736,8 +1916,6 @@ export function scheduledGoalReached(
   ) return false;
   const reachedOnDate = (date: string) => {
     if (!metricApplicableOnDate(state, metric, userId, date)) return false;
-    if (metric.id === "weight")
-      return weightDailyGoalStatus(state, userId, date).reached;
     if (metric.fastingSettings) {
       const fasting = fastingProgressForDate(
         state,
@@ -1889,6 +2067,7 @@ export function trackedGoalSummary(
 ) {
   const metrics = state.metrics.filter(
     (metric) =>
+      canBeTrackedGoal(metric) &&
       metric.goalEnabled !== false &&
       metric.activeFrom <= localDate &&
       metric.dataType !== "text" &&

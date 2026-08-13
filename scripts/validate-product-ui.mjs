@@ -9,12 +9,15 @@ const tabs = read("app", "(tabs)", "_layout.tsx");
 const seed = read("src", "data", "seed.ts");
 const log = read("app", "(tabs)", "log.tsx");
 const today = read("app", "(tabs)", "index.tsx");
+const ui = read("src", "components", "ui.tsx");
 
 for (const [name, source] of [["tab fallback", tabs], ["new-user seed", seed]]) {
   const gym = source.indexOf('"gym"');
   const chat = source.indexOf('"chat"');
   assert.ok(chat >= 0 && gym > chat, `${name} must place Chat before Workout`);
 }
+assert.match(tabs, /enableFreeze\(true\)/);
+assert.match(tabs, /freezeOnBlur: true/);
 
 assert.match(log, /const \[privacyMenuOpen, setPrivacyMenuOpen\]/);
 assert.match(log, /accessibilityState=\{\{ expanded: privacyMenuOpen \}\}/);
@@ -23,6 +26,13 @@ assert.doesNotMatch(
   log,
   /<View style=\{styles\.privacyRow\}>/,
   "sharing choices should not consume a permanent row of chips",
+);
+
+assert.match(ui, /subtitle,[\s\S]{0,300}translateSubtitle = true/);
+assert.match(
+  ui,
+  /subtitle \? \([\s\S]{0,300}translate=\{translateSubtitle\}[\s\S]{0,300}\{subtitle\}/,
+  "PageHeader guidance subtitles must be rendered instead of silently dropped",
 );
 assert.match(
   log,

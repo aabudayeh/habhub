@@ -6,6 +6,86 @@ import type {
 
 const MINUTE_MS = 60_000;
 
+type HealthImportIdentity = {
+  source?: unknown;
+  sourceProvider?: unknown;
+  sourceRecordId?: unknown;
+  sourceOrigin?: unknown;
+};
+
+/**
+ * Provenance survives cloud round-trips in more than one field. Treat any
+ * imported marker as device ownership so a web fallback cannot delete or
+ * override a health row merely because one legacy field is absent.
+ */
+export function hasHealthImportIdentity(entry: HealthImportIdentity) {
+  return (
+    entry.source === "imported" ||
+    Boolean(entry.sourceProvider) ||
+    Boolean(entry.sourceRecordId) ||
+    Boolean(entry.sourceOrigin)
+  );
+}
+
+/** Only provenance-free manual fallback rows may be replaced from the web. */
+export function manualStepEntriesEligibleForReplacement<
+  TEntry extends HealthImportIdentity,
+>(entries: readonly TEntry[]): TEntry[] {
+  return entries.filter((entry) => !hasHealthImportIdentity(entry));
+}
+
+/**
+ * A web-entered step total is the fallback when no device bridge exists. If a
+ * phone later supplies the same day through Health Connect/HealthKit, that
+ * platform aggregate is authoritative instead of being added to the manual
+ * total and doubling the day.
+ */
+export function authoritativeStepEntries<
+  TEntry extends HealthImportIdentity,
+>(entries: readonly TEntry[]): TEntry[] {
+  const imported = entries.filter(hasHealthImportIdentity);
+  return imported.length ? imported : [...entries];
+}
+
+/**
+ * Expands a chunked Health Connect request to local calendar-day boundaries.
+ * Period aggregation is anchored to the request start, so a backfill chunk
+ * beginning at 14:00 would otherwise create 14:00-to-14:00 "days" and assign
+ * the wrong step total to both dates. The current day remains partial at now;
+ * historical boundaries round up and harmlessly overlap the adjacent chunk.
+ */
+export function localCalendarAggregateRange(
+  from: Date,
+  to: Date,
+  now: Date = new Date(),
+) {
+  const start = new Date(from);
+  const requestedEnd = new Date(
+    Math.min(to.getTime(), now.getTime()),
+  );
+  if (
+    !Number.isFinite(start.getTime()) ||
+    !Number.isFinite(requestedEnd.getTime()) ||
+    requestedEnd <= start
+  )
+    throw new Error("Health aggregate range must have a positive duration.");
+
+  start.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const end = new Date(requestedEnd);
+  if (end < today) {
+    const alreadyMidnight =
+      end.getHours() === 0 &&
+      end.getMinutes() === 0 &&
+      end.getSeconds() === 0 &&
+      end.getMilliseconds() === 0;
+    end.setHours(0, 0, 0, 0);
+    if (!alreadyMidnight) end.setDate(end.getDate() + 1);
+  }
+  return { from: start, to: end };
+}
+
 function finiteTime(value: string) {
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : 0;

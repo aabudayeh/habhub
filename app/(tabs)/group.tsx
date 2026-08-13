@@ -22,7 +22,7 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { shareText } from "@/src/lib/shareText";
 import { ReorderItem } from "@/src/components/ReorderItem";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
@@ -30,6 +30,10 @@ import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGestur
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
+import {
+  GoalHeatmap,
+  type GoalHeatmapModel,
+} from "@/src/components/GoalHeatmap";
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
@@ -46,11 +50,13 @@ import {
   Screen,
 } from "@/src/components/ui";
 import {
+  calendarPeriodRange,
   dateKey,
   dateKeyWithOffset,
   friendlyDate,
   relativeTime,
 } from "@/src/domain/date";
+import { statusForDay } from "@/src/domain/dataIndex";
 import {
   groupInviteMessage,
   validGroupInviteCode,
@@ -84,14 +90,209 @@ import {
   isChallengeMetric,
   mergedLeaderboardCardOrder,
 } from "@/src/domain/groupChallenges";
-import { formatMetricValue } from "@/src/domain/metrics";
+import {
+  formatMetricValue,
+  goalReached,
+  hasMetricData,
+  sharedMetricResult,
+} from "@/src/domain/metrics";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { AppState, GroupChallenge, MetricDefinition, Visibility } from "@/src/types";
+import {
+  AppState,
+  GroupChallenge,
+  HistoryRange,
+  MetricDefinition,
+  Visibility,
+} from "@/src/types";
 
 const SCORE_ID = "__score";
+const SHARED_LEADERBOARD_SUMMARY_START = "2000-01-01";
+
+function sharedLeaderboardHeatmapModel(
+  state: AppState,
+  metric: MetricDefinition,
+  userId: string,
+  dates: string[],
+): GoalHeatmapModel {
+  const today = dateKey();
+  const cells = dates.map((date) => {
+    const future = date > today;
+    const status = statusForDay(
+      state.dailyMetricStatuses,
+      state.group.id,
+      metric.id,
+      userId,
+      date,
+    );
+    const result = sharedMetricResult(
+      state,
+      metric,
+      userId,
+      state.currentUserId,
+      date,
+    );
+    const exactData =
+      result.mode === "exact" && hasMetricData(state, metric, userId, date);
+    const logged = !future && (status?.hasData === true || exactData);
+    const tracked =
+      !future && (status?.goalEligible ?? metric.activeFrom <= date);
+    const target = Number(status?.goalTarget);
+    const reached =
+      logged &&
+      (status?.goalReached === true ||
+        (result.mode === "exact" &&
+          goalReached(
+            {
+              ...metric,
+              goal: status?.goalKind
+                ? { ...metric.goal, kind: status.goalKind }
+                : metric.goal,
+            },
+            result.value,
+            Number.isFinite(target) ? target : metric.goal.target,
+          )));
+    return {
+      date,
+      future,
+      logged,
+      tracked,
+      reached,
+      backgroundColor: future
+        ? undefined
+        : !logged
+          ? `${palette.faint}72`
+          : !tracked
+            ? palette.amber
+            : reached
+              ? palette.lime
+              : palette.red,
+    };
+  });
+  const applicableDates = cells
+    .filter((cell) => !cell.future && cell.tracked)
+    .map((cell) => cell.date);
+  const loggedDates = cells
+    .filter((cell) => cell.logged)
+    .map((cell) => cell.date);
+  const goalsReached = cells.filter((cell) => cell.reached).length;
+  return {
+    cells,
+    period: {
+      applicableDates,
+      loggedDates,
+      values: [],
+      total: 0,
+      average: 0,
+      averageTarget: metric.goal.target,
+      goalsReached,
+    },
+  };
+}
+
+const LeaderboardMemberGrid = React.memo(function LeaderboardMemberGrid({
+  state,
+  metric,
+  memberId,
+  memberName,
+  gridDates,
+  gridRange,
+  gridKey,
+  setExpandedGridRows,
+}: {
+  state: AppState;
+  metric: MetricDefinition;
+  memberId: string;
+  memberName: string;
+  gridDates: string[];
+  gridRange: HistoryRange;
+  gridKey: string;
+  setExpandedGridRows: React.Dispatch<React.SetStateAction<string[]>>;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const t = useTranslation();
+  // Year grids can contain 365 cells per member. Keep that privacy-aware
+  // projection stable across the parent screen's clock/edit renders.
+  const gridModel = useMemo(
+    () =>
+      sharedLeaderboardHeatmapModel(
+        state,
+        metric,
+        memberId,
+        gridDates,
+      ),
+    [gridDates, memberId, metric, state],
+  );
+  const collapse = useCallback(
+    () =>
+      setExpandedGridRows((current) =>
+        current.filter((key) => key !== gridKey),
+      ),
+    [gridKey, setExpandedGridRows],
+  );
+  return (
+    <View
+      style={[
+        styles.memberGrid,
+        {
+          borderTopColor: colors.border,
+          backgroundColor:
+            memberId === state.currentUserId
+              ? colors.primarySoft
+              : colors.card,
+        },
+      ]}
+    >
+      <View style={styles.memberGridHeader}>
+        <Text style={[styles.memberGridLabel, { color: colors.muted }]}>
+          {t(`${gridRange.toUpperCase()} · tap a shared day for details`)}
+        </Text>
+        <Pressable
+          accessibilityLabel={t(`Collapse calendar for ${memberName}`)}
+          onPress={collapse}
+          hitSlop={7}
+        >
+          <Ionicons name="chevron-up" size={14} color={accent} />
+        </Pressable>
+      </View>
+      <GoalHeatmap
+        state={state}
+        metric={metric}
+        dates={gridDates}
+        range={gridRange}
+        compact
+        completionOnly
+        model={gridModel}
+        onSelect={(selectedDate) => {
+          const cell = gridModel.cells.find(
+            (item) => item.date === selectedDate,
+          );
+          if (!cell?.logged) return;
+          if (memberId === state.currentUserId) {
+            router.navigate({
+              pathname: "/day/[date]",
+              params: { date: selectedDate, metrics: metric.id },
+            } as never);
+            return;
+          }
+          router.navigate({
+            pathname: "/member/[id]",
+            params: {
+              id: memberId,
+              period: "custom",
+              anchor: selectedDate,
+              metrics: metric.id,
+            },
+          } as never);
+        }}
+      />
+    </View>
+  );
+});
+
 if (
   Platform.OS === "android" &&
   UIManager.setLayoutAnimationEnabledExperimental
@@ -106,6 +307,7 @@ function LeaderboardScreen() {
   const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
@@ -114,6 +316,7 @@ function LeaderboardScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
+  const [expandedGridRows, setExpandedGridRows] = useState<string[]>([]);
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const rankingStateRef = useRef(state);
@@ -191,6 +394,12 @@ function LeaderboardScreen() {
     [state.group.id, state.settings.leaderboardPinnedMetricIdsByGroup],
   );
   const weekStartsOn = state.settings.weekStartsOn ?? 1;
+  const gridRange: HistoryRange =
+    state.settings.leaderboardGridRangeByGroup?.[state.group.id] ?? "week";
+  const gridDates = useMemo(
+    () => calendarPeriodRange(anchor, gridRange, weekStartsOn),
+    [anchor, gridRange, weekStartsOn],
+  );
   const allTimeInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -244,7 +453,7 @@ function LeaderboardScreen() {
       period === "overall"
         ? anchor
         : (sortedDates.at(-1) ?? anchor);
-    return expandGroupChallengeOccurrences(
+    const rangeChallenges = expandGroupChallengeOccurrences(
       challengeCloud.challenges,
       fromDate,
       throughDate,
@@ -259,6 +468,29 @@ function LeaderboardScreen() {
         groupChallengeResponseDeadline(challenge) >= dateKey()
       );
     });
+    // A future invitation must be actionable from today's Leaderboard even
+    // though its scoring occurrence belongs to a later date range. Keep only
+    // unanswered/declined source cards here so accepted future series do not
+    // crowd the current ranking view.
+    const futureInvitations = challengeCloud.challenges.filter((challenge) => {
+      const participation = groupChallengeParticipation(
+        challenge,
+        state.currentUserId,
+      );
+      return (
+        challenge.localDate > throughDate &&
+        (participation === "invited" || participation === "declined") &&
+        groupChallengeResponseDeadline(challenge) >= dateKey()
+      );
+    });
+    return [
+      ...new Map(
+        [...rangeChallenges, ...futureInvitations].map((challenge) => [
+          challenge.id,
+          challenge,
+        ]),
+      ).values(),
+    ];
   }, [anchor, challengeCloud.challenges, dates, period, state.currentUserId]);
   const savedCardOrder =
     state.settings.leaderboardCardOrderByGroup?.[state.group.id];
@@ -367,6 +599,66 @@ function LeaderboardScreen() {
     rankingInputs,
     tracked,
   ]);
+  const visibleGridKeys = useMemo(
+    () =>
+      calculationSelected.flatMap((metricId) =>
+        metricId === SCORE_ID
+          ? []
+          : (rankingRows.get(metricId) ?? [])
+              .map((row) => `${metricId}:${row.member.id}`),
+      ),
+    [calculationSelected, rankingRows],
+  );
+  const targetedActivitySince = useMemo(
+    () => {
+      // Overall cannot infer the server's earliest shared day from a 120-day
+      // local cache. Ask once for the complete compact status read model;
+      // raw/exact entries remain server-clamped to their privacy-safe window.
+      if (period === "overall") return SHARED_LEADERBOARD_SUMMARY_START;
+      return [dates[0], gridDates[0]]
+        .filter((date): date is string => Boolean(date))
+        .sort()[0];
+    },
+    [dates, gridDates, period],
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (
+        tutorialSandbox ||
+        personalSetup ||
+        !targetedActivitySince ||
+        !isCloudGroupId(state.group.id)
+      )
+        return;
+      const timer = setTimeout(() => {
+        cloud.refreshActivity(targetedActivitySince).catch(() => undefined);
+      }, 180);
+      return () => clearTimeout(timer);
+    }, [
+      cloud,
+      personalSetup,
+      state.group.id,
+      targetedActivitySince,
+      tutorialSandbox,
+    ]),
+  );
+
+  function saveGridRange(range: HistoryRange) {
+    updateSettings({
+      leaderboardGridRangeByGroup: {
+        ...(state.settings.leaderboardGridRangeByGroup ?? {}),
+        [state.group.id]: range,
+      },
+    });
+  }
+
+  function toggleGridRow(key: string) {
+    setExpandedGridRows((current) =>
+      current.includes(key)
+        ? current.filter((item) => item !== key)
+        : [...current, key],
+    );
+  }
   function choosePeriod(next: LeaderboardPeriod) {
     setPeriod(next);
     if (
@@ -705,6 +997,64 @@ function LeaderboardScreen() {
             />
           </DateRangeNavigator>
         ) : null}
+        {editing ? (
+          <Card style={styles.gridEditControls}>
+            <View style={styles.gridEditLine}>
+              <View style={styles.gridRangeChoices}>
+                {(["week", "month", "year"] as HistoryRange[]).map(
+                  (range) => {
+                    const selectedRange = gridRange === range;
+                    return (
+                      <Pressable
+                        key={range}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: selectedRange }}
+                        onPress={() => saveGridRange(range)}
+                        style={[
+                          styles.gridRangeChoice,
+                          {
+                            borderColor: selectedRange
+                              ? accent
+                              : colors.border,
+                            backgroundColor: selectedRange
+                              ? colors.primarySoft
+                              : colors.card,
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.gridRangeChoiceText,
+                            { color: selectedRange ? accent : colors.muted },
+                          ]}
+                        >
+                          {range[0].toUpperCase() + range.slice(1)}
+                        </Text>
+                      </Pressable>
+                    );
+                  },
+                )}
+              </View>
+              <View style={styles.gridDisclosureActions}>
+                <Pressable
+                  onPress={() => setExpandedGridRows(visibleGridKeys)}
+                  style={styles.gridDisclosureAction}
+                >
+                  <Ionicons name="expand-outline" size={14} color={accent} />
+                  <Text style={[styles.gridDisclosureText, { color: accent }]}>{t("Expand all")}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setExpandedGridRows([])}
+                  style={styles.gridDisclosureAction}
+                >
+                  <Ionicons name="contract-outline" size={14} color={accent} />
+                  <Text style={[styles.gridDisclosureText, { color: accent }]}>{t("Collapse all")}</Text>
+                </Pressable>
+              </View>
+            </View>
+            <Text style={[styles.gridEditHint, { color: colors.muted }]}>{t("Calendar rows are collapsed by default. The selected range is saved for this group.")}</Text>
+          </Card>
+        ) : null}
       {displayedSelected.map((id, cardIndex) => {
         const challengeId = challengeIdFromCard(id);
         const challenge = challengeId
@@ -844,7 +1194,7 @@ function LeaderboardScreen() {
                 </Text>
               </View>
             ) : null}
-            {rows.slice(0, 4).map((row, index) => {
+            {rows.map((row, index) => {
               const result = row.metrics[0]?.result;
               const value = includeScore
                 ? `${Math.round(row.score)} pts`
@@ -869,19 +1219,22 @@ function LeaderboardScreen() {
                 !includeScore && dates.length > 1
                   ? result?.averageLabel
                   : undefined;
+              const gridKey = `${id}:${row.member.id}`;
+              const gridExpanded = expandedGridRows.includes(gridKey);
+              const gridMemberName = memberDisplayName(state, row.member);
               return (
-                <View
-                  key={row.member.id}
-                  style={[
-                    styles.row,
-                    { borderTopColor: colors.border },
-                    row.member.id === state.currentUserId && {
-                      backgroundColor: colors.primarySoft,
-                      borderRadius: 14,
-                      borderTopColor: "transparent",
-                    },
-                  ]}
-                >
+                <View key={row.member.id} style={styles.memberGridBlock}>
+                  <View
+                    style={[
+                      styles.row,
+                      { borderTopColor: colors.border },
+                      row.member.id === state.currentUserId && {
+                        backgroundColor: colors.primarySoft,
+                        borderRadius: 14,
+                        borderTopColor: "transparent",
+                      },
+                    ]}
+                  >
                   <Pressable
                     disabled={editing}
                     onPress={() =>
@@ -1010,6 +1363,35 @@ function LeaderboardScreen() {
                       color={colors.faint}
                     />
                   </Pressable>
+                  {!includeScore && metric ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t(`${gridExpanded ? "Collapse" : "Expand"} ${gridRange} calendar for ${gridMemberName}`)}
+                      accessibilityState={{ expanded: gridExpanded }}
+                      onPress={() => toggleGridRow(gridKey)}
+                      hitSlop={5}
+                      style={styles.gridToggle}
+                    >
+                      <Ionicons
+                        name={gridExpanded ? "chevron-up" : "calendar-outline"}
+                        size={15}
+                        color={accent}
+                      />
+                    </Pressable>
+                  ) : null}
+                  </View>
+                  {gridExpanded && metric ? (
+                    <LeaderboardMemberGrid
+                      state={state}
+                      metric={metric}
+                      memberId={row.member.id}
+                      memberName={gridMemberName}
+                      gridDates={gridDates}
+                      gridRange={gridRange}
+                      gridKey={gridKey}
+                      setExpandedGridRows={setExpandedGridRows}
+                    />
+                  ) : null}
                 </View>
               );
             })}
@@ -1482,6 +1864,15 @@ const styles = StyleSheet.create({
   addExistingText: { fontSize: 10, fontWeight: "900" },
   editHint: { alignItems: "center", paddingVertical: 7 },
   hint: { fontSize: 9, fontWeight: "700" },
+  gridEditControls: { padding: 8, marginBottom: 6 },
+  gridEditLine: { flexDirection: "row", alignItems: "center", gap: 8 },
+  gridRangeChoices: { flex: 1, flexDirection: "row", gap: 5 },
+  gridRangeChoice: { minHeight: 30, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
+  gridRangeChoiceText: { fontSize: 8, fontWeight: "900" },
+  gridDisclosureActions: { flexDirection: "row", alignItems: "center", gap: 4 },
+  gridDisclosureAction: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4 },
+  gridDisclosureText: { fontSize: 7, fontWeight: "900" },
+  gridEditHint: { fontSize: 7, lineHeight: 10, marginTop: 5 },
   ranking: { padding: 7 },
   challengeCard: { overflow: "hidden" },
   challengeHead: { flexDirection: "row", alignItems: "center", gap: 9, padding: 5, paddingBottom: 8 },
@@ -1531,6 +1922,11 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderTopWidth: 1,
   },
+  memberGridBlock: { overflow: "hidden" },
+  gridToggle: { width: 25, minHeight: 34, alignItems: "center", justifyContent: "center" },
+  memberGrid: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 7, paddingTop: 5, paddingBottom: 8 },
+  memberGridHeader: { minHeight: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  memberGridLabel: { fontSize: 7, fontWeight: "800" },
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },
   memberLink: {

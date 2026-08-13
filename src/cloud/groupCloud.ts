@@ -12,6 +12,7 @@ import {
   effectiveGoalTarget,
   displayGoalProgress,
   formatMetricValue,
+  groupVisibleMetricValue,
   hasMetricData,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
@@ -35,6 +36,12 @@ import {
 } from "@/src/domain/vacation";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
+import { hasHealthImportIdentity } from "@/src/domain/healthDedup";
+import {
+  applySharedMetricPrivacyFences,
+  projectionSurvivesSharedMetricPrivacyFences,
+  type SharedMetricPrivacyFence,
+} from "@/src/domain/sharedMetricPrivacy";
 import { supabase } from "@/src/lib/supabase";
 import { translateUiText } from "@/src/i18n";
 import {
@@ -118,6 +125,7 @@ type CloudActivityEntryRow = {
   source_origin?: string | null;
   source_updated_at?: string | null;
   image_path?: string | null;
+  account_revision?: number | string | null;
 };
 
 type CloudActivityStatusRow = {
@@ -133,7 +141,9 @@ type CloudActivityStatusRow = {
   goal_eligible?: boolean | null;
   exact_value?: number | string | null;
   has_data?: boolean | null;
+  privacy_projection_version?: number | string | null;
   updated_at?: string | null;
+  account_revision?: number | string | null;
 };
 
 type CloudDailyStatusUpsertRow = {
@@ -145,12 +155,13 @@ type CloudDailyStatusUpsertRow = {
   score_contribution: number;
   goal_progress: number;
   goal_kind: MetricDefinition["goal"]["kind"];
-  goal_target: number;
+  goal_target: number | null;
   visibility: MetricEntry["visibility"];
   goal_eligible: boolean;
   exact_value: number | null;
   has_data: boolean;
   account_revision: number;
+  privacy_projection_version: 2;
 };
 
 type GroupActivitySnapshot = {
@@ -162,11 +173,14 @@ type GroupActivitySnapshot = {
   metrics?: { id: string; slug: string }[];
   entries?: CloudActivityEntryRow[];
   statuses?: CloudActivityStatusRow[];
+  privacy_fences?: {
+    user_id: string;
+    metric_id: string;
+    revision: number | string;
+  }[];
   tombstones?: {
     user_id: string;
     client_generated_id: string;
-    local_date: string;
-    deleted_at: string;
   }[];
 };
 
@@ -174,6 +188,7 @@ export type CloudActivityMetadata = {
   version?: number;
   updatedAt?: string;
   sinceDate?: string;
+  privacyFences?: SharedMetricPrivacyFence[];
 };
 
 function batches<T>(items: T[], size = 500) {
@@ -228,6 +243,39 @@ function cloudErrorText(error: unknown) {
     : "The cloud did not return an error description.";
 }
 
+function sharingProjectionState(
+  state: AppState,
+  allowedVisibilities: ReadonlySet<MetricEntry["visibility"]>,
+): AppState {
+  const owns = (userId: string) => userId === state.currentUserId;
+  return {
+    ...state,
+    entries: state.entries.filter(
+      (entry) =>
+        !owns(entry.userId) || allowedVisibilities.has(entry.visibility),
+    ),
+    photos: state.photos.filter(
+      (photo) =>
+        !owns(photo.userId) || allowedVisibilities.has(photo.visibility),
+    ),
+    gymSessions: (state.gymSessions ?? []).filter(
+      (session) =>
+        !owns(session.userId) || allowedVisibilities.has(session.visibility),
+    ),
+    // Never feed an older owner projection back into a newly restricted
+    // calculation after visibility changed. Derive it again from source rows.
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => !owns(status.userId),
+    ),
+  };
+}
+
+/** Status-only sharing exposes a progress band, never an invertible percent. */
+function coarseSharedProgress(value: number, cap: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(cap, Math.floor(value / 25) * 25));
+}
+
 function buildCloudDailyStatusRows(
   state: AppState,
   idBySlug: Map<string, string>,
@@ -235,6 +283,14 @@ function buildCloudDailyStatusRows(
   statusDates: string[],
   accountRevision: number,
 ): CloudDailyStatusUpsertRow[] {
+  const exactProjectionState = sharingProjectionState(
+    state,
+    new Set<MetricEntry["visibility"]>(["group"]),
+  );
+  const statusProjectionState = sharingProjectionState(
+    state,
+    new Set<MetricEntry["visibility"]>(["group", "status"]),
+  );
   const exactSharedEntryDays = new Set<string>();
   const statusSharedEntryDays = new Set<string>();
   const privateEntryDays = new Set<string>();
@@ -265,106 +321,136 @@ function buildCloudDailyStatusRows(
         const metric =
           state.metrics.find((candidate) => candidate.id === groupMetric.id) ??
           groupMetric;
-        const value = safeMetricValue(
-          state,
-          metric,
-          state.currentUserId,
-          localDate,
-        );
         const entryDayKey = `${metric.id}:${localDate}`;
         const hasExactSharedEntry = exactSharedEntryDays.has(entryDayKey);
         const hasStatusSharedEntry = statusSharedEntryDays.has(entryDayKey);
         const hasPrivateEntry = privateEntryDays.has(entryDayKey);
-        const exactShared =
-          !isVacationDate(state, state.currentUserId, localDate) &&
-          (hasExactSharedEntry ||
-            (metric.defaultVisibility === "group" &&
-              (metric.dataType === "calculated" ||
-                (Boolean(metric.gymMapping) &&
-                  (state.gymSessions ?? []).some(
-                    (session) =>
-                      session.userId === state.currentUserId &&
-                      session.localDate === localDate &&
-                      session.visibility === "group",
-                  )) ||
-                metric.stepFallback === true)));
-        const hasData = hasMetricData(
-          state,
+        const sourceVisibilities = [
+          ...(metric.dataType === "photo"
+            ? state.photos
+                .filter(
+                  (photo) =>
+                    photo.userId === state.currentUserId &&
+                    photo.localDate === localDate,
+                )
+                .map((photo) => photo.visibility)
+            : []),
+          ...(metric.gymMapping
+            ? (state.gymSessions ?? [])
+                .filter(
+                  (session) =>
+                    session.userId === state.currentUserId &&
+                    session.localDate === localDate,
+                )
+                .map((session) => session.visibility)
+            : []),
+        ];
+        const hasExactSharedSource =
+          hasExactSharedEntry || sourceVisibilities.includes("group");
+        const hasStatusSharedSource =
+          hasStatusSharedEntry || sourceVisibilities.includes("status");
+        const hasPrivateSource =
+          hasPrivateEntry || sourceVisibilities.includes("private");
+        const statusVisibility = hasExactSharedSource
+          ? ("group" as const)
+          : hasStatusSharedSource
+            ? ("status" as const)
+            : hasPrivateSource
+              ? ("private" as const)
+              : metric.defaultVisibility;
+        const sharedExactValue =
+          statusVisibility === "group" &&
+          !isVacationDate(state, state.currentUserId, localDate)
+            ? groupVisibleMetricValue(
+                state,
+                metric,
+                state.currentUserId,
+                localDate,
+              )
+            : undefined;
+        const exactShared = sharedExactValue !== undefined;
+        const projectionState = exactShared
+          ? exactProjectionState
+          : statusVisibility === "private"
+            ? state
+            : statusVisibility === "status"
+              ? statusProjectionState
+              : exactProjectionState;
+        const value = sharedExactValue !== undefined
+          ? sharedExactValue
+          : safeMetricValue(
+              projectionState,
+              metric,
+              state.currentUserId,
+              localDate,
+            );
+        const target = effectiveGoalTarget(
+          projectionState,
           metric,
           state.currentUserId,
           localDate,
         );
-        const statusVisibility = hasExactSharedEntry
-          ? ("group" as const)
-          : hasStatusSharedEntry
-            ? ("status" as const)
-            : hasPrivateEntry
-              ? ("private" as const)
-              : metric.defaultVisibility;
+        const reached = scheduledGoalReached(
+          projectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const rawScore =
+          Math.min(
+            metricVisualProgress(
+              projectionState,
+              metric,
+              state.currentUserId,
+              localDate,
+              value,
+              target,
+            ),
+            1,
+          ) * 100;
+        const rawGoalProgress =
+          (metric.goalProgressMode === "journey"
+            ? metricVisualProgress(
+                projectionState,
+                metric,
+                state.currentUserId,
+                localDate,
+                value,
+              )
+            : displayGoalProgress(metric, value, target)) * 100;
+        const statusOnly = statusVisibility !== "private" && !exactShared;
+        const hasData = hasMetricData(
+          projectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
         return {
           group_id: state.group.id,
           metric_id: idBySlug.get(groupMetric.id),
           user_id: state.currentUserId,
           local_date: localDate,
-          goal_reached: scheduledGoalReached(
-            state,
-            metric,
-            state.currentUserId,
-            localDate,
-          ),
-          score_contribution:
-            Math.min(
-              metricVisualProgress(
-                state,
-                metric,
-                state.currentUserId,
-                localDate,
-                value,
-                effectiveGoalTarget(
-                  state,
-                  metric,
-                  state.currentUserId,
-                  localDate,
-                ),
-              ),
-              1,
-            ) * 100,
+          goal_reached: reached,
+          score_contribution: statusOnly
+            ? coarseSharedProgress(rawScore, 100)
+            : rawScore,
           goal_progress: Math.max(
             0,
             Math.min(
               300,
-              (metric.goalProgressMode === "journey"
-                ? metricVisualProgress(
-                    state,
-                    metric,
-                    state.currentUserId,
-                    localDate,
-                    value,
-                  )
-                : displayGoalProgress(
-                    metric,
-                    value,
-                    effectiveGoalTarget(
-                      state,
-                      metric,
-                      state.currentUserId,
-                      localDate,
-                    ),
-                  )) * 100,
+              statusOnly
+                ? coarseSharedProgress(rawGoalProgress, 300)
+                : rawGoalProgress,
             ),
           ),
           goal_kind: metric.goal.kind,
-          goal_target: effectiveGoalTarget(
-            state,
-            metric,
-            state.currentUserId,
-            localDate,
-          ),
+          goal_target: statusOnly ? null : target,
           visibility: statusVisibility,
           goal_eligible: isMetricTrackedOnDate(state, metric, localDate),
-          exact_value: exactShared ? value : null,
+          exact_value: sharedExactValue ?? null,
           has_data: hasData,
           account_revision: accountRevision,
+          privacy_projection_version: 2,
         };
       }),
   );
@@ -405,7 +491,7 @@ async function upsertCloudDailyStatusRows(
     });
     if (
       error &&
-      /goal_progress|goal_kind|goal_target|visibility|goal_eligible|exact_value|has_data/i.test(
+      /goal_progress|goal_kind|goal_target|visibility|goal_eligible|exact_value|has_data|privacy_projection_version/i.test(
         `${error.code ?? ""} ${error.message ?? ""}`,
       )
     ) {
@@ -418,6 +504,7 @@ async function upsertCloudDailyStatusRows(
           goal_eligible: _eligible,
           exact_value: _exact,
           has_data: _hasData,
+          privacy_projection_version: _privacyProjectionVersion,
           ...status
         }) => status,
       );
@@ -729,6 +816,7 @@ export async function loadCloudGroupActivity(
     deletedEntryKeys?: string[];
     authoritativeEntrySinceDate?: string;
     authoritativeStatusSinceDate?: string;
+    privacyFences?: SharedMetricPrivacyFence[];
   }
 > {
   const client = requireCloud();
@@ -802,33 +890,52 @@ export async function loadCloudGroupActivity(
     ]);
   }
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
+  const privacyFences: SharedMetricPrivacyFence[] = (
+    snapshot?.privacy_fences ?? []
+  ).flatMap((fence) => {
+    const metricId = slugById.get(fence.metric_id);
+    const revision = Number(fence.revision);
+    return metricId && Number.isFinite(revision)
+      ? [{ userId: fence.user_id, metricId, revision }]
+      : [];
+  });
   const urls = await signedUrls(
     entryRows
       .map((entry) => entry.image_path)
       .filter((path): path is string => Boolean(path)),
   );
-  const remoteEntries: MetricEntry[] = entryRows.map((entry) => ({
-    id: entry.client_generated_id,
-    metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
-    userId: entry.user_id,
-    value: entry.value as number | boolean | string,
-    localDate: entry.local_date,
-    recordedAt: entry.recorded_at,
-    visibility: entry.visibility,
-    source: entry.source,
-    label: entry.label ?? undefined,
-    note: entry.note ?? undefined,
-    nutrition: entry.nutrition ?? undefined,
-    submetricValues: entry.submetric_values ?? undefined,
-    sourceProvider: entry.source_provider ?? undefined,
-    sourceRecordId: entry.source_record_id ?? undefined,
-    sourceOrigin: entry.source_origin ?? undefined,
-    sourceUpdatedAt: entry.source_updated_at ?? undefined,
-    imageStoragePath: entry.image_path ?? undefined,
-    imageUri: entry.image_path
-      ? (urls.get(entry.image_path) ?? undefined)
-      : undefined,
-  }));
+  // The fence RPC may commit just before the owner's history rewrite. Even if
+  // RLS still authorizes that narrow race response, exact rows at or below the
+  // fence revision are stale and must fail closed.
+  const remoteEntries: MetricEntry[] = applySharedMetricPrivacyFences(
+    entryRows.map((entry) => ({
+      id: entry.client_generated_id,
+      metricId: slugById.get(entry.metric_id) ?? entry.metric_id,
+      userId: entry.user_id,
+      value: entry.value as number | boolean | string,
+      localDate: entry.local_date,
+      recordedAt: entry.recorded_at,
+      visibility: entry.visibility,
+      source: entry.source,
+      label: entry.label ?? undefined,
+      note: entry.note ?? undefined,
+      nutrition: entry.nutrition ?? undefined,
+      submetricValues: entry.submetric_values ?? undefined,
+      sourceProvider: entry.source_provider ?? undefined,
+      sourceRecordId: entry.source_record_id ?? undefined,
+      sourceOrigin: entry.source_origin ?? undefined,
+      sourceUpdatedAt: entry.source_updated_at ?? undefined,
+      sourceRevision: Number.isFinite(Number(entry.account_revision))
+        ? Number(entry.account_revision)
+        : undefined,
+      imageStoragePath: entry.image_path ?? undefined,
+      imageUri: entry.image_path
+        ? (urls.get(entry.image_path) ?? undefined)
+        : undefined,
+    })),
+    privacyFences,
+    state.currentUserId,
+  );
   const groupMetricSlugs = new Set(slugById.values());
   const groupMemberIds = new Set(state.group.members.map((member) => member.id));
   // A range response is a delta, not proof that an absent cached row was
@@ -836,7 +943,11 @@ export async function loadCloudGroupActivity(
   // realtime/manual refresh cannot temporarily erase a friend's leaderboard
   // value while related entry/status writes are still settling.
   const entriesById = new Map(
-    state.entries
+    applySharedMetricPrivacyFences(
+      state.entries,
+      privacyFences,
+      state.currentUserId,
+    )
       .filter(
         (entry) =>
           !deletedEntryKeys.has(metricEntryKey(entry.userId, entry.id)) &&
@@ -873,39 +984,69 @@ export async function loadCloudGroupActivity(
       const key = metricEntryKey(entry.userId, entry.id);
       if (!entriesById.has(key)) entriesById.set(key, entry);
     });
+  // A status-only row is safe at fence revision N, but an older status can be
+  // left over from a subsequent private transition and must also be removed.
+  // Exact/group rows must be strictly newer than the fence.
   const remoteStatuses: DailyMetricStatus[] = statusRows.map((status) => ({
-    groupId,
-    metricId: slugById.get(status.metric_id) ?? status.metric_id,
-    userId: status.user_id,
-    localDate: status.local_date,
-    goalReached: Boolean(status.goal_reached),
-    scoreContribution: Number(status.score_contribution ?? 0),
-    goalProgress:
-      status.goal_progress === null || status.goal_progress === undefined
-        ? undefined
-        : Number(status.goal_progress),
-    goalKind: status.goal_kind ?? undefined,
-    goalTarget:
-      status.goal_target === null || status.goal_target === undefined
-        ? undefined
-        : Number(status.goal_target),
-    visibility: status.visibility ?? undefined,
-    goalEligible:
-      status.goal_eligible === null || status.goal_eligible === undefined
-        ? undefined
-        : Boolean(status.goal_eligible),
-    exactValue:
-      status.exact_value === null || status.exact_value === undefined
-        ? undefined
-        : Number(status.exact_value),
-    hasData:
-      status.has_data === null || status.has_data === undefined
-        ? undefined
-        : Boolean(status.has_data),
-    syncedAt: status.updated_at ?? undefined,
-  }));
+      groupId,
+      metricId: slugById.get(status.metric_id) ?? status.metric_id,
+      userId: status.user_id,
+      localDate: status.local_date,
+      goalReached: Boolean(status.goal_reached),
+      scoreContribution: Number(status.score_contribution ?? 0),
+      goalProgress:
+        status.goal_progress === null || status.goal_progress === undefined
+          ? undefined
+          : Number(status.goal_progress),
+      goalKind: status.goal_kind ?? undefined,
+      goalTarget:
+        status.visibility !== "group" ||
+        status.goal_target === null ||
+        status.goal_target === undefined
+          ? undefined
+          : Number(status.goal_target),
+      visibility: status.visibility ?? undefined,
+      goalEligible:
+        status.goal_eligible === null || status.goal_eligible === undefined
+          ? undefined
+          : Boolean(status.goal_eligible),
+      exactValue:
+        status.visibility !== "group" ||
+        Number(status.privacy_projection_version) !== 2 ||
+        status.exact_value === null ||
+        status.exact_value === undefined
+          ? undefined
+          : Number(status.exact_value),
+      privacyProjectionVersion:
+        status.privacy_projection_version === null ||
+        status.privacy_projection_version === undefined
+          ? undefined
+          : Number(status.privacy_projection_version),
+      hasData:
+        status.has_data === null || status.has_data === undefined
+          ? undefined
+          : Boolean(status.has_data),
+      syncedAt: status.updated_at ?? undefined,
+      sourceRevision: Number.isFinite(Number(status.account_revision))
+        ? Number(status.account_revision)
+        : undefined,
+    })).filter(
+      (status) =>
+        status.userId === state.currentUserId ||
+        projectionSurvivesSharedMetricPrivacyFences(
+          status.userId,
+          status.metricId,
+          status.sourceRevision,
+          privacyFences,
+          status.visibility,
+        ),
+    );
   const statusMap = new Map(
-    state.dailyMetricStatuses
+    applySharedMetricPrivacyFences(
+      state.dailyMetricStatuses,
+      privacyFences,
+      state.currentUserId,
+    )
       .filter(
         (status) =>
           status.groupId === groupId &&
@@ -955,6 +1096,7 @@ export async function loadCloudGroupActivity(
     authoritativeStatusSinceDate: authoritativeSnapshot
       ? (snapshot?.statuses_since_date ?? requestedSince)
       : undefined,
+    privacyFences,
   };
 }
 
@@ -1141,6 +1283,18 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
         .sort((a, b) => a.order - b.order),
     }),
   );
+}
+
+/** Lightweight authoritative check used when realtime DELETE delivery is lossy. */
+export async function hasActiveCloudGroupMembership(groupId: string) {
+  const { data, error } = await requireCloud()
+    .from("group_members")
+    .select("group_id")
+    .eq("group_id", groupId)
+    .eq("status", "active")
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data?.group_id);
 }
 
 export async function createCloudGroup(
@@ -1391,6 +1545,7 @@ export async function loadCloudWorkspace(
     version: activity.version,
     updatedAt: activity.updatedAt,
     sinceDate: activity.authoritativeStatusSinceDate,
+    privacyFences: activity.privacyFences,
   });
   const mediaIds = photoRows.map(
     (photo) => photo.media_asset_id,
@@ -1416,14 +1571,21 @@ export async function loadCloudWorkspace(
   // snapshot to remove stale friend rows from the active window.
   const cloudMetricSlugs = new Set(groupMetrics.map((metric) => metric.id));
   const groupMemberIds = new Set(group.members.map((member) => member.id));
+  const privacyFences = activity.privacyFences ?? [];
+  const deletedEntryKeys = new Set(activity.deletedEntryKeys ?? []);
   const entriesById = new Map(
-    state.entries
+    applySharedMetricPrivacyFences(
+      state.entries,
+      privacyFences,
+      state.currentUserId,
+    )
       .filter(
         (entry) =>
-          entry.localDate <
+          !deletedEntryKeys.has(metricEntryKey(entry.userId, entry.id)) &&
+          (entry.localDate <
             (activity.authoritativeEntrySinceDate ?? activitySinceDate) ||
-          !cloudMetricSlugs.has(entry.metricId) ||
-          !groupMemberIds.has(entry.userId),
+            !cloudMetricSlugs.has(entry.metricId) ||
+            !groupMemberIds.has(entry.userId)),
       )
       .map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
   );
@@ -1434,7 +1596,11 @@ export async function loadCloudWorkspace(
     a.recordedAt.localeCompare(b.recordedAt),
   );
   const statusMap = new Map(
-    state.dailyMetricStatuses
+    applySharedMetricPrivacyFences(
+      state.dailyMetricStatuses,
+      privacyFences,
+      state.currentUserId,
+    )
       .filter(
         (status) =>
           status.groupId !== groupId ||
@@ -1485,22 +1651,43 @@ export async function loadCloudWorkspace(
   const messages = [...otherGroupMessages, ...messagesById.values()].sort((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
-  const remotePhotos: PhotoUpdate[] = photoRows.map((photo) => {
-    const asset = mediaById.get(photo.media_asset_id);
-    const path = asset?.storage_path;
-    return {
-      id: photo.client_generated_id ?? photo.id,
-      userId: photo.owner_user_id,
-      uri: path ? (urls.get(path) ?? "") : "",
-      storagePath: path,
-      caption: photo.caption,
-      localDate: photo.local_date,
-      createdAt: photo.created_at,
-      capturedAt: asset?.captured_at ?? undefined,
-      visibility: photo.visibility,
-    };
-  });
-  const photosById = new Map(state.photos.map((photo) => [photo.id, photo]));
+  const remotePhotos: PhotoUpdate[] = photoRows
+    .map((photo) => {
+      const asset = mediaById.get(photo.media_asset_id);
+      const path = asset?.storage_path;
+      return {
+        id: photo.client_generated_id ?? photo.id,
+        userId: photo.owner_user_id,
+        uri: path ? (urls.get(path) ?? "") : "",
+        storagePath: path,
+        caption: photo.caption,
+        localDate: photo.local_date,
+        createdAt: photo.created_at,
+        capturedAt: asset?.captured_at ?? undefined,
+        visibility: photo.visibility,
+        sourceRevision: Number.isFinite(Number(photo.account_revision))
+          ? Number(photo.account_revision)
+          : undefined,
+      };
+    })
+    .filter(
+      (photo) =>
+        photo.userId === state.currentUserId ||
+        projectionSurvivesSharedMetricPrivacyFences(
+          photo.userId,
+          "progress_photo",
+          photo.sourceRevision,
+          privacyFences,
+        ),
+    );
+  const photosById = new Map(
+    state.photos
+      // PhotoUpdate has no group id. On an authoritative group load, retaining
+      // any foreign row could carry another group's signed URL across a switch
+      // or preserve a row that has since become private.
+      .filter((photo) => photo.userId === state.currentUserId)
+      .map((photo) => [photo.id, photo]),
+  );
   remotePhotos.forEach((photo) => photosById.set(photo.id, photo));
   const photos = [...photosById.values()];
   return {
@@ -1845,6 +2032,7 @@ export async function pushCloudWorkspace(
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
+      acknowledgedPrivacyFenceMetricIds: [],
     };
   const client = requireCloud();
   const current = state.group.members.find(
@@ -1857,6 +2045,7 @@ export async function pushCloudWorkspace(
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
+      acknowledgedPrivacyFenceMetricIds: [],
     };
   const publishRevision = await resolveAccountRevision(
     client,
@@ -1877,6 +2066,7 @@ export async function pushCloudWorkspace(
       activityVersion: undefined,
       workspacePushed: false,
       groupConfigurationPushed: false,
+      acknowledgedPrivacyFenceMetricIds: [],
     };
   const canManage = current.role === "owner" || current.role === "admin";
   const groupConfigurationPushed = canManage && pushGroupConfiguration;
@@ -1931,11 +2121,66 @@ export async function pushCloudWorkspace(
     .is("archived_at", null);
   if (metricError) throw metricError;
   const idBySlug = new Map((metricRows ?? []).map((row) => [row.slug, row.id]));
+  const pendingPrivacyFenceMetricIds = [
+    ...new Set(
+      state.settings.pendingMetricPrivacyFenceIdsByGroup?.[
+        state.group.id
+      ] ?? [],
+    ),
+  ].filter((metricId) => idBySlug.has(metricId));
+  if (pendingPrivacyFenceMetricIds.length) {
+    const fenceResult = await client.rpc(
+      "advance_metric_privacy_cache_fences",
+      {
+        p_group_id: state.group.id,
+        p_metric_ids: pendingPrivacyFenceMetricIds.map((metricId) =>
+          idBySlug.get(metricId),
+        ),
+        p_expected_revision: publishRevision,
+      },
+    );
+    if (fenceResult.error) throw fenceResult.error;
+  }
+  const ownedEntries = state.entries.filter(
+    (entry) =>
+      entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
+  );
+  const groupHealthStepDates = new Set(
+    ownedEntries
+      .filter(
+        (entry) =>
+          entry.metricId === "steps" &&
+          entry.visibility === "group" &&
+          hasHealthImportIdentity(entry),
+      )
+      .map((entry) => entry.localDate),
+  );
+  // A web-entered Steps total is only a fallback. Once an exact group-visible
+  // Health aggregate exists for the same day, keep the fallback privately in
+  // the owner's snapshot but remove/omit its raw shared row. Otherwise the DB
+  // trigger could replace the authoritative compact total with stale manual
+  // data that Health Connect intentionally superseded.
+  const supersededSharedStepFallbackIds = new Set(
+    ownedEntries
+      .filter(
+        (entry) =>
+          entry.metricId === "steps" &&
+          !hasHealthImportIdentity(entry) &&
+          groupHealthStepDates.has(entry.localDate),
+      )
+      .map((entry) => entry.id),
+  );
   const explicitDeletedEntryIds = [
     ...new Set(state.settings.pendingDeletedEntryIds ?? []),
   ];
+  const remoteEntryIdsToDelete = [
+    ...new Set([
+      ...explicitDeletedEntryIds,
+      ...supersededSharedStepFallbackIds,
+    ]),
+  ];
   const explicitlyDeletedLocalDates: string[] = [];
-  for (const batch of batches(explicitDeletedEntryIds)) {
+  for (const batch of batches(remoteEntryIdsToDelete)) {
     const deleted = await client.rpc("delete_group_metric_entries", {
       p_client_generated_ids: batch,
       p_expected_revision: publishRevision,
@@ -1957,10 +2202,6 @@ export async function pushCloudWorkspace(
       });
     }
   }
-  const ownedEntries = state.entries.filter(
-    (entry) =>
-      entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
-  );
   const recentCommitSinceDate = dateWithOffsetFrom(dateKey(), -29);
   const fastRecentDates = dateRangeEnding(dateKey(), 30);
   const fastRecentStatuses = buildCloudDailyStatusRows(
@@ -1987,6 +2228,7 @@ export async function pushCloudWorkspace(
       localDates: fastRecentDates,
     });
   const detailedOwnedEntries = ownedEntries.filter((entry) => {
+    if (supersededSharedStepFallbackIds.has(entry.id)) return false;
     const metric =
       state.metrics.find((candidate) => candidate.id === entry.metricId) ??
       state.group.metricConfiguration?.find(
@@ -2121,7 +2363,7 @@ export async function pushCloudWorkspace(
     entries: source.entries.filter(
       (entry) =>
         entry.userId !== source.currentUserId ||
-        entry.visibility !== "private",
+        entry.visibility === "group",
     ),
     dailyMetricStatuses: source.dailyMetricStatuses.filter(
       (status) =>
@@ -2130,6 +2372,9 @@ export async function pushCloudWorkspace(
     ),
   });
   changedSharedEntries.forEach((entry) => {
+    // Goal-status-only rows may drive the compact status card, but their raw
+    // values must never decide an exact lead-change or winner notification.
+    if (entry.visibility !== "group") return;
     const entries = leadEntriesByMetric.get(entry.metricId);
     if (entries) entries.push(entry);
     else leadEntriesByMetric.set(entry.metricId, [entry]);
@@ -2352,7 +2597,7 @@ export async function pushCloudWorkspace(
   statusStart.setHours(12, 0, 0, 0);
   statusStart.setDate(statusStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS);
   const recentStatusSinceDate = dateKey(statusStart);
-  const localSharedHistoryStart = [
+  const localSharedHistoryDates = [
     ...ownedEntries
       .filter((entry) => entry.visibility !== "private")
       .map((entry) => entry.localDate),
@@ -2364,16 +2609,21 @@ export async function pushCloudWorkspace(
           status.visibility !== "private",
       )
       .map((status) => status.localDate),
-  ].sort()[0];
+  ];
+  const localSharedHistoryStart = [...localSharedHistoryDates].sort()[0];
   let remoteSharedHistoryStart: string | undefined;
   let latestRemoteStatusUpdatedAt: string | undefined;
+  let remoteStatusCount = 0;
   if (localSharedHistoryStart) {
-    const [coverage, latest] = await Promise.all([
+    const [coverage, latest, count] = await Promise.all([
       client
         .from("daily_metric_status")
         .select("local_date")
         .eq("group_id", state.group.id)
         .eq("user_id", state.currentUserId)
+        .neq("visibility", "private")
+        .gte("local_date", localSharedHistoryStart)
+        .lte("local_date", today)
         .order("local_date", { ascending: true })
         .limit(1)
         .maybeSingle(),
@@ -2382,27 +2632,63 @@ export async function pushCloudWorkspace(
         .select("updated_at")
         .eq("group_id", state.group.id)
         .eq("user_id", state.currentUserId)
+        .neq("visibility", "private")
+        .gte("local_date", localSharedHistoryStart)
+        .lte("local_date", today)
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
+      client
+        .from("daily_metric_status")
+        .select("metric_id", { count: "exact", head: true })
+        .eq("group_id", state.group.id)
+        .eq("user_id", state.currentUserId)
+        .neq("visibility", "private")
+        .gte("local_date", localSharedHistoryStart)
+        .lte("local_date", today),
     ]);
     if (coverage.error) throw coverage.error;
     if (latest.error) throw latest.error;
+    if (count.error) throw count.error;
     remoteSharedHistoryStart = coverage.data?.local_date;
     latestRemoteStatusUpdatedAt = latest.data?.updated_at;
+    remoteStatusCount = count.count ?? 0;
   }
+  // The old coverage check compared only the earliest day. A Health Connect
+  // backfill could therefore publish an old first day and a recent window,
+  // yet leave missing days between them forever. Compare the compact row
+  // count too; recent no-data rows are included so normal 30-day publishing
+  // does not look like a gap.
+  const expectedCoverageDates = [
+    ...new Set(
+      [...localSharedHistoryDates, ...fastRecentDates].filter(
+        (localDate) =>
+          localDate >= (localSharedHistoryStart ?? localDate) && localDate <= today,
+      ),
+    ),
+  ];
+  const expectedStatusCount = buildCloudDailyStatusRows(
+    state,
+    idBySlug,
+    ownedEntries,
+    expectedCoverageDates,
+    publishRevision,
+  ).filter((status) => status.visibility !== "private").length;
   const needsHistoricalSummaryRepair = Boolean(
-    localSharedHistoryStart &&
+    (localSharedHistoryStart || pendingPrivacyFenceMetricIds.length) &&
       (groupMetricSetChanged ||
+        pendingPrivacyFenceMetricIds.length > 0 ||
         !remoteSharedHistoryStart ||
-        localSharedHistoryStart < remoteSharedHistoryStart),
+        localSharedHistoryStart < remoteSharedHistoryStart ||
+        remoteStatusCount < expectedStatusCount),
   );
   const statusSinceDate = needsHistoricalSummaryRepair
     ? SHARED_SUMMARY_HISTORY_START
     : recentStatusSinceDate;
   const rebuildStatusHistory =
     needsHistoricalSummaryRepair ||
-    explicitDeletedEntryIds.length > 0;
+    remoteEntryIdsToDelete.length > 0 ||
+    pendingPrivacyFenceMetricIds.length > 0;
   const changedActivityDates = [
     ...ownedEntries
       .filter(
@@ -2850,5 +3136,6 @@ export async function pushCloudWorkspace(
     groupConfigurationPushed,
     groupConfigurationRevision:
       projectionResult?.groupConfigurationRevision,
+    acknowledgedPrivacyFenceMetricIds: pendingPrivacyFenceMetricIds,
   };
 }

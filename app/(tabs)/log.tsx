@@ -14,7 +14,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useLocale } from "@/src/i18n";
 
 import { Button, Card, Chip, PageHeader, Screen } from "@/src/components/ui";
 import { MetricSelector } from "@/src/components/MetricSelector";
@@ -80,20 +80,22 @@ function LogScreen() {
     vitaminD?: string;
     vitaminB12?: string;
   }>();
-  const { state, logMetric, addPhoto } = useApp();
+  const { state, logMetric, addPhoto, updateMetric } = useApp();
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
   const metrics = useMemo(() => {
     return [...state.metrics]
       .filter(
         (metric) =>
           metric.dataType !== "calculated" &&
-          metric.id !== "steps" &&
+          (metric.id !== "steps" || Platform.OS === "web") &&
           !metric.fastingSettings &&
           metric.id !== "blood_pressure_diastolic" &&
           !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
-          metric.manualEntry !== false,
+          (metric.manualEntry !== false ||
+            (metric.id === "steps" && Platform.OS === "web")),
       )
       .sort((a, b) => a.order - b.order);
   }, [state.metrics]);
@@ -130,6 +132,7 @@ function LogScreen() {
     !selected?.submetrics?.length ||
     selected.submetricDisplay?.mainValueEnabled !== false;
   const [value, setValue] = useState("");
+  const [waterTouched, setWaterTouched] = useState(false);
   const [label, setLabel] = useState("");
   const [note, setNote] = useState("");
   const [visibility, setVisibility] = useState<Visibility>(
@@ -179,7 +182,7 @@ function LogScreen() {
           : "snack",
   );
   const hasDraft = Boolean(
-    value.trim() ||
+    (value.trim() && (selected?.id !== "water" || waterTouched)) ||
       label.trim() ||
       note.trim() ||
       entryImage ||
@@ -285,6 +288,15 @@ function LogScreen() {
     setSubmetricValues({});
     setExtraSubmetricsOpen(false);
   }, [selected]);
+  useEffect(() => {
+    if (selected?.id !== "water") return;
+    const parameterValue =
+      params.metric === "water" && params.value !== undefined
+        ? params.value
+        : undefined;
+    setValue(parameterValue || "0.25");
+    setWaterTouched(Boolean(parameterValue));
+  }, [params.metric, params.value, selected?.id]);
   const numericToday = selected
     ? safeMetricValue(state, selected, state.currentUserId, logDate)
     : 0;
@@ -318,7 +330,8 @@ function LogScreen() {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
   function clearEntry() {
-    setValue("");
+    setValue(selected?.id === "water" ? "0.25" : "");
+    setWaterTouched(false);
     setLabel("");
     setNote("");
     setEntryImage(null);
@@ -345,6 +358,15 @@ function LogScreen() {
     setBpDiastolic("");
     setBpPulse("");
     setSubmetricValues({});
+  }
+  const waterLiters =
+    selected?.id === "water" ? Number(value.replace(",", ".")) : Number.NaN;
+  const waterCups = Number.isFinite(waterLiters) ? waterLiters * 4 : 1;
+  function adjustWaterCups(change: -1 | 1) {
+    const current = Number.isFinite(waterCups) ? Math.round(waterCups) : 1;
+    const next = Math.max(1, Math.min(40, current + change));
+    setValue(String(next / 4));
+    setWaterTouched(true);
   }
   function toggleBoolean() {
     if (!selected) return;
@@ -520,6 +542,9 @@ function LogScreen() {
       visibility,
       replaceMode ? "replace" : "add",
       details,
+      selected.id === "steps"
+        ? { source: "web-log-ui", deviceOwnedMetric: "steps" }
+        : undefined,
     );
     if (
       selected.id !== "food" &&
@@ -823,6 +848,13 @@ function LogScreen() {
                     accessibilityState={{ checked: selectedOption }}
                     onPress={() => {
                       setVisibility(option.value);
+                      // This control is the tracker-wide default, not a
+                      // one-off entry override. AppProvider applies it to
+                      // existing rows too; later manual and health imports
+                      // inherit the same backend-enforced disclosure choice.
+                      updateMetric(selected.id, {
+                        defaultVisibility: option.value,
+                      });
                       setPrivacyMenuOpen(false);
                       if (option.value === "status")
                         tutorial.reportEvent({
@@ -1080,29 +1112,75 @@ function LogScreen() {
           ) : mainValueEnabled ? (
             <>
               {selected.id === "water" ? (
-                <View style={styles.waterAmounts}>
-                  {[0.25, 0.5, 0.75, 1].map((amount) => (
-                    <Chip
-                      key={amount}
-                      label={String(amount)}
-                      selected={Number(value) === amount}
-                      onPress={() => setValue(String(amount))}
-                    />
-                  ))}
+                <>
+                  <View style={styles.waterStepper}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Remove 250 millilitres"
+                      disabled={waterCups <= 1}
+                      onPress={() => adjustWaterCups(-1)}
+                      style={[
+                        styles.waterStepButton,
+                        { backgroundColor: colors.primarySoft },
+                        waterCups <= 1 && styles.waterStepDisabled,
+                      ]}
+                    >
+                      <Ionicons name="remove" size={20} color={accent} />
+                    </Pressable>
+                    <View
+                      style={[
+                        styles.waterInputWrap,
+                        { borderColor: colors.border },
+                      ]}
+                    >
+                      <TextInput
+                        accessibilityLabel="Water amount in litres"
+                        keyboardType="decimal-pad"
+                        value={value}
+                        onChangeText={(next) => {
+                          setValue(next);
+                          setWaterTouched(true);
+                        }}
+                        selectTextOnFocus
+                        style={[styles.waterInput, { color: colors.ink }]}
+                      />
+                      <Text style={[styles.unit, { color: colors.muted }]}>L</Text>
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Add 250 millilitres"
+                      onPress={() => adjustWaterCups(1)}
+                      style={[
+                        styles.waterStepButton,
+                        { backgroundColor: colors.primarySoft },
+                      ]}
+                    >
+                      <Ionicons name="add" size={20} color={accent} />
+                    </Pressable>
+                  </View>
+                  <Text
+                    translate={false}
+                    style={[styles.waterEquivalent, { color: colors.muted }]}
+                  >
+                    {Number.isFinite(waterLiters)
+                      ? `${Math.round(waterLiters * 1000).toLocaleString(locale)} ml · ${waterCups.toLocaleString(locale, { maximumFractionDigits: 2 })} ${Math.abs(waterCups - 1) < 0.001 ? "cup" : "cups"}`
+                      : "250 ml · 1 cup"}
+                  </Text>
+                </>
+              ) : (
+                <View style={styles.numberWrap}>
+                  <TextInput
+                    accessibilityLabel={`${selected.name} value`}
+                    keyboardType="decimal-pad"
+                    value={value}
+                    onChangeText={setValue}
+                    placeholder={replaceMode ? "Day's total" : "Amount to add"}
+                    placeholderTextColor={palette.faint}
+                    style={[styles.numberInput, { color: colors.ink }]}
+                  />
+                  <Text style={styles.unit}>{selected.unit}</Text>
                 </View>
-              ) : null}
-              <View style={styles.numberWrap}>
-                <TextInput
-                  accessibilityLabel={`${selected.name} value`}
-                  keyboardType="decimal-pad"
-                  value={value}
-                  onChangeText={setValue}
-                  placeholder={replaceMode ? "Day's total" : "Amount to add"}
-                  placeholderTextColor={palette.faint}
-                  style={[styles.numberInput, { color: colors.ink }]}
-                />
-                <Text style={styles.unit}>{selected.unit}</Text>
-              </View>
+              )}
             </>
           ) : null}
           {selected.submetrics?.length &&
@@ -1712,6 +1790,44 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 5,
     marginBottom: 7,
+  },
+  waterStepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
+  waterStepButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  waterStepDisabled: { opacity: 0.4 },
+  waterInputWrap: {
+    flex: 1,
+    height: 42,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderRadius: 13,
+    paddingHorizontal: 11,
+  },
+  waterInput: {
+    flex: 1,
+    minWidth: 0,
+    textAlign: "center",
+    ...typography.cardTitle,
+    fontWeight: "900",
+    paddingVertical: 8,
+  },
+  waterEquivalent: {
+    ...typography.supporting,
+    fontWeight: "800",
+    textAlign: "center",
+    marginBottom: 8,
   },
   nutritionDisclosureCopy: { flex: 1 },
   nutritionDisclosureTitle: {

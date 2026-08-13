@@ -23,6 +23,7 @@ import {
   approveCloudGroupMember,
   type CloudActivityMetadata,
   createCloudGroup,
+  hasActiveCloudGroupMembership,
   isCloudGroupId,
   joinCloudGroup,
   leaveCloudGroup,
@@ -48,6 +49,7 @@ import {
   profileProjectionLagsSnapshot,
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { applySharedMetricPrivacyFences } from "@/src/domain/sharedMetricPrivacy";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
 import {
@@ -65,6 +67,7 @@ import {
 } from "@/src/state/AppProvider";
 import {
   readGroupActivityCache,
+  removeGroupActivityCache,
   writeGroupActivityCache,
 } from "@/src/storage/groupActivityCache";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
@@ -157,7 +160,7 @@ type CloudSyncContextValue = {
   switchGroup: (groupId: string) => Promise<void>;
   leaveGroup: (groupId: string) => Promise<void>;
   refreshGroup: () => Promise<void>;
-  refreshActivity: () => Promise<void>;
+  refreshActivity: (sinceDate?: string) => Promise<void>;
   refreshMessages: () => Promise<void>;
   syncMessagesNow: (messageId?: string) => Promise<void>;
   approveMember: (userId: string) => Promise<void>;
@@ -755,6 +758,8 @@ function snapshotPayload(state: AppState): AppState {
       // This is a device-local outbox marker. Uploading it could make another
       // device push stale group settings on this device's behalf.
       pendingGroupConfigurationIds: undefined,
+      // Privacy fence publication is also a device-local relational outbox.
+      pendingMetricPrivacyFenceIdsByGroup: undefined,
       // Disclosure state follows this device and must not create an account
       // sync just because another screen size uses a different layout.
       progressGridDateNavigatorCollapsed: undefined,
@@ -809,6 +814,40 @@ function canonicalHashValue(value: unknown): unknown {
     );
   }
   return value;
+}
+
+function messageBelongsToCloudGroup(
+  message: ChatMessage,
+  groupId: string,
+) {
+  return (
+    message.groupId === groupId ||
+    message.conversationId === `group:${groupId}`
+  );
+}
+
+/** Drop every value/media handle authorized only by a departed group. */
+function purgeDepartedGroupData(state: AppState, departed: Group): AppState {
+  return {
+    ...state,
+    // Entries do not carry a group id, and a stale shell may already omit an
+    // old member or metric. Keep only owned rows; the next authorized group's
+    // scoped cache restores any peer rows that still belong on this device.
+    entries: state.entries.filter(
+      (entry) => entry.userId === state.currentUserId,
+    ),
+    dailyMetricStatuses: state.dailyMetricStatuses.filter(
+      (status) => status.groupId !== departed.id,
+    ),
+    // PhotoUpdate has no group id; retaining any peer photo across membership
+    // loss can preserve a signed URL after its RLS authorization disappears.
+    photos: state.photos.filter(
+      (photo) => photo.userId === state.currentUserId,
+    ),
+    messages: state.messages.filter(
+      (message) => !messageBelongsToCloudGroup(message, departed.id),
+    ),
+  };
 }
 
 function valueHash(value: unknown) {
@@ -1008,6 +1047,10 @@ function workspaceHash(state: AppState) {
     photos: payload.photos.filter(
       (photo) => photo.userId === payload.currentUserId,
     ),
+    pendingPrivacyFences:
+      state.settings.pendingMetricPrivacyFenceIdsByGroup?.[
+        payload.group.id
+      ] ?? [],
   });
   workspaceHashCache.set(state, hash);
   return hash;
@@ -2002,14 +2045,11 @@ function mergeWorkspaceWithoutRegression(
       }
     : remote.group;
   const remoteGroup = remoteGroupBase;
-  const groupMemberIds = new Set(
-    remoteGroup.members.map((member) => member.id),
-  );
+  // The remote workspace already merged the authorized bounded snapshot with
+  // its fence-filtered older history. Only owned local outbox rows may overlay
+  // it here; re-seeding live peer rows would resurrect revoked data.
   const cachedEntries = live.entries.filter(
-    (entry) =>
-      entry.userId === live.currentUserId ||
-      (remoteGroupMetricIds.has(entry.metricId) &&
-        groupMemberIds.has(entry.userId)),
+    (entry) => entry.userId === live.currentUserId,
   );
   const pendingDeletedEntryIds = new Set(
     [
@@ -2043,7 +2083,9 @@ function mergeWorkspaceWithoutRegression(
     ],
   );
   const statuses = mergeActivityStatuses(
-    live.dailyMetricStatuses,
+    live.dailyMetricStatuses.filter(
+      (status) => status.userId === live.currentUserId,
+    ),
     remote.dailyMetricStatuses,
   );
   const merged: AppState = {
@@ -2206,6 +2248,13 @@ function isTransientCloudError(error: unknown) {
   const message = typeof error === "string" ? error : errorText(error);
   return /network|fetch|offline|timeout|timed out|PGRST003|connection pool|too many connections/i.test(
     message,
+  );
+}
+
+function isDefinitiveGroupMembershipLoss(error: unknown) {
+  if (isTransientCloudError(error)) return false;
+  return /42501|not authorized|permission denied|group is unavailable|no longer have access|membership is no longer (?:active|available)/i.test(
+    errorText(error),
   );
 }
 
@@ -2656,6 +2705,70 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     },
     [],
   );
+
+  const evictUnavailableGroup = useCallback(
+    async (groupId: string) => {
+      const live = stateRef.current;
+      const departed = live.groups.find((group) => group.id === groupId);
+      if (!departed || !isCloudGroupId(groupId)) {
+        await removeGroupActivityCache(groupId).catch(() => undefined);
+        return;
+      }
+      let remaining = live.groups.filter((group) => group.id !== groupId);
+      if (!remaining.length) {
+        const priorMember =
+          departed.members.find(
+            (member) => member.id === live.currentUserId,
+          ) ??
+          ({
+            id: live.currentUserId,
+            name: accountMemberProfile(live)?.name ?? "HabHub member",
+            initials: accountMemberProfile(live)?.initials ?? "H",
+            color: DEFAULT_GROUP_THEME,
+            role: "owner",
+          } satisfies Member);
+        remaining = [
+          createPersonalSetupGroup(
+            priorMember,
+            personalSetupMetricConfiguration(
+              live.metrics,
+              live.trackedGoalPeriods,
+            ),
+          ),
+        ];
+      }
+      const active =
+        live.group.id === groupId ? remaining[0] : live.group;
+      const evicted = purgeDepartedGroupData(
+        stateWithActiveGroup(live, active, remaining),
+        departed,
+      );
+      stateRef.current = evicted;
+      workspaceUploadRequiredGroupsRef.current.delete(groupId);
+      activityVersionByGroupRef.current.delete(groupId);
+      activityCoverageSinceByGroupRef.current.delete(groupId);
+      workspaceAckHashesRef.current.delete(groupId);
+      groupConfigurationAckHashesRef.current.delete(groupId);
+      replaceState(evicted);
+      await removeGroupActivityCache(groupId).catch(() => undefined);
+      setPendingChanges(true);
+    },
+    [replaceState],
+  );
+
+  const verifyActiveGroupMembership = useCallback(async () => {
+    const groupId = stateRef.current.group.id;
+    if (!isCloudGroupId(groupId)) return;
+    try {
+      if (!(await hasActiveCloudGroupMembership(groupId)))
+        await evictUnavailableGroup(groupId);
+    } catch (error) {
+      // A timeout/offline response is not evidence of revocation. The normal
+      // bounded retry and the next resume/reconnect will verify again.
+      if (isDefinitiveGroupMembershipLoss(error))
+        await evictUnavailableGroup(groupId);
+    }
+  }, [evictUnavailableGroup]);
 
   const clearGroupReadRetry = useCallback((groupId?: string) => {
     if (
@@ -3463,6 +3576,27 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                       ...acknowledged,
                     ]),
                   ],
+                },
+              };
+            }
+            if (workspaceResult.acknowledgedPrivacyFenceMetricIds.length) {
+              const acknowledged = new Set(
+                workspaceResult.acknowledgedPrivacyFenceMetricIds,
+              );
+              const pendingByGroup = {
+                ...(acknowledgedState.settings
+                  .pendingMetricPrivacyFenceIdsByGroup ?? {}),
+              };
+              const remaining = (pendingByGroup[pushedGroupId] ?? []).filter(
+                (metricId) => !acknowledged.has(metricId),
+              );
+              if (remaining.length) pendingByGroup[pushedGroupId] = remaining;
+              else delete pendingByGroup[pushedGroupId];
+              acknowledgedState = {
+                ...acknowledgedState,
+                settings: {
+                  ...acknowledgedState.settings,
+                  pendingMetricPrivacyFenceIdsByGroup: pendingByGroup,
                 },
               };
             }
@@ -4619,9 +4753,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           table: "group_members",
           filter: `user_id=eq.${auth.user.id}`,
         },
-        () => {
+        (event) => {
           AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
           setPendingGroup(null);
+          const removed = event.old as {
+            group_id?: string;
+            user_id?: string;
+          };
+          if (
+            removed.user_id === auth.user?.id &&
+            removed.group_id &&
+            stateRef.current.groups.some(
+              (group) => group.id === removed.group_id,
+            )
+          )
+            void evictUnavailableGroup(removed.group_id);
         },
       )
       .subscribe();
@@ -4638,6 +4784,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recordActivityMetadata,
     replaceState,
     scheduleGroupReadRetry,
+    evictUnavailableGroup,
   ]);
 
   const refreshGroup = useCallback(async () => {
@@ -4653,6 +4800,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         (metadata) => recordActivityMetadata(groupId, metadata),
       );
     } catch (error) {
+      if (isDefinitiveGroupMembershipLoss(error)) {
+        await evictUnavailableGroup(groupId);
+        return;
+      }
       scheduleGroupReadRetry(groupId);
       throw error;
     }
@@ -4676,6 +4827,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     recordActivityMetadata,
     replaceState,
     scheduleGroupReadRetry,
+    evictUnavailableGroup,
   ]);
 
   const refreshMessages = useCallback((): Promise<void> => {
@@ -4800,23 +4952,33 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           const groupMemberIds = new Set(
             live.group.members.map((member) => member.id),
           );
+          const fenceFilteredEntries = applySharedMetricPrivacyFences(
+            live.entries,
+            activity.privacyFences ?? [],
+            live.currentUserId,
+          );
+          const fenceFilteredStatuses = applySharedMetricPrivacyFences(
+            live.dailyMetricStatuses,
+            activity.privacyFences ?? [],
+            live.currentUserId,
+          );
           const baseEntries = activity.authoritativeEntrySinceDate
-            ? live.entries.filter(
+            ? fenceFilteredEntries.filter(
                 (entry) =>
                   entry.userId === live.currentUserId ||
                   !groupMetricIds.has(entry.metricId) ||
                   !groupMemberIds.has(entry.userId) ||
                   entry.localDate < activity.authoritativeEntrySinceDate!,
               )
-            : live.entries;
+            : fenceFilteredEntries;
           const baseStatuses = activity.authoritativeStatusSinceDate
-            ? live.dailyMetricStatuses.filter(
+            ? fenceFilteredStatuses.filter(
                 (status) =>
                   status.groupId !== groupId ||
                   status.userId === live.currentUserId ||
                   status.localDate < activity.authoritativeStatusSinceDate!,
               )
-            : live.dailyMetricStatuses;
+            : fenceFilteredStatuses;
           // Absence in a range response is not a deletion signal. Merge the
           // fetched delta monotonically. Only the versioned snapshot RPC may
           // authoritatively prune absent friend rows in its bounded date range.
@@ -4897,6 +5059,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       return;
     }
     const timer = setTimeout(() => {
+      verifyActiveGroupMembership().catch(() => undefined);
       performSync(false, false).catch(() => undefined);
       refreshMessages().catch(() => undefined);
       refreshGroupActivity(
@@ -4912,6 +5075,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    evictUnavailableGroup,
     flushChatOutbox,
     networkAvailable,
     performSync,
@@ -4921,6 +5085,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     restoreWorkspaceConflictRetry,
     scheduleActivityReadRetry,
     scheduleGroupReadRetry,
+    verifyActiveGroupMembership,
   ]);
 
   useEffect(() => {
@@ -5059,6 +5224,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           });
         })
         .catch((error) => {
+          if (isDefinitiveGroupMembershipLoss(error)) {
+            void evictUnavailableGroup(groupId);
+            return;
+          }
           setErrorMessage(`Group refresh will retry: ${errorText(error)}`);
           scheduleGroupReadRetry(groupId);
         });
@@ -5070,6 +5239,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       recordActivityMetadata,
       replaceState,
       scheduleGroupReadRetry,
+      evictUnavailableGroup,
     ],
   );
   groupReadRetryRunnerRef.current = hydrateGroupInBackground;
@@ -5296,7 +5466,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         },
         (event) => {
           if (event.eventType === "DELETE") {
-            queueRefresh();
+            const removed = event.old as { group_id?: string };
+            if (removed.group_id === stateRef.current.group.id)
+              queueRefresh();
             return;
           }
           const live = stateRef.current;
@@ -5432,6 +5604,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // separate turns. The activity subscription checks its lightweight
       // server version on reconnect and only reloads history when it changed.
       later(150, () => {
+        verifyActiveGroupMembership().catch(() => undefined);
         void recoverChatOutbox();
         refreshMessages().catch(() => undefined);
       });
@@ -5479,6 +5652,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     scheduleGroupReadRetry,
     status,
     touchPresence,
+    verifyActiveGroupMembership,
   ]);
 
   useEffect(() => {
@@ -5773,6 +5947,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             route: "/group-settings",
           }).catch(() => undefined);
           await leaveCloudGroup(groupId);
+          const purged = purgeDepartedGroupData(
+            stateRef.current,
+            leavingGroup,
+          );
+          stateRef.current = purged;
+          replaceState(purged);
+          await removeGroupActivityCache(groupId).catch(() => undefined);
+          activityVersionByGroupRef.current.delete(groupId);
+          activityCoverageSinceByGroupRef.current.delete(groupId);
+          workspaceAckHashesRef.current.delete(groupId);
+          groupConfigurationAckHashesRef.current.delete(groupId);
           setPendingChanges(true);
           if (isCloudGroupId(nextGroup.id))
             hydrateGroupInBackground(nextGroup.id);
@@ -5783,17 +5968,31 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
       },
       refreshGroup,
-      refreshActivity: () => {
+      refreshActivity: (sinceDate) => {
         const groupId = stateRef.current.group.id;
+        const requestedSince = /^\d{4}-\d{2}-\d{2}$/.test(sinceDate ?? "")
+          ? sinceDate
+          : undefined;
+        const loadedSince = activityCoverageSinceByGroupRef.current.get(groupId);
+        // Range hydration is idempotent: once a period is present locally,
+        // revisiting the Leaderboard should not download and re-render it.
+        // Realtime keeps that cache current; parameterless manual refreshes
+        // remain a deliberate force-refresh escape hatch.
+        if (requestedSince && loadedSince && loadedSince <= requestedSince)
+          return Promise.resolve();
         // A deliberate user refresh is also the mixed-version escape hatch:
         // older installed clients do not publish activity commit versions.
-        activityVersionByGroupRef.current.delete(groupId);
-        activityCoverageSinceByGroupRef.current.delete(groupId);
+        if (!requestedSince) {
+          activityVersionByGroupRef.current.delete(groupId);
+          activityCoverageSinceByGroupRef.current.delete(groupId);
+        }
         return refreshGroupActivity(
-          dateWithOffsetFrom(
-            dateKey(),
-            -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1),
-          ),
+          requestedSince
+            ? requestedSince
+            : dateWithOffsetFrom(
+                dateKey(),
+                -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1),
+              ),
         );
       },
       refreshMessages,
@@ -5904,7 +6103,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       switchGroup: (groupId) => latestValueRef.current.switchGroup(groupId),
       leaveGroup: (groupId) => latestValueRef.current.leaveGroup(groupId),
       refreshGroup: () => latestValueRef.current.refreshGroup(),
-      refreshActivity: () => latestValueRef.current.refreshActivity(),
+      refreshActivity: (sinceDate) =>
+        latestValueRef.current.refreshActivity(sinceDate),
       refreshMessages: () => latestValueRef.current.refreshMessages(),
       syncMessagesNow: (messageId) =>
         latestValueRef.current.syncMessagesNow(messageId),

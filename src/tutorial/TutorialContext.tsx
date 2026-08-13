@@ -95,6 +95,13 @@ type TutorialContextValue = {
     reveal?: () => void,
   ) => void;
   requestTargetReveal: (id: string) => void;
+  activatableTargets: Readonly<Record<string, boolean>>;
+  setTargetActivator: (
+    id: string,
+    instanceId: number,
+    activate?: () => void,
+  ) => void;
+  requestTargetActivation: (id: string) => boolean;
 };
 
 const TutorialContext = createContext<TutorialContextValue | null>(null);
@@ -137,6 +144,12 @@ export function TutorialProvider({
   const targetRevealers = useRef(
     new Map<string, Map<number, () => void>>(),
   );
+  const targetActivators = useRef(
+    new Map<string, Map<number, () => void>>(),
+  );
+  const [activatableTargets, setActivatableTargets] = useState<
+    Record<string, boolean>
+  >({});
   const [targets, setTargets] = useState<
     Record<string, TutorialRect | undefined>
   >({});
@@ -596,6 +609,39 @@ export function TutorialProvider({
     targetRevealers.current.get(id)?.forEach((reveal) => reveal());
   }, []);
 
+  const setTargetActivator = useCallback(
+    (id: string, instanceId: number, activate?: () => void) => {
+      let instances = targetActivators.current.get(id);
+      if (!instances && activate) {
+        instances = new Map();
+        targetActivators.current.set(id, instances);
+      }
+      if (activate) instances?.set(instanceId, activate);
+      else instances?.delete(instanceId);
+      if (!instances?.size) targetActivators.current.delete(id);
+      const available = Boolean(targetActivators.current.get(id)?.size);
+      setActivatableTargets((current) => {
+        if (Boolean(current[id]) === available) return current;
+        const next = { ...current };
+        if (available) next[id] = true;
+        else delete next[id];
+        return next;
+      });
+    },
+    [],
+  );
+
+  const requestTargetActivation = useCallback((id: string) => {
+    const instances = targetActivators.current.get(id);
+    if (!instances?.size) return false;
+    const activate = [...instances.entries()].sort(
+      ([left], [right]) => right - left,
+    )[0]?.[1];
+    if (!activate) return false;
+    activate();
+    return true;
+  }, []);
+
   const activeGuide = activeSession
     ? guideMap.get(activeSession.guideId)
     : undefined;
@@ -631,11 +677,15 @@ export function TutorialProvider({
       requestTargetMeasure,
       setTargetRevealer,
       requestTargetReveal,
+      activatableTargets,
+      setTargetActivator,
+      requestTargetActivation,
     }),
     [
       activeGuide,
       activeStep,
       activeSession,
+      activatableTargets,
       finishGuide,
       guides,
       hydrated,
@@ -648,7 +698,9 @@ export function TutorialProvider({
       reportPracticeAction,
       reportEvent,
       requestTargetMeasure,
+      requestTargetActivation,
       requestTargetReveal,
+      setTargetActivator,
       setTargetRevealer,
       setTargetMeasurer,
       skipGuide,

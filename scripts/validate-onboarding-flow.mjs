@@ -74,6 +74,40 @@ assert.match(connectionPage, /healthHistoryDays === days/);
 assert.match(connectionPage, /startHealthGoalsFromHistory/);
 assert.match(connectionPage, /Open HabHub on/);
 assert.match(connectionPage, /Start in dark mode/);
+assert.match(
+  source,
+  /const OPTIONAL_ONBOARDING_TRACKER_IDS = \["screen_time"\]/,
+  "Screen Time must be available in Mind without becoming a selected default",
+);
+assert.match(
+  source,
+  /const \[pushReady, setPushReady\] = useState\(false\)/,
+  "a saved notification preference must not render as a connected device",
+);
+assert.match(source, /notificationSetupComplete\(auth\.user\?\.id\)/);
+assert.match(
+  source,
+  /setHealthReady\(state\.settings\.healthSync\.enabled\)[\s\S]{0,80}\[state\.settings\.healthSync\.enabled\]/,
+  "onboarding Health readiness must follow the provider's native permission reconciliation",
+);
+const pushSource = fs.readFileSync("src/notifications/push.ts", "utf8");
+assert.match(pushSource, /signatureMatchesCurrentDevice/);
+assert.match(pushSource, /signature\.userId === userId/);
+assert.match(pushSource, /signature\.projectId === projectId/);
+assert.match(pushSource, /signature\.token === token/);
+assert.match(pushSource, /signature\.platform === Platform\.OS/);
+assert.match(pushSource, /PUSH_REGISTRATION_TTL_MS/);
+assert.match(pushSource, /from\('device_push_tokens'\)/);
+assert.match(pushSource, /\.eq\('user_id', userId\)/);
+assert.match(pushSource, /\.eq\('token', token\)/);
+assert.match(pushSource, /\.eq\('platform', Platform\.OS\)/);
+assert.match(pushSource, /return !error && Boolean\(data\)/);
+assert.doesNotMatch(source, /notificationPermissionGranted\(/);
+assert.match(
+  source,
+  /await enablePushNotifications\([\s\S]*?if \(!\(await notificationSetupComplete\(auth\.user\.id\)\)\)/,
+  "onboarding can mark notifications connected only after token registration",
+);
 assert.doesNotMatch(finalPage, /Open HabHub on/);
 assert.doesNotMatch(finalPage, /Start in dark mode/);
 assert.match(finalPage, /Start the basic guide/);
@@ -138,7 +172,7 @@ assert.ok(
   "the tracked-goal flag must sit left of the standard selection checkmark",
 );
 assert.match(summaryCard, /accessibilityRole="button"/);
-assert.match(summaryCard, /accessibilityHint=\{item\.description\}/);
+assert.match(summaryCard, /accessibilityHint=\{t\(item\.description\)\}/);
 assert.match(summaryCard, /accessibilityState=\{\{ checked: tracked \}\}/);
 
 const firstFlushIndex = source.indexOf("await flushLocalPersistence();");

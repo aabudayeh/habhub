@@ -254,6 +254,37 @@ assert(
   "The Meditation flag practice target must be visible in the tutorial Today view.",
 );
 
+const todaySource = read("app/(tabs)/index.tsx");
+assert(
+  /<TutorialTarget id="today-edit">\s*<Pressable[\s\S]{0,220}onPress=\{\(\) => \{[\s\S]{0,100}beginEditing\(\)/.test(
+    todaySource,
+  ),
+  "The Today edit spotlight must expose the real edit-mode Pressable rather than a non-interactive whole row.",
+);
+assert(
+  /const trackedToggle = canBeTrackedGoal\(item\)[\s\S]{0,220}onPress=\{onTrackedToggle\}[\s\S]*?<TutorialTarget id="today-goal-flag">\s*\{trackedToggle\}/.test(
+    todaySource,
+  ),
+  "The Meditation flag spotlight must expose the real tracked-goal Pressable.",
+);
+assert(
+  /\["today-goal-flag", "today-reorder", "today-edit-menu"\][\s\S]{0,220}setEditing\(true\)/.test(
+    todaySource,
+  ),
+  "A resumed tutorial edit step must reveal its edit-only target without replaying the prior action.",
+);
+assert(
+  todaySource.includes("<TutorialScrollProvider") &&
+    todaySource.includes("reveal={revealTutorialTarget}") &&
+    todaySource.includes(
+      "setActiveTargetMeasurer={setTutorialTargetMeasurer}",
+    ) &&
+    /onScroll=\{\(event\) => \{[\s\S]{0,180}scheduleTutorialTargetMeasure\(\)/.test(
+      todaySource,
+    ),
+  "Today's custom ScrollView must reveal and remeasure off-screen tutorial targets.",
+);
+
 console.log(
   `Tutorial core-page wiring validated: ${Object.keys(targetFiles).length} targets and ${Object.keys(actionWiring).length} isolated practice actions.`,
 );

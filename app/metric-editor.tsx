@@ -38,6 +38,7 @@ import { energyFormulaVariables } from "@/src/domain/energy";
 import { dateKey } from "@/src/domain/date";
 import { MUSCLE_LABELS } from "@/src/domain/exerciseCatalog";
 import { evaluateFormula, formulaIdentifiers } from "@/src/domain/formula";
+import { canBeTrackedGoal } from "@/src/domain/metrics";
 import {
   defaultProgressReminderPercentages,
   defaultReminderTimes,
@@ -346,6 +347,10 @@ export default function TrackerEditor() {
   const [goalEnabled, setGoalEnabled] = useState(
     tracker?.goalEnabled !== false,
   );
+  const canTrackDailyGoal = canBeTrackedGoal({
+    id: presetId || tracker?.id || "new",
+    dataType,
+  });
   const [goalKind, setGoalKind] = useState<GoalKind>(
     tracker?.goal.kind ?? "at_least",
   );
@@ -586,6 +591,7 @@ export default function TrackerEditor() {
   const [activeFrom, setActiveFrom] = useState(tracker?.activeFrom ?? dateKey());
   const initiallyTracked = Boolean(
     !groupScope &&
+      canTrackDailyGoal &&
       tracker &&
       (trackerPeriods
         ? trackerPeriods.some((period) => !period.to)
@@ -1199,7 +1205,8 @@ export default function TrackerEditor() {
           }
         : undefined,
       activeFrom,
-      trackGoal: !groupScope && goalEnabled && trackGoal,
+      trackGoal:
+        !groupScope && goalEnabled && canTrackDailyGoal && trackGoal,
       addToToday: !groupScope && addToToday,
       goalSchedule: {
         mode: scheduleMode,
@@ -2100,7 +2107,7 @@ export default function TrackerEditor() {
           }}
         >
         <Card style={styles.advancedPanel}>
-          {!groupScope && goalEnabled && dataType !== "text" ? (
+          {!groupScope && goalEnabled && canTrackDailyGoal ? (
             <>
               <View style={[styles.switchRow, { borderColor: colors.border }]}>
                 <View style={styles.grow}>

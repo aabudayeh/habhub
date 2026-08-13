@@ -621,12 +621,19 @@ export function translateUiText(language: AppLanguage, source: string) {
       catalogs[language][matcher.source] ??
       generatedCatalogs[language][matcher.source];
     if (!translatedTemplate) continue;
-    const parameters = new Map(
-      matcher.parameterNames.map((name, index) => [name, values[index + 1] ?? ""]),
-    );
+    // Keep a queue per placeholder name. The source scanner intentionally
+    // normalizes anonymous JSX expressions to {value}; if a sentence contains
+    // two values, a plain Map would otherwise replace both with the last one.
+    const parameters = new Map<string, string[]>();
+    matcher.parameterNames.forEach((name, index) => {
+      parameters.set(name, [
+        ...(parameters.get(name) ?? []),
+        values[index + 1] ?? "",
+      ]);
+    });
     const translated = translatedTemplate.replace(
       /\{([^}]+)\}/g,
-      (_placeholder, name: string) => parameters.get(name) ?? "",
+      (_placeholder, name: string) => parameters.get(name)?.shift() ?? "",
     );
     return `${before}${translated}${after}`;
   }

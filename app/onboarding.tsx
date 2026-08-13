@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -30,11 +31,16 @@ import {
   trackerPresets,
   TrackerPreset,
 } from "@/src/domain/trackerCatalog";
+import { estimateWeightPlan } from "@/src/domain/weightPlan";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import {
+  LocalizedAlert as Alert,
+  useLocale,
+  useTranslation,
+} from "@/src/i18n";
 import {
   enablePushNotifications,
-  notificationPermissionGranted,
+  notificationSetupComplete,
 } from "@/src/notifications/push";
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -141,6 +147,8 @@ const DEFAULT_STARTER_TRACKER_IDS = [
   "work",
 ] as const;
 const DEFAULT_TRACKED_GOAL_IDS = ["steps", "exercise", "workout", "water"];
+/** Useful optional choices shown without silently adding them to the setup. */
+const OPTIONAL_ONBOARDING_TRACKER_IDS = ["screen_time"] as const;
 const NOT_DAILY_GOALS = new Set([
   "weight",
   "weekly_deficit_balance",
@@ -182,6 +190,8 @@ export default function Onboarding() {
   const health = useHealthSync();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const locale = useLocale();
+  const t = useTranslation();
   const { width } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   useKeyboardReveal(scrollRef);
@@ -209,6 +219,7 @@ export default function Onboarding() {
   const [trackedSelected, setTrackedSelected] = useState<string[]>(
     DEFAULT_TRACKED_GOAL_IDS,
   );
+  const [infoTracker, setInfoTracker] = useState<TrackerPreset | null>(null);
   const [expandedGoals, setExpandedGoals] = useState<string[]>([]);
   const [direction, setDirection] = useState<WeightDirection>(
     state.settings.weightDirection ?? "lose",
@@ -226,9 +237,7 @@ export default function Onboarding() {
   );
   const [landingPage, setLandingPage] = useState<LandingPage>("index");
   const [startShortTour, setStartShortTour] = useState(true);
-  const [pushReady, setPushReady] = useState(
-    state.settings.notifications.pushEnabled,
-  );
+  const [pushReady, setPushReady] = useState(false);
   const [healthReady, setHealthReady] = useState(
     state.settings.healthSync.enabled,
   );
@@ -243,6 +252,10 @@ export default function Onboarding() {
     setCloudSyncPaused("onboarding", true);
     return () => setCloudSyncPaused("onboarding", false);
   }, []);
+
+  useEffect(() => {
+    setHealthReady(state.settings.healthSync.enabled);
+  }, [state.settings.healthSync.enabled]);
 
   useEffect(() => {
     let active = true;
@@ -285,23 +298,18 @@ export default function Onboarding() {
 
   useEffect(() => {
     let active = true;
-    void notificationPermissionGranted()
-      .then(async (granted) => {
-        if (!active || !granted) return;
-        setPushReady(true);
-        if (!state.settings.notifications.pushEnabled)
-          updateSettings({
-            notifications: {
-              ...state.settings.notifications,
-              pushEnabled: true,
-            },
-          });
+    setPushReady(false);
+    void notificationSetupComplete(auth.user?.id)
+      .then((ready) => {
+        if (active) setPushReady(ready);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (active) setPushReady(false);
+      });
     return () => {
       active = false;
     };
-  }, [state.settings.notifications, updateSettings]);
+  }, [auth.user?.id]);
 
   const nextProfile = useMemo(
     () => ({
@@ -315,7 +323,14 @@ export default function Onboarding() {
       desiredWeeklyLossKg:
         direction === "maintain"
           ? 0
-          : Math.max(0.1, Number(weeklyChange) || profile.desiredWeeklyLossKg),
+          : Math.max(
+              0.05,
+              Math.min(
+                2,
+                Number(weeklyChange.replace(",", ".")) ||
+                  profile.desiredWeeklyLossKg,
+              ),
+            ),
       sex,
       activityLevel: activity,
     }),
@@ -334,6 +349,7 @@ export default function Onboarding() {
 
   const desired = useMemo(() => {
     const ids = new Set<string>(DEFAULT_STARTER_TRACKER_IDS);
+    OPTIONAL_ONBOARDING_TRACKER_IDS.forEach((id) => ids.add(id));
     goals.forEach((goalId) =>
       (GOAL_TRACKER_IDS[goalId] ?? []).forEach((id) => ids.add(id)),
     );
@@ -389,6 +405,33 @@ export default function Onboarding() {
     direction === "maintain" ||
     (direction === "lose" && nextProfile.targetWeightKg < nextProfile.weightKg) ||
     (direction === "gain" && nextProfile.targetWeightKg > nextProfile.weightKg);
+  const weeklyChangeNumber = Number(weeklyChange.replace(",", "."));
+  const weeklyChangeIsValid =
+    direction === "maintain" ||
+    (Number.isFinite(weeklyChangeNumber) &&
+      weeklyChangeNumber >= 0.05 &&
+      weeklyChangeNumber <= 2);
+  const weightPlan = useMemo(
+    () =>
+      targetIsValid
+        ? estimateWeightPlan({
+            anchorDate: dateKey(),
+            currentWeightKg: nextProfile.weightKg,
+            direction,
+            targetWeightKg: nextProfile.targetWeightKg,
+            weeklyChangeKg: nextProfile.desiredWeeklyLossKg,
+          })
+        : undefined,
+    [direction, nextProfile, targetIsValid],
+  );
+  const expectedWeightDate = weightPlan?.expectedGoalDate
+    ? new Intl.DateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
+    : undefined;
+  const infoTarget = infoTracker ? presetTargetLabel(infoTracker) : null;
 
   useEffect(() => {
     if (!draftReady) return;
@@ -501,6 +544,20 @@ export default function Onboarding() {
     }
   }
 
+  function chooseWeightDirection(next: WeightDirection) {
+    setDirection(next);
+    const current = Number(weight.replace(",", "."));
+    const currentTarget = Number(target.replace(",", "."));
+    if (!Number.isFinite(current)) return;
+    if (next === "maintain") setTarget(String(current));
+    else if (
+      !Number.isFinite(currentTarget) ||
+      (next === "lose" && currentTarget >= current) ||
+      (next === "gain" && currentTarget <= current)
+    )
+      setTarget(String(Math.max(20, current + (next === "gain" ? 5 : -5))));
+  }
+
   function toggleTracker(id: string) {
     const linkedIds =
       id === "blood_pressure_systolic"
@@ -534,18 +591,7 @@ export default function Onboarding() {
   }
 
   function showTrackerInfo(item: TrackerPreset) {
-    const target = presetTargetLabel(item);
-    Alert.alert(
-      item.name,
-      [
-        item.description,
-        target
-          ? `${trackedSelected.includes(item.templateId) ? "Daily goal" : "Available"} - ${target}`
-          : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
+    setInfoTracker(item);
   }
 
   function chooseHealthGoalHistory(value: boolean) {
@@ -620,6 +666,10 @@ export default function Onboarding() {
     updateSettings({
       selectedGoals: goals,
       weightDirection: direction,
+      weightManagementEnabled: goals.includes("weight"),
+      showWeightManagementSummary: goals.includes("weight")
+        ? state.settings.showWeightManagementSummary !== false
+        : state.settings.showWeightManagementSummary,
       showLeaderboard: goals.includes("friends"),
       showChat: true,
       showGym: true,
@@ -711,17 +761,25 @@ export default function Onboarding() {
 
   async function enablePush() {
     try {
-      if (auth.user)
-        await enablePushNotifications(
-          auth.user.id,
-          { ...state.settings.notifications, pushEnabled: true },
-          state.settings.language,
+      if (!auth.user)
+        throw new Error(
+          "Sign in on a physical device before connecting notifications.",
+        );
+      const preferences = {
+        ...state.settings.notifications,
+        pushEnabled: true,
+      };
+      await enablePushNotifications(
+        auth.user.id,
+        preferences,
+        state.settings.language,
+      );
+      if (!(await notificationSetupComplete(auth.user.id)))
+        throw new Error(
+          "Permission was granted, but this device has not finished registering. Check your connection and retry.",
         );
       updateSettings({
-        notifications: {
-          ...state.settings.notifications,
-          pushEnabled: true,
-        },
+        notifications: preferences,
       });
       setPushReady(true);
     } catch (error) {
@@ -857,12 +915,12 @@ export default function Onboarding() {
               <>
                 <Title
                   title="Your starter dashboard"
-                  copy="This is the simple result of your choices. Nothing here is permanent."
+                  copy="Trackers keep useful history. Tracked goals are the few daily goals you care about; for example, Workout duration can stay visible without counting toward your day."
                   colors={colors}
                 />
                 <View style={styles.legend}>
                   <Legend icon="checkmark-circle" label="Added to HabHub" color={accent} colors={colors} />
-                  <Legend icon="flag" label="Tracked each day" color={accent} colors={colors} />
+                  <Legend icon="flag" label="Counts as a daily goal" color={accent} colors={colors} />
                 </View>
                 <View
                   style={[
@@ -916,7 +974,7 @@ export default function Onboarding() {
                     <Text style={[styles.sectionLabel, { color: colors.ink }]}>Weight plan</Text>
                     <View style={styles.wrap}>
                       {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
-                        <Chip key={item} label={item[0].toUpperCase() + item.slice(1)} selected={direction === item} onPress={() => setDirection(item)} />
+                        <Chip key={item} label={item[0].toUpperCase() + item.slice(1)} selected={direction === item} onPress={() => chooseWeightDirection(item)} />
                       ))}
                     </View>
                     <View style={styles.fields}>
@@ -940,16 +998,50 @@ export default function Onboarding() {
                     </View>
                     {direction !== "maintain" ? (
                       <>
-                        <Text style={[styles.fieldGroupLabel, { color: colors.ink }]}>Desired {direction === "gain" ? "gain" : "loss"} per week</Text>
-                        <View style={styles.wrap}>
+                        <Text style={[styles.fieldGroupLabel, { color: colors.ink }]}>
+                          {direction === "gain"
+                            ? "Desired gain per week"
+                            : "Desired loss per week"}
+                        </Text>
+                        <View style={styles.rateControls}>
+                          <View style={styles.rateChips}>
                           {[0.25, 0.5, 0.75, 1].map((rate) => (
                             <Chip key={rate} label={`${rate} kg`} selected={Number(weeklyChange) === rate} onPress={() => setWeeklyChange(String(rate))} />
                           ))}
+                          </View>
+                          <View style={[styles.rateInputWrap, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+                            <TextInput
+                              accessibilityLabel={
+                                direction === "gain"
+                                  ? "Desired gain per week"
+                                  : "Desired loss per week"
+                              }
+                              value={weeklyChange}
+                              onChangeText={setWeeklyChange}
+                              keyboardType="decimal-pad"
+                              selectTextOnFocus
+                              style={[styles.rateInput, { color: colors.ink }]}
+                            />
+                            <Text style={[styles.rateUnit, { color: colors.muted }]}>kg/wk</Text>
+                          </View>
                         </View>
                       </>
                     ) : null}
+                    {weightPlan && (expectedWeightDate || direction === "maintain") ? (
+                      <View style={[styles.weightEstimate, { backgroundColor: colors.primarySoft }]}>
+                        <Ionicons name={direction === "maintain" ? "remove-outline" : "calendar-outline"} size={15} color={accent} />
+                        <Text style={[styles.weightEstimateText, { color: colors.ink }]}>
+                          {direction === "maintain"
+                            ? `Maintain around ${nextProfile.weightKg.toFixed(1)} kg`
+                            : `At ${weightPlan.weeklyChangeKg.toFixed(2).replace(/0$/, "")} kg/week · target around ${expectedWeightDate}`}
+                        </Text>
+                      </View>
+                    ) : null}
                     {!targetIsValid ? (
                       <Text style={[styles.validation, { color: palette.red }]}>{direction === "lose" ? "Choose a target below your current weight." : "Choose a target above your current weight."}</Text>
+                    ) : null}
+                    {!weeklyChangeIsValid ? (
+                      <Text style={[styles.validation, { color: palette.red }]}>Choose a weekly change from 0.05 to 2 kg.</Text>
                     ) : null}
                   </View>
                 ) : null}
@@ -1079,6 +1171,61 @@ export default function Onboarding() {
               </>
             ) : null}
           </ScrollView>
+          <Modal
+            animationType="fade"
+            transparent
+            visible={Boolean(infoTracker)}
+            onRequestClose={() => setInfoTracker(null)}
+          >
+            <View style={styles.infoOverlay}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close tracker description"
+                onPress={() => setInfoTracker(null)}
+                style={StyleSheet.absoluteFill}
+              />
+              {infoTracker ? (
+                <View
+                  accessibilityViewIsModal
+                  style={[
+                    styles.infoCard,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                  ]}
+                >
+                  <View style={styles.infoHeading}>
+                    <View style={[styles.infoIcon, { backgroundColor: `${infoTracker.color}18` }]}>
+                      <Ionicons name={infoTracker.icon as keyof typeof Ionicons.glyphMap} size={22} color={infoTracker.color} />
+                    </View>
+                    <View style={styles.grow}>
+                      <Text style={[styles.infoTitle, { color: colors.ink }]}>{infoTracker.name}</Text>
+                      <Text style={[styles.infoGroup, { color: colors.muted }]}>{trackerGroupLabel(infoTracker)}</Text>
+                    </View>
+                    <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={() => setInfoTracker(null)} hitSlop={8} style={styles.infoClose}>
+                      <Ionicons name="close" size={20} color={colors.muted} />
+                    </Pressable>
+                  </View>
+                  <Text translate={false} style={[styles.infoDescription, { color: colors.ink }]}>{t(infoTracker.description)}</Text>
+                  <View style={styles.infoMetaRow}>
+                    <View style={[styles.infoMeta, { backgroundColor: colors.primarySoft }]}>
+                      <Ionicons name={trackedSelected.includes(infoTracker.templateId) ? "flag" : "albums-outline"} size={13} color={accent} />
+                      <Text style={[styles.infoMetaText, { color: accent }]}>
+                        {trackedSelected.includes(infoTracker.templateId) ? "Counts as a daily goal" : "Available for reference"}
+                      </Text>
+                    </View>
+                    {infoTarget ? (
+                      <View style={[styles.infoMeta, { backgroundColor: colors.canvas }]}>
+                        <Ionicons name="locate-outline" size={13} color={colors.muted} />
+                        <Text translate={false} style={[styles.infoMetaText, { color: colors.muted }]}>{infoTarget}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Pressable accessibilityRole="button" onPress={() => setInfoTracker(null)} style={[styles.infoDone, { backgroundColor: accent }]}>
+                    <Text preserveColor style={styles.infoDoneText}>Got it</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          </Modal>
           <View style={styles.footer}>
             {step > 0 ? (
               <Pressable
@@ -1097,7 +1244,7 @@ export default function Onboarding() {
             <View style={styles.next}>
               <Button
                 label={step === 4 ? "Start using HabHub" : "Continue"}
-                disabled={finishing || !displayName.trim() || (step === 2 && goals.includes("weight") && !targetIsValid)}
+                disabled={finishing || !displayName.trim() || (step === 2 && goals.includes("weight") && (!targetIsValid || !weeklyChangeIsValid))}
                 loading={finishing}
                 onPress={() => void continueFlow()}
               />
@@ -1112,12 +1259,13 @@ export default function Onboarding() {
 function MetricSummaryCard({ item, selected, tracked, width, onShowInfo, onToggle, onToggleTracked }: { item: TrackerPreset; selected: boolean; tracked: boolean; width: "31.5%" | "48.5%" | "100%"; onShowInfo: () => void; onToggle: () => void; onToggleTracked: () => void }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const canTrack = item.goalEnabled !== false && !NOT_DAILY_GOALS.has(item.templateId);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`About ${item.name}`}
-      accessibilityHint={item.description}
+      accessibilityLabel={t(`About ${item.name}`)}
+      accessibilityHint={t(item.description)}
       onPress={onShowInfo}
       style={({ pressed }) => [styles.metricCard, { width, backgroundColor: colors.card, borderColor: selected ? `${accent}88` : colors.border, opacity: selected ? 1 : 0.55 }, pressed && styles.pressed]}
     >
@@ -1146,5 +1294,5 @@ function TourChoice({ selected, icon, title, copy, onPress }: { selected: boolea
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1, minWidth: 0 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGroup: { marginBottom: 5 }, metricGroupLabel: { fontSize: 9, fontWeight: "900", letterSpacing: 0.4, marginBottom: 5 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 57, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, lineHeight: 12, fontWeight: "900", flexShrink: 1 }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, metricCheck: { width: 21, height: 23, alignItems: "center", justifyContent: "center" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
+  safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1, minWidth: 0 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGroup: { marginBottom: 5 }, metricGroupLabel: { fontSize: 9, fontWeight: "900", letterSpacing: 0.4, marginBottom: 5 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 57, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, lineHeight: 12, fontWeight: "900", flexShrink: 1 }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, metricCheck: { width: 21, height: 23, alignItems: "center", justifyContent: "center" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, rateControls: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 7 }, rateChips: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 5 }, rateInputWrap: { width: 92, minHeight: 34, borderWidth: 1, borderRadius: 11, paddingHorizontal: 7, flexDirection: "row", alignItems: "center" }, rateInput: { flex: 1, minWidth: 0, paddingVertical: 5, fontSize: 10, fontWeight: "900", textAlign: "right" }, rateUnit: { marginLeft: 3, fontSize: 7, fontWeight: "800" }, weightEstimate: { minHeight: 32, borderRadius: 11, paddingHorizontal: 9, flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 7 }, weightEstimateText: { flex: 1, fontSize: 9, lineHeight: 12, fontWeight: "800" }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, infoOverlay: { flex: 1, padding: 20, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(8,14,24,.66)" }, infoCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 20, padding: 16, gap: 12 }, infoHeading: { flexDirection: "row", alignItems: "center", gap: 10 }, infoIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" }, infoTitle: { fontSize: 16, lineHeight: 20, fontWeight: "900" }, infoGroup: { fontSize: 9, lineHeight: 12, fontWeight: "800", marginTop: 2 }, infoClose: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDescription: { fontSize: 12, lineHeight: 18, fontWeight: "700" }, infoMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, infoMeta: { minHeight: 28, borderRadius: 10, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 5 }, infoMetaText: { fontSize: 8, lineHeight: 11, fontWeight: "900" }, infoDone: { minHeight: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDoneText: { color: palette.white, fontSize: 11, fontWeight: "900" }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
 });

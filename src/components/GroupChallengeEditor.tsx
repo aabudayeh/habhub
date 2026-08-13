@@ -28,14 +28,22 @@ import {
   MetricDefinition,
 } from "@/src/types";
 
-type ChallengeRepeatMode = "once" | "daily" | "weekly" | "monthly";
+type ChallengeRepeatMode =
+  | "once"
+  | "daily"
+  | "selected_days"
+  | "every_other_day"
+  | "interval_days"
+  | "days_of_month";
 
 function challengeRepeatMode(
   recurrence: GoalSchedule | undefined,
 ): ChallengeRepeatMode {
   if (recurrence?.mode === "daily") return "daily";
-  if (recurrence?.mode === "selected_days") return "weekly";
-  if (recurrence?.mode === "days_of_month") return "monthly";
+  if (recurrence?.mode === "selected_days") return "selected_days";
+  if (recurrence?.mode === "every_other_day") return "every_other_day";
+  if (recurrence?.mode === "interval_days") return "interval_days";
+  if (recurrence?.mode === "days_of_month") return "days_of_month";
   return "once";
 }
 
@@ -76,6 +84,9 @@ export function GroupChallengeEditor({
   const [repeatUntil, setRepeatUntil] = useState(
     dateWithOffsetFrom(initialDate ?? dateKey(), 28),
   );
+  const [repeatDays, setRepeatDays] = useState<number[]>([]);
+  const [repeatInterval, setRepeatInterval] = useState("3");
+  const [repeatMonthDays, setRepeatMonthDays] = useState("");
   const [participants, setParticipants] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -99,6 +110,13 @@ export function GroupChallengeEditor({
     setRepeatUntil(
       challenge?.recurrence?.endDate ??
         dateWithOffsetFrom(challenge?.localDate ?? initialDate ?? dateKey(), 28),
+    );
+    const challengeDate = challenge?.localDate ?? initialDate ?? dateKey();
+    const anchor = new Date(`${challengeDate}T12:00:00`);
+    setRepeatDays(challenge?.recurrence?.daysOfWeek ?? [anchor.getDay()]);
+    setRepeatInterval(String(challenge?.recurrence?.intervalDays ?? 3));
+    setRepeatMonthDays(
+      (challenge?.recurrence?.daysOfMonth ?? [anchor.getDate()]).join(", "),
     );
     setParticipants(
       challenge?.participantIds ??
@@ -141,25 +159,30 @@ export function GroupChallengeEditor({
 
   async function submit() {
     const numericTarget = Number(target.replace(",", "."));
-    const anchor = new Date(`${localDate}T12:00:00`);
+    const monthDays = [
+      ...new Set(
+        repeatMonthDays
+          .split(",")
+          .map((item) => Number(item.trim()))
+          .filter((day) => Number.isInteger(day) && day >= 1 && day <= 31),
+      ),
+    ];
     const recurrence: GoalSchedule | undefined =
       repeatMode === "once"
         ? undefined
-        : repeatMode === "daily"
-          ? { mode: "daily", anchorDate: localDate, endDate: repeatUntil }
-          : repeatMode === "weekly"
-            ? {
-                mode: "selected_days",
-                anchorDate: localDate,
-                endDate: repeatUntil,
-                daysOfWeek: [anchor.getDay()],
-              }
-            : {
-                mode: "days_of_month",
-                anchorDate: localDate,
-                endDate: repeatUntil,
-                daysOfMonth: [anchor.getDate()],
-              };
+        : {
+            mode: repeatMode,
+            anchorDate: localDate,
+            endDate: repeatUntil,
+            daysOfWeek:
+              repeatMode === "selected_days" ? repeatDays : undefined,
+            intervalDays:
+              repeatMode === "interval_days"
+                ? Number(repeatInterval)
+                : undefined,
+            daysOfMonth:
+              repeatMode === "days_of_month" ? monthDays : undefined,
+          };
     const participantIds = [
       ...new Set([...participants, currentUserId, challengeCreatorId]),
     ];
@@ -298,8 +321,10 @@ export function GroupChallengeEditor({
                 [
                   ["once", "Once"],
                   ["daily", "Daily"],
-                  ["weekly", "Weekly"],
-                  ["monthly", "Monthly"],
+                  ["selected_days", "Weekdays"],
+                  ["every_other_day", "Every other"],
+                  ["interval_days", "Every N days"],
+                  ["days_of_month", "Month dates"],
                 ] as const
               ).map(([mode, label]) => {
                 const selected = repeatMode === mode;
@@ -327,19 +352,82 @@ export function GroupChallengeEditor({
                   </Pressable>
                 );
               })}
-              {repeatMode !== "once" ? (
-                <View style={[styles.repeatUntil, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
-                  <Text style={[styles.repeatUntilLabel, { color: colors.muted }]}>Until</Text>
-                  <TextInput
-                    value={repeatUntil}
-                    onChangeText={setRepeatUntil}
-                    maxLength={10}
-                    placeholder="YYYY-MM-DD"
-                    style={[styles.repeatUntilInput, { color: colors.ink }]}
-                  />
-                </View>
-              ) : null}
             </View>
+            {repeatMode === "selected_days" ? (
+              <View style={styles.repeatDetail}>
+                <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>{t("Repeat on")}</Text>
+                <View style={styles.weekdayRow}>
+                  {["S", "M", "T", "W", "T", "F", "S"].map((label, day) => {
+                    const selected = repeatDays.includes(day);
+                    return (
+                      <Pressable
+                        key={`${label}-${day}`}
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: selected }}
+                        onPress={() =>
+                          setRepeatDays((current) =>
+                            selected
+                              ? current.filter((item) => item !== day)
+                              : [...current, day].sort(),
+                          )
+                        }
+                        style={[
+                          styles.weekday,
+                          {
+                            borderColor: selected ? accent : colors.border,
+                            backgroundColor: selected
+                              ? colors.primarySoft
+                              : colors.canvas,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.weekdayText, { color: selected ? accent : colors.muted }]}>{label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+            {repeatMode === "interval_days" ? (
+              <View style={styles.repeatDetail}>
+                <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>Repeat every</Text>
+                <View style={[styles.intervalInput, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+                  <TextInput
+                    value={repeatInterval}
+                    onChangeText={setRepeatInterval}
+                    keyboardType="number-pad"
+                    maxLength={2}
+                    placeholder="3"
+                    style={[styles.intervalValue, { color: colors.ink }]}
+                  />
+                  <Text style={[styles.intervalSuffix, { color: colors.muted }]}>days</Text>
+                </View>
+              </View>
+            ) : null}
+            {repeatMode === "days_of_month" ? (
+              <View style={styles.repeatDetail}>
+                <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>Dates each month</Text>
+                <TextInput
+                  value={repeatMonthDays}
+                  onChangeText={setRepeatMonthDays}
+                  keyboardType="numbers-and-punctuation"
+                  placeholder="1, 15"
+                  style={[styles.monthDaysInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]}
+                />
+              </View>
+            ) : null}
+            {repeatMode !== "once" ? (
+              <View style={[styles.repeatUntil, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+                <Text style={[styles.repeatUntilLabel, { color: colors.muted }]}>{t("Repeat until")}</Text>
+                <TextInput
+                  value={repeatUntil}
+                  onChangeText={setRepeatUntil}
+                  maxLength={10}
+                  placeholder="YYYY-MM-DD"
+                  style={[styles.repeatUntilInput, { color: colors.ink }]}
+                />
+              </View>
+            ) : null}
 
             <Text style={[styles.label, { color: colors.ink }]}>Title · optional</Text>
             <TextInput
@@ -464,9 +552,18 @@ const styles = StyleSheet.create({
   repeatRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 13 },
   repeatChip: { minHeight: 32, borderRadius: 11, borderWidth: 1, paddingHorizontal: 9, alignItems: "center", justifyContent: "center" },
   repeatText: { fontSize: 8, fontWeight: "900" },
-  repeatUntil: { minHeight: 32, borderRadius: 11, borderWidth: 1, flexDirection: "row", alignItems: "center", paddingHorizontal: 8, gap: 4 },
-  repeatUntilLabel: { fontSize: 7, fontWeight: "800" },
-  repeatUntilInput: { width: 78, padding: 0, fontSize: 8, fontWeight: "900" },
+  repeatDetail: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 7 },
+  repeatDetailLabel: { minWidth: 72, fontSize: 8, fontWeight: "800" },
+  weekdayRow: { flexDirection: "row", flex: 1, gap: 5 },
+  weekday: { width: 28, height: 28, borderRadius: 9, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  weekdayText: { fontSize: 8, fontWeight: "900" },
+  intervalInput: { minHeight: 32, borderRadius: 11, borderWidth: 1, flexDirection: "row", alignItems: "center", paddingHorizontal: 9 },
+  intervalValue: { width: 34, padding: 0, textAlign: "center", fontSize: 10, fontWeight: "900" },
+  intervalSuffix: { fontSize: 8, fontWeight: "800" },
+  monthDaysInput: { flex: 1, height: 34, borderRadius: 11, borderWidth: 1, paddingHorizontal: 9, fontSize: 9, fontWeight: "800" },
+  repeatUntil: { alignSelf: "flex-start", minHeight: 34, borderRadius: 11, borderWidth: 1, flexDirection: "row", alignItems: "center", paddingHorizontal: 9, gap: 6, marginBottom: 13 },
+  repeatUntilLabel: { fontSize: 8, fontWeight: "800" },
+  repeatUntilInput: { width: 88, padding: 0, fontSize: 9, fontWeight: "900" },
   titleInput: { height: 42, borderRadius: 13, borderWidth: 1, paddingHorizontal: 11, fontSize: 11, marginBottom: 14 },
   peopleHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 },
   peopleHint: { fontSize: 8, lineHeight: 11 },

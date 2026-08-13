@@ -50,6 +50,7 @@ export {
   BASIC_TUTORIAL_GUIDE,
   TutorialIsolatedPreviewBoundary,
   TutorialProvider,
+  useOptionalTutorial,
   useTutorial,
 };
 
@@ -93,6 +94,10 @@ function trapTutorialFocus(event: TutorialKeyboardEvent) {
 
 type TutorialScrollContextValue = {
   reveal: (targetY: number) => void;
+  setActiveTargetMeasurer: (
+    instanceId: number,
+    measure?: () => void,
+  ) => void;
 };
 
 const TutorialScrollContext = React.createContext<TutorialScrollContextValue | null>(
@@ -106,8 +111,15 @@ const TutorialScrollContext = React.createContext<TutorialScrollContextValue | n
 export function TutorialScrollProvider({
   children,
   reveal,
-}: PropsWithChildren<{ reveal: (targetY: number) => void }>) {
-  const value = React.useMemo(() => ({ reveal }), [reveal]);
+  setActiveTargetMeasurer,
+}: PropsWithChildren<{
+  reveal: (targetY: number) => void;
+  setActiveTargetMeasurer: TutorialScrollContextValue["setActiveTargetMeasurer"];
+}>) {
+  const value = React.useMemo(
+    () => ({ reveal, setActiveTargetMeasurer }),
+    [reveal, setActiveTargetMeasurer],
+  );
   return (
     <TutorialScrollContext.Provider value={value}>
       {children}
@@ -120,16 +132,21 @@ export function TutorialTarget({
   children,
   style,
   reveal,
+  onTutorialActivate,
 }: PropsWithChildren<{
   id: string;
   style?: StyleProp<ViewStyle>;
   reveal?: () => void;
+  onTutorialActivate?: () => void;
 }>) {
   const tutorial = useOptionalTutorial();
   const scrollContext = React.useContext(TutorialScrollContext);
   const ref = useRef<View>(null);
   const lastWindowY = useRef(0);
+  const autoRevealDoneRef = useRef(false);
+  const autoRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const instanceId = useRef(++targetInstanceSequence).current;
+  const { height: windowHeight } = useWindowDimensions();
   const activeTargetId =
     tutorial?.activeStep?.anchor?.target ?? tutorial?.activeStep?.target;
   const enabled = activeTargetId === id;
@@ -139,24 +156,39 @@ export function TutorialTarget({
   const unregisterTarget = tutorial?.unregisterTarget;
   const setTargetMeasurer = tutorial?.setTargetMeasurer;
   const setTargetRevealer = tutorial?.setTargetRevealer;
+  const setTargetActivator = tutorial?.setTargetActivator;
+  const measureNow = useCallback(() => {
+    if (!enabledRef.current) return;
+    ref.current?.measureInWindow((x, y, width, height) => {
+      if (width > 0 && height > 0) {
+        lastWindowY.current = y;
+        registerTarget?.(id, instanceId, { x, y, width, height });
+        const outsideUsableViewport =
+          y < 72 || y + height > Math.max(120, windowHeight - 88);
+        if (outsideUsableViewport && !autoRevealDoneRef.current) {
+          autoRevealDoneRef.current = true;
+          autoRevealTimerRef.current = setTimeout(() => {
+            if (reveal) reveal();
+            else scrollContext?.reveal(lastWindowY.current);
+            autoRevealTimerRef.current = null;
+          }, 1020);
+        }
+      }
+    });
+  }, [id, instanceId, registerTarget, reveal, scrollContext, windowHeight]);
   const measure = useCallback(
     (_event?: LayoutChangeEvent) => {
-      if (!enabledRef.current) return;
-      requestAnimationFrame(() =>
-        enabledRef.current && ref.current?.measureInWindow((x, y, width, height) => {
-          if (width > 0 && height > 0) {
-            lastWindowY.current = y;
-            registerTarget?.(id, instanceId, { x, y, width, height });
-          }
-        }),
-      );
+      requestAnimationFrame(measureNow);
     },
-    [id, instanceId, registerTarget],
+    [measureNow],
   );
 
   useEffect(() => {
     if (!enabled) return;
+    autoRevealDoneRef.current = false;
     setTargetMeasurer?.(id, instanceId, measure);
+    scrollContext?.setActiveTargetMeasurer(instanceId, measureNow);
+    setTargetActivator?.(id, instanceId, onTutorialActivate);
     const revealTarget =
       reveal ??
       (scrollContext
@@ -166,7 +198,14 @@ export function TutorialTarget({
     const timers = [0, 80, 240].map((delay) => setTimeout(measure, delay));
     return () => {
       timers.forEach(clearTimeout);
+      if (autoRevealTimerRef.current !== null) {
+        clearTimeout(autoRevealTimerRef.current);
+        autoRevealTimerRef.current = null;
+      }
+      autoRevealDoneRef.current = false;
       setTargetMeasurer?.(id, instanceId);
+      scrollContext?.setActiveTargetMeasurer(instanceId);
+      setTargetActivator?.(id, instanceId);
       setTargetRevealer?.(id, instanceId);
       unregisterTarget?.(id, instanceId);
     };
@@ -175,9 +214,12 @@ export function TutorialTarget({
     id,
     instanceId,
     measure,
+    measureNow,
+    onTutorialActivate,
     reveal,
     scrollContext,
     setTargetMeasurer,
+    setTargetActivator,
     setTargetRevealer,
     unregisterTarget,
   ]);
@@ -225,6 +267,8 @@ function TutorialSpotlightContent() {
     completePracticeAccessibly,
     requestTargetMeasure,
     requestTargetReveal,
+    activatableTargets,
+    requestTargetActivation,
     targets,
     isolatedPreviewActive,
     transitionPhase,
@@ -240,11 +284,13 @@ function TutorialSpotlightContent() {
   const accessibilityIntroRef = useRef<View>(null);
   const [overlayOrigin, setOverlayOrigin] = useState({ x: 0, y: 0 });
   const [anchorTimedOut, setAnchorTimedOut] = useState(false);
+  const [pageSettled, setPageSettled] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [calloutHeight, setCalloutHeight] = useState(214);
   const fade = useRef(new Animated.Value(0)).current;
   const curtain = useRef(new Animated.Value(0)).current;
   const routedParameterizedStep = useRef<string | undefined>(undefined);
+  const settledPath = useRef<string | undefined>(undefined);
   const localizedGuide = activeGuide
     ? localizedTutorialGuide(activeGuide, language)
     : undefined;
@@ -274,7 +320,12 @@ function TutorialSpotlightContent() {
   const observedPractice =
     step?.interaction?.mode === "practice" &&
     step.interaction.completion === "observed-action";
-  const canPassThrough = observedPractice && isolatedPreviewActive && Boolean(rect);
+  const anchorActivatable = Boolean(
+    targetId && activatableTargets[targetId],
+  );
+  const realPracticeAvailable =
+    observedPractice && isolatedPreviewActive && Boolean(rect);
+  const canPassThrough = realPracticeAvailable && !anchorActivatable;
   const accessibleRehearsalAvailable = Boolean(
     observedPractice &&
       isolatedPreviewActive &&
@@ -316,7 +367,7 @@ function TutorialSpotlightContent() {
 
   useEffect(() => {
     fade.stopAnimation();
-    if (!active) {
+    if (!active || !pageSettled) {
       fade.setValue(0);
       return;
     }
@@ -332,10 +383,30 @@ function TutorialSpotlightContent() {
     });
     animation.start();
     return () => animation.stop();
-  }, [active, fade, reduceMotion, stepIdentity]);
+  }, [active, fade, pageSettled, reduceMotion, stepIdentity]);
 
   useEffect(() => {
-    if (!active || !step) return;
+    if (!active || waitingForRoute) {
+      setPageSettled(false);
+      return;
+    }
+    if (settledPath.current === pathname) {
+      setPageSettled(true);
+      return;
+    }
+    setPageSettled(false);
+    const timer = setTimeout(
+      () => {
+        settledPath.current = pathname;
+        setPageSettled(true);
+      },
+      reduceMotion ? 0 : 950,
+    );
+    return () => clearTimeout(timer);
+  }, [active, pathname, reduceMotion, waitingForRoute]);
+
+  useEffect(() => {
+    if (!active || !step || !pageSettled) return;
     const timer = setTimeout(() => {
       if (Platform.OS === "web") {
         (
@@ -347,7 +418,7 @@ function TutorialSpotlightContent() {
       if (node !== null) AccessibilityInfo.setAccessibilityFocus(node);
     }, Platform.OS === "web" || reduceMotion ? 0 : 80);
     return () => clearTimeout(timer);
-  }, [active, reduceMotion, step, stepIdentity]);
+  }, [active, pageSettled, reduceMotion, step, stepIdentity]);
 
   useEffect(() => {
     curtain.stopAnimation();
@@ -376,16 +447,17 @@ function TutorialSpotlightContent() {
   }, [active, anchorRequired, rect, step, stepIdentity, waitingForRoute]);
 
   useEffect(() => {
-    // Optional anchors may fall back without blocking the guide, but they
-    // should still be revealed when the real control is mounted off-screen.
-    if (!active || rect || waitingForRoute || !targetId) return;
+    // A mounted target can still measure below the visible ScrollView. Reveal
+    // every target once the user has had a moment to see the new page, then
+    // let Screen's scroll listener remeasure the cutout as it moves.
+    if (!active || !pageSettled || waitingForRoute || !targetId) return;
     const timers = [120, 520, 1100].map((delay) =>
       setTimeout(() => requestTargetReveal(targetId), delay),
     );
     return () => timers.forEach(clearTimeout);
   }, [
     active,
-    rect,
+    pageSettled,
     requestTargetReveal,
     stepIdentity,
     targetId,
@@ -408,7 +480,10 @@ function TutorialSpotlightContent() {
       return;
     if (!safeTutorialRoute(route)) return;
     routedParameterizedStep.current = stepIdentity;
-    const timer = setTimeout(() => router.replace(route as never), 0);
+    // Give the real control a chance to perform its own navigation first.
+    // This avoids replacing a transparent/modal screen while React Navigation
+    // is still presenting it, which can leave Android with a blank surface.
+    const timer = setTimeout(() => router.navigate(route as never), 420);
     return () => clearTimeout(timer);
   }, [active, activeSession, pathname, step, stepIdentity]);
 
@@ -441,10 +516,7 @@ function TutorialSpotlightContent() {
       activeSession?.demoAnchorDate,
     );
     if (destination)
-      setTimeout(
-        () => router.replace(destination as never),
-        transitionDurationMs,
-      );
+      setTimeout(() => router.navigate(destination as never), transitionDurationMs);
   }, [
     activeGuide?.path,
     activeSession?.demoAnchorDate,
@@ -479,6 +551,12 @@ function TutorialSpotlightContent() {
       />
     );
 
+  // Keep the newly opened page completely visible for a beat before drawing
+  // the next shade/callout. The route itself remains interactive only after
+  // the isolated tutorial target is intentionally exposed below.
+  if (transitionPhase === "active" && (waitingForRoute || !pageSettled))
+    return null;
+
   const displayGuide = localizedGuide;
   const displayStep = localizedStep;
 
@@ -495,27 +573,17 @@ function TutorialSpotlightContent() {
         activeSession!.demoAnchorDate,
       );
       if (resolved)
-        setTimeout(
-          () => router.replace(resolved as never),
-          transitionDurationMs,
-        );
+        setTimeout(() => router.navigate(resolved as never), transitionDurationMs);
       return;
     }
-    const after = step!.navigation?.after;
-    const resolved = resolvedTutorialRoute(
-      after,
-      activeSession!.demoAnchorDate,
-    );
-    if (nextStep() && resolved) router.replace(resolved as never);
+    // The next step owns its required route. Route enforcement waits briefly
+    // and navigates only if the successful app action did not already do so.
+    nextStep();
   }
 
   function back() {
     if (activeSession!.stepIndex <= 0) return;
-    const previous = activeGuide!.steps[activeSession!.stepIndex - 1];
-    if (previousStep()) {
-      const route = routeForStep(previous, activeSession!.demoAnchorDate);
-      if (safeTutorialRoute(route)) router.replace(route as never);
-    }
+    previousStep();
   }
 
   function rehearseAnchor() {
@@ -528,6 +596,17 @@ function TutorialSpotlightContent() {
       reportPracticeAction(interaction.actionId, "tutorial-local");
   }
 
+  function activateOrRehearseAnchor() {
+    if (
+      observedPractice &&
+      targetId &&
+      anchorActivatable &&
+      requestTargetActivation(targetId)
+    )
+      return;
+    rehearseAnchor();
+  }
+
   const primaryLabel =
     activeSession.stepIndex >= activeGuide.steps.length - 1
       ? t("Finish")
@@ -537,9 +616,10 @@ function TutorialSpotlightContent() {
   )?.title;
   const missingRequiredAnchor = anchorRequired && !rect && anchorTimedOut;
   const nextDisabled =
+    !pageSettled ||
     waitingForRoute ||
     waitingForAnchor ||
-    (canPassThrough && !practiceComplete);
+    (realPracticeAvailable && !practiceComplete);
   const webFocusTrapProps =
     Platform.OS === "web"
       ? {
@@ -605,7 +685,7 @@ function TutorialSpotlightContent() {
                 ? undefined
                 : `${displayStep.title}. ${displayStep.interaction?.instruction ?? t("Highlighted control")}`
             }
-            onPress={rehearseAnchor}
+            onPress={activateOrRehearseAnchor}
             style={[
               styles.spotlight,
               {

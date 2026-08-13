@@ -12,7 +12,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { ColorSpectrumPicker } from "@/src/components/ColorSpectrumPicker";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
@@ -29,6 +29,7 @@ import {
   DEFAULT_GROUP_THEME,
   newMetricFromDefinition,
 } from "@/src/domain/groupSetup";
+import { randomGroupNameSuggestion } from "@/src/domain/groupNames";
 import {
   isInternalTracker,
   trackerPresets,
@@ -43,7 +44,9 @@ export default function CreateGroup() {
   const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const [name, setName] = useState("");
+  const [nameSuggestion] = useState(() => randomGroupNameSuggestion());
   const [themeColor, setThemeColor] = useState<string>(DEFAULT_GROUP_THEME);
   const [allowImmediateJoin, setAllowImmediateJoin] = useState(true);
   const [selectedSuggested, setSelectedSuggested] = useState<string[]>([]);
@@ -196,13 +199,26 @@ export default function CreateGroup() {
           value={name}
           onChangeText={setName}
           maxLength={80}
-          placeholder="e.g. Office Step League"
+          placeholder={t(`e.g. ${nameSuggestion}`)}
           placeholderTextColor={colors.faint}
           style={[
             styles.input,
             { color: colors.ink, borderColor: colors.border },
           ]}
         />
+        {!name.trim() ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t(`Use suggested group name ${nameSuggestion}`)}
+            onPress={() => setName(nameSuggestion)}
+            style={styles.nameSuggestion}
+          >
+            <Ionicons name="sparkles-outline" size={13} color={accent} />
+            <Text style={[styles.nameSuggestionText, { color: accent }]}>
+              {t(`Try “${nameSuggestion}”`)}
+            </Text>
+          </Pressable>
+        ) : null}
       </Card>
 
       <SectionHeader title="Suggested from your Today page" />
@@ -503,6 +519,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 10,
   },
+  nameSuggestion: {
+    alignSelf: "flex-start",
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 4,
+  },
+  nameSuggestionText: { fontSize: 9, fontWeight: "800" },
   list: { paddingVertical: 2, paddingHorizontal: 11 },
   choice: {
     minHeight: 54,

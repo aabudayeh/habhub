@@ -4,6 +4,7 @@ import { Href, Tabs } from "expo-router";
 import React, { useMemo } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { Freeze } from "react-freeze";
+import { enableFreeze } from "react-native-screens";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useAppColors, useGroupAccent } from "@/src/theme";
@@ -25,6 +26,11 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   performance: "speedometer-outline",
   status: "accessibility-outline",
 };
+
+// Native tabs keep their local state, but hidden heavy pages must stop React
+// work while another tab is handling touches. react-native-screens requires
+// this opt-in for `freezeOnBlur` to suspend inactive React subtrees.
+if (Platform.OS !== "web") enableFreeze(true);
 
 function WebTabFreeze({ children }: React.PropsWithChildren) {
   const isFocused = useIsFocused();

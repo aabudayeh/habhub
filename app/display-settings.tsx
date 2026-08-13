@@ -61,6 +61,7 @@ type ToggleKey =
   | "showJournalShortcut"
   | "showPerformance"
   | "showStatus"
+  | "showWeightManagementSummary"
   | "showTodosToday"
   | "showGoalsToday"
   | "showAiAssistant";
@@ -447,6 +448,16 @@ export default function DisplaySettings() {
               updateSettings({ showFeaturedCardProgressOutline })
             }
           />
+          {(state.settings.weightManagementEnabled ??
+          state.settings.selectedGoals.includes("weight")) ? (
+            <ToggleRow
+              icon="scale-outline"
+              title="Weight plan summary"
+              copy="Show weight, body fat, and the target estimate on Today and Status"
+              enabled={state.settings.showWeightManagementSummary !== false}
+              onChange={(value) => toggle("showWeightManagementSummary", value)}
+            />
+          ) : null}
           <ToggleRow
             icon="list-outline"
             title="Show every tile"

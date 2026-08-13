@@ -13,7 +13,10 @@ import {
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import { AppText as Text } from "@/src/components/AppText";
-import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import {
+  TutorialTarget,
+  useTutorial,
+} from "@/src/components/TutorialSpotlight";
 import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 import { ReorderItem } from "@/src/components/ReorderItem";
@@ -29,7 +32,11 @@ import {
   Screen,
   SectionHeader,
 } from "@/src/components/ui";
-import { formatMetricValue, isMetricTrackedOnDate } from "@/src/domain/metrics";
+import {
+  canBeTrackedGoal,
+  formatMetricValue,
+  isMetricTrackedOnDate,
+} from "@/src/domain/metrics";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { useApp } from "@/src/state/AppProvider";
@@ -52,6 +59,7 @@ if (
 }
 
 export default function Customize() {
+  const tutorial = useTutorial();
   const params = useLocalSearchParams<{ tab?: string }>();
   const {
     state,
@@ -108,7 +116,7 @@ export default function Customize() {
   }
 
   function changeAllTracked(value: boolean) {
-    const applicable = ordered.filter((metric) => metric.dataType !== "text");
+    const applicable = ordered.filter(canBeTrackedGoal);
     Alert.alert(
       value ? "Track every configured goal?" : "Stop tracking every goal?",
       "Choose whether this should also change earlier progress reports.",
@@ -217,11 +225,19 @@ export default function Customize() {
         subtitle="Only your selected trackers appear here. Group competition is managed in Group settings."
         showMenu={false}
         action={
+          <TutorialTarget id="customize-close">
           <IconButton
             icon="close"
             label="Close"
-            onPress={() => router.back()}
+            onPress={() => {
+              router.back();
+              tutorial.reportEvent({
+                actionId: "tutorial.navigation.close-customize",
+                scope: "isolated-preview",
+              });
+            }}
           />
+          </TutorialTarget>
         }
       />
       <TutorialTarget id="customize-tabs">
@@ -343,7 +359,7 @@ export default function Customize() {
           />
           <Card style={styles.list}>
             {ordered
-              .filter((metric) => metric.dataType !== "text")
+              .filter(canBeTrackedGoal)
               .map((metric, index, list) => {
                 const selected = isMetricTrackedOnDate(
                   state,
