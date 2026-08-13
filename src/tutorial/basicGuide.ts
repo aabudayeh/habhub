@@ -7,7 +7,7 @@ import type { TutorialGuide } from "./types";
  */
 export const BASIC_TUTORIAL_GUIDE: TutorialGuide = {
   id: "essential",
-  version: 4,
+  version: 5,
   title: "HabHub basics",
   detail: "A guided introduction to trackers, every main page, and the controls that personalize HabHub",
   icon: "compass-outline",
@@ -31,12 +31,12 @@ export const BASIC_TUTORIAL_GUIDE: TutorialGuide = {
     {
       id: "essential.navigation",
       sectionId: "today",
-      target: "tab-index",
+      target: "tab-bar",
       path: "/",
       title: "Start with the navigation bar",
       copy: "The bottom bar opens HabHub's main pages. Today is your daily home; hidden optional pages can be enabled later from Display settings.",
       primaryLabel: "Show Today",
-      anchor: { required: false, waitMs: 1800, padding: 5, radius: 14 },
+      anchor: { required: false, waitMs: 1800, padding: 0, radius: 0 },
       interaction: { mode: "observe", completion: "manual" },
     },
     {
@@ -259,7 +259,7 @@ export const BASIC_TUTORIAL_GUIDE: TutorialGuide = {
       target: "log-header",
       path: "/log",
       title: "Choose a tracker to log",
-      copy: "Manual trackers accept an entry. Calculated, device-owned and gym-derived trackers direct you to their history or source instead.",
+      copy: "Manual trackers accept an entry. Steps also accepts a manual daily total when device sync is unavailable; most other calculated, device-owned and gym-derived trackers open their history or source.",
       primaryLabel: "Next",
       anchor: { required: true, waitMs: 1800 },
       navigation: { before: "/log" },

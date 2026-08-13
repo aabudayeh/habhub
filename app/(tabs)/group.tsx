@@ -196,24 +196,16 @@ const LeaderboardMemberGrid = React.memo(function LeaderboardMemberGrid({
   state,
   metric,
   memberId,
-  memberName,
   gridDates,
   gridRange,
-  gridKey,
-  setExpandedGridRows,
 }: {
   state: AppState;
   metric: MetricDefinition;
   memberId: string;
-  memberName: string;
   gridDates: string[];
   gridRange: HistoryRange;
-  gridKey: string;
-  setExpandedGridRows: React.Dispatch<React.SetStateAction<string[]>>;
 }) {
   const colors = useAppColors();
-  const accent = useGroupAccent();
-  const t = useTranslation();
   // Year grids can contain 365 cells per member. Keep that privacy-aware
   // projection stable across the parent screen's clock/edit renders.
   const gridModel = useMemo(
@@ -225,13 +217,6 @@ const LeaderboardMemberGrid = React.memo(function LeaderboardMemberGrid({
         gridDates,
       ),
     [gridDates, memberId, metric, state],
-  );
-  const collapse = useCallback(
-    () =>
-      setExpandedGridRows((current) =>
-        current.filter((key) => key !== gridKey),
-      ),
-    [gridKey, setExpandedGridRows],
   );
   return (
     <View
@@ -246,18 +231,6 @@ const LeaderboardMemberGrid = React.memo(function LeaderboardMemberGrid({
         },
       ]}
     >
-      <View style={styles.memberGridHeader}>
-        <Text style={[styles.memberGridLabel, { color: colors.muted }]}>
-          {t(`${gridRange.toUpperCase()} · tap a shared day for details`)}
-        </Text>
-        <Pressable
-          accessibilityLabel={t(`Collapse calendar for ${memberName}`)}
-          onPress={collapse}
-          hitSlop={7}
-        >
-          <Ionicons name="chevron-up" size={14} color={accent} />
-        </Pressable>
-      </View>
       <GoalHeatmap
         state={state}
         metric={metric}
@@ -1223,14 +1196,26 @@ function LeaderboardScreen() {
               const gridExpanded = expandedGridRows.includes(gridKey);
               const gridMemberName = memberDisplayName(state, row.member);
               return (
-                <View key={row.member.id} style={styles.memberGridBlock}>
+                <View
+                  key={row.member.id}
+                  style={[
+                    styles.memberGridBlock,
+                    gridExpanded &&
+                      row.member.id === state.currentUserId && {
+                        backgroundColor: colors.primarySoft,
+                        borderRadius: 14,
+                      },
+                  ]}
+                >
                   <View
                     style={[
                       styles.row,
                       { borderTopColor: colors.border },
                       row.member.id === state.currentUserId && {
-                        backgroundColor: colors.primarySoft,
-                        borderRadius: 14,
+                        backgroundColor: gridExpanded
+                          ? "transparent"
+                          : colors.primarySoft,
+                        borderRadius: gridExpanded ? 0 : 14,
                         borderTopColor: "transparent",
                       },
                     ]}
@@ -1385,11 +1370,8 @@ function LeaderboardScreen() {
                       state={state}
                       metric={metric}
                       memberId={row.member.id}
-                      memberName={gridMemberName}
                       gridDates={gridDates}
                       gridRange={gridRange}
-                      gridKey={gridKey}
-                      setExpandedGridRows={setExpandedGridRows}
                     />
                   ) : null}
                 </View>
@@ -1925,8 +1907,6 @@ const styles = StyleSheet.create({
   memberGridBlock: { overflow: "hidden" },
   gridToggle: { width: 25, minHeight: 34, alignItems: "center", justifyContent: "center" },
   memberGrid: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 7, paddingTop: 5, paddingBottom: 8 },
-  memberGridHeader: { minHeight: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  memberGridLabel: { fontSize: 7, fontWeight: "800" },
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },
   memberLink: {

@@ -101,6 +101,9 @@ export default function DisplaySettings() {
       (page.id !== "performance" || state.settings.showPerformance) &&
       (page.id !== "status" || state.settings.showStatus),
   );
+  const landingPages = pages.filter(
+    (page) => page.id === "status" || visible.some((item) => item.id === page.id),
+  );
   const navigationOrder = React.useMemo(() => {
     const saved = state.settings.tabOrder ?? [];
     const valid = saved.filter(
@@ -326,15 +329,22 @@ export default function DisplaySettings() {
             />
             <SelectionMenu
               title="Default landing page"
-              items={visible.map((page) => ({
+              items={landingPages.map((page) => ({
                 id: page.id,
                 label: page.label,
                 icon: page.icon,
               }))}
               selectedIds={[state.settings.defaultLandingPage ?? "index"]}
-              onChange={([value]) =>
-                value && updateSettings({ defaultLandingPage: value as LandingPage })
-              }
+              onChange={([value]) => {
+                if (!value) return;
+                const defaultLandingPage = value as LandingPage;
+                updateSettings({
+                  defaultLandingPage,
+                  ...(defaultLandingPage === "status"
+                    ? { showStatus: true }
+                    : {}),
+                });
+              }}
               multiple={false}
               searchable={false}
             />
@@ -616,18 +626,6 @@ export default function DisplaySettings() {
         </Card>
       </CollapsibleSection>
 
-      <TutorialTarget id="display-widgets-info">
-        <Card style={styles.widgetInfo}>
-          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
-            <Ionicons name="accessibility-outline" size={19} color={accent} />
-          </View>
-          <View style={styles.copy}>
-            <Text style={[styles.title, { color: colors.ink }]}>Status Avatar widget</Text>
-            <Text style={[styles.meta, { color: colors.muted }]}>{"On Android, add it from the launcher's widget picker. HabHub refreshes it from the latest app snapshot."}</Text>
-          </View>
-          <Ionicons name="phone-portrait-outline" size={18} color={colors.faint} />
-        </Card>
-      </TutorialTarget>
     </Screen>
   );
 }
@@ -743,12 +741,6 @@ const styles = StyleSheet.create({
   chips: { flexDirection: "row", gap: 6 },
   navigationRow: { minHeight: 44, borderTopWidth: 1, flexDirection: "row", alignItems: "center", gap: 8 },
   navigationHeading: { borderBottomWidth: 0 },
-  widgetInfo: {
-    marginTop: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 9,
-  },
   pageText: { flex: 1, fontSize: 10, fontWeight: "900" },
   orderButton: { width: 34, height: 34, alignItems: "center", justifyContent: "center" },
 });

@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { BlurView } from "expo-blur";
 import { router, usePathname } from "expo-router";
 import React, {
   PropsWithChildren,
@@ -12,6 +13,7 @@ import {
   Animated,
   BackHandler,
   findNodeHandle,
+  InteractionManager,
   LayoutChangeEvent,
   Platform,
   Pressable,
@@ -291,6 +293,7 @@ function TutorialSpotlightContent() {
   const curtain = useRef(new Animated.Value(0)).current;
   const routedParameterizedStep = useRef<string | undefined>(undefined);
   const settledPath = useRef<string | undefined>(undefined);
+  const settledStep = useRef<string | undefined>(undefined);
   const localizedGuide = activeGuide
     ? localizedTutorialGuide(activeGuide, language)
     : undefined;
@@ -339,6 +342,9 @@ function TutorialSpotlightContent() {
     safeTop: insets.top,
     safeBottom: insets.bottom,
   });
+  const shadeColor = colors.isDark
+    ? "rgba(2,7,18,0.52)"
+    : "rgba(8,15,24,0.38)";
 
   const measureOverlay = useCallback(() => {
     overlayRef.current?.measureInWindow((x, y) => {
@@ -390,20 +396,23 @@ function TutorialSpotlightContent() {
       setPageSettled(false);
       return;
     }
-    if (settledPath.current === pathname) {
+    const settlementKey = `${stepIdentity}:${pathname}`;
+    if (settledStep.current === settlementKey) {
       setPageSettled(true);
       return;
     }
+    const samePage = settledPath.current === pathname;
     setPageSettled(false);
     const timer = setTimeout(
       () => {
         settledPath.current = pathname;
+        settledStep.current = settlementKey;
         setPageSettled(true);
       },
-      reduceMotion ? 0 : 950,
+      reduceMotion ? 0 : samePage ? 460 : 950,
     );
     return () => clearTimeout(timer);
-  }, [active, pathname, reduceMotion, waitingForRoute]);
+  }, [active, pathname, reduceMotion, stepIdentity, waitingForRoute]);
 
   useEffect(() => {
     if (!active || !step || !pageSettled) return;
@@ -483,8 +492,18 @@ function TutorialSpotlightContent() {
     // Give the real control a chance to perform its own navigation first.
     // This avoids replacing a transparent/modal screen while React Navigation
     // is still presenting it, which can leave Android with a blank surface.
-    const timer = setTimeout(() => router.navigate(route as never), 420);
-    return () => clearTimeout(timer);
+    let interaction:
+      | ReturnType<typeof InteractionManager.runAfterInteractions>
+      | undefined;
+    const timer = setTimeout(() => {
+      interaction = InteractionManager.runAfterInteractions(() =>
+        router.navigate(route as never),
+      );
+    }, 900);
+    return () => {
+      clearTimeout(timer);
+      interaction?.cancel();
+    };
   }, [active, activeSession, pathname, step, stepIdentity]);
 
   useEffect(() => {
@@ -546,8 +565,16 @@ function TutorialSpotlightContent() {
   if (!activeGuide || !activeSession || !step || !localizedGuide || !localizedStep)
     return (
       <Animated.View
-        pointerEvents="auto"
-        style={[styles.transitionCurtain, { opacity: curtain }]}
+        pointerEvents="none"
+        style={[
+          styles.transitionCurtain,
+          {
+            opacity: curtain,
+            backgroundColor: colors.isDark
+              ? "rgba(7,17,39,0.76)"
+              : "rgba(247,241,222,0.72)",
+          },
+        ]}
       />
     );
 
@@ -642,20 +669,28 @@ function TutorialSpotlightContent() {
       accessibilityLiveRegion="polite"
     >
       <Animated.View
-        pointerEvents={transitionPhase === "active" ? "none" : "auto"}
-        style={[styles.transitionCurtain, { opacity: curtain }]}
+        pointerEvents="none"
+        style={[
+          styles.transitionCurtain,
+          {
+            opacity: curtain,
+            backgroundColor: colors.isDark
+              ? "rgba(7,17,39,0.76)"
+              : "rgba(247,241,222,0.72)",
+          },
+        ]}
       />
       {rect ? (
         <>
           <View
             pointerEvents="auto"
-            style={[styles.shade, { left: 0, top: 0, right: 0, height: rect.y }]}
+            style={[styles.shade, { backgroundColor: shadeColor, left: 0, top: 0, right: 0, height: rect.y }]}
           />
           <View
             pointerEvents="auto"
             style={[
               styles.shade,
-              { left: 0, top: rect.y, width: rect.x, height: rect.height },
+              { backgroundColor: shadeColor, left: 0, top: rect.y, width: rect.x, height: rect.height },
             ]}
           />
           <View
@@ -663,6 +698,7 @@ function TutorialSpotlightContent() {
             style={[
               styles.shade,
               {
+                backgroundColor: shadeColor,
                 left: rect.x + rect.width,
                 right: 0,
                 top: rect.y,
@@ -674,7 +710,7 @@ function TutorialSpotlightContent() {
             pointerEvents="auto"
             style={[
               styles.shade,
-              { left: 0, right: 0, top: rect.y + rect.height, bottom: 0 },
+              { backgroundColor: shadeColor, left: 0, right: 0, top: rect.y + rect.height, bottom: 0 },
             ]}
           />
           <Pressable
@@ -700,7 +736,14 @@ function TutorialSpotlightContent() {
           />
         </>
       ) : (
-        <View pointerEvents="auto" style={[styles.shade, StyleSheet.absoluteFill]} />
+        <View
+          pointerEvents="auto"
+          style={[
+            styles.shade,
+            StyleSheet.absoluteFill,
+            { backgroundColor: shadeColor },
+          ]}
+        />
       )}
 
       <View
@@ -711,11 +754,24 @@ function TutorialSpotlightContent() {
             left: layout.left,
             top: layout.top,
             width: layout.width,
-            backgroundColor: colors.card,
+            backgroundColor: colors.isDark
+              ? "rgba(8,18,34,0.76)"
+              : "rgba(255,255,255,0.72)",
             borderColor: accent,
           },
         ]}
       >
+        <BlurView
+          pointerEvents="none"
+          intensity={
+            Platform.OS === "android" ? 32 : colors.isDark ? 54 : 68
+          }
+          tint={colors.isDark ? "dark" : "light"}
+          experimentalBlurMethod={
+            Platform.OS === "android" ? "dimezisBlurView" : undefined
+          }
+          style={styles.calloutBlur}
+        />
         <View
           ref={accessibilityIntroRef}
           accessible
@@ -870,9 +926,8 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     zIndex: 10002,
     elevation: 10002,
-    backgroundColor: "#071127",
   },
-  shade: { position: "absolute", backgroundColor: "rgba(2,7,18,0.72)" },
+  shade: { position: "absolute" },
   spotlight: {
     position: "absolute",
     borderWidth: 3,
@@ -892,6 +947,11 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     elevation: 20,
+  },
+  calloutBlur: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    overflow: "hidden",
   },
   accessibilityIntro: {
     position: "absolute",

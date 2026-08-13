@@ -179,8 +179,8 @@ assert.match(
 );
 assert.match(
   statusPageSource,
-  /styles\.avatarColumn[\s\S]{0,450}styles\.personName[\s\S]{0,350}<BodyProgressAvatar/,
-  "the member name must use the free space directly above the avatar",
+  /styles\.avatarColumn[\s\S]{0,650}styles\.personHeading[\s\S]{0,500}styles\.personName[\s\S]{0,1200}<BodyProgressAvatar/,
+  "the member name and optional weight plan must share the free line directly above the avatar",
 );
 assert.doesNotMatch(
   statusPageSource,

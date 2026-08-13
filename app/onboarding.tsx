@@ -654,7 +654,7 @@ export default function Onboarding() {
       }));
   }
 
-  function configure() {
+  function configure(options?: { keepLeaderboardVisible?: boolean }) {
     const metrics = metricDefinitions();
     configurePersonalMetrics(
       metrics,
@@ -670,9 +670,12 @@ export default function Onboarding() {
       showWeightManagementSummary: goals.includes("weight")
         ? state.settings.showWeightManagementSummary !== false
         : state.settings.showWeightManagementSummary,
-      showLeaderboard: goals.includes("friends"),
+      showLeaderboard:
+        options?.keepLeaderboardVisible === true || goals.includes("friends"),
       showChat: true,
       showGym: true,
+      showStatus:
+        landingPage === "status" || state.settings.showStatus === true,
       defaultLandingPage: landingPage,
     });
     updateEnergyProfile(nextProfile);
@@ -690,8 +693,9 @@ export default function Onboarding() {
   async function completeOnboarding(
     shortTour: boolean,
     route: string,
+    options?: { keepLeaderboardVisible?: boolean },
   ) {
-    configure();
+    configure(options);
     await saveDisplayName();
     updateSettings({
       healthHistoryDays,
@@ -749,7 +753,9 @@ export default function Onboarding() {
     if (finishing) return;
     setFinishing(true);
     try {
-      await completeOnboarding(true, "/");
+      await completeOnboarding(true, "/", {
+        keepLeaderboardVisible: true,
+      });
     } catch (error) {
       setFinishing(false);
       Alert.alert(
@@ -915,7 +921,7 @@ export default function Onboarding() {
               <>
                 <Title
                   title="Your starter dashboard"
-                  copy="Trackers keep useful history. Tracked goals are the few daily goals you care about; for example, Workout duration can stay visible without counting toward your day."
+                  copy={t("Trackers record things you want to see over time. Tracked goals are the small set that count toward Today's completion. For example, keep Body weight as a tracker for its long-term trend, while Steps can be a tracked goal you aim to finish each day.")}
                   colors={colors}
                 />
                 <View style={styles.legend}>
@@ -1123,6 +1129,7 @@ export default function Onboarding() {
                   {goals.includes("friends") ? <Chip label="Leaderboard" icon="people-outline" selected={landingPage === "group"} onPress={() => setLandingPage("group")} /> : null}
                   <Chip label="Progress" icon="stats-chart-outline" selected={landingPage === "insights"} onPress={() => setLandingPage("insights")} />
                   <Chip label="Log" icon="add-circle-outline" selected={landingPage === "log"} onPress={() => setLandingPage("log")} />
+                  <Chip label="Status" icon="accessibility-outline" selected={landingPage === "status"} onPress={() => setLandingPage("status")} />
                 </View>
                 <View style={[styles.switchCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={styles.grow}>

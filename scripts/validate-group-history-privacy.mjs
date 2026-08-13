@@ -61,6 +61,16 @@ assert.match(group, /const LeaderboardMemberGrid = React\.memo/);
 assert.match(group, /const gridModel = useMemo/);
 assert.doesNotMatch(group, /rows\.slice\(0, 4\)\.map/);
 assert.match(group, /pathname: "\/day\/\[date\]"/);
+assert.doesNotMatch(
+  group,
+  /tap a shared day for details/i,
+  "expanded calendars should not spend a row repeating the range and tap hint",
+);
+assert.match(
+  group,
+  /gridExpanded &&[\s\S]{0,120}row\.member\.id === state\.currentUserId[\s\S]{0,160}backgroundColor: colors\.primarySoft[\s\S]{0,80}borderRadius: 14/,
+  "the current user's expanded row and calendar must share one clipped rounded surface",
+);
 assert.match(group, /futureInvitations/);
 assert.match(group, /participation === "invited"/);
 
@@ -480,8 +490,13 @@ assert.match(challenge, /daysOfWeek:/);
 assert.match(challenge, /daysOfMonth:/);
 
 assert.match(names, /randomGroupNameSuggestion\(random = Math\.random\)/);
-assert.match(createGroup, /useState\(\(\) => randomGroupNameSuggestion\(\)\)/);
-assert.match(createGroup, /placeholder=\{t\(`e\.g\. \$\{nameSuggestion\}`\)\}/);
+assert.match(
+  createGroup,
+  /const \[name, setName\] = useState<string>\(\(\) =>[\s\S]{0,50}randomGroupNameSuggestion\(\)/,
+  "a cute stable name must be the editable value, not a placeholder",
+);
+assert.match(createGroup, /value=\{name\}[\s\S]{0,220}selectTextOnFocus/);
+assert.doesNotMatch(createGroup, /Use suggested group name|Try [“\"]\$\{nameSuggestion\}/);
 
 console.log(
   "Group history/privacy validation passed: gap repair, bounded range hydration, collapsible calendars, durable visibility, rich challenge repeats, future invitations, and stable name suggestions.",

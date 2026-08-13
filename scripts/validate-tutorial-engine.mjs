@@ -59,7 +59,18 @@ assert.equal(
   true,
 );
 assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].id, "essential.navigation");
-assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].target, "tab-index");
+assert.equal(
+  BASIC_TUTORIAL_GUIDE.version,
+  5,
+  "Anchor and route-flow changes must invalidate stale persisted basic-guide sessions.",
+);
+assert.equal(BASIC_TUTORIAL_GUIDE.steps[0].target, "tab-bar");
+const tabLayoutSource = fs.readFileSync("app/(tabs)/_layout.tsx", "utf8");
+assert.match(
+  tabLayoutSource,
+  /<TutorialTarget id="tab-bar">[\s\S]{0,100}<BottomTabBar \{\.\.\.props\} \/>/,
+  "The first guide step must measure the complete rendered navigation bar.",
+);
 for (const actionId of [
   "tutorial.navigation.open-menu",
   "tutorial.navigation.open-customize",
@@ -82,8 +93,28 @@ assert.doesNotMatch(
 );
 assert.match(
   menuSource,
-  /InteractionManager\.runAfterInteractions\([\s\S]{0,180}openDestination/,
-  "The next menu destination must wait until the outgoing native drawer transition is idle.",
+  /const NATIVE_MENU_DISMISS_MS = 320/,
+  "The outgoing native drawer needs a complete dismissal beat before another modal opens.",
+);
+assert.match(
+  menuSource,
+  /const openDestination = \(\) => \{[\s\S]{0,120}router\.navigate\(path as never\)[\s\S]{0,260}tutorial\.reportEvent\([\s\S]{0,500}router\.back\(\)[\s\S]{0,300}setTimeout\(openDestination, NATIVE_MENU_DISMISS_MS\)/,
+  "Menu practice must advance with one delayed destination navigation, after drawer dismissal.",
+);
+assert.match(
+  menuSource,
+  /destinationOpeningRef\.current\) return;[\s\S]{0,80}destinationOpeningRef\.current = true/,
+  "Repeated taps cannot stack menu destination modals.",
+);
+assert.doesNotMatch(
+  menuSource,
+  /InteractionManager|setTimeout\(openDestination, 80\)/,
+  "An interaction callback or short timer must not race the transparent native drawer dismissal.",
+);
+assert.match(
+  customizeSource,
+  /closeInFlightRef\.current\) return;[\s\S]{0,650}router\.back\(\)[\s\S]{0,120}setTimeout\(reportClose, 320\)/,
+  "Customize must use one guarded modal dismissal before its delayed tutorial advance.",
 );
 assert.match(
   todaySource,
@@ -92,8 +123,37 @@ assert.match(
 );
 assert.doesNotMatch(
   todaySource,
+  /findNodeHandle/,
+  "Today tutorial reveal must not call unsupported findNodeHandle on web.",
+);
+assert.match(
+  todaySource,
+  /todayScrollViewportRef\.current\?\.measureInWindow\([\s\S]{0,300}todayScrollRef\.current\?\.scrollTo/,
+  "Today tutorial reveal must measure its cross-platform View ref rather than a node handle.",
+);
+assert.match(
+  todaySource,
+  /<View ref=\{todayScrollViewportRef\} collapsable=\{false\} style=\{styles\.safe\}>/,
+  "Today must keep a measurable, non-collapsible viewport around its tutorial ScrollView.",
+);
+assert.doesNotMatch(
+  todaySource,
   /<Modal[\s\S]{0,120}visible=\{showViewFilters\}/,
   "A native Modal would cover the tutorial callout for the filter-manager practice step.",
+);
+const viewFilterOverlayStyle = todaySource.match(
+  /viewFilterOverlay:\s*\{([\s\S]*?)\n\s*\},/,
+)?.[1];
+assert.ok(viewFilterOverlayStyle, "Today must retain its in-tree filter overlay style.");
+assert.doesNotMatch(
+  viewFilterOverlayStyle,
+  /backgroundColor|elevation/,
+  "The Android filter overlay must not create an elevated tinted hardware surface.",
+);
+assert.match(
+  todaySource,
+  /viewFilterBackdrop:\s*\{\s*backgroundColor: "rgba\(10,15,12,\.52\)"\s*\}/,
+  "Only the full-screen pressable backdrop should provide the Today filter dim.",
 );
 const anchoredDayStep = {
   id: "anchored-day",
@@ -292,11 +352,12 @@ assert.match(
 );
 assert.match(
   spotlightSource,
-  /setTimeout\(\(\) => router\.navigate\(route as never\), 420\)/,
-  "Route enforcement must wait for the real control before navigating.",
+  /setTimeout\(\(\) => \{[\s\S]{0,180}InteractionManager\.runAfterInteractions\([\s\S]{0,120}router\.navigate\(route as never\)[\s\S]{0,120}, 900\)/,
+  "Route enforcement must wait for the real control and native interactions before navigating.",
 );
 assert.match(spotlightSource, /settledPath\.current === pathname/);
-assert.match(spotlightSource, /reduceMotion \? 0 : 950/);
+assert.match(spotlightSource, /reduceMotion \? 0 : samePage \? 460 : 950/);
+assert.match(spotlightSource, /const settlementKey = `\$\{stepIdentity\}:\$\{pathname\}`/);
 assert.match(
   spotlightSource,
   /function back\(\)[\s\S]{0,180}previousStep\(\);/,
@@ -309,8 +370,17 @@ assert.doesNotMatch(
 );
 assert.match(
   spotlightSource,
-  /if \(!activeGuide \|\| !activeSession \|\| !step \|\| !localizedGuide \|\| !localizedStep\)[\s\S]{0,220}styles\.transitionCurtain/,
-  "Entering with no active session must still render an opaque transition curtain",
+  /if \(!activeGuide \|\| !activeSession \|\| !step \|\| !localizedGuide \|\| !localizedStep\)[\s\S]{0,260}styles\.transitionCurtain/,
+  "Entering with no active session must retain a bounded transition surface",
+);
+assert.match(spotlightSource, /import \{ BlurView \} from "expo-blur"/);
+assert.match(spotlightSource, /experimentalBlurMethod=/);
+assert.match(spotlightSource, /Platform\.OS === "android" \? 32/);
+assert.match(spotlightSource, /pointerEvents="none"[\s\S]{0,120}styles\.transitionCurtain/);
+assert.match(
+  contextSource,
+  /defensive recovery path[\s\S]{0,700}transitionPhase === "entering"[\s\S]{0,500}setTransitionPhase\("active"\)/,
+  "Native tutorial transitions need a watchdog so a detached modal cannot strand the screen.",
 );
 assert.match(spotlightSource, /localizedTutorialGuide\(activeGuide, language\)/);
 assert.match(quickGuideSource, /localizedTutorialGuides\(guides, language\)/);
@@ -322,17 +392,17 @@ assert.match(uiSource, /scrollOffsetRef\.current \+ targetWindowY - scrollWindow
 assert.match(uiSource, /onScroll\?\.\(event\)/, "Screen must preserve its caller's onScroll callback");
 assert.match(
   uiSource,
-  /onScroll=\{\(event\) => \{[\s\S]{0,180}scheduleTutorialTargetMeasure\(\);/,
+  /onScroll=\{[\s\S]{0,700}scheduleTutorialTargetMeasure\(\);/,
   "Screen scrolls must keep the active spotlight aligned with its real control",
 );
 assert.match(
   uiSource,
-  /onScrollEndDrag=\{\(event\) => \{[\s\S]{0,120}flushTutorialTargetMeasure\(\);[\s\S]{0,120}onScrollEndDrag\?\.\(event\)/,
+  /onScrollEndDrag=\{[\s\S]{0,700}flushTutorialTargetMeasure\(\);[\s\S]{0,180}onScrollEndDrag\?\.\(event\)/,
   "Screen must remeasure at drag end and preserve the caller's handler",
 );
 assert.match(
   uiSource,
-  /onMomentumScrollEnd=\{\(event\) => \{[\s\S]{0,120}flushTutorialTargetMeasure\(\);[\s\S]{0,120}onMomentumScrollEnd\?\.\(event\)/,
+  /onMomentumScrollEnd=\{[\s\S]{0,700}flushTutorialTargetMeasure\(\);[\s\S]{0,180}onMomentumScrollEnd\?\.\(event\)/,
   "Screen must remeasure at momentum end and preserve the caller's handler",
 );
 assert.match(

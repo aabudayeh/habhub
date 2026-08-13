@@ -14,7 +14,10 @@ export type ScreenTimeReport = {
   accessGranted: boolean;
   from: number;
   to: number;
-  /** Android app-foreground totals are the closest public proxy for screen use. */
+  /**
+   * Android UsageStats app-foreground time is the closest distributable
+   * proxy. Digital Wellbeing's privileged/private counters are not exposed.
+   */
   screenTimeMs: number;
   approximate: true;
   calculationMethod?:

@@ -7,10 +7,13 @@ import type {
 const MINUTE_MS = 60_000;
 
 type HealthImportIdentity = {
+  id?: unknown;
   source?: unknown;
   sourceProvider?: unknown;
   sourceRecordId?: unknown;
   sourceOrigin?: unknown;
+  recordedAt?: unknown;
+  sourceUpdatedAt?: unknown;
 };
 
 /**
@@ -27,7 +30,7 @@ export function hasHealthImportIdentity(entry: HealthImportIdentity) {
   );
 }
 
-/** Only provenance-free manual fallback rows may be replaced from the web. */
+/** Only provenance-free manual fallback rows may be replaced from the Log UI. */
 export function manualStepEntriesEligibleForReplacement<
   TEntry extends HealthImportIdentity,
 >(entries: readonly TEntry[]): TEntry[] {
@@ -35,16 +38,43 @@ export function manualStepEntriesEligibleForReplacement<
 }
 
 /**
- * A web-entered step total is the fallback when no device bridge exists. If a
- * phone later supplies the same day through Health Connect/HealthKit, that
- * platform aggregate is authoritative instead of being added to the manual
- * total and doubling the day.
+ * Steps are a daily total, never an additive mixture of manual and imported
+ * rows. The newest user override wins immediately; a later device sync can
+ * reclaim authority without deleting either provenance stream.
  */
 export function authoritativeStepEntries<
   TEntry extends HealthImportIdentity,
 >(entries: readonly TEntry[]): TEntry[] {
   const imported = entries.filter(hasHealthImportIdentity);
-  return imported.length ? imported : [...entries];
+  const manual = entries.filter((entry) => !hasHealthImportIdentity(entry));
+  const latest = (items: readonly TEntry[]) =>
+    items.reduce<TEntry | undefined>((current, candidate) => {
+      if (!current) return candidate;
+      const currentRevision = String(
+        current.sourceUpdatedAt ?? current.recordedAt ?? "",
+      );
+      const candidateRevision = String(
+        candidate.sourceUpdatedAt ?? candidate.recordedAt ?? "",
+      );
+      if (candidateRevision !== currentRevision)
+        return candidateRevision > currentRevision ? candidate : current;
+      return String(candidate.id ?? "") > String(current.id ?? "")
+        ? candidate
+        : current;
+    }, undefined);
+  const latestImported = latest(imported);
+  const latestManual = latest(manual);
+  if (!latestImported) return latestManual ? [latestManual] : [];
+  if (!latestManual) return [latestImported];
+  const importedRevision = String(
+    latestImported.sourceUpdatedAt ?? latestImported.recordedAt ?? "",
+  );
+  const manualRevision = String(
+    latestManual.sourceUpdatedAt ?? latestManual.recordedAt ?? "",
+  );
+  return manualRevision > importedRevision
+    ? [latestManual]
+    : [latestImported];
 }
 
 /**
@@ -267,7 +297,7 @@ export function healthRecordsAreEquivalent(
   if ((left.workoutRecordKind ?? "session") !== (right.workoutRecordKind ?? "session"))
     return false;
   if (left.type === "steps") {
-    return left.endTime.slice(0, 10) === right.endTime.slice(0, 10);
+    return recordDay(left) === recordDay(right);
   }
   if (left.type === "menstruation")
     return left.endTime.slice(0, 10) === right.endTime.slice(0, 10);
@@ -317,7 +347,18 @@ function latestRecord(left: HealthImportRecord, right: HealthImportRecord) {
 }
 
 function recordDay(record: HealthImportRecord) {
-  return record.endTime.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(record.localDate ?? ""))
+    return record.localDate!;
+  if (record.type !== "steps")
+    return (record.endTime || record.startTime).slice(0, 10);
+  const instant = new Date(record.endTime || record.startTime);
+  if (!Number.isNaN(instant.getTime())) {
+    const year = instant.getFullYear();
+    const month = String(instant.getMonth() + 1).padStart(2, "0");
+    const day = String(instant.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return (record.endTime || record.startTime).slice(0, 10);
 }
 
 function normalizeStepRecords(records: HealthImportRecord[]) {

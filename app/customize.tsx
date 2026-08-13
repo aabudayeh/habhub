@@ -88,6 +88,7 @@ export default function Customize() {
     },
   });
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
+  const closeInFlightRef = useRef(false);
   useEffect(() => {
     setCloudSyncPaused("customize-reorder", Boolean(draggingMetricId));
     return () => setCloudSyncPaused("customize-reorder", false);
@@ -230,11 +231,19 @@ export default function Customize() {
             icon="close"
             label="Close"
             onPress={() => {
+              if (closeInFlightRef.current) return;
+              closeInFlightRef.current = true;
+              const reportClose = () =>
+                tutorial.reportEvent({
+                  actionId: "tutorial.navigation.close-customize",
+                  scope: "isolated-preview",
+                });
+              // Let this single native dismissal reveal Today before advancing
+              // to the Today step, so route enforcement cannot stack a second
+              // navigation against the outgoing Customize surface.
               router.back();
-              tutorial.reportEvent({
-                actionId: "tutorial.navigation.close-customize",
-                scope: "isolated-preview",
-              });
+              if (Platform.OS === "web") reportClose();
+              else setTimeout(reportClose, 320);
             }}
           />
           </TutorialTarget>

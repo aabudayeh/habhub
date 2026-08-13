@@ -133,7 +133,7 @@ for (const id of onboardingTrackerIds) {
 }
 assert.match(
   onboarding,
-  /Trackers keep useful history\. Tracked goals are the few daily goals you care about; for example, Workout duration can stay visible without counting toward your day\./,
+  /Trackers record things you want to see over time\.[\s\S]{0,220}Body weight as a tracker for its long-term trend, while Steps can be a tracked goal/,
 );
 assert.match(onboarding, /Tap a tracker to learn what it records/);
 assert.match(onboarding, /<Modal[\s\S]*?infoTracker\.description/);
@@ -158,9 +158,62 @@ assert.match(
 );
 assert.match(status, /weightManagementSummaryVisible\(state\.settings\)/);
 assert.match(today, /weightManagementSummaryVisible\(state\.settings\)/);
+assert.match(
+  today,
+  /styles\.heroTitleRow[\s\S]{0,1500}styles\.heroWeightInline/,
+  "Today's target ETA must share the existing goals-left row.",
+);
+assert.doesNotMatch(
+  today,
+  /styles\.heroWeightPlan/,
+  "Today's target ETA must not add a separate row to the featured card.",
+);
+assert.match(
+  today,
+  /delay: heroAllMet \? GOLD_HERO_FADE_MS \+ 120 : 0/,
+  "Perfect Day goal liquid must wait until the shared gold state is established.",
+);
+assert.match(
+  today,
+  /Animated\.timing\(todayGoldTint,[\s\S]{0,180}useNativeDriver: true/,
+  "The subtle all-complete page tint must use a native opacity animation.",
+);
+assert.match(today, /styles\.todayGoldTint[\s\S]{0,180}opacity: todayGoldTint/);
+assert.match(
+  today,
+  /const \[goldPresentation, setGoldPresentation\] = useState<[\s\S]{0,100}>\("pending"\)/,
+  "Perfect Day rendering must wait for persisted celebration-snapshot hydration.",
+);
+assert.doesNotMatch(
+  today,
+  /new Animated\.Value\((?:heroAllMet|allMet && met|allGoalsMet && trackedGoal)/,
+  "Hero, completion dots, and goal tiles must not cold-mount gold before hydration.",
+);
+assert.equal(
+  (today.match(/goldPresentation=\{goldPresentation\}/g) ?? []).length,
+  2,
+  "The snapshot state must gate both featured dots and Today goal tiles.",
+);
+assert.match(
+  today,
+  /if \(goldPresentation === "settled"\) \{[\s\S]{0,100}gold\.setValue\(1\)/,
+  "Already-celebrated goals must settle gold directly without replaying.",
+);
+assert.match(
+  status,
+  /styles\.personHeading[\s\S]{0,900}memberDisplayName\(state, member\)[\s\S]{0,900}styles\.personWeightPlan/,
+  "Status target ETA must share the existing user-name line.",
+);
+assert.doesNotMatch(status, /styles\.weightPlanLine/);
 assert.match(today, /habhub-all-goals-dismissed-v1:/);
 assert.match(today, /accessibilityLabel="Dismiss all goals complete"/);
 assert.match(display, /showWeightManagementSummary/);
+assert.match(
+  display,
+  /page\.id === "status" \|\| visible\.some/,
+  "Display must offer Status as a landing choice even before its tab is enabled.",
+);
+assert.doesNotMatch(display, /Status Avatar widget|launcher' s widget picker|display-widgets-info/);
 
 assert.match(log, /selected\?\.id === "water" \? "0\.25" : ""/);
 assert.match(log, /function adjustWaterCups\(change: -1 \| 1\)/);

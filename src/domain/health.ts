@@ -80,7 +80,8 @@ function entryFor(
     metricId,
     userId,
     value,
-    localDate: dateKey(new Date(record.endTime || record.startTime)),
+    localDate:
+      record.localDate ?? dateKey(new Date(record.endTime || record.startTime)),
     recordedAt: record.endTime || record.startTime,
     visibility,
     source: 'imported',

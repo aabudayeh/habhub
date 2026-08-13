@@ -10,6 +10,11 @@ type SizedIndex<T> = {
   values: Map<string, T[]>;
 };
 
+type RecordedAtIndex = {
+  size: number;
+  values: Set<string>;
+};
+
 const entryIndexes = new WeakMap<MetricEntry[], SizedIndex<MetricEntry>>();
 const statusIndexes = new WeakMap<
   DailyMetricStatus[],
@@ -25,7 +30,7 @@ const userDayEntryIndexes = new WeakMap<
   MetricEntry[],
   SizedIndex<MetricEntry>
 >();
-
+const recordedAtEntryIndexes = new WeakMap<MetricEntry[], RecordedAtIndex>();
 function indexed<T>(
   source: T[],
   cache: WeakMap<T[], SizedIndex<T>>,
@@ -104,6 +109,30 @@ export function entriesForUserDay(
       userDayEntryIndexes,
       (entry) => `${entry.userId}\u0000${entry.localDate}`,
     ).get(key) ?? []
+  );
+}
+
+export function hasEntryAtRecordedTime(
+  entries: MetricEntry[],
+  metricId: string,
+  userId: string,
+  recordedAt: string,
+) {
+  let index = recordedAtEntryIndexes.get(entries);
+  if (!index || index.size !== entries.length) {
+    index = {
+      size: entries.length,
+      values: new Set(
+        entries.map(
+          (entry) =>
+            `${entry.metricId}\u0000${entry.userId}\u0000${entry.recordedAt}`,
+        ),
+      ),
+    };
+    recordedAtEntryIndexes.set(entries, index);
+  }
+  return index.values.has(
+    `${metricId}\u0000${userId}\u0000${recordedAt}`,
   );
 }
 

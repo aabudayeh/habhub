@@ -24,7 +24,6 @@ const targetSources = new Map([
   ["battery-optimization", "app/notifications.tsx"],
   ["personal-theme", "app/display-settings.tsx"],
   ["display-layout", "app/display-settings.tsx"],
-  ["display-widgets-info", "app/display-settings.tsx"],
   ["metric-detail-summary", "app/metric-detail.tsx"],
   ["metric-detail-chart", "app/metric-detail.tsx"],
   ["screen-time-breakdown", "src/screenTime/ScreenTimeBreakdownCard.tsx"],

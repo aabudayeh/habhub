@@ -284,7 +284,7 @@ const LOG_STEPS = [
     path: "/log",
     target: "log-header",
     title: "Choose a tracker to log",
-    copy: "Manual trackers accept an entry. Calculated, device-owned and gym-derived trackers direct you to their history or source instead.",
+    copy: "Manual trackers accept an entry. Steps also accepts a manual daily total when device sync is unavailable; most other calculated, device-owned and gym-derived trackers open their history or source.",
     primaryLabel: "Next",
     navigation: { before: "/log" },
   }),
@@ -776,15 +776,6 @@ const SETTINGS_STEPS = [
     title: "Choose pages and navigation order",
     copy: "Show or hide optional pages, reorder the navigation bar, configure Today tiles and completion indicator, and choose available Progress layouts.",
     primaryLabel: "Next",
-  }),
-  step("display", {
-    id: "full.display.widgets",
-    path: "/display-settings",
-    target: "display-widgets-info",
-    title: "Add the Status widget from Android",
-    copy: "HabHub keeps the Status Avatar widget updated from app snapshots. Home-screen widget placement belongs to the Android launcher, so the guide can explain it but cannot practice that system action inside HabHub.",
-    primaryLabel: "Next module",
-    required: false,
   }),
 ] as const;
 

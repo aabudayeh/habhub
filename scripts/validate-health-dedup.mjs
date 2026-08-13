@@ -27,21 +27,55 @@ const record = (overrides = {}) => ({
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const webFallbackAndPhoneTotal = authoritativeStepEntries([
-  { id: "web", value: 8_000 },
+const manualFallbackAndPhoneTotal = authoritativeStepEntries([
+  { id: "manual", value: 8_000 },
   { id: "phone", value: 8_350, sourceProvider: "health_connect" },
 ]);
 assert.deepEqual(
-  webFallbackAndPhoneTotal.map((entry) => entry.id),
+  manualFallbackAndPhoneTotal.map((entry) => entry.id),
   ["phone"],
-  "a later device aggregate must replace, not add to, the web fallback",
+  "legacy rows without revisions must prefer the device aggregate, never add both",
 );
 assert.deepEqual(
-  authoritativeStepEntries([{ id: "web", value: 8_000 }]).map(
+  authoritativeStepEntries([{ id: "manual", value: 8_000 }]).map(
     (entry) => entry.id,
   ),
-  ["web"],
-  "the web total must remain usable when no phone aggregate exists",
+  ["manual"],
+  "a manual daily total must remain usable when no device aggregate exists",
+);
+
+const importedBeforeOverride = {
+  id: "phone-before-override",
+  value: 8_350,
+  sourceProvider: "health_connect",
+  sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
+};
+const manualOverride = {
+  id: "manual-override",
+  value: 8_100,
+  source: "manual",
+  sourceUpdatedAt: "2026-08-13T09:00:00.000Z",
+};
+assert.deepEqual(
+  authoritativeStepEntries([importedBeforeOverride, manualOverride]).map(
+    (entry) => entry.id,
+  ),
+  ["manual-override"],
+  "a newer manual APK/web entry must immediately override the daily device total",
+);
+assert.deepEqual(
+  authoritativeStepEntries([
+    importedBeforeOverride,
+    manualOverride,
+    {
+      ...importedBeforeOverride,
+      id: "phone-after-override",
+      value: 8_420,
+      sourceUpdatedAt: "2026-08-13T09:05:00.000Z",
+    },
+  ]).map((entry) => entry.id),
+  ["phone-after-override"],
+  "a later device sync must reclaim authority without adding the manual total",
 );
 
 const existingImportedStep = {
@@ -50,6 +84,7 @@ const existingImportedStep = {
   source: "imported",
   sourceProvider: "health_connect",
   sourceRecordId: "daily:2026-08-13",
+  sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
 };
 const existingManualStep = {
   id: "web-old",
@@ -64,21 +99,26 @@ const replacementTombstones = replacedManualRows.map((entry) => entry.id);
 const replacedRows = new Set(replacedManualRows);
 const afterWebReplacement = [
   ...replacementCandidates.filter((entry) => !replacedRows.has(entry)),
-  { id: "web-new", value: 8_100, source: "manual" },
+  {
+    id: "manual-new",
+    value: 8_100,
+    source: "manual",
+    sourceUpdatedAt: "2026-08-13T09:00:00.000Z",
+  },
 ];
 assert.deepEqual(replacementTombstones, ["web-old"]);
 assert.ok(
   afterWebReplacement.some((entry) => entry.id === "phone-existing"),
-  "manual web replacement must retain the imported Steps row",
+  "manual replacement must retain the imported Steps row in storage",
 );
 assert.ok(
   !replacementTombstones.includes("phone-existing"),
-  "manual web replacement must not tombstone the imported Steps row",
+  "manual replacement must not tombstone the imported Steps row",
 );
 assert.deepEqual(
   authoritativeStepEntries(afterWebReplacement).map((entry) => entry.id),
-  ["phone-existing"],
-  "the imported phone total must remain the displayed authoritative Steps value",
+  ["manual-new"],
+  "the newer manual daily total must display without deleting the imported row",
 );
 
 const historicalChunk = localCalendarAggregateRange(
@@ -117,6 +157,30 @@ const mirroredSteps = deduplicateHealthImportRecords([
 assert.equal(mirroredSteps.length, 1);
 assert.equal(mirroredSteps[0].value, 1254);
 assert.equal(healthSourceId(mirroredSteps[0].origin), "samsung-health");
+
+const timezoneSafeSteps = deduplicateHealthImportRecords([
+  record({
+    id: "late-samsung",
+    localDate: "2026-08-10",
+    startTime: "2026-08-10T22:30:00.000Z",
+    endTime: "2026-08-10T23:30:00.000Z",
+    value: 900,
+  }),
+  record({
+    id: "post-midnight-mirror",
+    localDate: "2026-08-10",
+    startTime: "2026-08-11T00:00:00.000+02:00",
+    endTime: "2026-08-11T01:30:00.000+02:00",
+    value: 898,
+    origin: "com.android.healthconnect.phone.random",
+  }),
+]);
+assert.equal(
+  timezoneSafeSteps.length,
+  1,
+  "the Health Connect local bucket date must win over UTC string slicing",
+);
+assert.equal(timezoneSafeSteps[0].localDate, "2026-08-10");
 
 const stepOrigins = [
   "com.google.android.apps.fitness",
@@ -217,10 +281,20 @@ assert.match(
   /hasDisabledSource && enabledOrigins\.length[\s\S]*dataOriginFilter: enabledOrigins/,
   "disabled writers must be excluded through Health Connect's inclusion filter",
 );
-assert.doesNotMatch(
+assert.match(
   androidHealthSource,
-  /dataOriginFilter: \[selectedOrigin\]/,
-  "the default path must preserve Health Connect's Activity-priority dedupe",
+  /preferredHealthSourceOrigin\([\s\S]{0,220}healthSourceId\(preferredOrigin\) === "samsung-health"/,
+  "Samsung must be selected only when it contributed and remains enabled",
+);
+assert.match(
+  androidHealthSource,
+  /dataOriginFilter: \[samsungOrigin\][\s\S]{0,900}groupsByDay\.set[\s\S]{0,250}selectedOrigin: samsungOrigin/,
+  "a per-day Samsung aggregate must replace only matching exported days",
+);
+assert.match(
+  androidHealthSource,
+  /endTime: recordedAt,[\s\S]{0,500}localDate,[\s\S]{0,500}updatedAt: syncRevision/,
+  "daily imports must preserve the local bucket date and sync revision",
 );
 assert.doesNotMatch(
   androidHealthSource,
@@ -231,15 +305,15 @@ const logSource = fs.readFileSync(
   path.join(root, "app", "(tabs)", "log.tsx"),
   "utf8",
 );
-assert.match(
+assert.doesNotMatch(
   logSource,
   /metric\.id !== "steps" \|\| Platform\.OS === "web"/,
-  "web must expose Steps in the manual logger",
+  "native Log must no longer hide manual Steps",
 );
 assert.match(
   logSource,
-  /metric\.manualEntry !== false \|\|[\s\S]{0,100}metric\.id === "steps" && Platform\.OS === "web"/,
-  "the device-owned Steps flag must not hide manual web entry",
+  /metric\.manualEntry !== false \|\| metric\.id === "steps"/,
+  "the device-owned Steps flag must not hide manual APK or web entry",
 );
 const appProviderSource = fs.readFileSync(
   path.join(root, "src", "state", "AppProvider.tsx"),
@@ -247,23 +321,23 @@ const appProviderSource = fs.readFileSync(
 );
 assert.match(
   appProviderSource,
-  /const WEB_LOG_MANUAL_STEPS_CAPABILITY = Symbol\("web-log-manual-steps"\)/,
-  "manual web Steps must use a private reducer capability",
+  /const LOG_MANUAL_STEPS_CAPABILITY = Symbol\("log-manual-steps"\)/,
+  "manual Steps must use a private reducer capability",
 );
 assert.match(
   appProviderSource,
-  /metric\?\.id === "steps"[\s\S]{0,300}action\.mode === "replace"[\s\S]{0,300}action\.manualDeviceEntryCapability ===[\s\S]{0,100}WEB_LOG_MANUAL_STEPS_CAPABILITY/,
+  /metric\?\.id === "steps"[\s\S]{0,300}action\.mode === "replace"[\s\S]{0,300}action\.manualDeviceEntryCapability ===[\s\S]{0,100}LOG_MANUAL_STEPS_CAPABILITY/,
   "the reducer must require the private capability for numeric replacement Steps",
 );
 assert.match(
   appProviderSource,
-  /\(metric\?\.id === "steps" \|\| metric\?\.manualEntry === false\)[\s\S]{0,100}!authorizedWebSteps/,
+  /\(metric\?\.id === "steps" \|\| metric\?\.manualEntry === false\)[\s\S]{0,100}!authorizedManualSteps/,
   "all device-owned entries, including Steps, must be rejected without authorization",
 );
 assert.match(
   appProviderSource,
-  /const entriesToReplace = authorizedWebSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
-  "authorized web Steps must replace only provenance-free manual candidates",
+  /const entriesToReplace = authorizedManualSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
+  "authorized manual Steps must replace only provenance-free manual candidates",
 );
 assert.match(
   appProviderSource,
@@ -272,15 +346,15 @@ assert.match(
 );
 assert.match(
   appProviderSource,
-  /Platform\.OS === "web"[\s\S]{0,200}metricId === "steps"[\s\S]{0,200}mode === "replace"[\s\S]{0,200}request\?\.source === "web-log-ui"[\s\S]{0,200}request\.deviceOwnedMetric === "steps"[\s\S]{0,200}\? WEB_LOG_MANUAL_STEPS_CAPABILITY/,
-  "the provider must mint the reducer capability only for an explicit web Log Steps replacement",
+  /metricId === "steps"[\s\S]{0,200}mode === "replace"[\s\S]{0,200}request\?\.source === "log-ui"[\s\S]{0,200}request\.deviceOwnedMetric === "steps"[\s\S]{0,200}\? LOG_MANUAL_STEPS_CAPABILITY/,
+  "the provider must mint the reducer capability only for an explicit Log Steps replacement",
 );
 assert.match(
   logSource,
-  /selected\.id === "steps"[\s\S]{0,100}\{ source: "web-log-ui", deviceOwnedMetric: "steps" \}/,
-  "the current Log save handler must explicitly request the manual web Steps capability",
+  /selected\.id === "steps"[\s\S]{0,100}\{ source: "log-ui", deviceOwnedMetric: "steps" \}/,
+  "the current Log save handler must explicitly request the manual Steps capability",
 );
-const webLogCapabilityCallers = [];
+const logCapabilityCallers = [];
 for (const relativeRoot of ["app", "src"]) {
   const pending = [path.join(root, relativeRoot)];
   while (pending.length) {
@@ -292,16 +366,40 @@ for (const relativeRoot of ["app", "src"]) {
         if (absolute === path.join(root, "src", "state", "AppProvider.tsx"))
           continue;
         const source = fs.readFileSync(absolute, "utf8");
-        if (source.includes('source: "web-log-ui"'))
-          webLogCapabilityCallers.push(path.relative(root, absolute));
+        if (source.includes('source: "log-ui"'))
+          logCapabilityCallers.push(path.relative(root, absolute));
       }
     }
   }
 }
 assert.deepEqual(
-  webLogCapabilityCallers,
+  logCapabilityCallers,
   [path.join("app", "(tabs)", "log.tsx")],
-  "no native, assistant, timer, or incidental caller may request the web Log Steps capability",
+  "no assistant, timer, or incidental caller may request the Log Steps capability",
+);
+const localPersistenceChangedStart = appProviderSource.indexOf(
+  "function localPersistenceChanged",
+);
+const localPersistenceChangedEnd = appProviderSource.indexOf(
+  "type Action",
+  localPersistenceChangedStart,
+);
+assert.ok(localPersistenceChangedStart >= 0 && localPersistenceChangedEnd > 0);
+const localPersistenceChangedSource = appProviderSource.slice(
+  localPersistenceChangedStart,
+  localPersistenceChangedEnd,
+);
+assert.doesNotMatch(localPersistenceChangedSource, /previous\.photos !== next\.photos/);
+assert.doesNotMatch(localPersistenceChangedSource, /previous\.messages !== next\.messages/);
+assert.match(
+  localPersistenceChangedSource,
+  /sameOwnedRowsByReference\([\s\S]{0,100}previous\.photos,[\s\S]{0,100}next\.photos/,
+  "peer-only photo hydration must not serialize the monolithic local snapshot",
+);
+assert.match(
+  localPersistenceChangedSource,
+  /sameRowsByReference\([\s\S]{0,100}previous\.messages,[\s\S]{0,180}message\.senderId === next\.currentUserId/,
+  "peer-only message hydration must not serialize the monolithic local snapshot",
 );
 const appleHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "appleHealth.ios.ts"),
@@ -407,5 +505,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: calendar-aligned platform step totals, web entry, source controls, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: calendar-aligned Samsung/platform totals, manual daily overrides, source controls, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

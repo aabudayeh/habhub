@@ -6,6 +6,8 @@ export type HealthImportRecord = {
   provider: HealthProvider;
   startTime: string;
   endTime: string;
+  /** Local calendar day represented by a daily aggregate. */
+  localDate?: string;
   value: number | boolean;
   unit: string;
   origin?: string;

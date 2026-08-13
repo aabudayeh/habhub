@@ -2,8 +2,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { ScreenTimeReport } from "@/src/screenTime";
 
-// v5 prefers DAILY-granularity UsageStats buckets over incomplete OEM events.
-const PREFIX = "habhub:screen-time-report:v5:";
+// v6 prefers a fresher complete foreground-event total for today's partial
+// bucket and keeps retained history on native DAILY UsageStats rows.
+const PREFIX = "habhub:screen-time-report:v6:";
 
 export async function cacheScreenTimeReport(
   localDate: string,

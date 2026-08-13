@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { BottomTabBar } from "@react-navigation/bottom-tabs";
 import { useIsFocused } from "@react-navigation/native";
 import { Href, Tabs } from "expo-router";
 import React, { useMemo } from "react";
@@ -13,6 +14,7 @@ import { LandingPage } from "@/src/types";
 import { useTranslation } from "@/src/i18n";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
+import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -155,6 +157,11 @@ export default function TabLayout() {
   return (
     <Tabs
       initialRouteName={defaultTab}
+      tabBar={(props) => (
+        <TutorialTarget id="tab-bar">
+          <BottomTabBar {...props} />
+        </TutorialTarget>
+      )}
       screenLayout={({ children }) => (
         <WebTabFreeze>{children}</WebTabFreeze>
       )}

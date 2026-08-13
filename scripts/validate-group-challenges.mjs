@@ -375,7 +375,26 @@ assert.match(challengeEditor, /recurrence\?\.mode === "daily"/);
 assert.match(challengeEditor, /repeatMode === "selected_days"/);
 assert.match(challengeEditor, /repeatMode === "interval_days"/);
 assert.match(challengeEditor, /repeatMode === "days_of_month"/);
-assert.match(challengeEditor, /\["every_other_day", "Every other"\]/);
+assert.match(challengeEditor, /import \{ SelectionMenu \}/);
+assert.match(
+  challengeEditor,
+  /<SelectionMenu[\s\S]{0,120}title="Frequency"[\s\S]{0,180}multiple=\{false\}[\s\S]{0,180}items=\{CHALLENGE_REPEAT_OPTIONS\}/,
+  "challenge frequency should use the same compact selection menu as reminders",
+);
+for (const label of [
+  "Once",
+  "Every day",
+  "Selected weekdays",
+  "Every other day",
+  "Custom interval",
+  "Dates each month",
+])
+  assert.match(challengeEditor, new RegExp(`label: "${label}"`));
+assert.doesNotMatch(
+  challengeEditor,
+  /styles\.repeatChip|styles\.repeatRow/,
+  "the legacy challenge frequency chip cloud must stay removed",
+);
 assert.match(challengeEditor, /mode: repeatMode/);
 assert.match(challengeEditor, /endDate: repeatUntil/);
 assert.match(

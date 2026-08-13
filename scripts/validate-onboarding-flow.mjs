@@ -75,6 +75,11 @@ assert.match(connectionPage, /startHealthGoalsFromHistory/);
 assert.match(connectionPage, /Open HabHub on/);
 assert.match(connectionPage, /Start in dark mode/);
 assert.match(
+  connectionPage,
+  /label="Status"[\s\S]{0,180}landingPage === "status"[\s\S]{0,180}setLandingPage\("status"\)/,
+  "Status must be available as an onboarding landing page.",
+);
+assert.match(
   source,
   /const OPTIONAL_ONBOARDING_TRACKER_IDS = \["screen_time"\]/,
   "Screen Time must be available in Mind without becoming a selected default",
@@ -148,6 +153,22 @@ assert.match(
 );
 assert.doesNotMatch(source, /A balanced setup is already selected/);
 assert.doesNotMatch(source, /Fine-tune a priority/);
+assert.doesNotMatch(source, /Workout duration can stay visible without counting toward your day/);
+assert.match(
+  source,
+  /Body weight as a tracker for its long-term trend, while Steps can be a tracked goal/,
+  "The tracker explanation must use a concrete long-term tracker versus daily-goal example.",
+);
+assert.match(
+  source,
+  /copy=\{t\("Trackers record things you want to see over time\.[\s\S]{0,300}finish each day\."\)\}/,
+  "Title copy props must call the keyed translator explicitly so i18n coverage cannot silently miss them.",
+);
+assert.match(
+  onboardingTranslationSource,
+  /\["Trackers record things you want to see over time\.[^\n]+"\],/,
+  "The tracker explanation needs one English key plus all seven localized values.",
+);
 assert.match(source, /groupedRecommendations\.map/);
 assert.match(source, /trackerGroupLabel\(item\)/);
 assert.match(source, /Tap a tracker to learn what it records/);
@@ -268,6 +289,16 @@ assert.match(providerSource, /onboardingVersion: Math\.max/);
 assert.match(cloudSource, /settings\.onboardingVersion = Math\.max/);
 for (const setting of ["showCalendar", "showJournal", "showPerformance"])
   assert.match(seedSource, new RegExp(`${setting}: false`));
+assert.match(
+  source,
+  /completeOnboarding\(true, "\/", \{[\s\S]{0,100}keepLeaderboardVisible: true/,
+  "Skipping onboarding must retain the default Leaderboard page.",
+);
+assert.match(
+  source,
+  /showStatus:[\s\S]{0,100}landingPage === "status"/,
+  "Choosing Status as the landing page must also make that page visible.",
+);
 assert.match(seedSource, /onboardingVersion: 3/);
 const tabOrder = seedSource.match(/tabOrder: \[([\s\S]*?)\n      \]/)?.[1] ?? "";
 assert.ok(

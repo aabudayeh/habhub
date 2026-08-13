@@ -130,21 +130,41 @@ class HabHubNativeModule(
         val dailyFallback = usageFromDailyAggregates(manager, safeFrom, safeTo)
         val days = localDayWindows(safeFrom, safeTo).mapNotNull { window ->
           val localDate = localDateKey(window.first)
-          val aggregateRows = dailyFallback[localDate]
+          val maximumMs = window.second - window.first
+          val aggregateRows = dailyFallback[localDate]?.let {
+            normalizedUsageRows(it, maximumMs)
+          }
           val eventCovered = eventUsage.coveredDays.contains(localDate)
-          // Android keeps UsageEvents for only a few days and vendors may omit
-          // resume/unlock edges. Prefer the DAILY-granularity UsageStats bucket
-          // when it exists; event replay remains a fallback for a current
-          // partial day an OEM has not materialized yet.
-          val sourceRows = aggregateRows
-            ?: if (eventCovered) eventUsage.rowsByDay[localDate].orEmpty()
-            else return@mapNotNull null
+          val eventRows = normalizedUsageRows(
+            eventUsage.rowsByDay[localDate].orEmpty(),
+            maximumMs,
+          )
+          val isCurrentDay = localDate == localDateKey(now)
+          val eventTotal = eventRows.values.sumOf { it.foregroundMs }
+          val aggregateTotal = aggregateRows?.values?.sumOf { it.foregroundMs } ?: 0L
+          // DAILY UsageStats is stable for retained history but can lag during
+          // the current partial day. Use the reconstructed event stream only
+          // when it contains more foreground time; this fixes the common
+          // Samsung undercount without replacing complete history with the
+          // short-lived event archive.
+          val useCurrentEvents =
+            isCurrentDay && eventCovered && eventTotal > aggregateTotal
+          val sourceRows = when {
+            useCurrentEvents -> eventRows
+            aggregateRows != null -> aggregateRows
+            eventCovered -> eventRows
+            else -> return@mapNotNull null
+          }
           UsageDay(
             localDate = localDate,
             from = window.first,
             to = window.second,
-            rows = normalizedUsageRows(sourceRows, window.second - window.first),
-            calculationMethod = if (aggregateRows != null) "aggregate_fallback" else "foreground_events",
+            rows = sourceRows,
+            calculationMethod = if (useCurrentEvents || aggregateRows == null) {
+              "foreground_events"
+            } else {
+              "aggregate_fallback"
+            },
           )
         }
         val combinedRows = mutableMapOf<String, ForegroundUsage>()
@@ -390,6 +410,7 @@ class HabHubNativeModule(
     val coveredDays = mutableSetOf<String>()
     val event = UsageEvents.Event()
     var currentPackage: String? = null
+    var currentActivityKey: String? = null
     var screenInteractive = Build.VERSION.SDK_INT < Build.VERSION_CODES.P
     var keyguardHidden = true
     var sawScreenState = false
@@ -443,18 +464,27 @@ class HabHubNativeModule(
           screenInteractive = false
           sawScreenState = true
           currentPackage = null
+          currentActivityKey = null
         }
         UsageEvents.Event.KEYGUARD_SHOWN -> keyguardHidden = false
         UsageEvents.Event.KEYGUARD_HIDDEN -> keyguardHidden = true
         UsageEvents.Event.ACTIVITY_RESUMED -> {
           currentPackage = event.packageName
+          currentActivityKey = "${event.packageName}\u0000${event.className ?: ""}"
           // Older devices and vendor builds do not always retain explicit
           // screen-state events. A resumed activity is then the best evidence
           // that the display was interactive.
           if (!sawScreenState) screenInteractive = true
         }
         UsageEvents.Event.ACTIVITY_PAUSED -> {
-          if (currentPackage == event.packageName) currentPackage = null
+          val pausedActivityKey = "${event.packageName}\u0000${event.className ?: ""}"
+          // A pause from an older Activity must not erase a newer resumed
+          // Activity in the same app. Tracking the class as well as package
+          // prevents a common navigation undercount.
+          if (currentActivityKey == pausedActivityKey) {
+            currentPackage = null
+            currentActivityKey = null
+          }
         }
         // Do not clear the package on ACTIVITY_STOPPED. Android commonly emits
         // it after another Activity in the same package has already resumed;
@@ -496,8 +526,10 @@ class HabHubNativeModule(
 
   /**
    * Usage events are retained for only a few days. For older dates request
-   * DAILY buckets explicitly and proportionally clip any OEM-expanded bucket
-   * to each requested local day. queryAndAggregateUsageStats is deliberately
+   * DAILY buckets explicitly and assign each returned bucket to its native
+   * local date. Proportionally spreading a bucket fabricates historical
+   * values because UsageStats does not expose within-bucket timing.
+   * queryAndAggregateUsageStats is deliberately
    * avoided because it may return an entire weekly/monthly bucket for a
    * single-day request (the source of impossible 44-hour values).
    */
@@ -515,36 +547,35 @@ class HabHubNativeModule(
     stats.forEach usageLoop@{ usage ->
       if (usage.totalTimeInForeground <= 0L || excludedUsagePackage(usage.packageName))
         return@usageLoop
-      val bucketStart = usage.firstTimeStamp.takeIf { it > 0L } ?: from
-      val bucketEnd = usage.lastTimeStamp.takeIf { it > bucketStart } ?: to
-      val bucketDuration = maxOf(1L, bucketEnd - bucketStart)
-      var dayCursor = maxOf(from, bucketStart)
-      val effectiveEnd = minOf(to, bucketEnd)
-      while (dayCursor < effectiveEnd) {
-        val windowStart = dayCursor
-        val windowEnd = minOf(effectiveEnd, nextLocalMidnight(windowStart))
-        val overlapStart = maxOf(windowStart, bucketStart)
-        val overlapEnd = minOf(windowEnd, bucketEnd)
-        val overlap = overlapEnd - overlapStart
-        if (overlap <= 0L) {
-          dayCursor = windowEnd
-          continue
-        }
-        val clipped = (
-          usage.totalTimeInForeground.toDouble() * overlap.toDouble() /
-            bucketDuration.toDouble()
-        ).roundToLong().coerceAtMost(overlap)
-        if (clipped > 0L) {
-          val rows = rowsByDay.getOrPut(localDateKey(windowStart)) { mutableMapOf() }
-          val row = rows.getOrPut(usage.packageName) { ForegroundUsage() }
-          row.foregroundMs += clipped
-          row.lastTimeUsed = maxOf(
-            row.lastTimeUsed,
-            usage.lastTimeUsed.coerceIn(windowStart, windowEnd),
-          )
-        }
-        dayCursor = windowEnd
+      val bucketTimestamp = usage.firstTimeStamp.takeIf { it > 0L } ?: from
+      val calendar = Calendar.getInstance().apply {
+        timeInMillis = bucketTimestamp
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
       }
+      val dayStart = calendar.timeInMillis
+      val dayEnd = nextLocalMidnight(dayStart)
+      val bucketEnd = usage.lastTimeStamp.takeIf { it > bucketTimestamp } ?: dayEnd
+      // A vendor-expanded weekly/monthly row has no public per-day breakdown.
+      // Dropping it is safer than inventing or cloning a total onto one date.
+      if (bucketEnd > dayEnd) return@usageLoop
+      val windowStart = maxOf(from, dayStart)
+      val windowEnd = minOf(to, dayEnd)
+      val maximum = windowEnd - windowStart
+      if (maximum <= 0L) return@usageLoop
+      val foreground = usage.totalTimeInForeground.coerceIn(0L, maximum)
+      if (foreground <= 0L) return@usageLoop
+      val rows = rowsByDay.getOrPut(localDateKey(dayStart)) { mutableMapOf() }
+      val row = rows.getOrPut(usage.packageName) { ForegroundUsage() }
+      // A few OEMs return duplicate interval rows. The row already represents
+      // a daily total, so summing duplicates would double-count the package.
+      row.foregroundMs = maxOf(row.foregroundMs, foreground)
+      row.lastTimeUsed = maxOf(
+        row.lastTimeUsed,
+        usage.lastTimeUsed.coerceIn(windowStart, windowEnd),
+      )
     }
     return rowsByDay
   }

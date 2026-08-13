@@ -217,6 +217,39 @@ export function TutorialProvider({
   }, [transitionDurationMs]);
 
   useEffect(() => {
+    if (
+      transitionPhase === "idle" ||
+      transitionPhase === "active"
+    )
+      return;
+    // Native Android can pause a transition callback while a modal surface is
+    // being detached. Never let that leave the tutorial in a permanent
+    // curtain-only state: the normal short timers win, and this is only a
+    // defensive recovery path after the navigation animation should be idle.
+    const watchdog = setTimeout(() => {
+      if (transitionPhase === "entering") {
+        const pending = pendingSessionRef.current;
+        if (pending) {
+          pendingSessionRef.current = null;
+          setActiveSession(pending);
+          setTransitionPhase("active");
+        } else {
+          setTransitionPhase(activeSessionRef.current ? "active" : "idle");
+        }
+        return;
+      }
+      if (transitionPhase === "exiting") {
+        pendingSessionRef.current = null;
+        setActiveSession(null);
+        setTransitionPhase("revealing");
+        return;
+      }
+      setTransitionPhase("idle");
+    }, Math.max(900, transitionDurationMs * 4));
+    return () => clearTimeout(watchdog);
+  }, [setActiveSession, transitionDurationMs, transitionPhase]);
+
+  useEffect(() => {
     let mounted = true;
     void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
       if (mounted) setReduceMotion(enabled);

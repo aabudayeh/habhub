@@ -13,7 +13,6 @@ import {
   AccessibilityInfo,
   Animated,
   BackHandler,
-  findNodeHandle,
   Modal,
   PanResponder,
   Platform,
@@ -185,6 +184,7 @@ function Today() {
   const [showHistoryOptions, setShowHistoryOptions] = useState(false);
   const [expandedHistoryIds, setExpandedHistoryIds] = useState<string[]>([]);
   const todayScrollRef = useRef<ScrollView>(null);
+  const todayScrollViewportRef = useRef<View>(null);
   const todayScrollOffsetRef = useRef(0);
   const tutorialTargetMeasurersRef = useRef(new Map<number, () => void>());
   const tutorialMeasureFrameRef = useRef<number | null>(null);
@@ -213,9 +213,10 @@ function Today() {
     measureTutorialTargets();
   }, [measureTutorialTargets]);
   const revealTutorialTarget = useCallback((targetWindowY: number) => {
-    const node = findNodeHandle(todayScrollRef.current);
-    if (node === null) return;
-    UIManager.measureInWindow(node, (_x, scrollWindowY) => {
+    // ScrollView exposes a cross-platform native-method facade directly.
+    // React Native Web rejects the legacy node-handle lookup, which previously
+    // redboxed when the guide first revealed an off-screen Today target.
+    todayScrollViewportRef.current?.measureInWindow((_x, scrollWindowY) => {
       todayScrollRef.current?.scrollTo({
         y: Math.max(
           0,
@@ -439,6 +440,9 @@ function Today() {
     )
     .sort((a, b) => a.order - b.order);
   const [goldSequenceRun, setGoldSequenceRun] = useState(0);
+  const [goldPresentation, setGoldPresentation] = useState<
+    "pending" | "animating" | "settled"
+  >("pending");
   const goalLiquidReveal = useRef(new Animated.Value(0)).current;
   const goalLiquidMotion = useRef(new Animated.Value(0)).current;
   const [liquidAnimatedGoalIds, setLiquidAnimatedGoalIds] = useState<string[]>(
@@ -506,7 +510,11 @@ function Today() {
   const goalLiquidSnapshotKey = JSON.stringify(goalLiquidSnapshot);
   const goalLiquidStorageKey = `metric-rally-goal-liquid-v3:${state.currentUserId}:${today}`;
   const liquidAnimatedGoalIdSet = new Set(liquidAnimatedGoalIds);
-  const heroGold = useRef(new Animated.Value(heroAllMet ? 1 : 0)).current;
+  // Start neutral until the persisted completion snapshot tells us whether
+  // this is a new Perfect Day or one that was already celebrated. Initializing
+  // as gold caused a visible gold -> green -> gold flash on cold return.
+  const heroGold = useRef(new Animated.Value(0)).current;
+  const todayGoldTint = useRef(new Animated.Value(0)).current;
   const heroCompletionColor = heroGold.interpolate({
     inputRange: [0, 1],
     outputRange: [palette.lime, "#FFD166"],
@@ -516,24 +524,50 @@ function Today() {
     outputRange: [accent, colors.isDark ? "#806018" : "#B98212"],
   });
   useEffect(() => {
-    if (!heroAllMet) {
+    if (!heroAllMet || goldPresentation === "pending") {
       heroGold.stopAnimation();
       heroGold.setValue(0);
+      todayGoldTint.stopAnimation();
+      todayGoldTint.setValue(0);
+      return;
     }
-  }, [heroAllMet, heroGold]);
+    if (goldPresentation === "settled") {
+      heroGold.stopAnimation();
+      heroGold.setValue(1);
+      todayGoldTint.stopAnimation();
+      todayGoldTint.setValue(1);
+    }
+  }, [goldPresentation, heroAllMet, heroGold, todayGoldTint]);
   useEffect(() => {
-    if (!heroAllMet || goldSequenceRun === 0) return;
+    if (
+      !heroAllMet ||
+      goldPresentation !== "animating" ||
+      goldSequenceRun === 0
+    )
+      return;
     heroGold.stopAnimation();
+    todayGoldTint.stopAnimation();
     heroGold.setValue(0);
-    const animation = Animated.timing(heroGold, {
-      toValue: 1,
-      duration: GOLD_HERO_FADE_MS,
-      delay: 0,
-      useNativeDriver: false,
-    });
+    todayGoldTint.setValue(0);
+    const animation = Animated.parallel([
+      Animated.timing(heroGold, {
+        toValue: 1,
+        duration: GOLD_HERO_FADE_MS,
+        delay: 0,
+        useNativeDriver: false,
+      }),
+      // Use one native opacity layer instead of repainting the full canvas
+      // color on every animation frame.
+      Animated.timing(todayGoldTint, {
+        toValue: 1,
+        duration: GOLD_HERO_FADE_MS,
+        delay: 0,
+        useNativeDriver: true,
+      }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [goldSequenceRun, heroAllMet, heroGold]);
+  }, [goldPresentation, goldSequenceRun, heroAllMet, heroGold, todayGoldTint]);
   useEffect(() => {
     let mounted = true;
     void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
@@ -625,6 +659,11 @@ function Today() {
               Animated.timing(goalLiquidReveal, {
                 toValue: 1,
                 duration: GOAL_LIQUID_REVEAL_MS,
+                // On a Perfect Day, establish the shared gold state before
+                // any newly completed goal starts filling. The same delayed
+                // reveal is shared by every changed goal, so returning after
+                // completing several final goals remains one smooth sequence.
+                delay: heroAllMet ? GOLD_HERO_FADE_MS + 120 : 0,
                 useNativeDriver: true,
               }),
               Animated.loop(
@@ -666,6 +705,7 @@ function Today() {
       goalLiquidReveal,
       goalLiquidSnapshotKey,
       goalLiquidStorageKey,
+      heroAllMet,
       reduceMotion,
       showGoalsToday,
       tutorialSandbox,
@@ -678,6 +718,11 @@ function Today() {
   const [celebrationSpecial, setCelebrationSpecial] = useState(false);
   const [celebratingGoalIds, setCelebratingGoalIds] = useState<string[]>([]);
   const celebrationStorageKey = `metric-rally-celebrations-v2:${state.currentUserId}:${today}`;
+  useEffect(() => {
+    // A different account/day needs its own persisted-snapshot decision.
+    setGoldPresentation("pending");
+    setGoldSequenceRun(0);
+  }, [celebrationStorageKey]);
   useEffect(() => {
     let active = true;
     setAllGoalsDismissed(false);
@@ -711,6 +756,7 @@ function Today() {
       let cancelled = false;
       let clearTiles: ReturnType<typeof setTimeout> | undefined;
       let clearConfetti: ReturnType<typeof setTimeout> | undefined;
+      let settleGold: ReturnType<typeof setTimeout> | undefined;
       if (tutorialSandbox) return;
       AsyncStorage.getItem(celebrationStorageKey)
         .then((saved) => {
@@ -727,7 +773,22 @@ function Today() {
             const special =
               newGoalIds.length > 0 && celebrationSnapshot.current.allMet;
             const duration = special ? 3800 : 2700;
-            if (special) setGoldSequenceRun((value) => value + 1);
+            if (special) {
+              setGoldPresentation("animating");
+              setGoldSequenceRun((value) => value + 1);
+              const goldSequenceDuration = Math.max(
+                GOLD_HERO_FADE_MS,
+                GOLD_TILE_START_DELAY_MS +
+                  Math.max(0, goldGoalOrder.length - 1) *
+                    GOLD_TILE_STAGGER_MS +
+                  GOLD_TILE_FADE_MS,
+              );
+              settleGold = setTimeout(() => {
+                if (!cancelled) setGoldPresentation("settled");
+              }, goldSequenceDuration + 120);
+            } else {
+              setGoldPresentation("settled");
+            }
             setCelebratingGoalIds(newGoalIds);
             setCelebrationSpecial(special);
             setConfettiVisible(true);
@@ -754,6 +815,10 @@ function Today() {
               () => setCelebratingGoalIds([]),
               duration,
             );
+          } else {
+            // Already-celebrated completions mount directly in their stable
+            // gold state, without replaying a neutral-to-gold sequence.
+            setGoldPresentation("settled");
           }
           if (!tutorialSandbox)
             AsyncStorage.setItem(
@@ -761,16 +826,19 @@ function Today() {
               [...completed].sort().join("|"),
             ).catch(() => undefined);
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (!cancelled) setGoldPresentation("settled");
+        });
       return () => {
         cancelled = true;
         if (clearTiles) clearTimeout(clearTiles);
         if (clearConfetti) clearTimeout(clearConfetti);
+        if (settleGold) clearTimeout(settleGold);
         celebration.stopAnimation();
         celebration.setValue(0);
         setConfettiVisible(false);
       };
-    }, [celebration, celebrationStorageKey, tutorialSandbox]),
+    }, [celebration, celebrationStorageKey, goldGoalOrder.length, tutorialSandbox]),
   );
   const celebrateTodo = useCallback(
     (todoId: string) => {
@@ -859,11 +927,23 @@ function Today() {
       // leaves a canvas-coloured strip between Today and the tab bar.
       edges={["top"]}
     >
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.todayGoldTint,
+          {
+            opacity: todayGoldTint,
+            backgroundColor: colors.isDark ? "#17150D" : "#FFF9E8",
+          },
+        ]}
+      />
       {confettiVisible ? (
         <ConfettiBurst progress={celebration} special={celebrationSpecial} />
       ) : null}
+      <View ref={todayScrollViewportRef} collapsable={false} style={styles.safe}>
       <ScrollView
         ref={todayScrollRef}
+        style={styles.safe}
         refreshControl={
           <RefreshControl
             enabled={!editing}
@@ -1031,43 +1111,51 @@ function Today() {
               >
                 {`${heroMet} of ${heroTotal}`}
               </Text>
-              <Text
-                preserveColor
-                style={[
-                  styles.heroTitle,
-                  { color: palette.white },
-                ]}
-              >
-                {heroAllMet
-                  ? heroUsesGoals
-                    ? "Every goal reached"
-                    : "Every to-do complete"
-                  : heroTotal
-                    ? `${heroTotal - heroMet} ${
-                        heroUsesGoals
-                          ? `goal${heroTotal - heroMet === 1 ? "" : "s"}`
-                          : `to-do${heroTotal - heroMet === 1 ? "" : "s"}`
-                      } left`
-                    : heroUsesGoals
-                      ? "Choose your first goal"
-                      : "No to-dos today"}
-              </Text>
-              {weightPlanLabel ? (
-                <View style={styles.heroWeightPlan}>
-                  <Ionicons
-                    name={weightPlan?.direction === "maintain" ? "remove-outline" : "calendar-outline"}
-                    size={11}
-                    color="rgba(255,255,255,.82)"
-                  />
-                  <Text
-                    preserveColor
-                    numberOfLines={1}
-                    style={styles.heroWeightPlanText}
-                  >
-                    {weightPlanLabel}
-                  </Text>
-                </View>
-              ) : null}
+              <View style={styles.heroTitleRow}>
+                <Text
+                  preserveColor
+                  numberOfLines={1}
+                  style={[
+                    styles.heroTitle,
+                    { color: palette.white },
+                  ]}
+                >
+                  {heroAllMet
+                    ? heroUsesGoals
+                      ? "Every goal reached"
+                      : "Every to-do complete"
+                    : heroTotal
+                      ? `${heroTotal - heroMet} ${
+                          heroUsesGoals
+                            ? `goal${heroTotal - heroMet === 1 ? "" : "s"}`
+                            : `to-do${heroTotal - heroMet === 1 ? "" : "s"}`
+                        } left`
+                      : heroUsesGoals
+                        ? "Choose your first goal"
+                        : "No to-dos today"}
+                </Text>
+                {weightPlanLabel ? (
+                  <View style={styles.heroWeightInline}>
+                    <Ionicons
+                      name={
+                        weightPlan?.direction === "maintain"
+                          ? "remove-outline"
+                          : "calendar-outline"
+                      }
+                      size={10}
+                      color="rgba(255,255,255,.82)"
+                    />
+                    <Text
+                      preserveColor
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={styles.heroWeightInlineText}
+                    >
+                      {weightPlanLabel}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
             <CompletionShapeIndicator
               icon={state.settings.completionIndicatorIcon}
@@ -1126,6 +1214,7 @@ function Today() {
                     progress={progress}
                     unavailable={unavailable}
                     allMet={goals.allMet}
+                    goldPresentation={goldPresentation}
                     sequenceRun={goldSequenceRun}
                     liquidReveal={goalLiquidReveal}
                     liquidMotion={goalLiquidMotion}
@@ -1275,6 +1364,7 @@ function Today() {
                   today,
                 )}
                 allGoalsMet={goals.allMet}
+                goldPresentation={goldPresentation}
                 goalSequenceIndex={goldGoalOrder.indexOf(item.id)}
                 goldSequenceRun={goldSequenceRun}
                 celebrating={celebratingGoalIds.includes(item.id)}
@@ -1520,6 +1610,7 @@ function Today() {
         ) : null}
         </TutorialScrollProvider>
       </ScrollView>
+      </View>
       {showViewFilters ? (
         <View
           accessibilityViewIsModal
@@ -1529,7 +1620,7 @@ function Today() {
             accessibilityLabel="Close Today view picker"
             accessibilityRole="button"
             onPress={() => setShowViewFilters(false)}
-            style={StyleSheet.absoluteFill}
+            style={[StyleSheet.absoluteFill, styles.viewFilterBackdrop]}
           />
           <View style={[styles.sheet, { backgroundColor: colors.card }]}>
             <View style={styles.sheetHandle} />
@@ -1892,6 +1983,7 @@ function GoalCompletionDot({
   progress,
   unavailable,
   allMet,
+  goldPresentation,
   sequenceRun,
   liquidReveal,
   liquidMotion,
@@ -1904,21 +1996,33 @@ function GoalCompletionDot({
   progress: number;
   unavailable: boolean;
   allMet: boolean;
+  goldPresentation: "pending" | "animating" | "settled";
   sequenceRun: number;
   liquidReveal: Animated.Value;
   liquidMotion: Animated.Value;
   animateLiquid: boolean;
   onPress: () => void;
 }) {
-  const gold = useRef(new Animated.Value(allMet && met ? 1 : 0)).current;
+  const gold = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!allMet || !met) {
+    if (!allMet || !met || goldPresentation === "pending") {
       gold.stopAnimation();
       gold.setValue(0);
+      return;
     }
-  }, [allMet, gold, met]);
+    if (goldPresentation === "settled") {
+      gold.stopAnimation();
+      gold.setValue(1);
+    }
+  }, [allMet, gold, goldPresentation, met]);
   useEffect(() => {
-    if (!allMet || !met || sequenceRun === 0) return;
+    if (
+      !allMet ||
+      !met ||
+      goldPresentation !== "animating" ||
+      sequenceRun === 0
+    )
+      return;
     gold.stopAnimation();
     gold.setValue(0);
     const animation = Animated.timing(gold, {
@@ -1929,7 +2033,7 @@ function GoalCompletionDot({
     });
     animation.start();
     return () => animation.stop();
-  }, [allMet, gold, met, sequenceRun]);
+  }, [allMet, gold, goldPresentation, met, sequenceRun]);
   const fillColor = met
     ? gold.interpolate({
         inputRange: [0, 1],
@@ -1968,7 +2072,7 @@ function GoalCompletionDot({
             style={[
               styles.dotLiquid,
               {
-                backgroundColor: animateLiquid ? palette.lime : fillColor,
+                backgroundColor: fillColor,
                 height: fillHeight,
                 transform: animateLiquid
                   ? [{ translateY: liquidTranslateY }]
@@ -2038,6 +2142,7 @@ function TrackerRow({
   weekly,
   trackedGoal,
   allGoalsMet,
+  goldPresentation,
   goalSequenceIndex,
   goldSequenceRun,
   celebrating,
@@ -2070,6 +2175,7 @@ function TrackerRow({
   weekly: ReturnType<typeof weeklyDeficitBalance>;
   trackedGoal: boolean;
   allGoalsMet: boolean;
+  goldPresentation: "pending" | "animating" | "settled";
   goalSequenceIndex: number;
   goldSequenceRun: number;
   celebrating: boolean;
@@ -2143,18 +2249,31 @@ function TrackerRow({
   );
   const cardComplete =
     item.id === "weekly_deficit_balance" ? weeklyBalanceAhead : met;
-  const gold = useRef(
-    new Animated.Value(allGoalsMet && trackedGoal && met ? 1 : 0),
-  ).current;
+  const gold = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    if (!allGoalsMet || !trackedGoal || !met) {
+    if (
+      !allGoalsMet ||
+      !trackedGoal ||
+      !met ||
+      goldPresentation === "pending"
+    ) {
       gold.stopAnimation();
       gold.setValue(0);
+      return;
     }
-  }, [allGoalsMet, gold, met, trackedGoal]);
+    if (goldPresentation === "settled") {
+      gold.stopAnimation();
+      gold.setValue(1);
+    }
+  }, [allGoalsMet, gold, goldPresentation, met, trackedGoal]);
   useEffect(() => {
     const becomesGold = allGoalsMet && trackedGoal && met;
-    if (!becomesGold || goldSequenceRun === 0) return;
+    if (
+      !becomesGold ||
+      goldPresentation !== "animating" ||
+      goldSequenceRun === 0
+    )
+      return;
     gold.stopAnimation();
     gold.setValue(0);
     const animation = Animated.timing(gold, {
@@ -2171,6 +2290,7 @@ function TrackerRow({
     allGoalsMet,
     goalSequenceIndex,
     gold,
+    goldPresentation,
     goldSequenceRun,
     met,
     trackedGoal,
@@ -3316,6 +3436,7 @@ const styles = StyleSheet.create({
   dayEndOptions: { flexDirection: "row", gap: 7, marginTop: 14 },
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
+  todayGoldTint: { ...StyleSheet.absoluteFillObject },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
   header: {
     height: 55,
@@ -3378,20 +3499,37 @@ const styles = StyleSheet.create({
     lineHeight: 35,
     marginTop: 3,
   },
-  heroTitle: { color: palette.white, fontSize: 11, fontWeight: "800" },
-  heroWeightPlan: {
-    minHeight: 18,
-    marginTop: 3,
+  heroTitleRow: {
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    justifyContent: "space-between",
+    gap: 6,
   },
-  heroWeightPlanText: {
+  heroTitle: {
+    minWidth: 0,
+    flexShrink: 1,
+    color: palette.white,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  heroWeightInline: {
+    minWidth: 0,
+    maxWidth: "58%",
+    flexShrink: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 3,
+  },
+  heroWeightInlineText: {
+    minWidth: 0,
     flexShrink: 1,
     color: "rgba(255,255,255,.82)",
     fontSize: 8,
     lineHeight: 11,
     fontWeight: "800",
+    textAlign: "right",
   },
   completionShape: {
     width: COMPLETION_INDICATOR_SIZE,
@@ -3685,11 +3823,12 @@ const styles = StyleSheet.create({
   viewFilterOverlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 80,
-    elevation: 80,
-    backgroundColor: "rgba(10,15,12,.52)",
     justifyContent: "flex-end",
   },
+  viewFilterBackdrop: { backgroundColor: "rgba(10,15,12,.52)" },
   sheet: {
+    zIndex: 1,
+    elevation: 8,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 16,

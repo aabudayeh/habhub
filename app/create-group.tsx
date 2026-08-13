@@ -45,8 +45,9 @@ export default function CreateGroup() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
-  const [name, setName] = useState("");
-  const [nameSuggestion] = useState(() => randomGroupNameSuggestion());
+  const [name, setName] = useState<string>(() =>
+    randomGroupNameSuggestion(),
+  );
   const [themeColor, setThemeColor] = useState<string>(DEFAULT_GROUP_THEME);
   const [allowImmediateJoin, setAllowImmediateJoin] = useState(true);
   const [selectedSuggested, setSelectedSuggested] = useState<string[]>([]);
@@ -199,26 +200,14 @@ export default function CreateGroup() {
           value={name}
           onChangeText={setName}
           maxLength={80}
-          placeholder={t(`e.g. ${nameSuggestion}`)}
+          placeholder={t("Group name")}
           placeholderTextColor={colors.faint}
+          selectTextOnFocus
           style={[
             styles.input,
             { color: colors.ink, borderColor: colors.border },
           ]}
         />
-        {!name.trim() ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t(`Use suggested group name ${nameSuggestion}`)}
-            onPress={() => setName(nameSuggestion)}
-            style={styles.nameSuggestion}
-          >
-            <Ionicons name="sparkles-outline" size={13} color={accent} />
-            <Text style={[styles.nameSuggestionText, { color: accent }]}>
-              {t(`Try “${nameSuggestion}”`)}
-            </Text>
-          </Pressable>
-        ) : null}
       </Card>
 
       <SectionHeader title="Suggested from your Today page" />
@@ -519,15 +508,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginBottom: 10,
   },
-  nameSuggestion: {
-    alignSelf: "flex-start",
-    minHeight: 30,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 4,
-  },
-  nameSuggestionText: { fontSize: 9, fontWeight: "800" },
   list: { paddingVertical: 2, paddingHorizontal: 11 },
   choice: {
     minHeight: 54,

@@ -65,6 +65,8 @@ export function Screen({
 }) {
   const compact = useCompactMode();
   const colors = useAppColors();
+  const tutorial = useOptionalTutorial();
+  const tutorialActive = Boolean(tutorial?.activeSession);
   const internalRef = useRef<ScrollView>(null);
   const activeRef = scrollRef ?? internalRef;
   const scrollViewportRef = useRef<View>(null);
@@ -155,23 +157,45 @@ export function Screen({
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             automaticallyAdjustKeyboardInsets
-            onScroll={(event) => {
-              scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
-              scheduleTutorialTargetMeasure();
-              onScroll?.(event);
-            }}
-            onScrollEndDrag={(event) => {
-              flushTutorialTargetMeasure();
-              onScrollEndDrag?.(event);
-            }}
-            onMomentumScrollEnd={(event) => {
-              flushTutorialTargetMeasure();
-              onMomentumScrollEnd?.(event);
-            }}
+            // Most pages do not consume scroll positions. Avoid crossing the
+            // native-to-JS bridge on every animation frame unless the current
+            // page asked for it or a live tutorial needs spotlight geometry.
+            onScroll={
+              tutorialActive || onScroll
+                ? (event) => {
+                    scrollOffsetRef.current =
+                      event.nativeEvent.contentOffset.y;
+                    if (tutorialActive) scheduleTutorialTargetMeasure();
+                    onScroll?.(event);
+                  }
+                : undefined
+            }
+            onScrollEndDrag={
+              tutorialActive || onScrollEndDrag
+                ? (event) => {
+                    scrollOffsetRef.current =
+                      event.nativeEvent.contentOffset.y;
+                    if (tutorialActive) flushTutorialTargetMeasure();
+                    onScrollEndDrag?.(event);
+                  }
+                : undefined
+            }
+            onMomentumScrollEnd={
+              tutorialActive || onMomentumScrollEnd
+                ? (event) => {
+                    scrollOffsetRef.current =
+                      event.nativeEvent.contentOffset.y;
+                    if (tutorialActive) flushTutorialTargetMeasure();
+                    onMomentumScrollEnd?.(event);
+                  }
+                : undefined
+            }
             scrollEventThrottle={
-              typeof scrollEventThrottle === "number"
-                ? Math.min(scrollEventThrottle, 16)
-                : 16
+              tutorialActive || onScroll
+                ? typeof scrollEventThrottle === "number"
+                  ? Math.min(scrollEventThrottle, 16)
+                  : 16
+                : undefined
             }
             refreshControl={
               Platform.OS !== "web" && refreshEnabled

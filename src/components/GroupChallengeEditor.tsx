@@ -11,6 +11,7 @@ import {
 } from "react-native";
 
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { Avatar } from "@/src/components/ui";
 import { SaveGroupChallengeInput } from "@/src/cloud/groupChallenges";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
@@ -35,6 +36,50 @@ type ChallengeRepeatMode =
   | "every_other_day"
   | "interval_days"
   | "days_of_month";
+
+const CHALLENGE_REPEAT_OPTIONS: {
+  id: ChallengeRepeatMode;
+  label: string;
+  sublabel: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  {
+    id: "once",
+    label: "Once",
+    sublabel: "Only on the selected date",
+    icon: "calendar-outline",
+  },
+  {
+    id: "daily",
+    label: "Every day",
+    sublabel: "Repeats daily",
+    icon: "today-outline",
+  },
+  {
+    id: "selected_days",
+    label: "Selected weekdays",
+    sublabel: "Choose one or several weekdays",
+    icon: "calendar-number-outline",
+  },
+  {
+    id: "every_other_day",
+    label: "Every other day",
+    sublabel: "Repeats from the selected date",
+    icon: "swap-horizontal-outline",
+  },
+  {
+    id: "interval_days",
+    label: "Custom interval",
+    sublabel: "Repeat every chosen number of days",
+    icon: "repeat-outline",
+  },
+  {
+    id: "days_of_month",
+    label: "Dates each month",
+    sublabel: "For example, the 1st and 15th",
+    icon: "calendar-clear-outline",
+  },
+];
 
 function challengeRepeatMode(
   recurrence: GoalSchedule | undefined,
@@ -310,48 +355,24 @@ export function GroupChallengeEditor({
               </View>
             </View>
 
-            <View style={styles.repeatHeader}>
-              <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
+            <View style={styles.repeatMenu}>
+              <SelectionMenu
+                title="Frequency"
+                searchable={false}
+                multiple={false}
+                items={CHALLENGE_REPEAT_OPTIONS}
+                selectedIds={[repeatMode]}
+                onChange={(ids) => {
+                  const mode = ids[0] as ChallengeRepeatMode | undefined;
+                  if (!mode) return;
+                  setRepeatMode(mode);
+                  if (mode !== "once" && repeatUntil < localDate)
+                    setRepeatUntil(dateWithOffsetFrom(localDate, 28));
+                }}
+              />
               {repeatMode !== "once" ? (
-                <Text style={[styles.peopleHint, { color: colors.muted }]}>Responses apply to the whole series.</Text>
+                <Text style={[styles.repeatSeriesHint, { color: colors.muted }]}>Responses apply to the whole series.</Text>
               ) : null}
-            </View>
-            <View style={styles.repeatRow}>
-              {(
-                [
-                  ["once", "Once"],
-                  ["daily", "Daily"],
-                  ["selected_days", "Weekdays"],
-                  ["every_other_day", "Every other"],
-                  ["interval_days", "Every N days"],
-                  ["days_of_month", "Month dates"],
-                ] as const
-              ).map(([mode, label]) => {
-                const selected = repeatMode === mode;
-                return (
-                  <Pressable
-                    key={mode}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                    onPress={() => {
-                      setRepeatMode(mode);
-                      if (mode !== "once" && repeatUntil < localDate)
-                        setRepeatUntil(dateWithOffsetFrom(localDate, 28));
-                    }}
-                    style={[
-                      styles.repeatChip,
-                      {
-                        borderColor: selected ? accent : colors.border,
-                        backgroundColor: selected
-                          ? colors.primarySoft
-                          : colors.canvas,
-                      },
-                    ]}
-                  >
-                    <Text style={[styles.repeatText, { color: selected ? accent : colors.muted }]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
             </View>
             {repeatMode === "selected_days" ? (
               <View style={styles.repeatDetail}>
@@ -548,10 +569,8 @@ const styles = StyleSheet.create({
   dateControls: { height: 42, borderRadius: 13, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   dateArrow: { width: 29, height: "100%", alignItems: "center", justifyContent: "center" },
   dateInput: { flex: 1, minWidth: 0, textAlign: "center", fontSize: 10, fontWeight: "800", paddingHorizontal: 0 },
-  repeatHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  repeatRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 13 },
-  repeatChip: { minHeight: 32, borderRadius: 11, borderWidth: 1, paddingHorizontal: 9, alignItems: "center", justifyContent: "center" },
-  repeatText: { fontSize: 8, fontWeight: "900" },
+  repeatMenu: { gap: 4, marginBottom: 9 },
+  repeatSeriesHint: { paddingHorizontal: 3, fontSize: 8, lineHeight: 11 },
   repeatDetail: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 7 },
   repeatDetailLabel: { minWidth: 72, fontSize: 8, fontWeight: "800" },
   weekdayRow: { flexDirection: "row", flex: 1, gap: 5 },

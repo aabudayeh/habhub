@@ -25,7 +25,8 @@ import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext"
 
 const FOREGROUND_REFRESH_MS = 5 * 60 * 1000;
 const AVAILABLE_HISTORY_DAYS = 730;
-const HISTORY_SYNC_PREFIX = "habhub:screen-time-history:v2:";
+// v3 rehydrates dates once after removing proportional OEM bucket spreading.
+const HISTORY_SYNC_PREFIX = "habhub:screen-time-history:v3:";
 
 function waitForInteractionIdle(maxWaitMs = 1_500) {
   return new Promise<void>((resolve) => {

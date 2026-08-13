@@ -151,6 +151,18 @@ const native = fs.readFileSync(
   "plugins/habhub-android/java/HabHubNativeModule.kt",
   "utf8",
 );
+const generatedNativePath =
+  "android/app/src/main/java/app/paceboard/mobile/HabHubNativeModule.kt";
+if (fs.existsSync(generatedNativePath)) {
+  const generatedNative = fs.readFileSync(generatedNativePath, "utf8");
+  assert.equal(
+    generatedNative.replace(/\r\n/g, "\n"),
+    native
+      .replace(/^package\s+[^\r\n]+/m, "package app.paceboard.mobile")
+      .replace(/\r\n/g, "\n"),
+    "generated Android module must match its config-plugin template",
+  );
+}
 assert.match(native, /UsageEvents\.Event\.ACTIVITY_PAUSED ->/);
 assert.match(native, /UsageEvents\.Event\.ACTIVITY_STOPPED -> Unit/);
 assert.doesNotMatch(
@@ -171,6 +183,11 @@ assert.match(
   /UsageEvents\.Event\.DEVICE_SHUTDOWN -> \{[\s\S]*?currentPackage = null/,
   "device shutdown must still clear the resumed app",
 );
+assert.match(
+  native,
+  /var currentActivityKey: String\? = null[\s\S]{0,4500}ACTIVITY_RESUMED -> \{[\s\S]{0,250}currentActivityKey = [\s\S]{0,1000}if \(currentActivityKey == pausedActivityKey\)/,
+  "a stale pause from another Activity must not erase the newly resumed app",
+);
 assert.match(native, /UsageStatsManager\.INTERVAL_DAILY/);
 assert.doesNotMatch(native, /manager\.queryAndAggregateUsageStats\(/);
 assert.match(native, /val maxWindow = 730L \* 24L/);
@@ -181,19 +198,29 @@ assert.match(
 );
 assert.match(
   native,
-  /val sourceRows = aggregateRows[\s\S]{0,180}eventUsage\.rowsByDay/,
-  "daily aggregates must win over an incomplete retained event stream",
+  /val useCurrentEvents =[\s\S]{0,120}isCurrentDay && eventCovered && eventTotal > aggregateTotal[\s\S]{0,220}useCurrentEvents -> eventRows[\s\S]{0,100}aggregateRows != null -> aggregateRows/,
+  "today may use a fresher larger event total while history keeps daily aggregates",
 );
 assert.doesNotMatch(
   native,
-  /windows\.forEach windowLoop/,
-  "historical fallback must not scan every selected day for every usage row",
+  /totalTimeInForeground\.toDouble\(\) \* overlap|bucketDuration\.toDouble\(\)/,
+  "historical totals must not be fabricated by proportional bucket spreading",
+);
+assert.match(
+  native,
+  /if \(bucketEnd > dayEnd\) return@usageLoop/,
+  "an indivisible OEM-expanded bucket must be omitted instead of assigned to a false date",
+);
+assert.match(
+  native,
+  /row\.foregroundMs = maxOf\(row\.foregroundMs, foreground\)/,
+  "duplicate OEM daily rows must not double-count the same package",
 );
 assert.match(native, /putArray\("days", dailyReports\)/);
-assert.match(native, /normalizedUsageRows\(sourceRows, window\.second - window\.first\)/);
+assert.match(native, /normalizedUsageRows\([\s\S]{0,80}eventUsage\.rowsByDay/);
 
 const cache = fs.readFileSync("src/screenTime/cache.ts", "utf8");
-assert.match(cache, /screen-time-report:v5:/);
+assert.match(cache, /screen-time-report:v6:/);
 
 const bridge = fs.readFileSync(
   "src/screenTime/ScreenTimeSyncBridge.tsx",
@@ -204,7 +231,7 @@ assert.match(bridge, /queryScreenTime\(from, to, 150\)/);
 assert.match(bridge, /await waitForInteractionIdle\(\)/);
 assert.match(bridge, /changedScreenTimeTrackerSamples\(/);
 assert.match(bridge, /setDeviceScreenTimeRangeRef\.current\(changed\)/);
-assert.match(bridge, /screen-time-history:v2:/);
+assert.match(bridge, /screen-time-history:v3:/);
 
 const detail = fs.readFileSync("src/screenTime/ScreenTimeBreakdownCard.tsx", "utf8");
 assert.match(detail, /screenTimeTrackerSamples\(next\.days\)/);

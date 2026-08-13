@@ -39,10 +39,11 @@
     "validate:battery": "node scripts/validate-battery-optimization.mjs",
     "validate:screen-time": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-screen-time.mjs",
     "validate:schedule": "node scripts/validate-schedule-all-items.mjs",
+    "validate:performance-latency": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-interaction-performance.mjs",
     "validate:product-ui": "node scripts/validate-product-ui.mjs",
     "validate:rn-keyboard": "node scripts/validate-rn-keyboard-patch.mjs",
-    "check": "pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:revision-fences && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:group-history && pnpm validate:onboarding && pnpm validate:weight-plan && pnpm validate:workout-trackers && pnpm validate:tutorial && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:schedule && pnpm validate:product-ui && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint",
-    "check:release": "pnpm doctor && pnpm validate:cloud && pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:revision-fences && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:group-history && pnpm validate:onboarding && pnpm validate:weight-plan && pnpm validate:workout-trackers && pnpm validate:tutorial && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:schedule && pnpm validate:product-ui && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint && pnpm export:web"
+    "check": "pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:revision-fences && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:group-history && pnpm validate:onboarding && pnpm validate:weight-plan && pnpm validate:workout-trackers && pnpm validate:tutorial && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:schedule && pnpm validate:performance-latency && pnpm validate:product-ui && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint",
+    "check:release": "pnpm doctor && pnpm validate:cloud && pnpm validate:i18n && pnpm validate:auth && pnpm validate:avatar && pnpm validate:avatar-simulator && pnpm validate:health && pnpm validate:progress-grid && pnpm validate:profile-sync && pnpm validate:revision-fences && pnpm validate:sync-gates && pnpm validate:native-ui && pnpm validate:challenges && pnpm validate:group-history && pnpm validate:onboarding && pnpm validate:weight-plan && pnpm validate:workout-trackers && pnpm validate:tutorial && pnpm validate:journal && pnpm validate:notifications && pnpm validate:battery && pnpm validate:screen-time && pnpm validate:schedule && pnpm validate:performance-latency && pnpm validate:product-ui && pnpm validate:rn-keyboard && pnpm typecheck && pnpm lint && pnpm export:web"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -57,6 +58,7 @@
     "@supabase/supabase-js": "^2.110.6",
     "expo": "~54.0.36",
     "expo-background-task": "~1.0.10",
+    "expo-blur": "~15.0.8",
     "expo-build-properties": "~1.0.10",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.13",

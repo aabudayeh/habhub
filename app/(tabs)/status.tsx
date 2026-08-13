@@ -321,7 +321,6 @@ export default function StatusPage() {
     ? new Intl.DateTimeFormat(locale, {
         month: "short",
         day: "numeric",
-        year: "numeric",
       }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
     : undefined;
   const weightPlanLabel = weightPlan
@@ -330,7 +329,7 @@ export default function StatusPage() {
       : weightPlan.reached
         ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg reached`
         : expectedWeightDate
-          ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg · estimate ${expectedWeightDate}`
+          ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg · est. ${expectedWeightDate}`
           : undefined
     : undefined;
   const bodyCompositionStat =
@@ -504,15 +503,38 @@ export default function StatusPage() {
                   pressed && styles.avatarHeld,
                 ]}
               >
-                {member ? (
-                  <Text
-                    translate={false}
-                    numberOfLines={1}
-                    style={[styles.personName, { color: colors.ink }]}
-                  >
-                    {memberDisplayName(state, member)}
-                  </Text>
-                ) : null}
+                <View style={styles.personHeading}>
+                  {member ? (
+                    <Text
+                      translate={false}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={[styles.personName, { color: colors.ink }]}
+                    >
+                      {memberDisplayName(state, member)}
+                    </Text>
+                  ) : null}
+                  {showWeightSummary && weightPlanLabel ? (
+                    <View style={styles.personWeightPlan}>
+                      <Ionicons
+                        name={
+                          weightPlan?.direction === "maintain"
+                            ? "remove-outline"
+                            : "calendar-outline"
+                        }
+                        size={11}
+                        color={colors.primary}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={[styles.personWeightPlanText, { color: colors.ink }]}
+                      >
+                        {weightPlanLabel}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
                 <BodyProgressAvatar
                   bodyFatPercent={avatarProgression.currentBodyFatPercent}
                   calculationSource={avatarCalculationSource}
@@ -596,12 +618,6 @@ export default function StatusPage() {
                 </>
               ) : null}
             </View>
-            {showWeightSummary && weightPlanLabel ? (
-              <View style={[styles.weightPlanLine, { backgroundColor: colors.primarySoft }]}>
-                <Ionicons name={weightPlan?.direction === "maintain" ? "remove-outline" : "calendar-outline"} size={13} color={colors.primary} />
-                <Text numberOfLines={1} style={[styles.weightPlanText, { color: colors.ink }]}>{weightPlanLabel}</Text>
-              </View>
-            ) : null}
             {avatarSourceEditorOpen ? (
               <View
                 accessibilityLabel={t("Avatar calculation source")}
@@ -779,21 +795,40 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   bodyFactDivider: { width: 1, height: 13 },
-  weightPlanLine: {
-    maxWidth: 330,
-    minHeight: 27,
-    borderRadius: 10,
-    paddingHorizontal: 8,
+  personHeading: {
+    position: "absolute",
+    zIndex: 2,
+    top: 0,
+    left: "-38%",
+    right: "-38%",
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 5,
+    justifyContent: "space-between",
+    gap: 7,
   },
-  weightPlanText: {
+  personName: {
+    minWidth: 0,
+    flexShrink: 1,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  personWeightPlan: {
+    minWidth: 0,
+    maxWidth: "62%",
+    flexShrink: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 3,
+  },
+  personWeightPlanText: {
+    minWidth: 0,
     flexShrink: 1,
     fontSize: 8,
     lineHeight: 11,
     fontWeight: "800",
+    textAlign: "right",
   },
   avatarSourceEditor: {
     maxWidth: 330,
@@ -821,17 +856,6 @@ const styles = StyleSheet.create({
   avatarSourceDone: { minHeight: 30, justifyContent: "center", paddingHorizontal: 5 },
   avatarSourceDoneText: { fontSize: 10, lineHeight: 13, fontWeight: "800" },
   avatarSourceFallback: { textAlign: "center", fontSize: 9, lineHeight: 12, fontWeight: "700" },
-  personName: {
-    position: "absolute",
-    zIndex: 2,
-    top: 0,
-    left: 3,
-    right: 3,
-    textAlign: "center",
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: "900",
-  },
   goalGrid: {
     flexDirection: "row",
     flexWrap: "wrap",

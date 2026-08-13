@@ -15,7 +15,6 @@ import {
   ActivityIndicator,
   AppState as NativeAppState,
   InteractionManager,
-  Platform,
   StyleSheet,
   Text,
   View,
@@ -99,13 +98,13 @@ const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 /**
  * Reducer authorization for the one supported manual device-owned value.
  * The token is module-private and minted only at the context boundary after
- * the web Log screen explicitly identifies its request.
+ * the Log screen explicitly identifies its request.
  */
-const WEB_LOG_MANUAL_STEPS_CAPABILITY = Symbol("web-log-manual-steps");
-type WebLogManualStepsCapability = typeof WEB_LOG_MANUAL_STEPS_CAPABILITY;
+const LOG_MANUAL_STEPS_CAPABILITY = Symbol("log-manual-steps");
+type LogManualStepsCapability = typeof LOG_MANUAL_STEPS_CAPABILITY;
 
 type LogMetricRequest = {
-  source: "web-log-ui";
+  source: "log-ui";
   deviceOwnedMetric: "steps";
 };
 
@@ -224,13 +223,25 @@ function sameOwnedRowsByReference<T extends { userId: string }>(
   right: T[],
   userId: string,
 ) {
+  return sameRowsByReference(
+    left,
+    right,
+    (row) => row.userId === userId,
+  );
+}
+
+function sameRowsByReference<T>(
+  left: T[],
+  right: T[],
+  included: (row: T) => boolean,
+) {
   if (left === right) return true;
   let leftIndex = 0;
   let rightIndex = 0;
   while (true) {
-    while (leftIndex < left.length && left[leftIndex].userId !== userId)
+    while (leftIndex < left.length && !included(left[leftIndex]))
       leftIndex += 1;
-    while (rightIndex < right.length && right[rightIndex].userId !== userId)
+    while (rightIndex < right.length && !included(right[rightIndex]))
       rightIndex += 1;
     const leftRow = left[leftIndex];
     const rightRow = right[rightIndex];
@@ -254,8 +265,6 @@ function localPersistenceChanged(previous: AppState, next: AppState) {
     previous.groups !== next.groups ||
     previous.energyProfiles !== next.energyProfiles ||
     previous.metrics !== next.metrics ||
-    previous.photos !== next.photos ||
-    previous.messages !== next.messages ||
     previous.gymPlans !== next.gymPlans ||
     previous.gymSessions !== next.gymSessions ||
     previous.gymExerciseGoals !== next.gymExerciseGoals ||
@@ -279,6 +288,16 @@ function localPersistenceChanged(previous: AppState, next: AppState) {
       previous.dailyMetricStatuses,
       next.dailyMetricStatuses,
       next.currentUserId,
+    ) &&
+    sameOwnedRowsByReference(
+      previous.photos,
+      next.photos,
+      next.currentUserId,
+    ) &&
+    sameRowsByReference(
+      previous.messages,
+      next.messages,
+      (message) => message.senderId === next.currentUserId,
     )
   );
 }
@@ -301,7 +320,7 @@ type Action =
       visibility: Visibility;
       details?: EntryDetails;
       mode: "add" | "replace";
-      manualDeviceEntryCapability?: WebLogManualStepsCapability;
+      manualDeviceEntryCapability?: LogManualStepsCapability;
     }
   | {
       type: "deviceScreenTime";
@@ -920,18 +939,18 @@ function reducer(state: AppState, action: Action): AppState {
       );
       // Device-owned rows remain reducer-protected even if a caller bypasses
       // the native UI or a malformed cloud definition flips manualEntry.
-      // Only the provider-minted, web Log capability can replace daily Steps.
-      const authorizedWebSteps =
+      // Only the provider-minted Log capability can replace daily Steps.
+      const authorizedManualSteps =
         metric?.id === "steps" &&
         action.mode === "replace" &&
         typeof action.value === "number" &&
         Number.isFinite(action.value) &&
         action.value >= 0 &&
         action.manualDeviceEntryCapability ===
-          WEB_LOG_MANUAL_STEPS_CAPABILITY;
+          LOG_MANUAL_STEPS_CAPABILITY;
       if (
         (metric?.id === "steps" || metric?.manualEntry === false) &&
-        !authorizedWebSteps
+        !authorizedManualSteps
       )
         return state;
       const previousValue = metric
@@ -946,11 +965,12 @@ function reducer(state: AppState, action: Action): AppState {
                 entry.localDate === localDate,
             )
           : [];
-      // Web Steps is a fallback that may coexist with a later phone aggregate.
+      // Manual Steps may coexist with a phone aggregate in storage.
       // Editing it replaces only provenance-free manual rows. In particular,
       // an imported row is neither removed locally nor sent to the deletion
-      // outbox, and authoritativeStepEntries keeps displaying that phone row.
-      const entriesToReplace = authorizedWebSteps
+      // outbox. The newest manual/device revision controls the displayed daily
+      // total, so a later device sync can safely reclaim authority.
+      const entriesToReplace = authorizedManualSteps
         ? manualStepEntriesEligibleForReplacement(replacementCandidates)
         : replacementCandidates;
       const replacedEntries = new Set(entriesToReplace);
@@ -3658,12 +3678,11 @@ export function AppProvider({
       ) => {
         const previous = persistenceStateRef.current;
         const manualDeviceEntryCapability =
-          Platform.OS === "web" &&
           metricId === "steps" &&
           mode === "replace" &&
-          request?.source === "web-log-ui" &&
+          request?.source === "log-ui" &&
           request.deviceOwnedMetric === "steps"
-            ? WEB_LOG_MANUAL_STEPS_CAPABILITY
+            ? LOG_MANUAL_STEPS_CAPABILITY
             : undefined;
         const next = withLocalDeletionTombstones(
           previous,

@@ -3,7 +3,6 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import React from "react";
 import {
-  InteractionManager,
   PanResponder,
   Platform,
   Pressable,
@@ -61,6 +60,8 @@ const items = [
   },
 ];
 
+const NATIVE_MENU_DISMISS_MS = 320;
+
 export default function MenuScreen() {
   const tutorial = useTutorial();
   const { state } = useApp();
@@ -69,6 +70,7 @@ export default function MenuScreen() {
   const user = state.group.members.find(
     (member) => member.id === state.currentUserId,
   )!;
+  const destinationOpeningRef = React.useRef(false);
   const closeSwipe = React.useMemo(
     () =>
       PanResponder.create({
@@ -83,16 +85,14 @@ export default function MenuScreen() {
   );
   const openItem = React.useCallback(
     (path: (typeof items)[number]["path"]) => {
+      if (destinationOpeningRef.current) return;
+      destinationOpeningRef.current = true;
       const actionId =
         path === "/customize"
           ? "tutorial.navigation.open-customize"
           : path === "/display-settings"
             ? "tutorial.navigation.open-display"
             : undefined;
-      // Close the transparent drawer before presenting the destination modal.
-      // Replacing the drawer while Android is animating it can leave a blank
-      // native surface, especially inside the tutorial sandbox.
-      router.back();
       const openDestination = () => {
         router.navigate(path as never);
         if (actionId)
@@ -101,16 +101,15 @@ export default function MenuScreen() {
             scope: "isolated-preview",
           });
       };
+      // Close the transparent drawer before presenting the destination modal.
+      // Advance the guide only when the one real destination navigation runs.
+      // That prevents the engine from trying to open the next route while the
+      // outgoing Android surface is still being detached.
+      router.back();
       if (Platform.OS === "web") {
         setTimeout(openDestination, 0);
       } else {
-        // React Navigation's transparent drawer is still a native transition
-        // after `back()` returns. Waiting for interactions prevents presenting
-        // the next modal against the outgoing surface (an Android blank-screen
-        // failure seen in the guided flow).
-        void InteractionManager.runAfterInteractions(() => {
-          setTimeout(openDestination, 80);
-        });
+        setTimeout(openDestination, NATIVE_MENU_DISMISS_MS);
       }
     },
     [tutorial],

@@ -7,6 +7,11 @@ import { AppState, TodoItem } from "@/src/types";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { gymSessionClockBounds } from "@/src/domain/gym";
 import { scheduledGoalReached } from "@/src/domain/metrics";
+import {
+  entriesForMetric,
+  entriesForUserDay,
+  hasEntryAtRecordedTime,
+} from "@/src/domain/dataIndex";
 
 export type ScheduleEvent = {
   id: string;
@@ -167,12 +172,11 @@ function fastingBlocksForDate(state: AppState, localDate: string): ScheduleEvent
               },
             ]
           : [];
-      const logged = state.entries
-        .filter(
-          (entry) =>
-            entry.userId === state.currentUserId &&
-            entry.metricId === metric.id,
-        )
+      const logged = entriesForMetric(
+        state.entries,
+        metric.id,
+        state.currentUserId,
+      )
         .flatMap((entry) => {
           const startedAtMs = entry.submetricValues?.fast_started_at_ms;
           const endedAtMs = entry.submetricValues?.fast_ended_at_ms;
@@ -236,6 +240,7 @@ export function scheduleEventsForDate(
   state: AppState,
   localDate: string,
 ): ScheduleEvent[] {
+  const metricById = new Map(state.metrics.map((metric) => [metric.id, metric]));
   const todos = (state.todos ?? []).flatMap((todo) => {
     const timeBlocks = todoTimeBlocksForDate(todo, localDate);
     if (!todoAppearsOnDate(todo, localDate) && !timeBlocks.length) return [];
@@ -352,7 +357,7 @@ export function scheduleEventsForDate(
     )
     .map((reminder) => {
       const metric = reminder.metricId
-        ? state.metrics.find((item) => item.id === reminder.metricId)
+        ? metricById.get(reminder.metricId)
         : undefined;
       const final = localDate < dateKey();
       const completed = Boolean(
@@ -383,33 +388,34 @@ export function scheduleEventsForDate(
   ]);
   const previousLocalDate = dateWithOffsetFrom(localDate, -1);
   const nextLocalDate = dateWithOffsetFrom(localDate, 1);
-  const entryLogs: ScheduleEvent[] = state.entries.flatMap((entry) => {
-    const metric = state.metrics.find((item) => item.id === entry.metricId);
-    if (
-      entry.userId !== state.currentUserId ||
-      ![previousLocalDate, localDate, nextLocalDate].includes(entry.localDate) ||
-      Boolean(metric?.fastingSettings) ||
-      isScheduleNoiseEntry(entry)
-    )
+  // Timed logs can cross midnight, so inspect the selected day plus its two
+  // neighbors. The shared immutable-array index makes this proportional to
+  // visible rows instead of rescanning years of history for every grid day.
+  const nearbyEntries = [previousLocalDate, localDate, nextLocalDate].flatMap(
+    (date) => entriesForUserDay(state.entries, state.currentUserId, date),
+  );
+  const entryLogs: ScheduleEvent[] = nearbyEntries.flatMap((entry) => {
+    const metric = metricById.get(entry.metricId);
+    if (Boolean(metric?.fastingSettings) || isScheduleNoiseEntry(entry))
       return [];
     if (!metric || metric.dataType === "calculated") return [];
     if (
       childNutritionIds.has(metric.id) &&
-      state.entries.some(
-        (candidate) =>
-          candidate.userId === entry.userId &&
-          candidate.metricId === "food" &&
-          candidate.recordedAt === entry.recordedAt,
+      hasEntryAtRecordedTime(
+        state.entries,
+        "food",
+        entry.userId,
+        entry.recordedAt,
       )
     )
       return [];
     if (
       ["blood_pressure_diastolic", "pulse"].includes(metric.id) &&
-      state.entries.some(
-        (candidate) =>
-          candidate.userId === entry.userId &&
-          candidate.metricId === "blood_pressure_systolic" &&
-          candidate.recordedAt === entry.recordedAt,
+      hasEntryAtRecordedTime(
+        state.entries,
+        "blood_pressure_systolic",
+        entry.userId,
+        entry.recordedAt,
       )
     )
       return [];
@@ -491,8 +497,8 @@ export function scheduleEventsForDate(
       ),
       kind: "gym" as const,
       metricId:
-        state.metrics.find((metric) => metric.id === "workout")?.id ??
-        state.metrics.find((metric) => metric.id === "workout_duration")?.id,
+        metricById.get("workout")?.id ??
+        metricById.get("workout_duration")?.id,
       color: "#8B5CF6",
       completed: true,
     }];

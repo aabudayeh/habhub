@@ -90,12 +90,11 @@ function LogScreen() {
       .filter(
         (metric) =>
           metric.dataType !== "calculated" &&
-          (metric.id !== "steps" || Platform.OS === "web") &&
+          metric.id !== "screen_time" &&
           !metric.fastingSettings &&
           metric.id !== "blood_pressure_diastolic" &&
           !(metric.id === "pulse" && state.metrics.some((item) => item.id === "blood_pressure_systolic")) &&
-          (metric.manualEntry !== false ||
-            (metric.id === "steps" && Platform.OS === "web")),
+          (metric.manualEntry !== false || metric.id === "steps"),
       )
       .sort((a, b) => a.order - b.order);
   }, [state.metrics]);
@@ -543,7 +542,7 @@ function LogScreen() {
       replaceMode ? "replace" : "add",
       details,
       selected.id === "steps"
-        ? { source: "web-log-ui", deviceOwnedMetric: "steps" }
+        ? { source: "log-ui", deviceOwnedMetric: "steps" }
         : undefined,
     );
     if (
