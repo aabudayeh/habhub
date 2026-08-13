@@ -39,8 +39,8 @@ const FIRST_BACKFILL_DELAY_MS = 6_000;
 const NEXT_BACKFILL_DELAY_MS = 900;
 const MAX_BACKFILL_RETRY_MS = 15 * 60 * 1000;
 const STEPS_REPAIR_CHUNK_DAYS = 30;
-const STEPS_REPAIR_CHUNKS_PER_BATCH = 6;
-const STEPS_REPAIR_NEXT_CHUNK_DELAY_MS = 900;
+const STEPS_REPAIR_CHUNKS_PER_BATCH = 4;
+const STEPS_REPAIR_NEXT_CHUNK_DELAY_MS = 4_000;
 const STEPS_REPAIR_RETRY_MS = 15 * 60 * 1000;
 const FOREGROUND_STEPS_SETTLE_DELAY_MS = 700;
 
@@ -461,6 +461,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           throughDate: dateKey(to),
           removeStepFallbacks: true,
         },
+        true,
       );
       const completedAt = new Date().toISOString();
       await saveStatus({
@@ -498,7 +499,6 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       return;
     activeHealthOperationRef.current = 'steps-repair';
     const operation = (async () => {
-      setCloudSyncPaused('health-steps-repair', true);
       try {
         const now = new Date();
         let cursor = persistedRef.current.stepsRepair;
@@ -536,15 +536,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         );
         const repairFrom = new Date(cursor.from);
         let nextRepair: PersistedHealthStatus['stepsRepair'] = cursor;
+        let batchFrom: Date | null = null;
+        let batchThrough: string | null = null;
+        const batchRecords: import('@/src/health/types').HealthImportRecord[] = [];
         for (
           let batchIndex = 0;
           batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH && nextRepair;
           batchIndex += 1
         ) {
-          // No scheduled delay occurs while the cloud gate is held. Yield only
-          // to queued JS/UI work, then immediately read the next small slice.
-          if (batchIndex > 0)
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
           const chunkEnd: Date = new Date(nextRepair.cursorEnd);
           const chunkStart: Date = new Date(chunkEnd);
           chunkStart.setDate(chunkStart.getDate() - STEPS_REPAIR_CHUNK_DAYS);
@@ -557,44 +556,58 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             dataTypes: ['steps'],
             sourcePreferences: current.settings.healthSync.sourcePreferences,
           });
-          const sourcePreferences = rememberHealthSources(records);
-          const entries = mapHealthRecordsToEntries(
-            records,
-            current.currentUserId,
-            healthVisibilityByMetric(current.metrics),
-            current.metrics,
-            current.settings.energyProfile,
-            sourcePreferences,
-          );
-          await importHealthEntries(
-            entries,
-            nativeHealthAdapter.provider!,
-            stepMetricIds,
-            dateKey(chunkStart),
-            false,
-            true,
-            {
-              metricIds: stepMetricIds,
-              throughDate: aggregateRangeThroughLocalDate(chunkEnd),
-              removeStepFallbacks: true,
-            },
-          );
+          batchRecords.push(...records);
+          batchFrom = chunkStart;
+          batchThrough ??= aggregateRangeThroughLocalDate(chunkEnd);
           nextRepair = finalChunk
             ? null
             : {
                 from: cursor.from,
                 cursorEnd: chunkStart.toISOString(),
               };
-          await saveStatus({
-            ...persistedRef.current,
-            stepsImportVersion: finalChunk
-              ? HEALTH_STEPS_IMPORT_VERSION
-              : persistedRef.current.stepsImportVersion,
-            stepsRepair: nextRepair,
-            stepsRepairError: null,
-            stepsRepairNextRetryAt: null,
-          });
         }
+        if (!batchFrom || !batchThrough) return;
+        const sourcePreferences = rememberHealthSources(batchRecords);
+        const entries = mapHealthRecordsToEntries(
+          batchRecords,
+          current.currentUserId,
+          healthVisibilityByMetric(current.metrics),
+          current.metrics,
+          current.settings.energyProfile,
+          sourcePreferences,
+        );
+        // Four native slices become one reducer update, one React render, and
+        // one deferred/coalesced snapshot write. Keep the cloud gate open while
+        // Health Connect reads so chat/group work remains responsive; pause it
+        // only around the single local historical merge.
+        setCloudSyncPaused('health-steps-repair', true);
+        try {
+          await importHealthEntries(
+            entries,
+            nativeHealthAdapter.provider!,
+            stepMetricIds,
+            dateKey(batchFrom),
+            false,
+            true,
+            {
+              metricIds: stepMetricIds,
+              throughDate: batchThrough,
+              removeStepFallbacks: true,
+            },
+            true,
+          );
+        } finally {
+          setCloudSyncPaused('health-steps-repair', false);
+        }
+        await saveStatus({
+          ...persistedRef.current,
+          stepsImportVersion: nextRepair
+            ? persistedRef.current.stepsImportVersion
+            : HEALTH_STEPS_IMPORT_VERSION,
+          stepsRepair: nextRepair,
+          stepsRepairError: null,
+          stepsRepairNextRetryAt: null,
+        });
         if (nextRepair)
           scheduleStepsRepair(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS);
       } catch (error) {
@@ -609,8 +622,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         scheduleStepsRepair(STEPS_REPAIR_RETRY_MS);
         throw error;
       } finally {
-        // Never hold the global gate while waiting between batches or retries;
-        // Android can background the app and suspend that timer indefinitely.
+        // Also releases a gate if a reducer/storage exception interrupted the
+        // guarded import above.
         setCloudSyncPaused('health-steps-repair', false);
       }
     })().finally(() => {

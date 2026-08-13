@@ -636,7 +636,11 @@ export function reconcileImportedHealthEntries(
       if (selectedPlatformAggregate) {
         const selected = selectedPlatformAggregate;
         if (Number(selected.value) > 0)
-          reconciled.push({ ...selected, value: Math.round(Number(selected.value)) });
+          reconciled.push(
+            Number(selected.value) === Math.round(Number(selected.value))
+              ? selected
+              : { ...selected, value: Math.round(Number(selected.value)) },
+          );
         continue;
       }
       const bySource = new Map<string, MetricEntry[]>();

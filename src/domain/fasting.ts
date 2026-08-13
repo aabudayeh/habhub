@@ -627,6 +627,18 @@ export function reconcileAutomaticFasting(
   changedEntries?: MetricEntry[],
   metricId?: string,
 ): AppState {
+  // Health imports pass the exact rows that changed. A Steps-only foreground
+  // refresh cannot start or finish a fast, so avoid sorting the entire food
+  // history and rebuilding every automatic fasting cycle on that hot path.
+  // Explicit tracker reconciliation still uses `metricId` with non-food rows.
+  if (
+    changedEntries !== undefined &&
+    metricId === undefined &&
+    !changedEntries.some((entry) =>
+      isFoodEntry(entry, state.currentUserId),
+    )
+  )
+    return state;
   const metrics = state.metrics.filter(
     (metric) =>
       Boolean(metric.fastingSettings?.automaticFoodBreak) &&

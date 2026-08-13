@@ -77,6 +77,7 @@ const EXPO_TOKEN_CACHE_PREFIX = 'habhub-expo-push-token-v1:';
 const PUSH_REGISTRATION_CACHE_PREFIX = 'habhub-push-registration-v2:';
 const PUSH_REGISTRATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+const PUSH_TOKEN_FOREGROUND_REFRESH_MS = 15 * 60 * 1000;
 const pushRegistrationBySignature = new Map<string, Promise<void>>();
 const pushRegistrationMemory = new Map<
   string,
@@ -231,6 +232,18 @@ async function registerPushToken(
   return operation;
 }
 
+async function registeredTokenExists(userId: string, token: string) {
+  if (!supabase) return true;
+  const { data, error } = await supabase
+    .from('device_push_tokens')
+    .select('token')
+    .eq('user_id', userId)
+    .eq('token', token)
+    .eq('platform', Platform.OS)
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
 /**
  * Refresh the Expo token after the native APNs/FCM token changes. The native
  * listener can fire while getExpoPushTokenAsync is resolving, so coalesce and
@@ -241,6 +254,7 @@ export function refreshPushTokenRegistration(
   preferences: NotificationSettings,
   language: AppLanguage = 'en',
   shouldContinue: () => boolean = () => true,
+  cooldownMs = PUSH_TOKEN_REFRESH_COOLDOWN_MS,
 ) {
   if (!supabase || Platform.OS === 'web') return Promise.resolve();
   const projectId = pushProjectId();
@@ -250,7 +264,7 @@ export function refreshPushTokenRegistration(
   if (inFlight) return inFlight;
   if (
     Date.now() - (pushTokenRefreshAttemptAt.get(key) ?? 0) <
-    PUSH_TOKEN_REFRESH_COOLDOWN_MS
+    cooldownMs
   )
     return Promise.resolve();
   pushTokenRefreshAttemptAt.set(key, Date.now());
@@ -263,6 +277,7 @@ export function refreshPushTokenRegistration(
             token,
             preferences,
             language,
+            true,
           )
         : undefined,
     )
@@ -446,14 +461,38 @@ export async function updatePushPreferences(
   try {
     const { token } = await cachedOrFreshExpoPushToken(projectId);
     if (!shouldContinue()) return;
+    const registrationExists = await registeredTokenExists(userId, token);
+    if (!shouldContinue()) return;
     await registerPushToken(
       userId,
       projectId,
       token,
       preferences,
       language,
+      !registrationExists,
     );
   } catch { /* The next foreground/settings visit retries registration. */ }
+}
+
+/**
+ * Foreground recovery fetches the current Expo token instead of trusting the
+ * project-scoped cache forever. This repairs DeviceNotRegistered cleanup and
+ * reinstalls while the per-account cooldown prevents resume storms.
+ */
+export async function recoverPushRegistrationOnForeground(
+  userId: string,
+  preferences: NotificationSettings,
+  language: AppLanguage = 'en',
+  shouldContinue: () => boolean = () => true,
+) {
+  if (!(await notificationPermissionGranted())) return;
+  await refreshPushTokenRegistration(
+    userId,
+    preferences,
+    language,
+    shouldContinue,
+    PUSH_TOKEN_FOREGROUND_REFRESH_MS,
+  );
 }
 
 export async function disablePushNotifications(userId: string) {

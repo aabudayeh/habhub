@@ -1,9 +1,17 @@
-import React, { useEffect, useMemo, useSyncExternalStore } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Platform, StyleSheet } from "react-native";
 import type { StyleProp, TextStyle } from "react-native";
 import Animated, {
   Easing,
   ReduceMotion,
+  runOnJS,
+  useAnimatedReaction,
   useAnimatedProps,
   useReducedMotion,
   useSharedValue,
@@ -11,7 +19,7 @@ import Animated, {
 } from "react-native-reanimated";
 import type { SharedValue } from "react-native-reanimated";
 
-import { AppTextInput } from "@/src/components/AppText";
+import { AppText, AppTextInput } from "@/src/components/AppText";
 import {
   claimColdLaunchMetricAnimation,
   coldLaunchMetricAnimationSnapshot,
@@ -155,6 +163,12 @@ export function ColdLaunchCountValue({
   style?: StyleProp<TextStyle>;
 }) {
   const finalText = `${value} of ${total}`;
+  const [animationSettled, setAnimationSettled] = useState(() =>
+    coldLaunchMetricAnimationSnapshot() === "consumed",
+  );
+  const settleAnimation = useCallback(() => {
+    setAnimationSettled(true);
+  }, []);
   const sizingStyle = useAnimatedTextSizing(style);
   const animatedProps = useAnimatedProps(() => {
     const count = Math.round(
@@ -163,7 +177,33 @@ export function ColdLaunchCountValue({
     const text = `${count} of ${total}`;
     return { text, defaultValue: text };
   }, [progress, total, value]);
-  const resolvedStyle = resolveCountTextStyle(style, sizingStyle);
+
+  // Keep the one-time launch count on the UI thread, then permanently swap to
+  // React Native's stable Text layout. Android can vertically mis-measure a
+  // non-editable TextInput after its animated `text` prop is retargeted by a
+  // later sync. Crossing to React only once avoids both that retained input and
+  // frame-by-frame JS work; later goal updates render immediately as normal text.
+  useAnimatedReaction(
+    () => progress.value >= 1,
+    (settled, previouslySettled) => {
+      if (settled && !previouslySettled) runOnJS(settleAnimation)();
+    },
+    [progress, settleAnimation],
+  );
+
+  if (animationSettled) {
+    return (
+      <AppText
+        accessibilityLabel={finalText}
+        numberOfLines={1}
+        preserveColor
+        style={style}
+        translate={false}
+      >
+        {finalText}
+      </AppText>
+    );
+  }
 
   return (
     <AnimatedTextInput
@@ -176,7 +216,7 @@ export function ColdLaunchCountValue({
       focusable={false}
       pointerEvents="none"
       scrollEnabled={false}
-      style={resolvedStyle}
+      style={resolveCountTextStyle(style, sizingStyle)}
       translate={false}
       underlineColorAndroid="transparent"
     />
@@ -187,10 +227,6 @@ function resolveCountTextStyle(
   style: StyleProp<TextStyle>,
   sizingStyle: TextStyle,
 ) {
-  // Reanimated's web wrapper can lose a color nested inside a style array
-  // before AppTextInput resolves it. Flatten it first, and mirror the explicit
-  // color into the browser's input glyph fill so theme/global input rules
-  // cannot turn the featured-card count dark.
   const resolved = StyleSheet.flatten([
     styles.text,
     style,

@@ -1,5 +1,9 @@
 import { supabase } from "@/src/lib/supabase";
 import { GoalSchedule, GroupChallenge } from "@/src/types";
+import {
+  assertPushDeliveryComplete,
+  dispatchPushWithBoundedRetry,
+} from "@/src/domain/pushDelivery";
 
 type GroupChallengeRow = {
   id: string;
@@ -116,25 +120,29 @@ async function sendChallengePush(input: {
   title: string;
   body: string;
 }) {
-  if (!supabase) return;
-  const { error } = await supabase.functions.invoke("send-push", {
-    body: {
-      eventKey: input.eventKey,
-      groupId: input.challenge.groupId,
-      category: "challenge",
-      audience: "user",
-      recipientId: input.recipientId,
-      title: input.title,
-      body: input.body,
-      data: {
-        route: "/group",
+  const client = supabase;
+  if (!client) return;
+  await dispatchPushWithBoundedRetry(async () => {
+    const { data, error } = await client.functions.invoke("send-push", {
+      body: {
+        eventKey: input.eventKey,
         groupId: input.challenge.groupId,
-        challengeId: input.challenge.id,
-        challengeEvent: input.event,
+        category: "challenge",
+        audience: "user",
+        recipientId: input.recipientId,
+        title: input.title,
+        body: input.body,
+        data: {
+          route: "/group",
+          groupId: input.challenge.groupId,
+          challengeId: input.challenge.id,
+          challengeEvent: input.event,
+        },
       },
-    },
+    });
+    if (error) throw error;
+    assertPushDeliveryComplete(data);
   });
-  if (error) throw error;
 }
 
 export async function sendGroupChallengeStartedPush(

@@ -36,6 +36,7 @@ import {
   isDailyStepReplacementCandidate,
   manualStepEntriesEligibleForReplacement,
   preserveUnchangedDailyAggregateRevision,
+  preserveUnchangedStepFallback,
 } from "@/src/domain/healthDedup";
 import {
   normalizeEnergyProfile,
@@ -2644,7 +2645,7 @@ function reducer(state: AppState, action: Action): AppState {
               existingById.get(key),
               entry,
             )
-          : entry;
+          : preserveUnchangedStepFallback(existingById.get(key), entry);
         byId.set(key, nextEntry);
       }
       const targetMetrics = new Set(action.metricIds);
@@ -2665,10 +2666,28 @@ function reducer(state: AppState, action: Action): AppState {
         state.metrics,
         state.settings.healthSync.sourcePreferences,
       );
-      const importedState = withLatestBodyProfileMeasurements(applyImportedFoodFastBreaks(
-        { ...state, entries: [...unaffected, ...reconciled] },
-        action.entries,
-      ));
+      const nextEntries = [...unaffected, ...reconciled];
+      const entriesUnchanged =
+        nextEntries.length === state.entries.length &&
+        nextEntries.every(
+          (entry) =>
+            existingById.get(metricEntryKey(entry.userId, entry.id)) === entry,
+        );
+      const reconciledState = entriesUnchanged
+        ? state
+        : applyImportedFoodFastBreaks(
+            { ...state, entries: nextEntries },
+            action.entries,
+          );
+      // A frequent Steps-only aggregate cannot change the private body
+      // profile. Avoid three full entry-index scans on every foreground read.
+      const importedState = action.entries.some((entry) =>
+        BODY_PROFILE_METRICS.some(
+          (mapping) => mapping.metricId === entry.metricId,
+        ),
+      )
+        ? withLatestBodyProfileMeasurements(reconciledState)
+        : reconciledState;
       if (action.preserveTrackedGoalHistory) return importedState;
       const withOnboardingGoalHistory = (next: AppState): AppState => {
         const pendingFirstImport =
@@ -2879,6 +2898,8 @@ type AppContextValue = {
       throughDate: string;
       removeStepFallbacks?: boolean;
     },
+    /** Device-owned imports can be re-read; keep their JSON save off tap frames. */
+    deferPersistence?: boolean,
   ) => Promise<void>;
   /** Flush the latest reducer state to this device before a route exits. */
   flushLocalPersistence: () => Promise<void>;
@@ -3680,6 +3701,7 @@ export function AppProvider({
       finalizeInitialImport,
       preserveTrackedGoalHistory,
       aggregateReplacement,
+      deferPersistence,
     ) => {
       const previous = persistenceStateRef.current;
       const next = withLocalDeletionTombstones(
@@ -3695,8 +3717,9 @@ export function AppProvider({
           aggregateReplacement,
         }),
       );
-      return commitReducedState(next, true).then(async () => {
-        if (ephemeral) return;
+      const changed = next !== previous;
+      return commitReducedState(next, !deferPersistence).then(async () => {
+        if (ephemeral || !changed) return;
         // Historical repairs must remain silent. Only a current-day value
         // crossing a configured threshold can emit an immediate milestone.
         if (entries.some((entry) => entry.localDate === dateKey())) {

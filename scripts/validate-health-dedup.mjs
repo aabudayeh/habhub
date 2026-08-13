@@ -16,6 +16,7 @@ import {
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
   preserveUnchangedDailyAggregateRevision,
+  preserveUnchangedStepFallback,
   preferredHealthSourceOrigin,
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
@@ -386,9 +387,9 @@ assert.equal(
   preserveUnchangedDailyAggregateRevision(stableAggregate, {
     ...stableAggregate,
     sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
-  }).sourceUpdatedAt,
-  "2026-08-13T08:00:00.000Z",
-  "an unchanged re-read must not outrank a later manual Steps override",
+  }),
+  stableAggregate,
+  "an unchanged re-read must retain object identity and not trigger a render",
 );
 assert.equal(
   preserveUnchangedDailyAggregateRevision(stableAggregate, {
@@ -398,6 +399,37 @@ assert.equal(
   }).sourceUpdatedAt,
   "2026-08-13T08:05:00.000Z",
   "a changed partial-day aggregate must receive the latest sync revision",
+);
+const stableFallback = {
+  id: "fallback",
+  metricId: "exercise",
+  userId: "owner",
+  localDate: "2026-08-13",
+  recordedAt: "2026-08-13T08:00:00.000Z",
+  source: "calculated",
+  sourceProvider: "health_connect",
+  sourceRecordId: "step-fallback:2026-08-13",
+  sourceOrigin: "Health Connect",
+  visibility: "group",
+  value: 123,
+  label: "Estimated unrecorded walking from steps",
+  note: "Uses 3,435 steps",
+};
+assert.equal(
+  preserveUnchangedStepFallback(stableFallback, {
+    ...stableFallback,
+    recordedAt: "2026-08-13T08:05:00.000Z",
+  }),
+  stableFallback,
+  "an unchanged derived Steps row must retain identity across refresh reads",
+);
+assert.notEqual(
+  preserveUnchangedStepFallback(stableFallback, {
+    ...stableFallback,
+    value: 125,
+  }),
+  stableFallback,
+  "a changed derived Steps value must remain publishable",
 );
 
 const repairNow = new Date(2026, 7, 13, 12);
@@ -775,7 +807,7 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /historicalStepRepairStart[\s\S]{0,3500}STEPS_REPAIR_CHUNK_DAYS[\s\S]{0,3500}stepsImportVersion: finalChunk/,
+  /historicalStepRepairStart[\s\S]{0,3500}STEPS_REPAIR_CHUNK_DAYS[\s\S]{0,5000}stepsImportVersion: nextRepair/,
   "historical Steps repair must be versioned, chunked, and resumable",
 );
 assert.match(
@@ -795,8 +827,13 @@ assert.match(
 );
 assert.match(
   healthProviderSource,
-  /STEPS_REPAIR_CHUNKS_PER_BATCH = 6[\s\S]{0,30000}batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH[\s\S]{0,5000}scheduleStepsRepair\(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS\)/,
-  "historical repair must batch six slices per cloud wake before scheduling the next batch",
+  /STEPS_REPAIR_CHUNKS_PER_BATCH = 4[\s\S]{0,30000}batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH[\s\S]{0,5000}batchRecords\.push\(\.\.\.records\)[\s\S]{0,5000}scheduleStepsRepair\(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS\)/,
+  "historical repair must merge four native slices into one foreground-friendly batch",
+);
+assert.match(
+  healthProviderSource,
+  /batchThrough \?\?= aggregateRangeThroughLocalDate\(chunkEnd\)[\s\S]{0,2500}dateKey\(batchFrom\)[\s\S]{0,500}throughDate: batchThrough/,
+  "a merged repair batch must replace the exact oldest-to-newest local-day window",
 );
 for (const source of [appProviderSource, backgroundHealthSource]) {
   assert.match(

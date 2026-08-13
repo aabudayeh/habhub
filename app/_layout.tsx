@@ -12,6 +12,7 @@ import * as Notifications from "expo-notifications";
 import "@/src/notifications/workoutTimer";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppState as NativeAppState,
   ActivityIndicator,
   Platform,
   StyleSheet,
@@ -61,6 +62,7 @@ import {
   syncGymNotifications,
   syncProductivityNotifications,
   refreshPushTokenRegistration,
+  recoverPushRegistrationOnForeground,
   updatePushPreferences,
 } from "@/src/notifications/push";
 import {
@@ -367,7 +369,22 @@ function RootNavigator() {
         cycleStateRef.current.settings.language,
         () => active,
       ).catch(() => undefined);
+    const recover = () =>
+      recoverPushRegistrationOnForeground(
+        userId,
+        cycleStateRef.current.settings.notifications,
+        cycleStateRef.current.settings.language,
+        () => active,
+      ).catch(() => undefined);
     void refresh();
+    void recover();
+    const foregroundSubscription = NativeAppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState !== "active") return;
+        void recover();
+      },
+    );
     const subscription = Notifications.addPushTokenListener(
       () =>
         void refreshPushTokenRegistration(
@@ -379,6 +396,7 @@ function RootNavigator() {
     );
     return () => {
       active = false;
+      foregroundSubscription.remove();
       subscription.remove();
     };
   }, [

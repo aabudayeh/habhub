@@ -1342,11 +1342,6 @@ function LeaderboardScreen() {
                         </Text>
                       ) : null}
                     </View>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={15}
-                      color={colors.faint}
-                    />
                   </Pressable>
                   {!includeScore && metric ? (
                     <Pressable
@@ -1354,12 +1349,12 @@ function LeaderboardScreen() {
                       accessibilityLabel={t(`${gridExpanded ? "Collapse" : "Expand"} ${gridRange} calendar for ${gridMemberName}`)}
                       accessibilityState={{ expanded: gridExpanded }}
                       onPress={() => toggleGridRow(gridKey)}
-                      hitSlop={5}
+                      hitSlop={8}
                       style={styles.gridToggle}
                     >
                       <Ionicons
-                        name={gridExpanded ? "chevron-up" : "calendar-outline"}
-                        size={15}
+                        name={gridExpanded ? "chevron-up" : "chevron-down"}
+                        size={16}
                         color={accent}
                       />
                     </Pressable>
@@ -1905,7 +1900,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
   },
   memberGridBlock: { overflow: "hidden" },
-  gridToggle: { width: 25, minHeight: 34, alignItems: "center", justifyContent: "center" },
+  gridToggle: { width: 22, minHeight: 34, alignItems: "center", justifyContent: "center" },
   memberGrid: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 7, paddingTop: 5, paddingBottom: 8 },
   rank: { width: 26, fontSize: 11, fontWeight: "900" },
   podium: { color: palette.amber, fontSize: 14 },

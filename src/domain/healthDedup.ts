@@ -18,6 +18,12 @@ type HealthImportIdentity = {
 
 type ImportedDailyAggregate = HealthImportIdentity & {
   value?: unknown;
+  metricId?: unknown;
+  userId?: unknown;
+  localDate?: unknown;
+  visibility?: unknown;
+  label?: unknown;
+  note?: unknown;
 };
 
 /**
@@ -95,13 +101,51 @@ export function preserveUnchangedDailyAggregateRevision<
     !existing?.sourceUpdatedAt ||
     existing.sourceProvider !== incoming.sourceProvider ||
     existing.sourceRecordId !== incoming.sourceRecordId ||
-    Number(existing.value) !== Number(incoming.value)
+    Number(existing.value) !== Number(incoming.value) ||
+    existing.metricId !== incoming.metricId ||
+    existing.userId !== incoming.userId ||
+    existing.localDate !== incoming.localDate ||
+    existing.source !== incoming.source ||
+    existing.sourceOrigin !== incoming.sourceOrigin ||
+    existing.visibility !== incoming.visibility ||
+    existing.label !== incoming.label ||
+    existing.note !== incoming.note
   )
     return incoming;
-  return {
-    ...incoming,
-    sourceUpdatedAt: existing.sourceUpdatedAt,
-  };
+  return existing;
+}
+
+type StepFallbackEntry = HealthImportIdentity & {
+  metricId?: unknown;
+  userId?: unknown;
+  localDate?: unknown;
+  value?: unknown;
+  visibility?: unknown;
+  label?: unknown;
+  note?: unknown;
+};
+
+/** Retain identity when only a fallback row's synthetic read time changed. */
+export function preserveUnchangedStepFallback<
+  TEntry extends StepFallbackEntry,
+>(existing: TEntry | undefined, incoming: TEntry): TEntry {
+  if (
+    !existing ||
+    !incoming.sourceRecordId?.toString().startsWith("step-fallback:") ||
+    existing.sourceRecordId !== incoming.sourceRecordId ||
+    existing.metricId !== incoming.metricId ||
+    existing.userId !== incoming.userId ||
+    existing.localDate !== incoming.localDate ||
+    existing.sourceProvider !== incoming.sourceProvider ||
+    existing.sourceOrigin !== incoming.sourceOrigin ||
+    existing.source !== incoming.source ||
+    existing.visibility !== incoming.visibility ||
+    existing.value !== incoming.value ||
+    existing.label !== incoming.label ||
+    existing.note !== incoming.note
+  )
+    return incoming;
+  return existing;
 }
 
 function localDateString(date: Date) {

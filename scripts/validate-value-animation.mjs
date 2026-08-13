@@ -49,21 +49,31 @@ assert.doesNotMatch(component, /requestAnimationFrame|setValue\s*\(/);
 assert.doesNotMatch(today, /function useAnimatedNumber/);
 assert.match(today, /<ColdLaunchMetricValue[\s\S]*progress=\{metricValueAnimationProgress\}/);
 assert.match(today, /<ColdLaunchCountValue[\s\S]*progress=\{metricValueAnimationProgress\}/);
+const countStart = component.indexOf("export function ColdLaunchCountValue");
+const countEnd = component.indexOf("function useAnimatedTextSizing", countStart);
+const countComponent = component.slice(countStart, countEnd);
+assert.ok(countStart >= 0 && countEnd > countStart);
 assert.match(
-  component,
-  /const resolvedStyle = resolveCountTextStyle\(style, sizingStyle\)/,
-  "the featured-card count must use its resolved caller color",
+  countComponent,
+  /useAnimatedReaction\([\s\S]*\(\) => progress\.value >= 1[\s\S]*runOnJS\(settleAnimation\)/,
+  "the featured count-up should cross to React exactly when its UI-thread animation settles",
 );
 assert.match(
-  component,
+  countComponent,
+  /if \(animationSettled\)[\s\S]*<AppText[\s\S]*preserveColor[\s\S]*style=\{style\}[\s\S]*\{finalText\}/,
+  "after launch, the featured count must use stable, immediately updated, color-preserving Text",
+);
+assert.doesNotMatch(
+  countComponent,
+  /runOnJS\([^)]*(?:displayed|count|value)|setDisplayedCount/,
+  "the featured count animation must not bridge frame-by-frame values to JavaScript",
+);
+assert.match(
+  countComponent,
   /WebkitTextFillColor: resolved\.color/,
-  "the animated featured-card count must preserve its explicit input glyph color on web",
+  "the brief animated web input must preserve the caller's explicit white color",
 );
-assert.match(
-  component,
-  /StyleSheet\.flatten\(\[\s*styles\.text,\s*style,\s*sizingStyle,?\s*\]\)/,
-  "the animated count must flatten nested caller styles before Reanimated reaches AppTextInput",
-);
+assert.match(today, /heroValue:[\s\S]{0,100}lineHeight: 35/);
 assert.match(today, /health\.lastStepSyncedAt \?\? health\.lastSyncedAt/);
 assert.match(healthProvider, /lastStepSyncedAt: persisted\.lastStepSyncedAt \?\? null/);
 

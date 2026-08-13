@@ -81,19 +81,29 @@ Deno.serve(async(req)=>{
       const language=pushLanguage(item.preferences??{});
       return {to:item.token,sound:'default',channelId:'paceboard',priority:'high',title:payload.titles?.[language]??payload.titles?.en??payload.title,body:payload.bodies?.[language]??payload.bodies?.en??payload.body,data:payload.data??{}};
     });
+    // Zero eligible messages (preferences, muted chats/groups, or quiet hours)
+    // is an intentional suppression, not a token-registration retry signal.
+    let acceptedTicketCount=0;
     if(messages.length){
       const response=await fetch('https://exp.host/--/api/v2/push/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(messages)});
       if(!response.ok)throw new Error(`Expo push failed: ${response.status}`);
       const ticketPayload=await response.json() as {data?:Array<{status?:string;message?:string;details?:{error?:string}}>;errors?:unknown[]};
       if(ticketPayload.errors?.length)throw new Error('Expo rejected the push batch');
       const tickets=ticketPayload.data??[];
+      if(tickets.length!==messages.length)throw new Error('Expo push ticket count mismatch');
       const transient=tickets.find((ticket)=>ticket.status==='error'&&ticket.details?.error!=='DeviceNotRegistered');
       if(transient)throw new Error(transient.message||'Expo push delivery failed');
+      acceptedTicketCount=tickets.filter((ticket)=>ticket.status==='ok').length;
       const staleTokens=tickets.flatMap((ticket,index)=>ticket.status==='error'&&ticket.details?.error==='DeviceNotRegistered'?[eligible[index]?.token]:[]).filter(Boolean);
       if(staleTokens.length)await admin.from('device_push_tokens').delete().in('token',staleTokens);
+      if(staleTokens.length===messages.length){
+        await admin.from('push_events').delete().eq('event_key',payload.eventKey);
+        claimedEvent=undefined;
+        return json({sent:0,retryable:true});
+      }
     }
     if(payload.clientMessageId)await admin.from('messages').update({push_dispatched_at:new Date().toISOString()}).eq('group_id',payload.groupId).eq('sender_id',user.id).eq('client_generated_id',payload.clientMessageId);
-    return json({sent:messages.length});
+    return json({sent:acceptedTicketCount});
   }catch(error){
     if(claimedEvent){
       const url=Deno.env.get('SUPABASE_URL');const service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');

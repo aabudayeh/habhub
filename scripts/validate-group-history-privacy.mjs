@@ -71,6 +71,33 @@ assert.match(
   /gridExpanded &&[\s\S]{0,120}row\.member\.id === state\.currentUserId[\s\S]{0,160}backgroundColor: colors\.primarySoft[\s\S]{0,80}borderRadius: 14/,
   "the current user's expanded row and calendar must share one clipped rounded surface",
 );
+const memberCalendarToggleStart = group.indexOf('style={styles.metricLink}');
+const memberCalendarToggleEnd = group.indexOf(
+  "{gridExpanded && metric ?",
+  memberCalendarToggleStart,
+);
+const memberCalendarToggle = group.slice(
+  memberCalendarToggleStart,
+  memberCalendarToggleEnd,
+);
+assert.ok(
+  memberCalendarToggleStart >= 0 &&
+    memberCalendarToggleEnd > memberCalendarToggleStart,
+);
+assert.match(
+  memberCalendarToggle,
+  /accessibilityState=\{\{ expanded: gridExpanded \}\}/,
+);
+assert.match(
+  memberCalendarToggle,
+  /name=\{gridExpanded \? "chevron-up" : "chevron-down"\}/,
+  "member calendars should use the same compact down/up disclosure as Today",
+);
+assert.doesNotMatch(
+  memberCalendarToggle,
+  /calendar-outline|chevron-forward/,
+  "member rows should not spend width on redundant calendar and detail icons",
+);
 assert.match(group, /futureInvitations/);
 assert.match(group, /participation === "invited"/);
 

@@ -45,6 +45,10 @@ import {
 import { supabase } from "@/src/lib/supabase";
 import { translateUiText } from "@/src/i18n";
 import {
+  assertPushDeliveryComplete,
+  dispatchPushWithBoundedRetry,
+} from "@/src/domain/pushDelivery";
+import {
   AppState,
   ChatMessage,
   DailyMetricStatus,
@@ -1363,22 +1367,25 @@ export async function sendMembershipPush(input: {
 }) {
   // Membership changes must remain successful even if the optional push
   // function is temporarily unavailable or not deployed yet.
-  const result = await requireCloud().functions.invoke("send-push", {
-    body: withLocalizedPushCopy({
-      eventKey: input.eventKey,
-      groupId: input.groupId,
-      category: "membership",
-      audience: input.audience,
-      recipientId: input.recipientId,
-      title: input.title,
-      body: input.body,
-      data: {
-        route: input.route ?? "/groups",
+  await dispatchPushWithBoundedRetry(async () => {
+    const result = await requireCloud().functions.invoke("send-push", {
+      body: withLocalizedPushCopy({
+        eventKey: input.eventKey,
         groupId: input.groupId,
-      },
-    }),
+        category: "membership",
+        audience: input.audience,
+        recipientId: input.recipientId,
+        title: input.title,
+        body: input.body,
+        data: {
+          route: input.route ?? "/groups",
+          groupId: input.groupId,
+        },
+      }),
+    });
+    if (result.error) throw result.error;
+    assertPushDeliveryComplete(result.data);
   });
-  if (result.error) throw result.error;
 }
 
 export async function approveCloudGroupMember(groupId: string, userId: string) {
@@ -1787,6 +1794,7 @@ export async function pushCloudMessagesNow(
       body: chatPushPayload(state, sender, message),
     });
     if (result.error) throw result.error;
+    assertPushDeliveryComplete(result.data);
     return;
   }
   const currentRows: {
@@ -1842,6 +1850,7 @@ export async function pushCloudMessagesNow(
         body: chatPushPayload(state, sender, message),
       });
       if (result.error) throw result.error;
+      assertPushDeliveryComplete(result.data);
     }),
   );
   const failed = dispatches.find(
@@ -3040,6 +3049,7 @@ export async function pushCloudWorkspace(
         body: chatPushPayload(state, current, message),
       });
       if (result.error) throw result.error;
+      assertPushDeliveryComplete(result.data);
       return result.data;
     }),
   );
