@@ -60,6 +60,14 @@ export type HealthAdapter = {
 
 export type PersistedHealthStatus = {
   lastSyncedAt: string | null;
+  /** Separate checkpoint so a cheap Steps refresh never postpones full sync. */
+  lastStepSyncedAt?: string | null;
+  /** Completed version of the platform-authoritative daily Steps import. */
+  stepsImportVersion?: number;
+  /** Resumable newest-to-oldest repair cursor for previously imported Steps. */
+  stepsRepair?: { from: string; cursorEnd: string } | null;
+  stepsRepairError?: string | null;
+  stepsRepairNextRetryAt?: string | null;
   /** Explicit per-device connection intent; never sourced from cloud state. */
   connectionEnabled?: boolean;
   /** The background permission preference is also specific to this device. */
@@ -77,6 +85,8 @@ export type PersistedHealthStatus = {
   backfill?: {
     from: string;
     cursorEnd: string;
+    /** End of the newest slice originally imported for this backfill. */
+    through?: string;
     importedCount: number;
     finalizeTrackedGoalHistory: boolean;
     /** A user-requested repair must never rewrite goal start periods. */

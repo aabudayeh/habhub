@@ -747,6 +747,7 @@ function TutorialSpotlightContent() {
       )}
 
       <View
+        testID="tutorial-callout"
         onLayout={(event) => setCalloutHeight(event.nativeEvent.layout.height)}
         style={[
           styles.callout,
@@ -754,19 +755,24 @@ function TutorialSpotlightContent() {
             left: layout.left,
             top: layout.top,
             width: layout.width,
+            // The callout is glass over the live app, not a colored card. BlurView
+            // supplies the readable tint while this low-alpha wash avoids an
+            // opaque block on platforms whose blur warms up a frame late.
             backgroundColor: colors.isDark
-              ? "rgba(8,18,34,0.76)"
-              : "rgba(255,255,255,0.72)",
+              ? "rgba(8,18,34,0.08)"
+              : "rgba(255,255,255,0.06)",
             borderColor: accent,
           },
         ]}
       >
         <BlurView
           pointerEvents="none"
-          intensity={
-            Platform.OS === "android" ? 32 : colors.isDark ? 54 : 68
+          intensity={Platform.OS === "android" ? 34 : 48}
+          tint={
+            colors.isDark
+              ? "systemUltraThinMaterialDark"
+              : "systemUltraThinMaterial"
           }
-          tint={colors.isDark ? "dark" : "light"}
           experimentalBlurMethod={
             Platform.OS === "android" ? "dimezisBlurView" : undefined
           }

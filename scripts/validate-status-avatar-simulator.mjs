@@ -58,6 +58,7 @@ const {
   STATUS_AVATAR_SIMULATION_METRICS,
   statusAvatarSimulationBaseline,
   statusAvatarSimulationInitialState,
+  statusAvatarSimulationMarkers,
   statusAvatarSimulationPreview,
   statusAvatarSimulationRange,
   statusAvatarSimulationSetEnabled,
@@ -87,6 +88,7 @@ assert.deepEqual(
 );
 
 const baseline = statusAvatarSimulationBaseline({
+  age: 35,
   bodyFatPercent: 18,
   heightCm: 178,
   leanBodyMassKg: 67,
@@ -96,6 +98,7 @@ const baseline = statusAvatarSimulationBaseline({
 });
 assert.equal(baseline.bodyFatWasLogged, true);
 assert.equal(baseline.leanMassWasLogged, true);
+assert.equal(baseline.weightWasLogged, true);
 const compositionState = statusAvatarSimulationInitialState(
   baseline,
   "body_composition",
@@ -112,6 +115,56 @@ for (const metric of STATUS_AVATAR_SIMULATION_METRICS.map((item) => item.id)) {
   assert.ok(range.initialValue >= range.minimumValue);
   assert.ok(range.initialValue <= range.maximumValue);
 }
+
+const markers = statusAvatarSimulationMarkers(baseline);
+const healthyBmiMidpoint = (18.5 + 24.9) / 2;
+const expectedReferenceWeight = healthyBmiMidpoint * (178 / 100) ** 2;
+const expectedReferenceBodyFat =
+  1.2 * healthyBmiMidpoint + 0.23 * 35 - 10.8 - 5.4;
+assert.ok(
+  Math.abs(markers.weight.recommendedValue - expectedReferenceWeight) <= 0.26,
+  "the adult weight tick must use the midpoint of the healthy-BMI reference range",
+);
+assert.ok(
+  Math.abs(markers.body_fat.recommendedValue - expectedReferenceBodyFat) <= 0.26,
+  "the body-fat tick must use the adult BMI/age/sex population equation",
+);
+assert.ok(
+  Math.abs(
+    markers.lean_body_mass.recommendedValue -
+      expectedReferenceWeight * (1 - expectedReferenceBodyFat / 100),
+  ) <= 0.51,
+  "the lean-mass tick must remain consistent with the same reference profile",
+);
+assert.equal(markers.weight.currentValue, 82);
+assert.equal(markers.body_fat.currentValue, 18);
+assert.equal(markers.lean_body_mass.currentValue, 67);
+assert.deepEqual(markers.bmi, {});
+
+const adolescentMarkers = statusAvatarSimulationMarkers(
+  statusAvatarSimulationBaseline({
+    age: 17,
+    bodyFatPercent: 18,
+    heightCm: 178,
+    leanBodyMassKg: 67,
+    sex: "male",
+    weightKg: 82,
+  }),
+);
+for (const metric of ["weight", "body_fat", "lean_body_mass"])
+  assert.equal(
+    adolescentMarkers[metric].recommendedValue,
+    undefined,
+    "adult reference markers must never be presented to an adolescent profile",
+  );
+const unspecifiedMarkers = statusAvatarSimulationMarkers(
+  statusAvatarSimulationBaseline({ age: 35, heightCm: 178, sex: "unspecified", weightKg: 82 }),
+);
+assert.ok(Number.isFinite(unspecifiedMarkers.weight.recommendedValue));
+assert.equal(unspecifiedMarkers.body_fat.recommendedValue, undefined);
+assert.equal(unspecifiedMarkers.lean_body_mass.recommendedValue, undefined);
+assert.equal(unspecifiedMarkers.body_fat.currentValue, undefined);
+assert.equal(unspecifiedMarkers.lean_body_mass.currentValue, undefined);
 
 const heightSquared = (baseline.heightCm / 100) ** 2;
 let linkedState = statusAvatarSimulationInitialState(baseline, "bmi");
@@ -352,6 +405,41 @@ assert.match(
   componentSource,
   /useWindowDimensions\(\)[\s\S]*windowHeight < 620[\s\S]*styles\.metricList/,
   "the single-page simulator must scale its avatar for compact phone heights",
+);
+assert.match(
+  componentSource,
+  /windowHeight < 620 \? 0\.64 : windowHeight < 720 \? 0\.72 : 0\.8/,
+  "the simulator avatar must use the available whitespace at compact, regular, and tall phone heights",
+);
+assert.match(
+  componentSource,
+  /currentValue=\{marker\.currentValue\}[\s\S]*recommendedValue=\{marker\.recommendedValue\}/,
+  "every visible slider must receive fixed current and recommended reference markers",
+);
+assert.match(
+  componentSource,
+  /styles\.sliderMarkerCodeCurrent[\s\S]*>\s*C\s*<\/Text>[\s\S]*styles\.sliderMarkerCodeRecommended[\s\S]*>\s*R\s*<\/Text>/,
+  "compact C and R ticks must share the existing slider track footprint",
+);
+assert.match(
+  componentSource,
+  /markersOverlap[\s\S]*translateX: markersOverlap \? -2 : 0[\s\S]*translateX: markersOverlap \? 2 : 0/,
+  "overlapping current and reference ticks must remain visually distinguishable",
+);
+assert.match(
+  componentSource,
+  /accessibilityHint=\{markerHint \|\| undefined\}/,
+  "screen readers must identify the current and adult-reference marker values",
+);
+assert.match(
+  componentSource,
+  /markerHint \? `\$\{accessibilityLabel\}\. \$\{markerHint\}` : accessibilityLabel/,
+  "web slider names must retain marker meaning even where accessibility hints are not exposed",
+);
+assert.match(
+  simulation.source,
+  /ADULT_HEALTHY_BMI_MIDPOINT[\s\S]*WHO adult healthy-BMI reference[\s\S]*Deurenberg/,
+  "the pure-domain marker method must document its adult reference evidence",
 );
 assert.doesNotMatch(
   componentSource,

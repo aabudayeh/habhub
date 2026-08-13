@@ -715,7 +715,7 @@ function Insights() {
       ) : null}
       {overviewVisualOpen ? (
       <TutorialTarget id="progress-visual">
-      <View {...visualSwipeResponder.panHandlers}>
+      <View testID="progress-overview-chart" {...visualSwipeResponder.panHandlers}>
       {view === "month" ? (
         <Card style={styles.visualCard}>
           <View style={styles.cardHeading}>
@@ -1060,6 +1060,7 @@ function ProgressModeBar({
   );
   return (
     <View
+      testID="progress-mode-bar"
       {...swipeResponder.panHandlers}
       style={[
         styles.progressModes,
@@ -2482,7 +2483,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 3,
     marginTop: -7,
-    marginBottom: 9,
+    marginBottom: 4,
   },
   progressMode: {
     flex: 1,
@@ -2732,7 +2733,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     justifyContent: "center",
   },
-  visualCard: { marginTop: 10, marginBottom: 14 },
+  visualCard: { marginTop: 4, marginBottom: 14 },
   cardHeading: {
     flexDirection: "row",
     alignItems: "center",

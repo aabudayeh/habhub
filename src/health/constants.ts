@@ -3,3 +3,10 @@ export const HEALTH_STATUS_STORAGE_KEY = 'paceboard-health-status-v1';
 export const HEALTH_HISTORY_DAYS = 730;
 /** Keep first-run onboarding responsive; deeper history is an explicit repair. */
 export const HEALTH_INITIAL_DAYS = 30;
+/**
+ * Version 2 replaces the short-lived Samsung-origin override with Health
+ * Connect's priority-aware aggregate and repairs rows imported by older builds.
+ */
+export const HEALTH_STEPS_IMPORT_VERSION = 2;
+/** A foreground return may refresh today's one-bucket aggregate this often. */
+export const HEALTH_TODAY_STEPS_MIN_INTERVAL_MS = 20_000;

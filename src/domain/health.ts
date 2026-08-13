@@ -1,10 +1,12 @@
 import { dateKey } from '@/src/domain/date';
 import {
   deduplicateHealthImportRecords,
+  hasHealthImportIdentity,
   healthRecordsAreEquivalent,
   healthSourceEnabled,
   healthSourceId,
   healthSourcePriority,
+  selectCanonicalHealthConnectStepAggregate,
 } from '@/src/domain/healthDedup';
 import { metricEntryKey } from '@/src/domain/metricEntry';
 import { HealthImportRecord } from '@/src/health/types';
@@ -598,15 +600,23 @@ export function reconcileImportedHealthEntries(
   for (const entry of entries) {
     const healthType = metricHealthType(metricById.get(entry.metricId));
     const healthOwned = Boolean(
-      entry.sourceProvider &&
-        healthType &&
+      healthType &&
+        entry.source !== "manual" &&
+        hasHealthImportIdentity(entry) &&
         (!ownerUserId || entry.userId === ownerUserId),
     );
     if (!healthOwned) {
       untouched.push(entry);
       continue;
     }
-    if (!healthSourceEnabled(entry.sourceOrigin, sourcePreferences)) continue;
+    // Steps use Health Connect's unfiltered, priority-aware aggregate. Source
+    // preferences are shared across record types, so disabling (for example)
+    // a nutrition writer must never discard that platform Steps total.
+    if (
+      healthType !== "steps" &&
+      !healthSourceEnabled(entry.sourceOrigin, sourcePreferences)
+    )
+      continue;
     const key = `${entry.userId}\u0000${entry.metricId}\u0000${entry.localDate}`;
     const group = groups.get(key);
     if (group) group.push(entry);
@@ -621,6 +631,14 @@ export function reconcileImportedHealthEntries(
       continue;
     }
     if (healthType === "steps") {
+      const selectedPlatformAggregate =
+        selectCanonicalHealthConnectStepAggregate(group);
+      if (selectedPlatformAggregate) {
+        const selected = selectedPlatformAggregate;
+        if (Number(selected.value) > 0)
+          reconciled.push({ ...selected, value: Math.round(Number(selected.value)) });
+        continue;
+      }
       const bySource = new Map<string, MetricEntry[]>();
       for (const entry of group) {
         const source = healthSourceId(entry.sourceOrigin);

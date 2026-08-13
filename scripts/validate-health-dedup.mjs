@@ -5,12 +5,20 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 
 import {
+  authoritativeHealthConnectStepGroups,
   authoritativeStepEntries,
+  aggregateRangeThroughLocalDate,
   deduplicateHealthImportRecords,
   healthSourceId,
+  historicalStepRepairStart,
+  isCanonicalHealthConnectStepAggregate,
+  isDailyStepReplacementCandidate,
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
+  preserveUnchangedDailyAggregateRevision,
   preferredHealthSourceOrigin,
+  selectCanonicalHealthConnectStepAggregate,
+  stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
 
 const record = (overrides = {}) => ({
@@ -26,6 +34,105 @@ const record = (overrides = {}) => ({
 });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+const platformPriorityAggregate = [
+  { localDate: "2026-08-13", count: 3_435, origin: "Health Connect" },
+];
+const laggingSamsungExport = [
+  { localDate: "2026-08-13", count: 2_917, origin: "Samsung Health" },
+];
+assert.equal(
+  authoritativeHealthConnectStepGroups(
+    platformPriorityAggregate,
+    laggingSamsungExport,
+  )[0].count,
+  3_435,
+  "a lower Samsung-filtered export must not replace Health Connect's priority-aware total",
+);
+assert.equal(
+  authoritativeHealthConnectStepGroups(platformPriorityAggregate)[0].count,
+  3_435,
+  "the unfiltered platform aggregate must remain authoritative without vendor metadata",
+);
+const authoritativeAggregateWithDisabledContributor =
+  deduplicateHealthImportRecords(
+    [
+      record({
+        id: "aggregate:steps:2026-08-13",
+        localDate: "2026-08-13",
+        value: 3_435,
+      }),
+    ],
+    {
+      "samsung-health": {
+        origin: "com.sec.android.app.shealth",
+        enabled: false,
+      },
+    },
+  );
+assert.equal(
+  authoritativeAggregateWithDisabledContributor[0]?.value,
+  3_435,
+  "a shared disabled-source preference must not discard the platform Steps aggregate",
+);
+const mappedCanonicalAggregate = deduplicateHealthImportRecords([
+  record({
+    id: "aggregate:steps:2026-08-13",
+    localDate: "2026-08-13",
+    value: 3_435,
+    updatedAt: "2026-08-13T12:00:00.000Z",
+  }),
+]);
+assert.equal(
+  mappedCanonicalAggregate[0]?.id,
+  "aggregate:steps:2026-08-13",
+  "canonical Health Connect aggregate identity must survive normalization",
+);
+assert.equal(
+  isCanonicalHealthConnectStepAggregate(mappedCanonicalAggregate[0]?.id),
+  true,
+  "the shared canonical identity helper must recognize the normalized aggregate",
+);
+const selectedMappedAggregate = selectCanonicalHealthConnectStepAggregate([
+  {
+    sourceRecordId: "daily:2026-08-13:samsung-health",
+    recordedAt: "2026-08-13T12:00:00.000Z",
+    value: 2_917,
+  },
+  {
+    sourceRecordId: mappedCanonicalAggregate[0]?.id,
+    recordedAt: "2026-08-13T12:00:00.000Z",
+    value: 3_435,
+  },
+]);
+assert.equal(
+  selectedMappedAggregate?.value,
+  3_435,
+  "runtime canonical selection must ignore a lower legacy writer total",
+);
+
+const requiredHistoricalStart = new Date(2025, 7, 13, 0, 0);
+const rangeCoverageNow = new Date(2026, 7, 13, 12, 0);
+assert.equal(
+  stepRepairRangeCovered(
+    requiredHistoricalStart,
+    new Date(2026, 4, 15, 0, 0),
+    rangeCoverageNow,
+    rangeCoverageNow,
+  ),
+  false,
+  "a shorter generic history backfill must not claim older Steps are repaired",
+);
+assert.equal(
+  stepRepairRangeCovered(
+    requiredHistoricalStart,
+    new Date(2025, 7, 13, 0, 0),
+    rangeCoverageNow,
+    rangeCoverageNow,
+  ),
+  true,
+  "a generic history backfill may claim the repair only after covering both bounds",
+);
 
 const manualFallbackAndPhoneTotal = authoritativeStepEntries([
   { id: "manual", value: 8_000 },
@@ -144,6 +251,92 @@ assert.equal(
   currentChunkEnd.getTime(),
   "today's step aggregate must remain partial at the current instant",
 );
+const exclusiveMidnight = new Date(2026, 7, 13, 0, 0, 0, 0);
+assert.equal(
+  aggregateRangeThroughLocalDate(exclusiveMidnight),
+  "2026-08-12",
+  "an exclusive local-midnight end must replace only the preceding day",
+);
+assert.equal(
+  aggregateRangeThroughLocalDate(currentChunkEnd),
+  "2026-08-13",
+  "a partial current-day aggregate must replace today's local bucket",
+);
+
+const replacementWindow = {
+  userId: "owner",
+  provider: "health_connect",
+  stepMetricIds: new Set(["steps"]),
+  fromDate: "2026-08-10",
+  throughDate: "2026-08-13",
+  includeFallbacks: true,
+};
+assert.equal(
+  isDailyStepReplacementCandidate(
+    {
+      userId: "owner",
+      metricId: "steps",
+      localDate: "2026-08-13",
+      sourceProvider: "health_connect",
+    },
+    replacementWindow,
+  ),
+  true,
+);
+assert.equal(
+  isDailyStepReplacementCandidate(
+    {
+      userId: "owner",
+      metricId: "steps",
+      localDate: "2026-08-13",
+      source: "imported",
+      sourceRecordId: "aggregate:steps:2026-08-13",
+    },
+    replacementWindow,
+  ),
+  true,
+  "providerless legacy imported aggregates must be repaired",
+);
+assert.equal(
+  isDailyStepReplacementCandidate(
+    {
+      userId: "owner",
+      metricId: "steps",
+      localDate: "2026-08-13",
+      source: "manual",
+      sourceRecordId: "daily:2026-08-13:samsung-health",
+    },
+    replacementWindow,
+  ),
+  false,
+  "an explicit manual row must survive even if a legacy id resembles an import",
+);
+assert.equal(
+  isDailyStepReplacementCandidate(
+    {
+      userId: "owner",
+      metricId: "exercise",
+      localDate: "2026-08-13",
+      sourceProvider: "health_connect",
+      sourceRecordId: "step-fallback:2026-08-13",
+    },
+    replacementWindow,
+  ),
+  true,
+  "a refreshed zero-step day must clear its stale calculated fallback",
+);
+assert.equal(
+  isDailyStepReplacementCandidate(
+    {
+      userId: "owner",
+      metricId: "steps",
+      localDate: "2026-08-13",
+    },
+    replacementWindow,
+  ),
+  false,
+  "manual daily Steps must survive native aggregate replacement",
+);
 
 const mirroredSteps = deduplicateHealthImportRecords([
   record({ id: "samsung", value: 1254 }),
@@ -181,6 +374,55 @@ assert.equal(
   "the Health Connect local bucket date must win over UTC string slicing",
 );
 assert.equal(timezoneSafeSteps[0].localDate, "2026-08-10");
+
+const stableAggregate = {
+  id: "health:health_connect:steps:aggregate:steps:2026-08-13:steps",
+  sourceProvider: "health_connect",
+  sourceRecordId: "aggregate:steps:2026-08-13",
+  sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
+  value: 3_435,
+};
+assert.equal(
+  preserveUnchangedDailyAggregateRevision(stableAggregate, {
+    ...stableAggregate,
+    sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+  }).sourceUpdatedAt,
+  "2026-08-13T08:00:00.000Z",
+  "an unchanged re-read must not outrank a later manual Steps override",
+);
+assert.equal(
+  preserveUnchangedDailyAggregateRevision(stableAggregate, {
+    ...stableAggregate,
+    sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+    value: 3_512,
+  }).sourceUpdatedAt,
+  "2026-08-13T08:05:00.000Z",
+  "a changed partial-day aggregate must receive the latest sync revision",
+);
+
+const repairNow = new Date(2026, 7, 13, 12);
+assert.equal(
+  historicalStepRepairStart(
+    repairNow,
+    90,
+    ["2025-08-20", "2026-08-10"],
+  ).getTime(),
+  new Date(2025, 7, 20).getTime(),
+  "repair must retain an older already-imported day when settings were shortened",
+);
+const boundedRepair = historicalStepRepairStart(
+  repairNow,
+  90,
+  ["2020-01-01"],
+);
+const maximumRepairStart = new Date(repairNow);
+maximumRepairStart.setHours(0, 0, 0, 0);
+maximumRepairStart.setDate(maximumRepairStart.getDate() - 730);
+assert.equal(
+  boundedRepair.getTime(),
+  maximumRepairStart.getTime(),
+  "repair must remain inside the app's 730-day Health Connect history bound",
+);
 
 const stepOrigins = [
   "com.google.android.apps.fitness",
@@ -273,33 +515,23 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /const hasDisabledSource = preferences\.some/,
-  "origin filtering must be reserved for an explicit user source opt-out",
+  /authoritativeHealthConnectStepGroups\(\s*unfilteredGroups,?\s*\)/,
+  "Steps must preserve Health Connect's Activity-priority aggregate",
 );
-assert.match(
+assert.doesNotMatch(
   androidHealthSource,
-  /hasDisabledSource && enabledOrigins\.length[\s\S]*dataOriginFilter: enabledOrigins/,
-  "disabled writers must be excluded through Health Connect's inclusion filter",
-);
-assert.match(
-  androidHealthSource,
-  /preferredHealthSourceOrigin\([\s\S]{0,220}healthSourceId\(preferredOrigin\) === "samsung-health"/,
-  "Samsung must be selected only when it contributed and remains enabled",
-);
-assert.match(
-  androidHealthSource,
-  /dataOriginFilter: \[samsungOrigin\][\s\S]{0,900}groupsByDay\.set[\s\S]{0,250}selectedOrigin: samsungOrigin/,
-  "a per-day Samsung aggregate must replace only matching exported days",
+  /recordType: "Steps"[\s\S]{0,700}dataOriginFilter|selectedOrigin|samsungGroups|sourceFilteredGroups/,
+  "Steps must never replace the platform total with a vendor/source-filtered aggregate",
 );
 assert.match(
   androidHealthSource,
   /endTime: recordedAt,[\s\S]{0,500}localDate,[\s\S]{0,500}updatedAt: syncRevision/,
   "daily imports must preserve the local bucket date and sync revision",
 );
-assert.doesNotMatch(
+assert.match(
   androidHealthSource,
-  /readPages\("Steps",/,
-  "step source discovery must not load thousands of granular records",
+  /if \(type === "steps"\) throw error/,
+  "a failed cumulative aggregate must retain the previous confirmed value instead of guessing from raw writers",
 );
 const logSource = fs.readFileSync(
   path.join(root, "app", "(tabs)", "log.tsx"),
@@ -417,12 +649,20 @@ const metricEditorSource = fs.readFileSync(
   path.join(root, "app", "metric-editor.tsx"),
   "utf8",
 );
+const healthDedupSource = fs.readFileSync(
+  path.join(root, "src", "domain", "healthDedup.ts"),
+  "utf8",
+);
 const healthMappingSource = fs.readFileSync(
   path.join(root, "src", "domain", "health.ts"),
   "utf8",
 );
 const healthProviderSource = fs.readFileSync(
   path.join(root, "src", "health", "HealthSyncProvider.tsx"),
+  "utf8",
+);
+const backgroundHealthSource = fs.readFileSync(
+  path.join(root, "src", "health", "background.native.ts"),
   "utf8",
 );
 const appConfig = fs.readFileSync(path.join(root, "app.json"), "utf8");
@@ -476,6 +716,115 @@ assert.match(
   /restored\.connectionEnabled !== false[\s\S]{0,500}restored\.connectionEnabled === true[\s\S]{0,120}granted\?\.connected === false[\s\S]{0,260}connectionEnabled: false/,
   "startup must clear a cached Health connection after native permission revocation",
 );
+assert.match(
+  healthMappingSource,
+  /healthType !== "steps" &&[\s\S]{0,120}!healthSourceEnabled/,
+  "generic source preferences must never discard Health Connect's authoritative Steps aggregate",
+);
+assert.match(
+  healthMappingSource,
+  /healthType &&[\s\S]{0,100}entry\.source !== "manual" &&[\s\S]{0,100}hasHealthImportIdentity\(entry\)/,
+  "providerless legacy cleanup must continue to preserve explicit manual rows",
+);
+assert.match(
+  healthDedupSource,
+  /record\.type !== "steps" &&[\s\S]{0,120}!healthSourceEnabled/,
+  "record-level dedup must exempt the priority-aware platform Steps aggregate from shared source filters",
+);
+assert.match(
+  healthMappingSource,
+  /selectCanonicalHealthConnectStepAggregate\(group\)[\s\S]{0,500}reconciled\.push/,
+  "the canonical platform Steps aggregate must win over legacy per-source rows",
+);
+assert.match(
+  healthProviderSource,
+  /lastStepSyncedAt[\s\S]{0,1800}dataTypes: \['steps'\][\s\S]{0,1800}lastStepSyncedAt: completedAt/,
+  "today's foreground Steps refresh must have an independent checkpoint",
+);
+assert.match(
+  healthProviderSource,
+  /HEALTH_TODAY_STEPS_MIN_INTERVAL_MS[\s\S]{0,7000}FOREGROUND_STEPS_SETTLE_DELAY_MS/,
+  "foreground refresh must be throttled and deferred until the UI settles",
+);
+const todayRefreshStart = healthProviderSource.indexOf(
+  "const refreshTodaySteps = useCallback",
+);
+const repairStart = healthProviderSource.indexOf(
+  "const runStepsRepair = useCallback",
+);
+const fullSyncStart = healthProviderSource.indexOf(
+  "const runSync = useCallback",
+  repairStart,
+);
+assert.ok(todayRefreshStart >= 0 && repairStart > todayRefreshStart);
+assert.ok(fullSyncStart > repairStart);
+const todayRefreshSource = healthProviderSource.slice(
+  todayRefreshStart,
+  repairStart,
+);
+const fullSyncSource = healthProviderSource.slice(fullSyncStart);
+assert.match(
+  todayRefreshSource,
+  /activeOperation === 'steps-refresh'[\s\S]{0,300}await pending[\s\S]{0,300}refreshTodayStepsRef\.current\?\.\(true\)/,
+  "a today-only refresh must queue behind a full sync instead of being silently consumed",
+);
+assert.match(
+  fullSyncSource,
+  /activeHealthOperationRef\.current === 'full'[\s\S]{0,300}await pending[\s\S]{0,300}runSyncRef\.current\?\.\(reason, forceEnabled\)/,
+  "a full sync must queue behind a today-only refresh instead of being silently consumed",
+);
+assert.match(
+  healthProviderSource,
+  /historicalStepRepairStart[\s\S]{0,3500}STEPS_REPAIR_CHUNK_DAYS[\s\S]{0,3500}stepsImportVersion: finalChunk/,
+  "historical Steps repair must be versioned, chunked, and resumable",
+);
+assert.match(
+  fullSyncSource,
+  /const completedStepsImportVersion =[\s\S]{0,700}stepRepairRangeCovered\(/,
+  "a general history backfill may claim the repair version only after covering its calculated bounds",
+);
+assert.match(
+  fullSyncSource,
+  /stepsImportVersion: completedStepsImportVersion/,
+  "the persisted generic-history version must use the bounded coverage result",
+);
+assert.match(
+  healthProviderSource,
+  /setCloudSyncPaused\('health-steps-repair', true\)[\s\S]{0,6500}setCloudSyncPaused\('health-steps-repair', false\)/,
+  "each history repair batch must coalesce cloud publication and release its gate in finally",
+);
+assert.match(
+  healthProviderSource,
+  /STEPS_REPAIR_CHUNKS_PER_BATCH = 6[\s\S]{0,30000}batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH[\s\S]{0,5000}scheduleStepsRepair\(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS\)/,
+  "historical repair must batch six slices per cloud wake before scheduling the next batch",
+);
+for (const source of [appProviderSource, backgroundHealthSource]) {
+  assert.match(
+    source,
+    /isDailyStepReplacementCandidate/,
+    "a zero-valued refreshed day must remove stale calculated step fallbacks",
+  );
+  assert.match(
+    source,
+    /preserveUnchangedDailyAggregateRevision/,
+    "foreground and background imports must preserve unchanged aggregate revisions",
+  );
+}
+assert.match(
+  appProviderSource,
+  /isDailyStepReplacementCandidate\([\s\S]{0,500}includeFallbacks:\s*action\.aggregateReplacement\?\.removeStepFallbacks === true/,
+  "foreground aggregate replacement must opt into stale fallback cleanup",
+);
+assert.match(
+  backgroundHealthSource,
+  /isDailyStepReplacementCandidate\([\s\S]{0,500}includeFallbacks:\s*true/,
+  "background aggregate replacement must opt into stale fallback cleanup",
+);
+assert.match(
+  healthDedupSource,
+  /isDailyStepReplacementCandidate[\s\S]{0,900}sourceRecordId\?\.startsWith\("step-fallback:"\)/,
+  "the shared replacement predicate must recognize calculated step fallback identity",
+);
 
 const phoneOnly = deduplicateHealthImportRecords(
   [
@@ -488,7 +837,11 @@ const phoneOnly = deduplicateHealthImportRecords(
   },
 );
 assert.equal(phoneOnly.length, 1);
-assert.equal(phoneOnly[0].value, 1250);
+assert.equal(
+  phoneOnly[0].value,
+  1254,
+  "shared source controls must not rebuild or filter the platform-owned Steps total",
+);
 
 const year = [];
 for (let day = 0; day < 365; day += 1) {
@@ -505,5 +858,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: calendar-aligned Samsung/platform totals, manual daily overrides, source controls, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: calendar-aligned priority-aware platform Steps, manual daily overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

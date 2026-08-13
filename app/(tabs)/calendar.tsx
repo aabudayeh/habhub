@@ -599,6 +599,7 @@ function SchedulePage() {
               date={date}
               editing={editing}
               expanded={expandedRows.has("all")}
+              uniformColumnShell
               tutorialId={date === dates[0] ? "schedule-all-slot" : undefined}
               onOpenSlot={(events) => {
                 setSlotMenu({ date, hour: null, events });
@@ -649,6 +650,7 @@ function SchedulePage() {
                 date={date}
                 editing={editing}
                 expanded={expandedRows.has(String(hour))}
+                uniformColumnShell={hour === hours[0]}
                 tutorialId={
                   hour === hours[0] && date === dates[0]
                     ? "schedule-hour-slot"
@@ -990,6 +992,7 @@ function ScheduleCell({
   expanded,
   onOpenSlot,
   onCreate,
+  uniformColumnShell = false,
   tutorialId,
 }: {
   events: ScheduleEvent[];
@@ -999,6 +1002,7 @@ function ScheduleCell({
   expanded: boolean;
   onOpenSlot: (events: ScheduleEvent[]) => void;
   onCreate: (date: string) => void;
+  uniformColumnShell?: boolean;
   tutorialId?: string;
 }) {
   const colors = useAppColors();
@@ -1185,6 +1189,11 @@ function ScheduleCell({
     <TutorialTarget id={tutorialId} style={styles.cellTarget}>
       {cell}
     </TutorialTarget>
+  ) : uniformColumnShell ? (
+    // Keep every grid column on the same flex shell. The tutorial target is on
+    // the first visible hour (normally 07:00); returning its siblings without
+    // this shell made that one row calculate different column boundaries.
+    <View style={styles.cellTarget}>{cell}</View>
   ) : cell;
 }
 

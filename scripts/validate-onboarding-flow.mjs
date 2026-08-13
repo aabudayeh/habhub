@@ -135,6 +135,16 @@ assert.match(source, /tutorialGuideId: shortTour \? "essential" : undefined/);
 assert.match(source, /tutorialComplete: !shortTour/);
 assert.match(source, /onboardingVersion: ONBOARDING_FLOW_VERSION/);
 assert.match(source, /await saveDisplayName\(\)/);
+assert.match(
+  source,
+  /function compactOnboardingName[\s\S]*?normalized === generatedAlias[\s\S]*?firstDisplayName\(normalized\)[\s\S]*?setDisplayName\([\s\S]*?compactOnboardingName\(draft\.displayName, generatedAccountAlias\)[\s\S]*?const name =[\s\S]*?compactOnboardingName\(displayName, generatedAccountAlias\)/,
+  "Onboarding must hydrate and save the compact first name instead of a provider full name",
+);
+assert.match(
+  fs.readFileSync("src/domain/profileName.ts", "utf8"),
+  /providerFirstDisplayName[\s\S]*?friendlyAccountAlias\(\{ id: identity\.id \}\)[\s\S]*?firstDisplayName\(normalized\)[\s\S]*?friendlyAccountAlias[\s\S]*?return `\$\{ADJECTIVES[\s\S]*?\$\{[\s\S]*?ANIMALS/,
+  "Provider full names use the first name while generated friendly aliases keep both words",
+);
 assert.match(source, /startTrackedGoalsAtFirstData:[\s\S]*?startHealthGoalsFromHistory/);
 assert.match(
   source,

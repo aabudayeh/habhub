@@ -6,14 +6,20 @@ import { dateKey } from '@/src/domain/date';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
 import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
+  aggregateRangeThroughLocalDate,
+  hasHealthImportIdentity,
   healthSourceId,
+  historicalStepRepairStart,
   mergeHealthSourcePreferences,
+  stepRepairRangeCovered,
 } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
 import {
   HEALTH_INITIAL_DAYS,
+  HEALTH_STEPS_IMPORT_VERSION,
   HEALTH_STATUS_STORAGE_KEY,
+  HEALTH_TODAY_STEPS_MIN_INTERVAL_MS,
 } from '@/src/health/constants';
 import {
   BackgroundHealthSyncRegistration,
@@ -32,11 +38,20 @@ const BACKFILL_CHUNK_DAYS = 30;
 const FIRST_BACKFILL_DELAY_MS = 6_000;
 const NEXT_BACKFILL_DELAY_MS = 900;
 const MAX_BACKFILL_RETRY_MS = 15 * 60 * 1000;
+const STEPS_REPAIR_CHUNK_DAYS = 30;
+const STEPS_REPAIR_CHUNKS_PER_BATCH = 6;
+const STEPS_REPAIR_NEXT_CHUNK_DELAY_MS = 900;
+const STEPS_REPAIR_RETRY_MS = 15 * 60 * 1000;
+const FOREGROUND_STEPS_SETTLE_DELAY_MS = 700;
+
+type ActiveHealthOperation = 'full' | 'steps-refresh' | 'steps-repair';
 
 type HealthSyncContextValue = {
   status: HealthSyncStatus;
   availability: HealthAdapterAvailability | null;
   lastSyncedAt: string | null;
+  /** Latest completed cheap foreground refresh of today's Steps bucket. */
+  lastStepSyncedAt: string | null;
   importedCount: number;
   errorMessage: string | null;
   /** Actual native task state, distinct from the user's selected cadence. */
@@ -76,6 +91,7 @@ const disabledHealthContext: HealthSyncContextValue = {
   status: 'unavailable',
   availability: tutorialHealthUnavailable,
   lastSyncedAt: null,
+  lastStepSyncedAt: null,
   importedCount: 0,
   errorMessage: null,
   backgroundRegistration: 'disabled',
@@ -130,13 +146,18 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   >('disabled');
   const persistedRef = useRef(persisted);
   const syncingRef = useRef<Promise<void> | null>(null);
+  const activeHealthOperationRef = useRef<ActiveHealthOperation | null>(null);
   const backfillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const todayStepsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stepsRepairTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runSyncRef = useRef<
     ((
       reason: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill',
       forceEnabled?: boolean,
     ) => Promise<void>) | null
   >(null);
+  const refreshTodayStepsRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+  const runStepsRepairRef = useRef<(() => Promise<void>) | null>(null);
   const stateRef = useRef(state);
   const updateSettingsRef = useRef(updateSettings);
   stateRef.current = state;
@@ -194,7 +215,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let cancelled = false;
-    const empty: PersistedHealthStatus = { lastSyncedAt:null,importedCount:0,error:null,backfill:null };
+    const empty: PersistedHealthStatus = { lastSyncedAt:null,importedCount:0,error:null,backfill:null,stepsRepair:null };
     persistedRef.current = empty;
     setPersisted(empty);
     const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`;
@@ -211,6 +232,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
                 parsed.lastSyncedAt && !Number.isNaN(new Date(parsed.lastSyncedAt).getTime())
                   ? parsed.lastSyncedAt
                   : null,
+              lastStepSyncedAt:
+                parsed.lastStepSyncedAt &&
+                !Number.isNaN(new Date(parsed.lastStepSyncedAt).getTime())
+                  ? parsed.lastStepSyncedAt
+                  : null,
+              stepsImportVersion: Number(parsed.stepsImportVersion ?? 0),
+              stepsRepair:
+                parsed.stepsRepair &&
+                !Number.isNaN(new Date(parsed.stepsRepair.from).getTime()) &&
+                !Number.isNaN(new Date(parsed.stepsRepair.cursorEnd).getTime())
+                  ? parsed.stepsRepair
+                  : null,
+              stepsRepairError: parsed.stepsRepairError ?? null,
+              stepsRepairNextRetryAt: parsed.stepsRepairNextRetryAt ?? null,
               connectionEnabled:
                 typeof parsed.connectionEnabled === 'boolean'
                   ? parsed.connectionEnabled
@@ -329,6 +364,22 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     }, delayMs);
   }, []);
 
+  const scheduleStepsRepair = useCallback((delayMs: number) => {
+    if (stepsRepairTimerRef.current) clearTimeout(stepsRepairTimerRef.current);
+    stepsRepairTimerRef.current = setTimeout(() => {
+      stepsRepairTimerRef.current = null;
+      if (
+        NativeAppState.currentState !== 'active' ||
+        !stateRef.current.settings.onboardingComplete ||
+        !stateRef.current.settings.healthSync.enabled
+      )
+        return;
+      InteractionManager.runAfterInteractions(() => {
+        runStepsRepairRef.current?.().catch(() => undefined);
+      });
+    }, delayMs);
+  }, []);
+
   const rememberHealthSources = useCallback((records: import('@/src/health/types').HealthImportRecord[]) => {
     const currentState = stateRef.current;
     const currentHealth = currentState.settings.healthSync;
@@ -347,12 +398,244 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     return sourcePreferences;
   }, []);
 
+  const refreshTodaySteps = useCallback(async (force = false) => {
+    const pending = syncingRef.current;
+    if (pending) {
+      const activeOperation = activeHealthOperationRef.current;
+      if (activeOperation === 'steps-refresh') return pending;
+      await pending.catch(() => undefined);
+      // A full read may have started before Samsung finished exporting its
+      // latest bucket. Keep the queued, cheap current-day read instead of
+      // silently treating the unrelated lock holder as this refresh.
+      return refreshTodayStepsRef.current?.(true);
+    }
+    const current = stateRef.current;
+    if (
+      !current.settings.healthSync.enabled ||
+      !current.settings.healthSync.dataTypes.steps ||
+      !nativeHealthAdapter.provider
+    )
+      return;
+    const last = persistedRef.current.lastStepSyncedAt
+      ? new Date(persistedRef.current.lastStepSyncedAt).getTime()
+      : 0;
+    if (
+      !force &&
+      Number.isFinite(last) &&
+      Date.now() - last < HEALTH_TODAY_STEPS_MIN_INTERVAL_MS
+    )
+      return;
+    activeHealthOperationRef.current = 'steps-refresh';
+    const operation = (async () => {
+      const from = new Date();
+      from.setHours(0, 0, 0, 0);
+      const to = new Date();
+      const stepMetricIds = metricIdsForHealthDataTypes(
+        ['steps'],
+        current.metrics,
+      );
+      const records = await nativeHealthAdapter.read({
+        from,
+        to,
+        dataTypes: ['steps'],
+        sourcePreferences: current.settings.healthSync.sourcePreferences,
+      });
+      const sourcePreferences = rememberHealthSources(records);
+      const entries = mapHealthRecordsToEntries(
+        records,
+        current.currentUserId,
+        healthVisibilityByMetric(current.metrics),
+        current.metrics,
+        current.settings.energyProfile,
+        sourcePreferences,
+      );
+      await importHealthEntries(
+        entries,
+        nativeHealthAdapter.provider!,
+        stepMetricIds,
+        dateKey(from),
+        false,
+        true,
+        {
+          metricIds: stepMetricIds,
+          throughDate: dateKey(to),
+          removeStepFallbacks: true,
+        },
+      );
+      const completedAt = new Date().toISOString();
+      await saveStatus({
+        ...persistedRef.current,
+        connectionEnabled: true,
+        lastStepSyncedAt: completedAt,
+        stepsRepairError: null,
+      });
+    })().finally(() => {
+      syncingRef.current = null;
+      activeHealthOperationRef.current = null;
+    });
+    syncingRef.current = operation;
+    return operation;
+  }, [importHealthEntries, rememberHealthSources, saveStatus]);
+  refreshTodayStepsRef.current = refreshTodaySteps;
+
+  const runStepsRepair = useCallback(async () => {
+    const pending = syncingRef.current;
+    if (pending) {
+      if (activeHealthOperationRef.current === 'steps-repair') return pending;
+      await pending.catch(() => undefined);
+      return runStepsRepairRef.current?.();
+    }
+    const current = stateRef.current;
+    if (
+      !current.settings.healthSync.enabled ||
+      !current.settings.healthSync.dataTypes.steps ||
+      current.settings.healthSync.initialHistoryImportPending ||
+      Boolean(persistedRef.current.backfill) ||
+      !nativeHealthAdapter.provider ||
+      (persistedRef.current.stepsImportVersion ?? 0) >=
+        HEALTH_STEPS_IMPORT_VERSION
+    )
+      return;
+    activeHealthOperationRef.current = 'steps-repair';
+    const operation = (async () => {
+      setCloudSyncPaused('health-steps-repair', true);
+      try {
+        const now = new Date();
+        let cursor = persistedRef.current.stepsRepair;
+        if (!cursor) {
+          const stepMetricIds = new Set(
+            metricIdsForHealthDataTypes(['steps'], current.metrics),
+          );
+          const existingDates = current.entries
+            .filter(
+              (entry) =>
+                entry.userId === current.currentUserId &&
+                stepMetricIds.has(entry.metricId) &&
+                hasHealthImportIdentity(entry),
+            )
+            .map((entry) => entry.localDate);
+          const repairFrom = historicalStepRepairStart(
+            now,
+            current.settings.healthHistoryDays ?? 90,
+            existingDates,
+          );
+          cursor = {
+            from: repairFrom.toISOString(),
+            cursorEnd: now.toISOString(),
+          };
+          await saveStatus({
+            ...persistedRef.current,
+            stepsRepair: cursor,
+            stepsRepairError: null,
+            stepsRepairNextRetryAt: null,
+          });
+        }
+        const stepMetricIds = metricIdsForHealthDataTypes(
+          ['steps'],
+          current.metrics,
+        );
+        const repairFrom = new Date(cursor.from);
+        let nextRepair: PersistedHealthStatus['stepsRepair'] = cursor;
+        for (
+          let batchIndex = 0;
+          batchIndex < STEPS_REPAIR_CHUNKS_PER_BATCH && nextRepair;
+          batchIndex += 1
+        ) {
+          // No scheduled delay occurs while the cloud gate is held. Yield only
+          // to queued JS/UI work, then immediately read the next small slice.
+          if (batchIndex > 0)
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          const chunkEnd: Date = new Date(nextRepair.cursorEnd);
+          const chunkStart: Date = new Date(chunkEnd);
+          chunkStart.setDate(chunkStart.getDate() - STEPS_REPAIR_CHUNK_DAYS);
+          if (chunkStart < repairFrom) chunkStart.setTime(repairFrom.getTime());
+          const finalChunk: boolean =
+            chunkStart.getTime() <= repairFrom.getTime();
+          const records = await nativeHealthAdapter.read({
+            from: chunkStart,
+            to: chunkEnd,
+            dataTypes: ['steps'],
+            sourcePreferences: current.settings.healthSync.sourcePreferences,
+          });
+          const sourcePreferences = rememberHealthSources(records);
+          const entries = mapHealthRecordsToEntries(
+            records,
+            current.currentUserId,
+            healthVisibilityByMetric(current.metrics),
+            current.metrics,
+            current.settings.energyProfile,
+            sourcePreferences,
+          );
+          await importHealthEntries(
+            entries,
+            nativeHealthAdapter.provider!,
+            stepMetricIds,
+            dateKey(chunkStart),
+            false,
+            true,
+            {
+              metricIds: stepMetricIds,
+              throughDate: aggregateRangeThroughLocalDate(chunkEnd),
+              removeStepFallbacks: true,
+            },
+          );
+          nextRepair = finalChunk
+            ? null
+            : {
+                from: cursor.from,
+                cursorEnd: chunkStart.toISOString(),
+              };
+          await saveStatus({
+            ...persistedRef.current,
+            stepsImportVersion: finalChunk
+              ? HEALTH_STEPS_IMPORT_VERSION
+              : persistedRef.current.stepsImportVersion,
+            stepsRepair: nextRepair,
+            stepsRepairError: null,
+            stepsRepairNextRetryAt: null,
+          });
+        }
+        if (nextRepair)
+          scheduleStepsRepair(STEPS_REPAIR_NEXT_CHUNK_DELAY_MS);
+      } catch (error) {
+        await saveStatus({
+          ...persistedRef.current,
+          stepsRepairError:
+            error instanceof Error ? error.message : 'Steps repair failed.',
+          stepsRepairNextRetryAt: new Date(
+            Date.now() + STEPS_REPAIR_RETRY_MS,
+          ).toISOString(),
+        });
+        scheduleStepsRepair(STEPS_REPAIR_RETRY_MS);
+        throw error;
+      } finally {
+        // Never hold the global gate while waiting between batches or retries;
+        // Android can background the app and suspend that timer indefinitely.
+        setCloudSyncPaused('health-steps-repair', false);
+      }
+    })().finally(() => {
+      syncingRef.current = null;
+      activeHealthOperationRef.current = null;
+    });
+    syncingRef.current = operation;
+    return operation;
+  }, [importHealthEntries, rememberHealthSources, saveStatus, scheduleStepsRepair]);
+  runStepsRepairRef.current = runStepsRepair;
+
   const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill', forceEnabled = false) => {
-    if (syncingRef.current) return syncingRef.current;
+    const pending = syncingRef.current;
+    if (pending) {
+      if (activeHealthOperationRef.current === 'full') return pending;
+      await pending.catch(() => undefined);
+      // A quick current-day read or repair chunk must not consume and discard
+      // the full-sync request that owns the multi-type checkpoint.
+      return runSyncRef.current?.(reason, forceEnabled);
+    }
     const current = stateRef.current;
     if ((!current.settings.healthSync.enabled && !forceEnabled) || !nativeHealthAdapter.provider) return;
     const dataTypes = enabledHealthDataTypes(current.settings.healthSync.dataTypes);
     if (!dataTypes.length) throw new Error('Choose at least one health data category.');
+    activeHealthOperationRef.current = 'full';
     const operation = (async () => {
       // Automatic foreground and historical work must never turn onboarding
       // or normal navigation into a blocking loading state.
@@ -376,9 +659,25 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           dataTypes,
           current.metrics,
         );
+        const stepMetricIds = dataTypes.includes('steps')
+          ? metricIdsForHealthDataTypes(['steps'], current.metrics)
+          : [];
+        const stepAggregateReplacement = (to: Date) =>
+          stepMetricIds.length
+            ? {
+                metricIds: stepMetricIds,
+                throughDate: aggregateRangeThroughLocalDate(to),
+                removeStepFallbacks: true,
+              }
+            : undefined;
+        const requestedAt = new Date();
         let importedCount = 0;
         let cumulativeImportedCount = 0;
         let backfill = fullRefresh ? null : previous.backfill;
+        let completedStepHistoryRange: {
+          from: string;
+          through: string;
+        } | null = null;
         if ((fullRefresh || initialHistoryImport) && !backfill) {
           const now = new Date();
           const historyFrom = syncStart(null, true, historyDays);
@@ -391,10 +690,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             : {
                 from: historyFrom.toISOString(),
                 cursorEnd: recentFrom.toISOString(),
+                through: now.toISOString(),
                 importedCount: 0,
                 finalizeTrackedGoalHistory: initialHistoryImport,
                 preserveTrackedGoalHistory: fullRefresh,
               };
+          if (finalChunk)
+            completedStepHistoryRange = {
+              from: historyFrom.toISOString(),
+              through: now.toISOString(),
+            };
           // Persist the cursor before the native read. If Android stops the
           // process, the next foreground resumes instead of restarting years
           // of history from scratch.
@@ -429,6 +734,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             dateKey(recentFrom),
             initialHistoryImport && finalChunk,
             fullRefresh,
+            stepAggregateReplacement(now),
           );
           backfill = backfill
             ? { ...backfill, importedCount }
@@ -466,7 +772,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             dateKey(chunkStart),
             backfill.finalizeTrackedGoalHistory && finalChunk,
             backfill.preserveTrackedGoalHistory === true,
+            stepAggregateReplacement(chunkEnd),
           );
+          if (finalChunk && backfill.through)
+            completedStepHistoryRange = {
+              from: backfill.from,
+              through: backfill.through,
+            };
           backfill = finalChunk
             ? null
             : {
@@ -477,9 +789,10 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           if (backfill) scheduleBackfill(NEXT_BACKFILL_DELAY_MS);
         } else {
           const from = syncStart(previous.lastSyncedAt, false, historyDays);
+          const to = new Date();
           const records = await nativeHealthAdapter.read({
             from,
-            to: new Date(),
+            to,
             dataTypes,
             sourcePreferences: current.settings.healthSync.sourcePreferences,
           });
@@ -501,12 +814,38 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             dateKey(from),
             false,
             false,
+            stepAggregateReplacement(to),
           );
           if (backfill) scheduleBackfill(FIRST_BACKFILL_DELAY_MS);
         }
         const cumulativeCount = backfill
           ? Math.max(backfill.importedCount, cumulativeImportedCount)
           : cumulativeImportedCount;
+        const existingImportedStepDates = stepMetricIds.length
+          ? current.entries
+              .filter(
+                (entry) =>
+                  entry.userId === current.currentUserId &&
+                  stepMetricIds.includes(entry.metricId) &&
+                  hasHealthImportIdentity(entry),
+              )
+              .map((entry) => entry.localDate)
+          : [];
+        const completedStepsImportVersion =
+          stepMetricIds.length &&
+          completedStepHistoryRange &&
+          stepRepairRangeCovered(
+            historicalStepRepairStart(
+              requestedAt,
+              historyDays,
+              existingImportedStepDates,
+            ),
+            new Date(completedStepHistoryRange.from),
+            new Date(completedStepHistoryRange.through),
+            requestedAt,
+          )
+            ? HEALTH_STEPS_IMPORT_VERSION
+            : persistedRef.current.stepsImportVersion;
         await saveStatus({
           ...persistedRef.current,
           // Any successful native read proves that this device remains
@@ -515,12 +854,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           connectionEnabled: true,
           backgroundAccess: current.settings.healthSync.backgroundAccess,
           lastSyncedAt: new Date().toISOString(),
+          lastStepSyncedAt: stepMetricIds.length
+            ? requestedAt.toISOString()
+            : persistedRef.current.lastStepSyncedAt,
           lastReason: reason,
           importedCount: cumulativeCount,
           error: null,
           backfill,
           retryAttempt: 0,
           nextRetryAt: null,
+          stepsImportVersion: completedStepsImportVersion,
+          stepsRepair:
+            completedStepsImportVersion === HEALTH_STEPS_IMPORT_VERSION
+              ? null
+              : persistedRef.current.stepsRepair,
         });
         setStatus('ready');
       } catch (error) {
@@ -543,6 +890,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       } finally {
         if (pausesCloud) setCloudSyncPaused('health-backfill', false);
         syncingRef.current = null;
+        activeHealthOperationRef.current = null;
       }
     })();
     syncingRef.current = operation;
@@ -677,6 +1025,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
 
   const disconnect = useCallback(async () => {
     setCloudSyncPaused('health-backfill', false);
+    setCloudSyncPaused('health-steps-repair', false);
     if (backfillTimerRef.current) {
       clearTimeout(backfillTimerRef.current);
       backfillTimerRef.current = null;
@@ -721,6 +1070,14 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       await runSyncRef.current?.('history', true);
       if (joinedExistingSync)
         await runSyncRef.current?.('history', true);
+    }
+    if (todayStepsTimerRef.current) {
+      clearTimeout(todayStepsTimerRef.current);
+      todayStepsTimerRef.current = null;
+    }
+    if (stepsRepairTimerRef.current) {
+      clearTimeout(stepsRepairTimerRef.current);
+      stepsRepairTimerRef.current = null;
     }
   }, []);
 
@@ -775,6 +1132,77 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (
       status !== 'ready' ||
+      !state.settings.onboardingComplete ||
+      !state.settings.healthSync.enabled ||
+      !state.settings.healthSync.dataTypes.steps ||
+      state.settings.healthSync.initialHistoryImportPending ||
+      Boolean(persisted.backfill) ||
+      (persisted.stepsImportVersion ?? 0) >= HEALTH_STEPS_IMPORT_VERSION
+    ) {
+      if ((persisted.stepsImportVersion ?? 0) >= HEALTH_STEPS_IMPORT_VERSION)
+        setCloudSyncPaused('health-steps-repair', false);
+      return;
+    }
+    const retryAt = persisted.stepsRepairNextRetryAt
+      ? new Date(persisted.stepsRepairNextRetryAt).getTime()
+      : 0;
+    scheduleStepsRepair(
+      Math.max(FIRST_BACKFILL_DELAY_MS, retryAt - Date.now()),
+    );
+    return () => {
+      if (stepsRepairTimerRef.current) {
+        clearTimeout(stepsRepairTimerRef.current);
+        stepsRepairTimerRef.current = null;
+      }
+    };
+  }, [
+    persisted.stepsImportVersion,
+    persisted.backfill,
+    persisted.stepsRepair,
+    persisted.stepsRepairNextRetryAt,
+    scheduleStepsRepair,
+    state.settings.healthSync.dataTypes.steps,
+    state.settings.healthSync.enabled,
+    state.settings.healthSync.initialHistoryImportPending,
+    state.settings.onboardingComplete,
+    status,
+  ]);
+
+  useEffect(() => {
+    if (
+      status !== 'ready' ||
+      NativeAppState.currentState !== 'active' ||
+      !state.settings.onboardingComplete ||
+      !state.settings.healthSync.enabled ||
+      !state.settings.healthSync.dataTypes.steps
+    )
+      return;
+    if (todayStepsTimerRef.current)
+      clearTimeout(todayStepsTimerRef.current);
+    todayStepsTimerRef.current = setTimeout(() => {
+      todayStepsTimerRef.current = null;
+      if (NativeAppState.currentState === 'active')
+        InteractionManager.runAfterInteractions(() => {
+          refreshTodayStepsRef.current?.().catch(() => undefined);
+        });
+    }, FOREGROUND_STEPS_SETTLE_DELAY_MS);
+    return () => {
+      if (todayStepsTimerRef.current) {
+        clearTimeout(todayStepsTimerRef.current);
+        todayStepsTimerRef.current = null;
+      }
+    };
+  }, [
+    state.currentUserId,
+    state.settings.healthSync.dataTypes.steps,
+    state.settings.healthSync.enabled,
+    state.settings.onboardingComplete,
+    status,
+  ]);
+
+  useEffect(() => {
+    if (
+      status !== 'ready' ||
       !persisted.backfill ||
       !state.settings.onboardingComplete ||
       !state.settings.healthSync.enabled
@@ -800,6 +1228,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   useEffect(
     () => () => {
       if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
+      if (todayStepsTimerRef.current) clearTimeout(todayStepsTimerRef.current);
+      if (stepsRepairTimerRef.current) clearTimeout(stepsRepairTimerRef.current);
+      setCloudSyncPaused('health-steps-repair', false);
     },
     [],
   );
@@ -846,7 +1277,43 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         clearTimeout(resumeTimer);
         resumeTimer = null;
       }
+      if (next !== 'active' && todayStepsTimerRef.current) {
+        clearTimeout(todayStepsTimerRef.current);
+        todayStepsTimerRef.current = null;
+      }
       if (next !== 'active') return;
+      // Today's one-bucket aggregate is small and user-visible. Refresh it on
+      // every meaningful foreground return independently of the 1h/6h/12h
+      // full-import cadence, with a short throttle for rapid app switching.
+      if (
+        stateRef.current.settings.onboardingComplete &&
+        stateRef.current.settings.healthSync.enabled &&
+        stateRef.current.settings.healthSync.dataTypes.steps
+      ) {
+        todayStepsTimerRef.current = setTimeout(() => {
+          todayStepsTimerRef.current = null;
+          if (NativeAppState.currentState === 'active')
+            InteractionManager.runAfterInteractions(() => {
+              refreshTodayStepsRef.current?.().catch(() => undefined);
+            });
+        }, FOREGROUND_STEPS_SETTLE_DELAY_MS);
+      }
+      if (
+        stateRef.current.settings.onboardingComplete &&
+        stateRef.current.settings.healthSync.enabled &&
+        stateRef.current.settings.healthSync.dataTypes.steps &&
+        !stateRef.current.settings.healthSync.initialHistoryImportPending &&
+        !persistedRef.current.backfill &&
+        (persistedRef.current.stepsImportVersion ?? 0) <
+          HEALTH_STEPS_IMPORT_VERSION
+      ) {
+        const retryAt = persistedRef.current.stepsRepairNextRetryAt
+          ? new Date(persistedRef.current.stepsRepairNextRetryAt).getTime()
+          : 0;
+        scheduleStepsRepair(
+          Math.max(FIRST_BACKFILL_DELAY_MS, retryAt - Date.now()),
+        );
+      }
       // The headless background task writes both entries and this small status
       // record directly to storage. Reload it before deciding whether another
       // foreground read is due; otherwise the UI reports a stale timestamp and
@@ -936,8 +1403,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       disposed = true;
       subscription.remove();
       if (resumeTimer) clearTimeout(resumeTimer);
+      if (todayStepsTimerRef.current) clearTimeout(todayStepsTimerRef.current);
     };
-  }, [runSync, scheduleBackfill]);
+  }, [runSync, scheduleBackfill, scheduleStepsRepair]);
 
   const sourceOrigins = useMemo(() => [...new Set(state.entries
     .filter((entry) => entry.userId === state.currentUserId && entry.source === 'imported' && entry.sourceOrigin)
@@ -961,6 +1429,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     status,
     availability,
     lastSyncedAt: persisted.lastSyncedAt,
+    lastStepSyncedAt: persisted.lastStepSyncedAt ?? null,
     importedCount: persisted.importedCount ?? 0,
     errorMessage: persisted.error ?? null,
     backgroundRegistration,

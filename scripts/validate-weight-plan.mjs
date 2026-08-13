@@ -161,7 +161,16 @@ assert.match(today, /weightManagementSummaryVisible\(state\.settings\)/);
 assert.match(
   today,
   /styles\.heroTitleRow[\s\S]{0,1500}styles\.heroWeightInline/,
-  "Today's target ETA must share the existing goals-left row.",
+  "Today's target ETA must use the featured card's existing compact detail row.",
+);
+const todayHero = today.slice(
+  today.indexOf('testID="today-featured-card"'),
+  today.indexOf("</AnimatedPressable>", today.indexOf('testID="today-featured-card"')),
+);
+assert.doesNotMatch(
+  todayHero,
+  /goals? left/i,
+  "The featured card must not repeat a goals-left sentence.",
 );
 assert.doesNotMatch(
   today,
@@ -201,8 +210,8 @@ assert.match(
 );
 assert.match(
   status,
-  /styles\.personHeading[\s\S]{0,900}memberDisplayName\(state, member\)[\s\S]{0,900}styles\.personWeightPlan/,
-  "Status target ETA must share the existing user-name line.",
+  /styles\.personHeading[\s\S]{0,900}firstDisplayName\(memberDisplayName\(state, member\)\)[\s\S]{0,900}<BodyProgressAvatar[\s\S]{0,1100}styles\.personWeightPlan/,
+  "Status target ETA must use the free centered space below the avatar.",
 );
 assert.doesNotMatch(status, /styles\.weightPlanLine/);
 assert.match(today, /habhub-all-goals-dismissed-v1:/);

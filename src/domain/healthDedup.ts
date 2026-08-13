@@ -16,6 +16,10 @@ type HealthImportIdentity = {
   sourceUpdatedAt?: unknown;
 };
 
+type ImportedDailyAggregate = HealthImportIdentity & {
+  value?: unknown;
+};
+
 /**
  * Provenance survives cloud round-trips in more than one field. Treat any
  * imported marker as device ownership so a web fallback cannot delete or
@@ -75,6 +79,188 @@ export function authoritativeStepEntries<
   return manualRevision > importedRevision
     ? [latestManual]
     : [latestImported];
+}
+
+/**
+ * Grouped Health Connect aggregates do not expose the underlying records'
+ * last-modified timestamp. The adapter stamps a read revision, but an
+ * unchanged re-read must not look like new device data and silently undo a
+ * newer manual daily override. A genuinely changed aggregate receives the new
+ * revision and can become authoritative again.
+ */
+export function preserveUnchangedDailyAggregateRevision<
+  TEntry extends ImportedDailyAggregate,
+>(existing: TEntry | undefined, incoming: TEntry): TEntry {
+  if (
+    !existing?.sourceUpdatedAt ||
+    existing.sourceProvider !== incoming.sourceProvider ||
+    existing.sourceRecordId !== incoming.sourceRecordId ||
+    Number(existing.value) !== Number(incoming.value)
+  )
+    return incoming;
+  return {
+    ...incoming,
+    sourceUpdatedAt: existing.sourceUpdatedAt,
+  };
+}
+
+function localDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Repairs at least the configured history and any older Steps already stored,
+ * while respecting Health Connect's maximum history window requested by the
+ * app. This prevents a later settings change from stranding old bad totals.
+ */
+export function historicalStepRepairStart(
+  now: Date,
+  configuredHistoryDays: number,
+  existingImportedLocalDates: readonly string[],
+  maximumHistoryDays = 730,
+) {
+  const today = new Date(now);
+  if (!Number.isFinite(today.getTime()))
+    throw new Error("A valid repair time is required.");
+  today.setHours(0, 0, 0, 0);
+  const maximumDays = Math.max(1, Math.floor(maximumHistoryDays));
+  const earliestAllowed = new Date(today);
+  earliestAllowed.setDate(earliestAllowed.getDate() - maximumDays);
+  const configuredStart = new Date(today);
+  configuredStart.setDate(
+    configuredStart.getDate() -
+      Math.min(maximumDays, Math.max(1, Math.floor(configuredHistoryDays))),
+  );
+  let selected = configuredStart;
+  for (const localDate of existingImportedLocalDates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate)) continue;
+    const candidate = new Date(`${localDate}T12:00:00`);
+    if (!Number.isFinite(candidate.getTime()) || candidate > today) continue;
+    candidate.setHours(0, 0, 0, 0);
+    if (candidate < selected) selected = candidate;
+  }
+  return selected < earliestAllowed ? earliestAllowed : selected;
+}
+
+/** Inclusive local day represented by an exclusive aggregate range end. */
+export function aggregateRangeThroughLocalDate(to: Date) {
+  const end = new Date(to);
+  if (!Number.isFinite(end.getTime()))
+    throw new Error("A valid aggregate range end is required.");
+  if (
+    end.getHours() === 0 &&
+    end.getMinutes() === 0 &&
+    end.getSeconds() === 0 &&
+    end.getMilliseconds() === 0
+  )
+    end.setMilliseconds(-1);
+  return localDateString(end);
+}
+
+/**
+ * Health Connect's unfiltered Activity aggregate always owns the Steps total.
+ * Source preferences are not record-type-specific, so applying them here can
+ * accidentally exclude a Steps writer when the user disabled an unrelated
+ * nutrition or workout source. A vendor-filtered total is never authoritative.
+ */
+export function authoritativeHealthConnectStepGroups<TGroup>(
+  unfiltered: readonly TGroup[],
+  _originFiltered?: readonly TGroup[],
+): readonly TGroup[] {
+  return unfiltered;
+}
+
+/** True only for the canonical daily total emitted by our aggregate adapter. */
+export function isCanonicalHealthConnectStepAggregate(
+  identity: string | undefined,
+) {
+  return identity?.startsWith("aggregate:steps:") === true;
+}
+
+type CanonicalStepEntry = {
+  sourceRecordId?: string;
+  sourceUpdatedAt?: string;
+  recordedAt: string;
+};
+
+/** Selects the newest canonical aggregate and ignores legacy writer totals. */
+export function selectCanonicalHealthConnectStepAggregate<
+  TEntry extends CanonicalStepEntry,
+>(entries: readonly TEntry[]): TEntry | undefined {
+  return entries
+    .filter((entry) =>
+      isCanonicalHealthConnectStepAggregate(entry.sourceRecordId),
+    )
+    .reduce<TEntry | undefined>((selected, entry) => {
+      if (!selected) return entry;
+      const selectedRevision = String(
+        selected.sourceUpdatedAt ?? selected.recordedAt,
+      );
+      const entryRevision = String(entry.sourceUpdatedAt ?? entry.recordedAt);
+      return entryRevision > selectedRevision ? entry : selected;
+    }, undefined);
+}
+
+/** A generic history read may claim the repair version only if it covered it. */
+export function stepRepairRangeCovered(
+  requiredFrom: Date,
+  coveredFrom: Date,
+  coveredThrough: Date,
+  now: Date,
+) {
+  const dates = [requiredFrom, coveredFrom, coveredThrough, now];
+  if (dates.some((date) => !Number.isFinite(date.getTime()))) return false;
+  return (
+    localDateString(coveredFrom) <= localDateString(requiredFrom) &&
+    localDateString(coveredThrough) >= localDateString(now)
+  );
+}
+
+type DailyStepReplacementEntry = {
+  userId: string;
+  metricId: string;
+  localDate: string;
+  source?: unknown;
+  sourceProvider?: unknown;
+  sourceRecordId?: string;
+  sourceOrigin?: string;
+};
+
+/** Exact imported rows cleared after a successful aggregate read. */
+export function isDailyStepReplacementCandidate(
+  entry: DailyStepReplacementEntry,
+  options: {
+    userId: string;
+    provider: unknown;
+    stepMetricIds: ReadonlySet<string>;
+    fromDate: string;
+    throughDate: string;
+    includeFallbacks?: boolean;
+  },
+) {
+  if (entry.source === "manual") return false;
+  const explicitProviderMatch = entry.sourceProvider === options.provider;
+  const legacyImportedIdentity =
+    !entry.sourceProvider &&
+    entry.source !== "manual" &&
+    (entry.source === "imported" ||
+      Boolean(entry.sourceOrigin) ||
+      entry.sourceRecordId?.startsWith("aggregate:steps:") ||
+      entry.sourceRecordId?.startsWith("daily:") ||
+      (options.includeFallbacks === true &&
+        entry.sourceRecordId?.startsWith("step-fallback:")));
+  return Boolean(
+    entry.userId === options.userId &&
+    (explicitProviderMatch || legacyImportedIdentity) &&
+    entry.localDate >= options.fromDate &&
+    entry.localDate <= options.throughDate &&
+    (options.stepMetricIds.has(entry.metricId) ||
+      (options.includeFallbacks === true &&
+        entry.sourceRecordId?.startsWith("step-fallback:")))
+  );
 }
 
 /**
@@ -399,9 +585,15 @@ function normalizeStepRecords(records: HealthImportRecord[]) {
     const template = items.reduce(latestRecord);
     const day = recordDay(template);
     const sourceId = healthSourceId(template.origin);
+    const canonicalPlatformAggregate = items.find((item) =>
+      isCanonicalHealthConnectStepAggregate(item.id),
+    );
     const normalized: HealthImportRecord = {
       ...template,
-      id: `daily:${day}:${sourceId}`,
+      // Preserve adapter-owned aggregate identity end-to-end. The reducer uses
+      // it to distinguish Health Connect's priority-aware total from legacy
+      // raw per-writer rows after local/cloud round-trips.
+      id: canonicalPlatformAggregate?.id ?? `daily:${day}:${sourceId}`,
       value: Math.round(total),
       startTime: items[0].startTime,
       endTime: items.reduce(
@@ -431,7 +623,15 @@ export function deduplicateHealthImportRecords(
 ) {
   const exact = new Map<string, HealthImportRecord>();
   for (const record of records) {
-    if (!healthSourceEnabled(record.origin, preferences)) continue;
+    // Steps have already been resolved by Health Connect's priority-aware
+    // Aggregate API. Shared source preferences are not type-aware and must not
+    // discard that canonical total because its sole contributor is disabled
+    // for nutrition/workout imports.
+    if (
+      record.type !== "steps" &&
+      !healthSourceEnabled(record.origin, preferences)
+    )
+      continue;
     const key = `${record.provider}\u0000${record.type}\u0000${record.id}`;
     exact.set(key, exact.has(key) ? latestRecord(exact.get(key)!, record) : record);
   }

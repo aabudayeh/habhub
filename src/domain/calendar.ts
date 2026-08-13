@@ -296,6 +296,19 @@ export function scheduleEventsForDate(
       }));
     if (due.length || reminders.length || timeBlocks.length)
       return [...due, ...reminders, ...timeBlocks];
+    // Today deliberately keeps an unresolved deadline visible after it is due.
+    // Schedule is a date projection instead: a specifically dated to-do belongs
+    // only on its planned-block, reminder and deadline dates. Reusing the Today
+    // fallback here used to copy a future deadline into every later ALL cell in
+    // the visible week, even before the deadline had arrived.
+    if (
+      !todo.recurrence &&
+      (Boolean(todo.dueAt) ||
+        Boolean(todo.scheduledStartAt) ||
+        Boolean(todo.scheduledEndAt) ||
+        todo.reminders.length > 0)
+    )
+      return [];
     return [
       {
         id: `todo:${todo.id}`,

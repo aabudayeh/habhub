@@ -38,6 +38,11 @@ import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
 import {
+  ColdLaunchCountValue,
+  ColdLaunchMetricValue,
+  useColdLaunchMetricProgress,
+} from "@/src/components/ColdLaunchMetricValue";
+import {
   TutorialScrollProvider,
   TutorialTarget,
   useTutorial,
@@ -168,6 +173,10 @@ function Today() {
   const tutorial = useTutorial();
   const reportTutorialEvent = tutorial.reportEvent;
   const health = useHealthSync();
+  const metricValueAnimationProgress = useColdLaunchMetricProgress(
+    health.status,
+    health.lastStepSyncedAt ?? health.lastSyncedAt,
+  );
   const cloud = useCloudSyncActions();
   const cloudStatus = useCloudSyncStatus();
   const colors = useAppColors();
@@ -1064,6 +1073,7 @@ function Today() {
         </View>
         <TutorialTarget id="today-hero">
         <AnimatedPressable
+          testID="today-featured-card"
           accessibilityRole="button"
           accessibilityLabel="Open daily status"
           onPress={() => router.navigate("/status" as never)}
@@ -1102,38 +1112,13 @@ function Today() {
                   ? ` · ${completedTodayTodos}/${todayTodos.length} TO-DOS`
                   : ""}
               </Text>
-              <Text
-                preserveColor
-                style={[
-                  styles.heroValue,
-                  { color: palette.white },
-                ]}
-              >
-                {`${heroMet} of ${heroTotal}`}
-              </Text>
+              <ColdLaunchCountValue
+                value={heroMet}
+                total={heroTotal}
+                progress={metricValueAnimationProgress}
+                style={[styles.heroValue, { color: palette.white }]}
+              />
               <View style={styles.heroTitleRow}>
-                <Text
-                  preserveColor
-                  numberOfLines={1}
-                  style={[
-                    styles.heroTitle,
-                    { color: palette.white },
-                  ]}
-                >
-                  {heroAllMet
-                    ? heroUsesGoals
-                      ? "Every goal reached"
-                      : "Every to-do complete"
-                    : heroTotal
-                      ? `${heroTotal - heroMet} ${
-                          heroUsesGoals
-                            ? `goal${heroTotal - heroMet === 1 ? "" : "s"}`
-                            : `to-do${heroTotal - heroMet === 1 ? "" : "s"}`
-                        } left`
-                      : heroUsesGoals
-                        ? "Choose your first goal"
-                        : "No to-dos today"}
-                </Text>
                 {weightPlanLabel ? (
                   <View style={styles.heroWeightInline}>
                     <Ionicons
@@ -1154,6 +1139,26 @@ function Today() {
                       {weightPlanLabel}
                     </Text>
                   </View>
+                ) : !heroUsesGoals ? (
+                  <Text
+                    preserveColor
+                    numberOfLines={1}
+                    style={[styles.heroTitle, { color: palette.white }]}
+                  >
+                    {heroAllMet
+                      ? "Every to-do complete"
+                      : heroTotal
+                        ? `${heroTotal - heroMet} to-do${heroTotal - heroMet === 1 ? "" : "s"} left`
+                        : "No to-dos today"}
+                  </Text>
+                ) : !heroTotal ? (
+                  <Text
+                    preserveColor
+                    numberOfLines={1}
+                    style={[styles.heroTitle, { color: palette.white }]}
+                  >
+                    Choose your first goal
+                  </Text>
                 ) : null}
               </View>
             </View>
@@ -1358,6 +1363,7 @@ function Today() {
                 colors={colors}
                 accent={accent}
                 weekly={weekly}
+                metricValueAnimationProgress={metricValueAnimationProgress}
                 trackedGoal={isMetricTrackedOnDate(
                   state,
                   item,
@@ -2140,6 +2146,7 @@ function TrackerRow({
   colors,
   accent,
   weekly,
+  metricValueAnimationProgress,
   trackedGoal,
   allGoalsMet,
   goldPresentation,
@@ -2173,6 +2180,9 @@ function TrackerRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   weekly: ReturnType<typeof weeklyDeficitBalance>;
+  metricValueAnimationProgress: ReturnType<
+    typeof useColdLaunchMetricProgress
+  >;
   trackedGoal: boolean;
   allGoalsMet: boolean;
   goldPresentation: "pending" | "animating" | "settled";
@@ -2227,7 +2237,7 @@ function TrackerRow({
     item.id === "weekly_deficit_balance"
       ? weekly.balance
       : safeMetricValue(state, item, state.currentUserId, day);
-  const value = useAnimatedNumber(actualValue);
+  const value = actualValue;
   const weeklyBalanceAhead =
     item.id === "weekly_deficit_balance" &&
     weekly.days > 0 &&
@@ -2415,6 +2425,18 @@ function TrackerRow({
         weekly,
         locale,
        );
+  const directlyFormattedNumericValue =
+    applicable &&
+    !isFasting &&
+    !mergedCompoundValue &&
+    !isBloodPressure &&
+    item.id !== "weekly_deficit_balance" &&
+    item.id !== "food" &&
+    item.id !== "weight" &&
+    item.goalProgressMode !== "journey" &&
+    item.dataType !== "boolean" &&
+    item.dataType !== "photo" &&
+    item.dataType !== "text";
   const dragHandle = (
     <View collapsable={false} style={styles.drag}>
       <Ionicons
@@ -2577,22 +2599,40 @@ function TrackerRow({
             </View>
           ) : null}
         </View>
-        <Text
-          style={[
-            styles.primary,
-            {
-              color:
-                item.id === "weekly_deficit_balance"
-                  ? colors.ink
-                  : applicable && item.goal.kind === "at_most" && value > target
-                  ? palette.red
-                  : colors.ink,
-            },
-          ]}
-          numberOfLines={1}
-        >
-          {content.primary}
-        </Text>
+        {directlyFormattedNumericValue ? (
+          <ColdLaunchMetricValue
+            metric={item}
+            value={value}
+            locale={locale}
+            progress={metricValueAnimationProgress}
+            style={[
+              styles.primary,
+              {
+                color:
+                  applicable && item.goal.kind === "at_most" && value > target
+                    ? palette.red
+                    : colors.ink,
+              },
+            ]}
+          />
+        ) : (
+          <Text
+            style={[
+              styles.primary,
+              {
+                color:
+                  item.id === "weekly_deficit_balance"
+                    ? colors.ink
+                    : applicable && item.goal.kind === "at_most" && value > target
+                    ? palette.red
+                    : colors.ink,
+              },
+            ]}
+            numberOfLines={1}
+          >
+            {content.primary}
+          </Text>
+        )}
         {content.secondary ? (
           <Text
             style={[styles.secondary, { color: colors.muted }]}
@@ -2901,27 +2941,6 @@ function todayProgressColor(
   return met ? palette.lime : item.color;
 }
 
-function useAnimatedNumber(target: number) {
-  const [value, setValue] = useState(0);
-  const current = useRef(0);
-  useEffect(() => {
-    if (!Number.isFinite(target)) return;
-    const from = current.current;
-    const started = Date.now();
-    let frame = 0;
-    const tick = () => {
-      const elapsed = Math.min(1, (Date.now() - started) / 520);
-      const eased = 1 - Math.pow(1 - elapsed, 3);
-      const next = from + (target - from) * eased;
-      current.current = next;
-      setValue(next);
-      if (elapsed < 1) frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [target]);
-  return value;
-}
 function displayValue(
   state: ReturnType<typeof useApp>["state"],
   item: MetricDefinition,
@@ -3501,9 +3520,10 @@ const styles = StyleSheet.create({
   },
   heroTitleRow: {
     minWidth: 0,
+    minHeight: 11,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "flex-start",
     gap: 6,
   },
   heroTitle: {
@@ -3515,11 +3535,11 @@ const styles = StyleSheet.create({
   },
   heroWeightInline: {
     minWidth: 0,
-    maxWidth: "58%",
+    maxWidth: "100%",
     flexShrink: 1,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "flex-start",
     gap: 3,
   },
   heroWeightInlineText: {
@@ -3529,7 +3549,7 @@ const styles = StyleSheet.create({
     fontSize: 8,
     lineHeight: 11,
     fontWeight: "800",
-    textAlign: "right",
+    textAlign: "left",
   },
   completionShape: {
     width: COMPLETION_INDICATOR_SIZE,

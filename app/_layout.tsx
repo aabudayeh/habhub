@@ -1,6 +1,12 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
 import { Image } from "expo-image";
-import { Redirect, router, Stack, useSegments } from "expo-router";
+import {
+  Redirect,
+  router,
+  Stack,
+  usePathname,
+  useSegments,
+} from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
 import "@/src/notifications/workoutTimer";
@@ -57,6 +63,11 @@ import {
   refreshPushTokenRegistration,
   updatePushPreferences,
 } from "@/src/notifications/push";
+import {
+  configureColdLaunchMetricAnimation,
+  isTodayPathname,
+  sealColdLaunchMetricAnimation,
+} from "@/src/animation/coldLaunchMetricAnimation";
 
 const theme = {
   ...DefaultTheme,
@@ -115,8 +126,10 @@ function RootNavigator() {
   const cloudSyncStatus = useCloudSyncStatus();
   const { state, hydrated, updateSettings } = useApp();
   const segments = useSegments();
+  const pathname = usePathname();
   const rootSegment = String(segments[0] ?? "");
   const landingApplied = useRef(false);
+  const launchMetricAnimationDecisionApplied = useRef(false);
   const onboardingAccountId =
     auth.user?.id ?? (!auth.configured ? `demo:${state.currentUserId}` : null);
   const [onboardingMarker, setOnboardingMarker] = useState<{
@@ -375,6 +388,13 @@ function RootNavigator() {
     tutorialActive,
   ]);
   useEffect(() => {
+    if (
+      launchMetricAnimationDecisionApplied.current &&
+      !isTodayPathname(pathname)
+    )
+      sealColdLaunchMetricAnimation();
+  }, [pathname]);
+  useEffect(() => {
     if (tutorialActive || Platform.OS === "web") return;
     const open = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;
@@ -510,6 +530,37 @@ function RootNavigator() {
     cloudSyncStatus,
     onboardingDone,
   });
+  useEffect(() => {
+    if (
+      launchMetricAnimationDecisionApplied.current ||
+      !hydrated ||
+      !rootSegment ||
+      auth.status === "loading" ||
+      cloudAccountHydrating ||
+      (onboardingAccountId &&
+        onboardingMarker?.accountId !== onboardingAccountId)
+    )
+      return;
+    launchMetricAnimationDecisionApplied.current = true;
+    configureColdLaunchMetricAnimation(
+      !tutorialActive &&
+        onboardingDone &&
+        rootSegment === "(tabs)" &&
+        safeDefaultLandingPage === "index" &&
+        isTodayPathname(pathname),
+    );
+  }, [
+    auth.status,
+    cloudAccountHydrating,
+    hydrated,
+    onboardingAccountId,
+    onboardingDone,
+    onboardingMarker?.accountId,
+    pathname,
+    rootSegment,
+    safeDefaultLandingPage,
+    tutorialActive,
+  ]);
   if (auth.status === "loading" || accountStateMismatch || cloudAccountHydrating) {
     return (
       <View style={styles.loading}>

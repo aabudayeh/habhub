@@ -32,7 +32,11 @@ import {
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
-import { manualStepEntriesEligibleForReplacement } from "@/src/domain/healthDedup";
+import {
+  isDailyStepReplacementCandidate,
+  manualStepEntriesEligibleForReplacement,
+  preserveUnchangedDailyAggregateRevision,
+} from "@/src/domain/healthDedup";
 import {
   normalizeEnergyProfile,
   recommendedDailyDeficit,
@@ -433,6 +437,15 @@ type Action =
       finalizeInitialImport?: boolean;
       /** Manual history repair imports values without changing goal periods. */
       preserveTrackedGoalHistory?: boolean;
+      /**
+       * Successful daily aggregates replace only these imported tracker rows
+       * inside the exact requested window. Manual rows are never removed.
+       */
+      aggregateReplacement?: {
+        metricIds: string[];
+        throughDate: string;
+        removeStepFallbacks?: boolean;
+      };
     }
   | { type: "reset" };
 
@@ -2597,16 +2610,43 @@ function reducer(state: AppState, action: Action): AppState {
       // Health Connect/HealthKit can briefly return an incomplete page while
       // another writer is updating. Upsert stable source ids without clearing
       // the overlap first, so a routine refresh never makes readings flash out.
-      const byId = new Map(
+      const existingById = new Map(
         state.entries.map((entry) => [
           metricEntryKey(entry.userId, entry.id),
           entry,
         ]),
       );
+      const replacementMetricIds = new Set(
+        action.aggregateReplacement?.metricIds ?? [],
+      );
+      const byId = new Map(
+        state.entries
+          .filter(
+            (entry) =>
+              !isDailyStepReplacementCandidate(entry, {
+                userId: state.currentUserId,
+                provider: action.provider,
+                stepMetricIds: replacementMetricIds,
+                fromDate: action.fromDate,
+                throughDate: action.aggregateReplacement?.throughDate ?? "",
+                includeFallbacks:
+                  action.aggregateReplacement?.removeStepFallbacks === true,
+              }),
+          )
+          .map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
+      );
       const dismissed = new Set(state.settings.dismissedHealthEntryIds ?? []);
-      for (const entry of action.entries)
-        if (!dismissed.has(entry.id))
-          byId.set(metricEntryKey(entry.userId, entry.id), entry);
+      for (const entry of action.entries) {
+        if (dismissed.has(entry.id)) continue;
+        const key = metricEntryKey(entry.userId, entry.id);
+        const nextEntry = replacementMetricIds.has(entry.metricId)
+          ? preserveUnchangedDailyAggregateRevision(
+              existingById.get(key),
+              entry,
+            )
+          : entry;
+        byId.set(key, nextEntry);
+      }
       const targetMetrics = new Set(action.metricIds);
       const affected: MetricEntry[] = [];
       const unaffected: MetricEntry[] = [];
@@ -2834,6 +2874,11 @@ type AppContextValue = {
     fromDate: string,
     finalizeInitialImport?: boolean,
     preserveTrackedGoalHistory?: boolean,
+    aggregateReplacement?: {
+      metricIds: string[];
+      throughDate: string;
+      removeStepFallbacks?: boolean;
+    },
   ) => Promise<void>;
   /** Flush the latest reducer state to this device before a route exits. */
   flushLocalPersistence: () => Promise<void>;
@@ -3634,6 +3679,7 @@ export function AppProvider({
       fromDate,
       finalizeInitialImport,
       preserveTrackedGoalHistory,
+      aggregateReplacement,
     ) => {
       const previous = persistenceStateRef.current;
       const next = withLocalDeletionTombstones(
@@ -3646,6 +3692,7 @@ export function AppProvider({
           fromDate,
           finalizeInitialImport,
           preserveTrackedGoalHistory,
+          aggregateReplacement,
         }),
       );
       return commitReducedState(next, true).then(async () => {

@@ -20,6 +20,7 @@ export const STATUS_AVATAR_SIMULATION_METRICS: readonly {
 ] as const;
 
 export type StatusAvatarSimulationInput = {
+  age?: number;
   bodyFatPercent?: number;
   heightCm?: number;
   leanBodyMassKg?: number;
@@ -29,6 +30,7 @@ export type StatusAvatarSimulationInput = {
 };
 
 export type StatusAvatarSimulationBaseline = {
+  age?: number;
   bodyFatPercent: number;
   bodyFatWasLogged: boolean;
   heightCm: number;
@@ -37,6 +39,7 @@ export type StatusAvatarSimulationBaseline = {
   muscleProgress: number;
   sex: BiologicalSex;
   weightKg: number;
+  weightWasLogged: boolean;
 };
 
 export type StatusAvatarSimulationRange = {
@@ -51,6 +54,16 @@ export type StatusAvatarSimulationState = {
   enabled: Record<StatusAvatarSimulationMetric, boolean>;
   values: Record<StatusAvatarSimulationMetric, number>;
 };
+
+export type StatusAvatarSimulationMarker = {
+  currentValue?: number;
+  recommendedValue?: number;
+};
+
+export type StatusAvatarSimulationMarkers = Record<
+  StatusAvatarSimulationMetric,
+  StatusAvatarSimulationMarker
+>;
 
 export type StatusAvatarSimulationConsistency =
   | { status: "ok" }
@@ -110,6 +123,11 @@ export function statusAvatarSimulationBaseline(
       : "unspecified";
   const heightCm = bounded(safeNumber(input.heightCm, 170), 135, 215);
   const heightM = heightCm / 100;
+  const age =
+    typeof input.age === "number" && Number.isFinite(input.age)
+      ? bounded(input.age, 13, 120)
+      : undefined;
+  const weightWasLogged = hasPositiveMeasurement(input.weightKg);
   const weightKg = bounded(
     safeNumber(input.weightKg, 22 * heightM * heightM),
     35,
@@ -130,6 +148,7 @@ export function statusAvatarSimulationBaseline(
   );
 
   return {
+    age,
     bodyFatPercent,
     bodyFatWasLogged,
     heightCm,
@@ -138,6 +157,7 @@ export function statusAvatarSimulationBaseline(
     muscleProgress: bounded(safeNumber(input.muscleProgress, 0), 0, 1),
     sex,
     weightKg,
+    weightWasLogged,
   };
 }
 
@@ -219,6 +239,98 @@ export function statusAvatarSimulationRange(
     ),
     step: 0.5,
     unit: "kg",
+  };
+}
+
+const ADULT_HEALTHY_BMI_MIDPOINT = (18.5 + 24.9) / 2;
+
+/**
+ * Builds fixed, visual reference markers for the simulator tracks.
+ *
+ * The weight marker is the midpoint of the WHO adult healthy-BMI reference
+ * range (18.5-24.9), converted using profile height. The composition markers
+ * use the adult Deurenberg BMI/age/sex population equation at that same BMI,
+ * then derive lean mass as reference weight minus estimated fat mass. These
+ * are orientation points, not diagnoses or personalized medical targets.
+ *
+ * Sources:
+ * https://apps.who.int/nutrition/landscape/help.aspx?helpid=420&menu=0
+ * https://pubmed.ncbi.nlm.nih.gov/2043597/
+ */
+export function statusAvatarSimulationMarkers(
+  baseline: StatusAvatarSimulationBaseline,
+): StatusAvatarSimulationMarkers {
+  const current = {
+    body_fat: baseline.bodyFatWasLogged
+      ? baseline.bodyFatPercent
+      : undefined,
+    lean_body_mass: baseline.leanMassWasLogged
+      ? baseline.leanBodyMassKg
+      : undefined,
+    weight: baseline.weightWasLogged ? baseline.weightKg : undefined,
+  };
+  const adult = baseline.age !== undefined && baseline.age >= 18;
+  if (!adult)
+    return {
+      bmi: {},
+      body_fat: { currentValue: current.body_fat },
+      lean_body_mass: { currentValue: current.lean_body_mass },
+      weight: { currentValue: current.weight },
+    };
+
+  const heightM = baseline.heightCm / 100;
+  const referenceWeightKg =
+    ADULT_HEALTHY_BMI_MIDPOINT * heightM * heightM;
+  const compositionProfileSupported =
+    baseline.age !== undefined &&
+    baseline.age <= 83 &&
+    (baseline.sex === "female" || baseline.sex === "male");
+  const referenceAge = compositionProfileSupported ? baseline.age : undefined;
+  const sexCoefficient = baseline.sex === "male" ? 1 : 0;
+  const referenceBodyFatPercent = referenceAge !== undefined
+    ? 1.2 * ADULT_HEALTHY_BMI_MIDPOINT +
+      0.23 * referenceAge -
+      10.8 * sexCoefficient -
+      5.4
+    : undefined;
+  const referenceLeanBodyMassKg =
+    referenceBodyFatPercent === undefined
+      ? undefined
+      : referenceWeightKg * (1 - referenceBodyFatPercent / 100);
+
+  const markerFor = (
+    metric: "weight" | "body_fat" | "lean_body_mass",
+    currentValue: number | undefined,
+    recommendedValue: number | undefined,
+  ): StatusAvatarSimulationMarker => {
+    const range = statusAvatarSimulationRange(metric, baseline);
+    const normalizeMarker = (value: number | undefined) =>
+      value === undefined
+        ? undefined
+        : bounded(
+            roundToStep(value, range.step),
+            range.minimumValue,
+            range.maximumValue,
+          );
+    return {
+      currentValue: normalizeMarker(currentValue),
+      recommendedValue: normalizeMarker(recommendedValue),
+    };
+  };
+
+  return {
+    bmi: {},
+    body_fat: markerFor(
+      "body_fat",
+      current.body_fat,
+      referenceBodyFatPercent,
+    ),
+    lean_body_mass: markerFor(
+      "lean_body_mass",
+      current.lean_body_mass,
+      referenceLeanBodyMassKg,
+    ),
+    weight: markerFor("weight", current.weight, referenceWeightKg),
   };
 }
 

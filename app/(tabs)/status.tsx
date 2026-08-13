@@ -38,6 +38,7 @@ import {
   type LeaderboardPeriod,
 } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
+import { firstDisplayName } from "@/src/domain/profileName";
 import {
   statusAllTimeDates,
   statusAvatarProgression,
@@ -511,28 +512,8 @@ export default function StatusPage() {
                       ellipsizeMode="tail"
                       style={[styles.personName, { color: colors.ink }]}
                     >
-                      {memberDisplayName(state, member)}
+                      {firstDisplayName(memberDisplayName(state, member))}
                     </Text>
-                  ) : null}
-                  {showWeightSummary && weightPlanLabel ? (
-                    <View style={styles.personWeightPlan}>
-                      <Ionicons
-                        name={
-                          weightPlan?.direction === "maintain"
-                            ? "remove-outline"
-                            : "calendar-outline"
-                        }
-                        size={11}
-                        color={colors.primary}
-                      />
-                      <Text
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                        style={[styles.personWeightPlanText, { color: colors.ink }]}
-                      >
-                        {weightPlanLabel}
-                      </Text>
-                    </View>
                   ) : null}
                 </View>
                 <BodyProgressAvatar
@@ -548,6 +529,30 @@ export default function StatusPage() {
                   visualStyle={state.settings.statusAvatarStyle ?? "silhouette"}
                   weightKg={avatarProgression.currentWeightKg}
                 />
+                {showWeightSummary && weightPlanLabel ? (
+                  <View
+                    pointerEvents="none"
+                    testID="status-weight-plan"
+                    style={styles.personWeightPlan}
+                  >
+                    <Ionicons
+                      name={
+                        weightPlan?.direction === "maintain"
+                          ? "remove-outline"
+                          : "calendar-outline"
+                      }
+                      size={11}
+                      color={colors.primary}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={[styles.personWeightPlanText, { color: colors.ink }]}
+                    >
+                      {weightPlanLabel}
+                    </Text>
+                  </View>
+                ) : null}
               </Pressable>
               </TutorialTarget>
               </TutorialTarget>
@@ -710,6 +715,7 @@ export default function StatusPage() {
           ) : null}
         </Card>
         <StatusAvatarSimulator
+          age={state.settings.energyProfile.age}
           bodyFatPercent={avatarProgression.currentBodyFatPercent}
           calculationSource={avatarCalculationSource}
           heightCm={state.settings.energyProfile.heightCm}
@@ -752,6 +758,9 @@ const styles = StyleSheet.create({
   goalRailRoomy: { width: 92 },
   goalRailEmpty: { width: 0 },
   bodyFacts: {
+    width: "100%",
+    maxWidth: 280,
+    alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -799,27 +808,29 @@ const styles = StyleSheet.create({
     position: "absolute",
     zIndex: 2,
     top: 0,
-    left: "-38%",
-    right: "-38%",
-    flexDirection: "row",
+    left: 0,
+    right: 0,
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 7,
+    justifyContent: "center",
   },
   personName: {
     minWidth: 0,
     flexShrink: 1,
+    maxWidth: "100%",
     fontSize: 12,
     lineHeight: 16,
     fontWeight: "900",
+    textAlign: "center",
   },
   personWeightPlan: {
-    minWidth: 0,
-    maxWidth: "62%",
-    flexShrink: 1,
+    position: "absolute",
+    zIndex: 2,
+    left: -22,
+    right: -22,
+    bottom: 0,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "center",
     gap: 3,
   },
   personWeightPlanText: {
@@ -828,7 +839,7 @@ const styles = StyleSheet.create({
     fontSize: 8,
     lineHeight: 11,
     fontWeight: "800",
-    textAlign: "right",
+    textAlign: "center",
   },
   avatarSourceEditor: {
     maxWidth: 330,

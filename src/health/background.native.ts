@@ -6,7 +6,12 @@ import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud'
 import { dateKey } from '@/src/domain/date';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
 import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
-import { mergeHealthSourcePreferences } from '@/src/domain/healthDedup';
+import {
+  aggregateRangeThroughLocalDate,
+  isDailyStepReplacementCandidate,
+  mergeHealthSourcePreferences,
+  preserveUnchangedDailyAggregateRevision,
+} from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
 import {
@@ -71,9 +76,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
     const dataTypes = enabledHealthDataTypes(state.settings.healthSync.dataTypes);
     if (!dataTypes.length) return BackgroundTask.BackgroundTaskResult.Success;
     const from = startDate(status.lastSyncedAt);
+    const to = new Date();
     const records = await nativeHealthAdapter.read({
       from,
-      to: new Date(),
+      to,
       dataTypes,
       sourcePreferences: state.settings.healthSync.sourcePreferences,
     });
@@ -89,8 +95,40 @@ TaskManager.defineTask(TASK_NAME, async () => {
       state.settings.energyProfile,
       sourcePreferences,
     );
+    const stepMetricIds = dataTypes.includes('steps')
+      ? metricIdsForHealthDataTypes(['steps'], state.metrics)
+      : [];
+    const stepMetricSet = new Set(stepMetricIds);
+    const replacementThrough = aggregateRangeThroughLocalDate(to);
+    const existingById = new Map(
+      state.entries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
+    );
+    const revisionSafeEntries = entries.map((entry) =>
+      stepMetricSet.has(entry.metricId)
+        ? preserveUnchangedDailyAggregateRevision(
+            existingById.get(`${entry.userId}:${entry.id}`),
+            entry,
+          )
+        : entry,
+    );
+    const replacementBase = stepMetricIds.length
+      ? {
+          ...state,
+          entries: state.entries.filter(
+            (entry) =>
+              !isDailyStepReplacementCandidate(entry, {
+                userId: state.currentUserId,
+                provider: nativeHealthAdapter.provider,
+                stepMetricIds: stepMetricSet,
+                fromDate: dateKey(from),
+                throughDate: replacementThrough,
+                includeFallbacks: true,
+              }),
+          ),
+        }
+      : state;
     const nextState = applyImportedFoodFastBreaks({
-      ...state,
+      ...replacementBase,
       settings:
         sourcePreferences === state.settings.healthSync.sourcePreferences
           ? state.settings
@@ -98,14 +136,17 @@ TaskManager.defineTask(TASK_NAME, async () => {
               ...state.settings,
               healthSync: { ...state.settings.healthSync, sourcePreferences },
             },
-      entries: mergeHealthEntries(state, entries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
+      entries: mergeHealthEntries(replacementBase, revisionSafeEntries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
       lastSavedAt: new Date().toISOString(),
-    }, entries);
+    }, revisionSafeEntries);
     const nextStatus: PersistedHealthStatus = {
       ...status,
       connectionEnabled: true,
       backgroundAccess: state.settings.healthSync.backgroundAccess,
       lastSyncedAt: new Date().toISOString(),
+      lastStepSyncedAt: dataTypes.includes('steps')
+        ? new Date().toISOString()
+        : status.lastStepSyncedAt,
       lastReason: 'background',
       lastImportFromDate: dateKey(from),
       importedCount: entries.length,

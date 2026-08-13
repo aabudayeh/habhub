@@ -23,11 +23,13 @@ import {
   STATUS_AVATAR_SIMULATION_METRICS,
   statusAvatarSimulationBaseline,
   statusAvatarSimulationInitialState,
+  statusAvatarSimulationMarkers,
   statusAvatarSimulationPreview,
   statusAvatarSimulationRange,
   statusAvatarSimulationSetEnabled,
   statusAvatarSimulationSetValue,
   type StatusAvatarSimulationMetric,
+  type StatusAvatarSimulationMarker,
   type StatusAvatarSimulationRange,
 } from "@/src/domain/statusAvatarSimulation";
 import { useLocalization } from "@/src/i18n";
@@ -40,26 +42,31 @@ import type {
 
 function SimulationSlider({
   accessibilityLabel,
+  currentValue,
   disabled,
   maximumValue,
   minimumValue,
   onChange,
+  recommendedValue,
   secondary = false,
   step,
   unit,
   value,
 }: {
   accessibilityLabel: string;
+  currentValue?: number;
   disabled: boolean;
   maximumValue: number;
   minimumValue: number;
   onChange: (value: number) => void;
+  recommendedValue?: number;
   secondary?: boolean;
   step: number;
   unit: string;
   value: number;
 }) {
   const colors = useAppColors();
+  const { locale, t } = useLocalization();
   const trackWidthRef = useRef(1);
   const dragStartXRef = useRef(0);
   const progressRef = useRef(0);
@@ -81,6 +88,19 @@ function SimulationSlider({
   lastEmittedValueRef.current = value;
   const span = Math.max(step, maximumValue - minimumValue);
   const progress = Math.max(0, Math.min(1, (value - minimumValue) / span));
+  const markerProgress = (markerValue: number | undefined) =>
+    markerValue === undefined
+      ? undefined
+      : Math.max(
+          0.015,
+          Math.min(0.985, (markerValue - minimumValue) / span),
+        );
+  const currentProgress = markerProgress(currentValue);
+  const recommendedProgress = markerProgress(recommendedValue);
+  const markersOverlap =
+    currentProgress !== undefined &&
+    recommendedProgress !== undefined &&
+    Math.abs(currentProgress - recommendedProgress) < 0.035;
   progressRef.current = progress;
   const updateFromXRef = useRef<(x: number) => void>(() => undefined);
   updateFromXRef.current = (x: number) => {
@@ -134,6 +154,26 @@ function SimulationSlider({
     Math.round((span / 20) / step) * step,
   );
   const accessibleValue = `${value.toFixed(step < 1 ? 1 : 0)}${unit ? ` ${unit}` : ""}`;
+  const markerFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(locale, {
+        maximumFractionDigits: step < 1 ? 1 : 0,
+        minimumFractionDigits: step < 1 ? 1 : 0,
+      }),
+    [locale, step],
+  );
+  const formatMarkerValue = (markerValue: number) =>
+    `${markerFormatter.format(markerValue)}${unit ? ` ${unit}` : ""}`;
+  const markerHint = [
+    currentValue === undefined
+      ? undefined
+      : `${t("C marks the current logged value")}: ${formatMarkerValue(currentValue)}`,
+    recommendedValue === undefined
+      ? undefined
+      : `${t("R marks an adult reference, not a medical target")}: ${formatMarkerValue(recommendedValue)}`,
+  ]
+    .filter(Boolean)
+    .join(". ");
   const adjust = useCallback(
     (direction: -1 | 1) => {
       if (disabled) return;
@@ -179,7 +219,10 @@ function SimulationSlider({
     <View
       accessible
       accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={markerHint || undefined}
+      accessibilityLabel={
+        markerHint ? `${accessibilityLabel}. ${markerHint}` : accessibilityLabel
+      }
       accessibilityRole="adjustable"
       accessibilityState={{ disabled }}
       accessibilityValue={{
@@ -228,6 +271,63 @@ function SimulationSlider({
             },
           ]}
         />
+        {currentProgress !== undefined ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.sliderMarkerAnchor,
+              {
+                left: `${currentProgress * 100}%`,
+                transform: [{ translateX: markersOverlap ? -2 : 0 }],
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.sliderMarkerTick,
+                { backgroundColor: colors.muted },
+              ]}
+            />
+            <Text
+              accessible={false}
+              preserveColor
+              style={[styles.sliderMarkerCodeCurrent, { color: colors.muted }]}
+              translate={false}
+            >
+              C
+            </Text>
+          </View>
+        ) : null}
+        {recommendedProgress !== undefined ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.sliderMarkerAnchor,
+              {
+                left: `${recommendedProgress * 100}%`,
+                transform: [{ translateX: markersOverlap ? 2 : 0 }],
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.sliderMarkerTickRecommended,
+                { backgroundColor: colors.primary },
+              ]}
+            />
+            <Text
+              accessible={false}
+              preserveColor
+              style={[
+                styles.sliderMarkerCodeRecommended,
+                { color: colors.primary },
+              ]}
+              translate={false}
+            >
+              R
+            </Text>
+          </View>
+        ) : null}
         <View
           style={[
             styles.sliderThumb,
@@ -287,6 +387,7 @@ function SimulationMetricRow({
   formatter,
   last,
   label,
+  marker,
   onChange,
   onToggle,
   range,
@@ -298,6 +399,7 @@ function SimulationMetricRow({
   formatter: Intl.NumberFormat;
   last: boolean;
   label: string;
+  marker: StatusAvatarSimulationMarker;
   onChange: (value: number) => void;
   onToggle: (enabled: boolean) => void;
   range: StatusAvatarSimulationRange;
@@ -354,10 +456,12 @@ function SimulationMetricRow({
       </View>
       <SimulationSlider
         accessibilityLabel={t(label)}
+        currentValue={marker.currentValue}
         disabled={!enabled}
         maximumValue={range.maximumValue}
         minimumValue={range.minimumValue}
         onChange={onChange}
+        recommendedValue={marker.recommendedValue}
         secondary={secondary}
         step={range.step}
         unit={range.unit}
@@ -368,6 +472,7 @@ function SimulationMetricRow({
 }
 
 export function StatusAvatarSimulator({
+  age,
   bodyFatPercent,
   calculationSource = "bmi",
   heightCm,
@@ -381,6 +486,7 @@ export function StatusAvatarSimulator({
   visualStyle = "silhouette",
   weightKg,
 }: {
+  age?: number;
   bodyFatPercent?: number;
   calculationSource?: StatusAvatarCalculationSource;
   heightCm?: number;
@@ -398,10 +504,11 @@ export function StatusAvatarSimulator({
   const { locale, t } = useLocalization();
   const { height: windowHeight } = useWindowDimensions();
   const [infoOpen, setInfoOpen] = useState(false);
-  const avatarScale = windowHeight < 620 ? 0.5 : windowHeight < 720 ? 0.61 : 0.68;
+  const avatarScale = windowHeight < 620 ? 0.64 : windowHeight < 720 ? 0.72 : 0.8;
   const baseline = useMemo(
     () =>
       statusAvatarSimulationBaseline({
+        age,
         bodyFatPercent,
         heightCm,
         leanBodyMassKg,
@@ -410,6 +517,7 @@ export function StatusAvatarSimulator({
         weightKg,
       }),
     [
+      age,
       bodyFatPercent,
       heightCm,
       leanBodyMassKg,
@@ -429,6 +537,10 @@ export function StatusAvatarSimulator({
           statusAvatarSimulationRange(id, baseline),
         ]),
       ) as Record<StatusAvatarSimulationMetric, StatusAvatarSimulationRange>,
+    [baseline],
+  );
+  const markers = useMemo(
+    () => statusAvatarSimulationMarkers(baseline),
     [baseline],
   );
   const preview = useMemo(
@@ -556,6 +668,9 @@ export function StatusAvatarSimulator({
                   <Text style={[styles.infoDetail, { color: colors.muted }]}>
                     Weight uses your profile height for total size. Body fat and lean mass can be adjusted or disabled independently.
                   </Text>
+                  <Text style={[styles.infoDetail, { color: colors.muted }]}>
+                    C = logged. R uses the adult healthy-BMI midpoint; body composition uses an age/sex reference, not medical advice.
+                  </Text>
                 </View>
               </Pressable>
             ) : null}
@@ -601,6 +716,7 @@ export function StatusAvatarSimulator({
                 formatter={formatter}
                 last={false}
                 label="Weight"
+                marker={markers.weight}
                 onChange={(value) => changeMetric("weight", value)}
                 onToggle={() => undefined}
                 range={ranges.weight}
@@ -614,6 +730,7 @@ export function StatusAvatarSimulator({
                   formatter={formatter}
                   last={index === 1}
                   label={item.label}
+                  marker={markers[item.id]}
                   onChange={(value) => changeMetric(item.id, value)}
                   onToggle={(enabled) => toggleMetric(item.id, enabled)}
                   range={ranges[item.id]}
@@ -770,6 +887,46 @@ const styles = StyleSheet.create({
   sliderTrackSecondary: { height: 4, borderRadius: 2 },
   sliderFill: { height: 6, borderRadius: 3 },
   sliderFillSecondary: { height: 4, borderRadius: 2 },
+  sliderMarkerAnchor: {
+    position: "absolute",
+    zIndex: 2,
+    top: 0,
+    width: 1,
+    height: 6,
+    alignItems: "center",
+  },
+  sliderMarkerTick: {
+    position: "absolute",
+    top: -3,
+    width: 1,
+    height: 12,
+    borderRadius: 1,
+  },
+  sliderMarkerTickRecommended: {
+    position: "absolute",
+    top: -4,
+    width: 2,
+    height: 14,
+    borderRadius: 1,
+  },
+  sliderMarkerCodeCurrent: {
+    position: "absolute",
+    top: -10,
+    width: 10,
+    textAlign: "center",
+    fontSize: 6,
+    lineHeight: 7,
+    fontWeight: "900",
+  },
+  sliderMarkerCodeRecommended: {
+    position: "absolute",
+    top: 8,
+    width: 10,
+    textAlign: "center",
+    fontSize: 6,
+    lineHeight: 7,
+    fontWeight: "900",
+  },
   sliderThumb: {
     position: "absolute",
     top: -6,

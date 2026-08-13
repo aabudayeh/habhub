@@ -174,13 +174,13 @@ assert.match(
 );
 assert.match(
   statusPageSource,
-  /<BodyProgressAvatar[\s\S]{0,600}showProgressLabel=\{false\}[\s\S]{0,1600}<StatusBodyFact[\s\S]{0,350}label="Weight"[\s\S]{0,1000}styles\.completionFact[\s\S]{0,500}\{completionPercent\}%[\s\S]{0,1000}<StatusBodyFact[\s\S]{0,300}label=\{bodyCompositionStat\.label\}/,
+  /<BodyProgressAvatar[\s\S]{0,600}showProgressLabel=\{false\}[\s\S]{0,2600}<StatusBodyFact[\s\S]{0,350}label="Weight"[\s\S]{0,1000}styles\.completionFact[\s\S]{0,500}\{completionPercent\}%[\s\S]{0,1000}<StatusBodyFact[\s\S]{0,300}label=\{bodyCompositionStat\.label\}/,
   "Status must place one-line completion percent between Weight and Body fat instead of over the avatar",
 );
 assert.match(
   statusPageSource,
-  /styles\.avatarColumn[\s\S]{0,650}styles\.personHeading[\s\S]{0,500}styles\.personName[\s\S]{0,1200}<BodyProgressAvatar/,
-  "the member name and optional weight plan must share the free line directly above the avatar",
+  /styles\.avatarColumn[\s\S]{0,650}styles\.personHeading[\s\S]{0,500}firstDisplayName\(memberDisplayName\(state, member\)\)[\s\S]{0,900}<BodyProgressAvatar[\s\S]{0,1100}styles\.personWeightPlan/,
+  "Status must center the first name above the avatar and its optional weight plan below it",
 );
 assert.doesNotMatch(
   statusPageSource,
@@ -425,9 +425,22 @@ assert.match(
   /case "log"[\s\S]{0,7000}bodyProfileMapping[\s\S]{0,700}withEnergyProfile/,
   "a current-day manual body-composition log must refresh the profile",
 );
+const importHealthCaseStart = stateSource.indexOf('case "importHealth"');
+const importHealthCaseEnd = stateSource.indexOf(
+  'case "reset"',
+  importHealthCaseStart,
+);
+assert.ok(
+  importHealthCaseStart >= 0 && importHealthCaseEnd > importHealthCaseStart,
+  "the Health import reducer case must remain present",
+);
+const importHealthCase = stateSource.slice(
+  importHealthCaseStart,
+  importHealthCaseEnd,
+);
 assert.match(
-  stateSource,
-  /case "importHealth"[\s\S]{0,2200}withLatestBodyProfileMeasurements/,
+  importHealthCase,
+  /withLatestBodyProfileMeasurements/,
   "a current-day imported body-composition reading must refresh the profile",
 );
 for (const field of ["bodyFatPercent", "leanBodyMassKg"]) {

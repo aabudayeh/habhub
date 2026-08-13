@@ -24,7 +24,11 @@ import { useAuth } from "@/src/auth/AuthProvider";
 import { setCloudSyncPaused } from "@/src/cloud/syncGate";
 import { dateKey } from "@/src/domain/date";
 import { ACTIVITY_LABELS } from "@/src/domain/energy";
-import { suggestedAccountName } from "@/src/domain/profileName";
+import {
+  firstDisplayName,
+  friendlyAccountAlias,
+  suggestedAccountName,
+} from "@/src/domain/profileName";
 import {
   isInternalTracker,
   trackerGroupLabel,
@@ -149,6 +153,13 @@ const DEFAULT_STARTER_TRACKER_IDS = [
 const DEFAULT_TRACKED_GOAL_IDS = ["steps", "exercise", "workout", "water"];
 /** Useful optional choices shown without silently adding them to the setup. */
 const OPTIONAL_ONBOARDING_TRACKER_IDS = ["screen_time"] as const;
+
+function compactOnboardingName(value: string, generatedAlias: string) {
+  const normalized = value.trim().replace(/\s+/g, " ").slice(0, 40);
+  return normalized === generatedAlias
+    ? generatedAlias
+    : firstDisplayName(normalized);
+}
 const NOT_DAILY_GOALS = new Set([
   "weight",
   "weekly_deficit_balance",
@@ -201,15 +212,19 @@ export default function Onboarding() {
     (!auth.configured
       ? `demo:${state.currentUserId}`
       : state.currentUserId);
+  const accountIdentity = auth.user ?? { id: state.currentUserId };
+  const generatedAccountAlias = friendlyAccountAlias(accountIdentity);
   const memberName =
     state.group.members.find((member) => member.id === state.currentUserId)
-      ?.name || suggestedAccountName(auth.user ?? { id: state.currentUserId });
+      ?.name || suggestedAccountName(accountIdentity);
   const profile = state.settings.energyProfile;
   const [draftReady, setDraftReady] = useState(false);
   const [step, setStep] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [finishing, setFinishing] = useState(false);
   const [completionRoute, setCompletionRoute] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState(memberName);
+  const [displayName, setDisplayName] = useState(
+    compactOnboardingName(memberName, generatedAccountAlias),
+  );
   const [goals, setGoals] = useState<string[]>(
     state.settings.selectedGoals ?? [],
   );
@@ -264,7 +279,9 @@ export default function Onboarding() {
       if (!active) return;
       if (draft) {
         setStep(draft.step);
-        setDisplayName(draft.displayName);
+        setDisplayName(
+          compactOnboardingName(draft.displayName, generatedAccountAlias),
+        );
         setGoals(draft.goals);
         setSelected(draft.selectedTrackerIds);
         setTrackedSelected(draft.trackedGoalIds);
@@ -294,7 +311,7 @@ export default function Onboarding() {
     return () => {
       active = false;
     };
-  }, [accountId, updateSettings]);
+  }, [accountId, generatedAccountAlias, updateSettings]);
 
   useEffect(() => {
     let active = true;
@@ -683,8 +700,8 @@ export default function Onboarding() {
 
   async function saveDisplayName() {
     const name =
-      displayName.trim().replace(/\s+/g, " ").slice(0, 40) ||
-      suggestedAccountName(auth.user ?? { id: state.currentUserId });
+      compactOnboardingName(displayName, generatedAccountAlias) ||
+      suggestedAccountName(accountIdentity);
     updateMemberName(state.currentUserId, name);
     if (auth.status === "signedIn")
       await auth.updateDisplayName(name);

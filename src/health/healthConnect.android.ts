@@ -13,11 +13,9 @@ import {
   healthConnectSessionExercise,
 } from "@/src/domain/exerciseCatalog";
 import {
+  authoritativeHealthConnectStepGroups,
   healthSourceEnabled,
-  healthSourceId,
-  healthSourcePriority,
   localCalendarAggregateRange,
-  preferredHealthSourceOrigin,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
@@ -731,10 +729,6 @@ export const healthConnectAdapter: HealthAdapter = {
           if (type === "active_energy") return activeEnergyImports;
           if (type === "workouts") return workoutImports;
           if (type === "steps") {
-            const preferences = Object.values(sourcePreferences ?? {});
-            const hasDisabledSource = preferences.some(
-              (preference) => preference.enabled === false,
-            );
             const syncRevision = new Date().toISOString();
             const stepRange = localCalendarAggregateRange(from, to);
             const stepTimeRangeFilter = {
@@ -743,13 +737,16 @@ export const healthConnectAdapter: HealthAdapter = {
               endTime: stepRange.to.toISOString(),
             };
             // Steps are cumulative Activity data and must be aggregated, not
-            // summed from raw records. Health Connect's unfiltered aggregate
-            // applies the user's Activity priority across phone/watch writers.
-            // Samsung Health, however, exposes its own combined daily total and
-            // users reasonably expect HabHub to match that UI when Samsung has
-            // exported a value. Read Samsung's origin once per range and use it
-            // only on dates where it actually contributed; other dates retain
-            // Health Connect's overlap-safe platform aggregate.
+            // summed from raw records. Health Connect's unfiltered aggregate is
+            // the platform-authoritative value: it applies the user's Activity
+            // priority and removes overlaps across phone/watch/app writers.
+            // Never replace it with an origin-filtered Samsung value. Samsung's
+            // Health Connect export can be behind its own UI, and an origin
+            // filter also bypasses Health Connect's cross-writer deduplication.
+            // Source preferences currently apply across record types, so they
+            // cannot safely filter Steps: disabling a nutrition-only writer
+            // could otherwise exclude the on-device Steps writer or change the
+            // platform's priority result. Steps therefore stay unfiltered.
             try {
               const unfilteredGroups = await aggregateGroupByPeriod({
                 recordType: "Steps",
@@ -764,90 +761,25 @@ export const healthConnectAdapter: HealthAdapter = {
                 ),
               ];
               const observedOrigins = [
-                ...new Set([
-                  ...contributedOrigins,
-                  ...preferences.map((preference) => preference.origin),
-                ].filter(Boolean)),
+                ...new Set(contributedOrigins.filter(Boolean)),
               ];
-              const enabledOrigins = observedOrigins.filter((candidate) =>
-                healthSourceEnabled(candidate, sourcePreferences),
+              const groups = authoritativeHealthConnectStepGroups(
+                unfilteredGroups,
               );
-              if (hasDisabledSource && observedOrigins.length && !enabledOrigins.length) {
-                successfulReads += 1;
-                return [];
-              }
-              const platformGroups =
-                hasDisabledSource && enabledOrigins.length
-                  ? await aggregateGroupByPeriod({
-                      recordType: "Steps",
-                      timeRangeFilter: stepTimeRangeFilter,
-                      timeRangeSlicer: { period: "DAYS", length: 1 },
-                      dataOriginFilter: enabledOrigins,
-                    })
-                  : unfilteredGroups;
-              const preferredOrigin = preferredHealthSourceOrigin(
-                observedOrigins,
-                "steps",
-                sourcePreferences,
-              );
-              const samsungOrigin =
-                preferredOrigin &&
-                healthSourceId(preferredOrigin) === "samsung-health"
-                  ? preferredOrigin
-                  : undefined;
-              const platformIsSamsungOnly = Boolean(
-                samsungOrigin &&
-                  (hasDisabledSource
-                    ? enabledOrigins.length === 1 &&
-                      enabledOrigins[0] === samsungOrigin
-                    : contributedOrigins.length === 1 &&
-                      contributedOrigins[0] === samsungOrigin),
-              );
-              const samsungGroups = samsungOrigin
-                ? platformIsSamsungOnly
-                  ? platformGroups
-                  : await aggregateGroupByPeriod({
-                      recordType: "Steps",
-                      timeRangeFilter: stepTimeRangeFilter,
-                      timeRangeSlicer: { period: "DAYS", length: 1 },
-                      dataOriginFilter: [samsungOrigin],
-                    })
-                : [];
               successfulReads += 1;
-              const groupsByDay = new Map<
-                string,
-                {
-                  group: (typeof platformGroups)[number];
-                  selectedOrigin?: string;
-                }
-              >();
-              platformGroups.forEach((group) => {
-                groupsByDay.set(group.startTime.slice(0, 10), { group });
-              });
-              samsungGroups.forEach((group) => {
-                if (!(Number(group.result.COUNT_TOTAL ?? 0) > 0)) return;
-                groupsByDay.set(group.startTime.slice(0, 10), {
-                  group,
-                  selectedOrigin: samsungOrigin,
-                });
-              });
-              return [...groupsByDay.entries()].flatMap(
-                ([localDate, selection]): HealthImportRecord[] => {
-                  const { group, selectedOrigin } = selection;
+              return groups.flatMap(
+                (group): HealthImportRecord[] => {
+                  const localDate = group.startTime.slice(0, 10);
                   const count = Number(group.result.COUNT_TOTAL ?? 0);
                   if (!(count > 0)) return [];
                   const sources = [
                     ...new Set(
                       (group.result.dataOrigins?.length
                         ? group.result.dataOrigins
-                        : enabledOrigins
+                        : observedOrigins
                       ).filter(Boolean),
                     ),
-                  ].sort(
-                    (a, b) =>
-                      healthSourcePriority(a, "steps") -
-                      healthSourcePriority(b, "steps"),
-                  );
+                  ].sort((a, b) => a.localeCompare(b));
                   const end = new Date(group.endTime);
                   const recordedAt = Number.isNaN(end.getTime())
                     ? group.endTime
@@ -863,27 +795,21 @@ export const healthConnectAdapter: HealthAdapter = {
                       value: Math.round(count),
                       unit: "steps",
                       origin:
-                        selectedOrigin ??
                         (sources.length === 1 ? sources[0] : "Health Connect"),
                       sourceOrigins: observedOrigins,
                       updatedAt: syncRevision,
-                      note: selectedOrigin
-                        ? "Samsung Health daily total exported through Health Connect."
-                        : hasDisabledSource
-                          ? "Health Connect excluded step writers disabled in HabHub."
-                          : undefined,
                     },
                   ];
                 },
               );
-            } catch {
-              // Old providers may not expose grouped aggregation. The pure
-              // domain fallback still selects one daily source safely.
-              const rawRecords = await readSafe("Steps");
-              return enabledRecords(rawRecords).map((record) => ({
-                ...convert(type, record),
-                updatedAt: syncRevision,
-              }));
+            } catch (error) {
+              // Raw Steps records can overlap across phone, watch, Samsung,
+              // Google Fit, and Health Connect's on-device writer. Returning a
+              // guessed sum would be worse than retaining the last confirmed
+              // aggregate, so make this type fail atomically instead.
+              throw new Error(
+                `Steps aggregate: ${error instanceof Error ? error.message : "Health Connect aggregation failed"}`,
+              );
             }
           }
           const rawRecords = await readSafe(RECORD_TYPES[type]);
@@ -898,7 +824,8 @@ export const healthConnectAdapter: HealthAdapter = {
                 Number(record.calories ?? 0),
             ).map((record) => convert(type, record));
           return records.map((record) => convert(type, record));
-        } catch {
+        } catch (error) {
+          if (type === "steps") throw error;
           // A vendor may not expose every requested record type. Keep the other
           // categories syncing instead of failing the entire refresh.
           return [];
