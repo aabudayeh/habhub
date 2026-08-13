@@ -167,10 +167,15 @@ const todayHero = today.slice(
   today.indexOf('testID="today-featured-card"'),
   today.indexOf("</AnimatedPressable>", today.indexOf('testID="today-featured-card"')),
 );
-assert.doesNotMatch(
+assert.match(
   todayHero,
-  /goals? left/i,
-  "The featured card must not repeat a goals-left sentence.",
+  /goal\$\{heroTotal - heroMet === 1 \? "" : "s"\}[\s\S]{0,180}\} left/,
+  "The featured card must retain its compact goals-left summary.",
+);
+assert.match(
+  today,
+  /heroTitleRow: \{[\s\S]{0,220}justifyContent: "flex-start"[\s\S]{0,120}gap: 6/,
+  "Goals left and target ETA must stay close together instead of spreading across the card.",
 );
 assert.doesNotMatch(
   today,

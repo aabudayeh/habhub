@@ -521,7 +521,6 @@ export default function StatusPage() {
                   calculationSource={avatarCalculationSource}
                   heightCm={state.settings.energyProfile.heightCm}
                   leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
-                  mindTier={avatarProgression.mindTier}
                   muscleProgress={avatarProgression.muscleProgress}
                   progress={summary.progress}
                   showProgressLabel={false}
@@ -720,7 +719,6 @@ export default function StatusPage() {
           calculationSource={avatarCalculationSource}
           heightCm={state.settings.energyProfile.heightCm}
           leanBodyMassKg={avatarProgression.currentLeanBodyMassKg}
-          mindTier={avatarProgression.mindTier}
           muscleProgress={avatarProgression.muscleProgress}
           onClose={() => setAvatarSimulatorOpen(false)}
           progress={summary.progress}

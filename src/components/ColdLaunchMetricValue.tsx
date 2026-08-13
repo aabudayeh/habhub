@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useSyncExternalStore } from "react";
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 import type { StyleProp, TextStyle } from "react-native";
 import Animated, {
   Easing,
@@ -163,6 +163,7 @@ export function ColdLaunchCountValue({
     const text = `${count} of ${total}`;
     return { text, defaultValue: text };
   }, [progress, total, value]);
+  const resolvedStyle = resolveCountTextStyle(style, sizingStyle);
 
   return (
     <AnimatedTextInput
@@ -175,11 +176,33 @@ export function ColdLaunchCountValue({
       focusable={false}
       pointerEvents="none"
       scrollEnabled={false}
-      style={[styles.text, style, sizingStyle]}
+      style={resolvedStyle}
       translate={false}
       underlineColorAndroid="transparent"
     />
   );
+}
+
+function resolveCountTextStyle(
+  style: StyleProp<TextStyle>,
+  sizingStyle: TextStyle,
+) {
+  // Reanimated's web wrapper can lose a color nested inside a style array
+  // before AppTextInput resolves it. Flatten it first, and mirror the explicit
+  // color into the browser's input glyph fill so theme/global input rules
+  // cannot turn the featured-card count dark.
+  const resolved = StyleSheet.flatten([
+    styles.text,
+    style,
+    sizingStyle,
+  ]) as TextStyle | undefined;
+  if (Platform.OS !== "web" || typeof resolved?.color !== "string") {
+    return resolved;
+  }
+  return {
+    ...resolved,
+    WebkitTextFillColor: resolved.color,
+  } as TextStyle & { WebkitTextFillColor: string };
 }
 
 function useAnimatedTextSizing(style: StyleProp<TextStyle>) {

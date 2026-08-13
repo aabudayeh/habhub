@@ -212,10 +212,15 @@ assert.doesNotMatch(
   /scaleX|scaleY|resizeMode=["']stretch["'][\s\S]{0,300}cropWidth/,
   "the body must not be independently stretched across the two axes",
 );
-assert.match(
+assert.doesNotMatch(
   componentSource,
-  /function MindAccessories[\s\S]{0,3500}mindTier >= 3/,
-  "mind progression accessories must remain anchored to the atlas face",
+  /MindAccessories|react-native-svg|<Circle\b|<Polygon\b|mindTier/,
+  "the visible avatar renderer must not draw glasses, a monocle, or a hat",
+);
+assert.doesNotMatch(
+  statusSource,
+  /<BodyProgressAvatar[\s\S]{0,700}mindTier=/,
+  "Status must not pass a removed accessory tier into the avatar renderer",
 );
 assert.doesNotMatch(
   componentSource,

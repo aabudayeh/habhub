@@ -30,4 +30,14 @@ export const avatarSimulatorTranslationRows = [
     "C = записано. R использует середину диапазона здорового ИМТ для взрослых; состав тела использует справочные данные по возрасту и полу и не является медицинской рекомендацией.",
     "C = enregistré. R utilise le milieu de la plage d’IMC sain chez l’adulte ; la composition corporelle utilise une référence selon l’âge et le sexe, et non un avis médical.",
   ],
+  [
+    "C = logged. R is a general adult reference based on available profile details; missing details use adult defaults. It is not a medical target.",
+    "C = قيمة مسجلة. R مرجع عام للبالغين يستخدم بيانات الملف المتاحة؛ عند نقصها تُستخدم قيم افتراضية للبالغين. ليس هدفًا طبيًا.",
+    "C = valor registrado. R es una referencia general para adultos basada en los datos disponibles del perfil; si faltan datos, usa valores predeterminados de adulto. No es un objetivo médico.",
+    "C = 已记录值。R 是根据可用个人资料生成的一般成人参考值；资料缺失时使用成人默认值。它不是医疗目标。",
+    "C = loggat värde. R är en allmän vuxenreferens baserad på tillgängliga profiluppgifter; saknade uppgifter ersätts med standardvärden för vuxna. Det är inte ett medicinskt mål.",
+    "C = protokollierter Wert. R ist ein allgemeiner Erwachsenen-Referenzwert auf Basis verfügbarer Profildaten; fehlende Angaben werden durch Erwachsenen-Standardwerte ersetzt. Es ist kein medizinisches Ziel.",
+    "C = записанное значение. R — общий ориентир для взрослых, рассчитанный по доступным данным профиля; при нехватке данных используются стандартные значения для взрослых. Это не медицинская цель.",
+    "C = valeur enregistrée. R est une référence adulte générale fondée sur les informations de profil disponibles ; les informations manquantes utilisent des valeurs adultes par défaut. Ce n’est pas un objectif médical.",
+  ],
 ] as const;

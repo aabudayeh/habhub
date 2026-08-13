@@ -49,6 +49,21 @@ assert.doesNotMatch(component, /requestAnimationFrame|setValue\s*\(/);
 assert.doesNotMatch(today, /function useAnimatedNumber/);
 assert.match(today, /<ColdLaunchMetricValue[\s\S]*progress=\{metricValueAnimationProgress\}/);
 assert.match(today, /<ColdLaunchCountValue[\s\S]*progress=\{metricValueAnimationProgress\}/);
+assert.match(
+  component,
+  /const resolvedStyle = resolveCountTextStyle\(style, sizingStyle\)/,
+  "the featured-card count must use its resolved caller color",
+);
+assert.match(
+  component,
+  /WebkitTextFillColor: resolved\.color/,
+  "the animated featured-card count must preserve its explicit input glyph color on web",
+);
+assert.match(
+  component,
+  /StyleSheet\.flatten\(\[\s*styles\.text,\s*style,\s*sizingStyle,?\s*\]\)/,
+  "the animated count must flatten nested caller styles before Reanimated reaches AppTextInput",
+);
 assert.match(today, /health\.lastStepSyncedAt \?\? health\.lastSyncedAt/);
 assert.match(healthProvider, /lastStepSyncedAt: persisted\.lastStepSyncedAt \?\? null/);
 

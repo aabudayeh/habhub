@@ -243,6 +243,9 @@ export function statusAvatarSimulationRange(
 }
 
 const ADULT_HEALTHY_BMI_MIDPOINT = (18.5 + 24.9) / 2;
+const GENERAL_ADULT_REFERENCE_AGE = 35;
+const DEURENBERG_ADULT_AGE_MINIMUM = 18;
+const DEURENBERG_ADULT_AGE_MAXIMUM = 83;
 
 /**
  * Builds fixed, visual reference markers for the simulator tracks.
@@ -250,8 +253,11 @@ const ADULT_HEALTHY_BMI_MIDPOINT = (18.5 + 24.9) / 2;
  * The weight marker is the midpoint of the WHO adult healthy-BMI reference
  * range (18.5-24.9), converted using profile height. The composition markers
  * use the adult Deurenberg BMI/age/sex population equation at that same BMI,
- * then derive lean mass as reference weight minus estimated fat mass. These
- * are orientation points, not diagnoses or personalized medical targets.
+ * then derive lean mass as reference weight minus estimated fat mass. An age
+ * outside the adult source range (or no age) uses a general adult age of 35;
+ * unspecified sex uses the midpoint of the male and female coefficients.
+ * This keeps R available as an orientation point for every profile, while it
+ * remains explicitly non-diagnostic and not a personalized medical target.
  *
  * Sources:
  * https://apps.who.int/nutrition/landscape/help.aspx?helpid=420&menu=0
@@ -269,34 +275,25 @@ export function statusAvatarSimulationMarkers(
       : undefined,
     weight: baseline.weightWasLogged ? baseline.weightKg : undefined,
   };
-  const adult = baseline.age !== undefined && baseline.age >= 18;
-  if (!adult)
-    return {
-      bmi: {},
-      body_fat: { currentValue: current.body_fat },
-      lean_body_mass: { currentValue: current.lean_body_mass },
-      weight: { currentValue: current.weight },
-    };
 
   const heightM = baseline.heightCm / 100;
   const referenceWeightKg =
     ADULT_HEALTHY_BMI_MIDPOINT * heightM * heightM;
-  const compositionProfileSupported =
+  const referenceAge =
     baseline.age !== undefined &&
-    baseline.age <= 83 &&
-    (baseline.sex === "female" || baseline.sex === "male");
-  const referenceAge = compositionProfileSupported ? baseline.age : undefined;
-  const sexCoefficient = baseline.sex === "male" ? 1 : 0;
-  const referenceBodyFatPercent = referenceAge !== undefined
-    ? 1.2 * ADULT_HEALTHY_BMI_MIDPOINT +
-      0.23 * referenceAge -
-      10.8 * sexCoefficient -
-      5.4
-    : undefined;
+    baseline.age >= DEURENBERG_ADULT_AGE_MINIMUM &&
+    baseline.age <= DEURENBERG_ADULT_AGE_MAXIMUM
+      ? baseline.age
+      : GENERAL_ADULT_REFERENCE_AGE;
+  const sexCoefficient =
+    baseline.sex === "male" ? 1 : baseline.sex === "female" ? 0 : 0.5;
+  const referenceBodyFatPercent =
+    1.2 * ADULT_HEALTHY_BMI_MIDPOINT +
+    0.23 * referenceAge -
+    10.8 * sexCoefficient -
+    5.4;
   const referenceLeanBodyMassKg =
-    referenceBodyFatPercent === undefined
-      ? undefined
-      : referenceWeightKg * (1 - referenceBodyFatPercent / 100);
+    referenceWeightKg * (1 - referenceBodyFatPercent / 100);
 
   const markerFor = (
     metric: "weight" | "body_fat" | "lean_body_mass",

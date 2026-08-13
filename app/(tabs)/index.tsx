@@ -1119,6 +1119,25 @@ function Today() {
                 style={[styles.heroValue, { color: palette.white }]}
               />
               <View style={styles.heroTitleRow}>
+                <Text
+                  preserveColor
+                  numberOfLines={1}
+                  style={[styles.heroTitle, { color: palette.white }]}
+                >
+                  {heroAllMet
+                    ? heroUsesGoals
+                      ? "Every goal reached"
+                      : "Every to-do complete"
+                    : heroTotal
+                      ? `${heroTotal - heroMet} ${
+                          heroUsesGoals
+                            ? `goal${heroTotal - heroMet === 1 ? "" : "s"}`
+                            : `to-do${heroTotal - heroMet === 1 ? "" : "s"}`
+                        } left`
+                      : heroUsesGoals
+                        ? "Choose your first goal"
+                        : "No to-dos today"}
+                </Text>
                 {weightPlanLabel ? (
                   <View style={styles.heroWeightInline}>
                     <Ionicons
@@ -1139,26 +1158,6 @@ function Today() {
                       {weightPlanLabel}
                     </Text>
                   </View>
-                ) : !heroUsesGoals ? (
-                  <Text
-                    preserveColor
-                    numberOfLines={1}
-                    style={[styles.heroTitle, { color: palette.white }]}
-                  >
-                    {heroAllMet
-                      ? "Every to-do complete"
-                      : heroTotal
-                        ? `${heroTotal - heroMet} to-do${heroTotal - heroMet === 1 ? "" : "s"} left`
-                        : "No to-dos today"}
-                  </Text>
-                ) : !heroTotal ? (
-                  <Text
-                    preserveColor
-                    numberOfLines={1}
-                    style={[styles.heroTitle, { color: palette.white }]}
-                  >
-                    Choose your first goal
-                  </Text>
                 ) : null}
               </View>
             </View>
@@ -3528,14 +3527,14 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     minWidth: 0,
-    flexShrink: 1,
+    flexShrink: 0,
     color: palette.white,
     fontSize: 11,
     fontWeight: "800",
   },
   heroWeightInline: {
     minWidth: 0,
-    maxWidth: "100%",
+    maxWidth: "62%",
     flexShrink: 1,
     flexDirection: "row",
     alignItems: "center",

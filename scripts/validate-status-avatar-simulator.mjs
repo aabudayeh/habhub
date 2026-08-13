@@ -152,19 +152,27 @@ const adolescentMarkers = statusAvatarSimulationMarkers(
   }),
 );
 for (const metric of ["weight", "body_fat", "lean_body_mass"])
-  assert.equal(
-    adolescentMarkers[metric].recommendedValue,
-    undefined,
-    "adult reference markers must never be presented to an adolescent profile",
+  assert.ok(
+    Number.isFinite(adolescentMarkers[metric].recommendedValue),
+    "the explicitly adult R guide must remain visible when an adult profile is unavailable",
   );
 const unspecifiedMarkers = statusAvatarSimulationMarkers(
   statusAvatarSimulationBaseline({ age: 35, heightCm: 178, sex: "unspecified", weightKg: 82 }),
 );
 assert.ok(Number.isFinite(unspecifiedMarkers.weight.recommendedValue));
-assert.equal(unspecifiedMarkers.body_fat.recommendedValue, undefined);
-assert.equal(unspecifiedMarkers.lean_body_mass.recommendedValue, undefined);
+assert.ok(Number.isFinite(unspecifiedMarkers.body_fat.recommendedValue));
+assert.ok(Number.isFinite(unspecifiedMarkers.lean_body_mass.recommendedValue));
 assert.equal(unspecifiedMarkers.body_fat.currentValue, undefined);
 assert.equal(unspecifiedMarkers.lean_body_mass.currentValue, undefined);
+const emptyProfileMarkers = statusAvatarSimulationMarkers(fallback);
+for (const metric of ["weight", "body_fat", "lean_body_mass"])
+  assert.ok(
+    Number.isFinite(emptyProfileMarkers[metric].recommendedValue),
+    "R must always be available even when no body measurement or profile detail was logged",
+  );
+assert.equal(emptyProfileMarkers.weight.currentValue, undefined);
+assert.equal(emptyProfileMarkers.body_fat.currentValue, undefined);
+assert.equal(emptyProfileMarkers.lean_body_mass.currentValue, undefined);
 
 const heightSquared = (baseline.heightCm / 100) ** 2;
 let linkedState = statusAvatarSimulationInitialState(baseline, "bmi");
@@ -433,6 +441,21 @@ assert.match(
 );
 assert.match(
   componentSource,
+  /configurationRef\.current\.disabled[\s\S]*markerAtPointRef\.current[\s\S]*onPanResponderRelease[\s\S]*onMarkerPress/,
+  "a disabled no-data slider must still claim an exact R-marker tap without enabling value adjustment",
+);
+assert.match(
+  componentSource,
+  /Math\.max\(Math\.abs\(gestureState\.dx\), Math\.abs\(gestureState\.dy\)\) > 6/,
+  "marker taps must cancel into the existing drag stream once the gesture moves",
+);
+assert.doesNotMatch(
+  componentSource,
+  /sliderMarkerAnchor[\s\S]{0,160}<Pressable/,
+  "marker info must not add a child Pressable that steals slider pointer capture",
+);
+assert.match(
+  componentSource,
   /markerHint \? `\$\{accessibilityLabel\}\. \$\{markerHint\}` : accessibilityLabel/,
   "web slider names must retain marker meaning even where accessibility hints are not exposed",
 );
@@ -463,8 +486,8 @@ assert.match(
 );
 assert.match(
   componentSource,
-  /accessibilityRole="adjustable"[\s\S]*accessibilityState=\{\{ disabled \}\}/,
-  "each slider must expose its enabled state and accessible adjustment actions",
+  /accessibilityActions = \[[\s\S]*disabled[\s\S]*increment[\s\S]*show-recommended-marker[\s\S]*accessibilityRole=\{disabled \? "button" : "adjustable"\}/,
+  "an off track must expose marker info without advertising unavailable adjustment actions",
 );
 assert.match(
   componentSource,

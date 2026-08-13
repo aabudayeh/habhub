@@ -40,6 +40,18 @@ import type {
   StatusAvatarStyle,
 } from "@/src/types";
 
+type SimulationMarkerKind = "current" | "recommended";
+
+type SimulatorNotice =
+  | { kind: "about" }
+  | {
+      kind: "marker";
+      markerKind: SimulationMarkerKind;
+      metricLabel: string;
+      unit: string;
+      value: number;
+    };
+
 function SimulationSlider({
   accessibilityLabel,
   currentValue,
@@ -47,6 +59,7 @@ function SimulationSlider({
   maximumValue,
   minimumValue,
   onChange,
+  onMarkerPress,
   recommendedValue,
   secondary = false,
   step,
@@ -59,6 +72,7 @@ function SimulationSlider({
   maximumValue: number;
   minimumValue: number;
   onChange: (value: number) => void;
+  onMarkerPress: (kind: SimulationMarkerKind, value: number) => void;
   recommendedValue?: number;
   secondary?: boolean;
   step: number;
@@ -69,6 +83,9 @@ function SimulationSlider({
   const { locale, t } = useLocalization();
   const trackWidthRef = useRef(1);
   const dragStartXRef = useRef(0);
+  const markerTapCandidateRef = useRef<SimulationMarkerKind | undefined>(
+    undefined,
+  );
   const progressRef = useRef(0);
   const lastEmittedValueRef = useRef(value);
   const configurationRef = useRef({
@@ -102,6 +119,56 @@ function SimulationSlider({
     recommendedProgress !== undefined &&
     Math.abs(currentProgress - recommendedProgress) < 0.035;
   progressRef.current = progress;
+  const markerInteractionRef = useRef({
+    currentProgress,
+    currentValue,
+    onMarkerPress,
+    recommendedProgress,
+    recommendedValue,
+  });
+  markerInteractionRef.current = {
+    currentProgress,
+    currentValue,
+    onMarkerPress,
+    recommendedProgress,
+    recommendedValue,
+  };
+  const markerAtPointRef = useRef<
+    (x: number, y: number) => SimulationMarkerKind | undefined
+  >(() => undefined);
+  markerAtPointRef.current = (x, y) => {
+    const width = Math.max(1, trackWidthRef.current);
+    const markerInteraction = markerInteractionRef.current;
+    const candidates = [
+      markerInteraction.currentProgress === undefined
+        ? undefined
+        : {
+            distance: Math.abs(
+              x - markerInteraction.currentProgress * width,
+            ),
+            kind: "current" as const,
+          },
+      markerInteraction.recommendedProgress === undefined
+        ? undefined
+        : {
+            distance: Math.abs(
+              x - markerInteraction.recommendedProgress * width,
+            ),
+            kind: "recommended" as const,
+          },
+    ].filter(
+      (
+        candidate,
+      ): candidate is { distance: number; kind: SimulationMarkerKind } =>
+        candidate !== undefined && candidate.distance <= 14,
+    )
+      .sort((left, right) => left.distance - right.distance);
+    if (candidates.length < 2) return candidates[0]?.kind;
+    // C is drawn above the track and R below it. When their x positions are
+    // close, the vertical half of the touch target keeps both individually
+    // selectable without installing a child responder over the drag surface.
+    return y <= 13.5 ? "current" : "recommended";
+  };
   const updateFromXRef = useRef<(x: number) => void>(() => undefined);
   updateFromXRef.current = (x: number) => {
     const configuration = configurationRef.current;
@@ -128,22 +195,68 @@ function SimulationSlider({
   );
   if (!responderRef.current) {
     responderRef.current = PanResponder.create({
-      onStartShouldSetPanResponder: () =>
-        !configurationRef.current.disabled,
-      onStartShouldSetPanResponderCapture: () =>
-        !configurationRef.current.disabled,
+      onStartShouldSetPanResponder: (event) => {
+        if (!configurationRef.current.disabled) return true;
+        return Boolean(
+          markerAtPointRef.current(
+            Number(event.nativeEvent.locationX),
+            Number(event.nativeEvent.locationY),
+          ),
+        );
+      },
+      onStartShouldSetPanResponderCapture: (event) => {
+        if (!configurationRef.current.disabled) return true;
+        return Boolean(
+          markerAtPointRef.current(
+            Number(event.nativeEvent.locationX),
+            Number(event.nativeEvent.locationY),
+          ),
+        );
+      },
       onMoveShouldSetPanResponder: () => !configurationRef.current.disabled,
       onMoveShouldSetPanResponderCapture: () =>
         !configurationRef.current.disabled,
       onPanResponderGrant: (event) => {
         const locationX = Number(event.nativeEvent.locationX);
+        const locationY = Number(event.nativeEvent.locationY);
         dragStartXRef.current = Number.isFinite(locationX)
           ? locationX
           : trackWidthRef.current * progressRef.current;
+        markerTapCandidateRef.current = markerAtPointRef.current(
+          dragStartXRef.current,
+          Number.isFinite(locationY) ? locationY : 13.5,
+        );
+        if (markerTapCandidateRef.current) return;
         updateFromXRef.current(dragStartXRef.current);
       },
-      onPanResponderMove: (_, gestureState) =>
-        updateFromXRef.current(dragStartXRef.current + gestureState.dx),
+      onPanResponderMove: (_, gestureState) => {
+        if (
+          markerTapCandidateRef.current &&
+          Math.max(Math.abs(gestureState.dx), Math.abs(gestureState.dy)) <= 4
+        )
+          return;
+        markerTapCandidateRef.current = undefined;
+        updateFromXRef.current(dragStartXRef.current + gestureState.dx);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const candidate = markerTapCandidateRef.current;
+        markerTapCandidateRef.current = undefined;
+        if (
+          !candidate ||
+          Math.max(Math.abs(gestureState.dx), Math.abs(gestureState.dy)) > 6
+        )
+          return;
+        const markerInteraction = markerInteractionRef.current;
+        const markerValue =
+          candidate === "current"
+            ? markerInteraction.currentValue
+            : markerInteraction.recommendedValue;
+        if (markerValue !== undefined)
+          markerInteraction.onMarkerPress(candidate, markerValue);
+      },
+      onPanResponderTerminate: () => {
+        markerTapCandidateRef.current = undefined;
+      },
       onPanResponderTerminationRequest: () => false,
       onShouldBlockNativeResponder: () => true,
     });
@@ -174,6 +287,30 @@ function SimulationSlider({
   ]
     .filter(Boolean)
     .join(". ");
+  const accessibilityActions = [
+    ...(disabled
+      ? []
+      : [
+          { name: "increment" as const },
+          { name: "decrement" as const },
+        ]),
+    ...(currentValue === undefined
+      ? []
+      : [
+          {
+            label: t("C marks the current logged value"),
+            name: "show-current-marker",
+          },
+        ]),
+    ...(recommendedValue === undefined
+      ? []
+      : [
+          {
+            label: t("R marks an adult reference, not a medical target"),
+            name: "show-recommended-marker",
+          },
+        ]),
+  ];
   const adjust = useCallback(
     (direction: -1 | 1) => {
       if (disabled) return;
@@ -218,21 +355,44 @@ function SimulationSlider({
   return (
     <View
       accessible
-      accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+      accessibilityActions={accessibilityActions}
       accessibilityHint={markerHint || undefined}
       accessibilityLabel={
         markerHint ? `${accessibilityLabel}. ${markerHint}` : accessibilityLabel
       }
-      accessibilityRole="adjustable"
-      accessibilityState={{ disabled }}
-      accessibilityValue={{
-        max: maximumValue,
-        min: minimumValue,
-        now: value,
-        text: accessibleValue,
+      accessibilityRole={disabled ? "button" : "adjustable"}
+      accessibilityState={{
+        disabled:
+          disabled && currentValue === undefined && recommendedValue === undefined,
       }}
-      focusable={!disabled}
+      accessibilityValue={
+        disabled
+          ? undefined
+          : {
+              max: maximumValue,
+              min: minimumValue,
+              now: value,
+              text: accessibleValue,
+            }
+      }
+      focusable={
+        !disabled || currentValue !== undefined || recommendedValue !== undefined
+      }
       onAccessibilityAction={(event) => {
+        if (
+          event.nativeEvent.actionName === "show-current-marker" &&
+          currentValue !== undefined
+        ) {
+          onMarkerPress("current", currentValue);
+          return;
+        }
+        if (
+          event.nativeEvent.actionName === "show-recommended-marker" &&
+          recommendedValue !== undefined
+        ) {
+          onMarkerPress("recommended", recommendedValue);
+          return;
+        }
         const direction =
           event.nativeEvent.actionName === "increment"
             ? 1
@@ -248,7 +408,6 @@ function SimulationSlider({
       style={[
         styles.sliderTouchTarget,
         secondary && styles.sliderTouchTargetSecondary,
-        disabled && styles.controlDisabled,
       ]}
       {...webKeyboardProps}
       {...responder.panHandlers}
@@ -389,6 +548,7 @@ function SimulationMetricRow({
   label,
   marker,
   onChange,
+  onMarkerPress,
   onToggle,
   range,
   secondary = false,
@@ -401,6 +561,7 @@ function SimulationMetricRow({
   label: string;
   marker: StatusAvatarSimulationMarker;
   onChange: (value: number) => void;
+  onMarkerPress: (kind: SimulationMarkerKind, value: number) => void;
   onToggle: (enabled: boolean) => void;
   range: StatusAvatarSimulationRange;
   secondary?: boolean;
@@ -461,6 +622,7 @@ function SimulationMetricRow({
         maximumValue={range.maximumValue}
         minimumValue={range.minimumValue}
         onChange={onChange}
+        onMarkerPress={onMarkerPress}
         recommendedValue={marker.recommendedValue}
         secondary={secondary}
         step={range.step}
@@ -477,7 +639,6 @@ export function StatusAvatarSimulator({
   calculationSource = "bmi",
   heightCm,
   leanBodyMassKg,
-  mindTier = 0,
   muscleProgress = 0,
   onClose,
   progress,
@@ -491,7 +652,6 @@ export function StatusAvatarSimulator({
   calculationSource?: StatusAvatarCalculationSource;
   heightCm?: number;
   leanBodyMassKg?: number;
-  mindTier?: 0 | 1 | 2 | 3;
   muscleProgress?: number;
   onClose: () => void;
   progress: number;
@@ -503,7 +663,7 @@ export function StatusAvatarSimulator({
   const colors = useAppColors();
   const { locale, t } = useLocalization();
   const { height: windowHeight } = useWindowDimensions();
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [notice, setNotice] = useState<SimulatorNotice | null>(null);
   const avatarScale = windowHeight < 620 ? 0.64 : windowHeight < 720 ? 0.72 : 0.8;
   const baseline = useMemo(
     () =>
@@ -561,14 +721,16 @@ export function StatusAvatarSimulator({
     setSimulation(
       statusAvatarSimulationInitialState(baseline, calculationSource),
     );
-    setInfoOpen(false);
+    setNotice(null);
   }, [baseline, calculationSource, visible]);
 
   const changeMetric = useCallback(
-    (metric: StatusAvatarSimulationMetric, value: number) =>
+    (metric: StatusAvatarSimulationMetric, value: number) => {
+      setNotice(null);
       setSimulation((current) =>
         statusAvatarSimulationSetValue(current, metric, value, baseline),
-      ),
+      );
+    },
     [baseline],
   );
   const toggleMetric = useCallback(
@@ -576,6 +738,22 @@ export function StatusAvatarSimulator({
       setSimulation((current) =>
         statusAvatarSimulationSetEnabled(current, metric, enabled),
       ),
+    [],
+  );
+  const showMarkerNotice = useCallback(
+    (
+      metricLabel: string,
+      unit: string,
+      markerKind: SimulationMarkerKind,
+      value: number,
+    ) =>
+      setNotice({
+        kind: "marker",
+        markerKind,
+        metricLabel,
+        unit,
+        value,
+      }),
     [],
   );
 
@@ -611,7 +789,11 @@ export function StatusAvatarSimulator({
                   accessibilityLabel={t("About this estimate")}
                   accessibilityRole="button"
                   hitSlop={7}
-                  onPress={() => setInfoOpen((open) => !open)}
+                  onPress={() =>
+                    setNotice((current) =>
+                      current?.kind === "about" ? null : { kind: "about" },
+                    )
+                  }
                   style={({ pressed }) => [
                     styles.infoButton,
                     pressed && styles.pressed,
@@ -644,10 +826,15 @@ export function StatusAvatarSimulator({
           </View>
 
           <View style={styles.content}>
-            {infoOpen ? (
+            {notice ? (
               <Pressable
+                accessibilityLabel={
+                  notice.kind === "marker"
+                    ? `${notice.markerKind === "current" ? "C" : "R"}. ${t(notice.metricLabel)}. ${formatter.format(notice.value)}${notice.unit ? ` ${notice.unit}` : ""}`
+                    : t("About this estimate")
+                }
                 accessibilityRole="button"
-                onPress={() => setInfoOpen(false)}
+                onPress={() => setNotice(null)}
                 style={[
                   styles.infoNotice,
                   {
@@ -662,15 +849,35 @@ export function StatusAvatarSimulator({
                   color={colors.primary}
                 />
                 <View style={styles.infoCopy}>
-                  <Text style={[styles.infoText, { color: colors.ink }]}>
-                    Estimate only. This is not a scan, scientific measurement, or prediction of your body.
-                  </Text>
-                  <Text style={[styles.infoDetail, { color: colors.muted }]}>
-                    Weight uses your profile height for total size. Body fat and lean mass can be adjusted or disabled independently.
-                  </Text>
-                  <Text style={[styles.infoDetail, { color: colors.muted }]}>
-                    C = logged. R uses the adult healthy-BMI midpoint; body composition uses an age/sex reference, not medical advice.
-                  </Text>
+                  {notice.kind === "marker" ? (
+                    <>
+                      <Text
+                        translate={false}
+                        style={[styles.infoText, { color: colors.ink }]}
+                      >
+                        {notice.markerKind === "current" ? "C" : "R"} · {t(notice.metricLabel)} · {formatter.format(notice.value)}{notice.unit ? ` ${notice.unit}` : ""}
+                      </Text>
+                      <Text
+                        style={[styles.infoDetail, { color: colors.muted }]}
+                      >
+                        {notice.markerKind === "current"
+                          ? "C marks the current logged value"
+                          : "R marks an adult reference, not a medical target"}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[styles.infoText, { color: colors.ink }]}>
+                        Estimate only. This is not a scan, scientific measurement, or prediction of your body.
+                      </Text>
+                      <Text style={[styles.infoDetail, { color: colors.muted }]}>
+                        Weight uses your profile height for total size. Body fat and lean mass can be adjusted or disabled independently.
+                      </Text>
+                      <Text style={[styles.infoDetail, { color: colors.muted }]}>
+                        C = logged. R is a general adult reference based on available profile details; missing details use adult defaults. It is not a medical target.
+                      </Text>
+                    </>
+                  )}
                 </View>
               </Pressable>
             ) : null}
@@ -688,7 +895,6 @@ export function StatusAvatarSimulator({
                 displayScale={avatarScale}
                 heightCm={preview.heightCm}
                 leanBodyMassKg={preview.leanBodyMassKg}
-                mindTier={mindTier}
                 muscleProgress={preview.muscleProgress}
                 progress={progress}
                 showProgressLabel={false}
@@ -718,6 +924,9 @@ export function StatusAvatarSimulator({
                 label="Weight"
                 marker={markers.weight}
                 onChange={(value) => changeMetric("weight", value)}
+                onMarkerPress={(kind, value) =>
+                  showMarkerNotice("Weight", ranges.weight.unit, kind, value)
+                }
                 onToggle={() => undefined}
                 range={ranges.weight}
                 toggleable={false}
@@ -732,6 +941,14 @@ export function StatusAvatarSimulator({
                   label={item.label}
                   marker={markers[item.id]}
                   onChange={(value) => changeMetric(item.id, value)}
+                  onMarkerPress={(kind, value) =>
+                    showMarkerNotice(
+                      item.label,
+                      ranges[item.id].unit,
+                      kind,
+                      value,
+                    )
+                  }
                   onToggle={(enabled) => toggleMetric(item.id, enabled)}
                   range={ranges[item.id]}
                   value={preview.values[item.id]}
@@ -943,7 +1160,6 @@ const styles = StyleSheet.create({
     marginLeft: -7,
     borderRadius: 7,
   },
-  controlDisabled: { opacity: 0.48 },
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 12,

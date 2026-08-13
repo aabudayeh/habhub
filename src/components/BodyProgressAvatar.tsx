@@ -6,7 +6,6 @@ import {
   StyleSheet,
   View,
 } from "react-native";
-import Svg, { Circle, G, Line, Path, Polygon } from "react-native-svg";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { GOAL_COMPLETE_COLOR } from "@/src/domain/colors";
@@ -81,99 +80,6 @@ function AtlasCell({
   );
 }
 
-function MindAccessories({
-  height,
-  mindTier,
-  variant,
-  width,
-}: {
-  height: number;
-  mindTier: 0 | 1 | 2 | 3;
-  variant: StatusAvatarAtlasBlend["variant"];
-  width: number;
-}) {
-  if (!mindTier) return null;
-  const scale = height / 150;
-  const eyeY = height * 0.075;
-  const eyeOffset = 5.2 * scale;
-  const lensRadius = 4.3 * scale;
-  const centerX = width / 2;
-  const ink = "#E8F0FF";
-  const gold = "#F6C453";
-  const leftEye = centerX - eyeOffset;
-  const rightEye = centerX + eyeOffset;
-  const capHalf = 15 * scale;
-  const capTop = Math.max(1, 3 * scale);
-  const capBrim = 10 * scale;
-
-  return (
-    <Svg
-      pointerEvents="none"
-      style={StyleSheet.absoluteFill}
-      viewBox={`0 0 ${width} ${height}`}
-    >
-      <G
-        fill="none"
-        stroke={ink}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={Math.max(1.25, 1.25 * scale)}
-      >
-        <Circle cx={leftEye} cy={eyeY} r={lensRadius} />
-        <Circle cx={rightEye} cy={eyeY} r={lensRadius} />
-        <Line
-          x1={leftEye + lensRadius}
-          y1={eyeY}
-          x2={rightEye - lensRadius}
-          y2={eyeY}
-        />
-      </G>
-      {mindTier >= 2 ? (
-        <G
-          fill="none"
-          stroke={gold}
-          strokeLinecap="round"
-          strokeWidth={Math.max(1.2, 1.15 * scale)}
-        >
-          <Circle cx={rightEye} cy={eyeY} r={lensRadius + 1.7 * scale} />
-          <Path
-            d={`M ${rightEye + lensRadius * 0.75} ${eyeY + lensRadius * 0.75} Q ${
-              rightEye + 9 * scale
-            } ${eyeY + 14 * scale} ${rightEye + 6 * scale} ${
-              eyeY + 22 * scale
-            }`}
-          />
-        </G>
-      ) : null}
-      {mindTier >= 3 ? (
-        <G>
-          <Polygon
-            fill={ink}
-            points={`${centerX - capHalf},${capBrim} ${centerX},${capTop} ${
-              centerX + capHalf
-            },${capBrim} ${centerX},${capBrim + 7 * scale}`}
-          />
-          <Line
-            x1={centerX + capHalf - 2 * scale}
-            y1={capBrim}
-            x2={centerX + capHalf - 2 * scale}
-            y2={capBrim + 12 * scale}
-            stroke={gold}
-            strokeLinecap="round"
-            strokeWidth={Math.max(1.2, 1.1 * scale)}
-          />
-          <Circle
-            cx={centerX + capHalf - 2 * scale}
-            cy={capBrim + 13.5 * scale}
-            fill={gold}
-            r={1.8 * scale}
-          />
-        </G>
-      ) : null}
-    </Svg>
-  );
-}
-
 function AtlasBodyLayer({
   blend,
   height,
@@ -211,7 +117,6 @@ export function BodyProgressAvatar({
   displayScale = 1,
   heightCm = 170,
   leanBodyMassKg,
-  mindTier = 0,
   muscleProgress = 0,
   progress,
   showProgressLabel = true,
@@ -225,7 +130,6 @@ export function BodyProgressAvatar({
   displayScale?: number;
   heightCm?: number;
   leanBodyMassKg?: number;
-  mindTier?: 0 | 1 | 2 | 3;
   muscleProgress?: number;
   progress: number;
   showProgressLabel?: boolean;
@@ -399,12 +303,6 @@ export function BodyProgressAvatar({
             </View>
           </View>
         ) : null}
-        <MindAccessories
-          height={renderedHeight}
-          mindTier={mindTier}
-          variant={blend.variant}
-          width={renderedWidth}
-        />
         {showProgressLabel ? (
           <View
             pointerEvents="none"
