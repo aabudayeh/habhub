@@ -38,11 +38,6 @@ import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { RangeGoalProgressBar } from "@/src/components/RangeGoalProgressBar";
 import { TodoTodayList } from "@/src/components/TodoTodayList";
 import {
-  ColdLaunchCountValue,
-  ColdLaunchMetricValue,
-  useColdLaunchMetricProgress,
-} from "@/src/components/ColdLaunchMetricValue";
-import {
   TutorialScrollProvider,
   TutorialTarget,
   useTutorial,
@@ -173,10 +168,6 @@ function Today() {
   const tutorial = useTutorial();
   const reportTutorialEvent = tutorial.reportEvent;
   const health = useHealthSync();
-  const metricValueAnimationProgress = useColdLaunchMetricProgress(
-    health.status,
-    health.lastStepSyncedAt ?? health.lastSyncedAt,
-  );
   const cloud = useCloudSyncActions();
   const cloudStatus = useCloudSyncStatus();
   const colors = useAppColors();
@@ -1112,12 +1103,13 @@ function Today() {
                   ? ` · ${completedTodayTodos}/${todayTodos.length} TO-DOS`
                   : ""}
               </Text>
-              <ColdLaunchCountValue
-                value={heroMet}
-                total={heroTotal}
-                progress={metricValueAnimationProgress}
+              <Text
+                preserveColor
+                numberOfLines={1}
                 style={[styles.heroValue, { color: palette.white }]}
-              />
+              >
+                {`${heroMet} of ${heroTotal}`}
+              </Text>
               <View style={styles.heroTitleRow}>
                 <Text
                   preserveColor
@@ -1362,7 +1354,6 @@ function Today() {
                 colors={colors}
                 accent={accent}
                 weekly={weekly}
-                metricValueAnimationProgress={metricValueAnimationProgress}
                 trackedGoal={isMetricTrackedOnDate(
                   state,
                   item,
@@ -2145,7 +2136,6 @@ function TrackerRow({
   colors,
   accent,
   weekly,
-  metricValueAnimationProgress,
   trackedGoal,
   allGoalsMet,
   goldPresentation,
@@ -2179,9 +2169,6 @@ function TrackerRow({
   colors: ReturnType<typeof useAppColors>;
   accent: string;
   weekly: ReturnType<typeof weeklyDeficitBalance>;
-  metricValueAnimationProgress: ReturnType<
-    typeof useColdLaunchMetricProgress
-  >;
   trackedGoal: boolean;
   allGoalsMet: boolean;
   goldPresentation: "pending" | "animating" | "settled";
@@ -2424,18 +2411,6 @@ function TrackerRow({
         weekly,
         locale,
        );
-  const directlyFormattedNumericValue =
-    applicable &&
-    !isFasting &&
-    !mergedCompoundValue &&
-    !isBloodPressure &&
-    item.id !== "weekly_deficit_balance" &&
-    item.id !== "food" &&
-    item.id !== "weight" &&
-    item.goalProgressMode !== "journey" &&
-    item.dataType !== "boolean" &&
-    item.dataType !== "photo" &&
-    item.dataType !== "text";
   const dragHandle = (
     <View collapsable={false} style={styles.drag}>
       <Ionicons
@@ -2598,40 +2573,22 @@ function TrackerRow({
             </View>
           ) : null}
         </View>
-        {directlyFormattedNumericValue ? (
-          <ColdLaunchMetricValue
-            metric={item}
-            value={value}
-            locale={locale}
-            progress={metricValueAnimationProgress}
-            style={[
-              styles.primary,
-              {
-                color:
-                  applicable && item.goal.kind === "at_most" && value > target
-                    ? palette.red
-                    : colors.ink,
-              },
-            ]}
-          />
-        ) : (
-          <Text
-            style={[
-              styles.primary,
-              {
-                color:
-                  item.id === "weekly_deficit_balance"
-                    ? colors.ink
-                    : applicable && item.goal.kind === "at_most" && value > target
-                    ? palette.red
-                    : colors.ink,
-              },
-            ]}
-            numberOfLines={1}
-          >
-            {content.primary}
-          </Text>
-        )}
+        <Text
+          style={[
+            styles.primary,
+            {
+              color:
+                item.id === "weekly_deficit_balance"
+                  ? colors.ink
+                  : applicable && item.goal.kind === "at_most" && value > target
+                  ? palette.red
+                  : colors.ink,
+            },
+          ]}
+          numberOfLines={1}
+        >
+          {content.primary}
+        </Text>
         {content.secondary ? (
           <Text
             style={[styles.secondary, { color: colors.muted }]}

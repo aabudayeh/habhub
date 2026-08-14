@@ -2,7 +2,7 @@
   "expo": {
     "name": "HabHub",
     "slug": "metrally",
-    "version": "1.0.12",
+    "version": "1.0.13",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
     "scheme": "paceboard",
