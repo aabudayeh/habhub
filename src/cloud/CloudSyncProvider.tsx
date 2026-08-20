@@ -98,6 +98,11 @@ import {
   stableValueHash,
 } from "@/src/domain/cloudHash";
 import { networkReachability } from "@/src/domain/network";
+import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import {
+  scheduleResponsiveWork,
+  waitForResponsiveTurn,
+} from "@/src/lib/responsiveWork";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -736,8 +741,13 @@ async function uploadOwnedMedia(state: AppState): Promise<AppState> {
     : state;
 }
 
+const snapshotPayloadCache = new WeakMap<AppState, AppState>();
+
 /** Never persist temporary signed URLs; only stable private-bucket paths. */
 function snapshotPayload(state: AppState): AppState {
+  const cached = snapshotPayloadCache.get(state);
+  if (cached) return cached;
+  const owned = accountOwnedCollections(state);
   const groups = state.groups.map((group) => ({
     ...group,
     members: group.members.map((member) => {
@@ -775,7 +785,7 @@ function snapshotPayload(state: AppState): AppState {
         return stableMember;
       }),
     };
-  return {
+  const payload: AppState = {
     ...state,
     // These flags describe a native import cursor on this physical device.
     // Syncing them to another phone could start (or finish) the wrong Health
@@ -807,27 +817,23 @@ function snapshotPayload(state: AppState): AppState {
     // Shared group history is an on-device cache backed by relational tables.
     // Keeping it out of the private snapshot makes hashing/saving proportional
     // to this user's data rather than the size of every group they joined.
-    entries: state.entries
-      .filter((entry) => entry.userId === state.currentUserId)
-      .map((entry) =>
-        entry.imageStoragePath ? { ...entry, imageUri: undefined } : entry,
-      ),
-    photos: state.photos
-      .filter((photo) => photo.userId === state.currentUserId)
-      .map((photo) => (photo.storagePath ? { ...photo, uri: "" } : photo)),
+    entries: owned.entries.map((entry) =>
+      entry.imageStoragePath ? { ...entry, imageUri: undefined } : entry,
+    ),
+    photos: owned.photos.map((photo) =>
+      photo.storagePath ? { ...photo, uri: "" } : photo,
+    ),
     // Group history is cached locally and reloaded from the relational table.
     // Keeping only owned messages in the private snapshot makes hashing and
     // account sync independent of a busy group chat.
-    messages: state.messages
-      .filter((message) => message.senderId === state.currentUserId)
-      .map((message) =>
-        message.imageStoragePath ? { ...message, imageUri: undefined } : message,
-      ),
-    dailyMetricStatuses: state.dailyMetricStatuses.filter(
-      (status) => status.userId === state.currentUserId,
+    messages: owned.messages.map((message) =>
+      message.imageStoragePath ? { ...message, imageUri: undefined } : message,
     ),
+    dailyMetricStatuses: owned.dailyMetricStatuses,
     lastSavedAt: null,
   };
+  snapshotPayloadCache.set(state, payload);
+  return payload;
 }
 
 function messageBelongsToCloudGroup(
@@ -4060,6 +4066,24 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
     let cancelled = false;
     const user = auth.user;
+    const responsiveTasks = new Set<{ cancel: () => void }>();
+    let deviceBookkeepingTimer: ReturnType<typeof setTimeout> | null = null;
+    const waitForUi = async (
+      minimumDelayMs: number,
+      maximumDelayMs: number,
+    ) => {
+      if (Platform.OS === "web") return;
+      const task = waitForResponsiveTurn({
+        minimumDelayMs,
+        maximumDelayMs,
+      });
+      responsiveTasks.add(task);
+      try {
+        await task.promise;
+      } finally {
+        responsiveTasks.delete(task);
+      }
+    };
     let settleInitialNetworkWork: () => void = () => undefined;
     const initialNetworkWorkSettled = new Promise<void>((resolve) => {
       settleInitialNetworkWork = resolve;
@@ -4105,13 +4129,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         groupConfigurationAckHashesRef.current = groupConfigurationAcks;
         accountMetadataHashRef.current = accountMetadataAck;
         mergeBaseRef.current = savedMergeBase;
-        if (
-          !mergeBaseRef.current &&
-          acknowledgedSnapshotHash &&
-          networkAvailableRef.current &&
-          stableHash(stateRef.current) === acknowledgedSnapshotHash
-        )
-          rememberCloudMergeBase(user.id, stateRef.current);
         if (savedCheckpoint) {
           lastSyncedAtRef.current = savedCheckpoint;
           setLastSyncedAt(savedCheckpoint);
@@ -4141,18 +4158,33 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           setErrorMessage(
             "Offline changes are safe on this device and will retry automatically.",
           );
-          InteractionManager.runAfterInteractions(() => {
+          const pendingCheck = scheduleResponsiveWork(() => {
             if (
               !cancelled &&
               !networkAvailableRef.current &&
               initializedUserRef.current === user.id
             )
               setPendingChanges(hasUnsyncedLocalChanges());
-          });
+          }, { minimumDelayMs: 900, maximumDelayMs: 4_000 });
+          responsiveTasks.add(pendingCheck);
           return;
         }
+        // Existing accounts already have a complete private cache. Give its
+        // first navigation/tap frames priority before starting online restore.
+        await waitForUi(280, 1_200);
+        if (cancelled) return;
         const remote = await fetchSnapshot(user.id);
         if (cancelled) return;
+        // Payload upgrades, hashing and three-way merges are synchronous. Start
+        // them after any navigation animation that occurred during the fetch.
+        await waitForUi(0, 1_800);
+        if (cancelled) return;
+        if (
+          !mergeBaseRef.current &&
+          acknowledgedSnapshotHash &&
+          stableHash(stateRef.current) === acknowledgedSnapshotHash
+        )
+          rememberCloudMergeBase(user.id, stateRef.current);
         // A successful account read ends the previous startup backoff. Group
         // publication below may establish its own fresh retry, but stale delay
         // from an earlier PGRST003 must not suppress deferred group hydration.
@@ -4269,7 +4301,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // Signed media URLs and group history are cache hydration, not an
           // app-start prerequisite. Render the local/private snapshot first,
           // then merge these server-owned rows without regressing local writes.
-          InteractionManager.runAfterInteractions(() => {
+          const groupHydration = scheduleResponsiveWork(() => {
             (async () => {
               // The first account write and the heavier group workspace read
               // used to start together. On small Supabase projects that burst
@@ -4324,7 +4356,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
               }
             });
-          });
+          }, { minimumDelayMs: 1_200, maximumDelayMs: 4_000 });
+          responsiveTasks.add(groupHydration);
         } else {
           const bound = bindStateToAccount(stateRef.current, user);
           stateRef.current = bound;
@@ -4338,7 +4371,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             ? (groupConfigurationAckHashesRef.current.get(bound.group.id) ?? null)
             : null;
           setPendingChanges(true);
-          InteractionManager.runAfterInteractions(() => {
+          const groupHydration = scheduleResponsiveWork(() => {
             (async () => {
               await initialNetworkWorkSettled;
               if (cancelled) return;
@@ -4379,7 +4412,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
               }
             });
-          });
+          }, { minimumDelayMs: 1_200, maximumDelayMs: 4_000 });
+          responsiveTasks.add(groupHydration);
         }
         if (cancelled) return;
         identityResetUserRef.current = null;
@@ -4387,14 +4421,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           !remote ||
           correctedAccountState ||
           hasUnsyncedLocalChanges()
-        )
+        ) {
+          await waitForUi(180, 1_500);
+          if (cancelled) return;
           await performSync(false, true);
-        else setStatus("synced");
+        } else setStatus("synced");
         settleInitialNetworkWork();
         // Device bookkeeping is not on the critical startup path. Stagger it
         // behind the account/group work rather than adding two more concurrent
         // PostgREST requests during a cold launch.
-        setTimeout(() => {
+        deviceBookkeepingTimer = setTimeout(() => {
           if (cancelled || nextRetryAtRef.current > Date.now()) return;
           supabase!
             .rpc("register_account_device", {
@@ -4405,7 +4441,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             .then(() => undefined, () => undefined);
           deviceHeartbeatAtRef.current = Date.now();
           loadDevices().catch(() => undefined);
-        }, 1200);
+        }, 1800);
       } catch (error) {
         if (!cancelled) {
           settleInitialNetworkWork();
@@ -4435,6 +4471,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     })();
     return () => {
       cancelled = true;
+      responsiveTasks.forEach((task) => task.cancel());
+      responsiveTasks.clear();
+      if (deviceBookkeepingTimer) clearTimeout(deviceBookkeepingTimer);
       settleInitialNetworkWork();
       initializedUserRef.current = null;
       remoteInitializationPendingRef.current = false;
@@ -5165,10 +5204,31 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       setInitializationAttempt((value) => value + 1);
       return;
     }
-    const timer = setTimeout(() => {
-      verifyActiveGroupMembership().catch(() => undefined);
+    const tasks = new Set<{ cancel: () => void }>();
+    const later = (
+      minimumDelayMs: number,
+      maximumDelayMs: number,
+      work: () => void,
+    ) => {
+      const task = scheduleResponsiveWork(work, {
+        minimumDelayMs,
+        maximumDelayMs,
+      });
+      tasks.add(task);
+    };
+    // The durable account outbox goes first, but no longer competes with the
+    // first tap after Android reports that connectivity returned.
+    later(260, 1_500, () => {
       performSync(false, false).catch(() => undefined);
+    });
+    later(700, 2_400, () => {
+      verifyActiveGroupMembership().catch(() => undefined);
       refreshMessages().catch(() => undefined);
+    });
+    // Group history can be large and is independently durable on the server.
+    // Hydrate it after account/chat recovery instead of landing every response
+    // and state replacement in the same JS turn.
+    later(1_600, 4_000, () => {
       refreshGroupActivity(
         dateWithOffsetFrom(dateKey(), -(GROUP_ACTIVITY_LOCAL_CACHE_DAYS - 1)),
       ).catch(() => undefined);
@@ -5177,8 +5237,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const retryActivityGroupId = activityReadRetryGroupIdRef.current;
       if (retryActivityGroupId)
         scheduleActivityReadRetry(retryActivityGroupId);
-    }, 150);
-    return () => clearTimeout(timer);
+    });
+    return () => {
+      tasks.forEach((task) => task.cancel());
+      tasks.clear();
+    };
   }, [
     auth.status,
     auth.user,
@@ -5668,18 +5731,21 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   ]);
 
   useEffect(() => {
-    const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
-    const later = (delay: number, work: () => void) => {
-      const timer = setTimeout(() => {
-        resumeTimers.delete(timer);
+    const resumeTasks = new Set<{ cancel: () => void }>();
+    const later = (
+      minimumDelayMs: number,
+      maximumDelayMs: number,
+      work: () => void,
+    ) => {
+      const task = scheduleResponsiveWork(() => {
         if (NativeAppState.currentState === "active") work();
-      }, delay);
-      resumeTimers.add(timer);
+      }, { minimumDelayMs, maximumDelayMs });
+      resumeTasks.add(task);
     };
     const subscription = NativeAppState.addEventListener("change", (next) => {
       if (next !== "active") {
-        resumeTimers.forEach(clearTimeout);
-        resumeTimers.clear();
+        resumeTasks.forEach((task) => task.cancel());
+        resumeTasks.clear();
         return;
       }
       if (
@@ -5712,12 +5778,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const retryActivityGroupId = activityReadRetryGroupIdRef.current;
       if (retryActivityGroupId)
         scheduleActivityReadRetry(retryActivityGroupId);
-      void touchPresence(true).catch(() => undefined);
       // Resume cached UI first, then recover chat and pending writes in
       // separate turns. The activity subscription checks its lightweight
       // server version on reconnect and only reloads history when it changed.
-      later(150, () => {
-        verifyActiveGroupMembership().catch(() => undefined);
+      later(220, 1_400, () => {
         void recoverChatOutbox();
         void flushPendingGroupPushEvents().catch(() => undefined);
         refreshMessages().catch(() => undefined);
@@ -5725,7 +5789,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // If the app was backgrounded for longer than the freshness window,
       // publish one compact leaderboard assertion after resume. The helper is
       // independently throttled and never marks the private outbox pending.
-      later(450, () => {
+      later(1_500, 3_200, () => {
         publishLeaderboardFreshness().catch(() => undefined);
       });
       // `pendingChanges` is presentation state and may still be false when the
@@ -5733,7 +5797,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // local outbox on resume so closing/reopening never makes manual Cloud
       // Sync a prerequisite for publishing a just-made edit.
       if (!initializationPending)
-        later(350, () => {
+        later(650, 2_000, () => {
           // Hashing a year-long offline snapshot is deliberately outside the
           // native AppState callback so the first resumed frame and tap are
           // never held up by JSON serialization.
@@ -5744,11 +5808,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           )
             performSync().catch(() => undefined);
         });
+      later(1_050, 2_800, () => {
+        verifyActiveGroupMembership().catch(() => undefined);
+        void touchPresence(true).catch(() => undefined);
+      });
     });
     return () => {
       subscription.remove();
-      resumeTimers.forEach(clearTimeout);
-      resumeTimers.clear();
+      resumeTasks.forEach((task) => task.cancel());
+      resumeTasks.clear();
     };
   }, [
     auth.status,

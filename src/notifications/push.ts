@@ -67,6 +67,16 @@ import {
 } from '@/src/notifications/activityTimerAlerts';
 import type { ScreenTimeReport } from '@/src/screenTime';
 import { readScreenTimeAppLimits } from '@/src/screenTime/appLimits';
+import {
+  clearCurrentWebPushIdentity,
+  enableWebPushNotifications,
+  recoverWebPushRegistration,
+  unregisterCurrentWebPushSubscription,
+  unregisterOrphanedWebPushSubscription,
+  updateWebPushPreferences,
+  webPushPermissionGranted,
+  webPushSetupComplete,
+} from '@/src/notifications/webPush';
 
 Notifications.setNotificationHandler({
   handleNotification: async (notification) => {
@@ -365,7 +375,19 @@ export async function enablePushNotifications(
   preferences: NotificationSettings,
   language: AppLanguage = 'en',
 ) {
-  if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
+  if (Platform.OS === 'web') {
+    const identityBarrier = pushIdentityCleanupQueue;
+    return enableWebPushNotifications(
+      userId,
+      preferences,
+      language,
+      identityBarrier,
+      async () => {
+        if (!userId) return;
+        await allowPushRegistrationForAccount(userId);
+      },
+    );
+  }
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
   await pushIdentityCleanupQueue.catch(() => undefined);
   await ensureNotificationChannel(language);
@@ -417,7 +439,8 @@ export async function enablePushNotifications(
 }
 
 export async function notificationPermissionGranted() {
-  if (Platform.OS === 'web' || !Device.isDevice) return false;
+  if (Platform.OS === 'web') return webPushPermissionGranted();
+  if (!Device.isDevice) return false;
   const permission = await Notifications.getPermissionsAsync();
   return (
     permission.granted ||
@@ -432,6 +455,7 @@ export async function notificationPermissionGranted() {
  * for a completed device setup.
  */
 export async function notificationSetupComplete(userId?: string) {
+  if (Platform.OS === 'web') return webPushSetupComplete(userId);
   if (!(await notificationPermissionGranted())) return false;
   const projectId = pushProjectId();
   if (!projectId) return false;
@@ -510,7 +534,18 @@ export async function updatePushPreferences(
   language: AppLanguage = 'en',
   shouldContinue: () => boolean = () => true,
 ) {
-  if (!supabase || Platform.OS === 'web') return;
+  if (Platform.OS === 'web') {
+    await pushIdentityCleanupQueue.catch(() => undefined);
+    if (!shouldContinue()) return;
+    await updateWebPushPreferences(
+      userId,
+      preferences,
+      language,
+      shouldContinue,
+    );
+    return;
+  }
+  if (!supabase) return;
   const projectId = pushProjectId();
   if (!projectId || !shouldContinue()) return;
   // Only the explicit enable flow may clear an account's disable fence. A
@@ -548,6 +583,17 @@ export async function recoverPushRegistrationOnForeground(
   language: AppLanguage = 'en',
   shouldContinue: () => boolean = () => true,
 ) {
+  if (Platform.OS === 'web') {
+    await pushIdentityCleanupQueue.catch(() => undefined);
+    if (!shouldContinue()) return;
+    await recoverWebPushRegistration(
+      userId,
+      preferences,
+      language,
+      shouldContinue,
+    );
+    return;
+  }
   if (!(await notificationPermissionGranted())) return;
   await refreshPushTokenRegistration(
     userId,
@@ -608,6 +654,14 @@ async function removeCurrentDevicePushToken(
 
 /** Remove only this physical phone's token before signing out or switching. */
 export async function unregisterCurrentDevicePushToken(userId: string) {
+  if (Platform.OS === 'web') {
+    const operation = pushIdentityCleanupQueue
+      .catch(() => undefined)
+      .then(() => unregisterCurrentWebPushSubscription(userId));
+    pushIdentityCleanupQueue = operation.catch(() => undefined);
+    await operation;
+    return;
+  }
   const registrationsBeforeCleanup = pushRegistrationQueue;
   const operation = pushIdentityCleanupQueue
     .catch(() => undefined)
@@ -620,7 +674,14 @@ export async function unregisterCurrentDevicePushToken(userId: string) {
 
 /** Session recovery can discover there is no owner before an account id loads. */
 export async function unregisterOrphanedDevicePushToken() {
-  if (Platform.OS === 'web') return;
+  if (Platform.OS === 'web') {
+    const operation = pushIdentityCleanupQueue
+      .catch(() => undefined)
+      .then(() => unregisterOrphanedWebPushSubscription());
+    pushIdentityCleanupQueue = operation.catch(() => undefined);
+    await operation;
+    return;
+  }
   const operation = pushIdentityCleanupQueue
     .catch(() => undefined)
     .then(async () => {
@@ -680,13 +741,18 @@ export async function disablePushNotifications(userId: string) {
       await pendingIntent;
       await Promise.all([
         cancelAllManagedLocalNotifications(userId),
-        clearNativePushIdentity(userId, projectId),
+        Platform.OS === 'web'
+          ? clearCurrentWebPushIdentity(userId)
+          : clearNativePushIdentity(userId, projectId),
       ]);
       await refreshBeforeCleanup?.catch(() => undefined);
       await registrationsBeforeCleanup.catch(() => undefined);
       // A token request queued before the fence may have repopulated the cache
       // after the first clear. Invalidate once more before releasing account B.
-      if (projectId) await clearNativePushIdentity(userId, projectId);
+      if (Platform.OS === 'web')
+        await clearCurrentWebPushIdentity(userId);
+      else if (projectId)
+        await clearNativePushIdentity(userId, projectId);
     });
   pushIdentityCleanupQueue = identityOperation.catch(() => undefined);
   const operation = identityOperation.then(async () => {

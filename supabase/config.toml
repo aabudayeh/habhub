@@ -23,19 +23,25 @@ port = 54324
 
 [storage]
 enabled = true
-file_size_limit = "25MiB"
+file_size_limit = "50MiB"
 
 [auth]
 enabled = true
-site_url = "http://localhost:8081"
-additional_redirect_urls = ["paceboard://**", "http://localhost:8081/**"]
+site_url = "https://sethstar-habhub.expo.app"
+additional_redirect_urls = ["paceboard://**", "http://localhost:8081/**", "http://localhost:8090/**", "https://sethstar-habhub.expo.app/**", "https://sethstar-habhub--*.expo.app/**"]
 jwt_expiry = 3600
 enable_signup = true
 
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = false
+enable_confirmations = true
+max_frequency = "1m"
+otp_length = 8
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
 
 [functions.delete-account]
 # The function validates the bearer token with auth.getUser itself. Keeping

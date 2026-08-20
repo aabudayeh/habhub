@@ -219,8 +219,8 @@ export default function NotificationsScreen() {
       setNotificationReady(true);
       setPermissionNote(
         auth.user
-          ? "This phone is registered for HabHub notifications."
-          : "Local reminders are enabled on this phone.",
+          ? "This device is registered for HabHub notifications."
+          : "Local reminders are enabled on this device.",
       );
     } catch (error) {
       const message =
@@ -290,7 +290,11 @@ export default function NotificationsScreen() {
           <ToggleRow
             icon="notifications"
             title="Push notifications"
-            copy="Account-wide master switch for all signed-in HabHub devices"
+            copy={
+              Platform.OS === "web"
+                ? "Account-wide master switch. The installed web app receives cloud alerts; timed reminders remain native-app scheduled."
+                : "Account-wide master switch for all signed-in HabHub devices"
+            }
             enabled={displayedPushEnabled}
             onPress={togglePush}
           />
@@ -725,18 +729,41 @@ export default function NotificationsScreen() {
           </View>
         ) : null}
       </Card> : null}
-      <Text
-        style={[styles.note, { color: colors.muted }]}
-        translate={false}
-      >
-        Turning this off cancels alerts on this phone immediately and removes
-        every account device registration when a signed-in phone reconnects.
-      </Text>
-      <Text style={[styles.note, { color: colors.muted }]}>
-        The installed app requests system permission and registers this phone.
-        Expo Go on Android cannot receive remote push notifications; use an EAS
-        development or release build.
-      </Text>
+      {Platform.OS === "web" ? (
+        <>
+          <Text
+            style={[styles.note, { color: colors.muted }]}
+            translate={false}
+          >
+            Turning this off removes HabHub push registrations for this account.
+            Timed tracker and to-do reminders still require the installed phone
+            app.
+          </Text>
+          <Text
+            style={[styles.note, { color: colors.muted }]}
+            translate={false}
+          >
+            On iPhone or iPad, add HabHub to the Home Screen and open it there
+            before enabling notifications. Other supported browsers require
+            HTTPS and a direct permission tap.
+          </Text>
+        </>
+      ) : (
+        <>
+          <Text
+            style={[styles.note, { color: colors.muted }]}
+            translate={false}
+          >
+            Turning this off cancels alerts on this phone immediately and removes
+            every account device registration when a signed-in phone reconnects.
+          </Text>
+          <Text style={[styles.note, { color: colors.muted }]}>
+            The installed app requests system permission and registers this phone.
+            Expo Go on Android cannot receive remote push notifications; use an EAS
+            development or release build.
+          </Text>
+        </>
+      )}
     </Screen>
   );
 }

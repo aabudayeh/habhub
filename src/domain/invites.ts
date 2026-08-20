@@ -19,7 +19,7 @@ export function groupInviteLink(code: string) {
     throw new Error('The invite is still being prepared. Refresh the group and try again.');
   const cloudBase = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim();
   const publicBase =
-    process.env.EXPO_PUBLIC_APP_URL?.trim() || "https://habhub.expo.app";
+    process.env.EXPO_PUBLIC_APP_URL?.trim() || 'https://sethstar-habhub.expo.app';
   if (publicBase)
     return `${publicBase.replace(/\/$/, '')}/join?code=${encodeURIComponent(normalized)}`;
   if (cloudBase)

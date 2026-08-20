@@ -17,6 +17,7 @@ import {
   authoritativeHealthConnectStepGroups,
   healthSourceEnabled,
   localCalendarAggregateRange,
+  partitionStepAggregateRange,
   replaceCanonicalStepAggregateForDay,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
@@ -731,8 +732,16 @@ export const healthConnectAdapter: HealthAdapter = {
           if (type === "active_energy") return activeEnergyImports;
           if (type === "workouts") return workoutImports;
           if (type === "steps") {
-            const syncRevision = new Date().toISOString();
-            const stepRange = localCalendarAggregateRange(from, to);
+            // Use one timestamp for range partitioning, the query end, and the
+            // imported revision. Crossing midnight between separate `now`
+            // calls must not attach a total to the wrong local day.
+            const stepReadAt = new Date();
+            const syncRevision = stepReadAt.toISOString();
+            const stepRange = localCalendarAggregateRange(from, to, stepReadAt);
+            const stepSlices = partitionStepAggregateRange(
+              stepRange,
+              stepReadAt,
+            );
             const stepTimeRangeFilter = {
               operator: "between" as const,
               startTime: stepRange.from.toISOString(),
@@ -750,25 +759,16 @@ export const healthConnectAdapter: HealthAdapter = {
             // could otherwise exclude the on-device Steps writer or change the
             // platform's priority result. Steps therefore stay unfiltered.
             try {
-              const todayStart = new Date();
-              todayStart.setHours(0, 0, 0, 0);
-              const currentStart = new Date(
-                Math.max(stepRange.from.getTime(), todayStart.getTime()),
-              );
-              const currentEnd = new Date(
-                Math.min(stepRange.to.getTime(), Date.now()),
-              );
-              const includesCurrentDay = currentEnd > currentStart;
-              const historicalEnd = new Date(
-                Math.min(stepRange.to.getTime(), todayStart.getTime()),
-              );
+              const currentStart = stepSlices.current?.from;
+              const currentEnd = stepSlices.current?.to;
+              const includesCurrentDay = Boolean(stepSlices.current);
               const [unfilteredGroups, currentAggregate] = await Promise.all([
-                historicalEnd > stepRange.from
+                stepSlices.historical
                   ? aggregateGroupByPeriod({
                       recordType: "Steps",
                       timeRangeFilter: {
                         ...stepTimeRangeFilter,
-                        endTime: historicalEnd.toISOString(),
+                        endTime: stepSlices.historical.to.toISOString(),
                       },
                       timeRangeSlicer: { period: "DAYS", length: 1 },
                     })
@@ -778,8 +778,8 @@ export const healthConnectAdapter: HealthAdapter = {
                       recordType: "Steps",
                       timeRangeFilter: {
                         operator: "between",
-                        startTime: currentStart.toISOString(),
-                        endTime: currentEnd.toISOString(),
+                        startTime: currentStart!.toISOString(),
+                        endTime: currentEnd!.toISOString(),
                       },
                     })
                   : Promise.resolve(null),
@@ -836,12 +836,9 @@ export const healthConnectAdapter: HealthAdapter = {
                   ];
                 },
               );
-              if (!includesCurrentDay) return historicalRecords;
-              const currentLocalDate = [
-                currentStart.getFullYear(),
-                String(currentStart.getMonth() + 1).padStart(2, "0"),
-                String(currentStart.getDate()).padStart(2, "0"),
-              ].join("-");
+              const currentSlice = stepSlices.current;
+              if (!currentSlice) return historicalRecords;
+              const currentLocalDate = currentSlice.localDate;
               const currentCount = Number(
                 currentAggregate?.COUNT_TOTAL ?? 0,
               );
@@ -859,11 +856,11 @@ export const healthConnectAdapter: HealthAdapter = {
                       id: `aggregate:steps:${currentLocalDate}`,
                       provider: "health_connect",
                       type: "steps",
-                      startTime: currentStart.toISOString(),
+                      startTime: currentSlice.from.toISOString(),
                       endTime: new Date(
                         Math.max(
-                          currentStart.getTime(),
-                          currentEnd.getTime() - 1,
+                          currentSlice.from.getTime(),
+                          currentSlice.to.getTime() - 1,
                         ),
                       ).toISOString(),
                       localDate: currentLocalDate,

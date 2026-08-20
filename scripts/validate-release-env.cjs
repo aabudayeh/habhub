@@ -14,6 +14,7 @@ function readDotEnv(filename) {
 const values = { ...readDotEnv('.env'), ...readDotEnv('.env.local'), ...process.env };
 const url = values.EXPO_PUBLIC_SUPABASE_URL;
 const key = values.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const webPushPublicKey = values.EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY;
 const requireCloud = process.argv.includes('--cloud');
 const placeholder = (value) => !value || /YOUR_|example|localhost/i.test(value);
 const issues = [];
@@ -22,6 +23,12 @@ if (Boolean(url) !== Boolean(key)) issues.push('Set both EXPO_PUBLIC_SUPABASE_UR
 if (requireCloud && (placeholder(url) || placeholder(key))) issues.push('Production cloud values are missing or still placeholders.');
 if (url && !/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(url)) issues.push('EXPO_PUBLIC_SUPABASE_URL should be the HTTPS project URL.');
 if (key && key.length < 20) issues.push('The Supabase publishable key looks incomplete.');
+if (
+  webPushPublicKey &&
+  !placeholder(webPushPublicKey) &&
+  !/^[A-Za-z0-9_-]{80,100}$/.test(webPushPublicKey)
+)
+  issues.push('EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY must be a URL-safe VAPID public key.');
 
 const app = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'app.json'), 'utf8')).expo;
 if (!app.ios?.bundleIdentifier || !app.android?.package) issues.push('Both iOS bundleIdentifier and Android package are required.');
@@ -34,4 +41,3 @@ if (issues.length) {
 }
 
 console.log(`Release environment is valid (${url && key ? 'cloud enabled' : 'credential-free demo'}).`);
-

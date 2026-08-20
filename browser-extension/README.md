@@ -29,11 +29,11 @@ ready companion.
 6. Click the HabHub icon to open the normal popup.
 
 Use the middle toolbar button to expand into the side panel. Use the right-hand
-button to open the full website. Sign in to `https://habhub.expo.app` with the
+button to open the full website. Sign in to `https://sethstar-habhub.expo.app` with the
 same account used on the phone. If the companion asks you to sign in, open the
 sign-in page once, then click refresh or reopen the popup.
 
-The production companion page is `https://habhub.expo.app/extension`.
+The production companion page is `https://sethstar-habhub.expo.app/extension`.
 
 If the public HabHub URL changes, edit `DEFAULT_APP_URL` in `config.js` and the
 matching `host_permissions`/`frame-src` values in `manifest.json` before loading

@@ -1444,6 +1444,7 @@ export function createInitialState(): AppState {
       completionIndicatorIcon: "ellipse-outline",
       completionIndicatorFillMode: "auto",
       showFeaturedCardProgressOutline: true,
+      pinTodayHeaderAndFeaturedCard: false,
       statusAvatarStyle: "silhouette",
       statusAvatarCalculationSource: "bmi",
       todosBelowGoals: false,

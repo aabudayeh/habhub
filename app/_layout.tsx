@@ -76,6 +76,10 @@ import { resumeManagedLocalNotifications } from "@/src/notifications/localSchedu
 import { resumeLiveActivityTimerNotifications } from "@/src/notifications/liveTimer";
 import { resumeWorkoutTimerNotifications } from "@/src/notifications/workoutTimer";
 import { syncActivityTimerAlerts } from "@/src/notifications/activityTimerAlerts";
+import {
+  registerHabHubServiceWorker,
+  subscribeWebPushSubscriptionChanges,
+} from "@/src/notifications/webPush";
 import { automaticFastProgress } from "@/src/domain/fasting";
 
 const theme = {
@@ -173,6 +177,10 @@ function RootNavigator() {
     localNotificationsReady &&
     state.settings.notifications.pushEnabled;
   const localNotificationCleanupKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    void registerHabHubServiceWorker().catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (
       !localNotificationsReady ||
@@ -688,6 +696,71 @@ function RootNavigator() {
     pushRegistrationKey,
     state.settings.notifications.pushEnabled,
     hydrated,
+    updateSettings,
+  ]);
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      !hydrated ||
+      !pushRegistrationUserId
+    )
+      return;
+    const userId = pushRegistrationUserId;
+    let active = true;
+    if (!state.settings.notifications.pushEnabled) {
+      void disablePushNotifications(userId).catch(() => undefined);
+      return () => {
+        active = false;
+      };
+    }
+    const refresh = async () => {
+      if (await hasPendingPushDisable(userId)) {
+        if (active)
+          updateSettings({
+            notifications: {
+              ...cycleStateRef.current.settings.notifications,
+              pushEnabled: false,
+            },
+          });
+        await disablePushNotifications(userId).catch(() => undefined);
+        return;
+      }
+      await allowPushRegistrationForAccount(userId);
+      if (!active) return;
+      await updatePushPreferences(
+        userId,
+        cycleStateRef.current.settings.notifications,
+        cycleStateRef.current.settings.language,
+        () => active,
+      );
+      if (!active) return;
+      await recoverPushRegistrationOnForeground(
+        userId,
+        cycleStateRef.current.settings.notifications,
+        cycleStateRef.current.settings.language,
+        () => active,
+      );
+    };
+    const recover = () => void refresh().catch(() => undefined);
+    recover();
+    const visibilityListener = () => {
+      if (document.visibilityState === "visible") recover();
+    };
+    document.addEventListener("visibilitychange", visibilityListener);
+    const unsubscribeSubscriptionChanges =
+      subscribeWebPushSubscriptionChanges(recover);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", visibilityListener);
+      unsubscribeSubscriptionChanges();
+    };
+  }, [
+    hydrated,
+    network.isConnected,
+    network.isInternetReachable,
+    pushRegistrationKey,
+    pushRegistrationUserId,
+    state.settings.notifications.pushEnabled,
     updateSettings,
   ]);
   useEffect(() => {

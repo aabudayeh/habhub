@@ -291,7 +291,7 @@ async function request(url: string, attempts = 3) {
       // Browsers control User-Agent themselves; native fetch permits the
       // identifying header requested by Open Food Facts.
       if (Platform.OS !== "web")
-        headers["User-Agent"] = "HabHub/1.0 (https://habhub.expo.app)";
+        headers["User-Agent"] = "HabHub/1.0 (https://sethstar-habhub.expo.app)";
       const response = await fetch(url, { headers, signal: controller.signal });
       if (response.ok) return response.json() as Promise<Record<string, unknown>>;
       last = new Error(`Food database request failed (${response.status}).`);

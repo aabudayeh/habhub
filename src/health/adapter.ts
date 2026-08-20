@@ -5,11 +5,11 @@ export const nativeHealthAdapter: HealthAdapter = {
   availability: async () => ({
     available: false,
     provider: null,
-    title: 'Mobile health sync',
-    detail: 'Health data is available in the installed iOS and Android apps, not in the web preview.',
+    title: 'Connected health data',
+    detail:
+      'Connect Apple Health or Health Connect in the installed HabHub phone app. When both devices use the same signed-in account, those imported entries appear on web with their original source identity instead of being added twice.',
   }),
   requestPermissions: async () => { throw new Error('Health sync requires an installed iOS or Android build.'); },
   read: async () => [],
   openSettings: async () => { throw new Error('Health settings are available in the installed mobile app.'); },
 };
-

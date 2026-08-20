@@ -9,6 +9,9 @@ import {
 
 const read = (file) => fs.readFileSync(file, "utf8");
 const push = read("src/notifications/push.ts");
+const webPush = read("src/notifications/webPush.ts");
+const webWorker = read("public/habhub-sw.js");
+const webManifest = JSON.parse(read("public/manifest.webmanifest"));
 const layout = read("app/_layout.tsx");
 const notifications = read("app/notifications.tsx");
 const auth = read("src/auth/AuthProvider.tsx");
@@ -19,6 +22,9 @@ const expand = read(
 );
 const activate = read(
   "supabase/migrations/202608140002_activate_group_notification_events.sql",
+);
+const webPushMigration = read(
+  "supabase/migrations/202608200001_web_push_subscriptions.sql",
 );
 const alerts = read("app/alerts.tsx");
 const group = read("app/(tabs)/group.tsx");
@@ -373,6 +379,136 @@ assert.ok(
   "accepted tickets must be checkpointed before a later ticket failure throws",
 );
 
+assert.match(push, /const identityBarrier = pushIdentityCleanupQueue/);
+assert.match(
+  push,
+  /return enableWebPushNotifications\([\s\S]{0,240}identityBarrier[\s\S]{0,240}allowPushRegistrationForAccount\(userId\)/,
+);
+assert.match(push, /return webPushSetupComplete\(userId\)/);
+assert.match(push, /unregisterCurrentWebPushSubscription\(userId\)/);
+assert.match(layout, /registerHabHubServiceWorker\(\)/);
+assert.match(layout, /subscribeWebPushSubscriptionChanges\(recover\)/);
+assert.match(webPush, /window\.isSecureContext/);
+assert.match(webPush, /navigator\.serviceWorker\.register/);
+assert.match(webPush, /updateViaCache: "none"/);
+assert.match(webPush, /userVisibleOnly: true/);
+assert.match(webPush, /subscription\.options\.applicationServerKey/);
+assert.match(webPush, /register_web_push_subscription/);
+assert.match(webPush, /own_web_push_subscription_exists/);
+assert.match(webPush, /delete_own_web_push_subscription/);
+assert.doesNotMatch(webPush, /WEB_PUSH_VAPID_PRIVATE_KEY/);
+const enableWebPush = webPush.slice(
+  webPush.indexOf("export async function enableWebPushNotifications"),
+  webPush.indexOf("export async function webPushPermissionGranted"),
+);
+assert.ok(
+  enableWebPush.indexOf("Notification.requestPermission()") <
+    enableWebPush.indexOf("await allowAccountRegistration()") &&
+    enableWebPush.indexOf("await allowAccountRegistration()") <
+      enableWebPush.indexOf("await ensureSubscription()"),
+  "the iOS Web Push permission prompt must stay in the direct user gesture, then a deliberate re-enable must clear an older durable disable before subscribing",
+);
+
+assert.match(webPushMigration, /create table if not exists public\.web_push_subscriptions/);
+assert.match(webPushMigration, /alter table public\.web_push_subscriptions enable row level security/);
+assert.match(webPushMigration, /revoke all on table public\.web_push_subscriptions/);
+assert.match(webPushMigration, /security definer/g);
+assert.match(webPushMigration, /caller_id <> p_expected_user_id/);
+assert.match(webPushMigration, /pg_catalog\.pg_column_size\(normalized_preferences\) > 16384/);
+assert.match(
+  webPushMigration,
+  /from public\.profiles profile[\s\S]*profile\.id = caller_id[\s\S]*for update;/,
+);
+assert.match(
+  webPushMigration,
+  /delete from public\.web_push_subscriptions subscription[\s\S]*subscription\.user_id = caller_id[\s\S]*order by older\.updated_at desc, older\.endpoint[\s\S]*offset 20/,
+);
+assert.match(
+  webPushMigration,
+  /where public\.web_push_subscriptions\.user_id = caller_id[\s\S]*public\.web_push_subscriptions\.p256dh = excluded\.p256dh[\s\S]*public\.web_push_subscriptions\.auth = excluded\.auth/,
+);
+assert.match(
+  webPushMigration,
+  /get diagnostics affected_rows = row_count;[\s\S]*if affected_rows = 0 then[\s\S]*using errcode = '42501';/,
+);
+assert.match(
+  webPushMigration,
+  /delete from public\.device_push_tokens[\s\S]*delete from public\.web_push_subscriptions/,
+);
+assert.match(
+  webPushMigration,
+  /create or replace function public\.delete_all_own_push_tokens\([\s\S]*returns integer[\s\S]*get diagnostics v_device_deleted = row_count;[\s\S]*get diagnostics v_web_deleted = row_count;[\s\S]*return v_device_deleted \+ v_web_deleted;/,
+);
+assert.match(webPushMigration, /notify pgrst, 'reload schema';/);
+
+assert.match(edge, /npm:web-push@3\.6\.7/);
+assert.match(edge, /\.from\("web_push_subscriptions"\)/);
+assert.match(edge, /WEB_PUSH_VAPID_PRIVATE_KEY/);
+assert.match(edge, /statusCode === 404 \|\| statusCode === 410/);
+assert.match(edge, /sendWebPushTarget/);
+assert.match(edge, /webPushTopic/);
+assert.match(edge, /!hostname\.includes\("\."\)/);
+assert.match(
+  edge,
+  /\(\?:localhost\|local\|internal\|lan\|home\|corp\|test\|invalid\|example\)/,
+);
+assert.match(webWorker, /self\.addEventListener\("push"/);
+assert.match(webWorker, /self\.registration\.showNotification/);
+assert.match(webWorker, /self\.addEventListener\("notificationclick"/);
+assert.match(webWorker, /target\.origin === self\.location\.origin/);
+assert.match(webWorker, /pushsubscriptionchange/);
+assert.equal(webManifest.id, "/");
+assert.equal(webManifest.display, "standalone");
+assert.equal(webManifest.prefer_related_applications, false);
+assert.deepEqual(
+  webManifest.icons.map((icon) => icon.sizes),
+  ["192x192", "512x512"],
+);
+
+// Executable ownership fixture for the SQL conflict policy: a current owner
+// may rotate keys, while an account transfer must prove possession of both
+// secrets already bound to the high-entropy endpoint.
+const endpointConflictAuthorized = (existing, incoming) =>
+  existing.userId === incoming.userId ||
+  (existing.p256dh === incoming.p256dh && existing.auth === incoming.auth);
+const storedWebEndpoint = {
+  userId: "account-a",
+  p256dh: "stored-public-key",
+  auth: "stored-auth-secret",
+};
+assert.equal(
+  endpointConflictAuthorized(storedWebEndpoint, {
+    userId: "account-a",
+    p256dh: "rotated-public-key",
+    auth: "rotated-auth-secret",
+  }),
+  true,
+);
+assert.equal(
+  endpointConflictAuthorized(storedWebEndpoint, {
+    userId: "account-b",
+    p256dh: "stored-public-key",
+    auth: "stored-auth-secret",
+  }),
+  true,
+);
+assert.equal(
+  endpointConflictAuthorized(storedWebEndpoint, {
+    userId: "account-b",
+    p256dh: "attacker-public-key",
+    auth: "stored-auth-secret",
+  }),
+  false,
+);
+assert.equal(
+  endpointConflictAuthorized(storedWebEndpoint, {
+    userId: "account-b",
+    p256dh: "stored-public-key",
+    auth: "attacker-auth-secret",
+  }),
+  false,
+);
+
 // Executed 101-token retry fixture: the first accepted Expo batch survives the
 // global claim release caused by a transient second batch. The retry sends only
 // the one uncheckpointed token and then completes the canonical event.
@@ -468,5 +604,5 @@ assert.match(alerts, /markGroupFeedRead\(unreadEventIds\)/);
 assert.match(alerts, /filter === "challenge"/);
 
 console.log(
-  "Push validation passed: account lifecycle, staged canonical outbox, compatibility bridges, private challenge feed, cursor drain, and per-token retry checkpoints.",
+  "Push validation passed: native and Web Push account lifecycle, PWA service worker, staged canonical outbox, private challenge feed, cursor drain, and per-target retry checkpoints.",
 );

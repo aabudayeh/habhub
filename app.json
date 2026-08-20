@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "HabHub",
-    "slug": "metrally",
-    "version": "1.0.14",
+    "slug": "habhub",
+    "version": "1.0.15",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
     "scheme": "paceboard",
@@ -91,7 +91,7 @@
           "background": true
         }
       ],
-      "expo-health-connect",
+      "react-native-health-connect",
       [
         "expo-build-properties",
         {
@@ -150,13 +150,13 @@
       "reactCompiler": true
     },
     "updates": {
-      "url": "https://u.expo.dev/f7411fe5-5319-4476-b70b-d7e3a4252a5c"
+      "url": "https://u.expo.dev/3226eb83-db91-4f40-a199-19ab9d025bd4"
     },
-    "owner": "sethypoo",
+    "owner": "sethstar",
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "f7411fe5-5319-4476-b70b-d7e3a4252a5c"
+        "projectId": "3226eb83-db91-4f40-a199-19ab9d025bd4"
       }
     }
   }

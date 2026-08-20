@@ -15,6 +15,7 @@ import {
   isDailyStepReplacementCandidate,
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
+  partitionStepAggregateRange,
   preserveUnchangedDailyAggregateRevision,
   preserveUnchangedStepFallback,
   preferredHealthSourceOrigin,
@@ -36,6 +37,14 @@ const record = (overrides = {}) => ({
 });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageManifest = JSON.parse(
+  fs.readFileSync(path.join(root, "package.json"), "utf8"),
+);
+assert.equal(
+  packageManifest.dependencies?.["react-native-health-connect"],
+  "4.1.3",
+  "Android health reads must use the production-stable Health Connect client wrapper",
+);
 
 const platformPriorityAggregate = [
   { localDate: "2026-08-13", count: 3_435, origin: "Health Connect" },
@@ -272,6 +281,41 @@ assert.equal(
   ).to.getTime(),
   currentChunkEnd.getTime(),
   "today's step aggregate must remain partial at the current instant",
+);
+const partitionedStepRange = partitionStepAggregateRange(
+  {
+    from: new Date(2026, 7, 12, 0, 0),
+    to: currentChunkEnd,
+  },
+  currentChunkEnd,
+);
+assert.equal(
+  partitionedStepRange.historical?.to.getTime(),
+  new Date(2026, 7, 13, 0, 0).getTime(),
+  "completed step buckets must end at today's local midnight",
+);
+assert.equal(
+  partitionedStepRange.current?.from.getTime(),
+  new Date(2026, 7, 13, 0, 0).getTime(),
+  "today's direct aggregate must start at local midnight",
+);
+assert.equal(
+  partitionedStepRange.current?.to.getTime(),
+  currentChunkEnd.getTime(),
+  "today's direct aggregate must never read beyond the captured current time",
+);
+assert.equal(partitionedStepRange.current?.localDate, "2026-08-13");
+const midnightPartition = partitionStepAggregateRange(
+  {
+    from: new Date(2026, 7, 12, 0, 0),
+    to: new Date(2026, 7, 13, 0, 0),
+  },
+  new Date(2026, 7, 13, 0, 0),
+);
+assert.equal(
+  midnightPartition.current,
+  undefined,
+  "an exclusive midnight range must not synthesize a zero row for the new day",
 );
 const exclusiveMidnight = new Date(2026, 7, 13, 0, 0, 0, 0);
 assert.equal(
@@ -563,8 +607,13 @@ const androidHealthSource = fs.readFileSync(
 );
 assert.match(
   androidHealthSource,
-  /const stepRange = localCalendarAggregateRange\(from, to\)/,
+  /const stepRange = localCalendarAggregateRange\(from, to, stepReadAt\)/,
   "daily step aggregation must align chunk reads to local calendar days",
+);
+assert.match(
+  androidHealthSource,
+  /partitionStepAggregateRange\([\s\S]{0,160}stepRange[\s\S]{0,160}stepReadAt/,
+  "historical and current-day step reads must share one midnight-safe clock snapshot",
 );
 assert.match(
   androidHealthSource,

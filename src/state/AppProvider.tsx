@@ -22,6 +22,8 @@ import {
 
 import { createInitialState } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
+import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import { scheduleResponsiveWork } from "@/src/lib/responsiveWork";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
   applyImportedFoodFastBreaks,
@@ -132,27 +134,23 @@ export async function readPersistedAccountState(accountId: string) {
   }
 }
 
+const localPersistenceProjectionCache = new WeakMap<AppState, AppState>();
+
 function stateForLocalPersistence(state: AppState): AppState {
+  const cached = localPersistenceProjectionCache.get(state);
+  if (cached) return cached;
   // Shared member history has its own bounded, per-group cache. Persisting it
   // again inside the monolithic app snapshot made JSON serialization grow with
   // every member and could block Android's JS thread after app switching. This
   // account boundary remains in force after leaving/switching a cloud group so
   // the previous group's values and signed photo URLs cannot survive there.
-  return {
+  const owned = accountOwnedCollections(state);
+  const projected = {
     ...state,
-    entries: state.entries.filter(
-      (entry) => entry.userId === state.currentUserId,
-    ),
-    photos: state.photos.filter(
-      (photo) => photo.userId === state.currentUserId,
-    ),
-    messages: state.messages.filter(
-      (message) => message.senderId === state.currentUserId,
-    ),
-    dailyMetricStatuses: state.dailyMetricStatuses.filter(
-      (status) => status.userId === state.currentUserId,
-    ),
+    ...owned,
   };
+  localPersistenceProjectionCache.set(state, projected);
+  return projected;
 }
 
 export function persistAppStateNow(state: AppState) {
@@ -2983,6 +2981,9 @@ export function AppProvider({
   const persistenceResumeTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+  const persistenceResumeReadTaskRef = useRef<{
+    cancel: () => void;
+  } | null>(null);
   const persistenceDirtyRef = useRef(false);
   const persistenceRevisionRef = useRef(0);
   const persistenceObservedStateRef = useRef<AppState | null>(null);
@@ -3567,6 +3568,8 @@ export function AppProvider({
         clearTimeout(persistenceResumeTimerRef.current);
         persistenceResumeTimerRef.current = null;
       }
+      persistenceResumeReadTaskRef.current?.cancel();
+      persistenceResumeReadTaskRef.current = null;
     };
     const subscription = NativeAppState.addEventListener("change", (next) => {
       clearQueuedPersistence();
@@ -3582,55 +3585,58 @@ export function AppProvider({
       // A native background Health Connect task may have updated storage while
       // this JS process remained suspended. Reconcile that small device-owned
       // delta before any queued foreground save can overwrite it.
-      void (async () => {
-        await persistenceWriteRef.current?.catch(() => undefined);
-        const currentUserId = persistenceStateRef.current.currentUserId;
-        const [saved, savedHealthStatus] = await Promise.all([
-          AsyncStorage.getItem(APP_STORAGE_KEY).catch(() => null),
-          AsyncStorage.getItem(
-            `${HEALTH_STATUS_STORAGE_KEY}:${currentUserId}`,
-          ).catch(() => null),
-        ]);
-        if (saved) {
-          try {
-            let importFromDate: string | undefined;
-            if (savedHealthStatus) {
-              const healthStatus = JSON.parse(
-                savedHealthStatus,
-              ) as PersistedHealthStatus;
-              if (
-                healthStatus.lastReason === "background" &&
-                !healthStatus.error
-              )
-                importFromDate = healthStatus.lastImportFromDate;
+      persistenceResumeReadTaskRef.current = scheduleResponsiveWork(() => {
+        persistenceResumeReadTaskRef.current = null;
+        void (async () => {
+          await persistenceWriteRef.current?.catch(() => undefined);
+          const currentUserId = persistenceStateRef.current.currentUserId;
+          const [saved, savedHealthStatus] = await Promise.all([
+            AsyncStorage.getItem(APP_STORAGE_KEY).catch(() => null),
+            AsyncStorage.getItem(
+              `${HEALTH_STATUS_STORAGE_KEY}:${currentUserId}`,
+            ).catch(() => null),
+          ]);
+          if (saved) {
+            try {
+              let importFromDate: string | undefined;
+              if (savedHealthStatus) {
+                const healthStatus = JSON.parse(
+                  savedHealthStatus,
+                ) as PersistedHealthStatus;
+                if (
+                  healthStatus.lastReason === "background" &&
+                  !healthStatus.error
+                )
+                  importFromDate = healthStatus.lastImportFromDate;
+              }
+              const merged = mergeBackgroundHealthRows(
+                persistenceStateRef.current,
+                JSON.parse(saved) as AppState,
+                importFromDate,
+              );
+              if (merged !== persistenceStateRef.current) {
+                const committed = {
+                  ...merged,
+                  lastSavedAt: new Date().toISOString(),
+                };
+                persistenceStateRef.current = committed;
+                persistenceObservedStateRef.current = committed;
+                persistenceDirtyRef.current = true;
+                persistenceRevisionRef.current += 1;
+                dispatch({ type: "replaceLocal", state: committed });
+              }
+            } catch {
+              // Keep the last valid in-memory snapshot if storage was interrupted.
             }
-            const merged = mergeBackgroundHealthRows(
-              persistenceStateRef.current,
-              JSON.parse(saved) as AppState,
-              importFromDate,
-            );
-            if (merged !== persistenceStateRef.current) {
-              const committed = {
-                ...merged,
-                lastSavedAt: new Date().toISOString(),
-              };
-              persistenceStateRef.current = committed;
-              persistenceObservedStateRef.current = committed;
-              persistenceDirtyRef.current = true;
-              persistenceRevisionRef.current += 1;
-              dispatch({ type: "replaceLocal", state: committed });
-            }
-          } catch {
-            // Keep the last valid in-memory snapshot if storage was interrupted.
           }
-        }
-        if (!persistenceDirtyRef.current) return;
-        // Let navigation paint and resume-time subscriptions settle first.
-        persistenceResumeTimerRef.current = setTimeout(() => {
-          persistenceResumeTimerRef.current = null;
-          queuePersistenceAfterInteractions();
-        }, 4000);
-      })();
+          if (!persistenceDirtyRef.current) return;
+          // Let navigation paint and resume-time subscriptions settle first.
+          persistenceResumeTimerRef.current = setTimeout(() => {
+            persistenceResumeTimerRef.current = null;
+            queuePersistenceAfterInteractions();
+          }, 4000);
+        })();
+      }, { minimumDelayMs: 320, maximumDelayMs: 1_800 });
     });
     return () => {
       subscription.remove();
@@ -3645,6 +3651,8 @@ export function AppProvider({
       persistenceTaskRef.current?.cancel();
       if (persistenceResumeTimerRef.current)
         clearTimeout(persistenceResumeTimerRef.current);
+      persistenceResumeReadTaskRef.current?.cancel();
+      persistenceResumeReadTaskRef.current = null;
       if (persistenceIdleFallbackTimerRef.current)
         clearTimeout(persistenceIdleFallbackTimerRef.current);
       // Do not leave a coalesced persistence promise waiting on a foreground

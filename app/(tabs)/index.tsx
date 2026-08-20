@@ -174,7 +174,13 @@ function Today() {
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
   const locale = useLocale();
+  const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
+  const todaySummaryPinned =
+    state.settings.pinTodayHeaderAndFeaturedCard === true;
+  const stickyTodaySummary =
+    todaySummaryPinned && !tutorial.activeSession;
+  const heroLongPressRef = useRef(false);
   const [completionSortEnabled, setCompletionSortEnabled] = useState(true);
   const exitingEditMode = useRef(false);
   const [draggingMetricId, setDraggingMetricId] = useState<string | null>(null);
@@ -941,9 +947,14 @@ function Today() {
         <ConfettiBurst progress={celebration} special={celebrationSpecial} />
       ) : null}
       <View ref={todayScrollViewportRef} collapsable={false} style={styles.safe}>
+      <TutorialScrollProvider
+        reveal={revealTutorialTarget}
+        setActiveTargetMeasurer={setTutorialTargetMeasurer}
+      >
       <ScrollView
         ref={todayScrollRef}
         style={styles.safe}
+        stickyHeaderIndices={stickyTodaySummary ? [0] : undefined}
         refreshControl={
           <RefreshControl
             enabled={!editing}
@@ -975,9 +986,16 @@ function Today() {
         onMomentumScrollEnd={flushTutorialTargetMeasure}
         scrollEventThrottle={16}
       >
-        <TutorialScrollProvider
-          reveal={revealTutorialTarget}
-          setActiveTargetMeasurer={setTutorialTargetMeasurer}
+        <View
+          testID="today-header-featured-shell"
+          style={
+            stickyTodaySummary
+              ? [
+                  styles.pinnedTodaySummary,
+                  { backgroundColor: colors.canvas },
+                ]
+              : undefined
+          }
         >
         <View style={styles.header}>
           <View style={styles.headerIdentity}>
@@ -1067,7 +1085,28 @@ function Today() {
           testID="today-featured-card"
           accessibilityRole="button"
           accessibilityLabel="Open daily status"
-          onPress={() => router.navigate("/status" as never)}
+          accessibilityActions={[
+            { name: "longpress", label: "Customize Today" },
+          ]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === "longpress" && !editing)
+              beginEditing();
+          }}
+          delayLongPress={325}
+          onPressIn={() => {
+            heroLongPressRef.current = false;
+          }}
+          onLongPress={() => {
+            heroLongPressRef.current = true;
+            if (!editing) beginEditing();
+          }}
+          onPress={() => {
+            if (heroLongPressRef.current) {
+              heroLongPressRef.current = false;
+              return;
+            }
+            router.navigate("/status" as never);
+          }}
           style={[
             styles.hero,
             {
@@ -1228,6 +1267,7 @@ function Today() {
           ) : null}
         </AnimatedPressable>
         </TutorialTarget>
+        </View>
         {showGoalsToday &&
         (tutorialCompletionPreview || (goals.allMet && !allGoalsDismissed)) ? (
           <TutorialTarget id="today-all-complete">
@@ -1601,11 +1641,52 @@ function Today() {
                 Day ends {state.settings.dayEndTime ?? "00:00"}
               </Text>
             </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t(
+                `${todaySummaryPinned ? "Unpin" : "Pin"} ${t("Today")}`,
+              )}
+              accessibilityState={{ selected: todaySummaryPinned }}
+              onPress={() =>
+                updateSettings({
+                  pinTodayHeaderAndFeaturedCard: !todaySummaryPinned,
+                })
+              }
+              style={[
+                styles.add,
+                styles.editActionButton,
+                {
+                  borderColor: todaySummaryPinned ? palette.amber : accent,
+                  backgroundColor: todaySummaryPinned
+                    ? "rgba(233,162,59,.09)"
+                    : "transparent",
+                },
+              ]}
+            >
+              <Ionicons
+                name={todaySummaryPinned ? "pin" : "pin-outline"}
+                size={18}
+                color={todaySummaryPinned ? palette.amber : accent}
+              />
+              <Text
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                numberOfLines={1}
+                style={[
+                  styles.addText,
+                  { color: todaySummaryPinned ? palette.amber : accent },
+                ]}
+              >
+                {t(
+                  `${todaySummaryPinned ? "Unpin" : "Pin"} ${t("Today")}`,
+                )}
+              </Text>
+            </Pressable>
           </View>
           </TutorialTarget>
         ) : null}
-        </TutorialScrollProvider>
       </ScrollView>
+      </TutorialScrollProvider>
       </View>
       {showViewFilters ? (
         <View
@@ -3413,6 +3494,12 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   todayGoldTint: { ...StyleSheet.absoluteFillObject },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
+  pinnedTodaySummary: {
+    marginHorizontal: -14,
+    paddingHorizontal: 14,
+    zIndex: 16,
+    elevation: 12,
+  },
   header: {
     height: 55,
     flexDirection: "row",

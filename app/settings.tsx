@@ -208,6 +208,15 @@ export default function SettingsScreen() {
   const [showHealthSources, setShowHealthSources] = useState(false);
   const [sourceBusy, setSourceBusy] = useState<string | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
+  const isWebHealthBridge = Platform.OS === "web";
+  const hasSyncedPhoneHealth = React.useMemo(
+    () =>
+      state.entries.some(
+        (entry) =>
+          entry.userId === state.currentUserId && Boolean(entry.sourceProvider),
+      ),
+    [state.currentUserId, state.entries],
+  );
   const selectedSyncMode = normalizeHealthSyncMode(state.settings.syncMode);
   const selectedHealthSchedule = healthSyncSchedule(selectedSyncMode);
 
@@ -513,21 +522,33 @@ export default function SettingsScreen() {
               {health.availability?.title ?? "Checking health service…"}
             </Text>
             <Text style={styles.meta}>
-              {state.settings.healthSync.enabled
-                ? "Connected"
-                : "Not connected"}{" "}
-              · {healthLastSync}
+              {isWebHealthBridge
+                ? hasSyncedPhoneHealth
+                  ? "Synced health items"
+                  : "Not connected"
+                : state.settings.healthSync.enabled
+                  ? "Connected"
+                  : "Not connected"}{" "}
+              {!isWebHealthBridge ? `· ${healthLastSync}` : null}
             </Text>
           </View>
           <Chip
             label={
               health.status === "syncing"
                 ? "Syncing"
-                : state.settings.healthSync.enabled
+                : isWebHealthBridge
+                  ? hasSyncedPhoneHealth
+                    ? "Synced"
+                    : "Off"
+                  : state.settings.healthSync.enabled
                   ? "Connected"
                   : "Off"
             }
-            selected={state.settings.healthSync.enabled}
+            selected={
+              isWebHealthBridge
+                ? hasSyncedPhoneHealth
+                : state.settings.healthSync.enabled
+            }
           />
         </View>
         <Text style={[styles.text, { color: colors.muted }]}>
@@ -539,44 +560,46 @@ export default function SettingsScreen() {
             <Text style={styles.noticeText}>{health.errorMessage}</Text>
           </View>
         ) : null}
-        <View style={styles.buttons}>
-          <View style={styles.grow}>
-            <Button
-              label={
-                state.settings.healthSync.enabled
-                  ? "Update access & sync"
-                  : "Connect health data"
-              }
-              icon="heart-outline"
-              loading={
-                busy === "health" ||
-                health.status === "requesting" ||
-                health.status === "syncing"
-              }
-              disabled={!health.availability?.available}
-              onPress={() =>
-                run("health", health.connect, "Health connection failed")
-              }
-            />
-          </View>
-          {state.settings.healthSync.enabled ? (
+        {!isWebHealthBridge ? (
+          <View style={styles.buttons}>
             <View style={styles.grow}>
               <Button
-                label="Sync now"
-                variant="ghost"
-                icon="refresh-outline"
+                label={
+                  state.settings.healthSync.enabled
+                    ? "Update access & sync"
+                    : "Connect health data"
+                }
+                icon="heart-outline"
+                loading={
+                  busy === "health" ||
+                  health.status === "requesting" ||
+                  health.status === "syncing"
+                }
+                disabled={!health.availability?.available}
                 onPress={() =>
-                  run(
-                    "health",
-                    () => health.syncNow("manual"),
-                    "Health sync failed",
-                  )
+                  run("health", health.connect, "Health connection failed")
                 }
               />
             </View>
-          ) : null}
-        </View>
-        {state.settings.healthSync.enabled ? (
+            {state.settings.healthSync.enabled ? (
+              <View style={styles.grow}>
+                <Button
+                  label="Sync now"
+                  variant="ghost"
+                  icon="refresh-outline"
+                  onPress={() =>
+                    run(
+                      "health",
+                      () => health.syncNow("manual"),
+                      "Health sync failed",
+                    )
+                  }
+                />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+        {!isWebHealthBridge && state.settings.healthSync.enabled ? (
           <>
             <View style={styles.healthLinks}>
               <Pressable
@@ -661,7 +684,7 @@ export default function SettingsScreen() {
             </View>
           </>
         ) : null}
-        {health.sourceOptions.length ? (
+        {!isWebHealthBridge && health.sourceOptions.length ? (
           <View style={styles.origins}>
             <Pressable
               onPress={() => setShowHealthSources((value) => !value)}
@@ -731,8 +754,10 @@ export default function SettingsScreen() {
             ) : null}
           </View>
         ) : null}
-        <View style={styles.localDivider} />
-        <Pressable
+        {!isWebHealthBridge ? (
+          <>
+            <View style={styles.localDivider} />
+            <Pressable
           onPress={() => setShowHealthTypes((value) => !value)}
           style={styles.collapseRow}
         >
@@ -752,9 +777,9 @@ export default function SettingsScreen() {
             size={18}
             color={accent}
           />
-        </Pressable>
-        {showHealthTypes
-          ? supportedHealthDataTypes.map((item, index) => (
+            </Pressable>
+            {showHealthTypes
+              ? supportedHealthDataTypes.map((item, index) => (
               <View
                 key={item.id}
                 style={[
@@ -794,8 +819,10 @@ export default function SettingsScreen() {
                   }
                 />
               </View>
-            ))
-          : null}
+                ))
+              : null}
+          </>
+        ) : null}
       </Card>
       <Text style={styles.disclaimer}>
         Imported values are group-visible by default, retain their source app,
@@ -804,7 +831,9 @@ export default function SettingsScreen() {
         share it.
       </Text>
 
-      <SectionHeader
+      {!isWebHealthBridge ? (
+        <>
+          <SectionHeader
         title="Health sync schedule"
         action={
           <Pressable onPress={() => setShowSchedule((value) => !value)}>
@@ -816,9 +845,9 @@ export default function SettingsScreen() {
             </Text>
           </Pressable>
         }
-      />
-      {showSchedule ? (
-        <Card style={styles.list}>
+          />
+          {showSchedule ? (
+            <Card style={styles.list}>
           {syncModes.map((mode, index) => (
             <React.Fragment key={mode.id}>
               {index === 0 || syncModes[index - 1]?.kind !== mode.kind ? (
@@ -879,15 +908,15 @@ export default function SettingsScreen() {
               </Pressable>
             </React.Fragment>
           ))}
-        </Card>
-      ) : null}
-      <View
+            </Card>
+          ) : null}
+          <View
         style={[
           styles.notice,
           styles.scheduleNotice,
           { backgroundColor: colors.canvas },
         ]}
-      >
+          >
         <Ionicons
           name={
             !selectedHealthSchedule.requestsBackground
@@ -902,14 +931,17 @@ export default function SettingsScreen() {
         <Text style={[styles.noticeText, { color: colors.muted }]}>
           {healthScheduleStatus}
         </Text>
-      </View>
-      <Text style={styles.disclaimer}>
-        Background intervals are minimum requests, not exact timers. iOS or
-        Android may run them later or skip a run based on system conditions.
-        Sync now is immediate; automatic app-open checks run only when the
-        selected interval is due. On Android, Force stop pauses background work
-        until HabHub is opened again. Account cloud sync remains separate.
-      </Text>
+          </View>
+          <Text style={styles.disclaimer}>
+            Background intervals are minimum requests, not exact timers. iOS or
+            Android may run them later or skip a run based on system conditions.
+            Sync now is immediate; automatic app-open checks run only when the
+            selected interval is due. On Android, Force stop pauses background
+            work until HabHub is opened again. Account cloud sync remains
+            separate.
+          </Text>
+        </>
+      ) : null}
 
       <ScreenTimeAccessCard />
 

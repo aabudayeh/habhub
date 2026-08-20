@@ -9,6 +9,8 @@ import {
 } from "../src/domain/cloudHash.ts";
 import { reconcileAutomaticFasting } from "../src/domain/fasting.ts";
 import { networkReachability } from "../src/domain/network.ts";
+import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
+import "./validate-responsive-work.mjs";
 
 const ui = fs.readFileSync("src/components/ui.tsx", "utf8");
 const calendar = fs.readFileSync("src/domain/calendar.ts", "utf8");
@@ -49,6 +51,26 @@ assert.match(
   appProvider,
   /commitReducedState\(next, !deferPersistence\)/,
   "device-owned foreground imports must be able to defer monolithic JSON persistence",
+);
+assert.match(
+  appProvider,
+  /localPersistenceProjectionCache = new WeakMap<AppState, AppState>/,
+  "local persistence must reuse privacy-scoped projections for unchanged state",
+);
+assert.match(
+  cloudProvider,
+  /snapshotPayloadCache = new WeakMap<AppState, AppState>/,
+  "cloud hashing and persistence must share one sanitized state projection",
+);
+assert.match(
+  cloudProvider,
+  /await waitForUi\(280, 1_200\)[\s\S]{0,500}fetchSnapshot/,
+  "cached native accounts must yield their first interaction frames before online restore",
+);
+assert.match(
+  appProvider,
+  /persistenceResumeReadTaskRef\.current = scheduleResponsiveWork\([\s\S]{0,5000}minimumDelayMs: 320,[\s\S]{0,100}maximumDelayMs: 1_800/,
+  "foreground cache reconciliation must not parse a full snapshot on the resume tap frame",
 );
 assert.equal(networkReachability(null, null), "unknown");
 assert.equal(networkReachability(false, null), "offline");
@@ -143,6 +165,63 @@ assert.equal(stableValueHash({ b: 2, a: 1 }), stableValueHash({ a: 1, b: 2 }));
 assert.ok(firstHashMs < 2_000, `First 50k-row hash took ${firstHashMs.toFixed(1)}ms`);
 assert.ok(cachedHashMs < 150, `Cached 50k-row hash took ${cachedHashMs.toFixed(1)}ms`);
 assert.ok(changedHashMs < 150, `One-row delta hash took ${changedHashMs.toFixed(1)}ms`);
+
+const projectionRows = Array.from({ length: 50_000 }, (_, index) => ({
+  id: `projection-${index}`,
+  userId: index % 5 === 0 ? "peer" : "owner",
+  senderId: index % 5 === 0 ? "peer" : "owner",
+}));
+const projectionState = {
+  currentUserId: "owner",
+  entries: projectionRows,
+  photos: projectionRows,
+  messages: projectionRows,
+  dailyMetricStatuses: projectionRows,
+};
+const firstProjectionStartedAt = performance.now();
+const firstProjection = accountOwnedCollections(projectionState);
+const firstProjectionMs = performance.now() - firstProjectionStartedAt;
+const wrappedProjectionState = {
+  ...projectionState,
+  settings: { darkMode: true },
+};
+const cachedProjectionStartedAt = performance.now();
+const cachedProjection = accountOwnedCollections(wrappedProjectionState);
+const cachedProjectionMs = performance.now() - cachedProjectionStartedAt;
+assert.equal(firstProjection.entries.length, 40_000);
+assert.equal(firstProjection.messages.length, 40_000);
+assert.equal(cachedProjection.entries, firstProjection.entries);
+assert.equal(cachedProjection.photos, firstProjection.photos);
+assert.equal(cachedProjection.messages, firstProjection.messages);
+assert.equal(
+  cachedProjection.dailyMetricStatuses,
+  firstProjection.dailyMetricStatuses,
+);
+const peerProjection = accountOwnedCollections({
+  ...projectionState,
+  currentUserId: "peer",
+});
+assert.equal(peerProjection.entries.length, 10_000);
+assert.equal(peerProjection.messages.length, 10_000);
+assert.notEqual(peerProjection.entries, firstProjection.entries);
+const ownerOnlyRows = projectionRows.filter((row) => row.userId === "owner");
+const ownerOnlyProjection = accountOwnedCollections({
+  currentUserId: "owner",
+  entries: ownerOnlyRows,
+  photos: ownerOnlyRows,
+  messages: ownerOnlyRows,
+  dailyMetricStatuses: ownerOnlyRows,
+});
+assert.equal(ownerOnlyProjection.entries, ownerOnlyRows);
+assert.equal(ownerOnlyProjection.messages, ownerOnlyRows);
+assert.ok(
+  firstProjectionMs < 500,
+  `First four-collection 50k-row privacy projection took ${firstProjectionMs.toFixed(1)}ms`,
+);
+assert.ok(
+  cachedProjectionMs < 25,
+  `Cached privacy projection took ${cachedProjectionMs.toFixed(2)}ms`,
+);
 entries.push(
   {
     id: "food",
@@ -297,5 +376,5 @@ assert.equal(
 );
 
 console.log(
-  `Interaction performance validation passed (50,000-row Schedule: ${firstPassMs.toFixed(1)} ms first, ${cachedPassMs.toFixed(1)} ms cached; hashes: ${firstHashMs.toFixed(1)} ms first, ${cachedHashMs.toFixed(1)} ms cached, ${changedHashMs.toFixed(1)} ms one-row delta; non-food fasting bypass: ${nonFoodFastingPassMs.toFixed(3)} ms).`,
+  `Interaction performance validation passed (50,000-row Schedule: ${firstPassMs.toFixed(1)} ms first, ${cachedPassMs.toFixed(1)} ms cached; hashes: ${firstHashMs.toFixed(1)} ms first, ${cachedHashMs.toFixed(1)} ms cached, ${changedHashMs.toFixed(1)} ms one-row delta; four privacy projections: ${firstProjectionMs.toFixed(1)} ms first, ${cachedProjectionMs.toFixed(2)} ms cached; non-food fasting bypass: ${nonFoodFastingPassMs.toFixed(3)} ms).`,
 );

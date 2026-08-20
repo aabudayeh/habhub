@@ -810,6 +810,8 @@ export type UserSettings = {
   completionIndicatorFillMode?: CompletionFillMode;
   /** Show the percentage-revealed outline around Today's featured card. */
   showFeaturedCardProgressOutline?: boolean;
+  /** Keep Today's page header and featured summary visible while the list scrolls. */
+  pinTodayHeaderAndFeaturedCard?: boolean;
   /** Personal visual treatment for the continuously morphed Status figure. */
   statusAvatarStyle?: StatusAvatarStyle;
   /** Defaults to BMI; composition is used only when both required readings exist. */

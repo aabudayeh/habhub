@@ -9,6 +9,7 @@ import {
   canUseCachedSharedRaw,
   projectionSurvivesSharedMetricPrivacyFences,
 } from "../src/domain/sharedMetricPrivacy.ts";
+import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
@@ -19,6 +20,7 @@ const group = read("app/(tabs)/group.tsx");
 const leaderboardDetail = read("app/leaderboard-detail.tsx");
 const log = read("app/(tabs)/log.tsx");
 const appProvider = read("src/state/AppProvider.tsx");
+const accountCollections = read("src/domain/accountCollections.ts");
 const groupActivityCacheTypes = read(
   "src/storage/groupActivityCache.types.ts",
 );
@@ -453,10 +455,41 @@ assert.match(
   /const deletedEntryKeys = new Set\(activity\.deletedEntryKeys \?\? \[\]\)[\s\S]{0,500}!deletedEntryKeys\.has\(metricEntryKey\(entry\.userId, entry\.id\)\)/,
   "a full-workspace merge must apply precise tombstones before preserving out-of-window cached entries",
 );
+const mixedAccountRows = [
+  { id: "owned", userId: "owner", senderId: "owner" },
+  { id: "foreign", userId: "peer", senderId: "peer" },
+];
+const ownedCollections = accountOwnedCollections({
+  currentUserId: "owner",
+  entries: mixedAccountRows,
+  photos: mixedAccountRows,
+  messages: mixedAccountRows,
+  dailyMetricStatuses: mixedAccountRows,
+});
+for (const rows of Object.values(ownedCollections))
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    ["owned"],
+    "the shared account projection must exclude every foreign account row",
+  );
 assert.match(
   appProvider,
-  /function stateForLocalPersistence[\s\S]{0,650}entries: state\.entries\.filter\([\s\S]{0,160}currentUserId[\s\S]{0,350}photos: state\.photos\.filter\([\s\S]{0,160}currentUserId/,
+  /function stateForLocalPersistence[\s\S]{0,900}accountOwnedCollections\(state\)[\s\S]{0,250}\.\.\.owned/,
   "account persistence must never retain foreign activity or signed photo URLs, including after a group switch",
+);
+assert.match(
+  provider,
+  /function snapshotPayload[\s\S]{0,300}const owned = accountOwnedCollections\(state\)/,
+  "cloud snapshots must use the same account-owned privacy projection",
+);
+assert.match(provider, /entries: owned\.entries\.map/);
+assert.match(provider, /photos: owned\.photos\.map/);
+assert.match(provider, /messages: owned\.messages\.map/);
+assert.match(provider, /dailyMetricStatuses: owned\.dailyMetricStatuses/);
+assert.match(
+  accountCollections,
+  /const accountId = state\.currentUserId[\s\S]{0,500}accountEntries\(state\.entries, accountId\)[\s\S]{0,500}accountMessages\([\s\S]{0,120}accountId/,
+  "the shared projection must key every cached collection by the active account",
 );
 assert.match(
   provider,

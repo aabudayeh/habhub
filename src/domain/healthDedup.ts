@@ -372,6 +372,55 @@ export function localCalendarAggregateRange(
   return { from: start, to: end };
 }
 
+/**
+ * Splits a calendar-aligned Steps read into completed local days and today's
+ * partial day from one clock snapshot. Keeping this in the domain layer makes
+ * the midnight boundary deterministic: a read that begins just before
+ * midnight cannot accidentally pair tomorrow's date with yesterday's range.
+ *
+ * The current slice always ends at `now`, never tomorrow's midnight. Health
+ * Connect can then apply its Activity priority and overlap removal to exactly
+ * the records available so far without us summing phone, watch, or app totals.
+ */
+export function partitionStepAggregateRange(
+  range: { from: Date; to: Date },
+  now: Date,
+) {
+  const from = new Date(range.from);
+  const to = new Date(range.to);
+  const readAt = new Date(now);
+  if (
+    ![from, to, readAt].every((date) => Number.isFinite(date.getTime())) ||
+    to <= from
+  )
+    throw new Error("Step aggregate range must have a positive duration.");
+
+  const todayStart = new Date(readAt);
+  todayStart.setHours(0, 0, 0, 0);
+  const historicalEnd = new Date(
+    Math.min(to.getTime(), todayStart.getTime()),
+  );
+  const currentStart = new Date(
+    Math.max(from.getTime(), todayStart.getTime()),
+  );
+  const currentEnd = new Date(Math.min(to.getTime(), readAt.getTime()));
+
+  return {
+    historical:
+      historicalEnd > from
+        ? { from, to: historicalEnd }
+        : undefined,
+    current:
+      currentEnd > currentStart
+        ? {
+            from: currentStart,
+            to: currentEnd,
+            localDate: localDateString(readAt),
+          }
+        : undefined,
+  };
+}
+
 function finiteTime(value: string) {
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : 0;

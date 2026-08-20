@@ -84,7 +84,48 @@ pnpm.cmd dlx eas-cli@latest env:create --environment production --name EXPO_PUBL
 
 Add the legal/support URL variables from `.env.example` before store submission.
 
-## 5. Build and deploy
+## 5. Configure standards-based Web Push
+
+Web Push uses one VAPID P-256 keypair for the web origin. Generate the pair once
+with a reputable Web Push tool. The public key is browser configuration; the
+private key must never enter Expo, the web bundle, Git, or an `EXPO_PUBLIC_`
+variable.
+
+Set the public key for the static Expo export:
+
+```text
+EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY=URL_SAFE_PUBLIC_KEY
+```
+
+Set the matching Edge Function secrets:
+
+```powershell
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_PUBLIC_KEY=URL_SAFE_PUBLIC_KEY
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_PRIVATE_KEY=URL_SAFE_PRIVATE_KEY
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_SUBJECT=mailto:notifications@YOUR_DOMAIN
+```
+
+Use this rollout order so the native Expo path never depends on an incomplete
+browser rollout:
+
+1. Apply `202608200001_web_push_subscriptions.sql`.
+2. Set and verify all three VAPID Edge secrets.
+3. Deploy `send-push`.
+4. Export and deploy the HTTPS web app with the matching public key.
+5. From the installed PWA, enable notifications with the in-app switch and
+   verify a chat/group event while the PWA is closed.
+
+Do not rotate the VAPID pair casually: existing browser subscriptions are bound
+to its public key. The client can replace a subscription after a deliberate
+rotation, but every browser must reopen once to register the replacement.
+
+On iPhone and iPad, add HabHub to the Home Screen and open that installed app
+before enabling notifications. Web Push currently carries server-owned chat,
+group, leaderboard, membership, and challenge events. Native timed tracker and
+to-do reminders remain device-scheduled; equivalent closed-browser reminder
+delivery would require a separate server-side scheduler.
+
+## 6. Build and deploy
 
 Health sync, barcode scanning, and push notifications are configured in `app.json`. They require a new native EAS build. Remote push is not available in Expo Go on Android; test it in the preview/release APK. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
 
@@ -128,7 +169,7 @@ pnpm.cmd dlx eas-cli@latest deploy --prod
 
 You may instead upload `dist/` to another static host. Add that exact domain to the Supabase redirect allowlist.
 
-## 6. Store-launch responsibilities
+## 7. Store-launch responsibilities
 
 Before public release:
 

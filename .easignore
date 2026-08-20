@@ -11,6 +11,7 @@ node_modules/
 .env.*
 !.env.example
 *.jks
+credentials.json
 *.p8
 *.p12
 *.key

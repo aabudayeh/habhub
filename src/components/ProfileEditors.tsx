@@ -29,10 +29,19 @@ import { ActivityLevel, BiologicalSex, WeightDirection } from "@/src/types";
 import { Card, Chip } from "./ui";
 import { DraftNumberInput } from "./DraftNumberInput";
 
+const PLANNED_WEIGHT_RATE_PRESETS = [0.25, 0.5, 0.75, 1] as const;
+
+function isPlannedWeightRatePreset(rate: number) {
+  return PLANNED_WEIGHT_RATE_PRESETS.some(
+    (preset) => Math.abs(preset - rate) < 0.001,
+  );
+}
+
 export function EnergyProfileEditor() {
   const { state, updateEnergyProfile, updateSettings } = useApp();
   const profile = state.settings.energyProfile;
   const colors = useAppColors();
+  const accent = useGroupAccent();
   const locale = useLocale();
   const bmr = Math.round(calculateBmr(profile));
   const estimatedActivity = Math.round(calculateActivityFromLevel(profile));
@@ -41,6 +50,12 @@ export function EnergyProfileEditor() {
   const direction = state.settings.weightDirection ?? "lose";
   const managesWeight = weightManagementEnabled(state.settings);
   const [collapsed, setCollapsed] = React.useState(true);
+  const [customRateOpen, setCustomRateOpen] = React.useState(
+    () => !isPlannedWeightRatePreset(profile.desiredWeeklyLossKg),
+  );
+  const customRateSelected =
+    customRateOpen ||
+    !isPlannedWeightRatePreset(profile.desiredWeeklyLossKg);
   const adjustment = recommendedDailyDeficit(profile);
   const intake = recommendedDailyIntakeForDirection(profile, direction);
   const weightPlan = weightProgressStats(
@@ -56,6 +71,10 @@ export function EnergyProfileEditor() {
       }).format(new Date(`${weightPlan.expectedGoalDate}T12:00:00`))
     : null;
   function setDirection(next: WeightDirection) {
+    const nextRate =
+      next === "maintain"
+        ? 0
+        : Math.max(0.25, profile.desiredWeeklyLossKg || 0.5);
     updateSettings({
       weightDirection: next,
       weightManagementEnabled: true,
@@ -69,11 +88,10 @@ export function EnergyProfileEditor() {
           : next === "lose"
             ? Math.min(profile.targetWeightKg, profile.weightKg - 0.1)
             : Math.max(profile.targetWeightKg, profile.weightKg + 0.1),
-      desiredWeeklyLossKg:
-        next === "maintain"
-          ? 0
-          : Math.max(0.25, profile.desiredWeeklyLossKg || 0.5),
+      desiredWeeklyLossKg: nextRate,
     });
+    if (next !== "maintain")
+      setCustomRateOpen(!isPlannedWeightRatePreset(nextRate));
   }
   return (
     <>
@@ -82,33 +100,129 @@ export function EnergyProfileEditor() {
         collapsed={collapsed}
         onToggle={() => setCollapsed((value) => !value)}
       />
-      {!collapsed ? <Card>
+      {!collapsed ? <Card style={styles.energyCard}>
         <Text style={[styles.help, { color: colors.muted }]}>
           Used for your private BMR, recommended deficit, and food-intake goals.
         </Text>
-        <Text style={[styles.label, { color: colors.ink }]}>Weight direction</Text>
-        <View style={styles.chips}>
-          <Chip
-            label="Not managing"
-            selected={!managesWeight}
-            onPress={() => updateSettings({ weightManagementEnabled: false })}
-          />
-          {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
+        <View
+          style={[
+            styles.planPanel,
+            { backgroundColor: colors.canvas, borderColor: colors.border },
+          ]}
+        >
+          <Text
+            style={[styles.label, styles.panelFirstLabel, { color: colors.ink }]}
+          >
+            Weight direction
+          </Text>
+          <View style={styles.chips}>
             <Chip
-              key={item}
-              label={item[0].toUpperCase() + item.slice(1)}
-              selected={managesWeight && direction === item}
-              onPress={() => setDirection(item)}
+              label="Not managing"
+              selected={!managesWeight}
+              onPress={() => updateSettings({ weightManagementEnabled: false })}
             />
-          ))}
+            {(["lose", "maintain", "gain"] as WeightDirection[]).map((item) => (
+              <Chip
+                key={item}
+                label={item[0].toUpperCase() + item.slice(1)}
+                selected={managesWeight && direction === item}
+                onPress={() => setDirection(item)}
+              />
+            ))}
+          </View>
+          {managesWeight ? (
+            <Text style={[styles.help, { color: colors.muted }]}>
+              {direction === "lose"
+                ? "Target weight must be below your current weight."
+                : direction === "gain"
+                  ? "Target weight must be above your current weight."
+                  : "Maintenance keeps target weight equal to current weight."}
+            </Text>
+          ) : null}
+          {managesWeight && direction !== "maintain" ? (
+            <View style={styles.rateSection}>
+              <Text
+                style={[styles.label, styles.rateLabel, { color: colors.ink }]}
+              >
+                Planned weight {direction === "gain" ? "gain" : "loss"} per week
+              </Text>
+              <View style={styles.chips}>
+                {PLANNED_WEIGHT_RATE_PRESETS.map((rate) => (
+                  <Chip
+                    key={rate}
+                    label={`${rate} kg`}
+                    selected={
+                      !customRateSelected &&
+                      profile.desiredWeeklyLossKg === rate
+                    }
+                    onPress={() => {
+                      setCustomRateOpen(false);
+                      updateEnergyProfile({ desiredWeeklyLossKg: rate });
+                    }}
+                  />
+                ))}
+                <Chip
+                  label="Custom"
+                  selected={customRateSelected}
+                  onPress={() => setCustomRateOpen(true)}
+                />
+              </View>
+              {customRateSelected ? (
+                <View
+                  style={[
+                    styles.customRatePanel,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                  ]}
+                >
+                  <View style={styles.customRateCopy}>
+                    <Ionicons name="options-outline" size={16} color={accent} />
+                    <Text
+                      style={[styles.customRateTitle, { color: colors.ink }]}
+                    >
+                      Custom rate
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.rateInputWrap,
+                      styles.customRateInputWrap,
+                      { borderColor: colors.border },
+                    ]}
+                  >
+                    <DraftNumberInput
+                      accessibilityLabel="Custom rate"
+                      value={profile.desiredWeeklyLossKg}
+                      selectTextOnFocus
+                      keyboardType="decimal-pad"
+                      minimum={0.05}
+                      maximum={2}
+                      onCommit={(desiredWeeklyLossKg) =>
+                        updateEnergyProfile({ desiredWeeklyLossKg })
+                      }
+                      style={[styles.rateInput, { color: colors.ink }]}
+                    />
+                    <Text style={[styles.unit, { color: colors.muted }]}>
+                      kg/week
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+              {expectedDate ? (
+                <Text
+                  style={[
+                    styles.help,
+                    styles.estimateCopy,
+                    { color: colors.muted },
+                  ]}
+                >
+                  Estimated target date: {expectedDate}. This follows your recent
+                  measured pace when enough weigh-ins exist; otherwise it uses
+                  your selected plan.
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
         </View>
-        {managesWeight ? <Text style={[styles.help, { color: colors.muted }]}>
-          {direction === "lose"
-            ? "Target weight must be below your current weight."
-            : direction === "gain"
-              ? "Target weight must be above your current weight."
-              : "Maintenance keeps target weight equal to current weight."}
-        </Text> : null}
         <View style={styles.grid}>
           {[
             {
@@ -264,52 +378,6 @@ export function EnergyProfileEditor() {
             />
             <Text style={[styles.unit, { color: colors.muted }]}>kcal/day</Text>
           </View>
-        ) : null}
-        {managesWeight && direction !== "maintain" ? (
-          <>
-            <Text style={[styles.label, { color: colors.ink }]}>Planned weight {direction === "gain" ? "gain" : "loss"} per week</Text>
-            <View style={styles.chips}>
-              {[0.25, 0.5, 0.75, 1].map((rate) => (
-                <Chip
-                  key={rate}
-                  label={`${rate} kg`}
-                  selected={profile.desiredWeeklyLossKg === rate}
-                  onPress={() => updateEnergyProfile({ desiredWeeklyLossKg: rate })}
-                />
-              ))}
-            </View>
-            <View style={styles.customRate}>
-              <Text style={[styles.help, { color: colors.muted }]}>
-                Custom rate
-              </Text>
-              <View
-                style={[styles.rateInputWrap, { borderColor: colors.border }]}
-              >
-                <DraftNumberInput
-                  value={profile.desiredWeeklyLossKg}
-                  selectTextOnFocus
-                  keyboardType="decimal-pad"
-                  minimum={0.05}
-                  maximum={2}
-                  commitOnChange
-                  onCommit={(desiredWeeklyLossKg) =>
-                    updateEnergyProfile({ desiredWeeklyLossKg })
-                  }
-                  style={[styles.rateInput, { color: colors.ink }]}
-                />
-                <Text style={[styles.unit, { color: colors.muted }]}>
-                  kg/week
-                </Text>
-              </View>
-            </View>
-            {expectedDate ? (
-              <Text style={[styles.help, { color: colors.muted }]}>
-                Estimated target date: {expectedDate}. This follows your recent
-                measured pace when enough weigh-ins exist; otherwise it uses
-                your selected plan.
-              </Text>
-            ) : null}
-          </>
         ) : null}
         <View style={[styles.equation, { backgroundColor: colors.canvas }]}>
           <Stat value={bmr} label="BMR kcal" />
@@ -567,11 +635,18 @@ function CollapsibleSectionHeader({
   action?: React.ReactNode;
 }) {
   const colors = useAppColors();
+  const accent = useGroupAccent();
   return (
-    <View style={styles.sectionHeader}>
+    <View
+      style={[
+        styles.sectionHeader,
+        { backgroundColor: colors.card, borderColor: colors.border },
+      ]}
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: !collapsed }}
+        accessibilityLabel={`${collapsed ? "Expand" : "Collapse"} ${title}`}
         onPress={onToggle}
         hitSlop={6}
         style={styles.sectionTitleButton}
@@ -580,7 +655,9 @@ function CollapsibleSectionHeader({
       </Pressable>
       {action}
       <Pressable
+        accessibilityRole="button"
         accessibilityLabel={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+        accessibilityState={{ expanded: !collapsed }}
         onPress={onToggle}
         hitSlop={8}
         style={styles.sectionChevron}
@@ -588,7 +665,7 @@ function CollapsibleSectionHeader({
         <Ionicons
           name={collapsed ? "chevron-down" : "chevron-up"}
           size={18}
-          color={colors.muted}
+          color={accent}
         />
       </Pressable>
     </View>
@@ -615,30 +692,70 @@ function Stat({
 }
 const styles = StyleSheet.create({
   sectionHeader: {
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    marginTop: 8,
-    marginBottom: 12,
+    gap: 9,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 13,
+    marginTop: 10,
+    marginBottom: 7,
   },
   sectionTitleButton: {
     flex: 1,
-    minHeight: 34,
+    minHeight: 56,
     flexDirection: "row",
     alignItems: "center",
   },
   sectionChevron: {
     width: 30,
-    minHeight: 34,
+    minHeight: 56,
     alignItems: "flex-end",
     justifyContent: "center",
   },
   sectionTitle: {
     flex: 1,
-    fontSize: 17,
-    fontWeight: "800",
-    letterSpacing: -0.2,
+    fontSize: 11,
+    fontWeight: "900",
   },
+  energyCard: { gap: 0 },
+  planPanel: {
+    borderWidth: 1,
+    borderRadius: 15,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  panelFirstLabel: { marginTop: 0 },
+  rateSection: {
+    marginTop: 4,
+    paddingTop: 4,
+  },
+  rateLabel: { marginTop: 4 },
+  customRatePanel: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 13,
+    paddingLeft: 10,
+    paddingRight: 6,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    rowGap: 6,
+    gap: 8,
+  },
+  customRateCopy: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  customRateTitle: { fontSize: 10, fontWeight: "900" },
+  customRateInputWrap: { maxWidth: "100%", flexShrink: 1 },
+  estimateCopy: { marginTop: 8, marginBottom: 0 },
   help: { color: palette.muted, fontSize: 11, lineHeight: 16, marginBottom: 8 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 9 },
   field: { width: "48%", minWidth: 130 },
@@ -659,19 +776,13 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
+    minWidth: 0,
     color: palette.ink,
     fontSize: 14,
     fontWeight: "900",
     paddingVertical: 10,
   },
   unit: { color: palette.muted, fontSize: 9 },
-  customRate: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginTop: 2,
-  },
   rateInputWrap: {
     width: 136,
     height: 38,
@@ -684,6 +795,7 @@ const styles = StyleSheet.create({
   activityOverride: { marginTop: 2 },
   rateInput: {
     flex: 1,
+    minWidth: 0,
     fontSize: 11,
     fontWeight: "900",
     paddingVertical: 7,
@@ -752,6 +864,7 @@ const styles = StyleSheet.create({
   },
   goalText: {
     flex: 1,
+    minWidth: 0,
     color: palette.ink,
     fontSize: 11,
     fontWeight: "900",

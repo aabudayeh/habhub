@@ -1,4 +1,5 @@
 {
+  "Connect Apple Health or Health Connect in the installed HabHub phone app. When both devices use the same signed-in account, those imported entries appear on web with their original source identity instead of being added twice.": "اربط Apple Health أو Health Connect في تطبيق HabHub المثبت على هاتفك. عندما يستخدم الجهازان الحساب نفسه الذي تم تسجيل الدخول إليه، تظهر الإدخالات المستوردة على الويب بهوية مصدرها الأصلية بدلاً من إضافتها مرتين.",
   "Avatar simulator": "محاكي الصورة الرمزية",
   "Preview a change without saving it.": "عاين التغيير دون حفظه.",
   "Choose what to change": "اختر ما تريد تغييره",

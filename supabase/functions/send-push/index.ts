@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import webpush from "npm:web-push@3.6.7";
 
 type PushCategory =
   | "chat"
@@ -43,6 +44,21 @@ type PushTicket = {
   message?: string;
   details?: { error?: string };
 };
+type ExpoPushTarget = {
+  kind: "expo";
+  token: string;
+  preferences: Record<string, unknown>;
+};
+type WebPushTarget = {
+  kind: "web";
+  token: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  expirationTime: number | null;
+  preferences: Record<string, unknown>;
+};
+type PushTarget = ExpoPushTarget | WebPushTarget;
 type StoredPushEvent = {
   id: string;
   event_key: string;
@@ -378,10 +394,42 @@ Deno.serve(async (request) => {
 
     const { data: tokens, error: tokenError } = await admin
       .from("device_push_tokens")
-      .select("token, preferences")
+      .select("token, preferences, platform")
       .in("user_id", recipientIds);
     if (tokenError) throw tokenError;
-    if (!(tokens ?? []).length) {
+    const webSubscriptionResult = await admin
+      .from("web_push_subscriptions")
+      .select("endpoint, p256dh, auth, expiration_time, preferences")
+      .in("user_id", recipientIds);
+    if (
+      webSubscriptionResult.error &&
+      !isMissingWebPushSubscriptionsError(webSubscriptionResult.error)
+    )
+      throw webSubscriptionResult.error;
+    const targets: PushTarget[] = [
+      ...(tokens ?? []).map((item) => ({
+        kind: "expo" as const,
+        token: item.token as string,
+        preferences: objectRecord(item.preferences),
+      })),
+      ...(webSubscriptionResult.error
+        ? []
+        : (webSubscriptionResult.data ?? []).map((item) => {
+            const expirationTime = Number(item.expiration_time);
+            return {
+              kind: "web" as const,
+              token: item.endpoint as string,
+              endpoint: item.endpoint as string,
+              p256dh: item.p256dh as string,
+              auth: item.auth as string,
+              expirationTime: Number.isFinite(expirationTime)
+                ? expirationTime
+                : null,
+              preferences: objectRecord(item.preferences),
+            };
+          })),
+    ];
+    if (!targets.length) {
       await releaseClaim(admin, canonical.eventKey);
       claimedEvent = undefined;
       return json({ sent: 0, retryable: true, accepted: false });
@@ -389,7 +437,7 @@ Deno.serve(async (request) => {
 
     // Quiet hours intentionally suppress live group activity. Delayed delivery
     // would require per-recipient queues because one event can span time zones.
-    const preferenceEligible = (tokens ?? []).filter(
+    const preferenceEligible = targets.filter(
       (item) =>
         preferenceAllowed(item.preferences ?? {}, canonical!) &&
         !inQuietHours(item.preferences ?? {}),
@@ -412,7 +460,13 @@ Deno.serve(async (request) => {
     const eligible = preferenceEligible.filter(
       (item) => !alreadyAccepted.has(item.token),
     );
-    const messages = eligible.map((item) => {
+    const expoEligible = eligible.filter(
+      (item): item is ExpoPushTarget => item.kind === "expo",
+    );
+    const webEligible = eligible.filter(
+      (item): item is WebPushTarget => item.kind === "web",
+    );
+    const messages = expoEligible.map((item) => {
       const language = pushLanguage(item.preferences ?? {});
       return {
         to: item.token,
@@ -461,7 +515,7 @@ Deno.serve(async (request) => {
         const staleTokens = tickets.flatMap((ticket, index) =>
           ticket.status === "error" &&
           ticket.details?.error === "DeviceNotRegistered"
-            ? [eligible[offset + index]?.token]
+            ? [expoEligible[offset + index]?.token]
             : [],
         ).filter((token): token is string => Boolean(token));
         const terminalTokens = [...acceptedTokens, ...staleTokens];
@@ -493,10 +547,57 @@ Deno.serve(async (request) => {
         if (transient)
           throw new Error(transient.message || "Expo push delivery failed");
       }
-      if (acceptedTicketCount === 0 && eligible.length > 0) {
-        await releaseClaim(admin, canonical.eventKey);
-        claimedEvent = undefined;
-        return json({ sent: 0, retryable: true, accepted: false });
+    }
+
+    if (webEligible.length) {
+      const topic = await webPushTopic(canonical.eventKey);
+      const vapidDetails = webPushVapidDetails();
+      for (let offset = 0; offset < webEligible.length; offset += 20) {
+        const batch = webEligible.slice(offset, offset + 20);
+        const outcomes = await Promise.allSettled(
+          batch.map((target) =>
+            sendWebPushTarget(target, canonical!, topic, vapidDetails),
+          ),
+        );
+        const acceptedTokens = outcomes.flatMap((outcome, index) =>
+          outcome.status === "fulfilled" && outcome.value === "accepted"
+            ? [batch[index].token]
+            : [],
+        );
+        const staleTokens = outcomes.flatMap((outcome, index) =>
+          outcome.status === "fulfilled" && outcome.value === "stale"
+            ? [batch[index].token]
+            : [],
+        );
+        const terminalTokens = [...acceptedTokens, ...staleTokens];
+        if (terminalTokens.length) {
+          const acceptanceWrite = await admin
+            .from("push_token_dispatch_acceptances")
+            .upsert(
+              terminalTokens.map((token) => ({
+                event_key: canonical!.eventKey,
+                token,
+              })),
+              { onConflict: "event_key,token", ignoreDuplicates: true },
+            );
+          if (acceptanceWrite.error) throw acceptanceWrite.error;
+        }
+        if (staleTokens.length) {
+          const staleCleanup = await admin
+            .from("web_push_subscriptions")
+            .delete()
+            .in("endpoint", staleTokens);
+          if (staleCleanup.error) throw staleCleanup.error;
+        }
+        acceptedTicketCount += acceptedTokens.length;
+        const transient = outcomes.find(
+          (outcome): outcome is PromiseRejectedResult =>
+            outcome.status === "rejected",
+        );
+        if (transient)
+          throw transient.reason instanceof Error
+            ? transient.reason
+            : new Error("Web Push delivery failed");
       }
     }
 
@@ -505,7 +606,9 @@ Deno.serve(async (request) => {
     await markCanonicalEventAccepted(
       admin,
       canonical,
-      messages.length ? "gateway_accepted" : "preference_suppressed",
+      messages.length || webEligible.length
+        ? "gateway_accepted"
+        : "preference_suppressed",
     );
     return json({ sent: acceptedTicketCount, accepted: true });
   } catch (error) {
@@ -1189,6 +1292,191 @@ function isMissingOutboxError(error: unknown) {
       message,
     )
   );
+}
+
+function isMissingWebPushSubscriptionsError(error: unknown) {
+  const value = objectRecord(error);
+  const code = String(value.code ?? "");
+  const message = [value.message, value.details, value.hint]
+    .filter((part) => typeof part === "string")
+    .join(" ");
+  return (
+    code === "42P01" ||
+    code === "PGRST205" ||
+    /web_push_subscriptions.*(?:does not exist|schema cache|not find)/i.test(
+      message,
+    )
+  );
+}
+
+function webPushVapidDetails() {
+  const publicKey = normalizedString(
+    Deno.env.get("WEB_PUSH_VAPID_PUBLIC_KEY"),
+    120,
+  );
+  const privateKey = normalizedString(
+    Deno.env.get("WEB_PUSH_VAPID_PRIVATE_KEY"),
+    100,
+  );
+  const subject = normalizedString(
+    Deno.env.get("WEB_PUSH_VAPID_SUBJECT"),
+    300,
+  );
+  if (
+    !publicKey ||
+    !privateKey ||
+    !subject ||
+    !/^[A-Za-z0-9_-]{80,100}$/.test(publicKey) ||
+    !/^[A-Za-z0-9_-]{40,80}$/.test(privateKey) ||
+    !validVapidSubject(subject)
+  )
+    throw new Error("Web Push VAPID secrets are missing or invalid");
+  return { publicKey, privateKey, subject };
+}
+
+function validVapidSubject(subject: string) {
+  if (/^mailto:[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(subject)) return true;
+  try {
+    const value = new URL(subject);
+    return (
+      value.protocol === "https:" &&
+      value.hostname !== "localhost" &&
+      value.hostname !== "127.0.0.1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function webPushTopic(eventKey: string) {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(eventKey)),
+  );
+  let binary = "";
+  for (const byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "")
+    .slice(0, 32);
+}
+
+async function sendWebPushTarget(
+  target: WebPushTarget,
+  event: CanonicalEvent,
+  topic: string,
+  vapidDetails: ReturnType<typeof webPushVapidDetails>,
+) {
+  if (!(await validWebPushTarget(target))) return "stale" as const;
+  if (target.expirationTime && target.expirationTime <= Date.now())
+    return "stale" as const;
+  const language = pushLanguage(target.preferences);
+  const expiresAt = event.expiresAt
+    ? new Date(event.expiresAt).getTime()
+    : Date.now() + 24 * 60 * 60 * 1000;
+  const ttl = Math.max(
+    0,
+    Math.min(
+      24 * 60 * 60,
+      Math.ceil((expiresAt - Date.now()) / 1000),
+    ),
+  );
+  const payload = JSON.stringify({
+    title: pushPreview(
+      event.titles?.[language] ?? event.titles?.en ?? event.title,
+      120,
+    ),
+    body: pushPreview(
+      event.bodies?.[language] ?? event.bodies?.en ?? event.body,
+      220,
+    ),
+    data: event.data,
+    tag: topic,
+  });
+  try {
+    await webpush.sendNotification(
+      {
+        endpoint: target.endpoint,
+        expirationTime: target.expirationTime,
+        keys: {
+          p256dh: target.p256dh,
+          auth: target.auth,
+        },
+      },
+      payload,
+      {
+        TTL: ttl,
+        urgency: "high",
+        topic,
+        vapidDetails,
+      },
+    );
+    return "accepted" as const;
+  } catch (error) {
+    const statusCode = Number(objectRecord(error).statusCode);
+    if (statusCode === 404 || statusCode === 410) return "stale" as const;
+    throw new Error(
+      Number.isFinite(statusCode)
+        ? `Web Push gateway failed: ${statusCode}`
+        : "Web Push gateway failed",
+    );
+  }
+}
+
+async function validWebPushTarget(target: WebPushTarget) {
+  if (
+    !/^[A-Za-z0-9_-]{40,200}$/.test(target.p256dh) ||
+    !/^[A-Za-z0-9_-]{8,100}$/.test(target.auth)
+  )
+    return false;
+  try {
+    const endpoint = new URL(target.endpoint);
+    const hostname = endpoint.hostname.toLowerCase().replace(/\.$/, "");
+    const nonPublicHostname =
+      !hostname.includes(".") ||
+      hostname.includes(":") ||
+      /^[0-9.]+$/.test(hostname) ||
+      /(?:^|\.)(?:localhost|local|internal|lan|home|corp|test|invalid|example)$/.test(
+        hostname,
+      );
+    if (!(
+      endpoint.protocol === "https:" &&
+      !endpoint.username &&
+      !endpoint.password &&
+      !endpoint.hash &&
+      (!endpoint.port || endpoint.port === "443") &&
+      !nonPublicHostname
+    ))
+      return false;
+    const publicKey = base64UrlByteArray(target.p256dh);
+    const authSecret = base64UrlByteArray(target.auth);
+    if (
+      publicKey.length !== 65 ||
+      publicKey[0] !== 4 ||
+      authSecret.length !== 16
+    )
+      return false;
+    await crypto.subtle.importKey(
+      "raw",
+      publicKey,
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      [],
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function base64UrlByteArray(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(
+    normalized.length + ((4 - (normalized.length % 4)) % 4),
+    "=",
+  );
+  const decoded = atob(padded);
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
 }
 
 function syntheticStoredEvent(input: Record<string, unknown>): StoredPushEvent {
