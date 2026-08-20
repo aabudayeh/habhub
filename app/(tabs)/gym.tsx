@@ -542,10 +542,13 @@ function GymScreen() {
       if (!actions.length) return;
       setQueuedNativeTimerActions((current) => {
         const known = new Set(
-          current.map((item) => `${item.action}:${item.occurredAt}`),
+          current.map(
+            (item) =>
+              `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}`,
+          ),
         );
         const additions = actions.filter((item) => {
-          const id = `${item.action}:${item.occurredAt}`;
+          const id = `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}`;
           if (known.has(id) || processedNativeTimerActionIds.current.has(id))
             return false;
           known.add(id);
@@ -1316,7 +1319,9 @@ function GymScreen() {
         // its persisted action now; the AppState replay remains a race-safe
         // fallback when Android wakes the app later.
         if (nativeWorkoutActionsEnabled())
-          void consumeWorkoutTimerActions().then(enqueueNativeTimerActions);
+          void consumeWorkoutTimerActions(state.currentUserId).then(
+            enqueueNativeTimerActions,
+          );
         void Notifications.clearLastNotificationResponseAsync();
         return;
       }
@@ -1332,7 +1337,7 @@ function GymScreen() {
       if (response) handle(response);
     });
     return () => subscription.remove();
-  }, [enqueueNativeTimerActions, tutorialSandbox]);
+  }, [enqueueNativeTimerActions, state.currentUserId, tutorialSandbox]);
 
   function updateSet(exerciseId: string, setId: string, changes: Partial<GymSet>) {
     setExercises((current) =>
@@ -2126,13 +2131,15 @@ function GymScreen() {
   useEffect(() => {
     const next = queuedNativeTimerActions[0];
     if (!next || !workoutDraftReady) return;
-    const id = `${next.action}:${next.occurredAt}`;
+    const id = `${next.ownerId}:${next.generation}:${next.action}:${next.occurredAt}`;
     if (!workoutTimer || processedNativeTimerActionIds.current.has(id)) {
       setQueuedNativeTimerActions((current) =>
-        current[0] && `${current[0].action}:${current[0].occurredAt}` === id
+        current[0] &&
+        `${current[0].ownerId}:${current[0].generation}:${current[0].action}:${current[0].occurredAt}` === id
           ? current.slice(1)
           : current.filter(
-              (item) => `${item.action}:${item.occurredAt}` !== id,
+              (item) =>
+                `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}` !== id,
             ),
       );
       return;
@@ -2150,10 +2157,12 @@ function GymScreen() {
     // relying on a timing delay that can fail on a large account.
     timerActionRef.current(next.action, next.occurredAt);
     setQueuedNativeTimerActions((current) =>
-      current[0] && `${current[0].action}:${current[0].occurredAt}` === id
+      current[0] &&
+      `${current[0].ownerId}:${current[0].generation}:${current[0].action}:${current[0].occurredAt}` === id
         ? current.slice(1)
         : current.filter(
-            (item) => `${item.action}:${item.occurredAt}` !== id,
+            (item) =>
+              `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}` !== id,
           ),
     );
   }, [queuedNativeTimerActions, workoutDraftReady, workoutTimer]);
@@ -2183,19 +2192,26 @@ function GymScreen() {
       // pre-suspend fallback; workoutTimer.ts revision-coalesces the duplicate
       // inactive/background/effect calls into one final Expo post.
       if (next === "active") {
-        void dismissWorkoutTimerNotification();
+        void dismissWorkoutTimerNotification(state.currentUserId);
         return;
       }
       const payload = notificationPayloadRef.current;
-      if (payload)
-        void showWorkoutTimerNotification(payload).catch(() => undefined);
+      if (payload && state.settings.notifications.pushEnabled)
+        void showWorkoutTimerNotification({
+          ...payload,
+          ownerId: state.currentUserId,
+        }).catch(() => undefined);
     };
     const subscription = NativeAppState.addEventListener(
       "change",
       handleActivity,
     );
     return () => subscription.remove();
-  }, [tutorialSandbox]);
+  }, [
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
+    tutorialSandbox,
+  ]);
 
   useEffect(() => {
     if (
@@ -2205,10 +2221,13 @@ function GymScreen() {
       appActivity !== "active"
     )
       return;
-    void consumeWorkoutTimerActions().then(enqueueNativeTimerActions);
+    void consumeWorkoutTimerActions(state.currentUserId).then(
+      enqueueNativeTimerActions,
+    );
   }, [
     appActivity,
     enqueueNativeTimerActions,
+    state.currentUserId,
     workoutDraftReady,
     workoutTimer,
     tutorialSandbox,
@@ -2217,11 +2236,15 @@ function GymScreen() {
   useEffect(() => {
     if (tutorialSandbox) return;
     if (!workoutTimer) {
-      void dismissWorkoutTimerNotification(true);
+      void dismissWorkoutTimerNotification(state.currentUserId, true);
       return;
     }
     if (appActivity === "active") {
-      void dismissWorkoutTimerNotification();
+      void dismissWorkoutTimerNotification(state.currentUserId);
+      return;
+    }
+    if (!state.settings.notifications.pushEnabled) {
+      void dismissWorkoutTimerNotification(state.currentUserId);
       return;
     }
     void showWorkoutTimerNotification({
@@ -2236,6 +2259,7 @@ function GymScreen() {
       steps: notificationSteps,
       phaseStartedAt: workoutTimer.phaseStartedAt,
       phaseElapsedSeconds: workoutTimer.phaseElapsedSeconds,
+      ownerId: state.currentUserId,
     }).catch(() => undefined);
   }, [
     appActivity,
@@ -2244,6 +2268,8 @@ function GymScreen() {
     timerHeading,
     timerNextLabel,
     workoutTimer?.exerciseId,
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
     workoutTimer?.phase,
     workoutTimer?.setId,
     workoutTimer,

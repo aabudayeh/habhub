@@ -746,7 +746,7 @@ const SETTINGS_STEPS = [
     path: "/notifications",
     target: "notifications-controls",
     title: "Choose exactly what interrupts you",
-    copy: "Control group activity, chat, membership, streaks, badges, reminders, workouts, cycle estimates and quiet hours. Tracker reminders remain editable from their tracker too.",
+    copy: "Control group activity, chat, membership, logged-tracker streak milestones, leaderboard winners, reminders, workouts, cycle estimates and quiet hours. Tracker reminders remain editable from their tracker too.",
     primaryLabel: "Next",
     required: false,
     navigation: { before: "/notifications" },

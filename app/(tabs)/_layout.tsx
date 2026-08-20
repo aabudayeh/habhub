@@ -15,6 +15,7 @@ import { useTranslation } from "@/src/i18n";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { normalizeTabOrder } from "@/src/domain/navigation";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -87,19 +88,6 @@ export default function TabLayout() {
     state.messages,
     state.settings.notifications.chatReadAtByConversation,
   ]);
-  const defaultOrder: LandingPage[] = [
-    "index",
-    "log",
-    "group",
-    "insights",
-    "chat",
-    "gym",
-    "calendar",
-    "journal",
-    "performance",
-    "status",
-  ];
-  const savedOrder = state.settings.tabOrder ?? [];
   const showLog = state.settings.showLog !== false;
   const showLeaderboard = state.settings.showLeaderboard !== false;
   const showChat = state.settings.showChat !== false;
@@ -107,14 +95,8 @@ export default function TabLayout() {
   const showCalendar = state.settings.showCalendar !== false;
   const showJournal = state.settings.showJournal !== false;
   const showPerformance = state.settings.showPerformance !== false;
-  const showStatus = state.settings.showStatus === true;
-  const tabOrder = [
-    ...savedOrder.filter(
-      (id, index) =>
-        defaultOrder.includes(id) && savedOrder.indexOf(id) === index,
-    ),
-    ...defaultOrder.filter((id) => !savedOrder.includes(id)),
-  ];
+  const showStatus = state.settings.showStatus !== false;
+  const tabOrder = normalizeTabOrder(state.settings.tabOrder);
   const tabOptions: Record<
     LandingPage,
     { title: string; href?: Href | null }

@@ -7,6 +7,10 @@ import {
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
 import { consolidateWorkoutTrackers } from "@/src/domain/workoutTrackers";
 import { repairLegacyScreenTimeEntries } from "@/src/domain/screenTime";
+import {
+  navigationDefaultsForVersion,
+  normalizeTabOrder,
+} from "@/src/domain/navigation";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -153,11 +157,10 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
     showCalendar: state.settings.showCalendar !== false,
     showJournal: state.settings.showJournal !== false,
     showPerformance: state.settings.showPerformance !== false,
+    showStatus: state.settings.showStatus !== false,
     healthHistoryDays: state.settings.healthHistoryDays ?? 90,
     todayHistoryCollapsed: state.settings.todayHistoryCollapsed ?? true,
-    tabOrder: state.settings.tabOrder?.includes("performance")
-      ? state.settings.tabOrder
-      : [...(state.settings.tabOrder ?? []), "performance"],
+    tabOrder: normalizeTabOrder(state.settings.tabOrder),
   };
   return {
     ...state,
@@ -168,6 +171,20 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
   };
 }
 
+function upgradeNavigationDefaults(
+  state: AppState,
+  sourceVersion: number,
+): AppState {
+  return {
+    ...state,
+    version: 25,
+    settings: {
+      ...state.settings,
+      ...navigationDefaultsForVersion(state.settings, sourceVersion),
+    },
+  };
+}
+
 /** One-time local/cloud snapshot repair for the unified activity model. */
 export function upgradeStateV21(
   state: AppState,
@@ -175,7 +192,7 @@ export function upgradeStateV21(
   sourceVersion = Number(state.version ?? 1),
 ): AppState {
   // This alias repair is intentionally version-independent. An offline older
-  // device can upload a v24-shaped snapshot that still contains the retired
+  // device can upload a v25-shaped snapshot that still contains the retired
   // gym summary ids, and it must converge on the same canonical trackers.
   state = consolidateWorkoutTrackers(state, defaults);
   const screenTimeEntries = repairLegacyScreenTimeEntries(state.entries);
@@ -204,16 +221,19 @@ export function upgradeStateV21(
       groups: groups.map((item) => (item.id === group.id ? group : item)),
       group,
     });
+    const navigationRepaired = upgradeNavigationDefaults(
+      repaired,
+      sourceVersion,
+    );
     return sourceVersion >= 24
-      ? repaired
+      ? navigationRepaired
       : {
-          ...repaired,
-          version: 24,
+          ...navigationRepaired,
           entries: reconcileImportedHealthEntries(
-            repaired.entries,
-            repaired.metrics,
-            repaired.settings.healthSync.sourcePreferences,
-            repaired.currentUserId,
+            navigationRepaired.entries,
+            navigationRepaired.metrics,
+            navigationRepaired.settings.healthSync.sourcePreferences,
+            navigationRepaired.currentUserId,
           ),
         };
   }
@@ -245,7 +265,7 @@ export function upgradeStateV21(
   };
   const repaired = repairOrphanedGroupMetrics({
     ...state,
-    version: 24,
+    version: 25,
     metrics: withTodo,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
     group,
@@ -256,13 +276,14 @@ export function upgradeStateV21(
         : {}),
     },
   });
+  const navigationRepaired = upgradeNavigationDefaults(repaired, sourceVersion);
   return {
-    ...repaired,
+    ...navigationRepaired,
     entries: reconcileImportedHealthEntries(
-      repaired.entries,
-      repaired.metrics,
-      repaired.settings.healthSync.sourcePreferences,
-      repaired.currentUserId,
+      navigationRepaired.entries,
+      navigationRepaired.metrics,
+      navigationRepaired.settings.healthSync.sourcePreferences,
+      navigationRepaired.currentUserId,
     ),
   };
 }

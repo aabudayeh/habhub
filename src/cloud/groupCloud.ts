@@ -11,7 +11,6 @@ import {
 import {
   effectiveGoalTarget,
   displayGoalProgress,
-  formatMetricValue,
   groupVisibleMetricValue,
   hasMetricData,
   isMetricTrackedOnDate,
@@ -73,6 +72,8 @@ const SHARED_PHOTO_CACHE_LIMIT = 120;
 const CHAT_PUSH_FRESHNESS_MS = 15 * 60 * 1000;
 const METRIC_PUSH_FRESHNESS_MS = 30 * 60 * 1000;
 const attemptedWinnerEvents = new Set<string>();
+let groupPushDrainPromise: Promise<void> | null = null;
+let groupPushDrainRequested = false;
 const COLORS = [
   "#0FBFB8",
   "#FF5750",
@@ -1356,36 +1357,67 @@ export async function joinCloudGroup(code: string) {
   return result;
 }
 
-export async function sendMembershipPush(input: {
-  groupId: string;
-  eventKey: string;
-  title: string;
-  body: string;
-  audience: "admins" | "user" | "group";
-  recipientId?: string;
-  route?: string;
-}) {
-  // Membership changes must remain successful even if the optional push
-  // function is temporarily unavailable or not deployed yet.
-  await dispatchPushWithBoundedRetry(async () => {
-    const result = await requireCloud().functions.invoke("send-push", {
-      body: withLocalizedPushCopy({
-        eventKey: input.eventKey,
-        groupId: input.groupId,
-        category: "membership",
-        audience: input.audience,
-        recipientId: input.recipientId,
-        title: input.title,
-        body: input.body,
-        data: {
-          route: input.route ?? "/groups",
-          groupId: input.groupId,
-        },
-      }),
-    });
-    if (result.error) throw result.error;
-    assertPushDeliveryComplete(result.data);
+export function flushPendingGroupPushEvents() {
+  groupPushDrainRequested = true;
+  if (groupPushDrainPromise) return groupPushDrainPromise;
+  const operation = (async () => {
+    const client = requireCloud();
+    // Ten pages bounds one foreground pass while still draining a large
+    // offline backlog. Concurrent callers only set the trailing flag and
+    // share this promise; they never launch duplicate Edge batches.
+    groupPushDrainRequested = false;
+    let cursor: { createdAt: string; id: string } | undefined;
+    let firstFailure: unknown;
+    for (let page = 0; page < 10; page += 1) {
+      let query = client
+        .from("push_dispatch_events")
+        .select("id, event_key, created_at")
+        .is("dispatched_at", null)
+        // Fresh social updates must not sit behind one old no-token event.
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(40);
+      if (cursor)
+        query = query.or(
+          `created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`,
+        );
+      const { data: pending, error } = await query;
+      if (error) throw error;
+      if (!(pending ?? []).length) break;
+      for (let offset = 0; offset < pending!.length; offset += 4) {
+        const results = await Promise.allSettled(
+          pending!.slice(offset, offset + 4).map(async (event) => {
+            const result = await client.functions.invoke("send-push", {
+              // Copy, category, audience, recipient, and route live only in
+              // the canonical server row. Replays carry a single stable key.
+              body: { eventKey: event.event_key },
+            });
+            if (result.error) throw result.error;
+            assertPushDeliveryComplete(result.data);
+          }),
+        );
+        const failed = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        if (failed && firstFailure === undefined)
+          firstFailure = failed.reason;
+      }
+      const last = pending![pending!.length - 1];
+      cursor = { createdAt: last.created_at, id: last.id };
+      if (pending!.length < 40) break;
+    }
+    // Every row in the bounded, cursor-stable window got a turn. Failures stay
+    // pending without making rows 41+ disappear behind a repeatedly selected
+    // newest page.
+    if (firstFailure !== undefined) throw firstFailure;
+  })();
+  groupPushDrainPromise = operation.finally(() => {
+    groupPushDrainPromise = null;
+    if (groupPushDrainRequested)
+      void flushPendingGroupPushEvents().catch(() => undefined);
   });
+  return groupPushDrainPromise;
 }
 
 export async function approveCloudGroupMember(groupId: string, userId: string) {
@@ -2389,33 +2421,9 @@ export async function pushCloudWorkspace(
     else leadEntriesByMetric.set(entry.metricId, [entry]);
   });
   const dispatchCommittedEntryNotifications = () =>
-    Promise.allSettled(
-      newSharedEntries.map((entry) => {
-        const metric =
-          (state.group.metricConfiguration ?? []).find(
-            (item) => item.id === entry.metricId,
-          ) ?? state.metrics.find((item) => item.id === entry.metricId);
-        return client.functions.invoke("send-push", {
-          body: withLocalizedPushCopy({
-            eventKey: `entry:${state.group.id}:${state.currentUserId}:${entry.id}`,
-            groupId: state.group.id,
-            category: "metric",
-            metricId: entry.metricId,
-            title: `${current.name} logged ${metric?.name ?? "a metric"}`,
-            body:
-              entry.visibility === "group" &&
-              metric &&
-              typeof entry.value !== "string"
-                ? formatMetricValue(metric, Number(entry.value))
-                : `A shared ${metric?.name ?? "metric"} update was added.`,
-            data: {
-              route: `/day/${entry.localDate}`,
-              metricId: entry.metricId,
-            },
-          }),
-        });
-      }),
-    );
+    newSharedEntries.length
+      ? flushPendingGroupPushEvents()
+      : Promise.resolve();
   const dispatchCommittedLeadNotifications = () =>
     Promise.allSettled(
       [...leadEntriesByMetric.entries()].flatMap(([metricId, changedEntries]) => {
@@ -2521,43 +2529,29 @@ export async function pushCloudWorkspace(
           : [];
       });
       if (!changed.length) return [];
-      const latestChange = changedEntries
-        .map((entry) => entry.sourceUpdatedAt ?? entry.recordedAt)
-        .sort()
-        .at(-1);
       const firstChangedId = changedEntries
         .map((entry) => entry.id)
         .sort()[0];
-      const byLeader = new Map<string, typeof changed>();
-      changed.forEach((change) => {
-        const changes = byLeader.get(change.currentLeader.id);
-        if (changes) changes.push(change);
-        else byLeader.set(change.currentLeader.id, [change]);
-      });
-      return [...byLeader.entries()].map(([leaderId, leaderChanges]) => {
-        const leaderName = leaderChanges[0].currentLeader.name;
-        const passed = [
-          ...new Set(
-            leaderChanges
-              .map((change) => change.previousLeader?.name)
-              .filter((name): name is string => Boolean(name)),
-          ),
-        ];
-        return client.functions.invoke("send-push", {
-          body: withLocalizedPushCopy({
-            eventKey: `lead:${state.group.id}:${state.currentUserId}:${metric.id}:${leaderId}:${firstChangedId}:${latestChange ?? today}`,
-            groupId: state.group.id,
-            category: "lead",
-            audience: "group_including_sender",
-            metricId: metric.id,
-            title: `${leaderName} took the lead`,
-            body: passed.length
-              ? `${leaderName} passed ${passed.join(", ")} in ${metric.name} for ${leaderChanges.map((change) => change.label).join(", ")}.`
-              : `${leaderName} is the new ${metric.name} leader for ${leaderChanges.map((change) => change.label).join(", ")}.`,
-            data: { route: "/group", metricId: metric.id },
-          }),
+      return [(async () => {
+        await dispatchPushWithBoundedRetry(async () => {
+          const enqueued = await client.rpc("enqueue_group_lead_push_event", {
+            p_group_id: state.group.id,
+            p_metric_slug: metric.id,
+            // The server accepts exactly one fresh committed shared row. The
+            // client reaches this branch only after comparing the old and new
+            // privacy-filtered ranking models and proving a leader change.
+            p_source_entry_ids: [firstChangedId],
+          });
+          if (enqueued.error) throw enqueued.error;
+          const eventKey = String(enqueued.data ?? "");
+          if (!eventKey) throw new Error("Lead event was not committed.");
+          const result = await client.functions.invoke("send-push", {
+            body: { eventKey },
+          });
+          if (result.error) throw result.error;
+          assertPushDeliveryComplete(result.data);
         });
-      });
+      })()];
       }),
     );
   if (entriesToUpsert.length) {
@@ -2917,25 +2911,32 @@ export async function pushCloudWorkspace(
         });
         if (!winners.length) return;
         attemptedWinnerEvents.add(eventKey);
-        const preview = winners
-          .slice(0, 3)
-          .map((winner) => `${winner.member}: ${winner.metric}`)
-          .join("; ");
-        const remaining = winners.length - 3;
-        const result = await client.functions.invoke("send-push", {
-          body: withLocalizedPushCopy({
-            eventKey,
-            groupId: state.group.id,
-            category: "winner",
-            audience: "group_including_sender",
-            title: period.title,
-            body: `${preview}${remaining > 0 ? `; +${remaining} more` : ""}.`,
-            data: { route: "/badges", groupId: state.group.id },
-          }),
-        });
-        if (result.error) {
+        try {
+          await dispatchPushWithBoundedRetry(async () => {
+            const enqueued = await client.rpc(
+              "enqueue_group_winner_push_event",
+              {
+                p_group_id: state.group.id,
+                p_period_type: period.key,
+                p_anchor:
+                  period.key === "month"
+                    ? `${period.anchor}-01`
+                    : period.anchor,
+              },
+            );
+            if (enqueued.error) throw enqueued.error;
+            const canonicalEventKey = String(enqueued.data ?? "");
+            if (!canonicalEventKey)
+              throw new Error("Winner event was not committed.");
+            const result = await client.functions.invoke("send-push", {
+              body: { eventKey: canonicalEventKey },
+            });
+            if (result.error) throw result.error;
+            assertPushDeliveryComplete(result.data);
+          });
+        } catch (error) {
           attemptedWinnerEvents.delete(eventKey);
-          throw result.error;
+          throw error;
         }
       }),
     );

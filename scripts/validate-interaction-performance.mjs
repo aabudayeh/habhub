@@ -3,13 +3,22 @@ import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 
 import { scheduleEventsForDate } from "../src/domain/calendar.ts";
+import {
+  orderedValueHash,
+  stableValueHash,
+} from "../src/domain/cloudHash.ts";
 import { reconcileAutomaticFasting } from "../src/domain/fasting.ts";
+import { networkReachability } from "../src/domain/network.ts";
 
 const ui = fs.readFileSync("src/components/ui.tsx", "utf8");
 const calendar = fs.readFileSync("src/domain/calendar.ts", "utf8");
 const appProvider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const healthProvider = fs.readFileSync(
   "src/health/HealthSyncProvider.tsx",
+  "utf8",
+);
+const cloudProvider = fs.readFileSync(
+  "src/cloud/CloudSyncProvider.tsx",
   "utf8",
 );
 const fasting = fs.readFileSync("src/domain/fasting.ts", "utf8");
@@ -40,6 +49,25 @@ assert.match(
   appProvider,
   /commitReducedState\(next, !deferPersistence\)/,
   "device-owned foreground imports must be able to defer monolithic JSON persistence",
+);
+assert.equal(networkReachability(null, null), "unknown");
+assert.equal(networkReachability(false, null), "offline");
+assert.equal(networkReachability(true, null), "unknown");
+assert.equal(networkReachability(true, true), "online");
+assert.match(
+  cloudProvider,
+  /const reachability = networkReachability\([\s\S]{0,800}Platform\.OS === "web" && reachability === "unknown"/,
+  "native startup must not treat nullable NetInfo fields as an online connection",
+);
+assert.match(
+  cloudProvider,
+  /const networkAvailable =\s*Boolean\(auth\.session\)/,
+  "a cached display identity must not authorize cloud traffic before Supabase restores a real session",
+);
+assert.match(
+  cloudProvider,
+  /const startingOffline = !networkAvailableRef\.current;[\s\S]{0,800}setStatus\("offline"\)[\s\S]{0,3000}Promise\.all\(/,
+  "the cached signed-in UI must enter offline mode before local metadata/network initialization",
 );
 assert.match(
   appProvider,
@@ -94,6 +122,27 @@ const entries = Array.from({ length: 50_000 }, (_, index) => ({
   value: index,
   visibility: "group",
 }));
+const hashRows = entries.map((entry) => ({ ...entry }));
+const firstHashStartedAt = performance.now();
+const firstRowsHash = orderedValueHash(hashRows);
+const firstHashMs = performance.now() - firstHashStartedAt;
+const cachedHashStartedAt = performance.now();
+const cachedRowsHash = orderedValueHash(hashRows);
+const cachedHashMs = performance.now() - cachedHashStartedAt;
+const changedRows = [...hashRows];
+changedRows[changedRows.length - 1] = {
+  ...changedRows[changedRows.length - 1],
+  value: 999_999,
+};
+const changedHashStartedAt = performance.now();
+const changedRowsHash = orderedValueHash(changedRows);
+const changedHashMs = performance.now() - changedHashStartedAt;
+assert.equal(firstRowsHash, cachedRowsHash);
+assert.notEqual(changedRowsHash, cachedRowsHash);
+assert.equal(stableValueHash({ b: 2, a: 1 }), stableValueHash({ a: 1, b: 2 }));
+assert.ok(firstHashMs < 2_000, `First 50k-row hash took ${firstHashMs.toFixed(1)}ms`);
+assert.ok(cachedHashMs < 150, `Cached 50k-row hash took ${cachedHashMs.toFixed(1)}ms`);
+assert.ok(changedHashMs < 150, `One-row delta hash took ${changedHashMs.toFixed(1)}ms`);
 entries.push(
   {
     id: "food",
@@ -248,5 +297,5 @@ assert.equal(
 );
 
 console.log(
-  `Interaction performance validation passed (50,000-row Schedule: ${firstPassMs.toFixed(1)} ms first, ${cachedPassMs.toFixed(1)} ms cached; non-food fasting bypass: ${nonFoodFastingPassMs.toFixed(3)} ms).`,
+  `Interaction performance validation passed (50,000-row Schedule: ${firstPassMs.toFixed(1)} ms first, ${cachedPassMs.toFixed(1)} ms cached; hashes: ${firstHashMs.toFixed(1)} ms first, ${cachedHashMs.toFixed(1)} ms cached, ${changedHashMs.toFixed(1)} ms one-row delta; non-food fasting bypass: ${nonFoodFastingPassMs.toFixed(3)} ms).`,
 );

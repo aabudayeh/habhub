@@ -31,6 +31,10 @@ import {
   startManualFast,
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import {
+  editFoodEntryClockTime,
+  preserveFoodEntryClockOverride,
+} from "@/src/domain/food";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import {
   isDailyStepReplacementCandidate,
@@ -344,6 +348,12 @@ type Action =
     }
   | { type: "deleteMetric"; metricId: string }
   | { type: "deleteEntry"; entryId: string }
+  | {
+      type: "updateFoodEntryTime";
+      entryId: string;
+      clockTime: string;
+      editedAt: string;
+    }
   | { type: "skipGoal"; metricId: string; localDate: string }
   | { type: "deletePhoto"; photoId: string }
   | {
@@ -1432,6 +1442,30 @@ function reducer(state: AppState, action: Action): AppState {
           ? reconcileAutomaticFasting(next, [target], target.metricId)
           : next;
       }
+    case "updateFoodEntryTime": {
+      const target = state.entries.find(
+        (entry) =>
+          entry.id === action.entryId && entry.userId === state.currentUserId,
+      );
+      if (!target) return state;
+      const updated = editFoodEntryClockTime(
+        target,
+        state.currentUserId,
+        action.clockTime,
+        action.editedAt,
+      );
+      if (!updated || updated === target) return state;
+      const next: AppState = {
+        ...state,
+        entries: state.entries.map((entry) =>
+          metricEntryKey(entry.userId, entry.id) ===
+          metricEntryKey(state.currentUserId, action.entryId)
+            ? updated
+            : entry,
+        ),
+      };
+      return reconcileAutomaticFasting(next, [updated]);
+    }
     case "skipGoal": {
       const metric = state.metrics.find((item) => item.id === action.metricId);
       if (!metric || metric.goalEnabled === false) return state;
@@ -2640,12 +2674,16 @@ function reducer(state: AppState, action: Action): AppState {
       for (const entry of action.entries) {
         if (dismissed.has(entry.id)) continue;
         const key = metricEntryKey(entry.userId, entry.id);
-        const nextEntry = replacementMetricIds.has(entry.metricId)
+        const sourceReconciledEntry = replacementMetricIds.has(entry.metricId)
           ? preserveUnchangedDailyAggregateRevision(
               existingById.get(key),
               entry,
             )
           : preserveUnchangedStepFallback(existingById.get(key), entry);
+        const nextEntry = preserveFoodEntryClockOverride(
+          existingById.get(key),
+          sourceReconciledEntry,
+        );
         byId.set(key, nextEntry);
       }
       const targetMetrics = new Set(action.metricIds);
@@ -2808,6 +2846,7 @@ type AppContextValue = {
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
   deleteEntry: (entryId: string) => void;
+  updateFoodEntryTime: (entryId: string, clockTime: string) => void;
   skipGoal: (metricId: string, localDate: string) => void;
   deletePhoto: (photoId: string) => void;
   setMetricSection: (
@@ -3195,7 +3234,7 @@ export function AppProvider({
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 24,
+            version: 25,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -3812,6 +3851,13 @@ export function AppProvider({
         void commitAction({ type: "updateMetric", metricId, changes }),
       deleteMetric: (metricId) => void commitAction({ type: "deleteMetric", metricId }),
       deleteEntry: (entryId) => void commitAction({ type: "deleteEntry", entryId }),
+      updateFoodEntryTime: (entryId, clockTime) =>
+        void commitAction({
+          type: "updateFoodEntryTime",
+          entryId,
+          clockTime,
+          editedAt: new Date().toISOString(),
+        }),
       skipGoal: (metricId, localDate) => void commitAction({ type: "skipGoal", metricId, localDate }),
       deletePhoto: (photoId) => void commitAction({ type: "deletePhoto", photoId }),
       setMetricSection: (metricId, section, value, historyMode) =>

@@ -1,6 +1,7 @@
 package __ANDROID_PACKAGE__
 
 import android.app.AppOpsManager
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.usage.UsageEvents
@@ -239,6 +240,48 @@ class HabHubNativeModule(
     }
   }
 
+  @ReactMethod
+  fun canScheduleExactAlarms(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+      promise.resolve(true)
+      return
+    }
+    try {
+      val alarmManager = reactContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      promise.resolve(alarmManager.canScheduleExactAlarms())
+    } catch (error: Exception) {
+      promise.reject("exact_alarm_status_failed", error)
+    }
+  }
+
+  /** Opens exact-alarm access only after a deliberate user tap. */
+  @ReactMethod
+  fun openExactAlarmSettings(promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+      promise.resolve(false)
+      return
+    }
+    try {
+      val packageUri = Uri.parse("package:${reactContext.packageName}")
+      val candidates = listOf(
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri),
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri),
+      )
+      val opened = candidates.any { candidate ->
+        candidate.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+          reactContext.startActivity(candidate)
+          true
+        } catch (_: Exception) {
+          false
+        }
+      }
+      promise.resolve(opened)
+    } catch (error: Exception) {
+      promise.reject("exact_alarm_settings_unavailable", error)
+    }
+  }
+
   /**
    * Opens Android's user-managed battery-optimization list. HabHub deliberately
    * does not request a direct exemption or launch this page automatically.
@@ -381,8 +424,18 @@ class HabHubNativeModule(
   }
 
   @ReactMethod
-  fun consumeWorkoutTimerNotificationActions(promise: Promise) {
-    promise.resolve(HabHubWorkoutNotificationStore.consumeActions(reactContext))
+  fun consumeWorkoutTimerNotificationActions(
+    ownerId: String,
+    generation: String,
+    promise: Promise,
+  ) {
+    promise.resolve(
+      HabHubWorkoutNotificationStore.consumeActions(
+        reactContext,
+        ownerId,
+        generation,
+      ),
+    )
   }
 
   @ReactMethod

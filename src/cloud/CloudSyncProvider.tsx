@@ -23,6 +23,7 @@ import {
   approveCloudGroupMember,
   type CloudActivityMetadata,
   createCloudGroup,
+  flushPendingGroupPushEvents,
   hasActiveCloudGroupMembership,
   isCloudGroupId,
   joinCloudGroup,
@@ -32,7 +33,6 @@ import {
   loadCloudMessages,
   loadCloudWorkspace,
   removeCloudGroupMember,
-  sendMembershipPush,
   touchCloudGroupPresence,
   pushCloudRecentActivity,
   pushCloudAccountMetadata,
@@ -93,6 +93,11 @@ import {
   type CloudConflictGate,
   nextCloudConflictGate,
 } from "@/src/domain/cloudConflict";
+import {
+  orderedValueHash,
+  stableValueHash,
+} from "@/src/domain/cloudHash";
+import { networkReachability } from "@/src/domain/network";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -333,6 +338,28 @@ async function writeCloudMergeBase(userId: string, base: CloudMergeBase) {
   );
 }
 
+function waitForCloudCacheWriteTurn() {
+  if (NativeAppState.currentState !== "active") return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let completed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
+    const run = () => {
+      if (completed) return;
+      completed = true;
+      if (timer) clearTimeout(timer);
+      task?.cancel();
+      resolve();
+    };
+    task = InteractionManager.runAfterInteractions(run);
+    if (completed) task.cancel();
+    // Continuous animations must not strand the conflict base forever, but a
+    // foreground tap/navigation frame gets priority over its JSON encoding.
+    timer = setTimeout(run, 4_000);
+  });
+}
+
 async function readWorkspaceAcks(userId: string) {
   try {
     const saved = await AsyncStorage.getItem(
@@ -491,13 +518,13 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,
-      version: 24,
+      version: 25,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
   if (sourceVersion >= 19)
     return upgradeStateV21({
       ...state,
-      version: 24,
+      version: 25,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
@@ -508,7 +535,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return upgradeStateV21({
       ...state,
-      version: 24,
+      version: 25,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -533,7 +560,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return upgradeStateV21({
     ...state,
-    version: 24,
+    version: 25,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -803,19 +830,6 @@ function snapshotPayload(state: AppState): AppState {
   };
 }
 
-function canonicalHashValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalHashValue);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalHashValue(item)]),
-    );
-  }
-  return value;
-}
-
 function messageBelongsToCloudGroup(
   message: ChatMessage,
   groupId: string,
@@ -850,20 +864,12 @@ function purgeDepartedGroupData(state: AppState, departed: Group): AppState {
   };
 }
 
-function valueHash(value: unknown) {
-  const serialized = JSON.stringify(canonicalHashValue(value));
-  const source = serialized === undefined ? "__undefined__" : serialized;
-  let hash = 2166136261;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
-}
-
 function hashRecord(record: Record<string, unknown> | undefined) {
   return Object.fromEntries(
-    Object.entries(record ?? {}).map(([key, value]) => [key, valueHash(value)]),
+    Object.entries(record ?? {}).map(([key, value]) => [
+      key,
+      stableValueHash(value),
+    ]),
   );
 }
 
@@ -872,7 +878,7 @@ function hashCollection<T>(
   keyFor: (item: T) => string,
 ) {
   return Object.fromEntries(
-    (items ?? []).map((item) => [keyFor(item), valueHash(item)]),
+    (items ?? []).map((item) => [keyFor(item), stableValueHash(item)]),
   );
 }
 
@@ -993,9 +999,39 @@ function stableHash(state: AppState) {
   ].forEach((key) => delete settings[key]);
   const groupShell = (group: Group) =>
     isCloudGroupId(group.id) ? { id: group.id } : group;
-  const hash = valueHash({
-    ...payload,
+  const {
+    entries,
+    photos,
+    messages,
+    metrics,
+    groups,
+    gymPlans,
+    gymSessions,
+    todos,
+    journalNotes,
+    calendarReminders,
+    activityTimers,
+    dailyMetricStatuses: _dailyMetricStatuses,
+    settings: _payloadSettings,
+    group: _payloadGroup,
+    ...compactPayload
+  } = payload;
+  const hash = stableValueHash({
+    ...compactPayload,
     settings,
+    // Hash large immutable collections item-by-item. Most rows retain object
+    // identity across a one-entry Health/realtime update, so their cached
+    // hashes are reused without re-stringifying years of history.
+    entries: orderedValueHash(entries),
+    photos: orderedValueHash(photos),
+    messages: orderedValueHash(messages),
+    metrics: orderedValueHash(metrics),
+    gymPlans: orderedValueHash(gymPlans),
+    gymSessions: orderedValueHash(gymSessions),
+    todos: orderedValueHash(todos),
+    journalNotes: orderedValueHash(journalNotes),
+    calendarReminders: orderedValueHash(calendarReminders),
+    activityTimers: orderedValueHash(activityTimers),
     // Keep owned summaries in the snapshot as an offline cache, but never let
     // their server-owned `updated_at` reopen the private account outbox.
     dailyMetricStatuses: [],
@@ -1006,7 +1042,7 @@ function stableHash(state: AppState) {
     // invites and admin-owned configuration changing on the server is not a
     // private account edit and must not re-open this device's outbox.
     group: groupShell(payload.group),
-    groups: payload.groups.map(groupShell),
+    groups: orderedValueHash(groups.map(groupShell)),
     selectedGroupMetricId: undefined,
   });
   stableHashCache.set(state, hash);
@@ -1017,7 +1053,7 @@ function stableHash(state: AppState) {
 function accountMetadataHash(state: AppState) {
   const cached = accountMetadataHashCache.get(state);
   if (cached) return cached;
-  const hash = valueHash({
+  const hash = stableValueHash({
     profile: accountMemberProfile(state),
     energyProfile: cloudAccountEnergyProjection(
       state.energyProfiles[state.currentUserId] ??
@@ -1034,19 +1070,15 @@ function workspaceHash(state: AppState) {
   const cached = workspaceHashCache.get(state);
   if (cached) return cached;
   const payload = snapshotPayload(state);
-  const hash = valueHash({
+  const hash = stableValueHash({
     currentUserId: payload.currentUserId,
     groupId: payload.group.id,
     // Profile and energy data use their own small global projection. Keeping
     // them out of this hash prevents a rename from uploading a year of group
     // activity or reopening the outbox once for every joined group.
     aliases: payload.settings.memberNicknamesByGroup[payload.group.id] ?? {},
-    entries: payload.entries.filter(
-      (entry) => entry.userId === payload.currentUserId,
-    ),
-    photos: payload.photos.filter(
-      (photo) => photo.userId === payload.currentUserId,
-    ),
+    entries: orderedValueHash(payload.entries),
+    photos: orderedValueHash(payload.photos),
     pendingPrivacyFences:
       state.settings.pendingMetricPrivacyFenceIdsByGroup?.[
         payload.group.id
@@ -1312,8 +1344,12 @@ function mergeRecordFromBase<T>(
   keys.forEach((key) => {
     const remoteHas = Object.prototype.hasOwnProperty.call(remoteRecord, key);
     const localHas = Object.prototype.hasOwnProperty.call(localRecord, key);
-    const remoteHash = remoteHas ? valueHash(remoteRecord[key]) : undefined;
-    const localHash = localHas ? valueHash(localRecord[key]) : undefined;
+    const remoteHash = remoteHas
+      ? stableValueHash(remoteRecord[key])
+      : undefined;
+    const localHash = localHas
+      ? stableValueHash(localRecord[key])
+      : undefined;
     const baseHash = baseHashes?.[key];
     const remoteChanged = remoteHash !== baseHash;
     const localChanged = localHash !== baseHash;
@@ -1343,8 +1379,8 @@ function mergeCollectionFromBase<T>(
   keys.forEach((key) => {
     const remoteItem = remoteMap.get(key);
     const localItem = localMap.get(key);
-    const remoteHash = remoteItem ? valueHash(remoteItem) : undefined;
-    const localHash = localItem ? valueHash(localItem) : undefined;
+    const remoteHash = remoteItem ? stableValueHash(remoteItem) : undefined;
+    const localHash = localItem ? stableValueHash(localItem) : undefined;
     const baseHash = baseHashes?.[key];
     const remoteChanged = remoteHash !== baseHash;
     const localChanged = localHash !== baseHash;
@@ -1815,7 +1851,7 @@ function applyMembershipRealtimeRow(
 }
 
 function groupConfigurationHash(state: AppState) {
-  return valueHash({
+  return stableValueHash({
     id: state.group.id,
     name: state.group.name,
     templateName: state.group.templateName,
@@ -2262,8 +2298,19 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const { state, hydrated, replaceState, stageState } = useApp();
   const auth = useAuth();
   const network = useNetInfo();
+  const reachability = networkReachability(
+    network.isConnected,
+    network.isInternetReachable,
+  );
+  // Browser reachability is not consistently populated. Native cold starts,
+  // however, must wait for a confirmed connection: nullable NetInfo fields
+  // previously launched a long Supabase request in airplane mode. The cached
+  // auth user is presentation-only, so remote work also waits for Supabase to
+  // restore a real session.
   const networkAvailable =
-    network.isConnected !== false && network.isInternetReachable !== false;
+    Boolean(auth.session) &&
+    (reachability === "online" ||
+      (Platform.OS === "web" && reachability === "unknown"));
   const [status, setStatus] = useState<CloudSyncStatus>(
     auth.status === "signedIn" ? "initializing" : "disabled",
   );
@@ -2390,6 +2437,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       mergeBaseRef.current = base;
       mergeBaseWriteRef.current = mergeBaseWriteRef.current
         .catch(() => undefined)
+        .then(waitForCloudCacheWriteTurn)
         .then(() => writeCloudMergeBase(userId, base))
         .catch(() => undefined);
     },
@@ -4021,28 +4069,53 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     setErrorMessage(null);
     (async () => {
       try {
-        const deviceId = await getDeviceId();
+        const startingOffline = !networkAvailableRef.current;
+        if (startingOffline) {
+          // Paint the account-scoped cache immediately. NetInfo begins with an
+          // unknown snapshot on Android, and local acknowledgement reads must
+          // not hold the entire signed-in UI behind an initializing screen.
+          initializedUserRef.current = user.id;
+          setStatus("offline");
+          setErrorMessage(
+            "Offline changes are safe on this device and will retry automatically.",
+          );
+        }
+        const [
+          deviceId,
+          workspaceAcks,
+          groupConfigurationAcks,
+          accountMetadataAck,
+          acknowledgedSnapshotHash,
+          savedMergeBase,
+          savedCheckpoint,
+          onboardingComplete,
+        ] = await Promise.all([
+          getDeviceId(),
+          readWorkspaceAcks(user.id),
+          readGroupConfigurationAcks(user.id),
+          readAccountMetadataAck(user.id),
+          readCloudSnapshotAck(user.id),
+          readCloudMergeBase(user.id),
+          readCloudSyncCheckpoint(user.id),
+          onboardingCompletedLocally(user.id),
+        ]);
         if (cancelled) return;
         deviceIdRef.current = deviceId;
-        workspaceAckHashesRef.current = await readWorkspaceAcks(user.id);
-        groupConfigurationAckHashesRef.current =
-          await readGroupConfigurationAcks(user.id);
-        accountMetadataHashRef.current = await readAccountMetadataAck(user.id);
-        const acknowledgedSnapshotHash = await readCloudSnapshotAck(user.id);
-        mergeBaseRef.current = await readCloudMergeBase(user.id);
+        workspaceAckHashesRef.current = workspaceAcks;
+        groupConfigurationAckHashesRef.current = groupConfigurationAcks;
+        accountMetadataHashRef.current = accountMetadataAck;
+        mergeBaseRef.current = savedMergeBase;
         if (
           !mergeBaseRef.current &&
           acknowledgedSnapshotHash &&
+          networkAvailableRef.current &&
           stableHash(stateRef.current) === acknowledgedSnapshotHash
         )
           rememberCloudMergeBase(user.id, stateRef.current);
-        const savedCheckpoint = await readCloudSyncCheckpoint(user.id);
         if (savedCheckpoint) {
           lastSyncedAtRef.current = savedCheckpoint;
           setLastSyncedAt(savedCheckpoint);
         }
-        if (cancelled) return;
-        const onboardingComplete = await onboardingCompletedLocally(user.id);
         if (cancelled) return;
         if (
           onboardingComplete &&
@@ -4065,10 +4138,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // fetches/merges the server revision before it publishes this outbox.
           initializedUserRef.current = user.id;
           setStatus("offline");
-          setPendingChanges(hasUnsyncedLocalChanges());
           setErrorMessage(
             "Offline changes are safe on this device and will retry automatically.",
           );
+          InteractionManager.runAfterInteractions(() => {
+            if (
+              !cancelled &&
+              !networkAvailableRef.current &&
+              initializedUserRef.current === user.id
+            )
+              setPendingChanges(hasUnsyncedLocalChanges());
+          });
           return;
         }
         const remote = await fetchSnapshot(user.id);
@@ -4576,7 +4656,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   ]);
 
   useEffect(() => {
-    if (!supabase || auth.status !== "signedIn" || !auth.user) return;
+    if (
+      !supabase ||
+      !networkAvailable ||
+      auth.status !== "signedIn" ||
+      !auth.user
+    )
+      return;
     const client = supabase;
     let fallbackChannel: ReturnType<typeof client.channel> | null = null;
     const handleInvalidation = (next: {
@@ -4645,10 +4731,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (fallbackChannel)
         client.removeChannel(fallbackChannel).catch(() => undefined);
     };
-  }, [auth.status, auth.user, pullLatest]);
+  }, [auth.status, auth.user, networkAvailable, pullLatest]);
 
   useEffect(() => {
-    if (!supabase || auth.status !== "signedIn" || !auth.user) return;
+    if (
+      !supabase ||
+      !networkAvailable ||
+      auth.status !== "signedIn" ||
+      !auth.user
+    )
+      return;
     let cancelled = false;
     let requestToWatch: PendingGroupRequest | null = null;
     let approvalCheckInFlight = false;
@@ -4779,6 +4871,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    networkAvailable,
     markGroupReadSucceeded,
     mergeRemoteWorkspace,
     recordActivityMetadata,
@@ -5032,6 +5125,19 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   };
 
   useEffect(() => {
+    if (
+      !hydrated ||
+      auth.status !== "signedIn" ||
+      !auth.user ||
+      !networkAvailable
+    )
+      return;
+    // The relational outbox is account-scoped, so startup drains events even
+    // for a group the user has just left and can no longer open locally.
+    void flushPendingGroupPushEvents().catch(() => undefined);
+  }, [auth.status, auth.user, hydrated, networkAvailable]);
+
+  useEffect(() => {
     const wasAvailable = previousNetworkAvailableRef.current;
     previousNetworkAvailableRef.current = networkAvailable;
     if (
@@ -5054,6 +5160,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     // window for durable chat rows that exhausted their previous attempt set.
     chatOutboxAttemptsRef.current.clear();
     void recoverChatOutbox();
+    void flushPendingGroupPushEvents().catch(() => undefined);
     if (remoteInitializationPendingRef.current) {
       setInitializationAttempt((value) => value + 1);
       return;
@@ -5265,6 +5372,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       !supabase ||
       auth.status !== "signedIn" ||
       !auth.user ||
+      !networkAvailable ||
       initializedUserRef.current !== auth.user.id ||
       !isCloudGroupId(state.group.id)
     )
@@ -5550,6 +5658,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   }, [
     auth.status,
     auth.user,
+    networkAvailable,
     pullLatest,
     refreshGroup,
     refreshGroupActivity,
@@ -5579,6 +5688,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       )
         return;
       lastResumeRecoveryAtRef.current = Date.now();
+      if (!networkAvailableRef.current) {
+        setStatus("offline");
+        return;
+      }
       if (supabase && !supabase.realtime.isConnected())
         supabase.realtime.connect();
       if (auth.user)
@@ -5606,6 +5719,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       later(150, () => {
         verifyActiveGroupMembership().catch(() => undefined);
         void recoverChatOutbox();
+        void flushPendingGroupPushEvents().catch(() => undefined);
         refreshMessages().catch(() => undefined);
       });
       // If the app was backgrounded for longer than the freshness window,
@@ -5658,6 +5772,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     if (
       auth.status !== "signedIn" ||
+      !networkAvailable ||
       !isCloudGroupId(state.group.id)
     )
       return;
@@ -5665,11 +5780,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       publishLeaderboardFreshness().catch(() => undefined);
     }, LEADERBOARD_FRESHNESS_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [auth.status, publishLeaderboardFreshness, state.group.id]);
+  }, [
+    auth.status,
+    networkAvailable,
+    publishLeaderboardFreshness,
+    state.group.id,
+  ]);
 
   useEffect(() => {
     if (
       auth.status !== "signedIn" ||
+      !networkAvailable ||
       !isCloudGroupId(state.group.id)
     )
       return;
@@ -5679,7 +5800,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         void touchPresence().catch(() => undefined);
     }, 5 * 60 * 1000);
     return () => clearInterval(timer);
-  }, [auth.status, state.group.id, touchPresence]);
+  }, [auth.status, networkAvailable, state.group.id, touchPresence]);
 
   const value = useMemo<CloudSyncContextValue>(
     () => ({
@@ -5793,7 +5914,6 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       joinGroup: async (code) => {
         const result = await joinCloudGroup(code);
-        const joiningName = accountName(auth.user!, "A new member");
         if (result.status === "pending") {
           const request = {
             groupId: result.groupId,
@@ -5804,14 +5924,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             JSON.stringify(request),
           );
           setPendingGroup(request);
-          sendMembershipPush({
-            groupId: result.groupId,
-            eventKey: `membership-request:${result.groupId}:${auth.user!.id}:${dateKey()}`,
-            audience: "admins",
-            title: `${joiningName} wants to join`,
-            body: `Review the request for ${result.groupName ?? "your group"}.`,
-            route: "/group-settings",
-          }).catch(() => undefined);
+          // The membership transaction created a canonical durable event.
+          // Dispatch is best-effort here and is retried on reconnect/startup.
+          flushPendingGroupPushEvents().catch(() => undefined);
           return "pending";
         }
         const groupId = result.groupId;
@@ -5863,14 +5978,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         setPendingGroup(null);
         hydrateGroupInBackground(groupId);
-        sendMembershipPush({
-          groupId,
-          eventKey: `membership-joined:${groupId}:${auth.user!.id}:${dateKey()}`,
-          audience: "admins",
-          title: `${joiningName} joined`,
-          body: `${joiningName} is now in ${result.groupName ?? "your group"}.`,
-          route: "/group-settings",
-        }).catch(() => undefined);
+        flushPendingGroupPushEvents().catch(() => undefined);
         return "active";
       },
       switchGroup: async (groupId) => {
@@ -5938,15 +6046,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           : null;
         replaceState(next);
         try {
-          await sendMembershipPush({
-            groupId,
-            eventKey: `membership-left:${groupId}:${before.currentUserId}:${Date.now()}`,
-            audience: "admins",
-            title: `${leavingMember?.name ?? "A member"} left`,
-            body: `${leavingMember?.name ?? "A member"} left ${leavingGroup.name}.`,
-            route: "/group-settings",
-          }).catch(() => undefined);
           await leaveCloudGroup(groupId);
+          // Send only after the membership mutation commits. The trigger-owned
+          // outbox survives this former member losing group RLS access.
+          await flushPendingGroupPushEvents().catch(() => undefined);
           const purged = purgeDepartedGroupData(
             stateRef.current,
             leavingGroup,
@@ -6016,31 +6119,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = optimistic;
           replaceState(optimistic);
         }
-        await sendMembershipPush({
-          groupId,
-          // A member can leave and later be approved again. Keep event-level
-          // deduplication without permanently suppressing future approvals.
-          eventKey: `membership-approved:${groupId}:${userId}:${Date.now()}`,
-          audience: "user",
-          recipientId: userId,
-          title: `Welcome to ${stateRef.current.group.name}`,
-          body: `Your request was approved. Tap to open the group.`,
-          route: "/group",
-        }).catch(() => undefined);
+        await flushPendingGroupPushEvents().catch(() => undefined);
         refreshGroup().catch(() => undefined);
       },
       removeMember: async (userId) => {
-        await sendMembershipPush({
-          groupId: stateRef.current.group.id,
-          eventKey: `membership-removed:${stateRef.current.group.id}:${userId}:${Date.now()}`,
-          audience: "user",
-          recipientId: userId,
-          title: `Group membership updated`,
-          body: `You were removed from ${stateRef.current.group.name}.`,
-          route: "/groups",
-        }).catch(() => undefined);
         const groupId = stateRef.current.group.id;
         await removeCloudGroupMember(groupId, userId);
+        await flushPendingGroupPushEvents().catch(() => undefined);
         const live = stateRef.current;
         const activeGroup = live.groups.find((group) => group.id === groupId);
         if (activeGroup) {

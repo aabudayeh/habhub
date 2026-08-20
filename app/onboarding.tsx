@@ -692,7 +692,7 @@ export default function Onboarding() {
       showChat: true,
       showGym: true,
       showStatus:
-        landingPage === "status" || state.settings.showStatus === true,
+        landingPage === "status" || state.settings.showStatus !== false,
       defaultLandingPage: landingPage,
     });
     updateEnergyProfile(nextProfile);
@@ -797,10 +797,9 @@ export default function Onboarding() {
         preferences,
         state.settings.language,
       );
-      if (!(await notificationSetupComplete(auth.user.id)))
-        throw new Error(
-          "Permission was granted, but this device has not finished registering. Check your connection and retry.",
-        );
+      // Resolution is the registration acknowledgement. A second immediate
+      // SELECT could fail after a successful insert and falsely show setup as
+      // disconnected on a weak connection.
       updateSettings({
         notifications: preferences,
       });

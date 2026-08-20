@@ -1,5 +1,5 @@
 import { dateWithOffsetFrom } from "@/src/domain/date";
-import { GoalSchedule, TodoItem } from "@/src/types";
+import { GoalSchedule, TodoItem, TodoReminder } from "@/src/types";
 
 export function scheduleAppliesOnDate(
   schedule: GoalSchedule | undefined,
@@ -77,6 +77,36 @@ export function todoAppearsOnDate(todo: TodoItem, localDate: string) {
   }
   const begins = todo.dueAt?.slice(0, 10) ?? createdDate;
   return localDate >= begins && (!resolvedDate || localDate <= resolvedDate);
+}
+
+/** Exact calendar dates on which one configured to-do reminder should fire. */
+export function todoReminderAppliesOnDate(
+  todo: TodoItem,
+  reminder: TodoReminder,
+  localDate: string,
+) {
+  const createdDate = todo.createdAt.slice(0, 10);
+  if (reminder.repeatDailyUntilDue)
+    return (
+      localDate >= createdDate &&
+      (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10))
+    );
+  if (reminder.schedule)
+    return scheduleAppliesOnDate(
+      reminder.schedule,
+      reminder.schedule.anchorDate ?? reminder.at?.slice(0, 10) ?? createdDate,
+      localDate,
+    );
+  if (reminder.daysBeforeDue !== undefined && todo.dueAt)
+    return (
+      localDate ===
+      dateWithOffsetFrom(
+        todo.dueAt.slice(0, 10),
+        -Math.max(0, Math.round(reminder.daysBeforeDue)),
+      )
+    );
+  if (reminder.at) return reminder.at.slice(0, 10) === localDate;
+  return Boolean(todo.dueAt && todo.dueAt.slice(0, 10) === localDate);
 }
 
 export function todoCompletedOnDate(todo: TodoItem, localDate: string) {

@@ -126,26 +126,31 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active")
-      void dismissLiveActivityTimerNotifications();
+      void dismissLiveActivityTimerNotifications(state.currentUserId);
     else
       void syncLiveActivityTimerNotifications(
         notificationDescriptorsRef.current,
+        state.currentUserId,
       );
     const subscription = NativeAppState.addEventListener("change", (next) => {
       if (next === "active")
-        void dismissLiveActivityTimerNotifications();
+        void dismissLiveActivityTimerNotifications(state.currentUserId);
       else
         void syncLiveActivityTimerNotifications(
           notificationDescriptorsRef.current,
+          state.currentUserId,
         );
     });
     return () => subscription.remove();
-  }, [tutorialSandbox]);
+  }, [state.currentUserId, tutorialSandbox]);
   useEffect(() => {
     if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active") return;
-    void syncLiveActivityTimerNotifications(notificationDescriptors);
-  }, [notificationDescriptors, tutorialSandbox]);
+    void syncLiveActivityTimerNotifications(
+      notificationDescriptors,
+      state.currentUserId,
+    );
+  }, [notificationDescriptors, state.currentUserId, tutorialSandbox]);
   useEffect(() => {
     if (!initialized.current) return;
     const next = clamp(positionRef.current.x, positionRef.current.y);

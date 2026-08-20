@@ -77,6 +77,7 @@ import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
+import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEvents";
 import {
   canManageGroupChallenge,
   acceptedChallengeParticipantIds,
@@ -325,6 +326,10 @@ function LeaderboardScreen() {
   const challengesEnabled =
     tutorialSandbox || (!personalSetup && isCloudGroupId(state.group.id));
   const challengeCloud = useGroupChallenges(state.group.id);
+  const { unreadCount: groupFeedUnreadCount } =
+    useGroupNotificationEvents(state.group.id);
+  const notificationBadgeCount =
+    groupFeedUnreadCount + (state.group.pendingMembers?.length ?? 0);
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
   const tracked = useMemo(
     () =>
@@ -930,10 +935,10 @@ function LeaderboardScreen() {
                     router.navigate("/alerts?scope=group" as never)
                   }
                 />
-                {(state.group.pendingMembers?.length ?? 0) > 0 ? (
+                {notificationBadgeCount > 0 ? (
                   <View style={styles.pendingDot}>
                     <Text style={styles.pendingDotText}>
-                      {Math.min(9, state.group.pendingMembers?.length ?? 0)}
+                      {Math.min(9, notificationBadgeCount)}
                     </Text>
                   </View>
                 ) : null}

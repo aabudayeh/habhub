@@ -256,7 +256,7 @@ export const tutorialEsCatalog = {
   "step.full.notifications.battery.copy": "HabHub puede solicitar la configuración de optimización de la batería de Android para que sea menos probable que se retrase la sincronización en segundo plano programada. La elección final ocurre en la página del sistema operativo.",
   "step.full.notifications.battery.primaryLabel": "Siguiente",
   "step.full.notifications.battery.title": "Permitir un trabajo confiable en segundo plano en Android",
-  "step.full.notifications.controls.copy": "Controla la actividad del grupo, el chat, la membresía, las rachas, las insignias, los recordatorios, los entrenamientos, las estimaciones de ciclos y las horas de silencio. Los recordatorios del rastreador también se pueden editar desde su rastreador.",
+  "step.full.notifications.controls.copy": "Controla la actividad del grupo, el chat, la membresía, los hitos de racha al registrar trackers, los ganadores de la clasificación, los recordatorios, los entrenamientos, las estimaciones del ciclo y las horas de silencio. Los recordatorios del tracker también se pueden editar desde el propio tracker.",
   "step.full.notifications.controls.primaryLabel": "Siguiente",
   "step.full.notifications.controls.title": "Elige exactamente lo que te interrumpe",
   "step.full.performance.edit.copy": "Anclar, reordenar, ocultar o agregar rastreadores compatibles. El orden de desempeño permanece separado de Today y Progress.",

@@ -25,8 +25,11 @@ import { useApp } from "@/src/state/AppProvider";
 import { defaultProgressReminderPercentages } from "@/src/domain/reminders";
 import { useAuth } from "@/src/auth/AuthProvider";
 import {
+  cancelAllManagedLocalNotifications,
   disablePushNotifications,
   enablePushNotifications,
+  notificationPermissionGranted,
+  notificationSetupComplete,
 } from "@/src/notifications/push";
 import {
   getBatteryOptimizationStatus,
@@ -34,6 +37,12 @@ import {
   openBatteryOptimizationSettings,
 } from "@/src/notifications/batteryOptimization";
 import type { BatteryOptimizationStatus } from "@/src/notifications/batteryOptimization";
+import {
+  getExactAlarmStatus,
+  isExactAlarmControlSupported,
+  openExactAlarmSettings,
+} from "@/src/notifications/exactAlarm";
+import type { ExactAlarmStatus } from "@/src/notifications/exactAlarm";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { NotificationSettings } from "@/src/types";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
@@ -47,6 +56,7 @@ export default function NotificationsScreen() {
   const { t } = useLocalization();
   const value = state.settings.notifications;
   const [permissionNote, setPermissionNote] = useState<string | null>(null);
+  const [notificationReady, setNotificationReady] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
   const [otherOpen, setOtherOpen] = useState(false);
   const [trackersOpen, setTrackersOpen] = useState(false);
@@ -56,6 +66,9 @@ export default function NotificationsScreen() {
   >(
     isBatteryOptimizationControlSupported() ? "checking" : "unsupported",
   );
+  const [exactAlarmStatus, setExactAlarmStatus] = useState<
+    ExactAlarmStatus | "checking"
+  >(isExactAlarmControlSupported() ? "checking" : "unsupported");
   const groupMetrics = (state.group.metricConfiguration ?? []).filter(
     (metric) => metric.scoreWeight > 0 && metric.dataType !== "text",
   );
@@ -72,6 +85,24 @@ export default function NotificationsScreen() {
   );
   const showGymNotifications =
     state.settings.showGym === true && hasGymTracker;
+  const displayedPushEnabled = tutorialSandbox
+    ? value.pushEnabled
+    : value.pushEnabled && notificationReady;
+  const refreshNotificationReady = useCallback(async () => {
+    if (tutorialSandbox) {
+      setNotificationReady(value.pushEnabled);
+      return;
+    }
+    try {
+      setNotificationReady(
+        auth.user
+          ? await notificationSetupComplete(auth.user.id)
+          : await notificationPermissionGranted(),
+      );
+    } catch {
+      setNotificationReady(false);
+    }
+  }, [auth.user, tutorialSandbox, value.pushEnabled]);
   const refreshBatteryOptimization = useCallback(async () => {
     if (tutorialSandbox) {
       setBatteryOptimizationStatus("unsupported");
@@ -85,17 +116,39 @@ export default function NotificationsScreen() {
       setBatteryOptimizationStatus("enabled");
     }
   }, [tutorialSandbox]);
+  const refreshExactAlarmStatus = useCallback(async () => {
+    if (tutorialSandbox) {
+      setExactAlarmStatus("unsupported");
+      return;
+    }
+    try {
+      setExactAlarmStatus(await getExactAlarmStatus());
+    } catch {
+      setExactAlarmStatus("inexact");
+    }
+  }, [tutorialSandbox]);
+  useEffect(() => {
+    void refreshNotificationReady();
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") void refreshNotificationReady();
+    });
+    return () => subscription.remove();
+  }, [refreshNotificationReady]);
   useEffect(() => {
     if (Platform.OS !== "android") {
       setBatteryOptimizationStatus("unsupported");
+      setExactAlarmStatus("unsupported");
       return;
     }
     void refreshBatteryOptimization();
+    void refreshExactAlarmStatus();
     const subscription = AppState.addEventListener("change", (nextState) => {
-      if (nextState === "active") void refreshBatteryOptimization();
+      if (nextState !== "active") return;
+      void refreshBatteryOptimization();
+      void refreshExactAlarmStatus();
     });
     return () => subscription.remove();
-  }, [refreshBatteryOptimization]);
+  }, [refreshBatteryOptimization, refreshExactAlarmStatus]);
   function patch(changes: Partial<NotificationSettings>) {
     updateSettings({ notifications: { ...value, ...changes } });
   }
@@ -128,32 +181,47 @@ export default function NotificationsScreen() {
     });
   }
   async function togglePush() {
-    const next = !value.pushEnabled;
+    const next = !displayedPushEnabled;
     if (tutorialSandbox) {
       patch({ pushEnabled: next });
       setPermissionNote("Tutorial preview only - device settings are unchanged.");
       return;
     }
     if (!next) {
+      // The master switch is local-first: remove every alarm/banner before a
+      // slow or offline server cleanup is attempted. The cloud helper keeps a
+      // durable retry marker when the account-wide token delete cannot finish.
       patch({ pushEnabled: false });
-      if (auth.user) await disablePushNotifications(auth.user.id);
-      setPermissionNote("Push delivery is off on this account.");
-      return;
-    }
-    if (!auth.user) {
-      patch({ pushEnabled: true });
-      setPermissionNote(
-        "Demo preferences are saved locally. Sign in to register this phone.",
-      );
+      setNotificationReady(false);
+      setPermissionNote("Notifications are off on this account.");
+      try {
+        await cancelAllManagedLocalNotifications(auth.user?.id);
+        if (auth.user) await disablePushNotifications(auth.user.id);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Cloud cleanup will retry when this phone reconnects.";
+        setPermissionNote(
+          `Notifications are off on this phone. ${message}`,
+        );
+      }
       return;
     }
     try {
-      await enablePushNotifications(auth.user.id, {
+      await enablePushNotifications(auth.user?.id, {
         ...value,
         pushEnabled: true,
       }, state.settings.language);
+      // enablePushNotifications resolves only after permission and (for an
+      // account) the cloud registration acknowledgement have succeeded.
       patch({ pushEnabled: true });
-      setPermissionNote("This phone is registered for HabHub notifications.");
+      setNotificationReady(true);
+      setPermissionNote(
+        auth.user
+          ? "This phone is registered for HabHub notifications."
+          : "Local reminders are enabled on this phone.",
+      );
     } catch (error) {
       const message =
         error instanceof Error
@@ -183,6 +251,25 @@ export default function NotificationsScreen() {
       );
     }
   }
+  async function reviewExactAlarmTiming() {
+    if (tutorialSandbox) {
+      setPermissionNote("Tutorial preview only - Android settings were not opened.");
+      return;
+    }
+    try {
+      const opened = await openExactAlarmSettings();
+      if (!opened)
+        Alert.alert(
+          "Precise timing settings unavailable",
+          "Android exact-alarm settings could not be opened.",
+        );
+    } catch {
+      Alert.alert(
+        "Precise timing settings unavailable",
+        "Android exact-alarm settings could not be opened.",
+      );
+    }
+  }
   return (
     <Screen keyboardShouldPersistTaps="handled">
       <PageHeader
@@ -203,8 +290,8 @@ export default function NotificationsScreen() {
           <ToggleRow
             icon="notifications"
             title="Push notifications"
-            copy="Master switch for notifications on this device"
-            enabled={value.pushEnabled}
+            copy="Account-wide master switch for all signed-in HabHub devices"
+            enabled={displayedPushEnabled}
             onPress={togglePush}
           />
           {permissionNote ? (
@@ -269,6 +356,52 @@ export default function NotificationsScreen() {
           <Ionicons name="open-outline" size={18} color={colors.faint} />
           </Pressable>
         </TutorialTarget>
+      ) : null}
+      {Platform.OS === "android" && exactAlarmStatus !== "unsupported" ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("Review precise reminder timing")}
+          accessibilityHint={t(
+            "Android controls exact-alarm access. HabHub opens the system screen only when you tap.",
+          )}
+          onPress={reviewExactAlarmTiming}
+          style={[
+            styles.batteryLink,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <View style={[styles.rowIcon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="alarm-outline" size={20} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <View style={styles.batteryTitleRow}>
+              <Text style={[styles.title, { color: colors.ink }]}>Precise reminder timing</Text>
+              <View
+                style={[
+                  styles.batteryBadge,
+                  {
+                    backgroundColor:
+                      exactAlarmStatus === "exact"
+                        ? `${accent}20`
+                        : colors.primarySoft,
+                  },
+                ]}
+              >
+                <Text style={[styles.batteryBadgeText, { color: accent }]}>
+                  {exactAlarmStatus === "exact" ? "Exact" : "Review"}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.copyText, { color: colors.muted }]}>
+              {exactAlarmStatus === "checking"
+                ? "Checking Android reminder timing..."
+                : exactAlarmStatus === "exact"
+                  ? "Android allows HabHub reminders to fire at their precise scheduled time."
+                  : "Android will use its inexact fallback, so reminders still arrive but may be delayed. Tap to review exact-alarm access."}
+            </Text>
+          </View>
+          <Ionicons name="open-outline" size={18} color={colors.faint} />
+        </Pressable>
       ) : null}
       <Pressable
         onPress={() => router.navigate("/calendar" as never)}
@@ -374,25 +507,23 @@ export default function NotificationsScreen() {
           }
         />
         <ToggleRow
+          icon="flag-outline"
+          title="Challenges"
+          copy="Invitations and acceptance updates for shared challenges"
+          enabled={value.challenges !== false}
+          onPress={() => patch({ challenges: value.challenges === false })}
+        />
+        <ToggleRow
           icon="flame-outline"
-          title="Streak updates"
-          copy="Useful milestones for any active goal"
+          title="Logged tracker streaks"
+          copy="Milestones reached when logging an active tracker goal"
           enabled={value.streakAlerts !== false}
           onPress={() => patch({ streakAlerts: value.streakAlerts === false })}
         />
         <ToggleRow
-          icon="heart-dislike-outline"
-          title="Goal recovery nudges"
-          copy="A gentle prompt after repeated missed days"
-          enabled={value.missedGoalNudges !== false}
-          onPress={() =>
-            patch({ missedGoalNudges: value.missedGoalNudges === false })
-          }
-        />
-        <ToggleRow
           icon="trophy-outline"
-          title="Badges & winners"
-          copy="Awards and finalized period winners"
+          title="Leaderboard winners"
+          copy="Finalized group period winners"
           enabled={value.badgesAndWinners}
           onPress={() => patch({ badgesAndWinners: !value.badgesAndWinners })}
         />
@@ -571,7 +702,7 @@ export default function NotificationsScreen() {
         <ToggleRow
           icon="moon-outline"
           title="Quiet hours"
-          copy="Hold non-urgent alerts during this window"
+          copy="Scheduled reminders move to quiet-hours end; live updates are suppressed"
           enabled={value.quietHoursEnabled}
           onPress={() => patch({ quietHoursEnabled: !value.quietHoursEnabled })}
         />
@@ -594,6 +725,13 @@ export default function NotificationsScreen() {
           </View>
         ) : null}
       </Card> : null}
+      <Text
+        style={[styles.note, { color: colors.muted }]}
+        translate={false}
+      >
+        Turning this off cancels alerts on this phone immediately and removes
+        every account device registration when a signed-in phone reconnects.
+      </Text>
       <Text style={[styles.note, { color: colors.muted }]}>
         The installed app requests system permission and registers this phone.
         Expo Go on Android cannot receive remote push notifications; use an EAS

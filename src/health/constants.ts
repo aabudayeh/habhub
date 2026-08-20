@@ -10,3 +10,5 @@ export const HEALTH_INITIAL_DAYS = 30;
 export const HEALTH_STEPS_IMPORT_VERSION = 2;
 /** A foreground return may refresh today's one-bucket aggregate this often. */
 export const HEALTH_TODAY_STEPS_MIN_INTERVAL_MS = 20_000;
+/** Health Connect batches on-device steps about once per minute. */
+export const HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS = 60_000;

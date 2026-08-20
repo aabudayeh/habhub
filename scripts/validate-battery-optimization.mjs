@@ -5,6 +5,7 @@ const read = (path) => fs.readFileSync(path, "utf8");
 const nativeSource = read("plugins/habhub-android/java/HabHubNativeModule.kt");
 const bridgeSource = read("src/notifications/batteryOptimization.ts");
 const settingsSource = read("app/notifications.tsx");
+const exactBridgeSource = read("src/notifications/exactAlarm.ts");
 const appConfig = read("app.json");
 const pluginConfig = read("plugins/withHabHubAndroid.js");
 
@@ -34,17 +35,28 @@ assert.match(
 );
 assert.match(settingsSource, /onPress=\{reviewBatteryOptimization\}/);
 
-const effectStart = settingsSource.indexOf("useEffect(() => {");
+const effectStart = settingsSource.indexOf(
+  "useEffect(() => {",
+  settingsSource.indexOf("const refreshExactAlarmStatus"),
+);
 const effectEnd = settingsSource.indexOf(
-  "}, [refreshBatteryOptimization]);",
+  "}, [refreshBatteryOptimization, refreshExactAlarmStatus]);",
   effectStart,
 );
 assert.ok(effectStart >= 0 && effectEnd > effectStart);
 assert.doesNotMatch(
   settingsSource.slice(effectStart, effectEnd),
-  /openBatteryOptimizationSettings/,
-  "Battery settings must never open automatically",
+  /open(?:BatteryOptimization|ExactAlarm)Settings/,
+  "Android timing and battery settings must never open automatically",
 );
+
+assert.match(nativeSource, /canScheduleExactAlarms/);
+assert.match(nativeSource, /Settings\.ACTION_REQUEST_SCHEDULE_EXACT_ALARM/);
+assert.match(exactBridgeSource, /getExactAlarmStatus/);
+assert.match(exactBridgeSource, /openExactAlarmSettings/);
+assert.match(appConfig, /android\.permission\.SCHEDULE_EXACT_ALARM/);
+assert.match(pluginConfig, /android\.permission\.SCHEDULE_EXACT_ALARM/);
+assert.match(settingsSource, /onPress=\{reviewExactAlarmTiming\}/);
 
 console.log(
   "Android battery-optimization status and user-initiated settings route validated.",

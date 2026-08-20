@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "Minutos dedicados al trabajo concentrado. Registre el tiempo manualmente o use el temporizador de actividad para comprender su rutina.",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "Tiempo dedicado al uso de aplicaciones y la pantalla. Android puede estimarlo con Usage Access; La web y los dispositivos no compatibles pueden registrarlo manualmente.",
   "Close Today view picker": "Cerrar selector de vista de Hoy",
-  "Open Today view picker": "Abrir selector de vista de Hoy"
+  "Open Today view picker": "Abrir selector de vista de Hoy",
+  "Macros": "Macronutrientes",
+  "Shown macros": "Macronutrientes mostrados",
+  "Protein, carbs, and fat for this date range": "Proteínas, carbohidratos y grasas para este intervalo",
+  "Percentages show each selected macro’s share of macro calories.": "Los porcentajes muestran la proporción calórica de cada macronutriente seleccionado.",
+  "Bars show daily intake or daily average": "Las barras muestran la ingesta diaria o el promedio diario",
+  "No macro details were available in food entries for this range.": "No hay detalles de macronutrientes en las comidas de este intervalo.",
+  "Macro calorie percentages": "Porcentajes calóricos de macronutrientes",
+  "Double-tap a meal to edit its time": "Toca dos veces una comida para cambiar la hora",
+  "Double tap to edit this meal time": "Toca dos veces para cambiar la hora de esta comida",
+  "Edit meal time": "Editar hora de la comida",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "Solo cambia la hora. Las calorías, la nutrición, la fuente y la visibilidad se mantienen.",
+  "Save time": "Guardar hora"
 }

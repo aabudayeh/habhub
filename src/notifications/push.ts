@@ -18,15 +18,22 @@ import {
   effectiveGoalTarget,
   isMetricTrackedOnDate,
   metricApplicableOnDate,
+  metricStreakStats,
   metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
 } from '@/src/domain/metrics';
 import { defaultProgressReminderPercentages } from '@/src/domain/reminders';
 import {
+  earliestLocalNotificationSchedules,
   goalReminderNotificationId,
   goalReminderSemanticKey,
+  LOCAL_NOTIFICATION_BUDGETS,
+  localNotificationIdentifier,
+  notificationFallsAfterFastingTarget,
+  quietHoursAdjustedDateTime,
 } from '@/src/domain/notificationScheduling';
+import { automaticFastProgress } from '@/src/domain/fasting';
 import { createLatestAsyncDrain } from '@/src/domain/latestAsyncDrain';
 import {
   averageGymRestSeconds,
@@ -38,8 +45,26 @@ import {
 } from '@/src/domain/gym';
 import {
   scheduleAppliesOnDate,
-  todoAppearsOnDate,
+  todoReminderAppliesOnDate,
+  todoResolvedOnDate,
 } from '@/src/domain/schedule';
+import {
+  ensureLocalNotificationChannels,
+} from '@/src/notifications/localChannels';
+import {
+  dateLocalNotificationPlan,
+  clearAllLocalNotifications,
+  type LocalNotificationPlan,
+  reconcileLocalNotifications,
+  scheduleImmediateManagedLocalNotification,
+} from '@/src/notifications/localScheduling';
+import { requestLocalNotificationRefresh } from '@/src/notifications/localRefresh';
+import { clearWorkoutTimerNotifications } from '@/src/notifications/workoutTimer';
+import { clearLiveActivityTimerNotifications } from '@/src/notifications/liveTimer';
+import {
+  ACTIVITY_TIMER_ALERT_IDS,
+  syncActivityTimerAlerts,
+} from '@/src/notifications/activityTimerAlerts';
 import type { ScreenTimeReport } from '@/src/screenTime';
 import { readScreenTimeAppLimits } from '@/src/screenTime/appLimits';
 
@@ -75,6 +100,7 @@ function storedPreferences(preferences: NotificationSettings, language: AppLangu
 let pushRegistrationQueue: Promise<void> = Promise.resolve();
 const EXPO_TOKEN_CACHE_PREFIX = 'habhub-expo-push-token-v1:';
 const PUSH_REGISTRATION_CACHE_PREFIX = 'habhub-push-registration-v2:';
+const PUSH_DISABLE_PENDING_PREFIX = 'habhub-push-disable-pending-v1:';
 const PUSH_REGISTRATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 const PUSH_TOKEN_FOREGROUND_REFRESH_MS = 15 * 60 * 1000;
@@ -87,6 +113,8 @@ const expoTokenFetchByProject = new Map<string, Promise<string>>();
 const pushTokenRefreshByAccount = new Map<string, Promise<void>>();
 const pushTokenRefreshAttemptAt = new Map<string, number>();
 const disabledPushRegistrationAccounts = new Set<string>();
+const pushDisableByAccount = new Map<string, Promise<void>>();
+let pushIdentityCleanupQueue: Promise<void> = Promise.resolve();
 
 function tokenCacheKey(projectId: string) {
   return `${EXPO_TOKEN_CACHE_PREFIX}${projectId}`;
@@ -105,6 +133,10 @@ function registrationCacheKey(userId: string, projectId: string) {
 
 function registrationAccountKey(userId: string, projectId: string) {
   return `${projectId}:${userId}`;
+}
+
+function pendingPushDisableKey(userId: string) {
+  return `${PUSH_DISABLE_PENDING_PREFIX}${userId}`;
 }
 
 function wait(ms: number) {
@@ -171,9 +203,14 @@ async function registerPushToken(
   const operationKey = `${force ? 'force' : 'normal'}:${signature}`;
   const inFlight = pushRegistrationBySignature.get(operationKey);
   if (inFlight) return inFlight;
+  // Capture the auth-transition barrier now. A later sign-out cleanup captures
+  // this registration queue in turn, which avoids a circular wait while still
+  // guaranteeing that account B cannot reuse account A's native token.
+  const identityBarrier = pushIdentityCleanupQueue;
   const operation = pushRegistrationQueue
     .catch(() => undefined)
     .then(async () => {
+      await identityBarrier.catch(() => undefined);
       if (disabledPushRegistrationAccounts.has(accountKey)) return;
       if (!force) {
         let prior = pushRegistrationMemory.get(cacheKey);
@@ -268,7 +305,10 @@ export function refreshPushTokenRegistration(
   )
     return Promise.resolve();
   pushTokenRefreshAttemptAt.set(key, Date.now());
-  const operation = fetchExpoPushToken(projectId)
+  const identityBarrier = pushIdentityCleanupQueue;
+  const operation = identityBarrier
+    .catch(() => undefined)
+    .then(() => fetchExpoPushToken(projectId))
     .then((token) =>
       shouldContinue()
         ? registerPushToken(
@@ -307,23 +347,39 @@ function notificationErrorMessage(error: unknown) {
   return 'Unknown cloud registration error.';
 }
 
+/** A cloud-synced account re-enable supersedes any older offline disable. */
+export async function allowPushRegistrationForAccount(userId: string) {
+  await pushDisableByAccount.get(userId)?.catch(() => undefined);
+  const projectId = pushProjectId();
+  if (projectId)
+    disabledPushRegistrationAccounts.delete(
+      registrationAccountKey(userId, projectId),
+    );
+  await AsyncStorage.removeItem(pendingPushDisableKey(userId)).catch(
+    () => undefined,
+  );
+}
+
 export async function enablePushNotifications(
-  userId: string,
+  userId: string | undefined,
   preferences: NotificationSettings,
   language: AppLanguage = 'en',
 ) {
   if (Platform.OS === 'web') throw new Error('Push notifications are available in the installed iOS and Android app.');
   if (!Device.isDevice) throw new Error('Use a physical device to enable push notifications.');
+  await pushIdentityCleanupQueue.catch(() => undefined);
   await ensureNotificationChannel(language);
   let permission = await Notifications.getPermissionsAsync();
   const granted = () => permission.granted || permission.status === Notifications.PermissionStatus.GRANTED;
   if (!granted()) permission = await Notifications.requestPermissionsAsync({ ios: { allowAlert: true, allowBadge: true, allowSound: true } });
   if (!granted()) throw new Error('Android/iOS has not granted notification permission. Enable it in system settings and retry.');
+  requestLocalNotificationRefresh();
+  // Demo mode still needs the OS permission and explicit local channels for
+  // reminders, but it intentionally has no cloud token registration.
+  if (!userId) return;
   const projectId = pushProjectId();
   if (!projectId) throw new Error('This build is missing its EAS project ID.');
-  disabledPushRegistrationAccounts.delete(
-    registrationAccountKey(userId, projectId),
-  );
+  await allowPushRegistrationForAccount(userId);
   let tokenResult: { token: string; cached: boolean };
   try {
     tokenResult = await cachedOrFreshExpoPushToken(projectId);
@@ -390,13 +446,7 @@ export async function notificationSetupComplete(userId?: string) {
     signature?: string;
     registeredAt?: number;
   }) => {
-    if (
-      typeof acknowledgement.signature !== 'string' ||
-      !Number.isFinite(acknowledgement.registeredAt) ||
-      Date.now() - Number(acknowledgement.registeredAt) >=
-        PUSH_REGISTRATION_TTL_MS
-    )
-      return false;
+    if (typeof acknowledgement.signature !== 'string') return false;
     try {
       const signature = JSON.parse(acknowledgement.signature) as {
         userId?: string;
@@ -420,13 +470,20 @@ export async function notificationSetupComplete(userId?: string) {
   try {
     if (!acknowledgement) {
       const raw = await AsyncStorage.getItem(cacheKey);
-      if (!raw) return false;
-      acknowledgement = JSON.parse(raw) as {
-        signature?: string;
-        registeredAt?: number;
-      };
+      if (raw)
+        acknowledgement = JSON.parse(raw) as {
+          signature?: string;
+          registeredAt?: number;
+        };
     }
-    if (!signatureMatchesCurrentDevice(acknowledgement)) return false;
+    const acknowledgementMatches = Boolean(
+      acknowledgement && signatureMatchesCurrentDevice(acknowledgement),
+    );
+    const acknowledgementFresh =
+      acknowledgementMatches &&
+      Number.isFinite(acknowledgement?.registeredAt) &&
+      Date.now() - Number(acknowledgement?.registeredAt) <
+        PUSH_REGISTRATION_TTL_MS;
     // The owner-readable token row is the authoritative setup truth. This
     // keeps a locally cached acknowledgement from showing Connected after a
     // server cleanup, token invalidation, or account recreation.
@@ -437,7 +494,11 @@ export async function notificationSetupComplete(userId?: string) {
       .eq('token', token)
       .eq('platform', Platform.OS)
       .maybeSingle();
-    return !error && Boolean(data);
+    // A current, unexpired acknowledgement was written only after the token
+    // registration succeeded. Keep that success authoritative while offline;
+    // a successful server read can still prove the row was later removed.
+    if (error) return acknowledgementFresh;
+    return Boolean(data);
   } catch {
     return false;
   }
@@ -456,6 +517,8 @@ export async function updatePushPreferences(
   // preferences effect can carry a stale pushEnabled=true value while the
   // user's disable action is already deleting the token row.
   await ensureNotificationChannel(language);
+  await pushIdentityCleanupQueue.catch(() => undefined);
+  if (!shouldContinue()) return;
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted || !shouldContinue()) return;
   try {
@@ -495,24 +558,152 @@ export async function recoverPushRegistrationOnForeground(
   );
 }
 
-export async function disablePushNotifications(userId: string) {
-  if (!supabase || Platform.OS === 'web') return;
+async function clearNativePushIdentity(userId: string, projectId?: string) {
+  if (Platform.OS === 'web') return;
+  await Notifications.unregisterForNotificationsAsync().catch(
+    () => undefined,
+  );
+  if (!projectId) return;
+  const cacheKey = registrationCacheKey(userId, projectId);
+  pushRegistrationMemory.delete(cacheKey);
+  await AsyncStorage.multiRemove([
+    tokenCacheKey(projectId),
+    cacheKey,
+  ]).catch(() => undefined);
+}
+
+async function removeCurrentDevicePushToken(
+  userId: string,
+  registrationsBeforeCleanup: Promise<void>,
+) {
+  if (Platform.OS === 'web') return;
   const projectId = pushProjectId();
-  const accountKey = projectId
-    ? registrationAccountKey(userId, projectId)
-    : null;
-  if (accountKey) disabledPushRegistrationAccounts.add(accountKey);
+  if (!projectId) {
+    await clearNativePushIdentity(userId);
+    return;
+  }
+  const accountKey = registrationAccountKey(userId, projectId);
+  disabledPushRegistrationAccounts.add(accountKey);
   // A registration already queued before the switch was toggled off must
   // finish (or observe the disabled fence) before the delete commits. Token
   // refresh work is awaited first because it may append to that queue.
-  if (accountKey)
-    await pushTokenRefreshByAccount.get(accountKey)?.catch(() => undefined);
-  await pushRegistrationQueue.catch(() => undefined);
-  await supabase.from('device_push_tokens').delete().eq('user_id', userId);
-  if (!projectId) return;
-  const key = registrationCacheKey(userId, projectId);
-  pushRegistrationMemory.delete(key);
-  await AsyncStorage.removeItem(key).catch(() => undefined);
+  await pushTokenRefreshByAccount.get(accountKey)?.catch(() => undefined);
+  await registrationsBeforeCleanup.catch(() => undefined);
+  const token = await AsyncStorage.getItem(tokenCacheKey(projectId));
+  let deletionError: unknown;
+  if (supabase && token) {
+    const { error } = await supabase
+      .from('device_push_tokens')
+      .delete()
+      .eq('user_id', userId)
+      .eq('token', token)
+      .eq('platform', Platform.OS);
+    deletionError = error;
+  }
+  // Always sever the native token locally, even if the old authenticated RLS
+  // session disappeared before its exact server row could be removed.
+  await clearNativePushIdentity(userId, projectId);
+  if (deletionError) throw deletionError;
+}
+
+/** Remove only this physical phone's token before signing out or switching. */
+export async function unregisterCurrentDevicePushToken(userId: string) {
+  const registrationsBeforeCleanup = pushRegistrationQueue;
+  const operation = pushIdentityCleanupQueue
+    .catch(() => undefined)
+    .then(() =>
+      removeCurrentDevicePushToken(userId, registrationsBeforeCleanup),
+    );
+  pushIdentityCleanupQueue = operation.catch(() => undefined);
+  await operation;
+}
+
+/** Session recovery can discover there is no owner before an account id loads. */
+export async function unregisterOrphanedDevicePushToken() {
+  if (Platform.OS === 'web') return;
+  const operation = pushIdentityCleanupQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await Notifications.unregisterForNotificationsAsync().catch(
+        () => undefined,
+      );
+      const projectId = pushProjectId();
+      if (projectId)
+        await AsyncStorage.removeItem(tokenCacheKey(projectId)).catch(
+          () => undefined,
+        );
+    });
+  pushIdentityCleanupQueue = operation.catch(() => undefined);
+  await operation;
+}
+
+/** A process-safe off intent wins over a stale hydrated true preference. */
+export async function hasPendingPushDisable(userId: string) {
+  return (
+    (await AsyncStorage.getItem(pendingPushDisableKey(userId)).catch(
+      () => undefined,
+    )) === 'pending'
+  );
+}
+
+/** Release the temporary sign-out fence after the auth transition settles. */
+export function releasePushRegistrationFence(userId: string) {
+  const projectId = pushProjectId();
+  if (projectId)
+    disabledPushRegistrationAccounts.delete(
+      registrationAccountKey(userId, projectId),
+    );
+}
+
+export async function disablePushNotifications(userId: string) {
+  const existing = pushDisableByAccount.get(userId);
+  if (existing) return existing;
+  const projectId = pushProjectId();
+  const accountKey = projectId
+    ? registrationAccountKey(userId, projectId)
+    : undefined;
+  if (accountKey) disabledPushRegistrationAccounts.add(accountKey);
+  // Start durable persistence and append the native cleanup fence before this
+  // async function yields. A simultaneous A-to-B switch therefore cannot let B
+  // register a fresh native identity that A's second clear would unregister.
+  const pendingIntent = AsyncStorage.setItem(
+    pendingPushDisableKey(userId),
+    'pending',
+  );
+  const registrationsBeforeCleanup = pushRegistrationQueue;
+  const refreshBeforeCleanup = accountKey
+    ? pushTokenRefreshByAccount.get(accountKey)
+    : undefined;
+  const identityOperation = pushIdentityCleanupQueue
+    .catch(() => undefined)
+    .then(async () => {
+      await pendingIntent;
+      await Promise.all([
+        cancelAllManagedLocalNotifications(userId),
+        clearNativePushIdentity(userId, projectId),
+      ]);
+      await refreshBeforeCleanup?.catch(() => undefined);
+      await registrationsBeforeCleanup.catch(() => undefined);
+      // A token request queued before the fence may have repopulated the cache
+      // after the first clear. Invalidate once more before releasing account B.
+      if (projectId) await clearNativePushIdentity(userId, projectId);
+    });
+  pushIdentityCleanupQueue = identityOperation.catch(() => undefined);
+  const operation = identityOperation.then(async () => {
+    if (supabase) {
+      const { error } = await supabase.rpc('delete_all_own_push_tokens', {
+        p_expected_user_id: userId,
+      });
+      if (error) throw error;
+    }
+    await AsyncStorage.removeItem(pendingPushDisableKey(userId));
+  });
+  pushDisableByAccount.set(userId, operation);
+  operation.finally(() => {
+    if (pushDisableByAccount.get(userId) === operation)
+      pushDisableByAccount.delete(userId);
+  }).catch(() => undefined);
+  return operation;
 }
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';
@@ -574,14 +765,22 @@ function ensureLegacyGoalReminderCleanup(state: AppState) {
   return cleanup;
 }
 
-function reminderTime(state: AppState, configured: string) {
-  if (!state.settings.notifications.quietHoursEnabled) return configured;
-  const start = state.settings.notifications.quietHoursStart;
-  const end = state.settings.notifications.quietHoursEnd;
-  const quiet = start <= end
-    ? configured >= start && configured < end
-    : configured >= start || configured < end;
-  return quiet ? end : configured;
+function reminderTriggerDate(
+  state: AppState,
+  localDate: string,
+  configured: string,
+) {
+  const adjusted = quietHoursAdjustedDateTime({
+    enabled: state.settings.notifications.quietHoursEnabled,
+    start: state.settings.notifications.quietHoursStart,
+    end: state.settings.notifications.quietHoursEnd,
+    localDate,
+    time: configured,
+  });
+  return {
+    date: new Date(`${adjusted.localDate}T${adjusted.time}:00`),
+    time: adjusted.time,
+  };
 }
 
 function localizedContent(state: AppState, title: string, body: string) {
@@ -735,7 +934,7 @@ export async function notifyScreenTimeAppLimits(
   if (!permission.granted) return;
   const limits = await readScreenTimeAppLimits(state.currentUserId);
   if (!limits.length) return;
-  await ensureNotificationChannel(state.settings.language);
+  await ensureLocalNotificationChannels(state.settings.language);
 
   let stored: { date?: string; userId?: string; fired?: string[] } = {};
   try {
@@ -783,14 +982,12 @@ export async function notifyScreenTimeAppLimits(
             '{app} used {percent}% of its daily screen-time limit.',
             { app: limit.appName, percent: newest },
           );
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: translateUiText(state.settings.language, 'Screen time'),
-        body,
-        data: { route: '/metric-detail', metric: 'screen_time', date: localDate },
-      },
-      trigger: null,
-    });
+    await scheduleImmediateManagedLocalNotification({
+      title: translateUiText(state.settings.language, 'Screen time'),
+      body,
+      sound: 'default',
+      data: { route: '/metric-detail', metric: 'screen_time', date: localDate },
+    }, state.currentUserId);
   }
   await AsyncStorage.setItem(
     SCREEN_TIME_APP_MILESTONES,
@@ -813,10 +1010,14 @@ export async function notifyProgressMilestones(
 ) {
   if (Platform.OS === 'web' || localDate !== dateKey()) return;
   const settings = nextState.settings.notifications;
-  if (!settings.pushEnabled || !settings.reminders || isQuietNow(settings)) return;
+  if (
+    !settings.pushEnabled ||
+    (!settings.reminders && settings.streakAlerts === false) ||
+    isQuietNow(settings)
+  ) return;
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
-  await ensureNotificationChannel(nextState.settings.language);
+  await ensureLocalNotificationChannels(nextState.settings.language);
   let fired: string[] = [];
   try {
     fired = JSON.parse(
@@ -829,11 +1030,65 @@ export async function notifyProgressMilestones(
   const retained = fired.filter((key) => key.startsWith(todayPrefix));
   const firedSet = new Set(retained);
   for (const metric of nextState.metrics) {
-    if (!metric.progressRemindersEnabled || metric.goalEnabled === false) continue;
+    if (metric.goalEnabled === false) continue;
     const previousMetric =
       previousState.metrics.find((candidate) => candidate.id === metric.id) ?? metric;
     const before = progressReminderPercent(previousState, previousMetric, localDate);
     const after = progressReminderPercent(nextState, metric, localDate);
+    const metricName = localizeMetricName(nextState.settings.language, metric);
+    if (
+      settings.streakAlerts !== false &&
+      !scheduledGoalReached(
+        previousState,
+        previousMetric,
+        previousState.currentUserId,
+        localDate,
+      ) &&
+      scheduledGoalReached(
+        nextState,
+        metric,
+        nextState.currentUserId,
+        localDate,
+      )
+    ) {
+      const beforeStreak = metricStreakStats(
+        previousState,
+        previousMetric,
+        previousState.currentUserId,
+        localDate,
+      ).current;
+      const afterStreak = metricStreakStats(
+        nextState,
+        metric,
+        nextState.currentUserId,
+        localDate,
+      ).current;
+      const streakMilestones = [2, 3, 5, 7, 10, 14, 21, 30, 50, 75, 100, 150, 200, 365];
+      if (
+        afterStreak > beforeStreak &&
+        streakMilestones.includes(afterStreak)
+      ) {
+        const streakKey = `${todayPrefix}streak:${metric.id}:${afterStreak}`;
+        if (!firedSet.has(streakKey)) {
+          await scheduleImmediateManagedLocalNotification({
+            ...localizedContent(
+              nextState,
+              `${metricName} streak`,
+              `${afterStreak} days in a row. Keep the rhythm that works for you.`,
+            ),
+            sound: 'default',
+            data: {
+              route: '/metric-detail',
+              metric: metric.id,
+              date: localDate,
+              notificationKind: 'streak-milestone',
+            },
+          }, nextState.currentUserId);
+          firedSet.add(streakKey);
+        }
+      }
+    }
+    if (!settings.reminders || !metric.progressRemindersEnabled) continue;
     const thresholds = [
       ...new Set(
         metric.progressReminderPercentages?.length
@@ -846,7 +1101,6 @@ export async function notifyProgressMilestones(
     for (const threshold of thresholds) {
       const key = `${todayPrefix}${metric.id}:${threshold}`;
       if (before >= threshold || after < threshold || firedSet.has(key)) continue;
-      const metricName = localizeMetricName(nextState.settings.language, metric);
       const isJourney =
         metric.id === 'weight' || metric.goalProgressMode === 'journey';
       const milestoneBody =
@@ -868,13 +1122,16 @@ export async function notifyProgressMilestones(
         `${metricName} progress`,
         milestoneBody,
       );
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          ...content,
-          data: { route: '/metric-detail', metric: metric.id, date: localDate },
+      await scheduleImmediateManagedLocalNotification({
+        ...content,
+        sound: 'default',
+        data: {
+          route: '/metric-detail',
+          metric: metric.id,
+          date: localDate,
+          notificationKind: 'progress-milestone',
         },
-        trigger: null,
-      });
+      }, nextState.currentUserId);
       firedSet.add(key);
     }
   }
@@ -884,28 +1141,46 @@ export async function notifyProgressMilestones(
 async function syncGoalNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
   await ensureLegacyGoalReminderCleanup(state);
-  const previous = JSON.parse((await AsyncStorage.getItem(GOAL_IDS)) ?? '[]') as string[];
-  await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
   const settings = state.settings.notifications;
   if (!settings.pushEnabled || !settings.reminders) {
-    await AsyncStorage.setItem(GOAL_IDS, '[]');
+    await reconcileLocalNotifications(GOAL_IDS, [], state.currentUserId);
     return;
   }
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
+  await ensureLocalNotificationChannels(state.settings.language);
   const now = new Date();
   const today = dateKey(now);
-  const ids: string[] = [];
+  const plans: LocalNotificationPlan[] = [];
   const scheduledSemantics = new Set<string>();
-  for (let offset = 0; offset < 8 && ids.length < 64; offset += 1) {
+  const fastingProgressByMetric = new Map(
+    state.metrics
+      .filter((metric) => Boolean(metric.fastingSettings))
+      .map((metric) => [
+        metric.id,
+        automaticFastProgress(
+          state,
+          state.currentUserId,
+          now,
+          metric.id,
+        ),
+      ] as const),
+  );
+  const reminderMetrics = settings.reminders
+    ? state.metrics.filter(
+        (metric) =>
+          metric.reminders?.some((item) => item.enabled) ||
+          metric.reminder?.enabled,
+      )
+    : [];
+  // Search a full year for sparse monthly/custom occurrences. Common daily
+  // schedules stop as soon as the nearest iOS-safe category budget is full.
+  for (let offset = 0; offset < 367; offset += 1) {
     const localDate = dateWithOffsetFrom(today, offset);
-    for (const metric of state.metrics) {
+    for (const metric of reminderMetrics) {
       if (
         !(metric.reminders?.some((item) => item.enabled) || metric.reminder?.enabled) ||
-        metric.goalEnabled === false ||
-        (!isMetricTrackedOnDate(state, metric, localDate) &&
-          !metric.fastingSettings) ||
-        (offset === 0 && scheduledGoalReached(state, metric, state.currentUserId, localDate))
+        metric.activeFrom > localDate
       ) continue;
       const configured = metric.reminders?.length ? metric.reminders : metric.reminder ? [metric.reminder] : [];
       for (const [reminderIndex, reminder] of configured.entries()) {
@@ -919,10 +1194,45 @@ async function syncGoalNotificationsNow(state: AppState) {
           )
         )
           continue;
+        if (
+          !reminder.schedule &&
+          metric.goalEnabled !== false &&
+          !metric.fastingSettings &&
+          !isMetricTrackedOnDate(state, metric, localDate)
+        )
+          continue;
+        if (
+          metric.goalEnabled !== false &&
+          offset === 0 &&
+          scheduledGoalReached(
+            state,
+            metric,
+            state.currentUserId,
+            localDate,
+          )
+        )
+          continue;
         if (!/^\d{2}:\d{2}$/.test(reminder.time)) continue;
-        const time = reminderTime(state, reminder.time);
-        const trigger = new Date(`${localDate}T${time}:00`);
+        const effective = reminderTriggerDate(
+          state,
+          localDate,
+          reminder.time,
+        );
+        const time = effective.time;
+        const trigger = effective.date;
         if (trigger <= now) continue;
+        const fastingProgress = fastingProgressByMetric.get(metric.id);
+        if (fastingProgress) {
+          if (
+            fastingProgress.active &&
+            notificationFallsAfterFastingTarget({
+              startedAt: fastingProgress.startedAt,
+              targetMinutes: fastingProgress.targetMinutes,
+              triggerAt: trigger.getTime(),
+            })
+          )
+            continue;
+        }
         const content = localizedContent(
           state,
           reminder.label ?? `${localizeMetricName(state.settings.language, metric)} reminder`,
@@ -951,8 +1261,9 @@ async function syncGoalNotificationsNow(state: AppState) {
           localDate,
           time,
         });
-        ids.push(await Notifications.scheduleNotificationAsync({
+        plans.push(dateLocalNotificationPlan({
           identifier,
+          date: trigger,
           content: {
             ...content,
             data: {
@@ -965,14 +1276,16 @@ async function syncGoalNotificationsNow(state: AppState) {
               reminderId: identifier,
             },
           },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
         }));
-        if (ids.length >= 64) break;
       }
-      if (ids.length >= 64) break;
     }
+    if (plans.length >= LOCAL_NOTIFICATION_BUDGETS.goals) break;
   }
-  await AsyncStorage.setItem(GOAL_IDS, JSON.stringify(ids));
+  await reconcileLocalNotifications(
+    GOAL_IDS,
+    earliestLocalNotificationSchedules(plans, LOCAL_NOTIFICATION_BUDGETS.goals),
+    state.currentUserId,
+  );
 }
 
 /**
@@ -990,23 +1303,26 @@ export function syncGoalNotifications(state: AppState) {
   return drainGoalNotifications(state);
 }
 
-export async function syncCycleNotifications(state: AppState) {
+async function syncCycleNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
-  const previous = JSON.parse((await AsyncStorage.getItem(CYCLE_IDS)) ?? '[]') as string[];
-  await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
   const settings = state.settings.notifications;
   if (!settings.pushEnabled || (settings.cyclePredictions === false && settings.cyclePhaseUpdates !== true)) {
-    await AsyncStorage.setItem(CYCLE_IDS, '[]');
+    await reconcileLocalNotifications(CYCLE_IDS, [], state.currentUserId);
     return;
   }
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
-  const today = dateKey();
+  await ensureLocalNotificationChannels(state.settings.language);
+  const now = new Date();
+  const today = dateKey(now);
   const forecast = cycleForecast(state, state.currentUserId, today);
-  if (!forecast.nextPeriodStart) return;
-  const schedule: { date: string; title: string; body: string }[] = [];
+  if (!forecast.nextPeriodStart) {
+    await reconcileLocalNotifications(CYCLE_IDS, [], state.currentUserId);
+    return;
+  }
+  const schedule: { date: string; sourceId: string; title: string; body: string }[] = [];
   if (settings.cyclePredictions !== false) {
-    schedule.push({ date: dateWithOffsetFrom(forecast.nextPeriodStart, -(settings.cycleReminderDays ?? 2)), title: 'Period estimate', body: `Your next period is estimated in ${settings.cycleReminderDays ?? 2} days. This may change as HabHub learns your cycle.` });
+    schedule.push({ date: dateWithOffsetFrom(forecast.nextPeriodStart, -(settings.cycleReminderDays ?? 2)), sourceId: 'period-estimate', title: 'Period estimate', body: `Your next period is estimated in ${settings.cycleReminderDays ?? 2} days. This may change as HabHub learns your cycle.` });
   }
   if (settings.cyclePhaseUpdates === true) {
     const currentStart = dateWithOffsetFrom(forecast.nextPeriodStart, -forecast.averageCycleDays);
@@ -1016,116 +1332,139 @@ export async function syncCycleNotifications(state: AppState) {
       return next;
     };
     schedule.push(
-      { date: future(currentStart), title: 'Menstrual phase estimate', body: 'Your next cycle is estimated to begin around today.' },
-      { date: future(dateWithOffsetFrom(currentStart, forecast.averagePeriodDays)), title: 'Follicular phase estimate', body: 'Your follicular phase is estimated to begin around today.' },
-      { date: future(dateWithOffsetFrom(currentStart, forecast.averageCycleDays - 15)), title: 'Ovulation phase estimate', body: 'Estimated ovulation phase begins around today. This is not a contraceptive prediction.' },
-      { date: future(dateWithOffsetFrom(currentStart, forecast.averageCycleDays - 12)), title: 'Luteal phase estimate', body: 'Your luteal phase is estimated to begin around today.' },
+      { date: future(currentStart), sourceId: 'menstrual-phase', title: 'Menstrual phase estimate', body: 'Your next cycle is estimated to begin around today.' },
+      { date: future(dateWithOffsetFrom(currentStart, forecast.averagePeriodDays)), sourceId: 'follicular-phase', title: 'Follicular phase estimate', body: 'Your follicular phase is estimated to begin around today.' },
+      { date: future(dateWithOffsetFrom(currentStart, forecast.averageCycleDays - 15)), sourceId: 'ovulation-phase', title: 'Ovulation phase estimate', body: 'Estimated ovulation phase begins around today. This is not a contraceptive prediction.' },
+      { date: future(dateWithOffsetFrom(currentStart, forecast.averageCycleDays - 12)), sourceId: 'luteal-phase', title: 'Luteal phase estimate', body: 'Your luteal phase is estimated to begin around today.' },
     );
   }
-  const ids: string[] = [];
-  for (const item of schedule.filter((item) => item.date > today)) {
-    const trigger = new Date(`${item.date}T09:00:00`);
-    ids.push(await Notifications.scheduleNotificationAsync({
+  const plans: LocalNotificationPlan[] = [];
+  for (const item of schedule) {
+    const effective = reminderTriggerDate(state, item.date, '09:00');
+    const trigger = effective.date;
+    if (trigger <= now) continue;
+    const identifier = localNotificationIdentifier({
+      userId: state.currentUserId,
+      kind: 'cycle',
+      sourceId: item.sourceId,
+      localDate: item.date,
+      time: effective.time,
+    });
+    plans.push(dateLocalNotificationPlan({
+      identifier,
+      date: trigger,
       content: {
         ...localizedContent(state, item.title, item.body),
-        data: { route: '/metric-detail', metric: 'menstrual_cycle' },
+        data: {
+          route: '/metric-detail',
+          metric: 'menstrual_cycle',
+          notificationKind: 'cycle-reminder',
+        },
       },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
     }));
   }
-  await AsyncStorage.setItem(CYCLE_IDS, JSON.stringify(ids));
+  await reconcileLocalNotifications(
+    CYCLE_IDS,
+    earliestLocalNotificationSchedules(plans, LOCAL_NOTIFICATION_BUDGETS.cycle),
+    state.currentUserId,
+  );
 }
 
-export async function syncProductivityNotifications(state: AppState) {
+async function syncProductivityNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
   // The one-time goal-reminder migration recognizes legacy timer routes.
   // Serialize it before calendar/to-do timers are recreated so it can never
   // cancel a fresh productivity reminder scheduled by a concurrent effect.
   await ensureLegacyGoalReminderCleanup(state);
-  const previous = JSON.parse(
-    (await AsyncStorage.getItem(PRODUCTIVITY_IDS)) ?? '[]',
-  ) as string[];
-  await Promise.all(
-    previous.map((id) =>
-      Notifications.cancelScheduledNotificationAsync(id).catch(
-        () => undefined,
-      ),
-    ),
-  );
   if (!state.settings.notifications.pushEnabled) {
-    await AsyncStorage.setItem(PRODUCTIVITY_IDS, '[]');
+    await reconcileLocalNotifications(
+      PRODUCTIVITY_IDS,
+      [],
+      state.currentUserId,
+    );
     return;
   }
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
+  await ensureLocalNotificationChannels(state.settings.language);
   const now = new Date();
   const today = dateKey(now);
-  const ids: string[] = [];
-  const schedule = async (
+  const plans: LocalNotificationPlan[] = [];
+  const schedule = (
     localDate: string,
     time: string,
     title: string,
     body: string,
     route: string,
+    kind: string,
+    sourceId: string,
   ) => {
-    if (ids.length >= 64 || !/^\d{2}:\d{2}$/.test(time)) return;
-    const trigger = new Date(
-      `${localDate}T${reminderTime(state, time)}:00`,
-    );
+    if (!/^\d{2}:\d{2}$/.test(time)) return;
+    const effective = reminderTriggerDate(state, localDate, time);
+    const effectiveTime = effective.time;
+    const trigger = effective.date;
     if (trigger <= now) return;
-    ids.push(
-      await Notifications.scheduleNotificationAsync({
-        content: { ...localizedContent(state, title, body), data: { route } },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: trigger,
+    const identifier = localNotificationIdentifier({
+      userId: state.currentUserId,
+      kind,
+      sourceId,
+      localDate,
+      time: effectiveTime,
+    });
+    plans.push(
+      dateLocalNotificationPlan({
+        identifier,
+        date: trigger,
+        content: {
+          ...localizedContent(state, title, body),
+          data: { route, notificationKind: kind, reminderId: identifier },
         },
       }),
     );
   };
-  for (let offset = 0; offset < 31 && ids.length < 64; offset += 1) {
+  // One-off deadlines and sparse calendar recurrences can be months away.
+  // Daily-heavy schedules still stop as soon as their nearest budget is full.
+  for (let offset = 0; offset < 367; offset += 1) {
     const localDate = dateWithOffsetFrom(today, offset);
     for (const todo of
       state.settings.notifications.todoReminders === false
         ? []
         : state.todos ?? []) {
       if (
-        !todoAppearsOnDate(todo, localDate) ||
-        todo.completedDates.includes(localDate) ||
+        todoResolvedOnDate(todo, localDate) ||
         (!todo.recurrence && Boolean(todo.completedAt))
       )
         continue;
+      const dueDate = todo.dueAt?.slice(0, 10);
+      const dueTime = todo.dueAt?.slice(11, 16) ?? '09:00';
+      const explicitDeadlineReminder = todo.reminders.some(
+        (reminder) =>
+          todoReminderAppliesOnDate(todo, reminder, localDate) &&
+          (reminder.time ?? reminder.at?.slice(11, 16) ?? dueTime) ===
+            dueTime,
+      );
+      if (dueDate === localDate && !explicitDeadlineReminder)
+        schedule(
+          localDate,
+          dueTime,
+          'To-do deadline',
+          todo.title,
+          `/todo-editor?id=${todo.id}`,
+          'todo-deadline',
+          todo.id,
+        );
       for (const reminder of todo.reminders) {
-        const dailyUntilDue =
-          reminder.repeatDailyUntilDue &&
-          localDate >= todo.createdAt.slice(0, 10) &&
-          (!todo.dueAt || localDate <= todo.dueAt.slice(0, 10));
-        const recurring =
-          reminder.schedule &&
-          scheduleAppliesOnDate(
-            reminder.schedule,
-            reminder.schedule.anchorDate ??
-              reminder.at?.slice(0, 10) ??
-              todo.createdAt.slice(0, 10),
-            localDate,
-          );
-        if (
-          !dailyUntilDue &&
-          !recurring &&
-          reminder.at &&
-          reminder.at.slice(0, 10) !== localDate
-        )
-          continue;
-        await schedule(
-          dailyUntilDue || recurring
-            ? localDate
-            : (reminder.at?.slice(0, 10) ?? localDate),
+        if (!todoReminderAppliesOnDate(todo, reminder, localDate)) continue;
+        schedule(
+          localDate,
           reminder.time ?? todo.dueAt?.slice(11, 16) ?? '09:00',
           todo.dueAt?.slice(0, 10) === localDate
             ? 'To-do deadline'
             : 'To-do reminder',
           todo.title,
           `/todo-editor?id=${todo.id}`,
+          'todo-reminder',
+          `${todo.id}:${reminder.id}`,
         );
       }
     }
@@ -1135,7 +1474,7 @@ export async function syncProductivityNotifications(state: AppState) {
         !scheduleAppliesOnDate(reminder.schedule, today, localDate)
       )
         continue;
-      await schedule(
+      schedule(
         localDate,
         reminder.time,
         reminder.title,
@@ -1147,29 +1486,38 @@ export async function syncProductivityNotifications(state: AppState) {
         reminder.kind === 'tracker' && reminder.metricId && reminder.durationMinutes
           ? `/timer?metric=${encodeURIComponent(reminder.metricId)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`
           : '/calendar',
+        'calendar-reminder',
+        reminder.id,
       );
     }
+    if (plans.length >= LOCAL_NOTIFICATION_BUDGETS.productivity) break;
   }
-  await AsyncStorage.setItem(PRODUCTIVITY_IDS, JSON.stringify(ids));
+  await reconcileLocalNotifications(
+    PRODUCTIVITY_IDS,
+    earliestLocalNotificationSchedules(
+      plans,
+      LOCAL_NOTIFICATION_BUDGETS.productivity,
+    ),
+    state.currentUserId,
+  );
 }
 
 /**
  * Keeps gym prompts private and on-device. Group activity still uses the
  * regular shared tracker entries created from a completed session.
  */
-export async function syncGymNotifications(state: AppState) {
+async function syncGymNotificationsNow(state: AppState) {
   if (Platform.OS === 'web') return;
   const settings = state.settings.notifications;
   const idsKey = `${GYM_IDS}:${state.currentUserId}`;
   const achievementKey = `${GYM_ACHIEVEMENT}:${state.currentUserId}`;
-  const previous = JSON.parse((await AsyncStorage.getItem(idsKey)) ?? '[]') as string[];
-  await Promise.all(previous.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
   if (!settings.pushEnabled || state.settings.showGym === false) {
-    await AsyncStorage.setItem(idsKey, '[]');
+    await reconcileLocalNotifications(idsKey, [], state.currentUserId);
     return;
   }
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
+  await ensureLocalNotificationChannels(state.settings.language);
   const sessions = (state.gymSessions ?? [])
     .filter(
       (session) =>
@@ -1178,9 +1526,61 @@ export async function syncGymNotifications(state: AppState) {
     )
     .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
   const latest = sessions[0];
-  const ids: string[] = [];
+  const plans: LocalNotificationPlan[] = [];
 
-  if (settings.gymAchievements !== false && latest) {
+  if (settings.gymReminders !== false) {
+    const waitDays = Math.max(1, Math.min(14, settings.gymReminderDays ?? 3));
+    const baseDate = latest?.localDate ?? dateKey();
+    let reminderDate = dateWithOffsetFrom(baseDate, waitDays);
+    const now = new Date();
+    let effective = reminderTriggerDate(state, reminderDate, '18:00');
+    let time = effective.time;
+    let trigger = effective.date;
+    if (trigger <= now) {
+      reminderDate = dateWithOffsetFrom(dateKey(), 1);
+      effective = reminderTriggerDate(state, reminderDate, '18:00');
+      time = effective.time;
+      trigger = effective.date;
+    }
+    const identifier = localNotificationIdentifier({
+      userId: state.currentUserId,
+      kind: 'gym-reminder',
+      sourceId: latest?.id ?? 'first-workout',
+      localDate: reminderDate,
+      time,
+    });
+    plans.push(
+      dateLocalNotificationPlan({
+        identifier,
+        date: trigger,
+        content: {
+          ...localizedContent(
+            state,
+            'Ready for your next workout?',
+            latest
+              ? `It has been ${waitDays} days since ${latest.name}. Reuse it or choose another saved workout when you are ready.`
+              : 'Start a workout to build your personal exercise baseline.',
+          ),
+          data: {
+            route: '/gym',
+            notificationKind: 'gym-reminder',
+            reminderId: identifier,
+          },
+        },
+      }),
+    );
+  }
+  await reconcileLocalNotifications(
+    idsKey,
+    earliestLocalNotificationSchedules(plans, LOCAL_NOTIFICATION_BUDGETS.gym),
+    state.currentUserId,
+  );
+
+  if (
+    settings.gymAchievements !== false &&
+    latest &&
+    !isQuietNow(settings)
+  ) {
     const alreadyNotified = await AsyncStorage.getItem(achievementKey);
     if (alreadyNotified !== latest.id) {
       const records = latest.exercises.flatMap((exercise) => {
@@ -1220,62 +1620,87 @@ export async function syncGymNotifications(state: AppState) {
         latestRest > 0 && priorRest > 0
           ? ` Average rest was ${Math.abs(latestRest - priorRest)}s ${latestRest > priorRest ? 'longer' : 'shorter'} than ${previousComparable.name}.`
           : '';
-      ids.push(
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            ...localizedContent(
-              state,
-              records.length ? 'New workout best' : 'Workout saved',
-              records.length
-                ? `${records
-                    .slice(0, 2)
-                    .map((name) =>
-                      localizeExerciseName(state.settings.language, {
-                        exerciseKey: latest.exercises.find((item) => item.name === name)?.exerciseKey,
-                        name,
-                      }),
-                    )
-                    .join(' and ')} moved above your prior estimated best.${restCopy}`
-                : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString(localeForLanguage(state.settings.language))} kg of volume logged.${restCopy}`,
-            ),
-            data: { route: '/gym' },
-          },
-          trigger: null,
-        }),
-      );
+      await scheduleImmediateManagedLocalNotification({
+        ...localizedContent(
+          state,
+          records.length ? 'New workout best' : 'Workout saved',
+          records.length
+            ? `${records
+                .slice(0, 2)
+                .map((name) =>
+                  localizeExerciseName(state.settings.language, {
+                    exerciseKey: latest.exercises.find((item) => item.name === name)?.exerciseKey,
+                    name,
+                  }),
+                )
+                .join(' and ')} moved above your prior estimated best.${restCopy}`
+            : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString(localeForLanguage(state.settings.language))} kg of volume logged.${restCopy}`,
+        ),
+        sound: 'default',
+        data: { route: '/gym', notificationKind: 'gym-achievement' },
+      }, state.currentUserId);
       await AsyncStorage.setItem(achievementKey, latest.id);
     }
   }
+}
 
-  if (settings.gymReminders !== false) {
-    const waitDays = Math.max(1, Math.min(14, settings.gymReminderDays ?? 3));
-    const baseDate = latest?.localDate ?? dateKey();
-    let reminderDate = dateWithOffsetFrom(baseDate, waitDays);
-    const now = new Date();
-    const time = reminderTime(state, '18:00');
-    let trigger = new Date(`${reminderDate}T${time}:00`);
-    if (trigger <= now) {
-      reminderDate = dateWithOffsetFrom(dateKey(), 1);
-      trigger = new Date(`${reminderDate}T${time}:00`);
-    }
-    ids.push(
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          ...localizedContent(
-            state,
-            'Ready for your next workout?',
-            latest
-              ? `It has been ${waitDays} days since ${latest.name}. Reuse it or choose another saved workout when you are ready.`
-              : 'Start a workout to build your personal exercise baseline.',
-          ),
-          data: { route: '/gym' },
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.DATE,
-          date: trigger,
-        },
-      }),
-    );
-  }
-  await AsyncStorage.setItem(idsKey, JSON.stringify(ids));
+const drainCycleNotifications = createLatestAsyncDrain<AppState>(
+  syncCycleNotificationsNow,
+);
+const drainProductivityNotifications = createLatestAsyncDrain<AppState>(
+  syncProductivityNotificationsNow,
+);
+const drainGymNotifications = createLatestAsyncDrain<AppState>(
+  syncGymNotificationsNow,
+);
+
+export function syncCycleNotifications(state: AppState) {
+  if (Platform.OS === 'web') return Promise.resolve();
+  return drainCycleNotifications(state);
+}
+
+export function syncProductivityNotifications(state: AppState) {
+  if (Platform.OS === 'web') return Promise.resolve();
+  return drainProductivityNotifications(state);
+}
+
+export function syncGymNotifications(state: AppState) {
+  if (Platform.OS === 'web') return Promise.resolve();
+  return drainGymNotifications(state);
+}
+
+/** Replenish rolling alarm windows after time-zone/day and foreground changes. */
+export async function syncAllLocalNotifications(state: AppState) {
+  if (Platform.OS === 'web') return;
+  await Promise.all([
+    syncGoalNotifications(state),
+    syncCycleNotifications(state),
+    syncProductivityNotifications(state),
+    syncGymNotifications(state),
+    syncActivityTimerAlerts(state),
+  ]);
+}
+
+export async function cancelAllManagedLocalNotifications(userId?: string) {
+  await Promise.all([
+    clearAllLocalNotifications([
+      GOAL_IDS,
+      CYCLE_IDS,
+      PRODUCTIVITY_IDS,
+      ...(userId
+        ? [`${GYM_IDS}:${userId}`, `${GYM_ACHIEVEMENT}:${userId}`]
+        : []),
+      PROGRESS_MILESTONES,
+      SCREEN_TIME_APP_MILESTONES,
+      'habhub-live-activity-notification-ids-v1',
+      ACTIVITY_TIMER_ALERT_IDS,
+      'metricrally-workout-notification-flow-v1',
+      'metricrally-workout-notification-actions-v1',
+    ]),
+    // Expo cancellation cannot clear the native locked-screen workout action
+    // queue. Clear both the banner and HabHubWorkoutNotificationStore so the
+    // next account can never consume the prior account's queued actions.
+    clearWorkoutTimerNotifications(),
+    clearLiveActivityTimerNotifications(),
+  ]);
 }

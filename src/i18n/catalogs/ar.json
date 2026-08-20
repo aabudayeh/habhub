@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "الدقائق التي يقضيها في العمل المركز. قم بتسجيل الوقت يدويًا أو استخدم مؤقت النشاط لفهم روتينك.",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "الوقت المستغرق في استخدام التطبيقات والشاشة. يمكن لنظام Android تقديره من خلال الوصول إلى الاستخدام؛ يمكن للويب والأجهزة غير المدعومة تسجيلها يدويًا.",
   "Close Today view picker": "إغلاق منتقي عرض اليوم",
-  "Open Today view picker": "فتح منتقي عرض اليوم"
+  "Open Today view picker": "فتح منتقي عرض اليوم",
+  "Macros": "المغذيات الكبرى",
+  "Shown macros": "المغذيات المعروضة",
+  "Protein, carbs, and fat for this date range": "البروتين والكربوهيدرات والدهون لنطاق التاريخ هذا",
+  "Percentages show each selected macro’s share of macro calories.": "توضح النسب حصة كل عنصر محدد من سعرات المغذيات الكبرى.",
+  "Bars show daily intake or daily average": "توضح الأعمدة المدخول اليومي أو المتوسط اليومي",
+  "No macro details were available in food entries for this range.": "لا تتوفر تفاصيل للمغذيات الكبرى في إدخالات الطعام لهذا النطاق.",
+  "Macro calorie percentages": "نسب سعرات المغذيات الكبرى",
+  "Double-tap a meal to edit its time": "انقر نقرًا مزدوجًا على وجبة لتعديل وقتها",
+  "Double tap to edit this meal time": "انقر نقرًا مزدوجًا لتعديل وقت هذه الوجبة",
+  "Edit meal time": "تعديل وقت الوجبة",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "يتغير الوقت فقط. تبقى السعرات والتغذية والمصدر والمشاركة كما هي.",
+  "Save time": "حفظ الوقت"
 }

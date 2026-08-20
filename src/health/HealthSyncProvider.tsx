@@ -18,6 +18,7 @@ import { configureBackgroundHealthSync } from '@/src/health/background';
 import {
   HEALTH_INITIAL_DAYS,
   HEALTH_STEPS_IMPORT_VERSION,
+  HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS,
   HEALTH_STATUS_STORAGE_KEY,
   HEALTH_TODAY_STEPS_MIN_INTERVAL_MS,
 } from '@/src/health/constants';
@@ -43,6 +44,7 @@ const STEPS_REPAIR_CHUNKS_PER_BATCH = 4;
 const STEPS_REPAIR_NEXT_CHUNK_DELAY_MS = 4_000;
 const STEPS_REPAIR_RETRY_MS = 15 * 60 * 1000;
 const FOREGROUND_STEPS_SETTLE_DELAY_MS = 700;
+const FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS = 1_200;
 
 type ActiveHealthOperation = 'full' | 'steps-refresh' | 'steps-repair';
 
@@ -149,6 +151,15 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   const activeHealthOperationRef = useRef<ActiveHealthOperation | null>(null);
   const backfillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todayStepsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const todayStepsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
+  const todayStepsInteractionRef = useRef<
+    ReturnType<typeof InteractionManager.runAfterInteractions> | null
+  >(null);
+  const todayStepsInteractionFallbackRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null);
   const stepsRepairTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runSyncRef = useRef<
     ((
@@ -163,6 +174,37 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   stateRef.current = state;
   updateSettingsRef.current = updateSettings;
   persistedRef.current = persisted;
+
+  const refreshTodayStepsAfterInteractions = useCallback((force = false) => {
+    todayStepsInteractionRef.current?.cancel();
+    if (todayStepsInteractionFallbackRef.current)
+      clearTimeout(todayStepsInteractionFallbackRef.current);
+    let completed = false;
+    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
+      null;
+    const run = () => {
+      if (completed) return;
+      completed = true;
+      task?.cancel();
+      if (todayStepsInteractionRef.current === task)
+        todayStepsInteractionRef.current = null;
+      if (todayStepsInteractionFallbackRef.current) {
+        clearTimeout(todayStepsInteractionFallbackRef.current);
+        todayStepsInteractionFallbackRef.current = null;
+      }
+      if (NativeAppState.currentState === 'active')
+        refreshTodayStepsRef.current?.(force).catch(() => undefined);
+    };
+    task = InteractionManager.runAfterInteractions(run);
+    if (completed) task.cancel();
+    else {
+      todayStepsInteractionRef.current = task;
+      todayStepsInteractionFallbackRef.current = setTimeout(
+        run,
+        FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS,
+      );
+    }
+  }, []);
   const backgroundConfigurationKey = useMemo(
     () =>
       JSON.stringify({
@@ -1195,17 +1237,24 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     todayStepsTimerRef.current = setTimeout(() => {
       todayStepsTimerRef.current = null;
       if (NativeAppState.currentState === 'active')
-        InteractionManager.runAfterInteractions(() => {
-          refreshTodayStepsRef.current?.().catch(() => undefined);
-        });
+        refreshTodayStepsAfterInteractions();
     }, FOREGROUND_STEPS_SETTLE_DELAY_MS);
+    todayStepsIntervalRef.current = setInterval(() => {
+      if (NativeAppState.currentState === 'active')
+        refreshTodayStepsAfterInteractions();
+    }, HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS);
     return () => {
       if (todayStepsTimerRef.current) {
         clearTimeout(todayStepsTimerRef.current);
         todayStepsTimerRef.current = null;
       }
+      if (todayStepsIntervalRef.current) {
+        clearInterval(todayStepsIntervalRef.current);
+        todayStepsIntervalRef.current = null;
+      }
     };
   }, [
+    refreshTodayStepsAfterInteractions,
     state.currentUserId,
     state.settings.healthSync.dataTypes.steps,
     state.settings.healthSync.enabled,
@@ -1242,6 +1291,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     () => () => {
       if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
       if (todayStepsTimerRef.current) clearTimeout(todayStepsTimerRef.current);
+      if (todayStepsIntervalRef.current)
+        clearInterval(todayStepsIntervalRef.current);
+      todayStepsInteractionRef.current?.cancel();
+      if (todayStepsInteractionFallbackRef.current)
+        clearTimeout(todayStepsInteractionFallbackRef.current);
       if (stepsRepairTimerRef.current) clearTimeout(stepsRepairTimerRef.current);
       setCloudSyncPaused('health-steps-repair', false);
     },
@@ -1306,9 +1360,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         todayStepsTimerRef.current = setTimeout(() => {
           todayStepsTimerRef.current = null;
           if (NativeAppState.currentState === 'active')
-            InteractionManager.runAfterInteractions(() => {
-              refreshTodayStepsRef.current?.().catch(() => undefined);
-            });
+            refreshTodayStepsAfterInteractions();
         }, FOREGROUND_STEPS_SETTLE_DELAY_MS);
       }
       if (
@@ -1418,7 +1470,12 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       if (resumeTimer) clearTimeout(resumeTimer);
       if (todayStepsTimerRef.current) clearTimeout(todayStepsTimerRef.current);
     };
-  }, [runSync, scheduleBackfill, scheduleStepsRepair]);
+  }, [
+    refreshTodayStepsAfterInteractions,
+    runSync,
+    scheduleBackfill,
+    scheduleStepsRepair,
+  ]);
 
   const sourceOrigins = useMemo(() => [...new Set(state.entries
     .filter((entry) => entry.userId === state.currentUserId && entry.source === 'imported' && entry.sourceOrigin)

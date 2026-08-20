@@ -256,7 +256,7 @@ export const tutorialDeCatalog = {
   "step.full.notifications.battery.copy": "HabHub kann die Android-Akkuoptimierungseinstellungen anfordern, sodass die Wahrscheinlichkeit einer Verzögerung bei der geplanten Hintergrundsynchronisierung geringer ist. Die endgültige Auswahl erfolgt auf der Betriebssystemseite.",
   "step.full.notifications.battery.primaryLabel": "Als nächstes",
   "step.full.notifications.battery.title": "Ermöglichen Sie zuverlässige Android-Hintergrundarbeit",
-  "step.full.notifications.controls.copy": "Kontrollieren Sie Gruppenaktivität, Chat, Mitgliedschaft, Streaks, Abzeichen, Erinnerungen, Workouts, Zyklusschätzungen und ruhige Stunden. Tracker-Erinnerungen können auch weiterhin über ihren Tracker bearbeitet werden.",
+  "step.full.notifications.controls.copy": "Steuere Gruppenaktivität, Chat, Mitgliedschaft, Serienmeilensteine für protokollierte Tracker, Ranglistensieger, Erinnerungen, Workouts, Zyklusschätzungen und Ruhezeiten. Tracker-Erinnerungen lassen sich auch im jeweiligen Tracker bearbeiten.",
   "step.full.notifications.controls.primaryLabel": "Als nächstes",
   "step.full.notifications.controls.title": "Wählen Sie genau aus, was Sie unterbricht",
   "step.full.performance.edit.copy": "Kompatible Tracker anpinnen, neu anordnen, ausblenden oder hinzufügen. Die Leistungsreihenfolge bleibt getrennt von „Heute“ und „Fortschritt“.",

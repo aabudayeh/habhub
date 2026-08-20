@@ -256,7 +256,7 @@ export const tutorialEnCatalog = {
   "step.full.notifications.battery.copy": "HabHub can request the Android battery-optimization settings so scheduled background sync is less likely to be delayed. The final choice happens in the operating-system page.",
   "step.full.notifications.battery.primaryLabel": "Next",
   "step.full.notifications.battery.title": "Allow reliable Android background work",
-  "step.full.notifications.controls.copy": "Control group activity, chat, membership, streaks, badges, reminders, workouts, cycle estimates and quiet hours. Tracker reminders remain editable from their tracker too.",
+  "step.full.notifications.controls.copy": "Control group activity, chat, membership, logged-tracker streak milestones, leaderboard winners, reminders, workouts, cycle estimates and quiet hours. Tracker reminders remain editable from their tracker too.",
   "step.full.notifications.controls.primaryLabel": "Next",
   "step.full.notifications.controls.title": "Choose exactly what interrupts you",
   "step.full.performance.edit.copy": "Pin, reorder, hide or add compatible trackers. Performance ordering remains separate from Today and Progress.",

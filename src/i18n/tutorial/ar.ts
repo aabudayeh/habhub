@@ -256,7 +256,7 @@ export const tutorialArCatalog = {
   "step.full.notifications.battery.copy": "يستطيع HabHub طلب إعدادات تحسين بطارية Android بحيث تقل احتمالية تأخير مزامنة الخلفية المجدولة. يتم الاختيار النهائي في صفحة نظام التشغيل.",
   "step.full.notifications.battery.primaryLabel": "التالي",
   "step.full.notifications.battery.title": "السماح بعمل خلفية موثوقة لنظام Android",
-  "step.full.notifications.controls.copy": "التحكم في نشاط المجموعة والدردشة والعضوية والخطوط والشارات والتذكيرات والتدريبات وتقديرات الدورة وساعات الهدوء. تظل تذكيرات المتعقب قابلة للتحرير من متتبعها أيضًا.",
+  "step.full.notifications.controls.copy": "تحكّم في نشاط المجموعة والدردشة والعضوية ومراحل سلاسل المتتبعات المسجّلة وفائزي لوحة الصدارة والتذكيرات والتمارين وتقديرات الدورة وساعات الهدوء. تظل تذكيرات المتتبع قابلة للتحرير من المتتبع نفسه أيضًا.",
   "step.full.notifications.controls.primaryLabel": "التالي",
   "step.full.notifications.controls.title": "اختر بالضبط ما يقاطعك",
   "step.full.performance.edit.copy": "تثبيت أدوات التتبع المتوافقة أو إعادة ترتيبها أو إخفائها أو إضافتها. يظل ترتيب الأداء منفصلاً عن اليوم والتقدم.",

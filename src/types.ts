@@ -267,6 +267,8 @@ export type MetricEntry = {
   value: number | boolean | string;
   localDate: string;
   recordedAt: string;
+  /** User-selected meal time retained across later health-source refreshes. */
+  recordedAtOverride?: string;
   visibility: Visibility;
   source: "manual" | "imported" | "calculated";
   label?: string;
@@ -440,6 +442,20 @@ export type GroupChallenge = {
   recurrence?: GoalSchedule;
   createdAt: string;
   updatedAt: string;
+};
+
+/** A private, recipient-scoped item in the Leaderboard notification feed. */
+export type GroupNotificationEvent = {
+  id: string;
+  /** Stable server identity used to make event creation idempotent. */
+  eventKey: string;
+  groupId: string;
+  recipientId: string;
+  actorId: string;
+  kind: "challenge_invitation" | "challenge_accepted";
+  challengeId: string;
+  createdAt: string;
+  readAt?: string;
 };
 export type TodoItem = {
   id: string;
@@ -821,7 +837,7 @@ export type UserSettings = {
   showCalendarShortcut?: boolean;
   showJournalShortcut?: boolean;
   showPerformance?: boolean;
-  /** Optional daily avatar-and-goal status tab; Today's hero always opens it. */
+  /** Default-visible avatar-and-goal Status tab; users may hide it in Display. */
   showStatus?: boolean;
   showTodosToday?: boolean;
   /** Hide tracked-goal tiles from Today without changing tracking history. */
@@ -915,6 +931,8 @@ export type NotificationSettings = {
   metricIds: string[];
   chatMessages: boolean;
   groupMembership?: boolean;
+  /** Invitations and response updates for shared group challenges. */
+  challenges?: boolean;
   badgesAndWinners: boolean;
   reminders: boolean;
   /** Schedule local notifications for dated and recurring to-dos. */
@@ -938,8 +956,6 @@ export type NotificationSettings = {
   gymAchievements?: boolean;
   /** Wait this many full days after the latest completed workout session. */
   gymReminderDays?: number;
-  /** Alert while a live rest timer is running substantially past its target. */
-  gymRestAlerts?: boolean;
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };
@@ -967,7 +983,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 24;
+  version: 25;
   currentUserId: string;
   group: Group;
   groups: Group[];

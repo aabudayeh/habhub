@@ -471,6 +471,45 @@ function reconcileAutomaticFastingMetric(
     );
     runtimeStart = validDate(runtime.startedAt);
   }
+  const revisedEndingFoodId =
+    runtime?.startedManually &&
+    runtime.endedBy === "food" &&
+    runtime.endedByFoodEntryId &&
+    changedEntries?.some(
+      (entry) => entry.id === runtime?.endedByFoodEntryId,
+    )
+      ? runtime.endedByFoodEntryId
+      : undefined;
+  const revisedEndingFood = revisedEndingFoodId
+    ? foods.find((entry) => entry.id === revisedEndingFoodId)
+    : undefined;
+  if (
+    runtimeStart &&
+    runtime &&
+    revisedEndingFood &&
+    runtime?.endedAt !== revisedEndingFood.recordedAt
+  ) {
+    const previousCompletionId = manualFastEntryId(
+      metric.id,
+      `food-${revisedEndingFoodId}`,
+    );
+    runtime = { startedAt: runtime.startedAt, startedManually: true };
+    next = withRuntime(
+      {
+        ...next,
+        entries: next.entries.filter(
+          (entry) =>
+            !(
+              entry.userId === state.currentUserId &&
+              entry.id === previousCompletionId
+            ),
+        ),
+      },
+      metric.id,
+      runtime,
+    );
+    runtimeStart = validDate(runtime.startedAt);
+  }
   if (runtimeStart && runtime?.startedManually) {
     const foodAfterStart = foods.find(
       (entry) => new Date(entry.recordedAt) > runtimeStart,

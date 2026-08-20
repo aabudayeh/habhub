@@ -65,8 +65,8 @@ requireTokens("app/_layout.tsx", [
   "{tutorialActive ? null : <WidgetSnapshotBridge />}",
   "<TutorialRouteBoundary>",
   "anchorDate={tutorial.activeSession.demoAnchorDate}",
-  "if (tutorialActive) return;",
-  'if (tutorialActive || Platform.OS === "web") return;',
+  "if (!localNotificationSchedulingEnabled || tutorialActive) return;",
+  "tutorialActive ||",
 ]);
 
 // The only writes above the ephemeral provider are account-scoped tutorial

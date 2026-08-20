@@ -110,8 +110,8 @@ assert.match(pushSource, /return !error && Boolean\(data\)/);
 assert.doesNotMatch(source, /notificationPermissionGranted\(/);
 assert.match(
   source,
-  /await enablePushNotifications\([\s\S]*?if \(!\(await notificationSetupComplete\(auth\.user\.id\)\)\)/,
-  "onboarding can mark notifications connected only after token registration",
+  /await enablePushNotifications\([\s\S]{0,500}?updateSettings\(\{[\s\S]{0,100}?notifications: preferences,[\s\S]{0,100}?setPushReady\(true\)/,
+  "onboarding can mark notifications connected only after awaited token registration",
 );
 assert.doesNotMatch(finalPage, /Open HabHub on/);
 assert.doesNotMatch(finalPage, /Start in dark mode/);
@@ -312,8 +312,9 @@ assert.match(
 assert.match(seedSource, /onboardingVersion: 3/);
 const tabOrder = seedSource.match(/tabOrder: \[([\s\S]*?)\n      \]/)?.[1] ?? "";
 assert.ok(
-  tabOrder.indexOf('"chat"') < tabOrder.indexOf('"gym"'),
-  "New-user navigation must keep Chat immediately to the left of Workout",
+  tabOrder.indexOf('"status"') > tabOrder.indexOf('"index"') &&
+    tabOrder.indexOf('"chat"') > tabOrder.indexOf('"gym"'),
+  "New-user navigation must keep Status after Today and Chat at the right edge",
 );
 
 console.log(

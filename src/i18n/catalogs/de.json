@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "Minuten, die Sie mit konzentrierter Arbeit verbringen. Protokollieren Sie die Zeit manuell oder verwenden Sie den Aktivitätstimer, um Ihre Routine zu verstehen.",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "Zeit, die mit der Nutzung von Apps und dem Bildschirm verbracht wird. Android kann es mit Usage Access abschätzen; Web und nicht unterstützte Geräte können es manuell protokollieren.",
   "Close Today view picker": "Auswahl der Heute-Ansicht schließen",
-  "Open Today view picker": "Auswahl der Heute-Ansicht öffnen"
+  "Open Today view picker": "Auswahl der Heute-Ansicht öffnen",
+  "Macros": "Makronährstoffe",
+  "Shown macros": "Angezeigte Makros",
+  "Protein, carbs, and fat for this date range": "Protein, Kohlenhydrate und Fett für diesen Zeitraum",
+  "Percentages show each selected macro’s share of macro calories.": "Die Prozente zeigen den Kalorienanteil jedes ausgewählten Makronährstoffs.",
+  "Bars show daily intake or daily average": "Balken zeigen die tägliche Aufnahme oder den Tagesdurchschnitt",
+  "No macro details were available in food entries for this range.": "Für diesen Zeitraum sind in den Mahlzeiten keine Makrodetails verfügbar.",
+  "Macro calorie percentages": "Kalorienanteile der Makronährstoffe",
+  "Double-tap a meal to edit its time": "Tippe doppelt auf eine Mahlzeit, um ihre Uhrzeit zu ändern",
+  "Double tap to edit this meal time": "Doppeltippen, um die Uhrzeit dieser Mahlzeit zu ändern",
+  "Edit meal time": "Mahlzeitzeit bearbeiten",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "Nur die Uhrzeit ändert sich. Kalorien, Nährwerte, Quelle und Freigabe bleiben gleich.",
+  "Save time": "Uhrzeit speichern"
 }

@@ -256,7 +256,7 @@ export const tutorialSvCatalog = {
   "step.full.notifications.battery.copy": "HabHub kan begära inställningarna för Android-batterioptimering så att schemalagd bakgrundssynkronisering är mindre sannolikt att försenas. Det sista valet sker på operativsystemsidan.",
   "step.full.notifications.battery.primaryLabel": "Nästa",
   "step.full.notifications.battery.title": "Tillåt pålitligt Android-bakgrundsarbete",
-  "step.full.notifications.controls.copy": "Kontrollgruppsaktivitet, chatt, medlemskap, streck, märken, påminnelser, träningspass, cykeluppskattningar och tysta timmar. Tracker-påminnelser förblir redigerbara från deras tracker.",
+  "step.full.notifications.controls.copy": "Styr gruppaktivitet, chatt, medlemskap, streakmilstolpar för loggade spårare, topplistevinnare, påminnelser, träningspass, cykelprognoser och tysta timmar. Spårarpåminnelser kan också redigeras från respektive spårare.",
   "step.full.notifications.controls.primaryLabel": "Nästa",
   "step.full.notifications.controls.title": "Välj exakt vad som stör dig",
   "step.full.performance.edit.copy": "Fäst, ordna om, dölj eller lägg till kompatibla spårare. Prestandaordning förblir åtskild från Today och Progress.",

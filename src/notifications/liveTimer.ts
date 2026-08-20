@@ -32,6 +32,9 @@ export type LiveActivityTimerNotification = {
 
 let activityChannelReady = false;
 let activityNotificationUpdate = Promise.resolve();
+let activityNotificationRevision = 0;
+let activityNotificationsSuspended = true;
+let activityNotificationOwnerId: string | undefined;
 
 const enhancer = () =>
   NativeModules.HabHubAndroid as AndroidTimerEnhancer | undefined;
@@ -93,11 +96,13 @@ async function readPresentedIds() {
  */
 async function syncLiveActivityTimerNotificationsNow(
   timers: LiveActivityTimerNotification[],
+  shouldContinue: () => boolean,
 ) {
   if (Platform.OS !== "android") return;
   const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return;
+  if (!permission.granted || !shouldContinue()) return;
   await ensureActivityTimerChannel();
+  if (!shouldContinue()) return;
 
   const nextIds = timers.map((timer) => notificationId(timer.id));
   const previousIds = await readPresentedIds();
@@ -111,39 +116,89 @@ async function syncLiveActivityTimerNotificationsNow(
       ),
   );
 
-  await Promise.all(
-    timers.map(async (timer) => {
-      const identifier = notificationId(timer.id);
-      await Notifications.scheduleNotificationAsync({
-        identifier,
-        content: {
-          title: timer.title,
-          body: timer.body,
-          data: { route: timer.route, activityTimer: true, timerId: timer.id },
-          sticky: false,
-          autoDismiss: false,
-          priority: Notifications.AndroidNotificationPriority.LOW,
-          color: timer.color,
-        },
-        trigger: { channelId: ACTIVITY_TIMER_CHANNEL },
-      });
-      await enhanceAndroidTimerNotification(
-        identifier,
-        timer.mode,
-        timer.referenceTime,
-        timer.timeoutAt,
-        timer.title,
-      );
-    }),
-  );
+  const installedIds = (
+    await Promise.all(
+      timers.map(async (timer) => {
+        if (!shouldContinue()) return;
+        const identifier = notificationId(timer.id);
+        try {
+          await Notifications.scheduleNotificationAsync({
+            identifier,
+            content: {
+              title: timer.title,
+              body: timer.body,
+              data: {
+                route: timer.route,
+                activityTimer: true,
+                timerId: timer.id,
+              },
+              sticky: false,
+              autoDismiss: false,
+              priority: Notifications.AndroidNotificationPriority.LOW,
+              color: timer.color,
+            },
+            trigger: { channelId: ACTIVITY_TIMER_CHANNEL },
+          });
+        } catch {
+          return;
+        }
+        if (!shouldContinue()) {
+          await Notifications.dismissNotificationAsync(identifier).catch(
+            () => undefined,
+          );
+          return;
+        }
+        await enhanceAndroidTimerNotification(
+          identifier,
+          timer.mode,
+          timer.referenceTime,
+          timer.timeoutAt,
+          timer.title,
+        );
+        if (!shouldContinue()) {
+          await Notifications.dismissNotificationAsync(identifier).catch(
+            () => undefined,
+          );
+          return;
+        }
+        return identifier;
+      }),
+    )
+  ).filter((identifier): identifier is string => Boolean(identifier));
+  if (!shouldContinue()) {
+    // Cleanup can suspend this queue while an Expo scheduling promise is in
+    // flight. Those late rows were never persisted, so dismiss them directly
+    // before allowing the serialized cleanup operation to continue.
+    await Promise.all(
+      installedIds.map((identifier) =>
+        Notifications.dismissNotificationAsync(identifier).catch(
+          () => undefined,
+        ),
+      ),
+    );
+    return;
+  }
   await AsyncStorage.setItem(ACTIVITY_TIMER_IDS_KEY, JSON.stringify(nextIds));
 }
 
 export function syncLiveActivityTimerNotifications(
   timers: LiveActivityTimerNotification[],
+  ownerId: string,
 ) {
+  if (
+    activityNotificationsSuspended ||
+    activityNotificationOwnerId !== ownerId
+  )
+    return Promise.resolve();
+  const revision = ++activityNotificationRevision;
   const update = activityNotificationUpdate.then(() =>
-    syncLiveActivityTimerNotificationsNow(timers),
+    syncLiveActivityTimerNotificationsNow(
+      timers,
+      () =>
+        !activityNotificationsSuspended &&
+        activityNotificationOwnerId === ownerId &&
+        activityNotificationRevision === revision,
+    ),
   );
   activityNotificationUpdate = update.catch(() => undefined);
   return update;
@@ -162,7 +217,30 @@ async function dismissLiveActivityTimerNotificationsNow() {
   await AsyncStorage.removeItem(ACTIVITY_TIMER_IDS_KEY);
 }
 
-export function dismissLiveActivityTimerNotifications() {
+export function dismissLiveActivityTimerNotifications(ownerId: string) {
+  if (
+    activityNotificationsSuspended ||
+    activityNotificationOwnerId !== ownerId
+  )
+    return Promise.resolve();
+  ++activityNotificationRevision;
+  const update = activityNotificationUpdate.then(() =>
+    dismissLiveActivityTimerNotificationsNow(),
+  );
+  activityNotificationUpdate = update.catch(() => undefined);
+  return update;
+}
+
+export function resumeLiveActivityTimerNotifications(ownerId: string) {
+  activityNotificationOwnerId = ownerId;
+  activityNotificationsSuspended = false;
+}
+
+/** Sign-out/master-off fence for the separate Android live-timer queue. */
+export function clearLiveActivityTimerNotifications() {
+  activityNotificationsSuspended = true;
+  activityNotificationOwnerId = undefined;
+  ++activityNotificationRevision;
   const update = activityNotificationUpdate.then(() =>
     dismissLiveActivityTimerNotificationsNow(),
   );

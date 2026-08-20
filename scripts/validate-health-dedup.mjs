@@ -18,6 +18,7 @@ import {
   preserveUnchangedDailyAggregateRevision,
   preserveUnchangedStepFallback,
   preferredHealthSourceOrigin,
+  replaceCanonicalStepAggregateForDay,
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
@@ -54,6 +55,26 @@ assert.equal(
   authoritativeHealthConnectStepGroups(platformPriorityAggregate)[0].count,
   3_435,
   "the unfiltered platform aggregate must remain authoritative without vendor metadata",
+);
+const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
+  [
+    record({ id: "yesterday", localDate: "2026-08-12", value: 8_000 }),
+    record({
+      id: "period-today",
+      localDate: "2026-08-13",
+      value: 2_917,
+    }),
+  ],
+  "2026-08-13",
+  record({ id: "direct-today", localDate: "2026-08-13", value: 3_435 }),
+);
+assert.deepEqual(
+  refreshedCurrentDay.map(({ id, value }) => [id, value]),
+  [
+    ["yesterday", 8_000],
+    ["direct-today", 3_435],
+  ],
+  "the fresh direct aggregate must replace, never add to, today's period bucket",
 );
 const authoritativeAggregateWithDisabledContributor =
   deduplicateHealthImportRecords(
@@ -550,6 +571,16 @@ assert.match(
   /authoritativeHealthConnectStepGroups\(\s*unfilteredGroups,?\s*\)/,
   "Steps must preserve Health Connect's Activity-priority aggregate",
 );
+assert.match(
+  androidHealthSource,
+  /includesCurrentDay[\s\S]{0,1600}\? aggregateRecord\(\{[\s\S]{0,200}recordType: "Steps"/,
+  "the partial current day must use a direct unfiltered aggregate",
+);
+assert.match(
+  androidHealthSource,
+  /return replaceCanonicalStepAggregateForDay\([\s\S]{0,200}historicalRecords[\s\S]{0,200}currentRecord/,
+  "the current aggregate must replace rather than add to the historical period rows",
+);
 assert.doesNotMatch(
   androidHealthSource,
   /recordType: "Steps"[\s\S]{0,700}dataOriginFilter|selectedOrigin|samsungGroups|sourceFilteredGroups/,
@@ -777,6 +808,16 @@ assert.match(
   healthProviderSource,
   /HEALTH_TODAY_STEPS_MIN_INTERVAL_MS[\s\S]{0,7000}FOREGROUND_STEPS_SETTLE_DELAY_MS/,
   "foreground refresh must be throttled and deferred until the UI settles",
+);
+assert.match(
+  healthProviderSource,
+  /todayStepsIntervalRef\.current = setInterval\([\s\S]{0,300}refreshTodayStepsAfterInteractions\(\)[\s\S]{0,300}HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS/,
+  "an open foreground app must refresh the current Health Connect Steps total every minute",
+);
+assert.match(
+  healthProviderSource,
+  /FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS[\s\S]{0,7000}InteractionManager\.runAfterInteractions\(run\)[\s\S]{0,500}setTimeout\(/,
+  "a continuous animation must not indefinitely strand today's user-visible Steps refresh",
 );
 const todayRefreshStart = healthProviderSource.indexOf(
   "const refreshTodaySteps = useCallback",

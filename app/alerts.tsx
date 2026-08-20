@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
@@ -17,6 +17,7 @@ import {
 import { AlertCategory, buildAlerts } from "@/src/domain/alerts";
 import { buildBadges } from "@/src/domain/badges";
 import { friendlyDate } from "@/src/domain/date";
+import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEvents";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 
@@ -30,11 +31,41 @@ export default function Alerts() {
   const locale = useLocale();
   const [filter, setFilter] = useState<Filter>("all");
   const alertScope = scope === "group" ? "group" : "personal";
-  const alerts = useMemo(() => buildAlerts(state), [state]).filter(
-    (alert) =>
-      alert.scope === alertScope &&
-      (filter === "all" || (filter !== "badges" && alert.category === filter)),
+  const {
+    events: groupFeedEvents,
+    markRead: markGroupFeedRead,
+  } = useGroupNotificationEvents(state.group.id);
+  const alerts = useMemo(
+    () =>
+      buildAlerts(state, groupFeedEvents).filter(
+        (alert) =>
+          alert.scope === alertScope &&
+          (filter === "all" ||
+            (filter !== "badges" && alert.category === filter)),
+      ),
+    [
+      alertScope,
+      filter,
+      groupFeedEvents,
+      state,
+    ],
   );
+  const unreadEventIds = useMemo(
+    () =>
+      groupFeedEvents
+        .filter((event) => !event.readAt)
+        .map((event) => event.id),
+    [groupFeedEvents],
+  );
+  useEffect(() => {
+    if (alertScope !== "group" || unreadEventIds.length === 0) return;
+    // Opening the bell feed is the read boundary. A short delay lets the user
+    // see which cards were new before the private server cursors advance.
+    const timer = setTimeout(() => {
+      void markGroupFeedRead(unreadEventIds).catch(() => undefined);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [alertScope, markGroupFeedRead, unreadEventIds]);
   const badges = useMemo(
     () =>
       buildBadges(state)
@@ -120,6 +151,12 @@ export default function Alerts() {
           onPress={() => setFilter("message")}
         />
         <Chip
+          label="Challenges"
+          translate={false}
+          selected={filter === "challenge"}
+          onPress={() => setFilter("challenge")}
+        />
+        <Chip
           label="Badge cabinet"
           icon="ribbon-outline"
           selected={filter === "badges"}
@@ -201,6 +238,8 @@ export default function Alerts() {
                   onPress={() =>
                     alert.category === "message"
                       ? router.push("/chat" as never)
+                      : alert.category === "challenge"
+                        ? router.navigate("/group" as never)
                       : alert.memberId
                         ? router.push(`/member/${alert.memberId}` as never)
                         : undefined
@@ -250,6 +289,12 @@ export default function Alerts() {
                       size={17}
                       color={colors.faint}
                     />
+                    {alert.category === "challenge" && !alert.readAt ? (
+                      <View
+                        accessibilityLabel="Challenge started"
+                        style={[styles.unreadDot, { borderColor: colors.card }]}
+                      />
+                    ) : null}
                   </Card>
                 </Pressable>
               );
@@ -320,4 +365,14 @@ const styles = StyleSheet.create({
   date: { fontSize: 8, marginTop: 4 },
   empty: { alignItems: "center", padding: 28 },
   emptyText: { fontSize: 11, marginTop: 8 },
+  unreadDot: {
+    position: "absolute",
+    top: 9,
+    right: 9,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    borderWidth: 2,
+    backgroundColor: "#F06A45",
+  },
 });

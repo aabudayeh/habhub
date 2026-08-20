@@ -92,6 +92,17 @@ function withNativeManifest(config, packageName) {
         $: { "android:name": "android.permission.PACKAGE_USAGE_STATS" },
       });
     }
+    if (
+      !manifest["uses-permission"].some(
+        (permission) =>
+          permission.$?.["android:name"] ===
+          "android.permission.SCHEDULE_EXACT_ALARM",
+      )
+    ) {
+      manifest["uses-permission"].push({
+        $: { "android:name": "android.permission.SCHEDULE_EXACT_ALARM" },
+      });
+    }
 
     const configActivity = `${packageName}.HabHubWidgetConfigActivity`;
     application.activity = (application.activity ?? []).filter(

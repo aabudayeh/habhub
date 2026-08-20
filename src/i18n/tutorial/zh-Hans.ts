@@ -256,7 +256,7 @@ export const tutorialZhHansCatalog = {
   "step.full.notifications.battery.copy": "HabHub 可以请求 Android 电池优化设置，以便安排的后台同步不太可能被延迟。最终选择发生在操作系统页面。",
   "step.full.notifications.battery.primaryLabel": "下一步",
   "step.full.notifications.battery.title": "允许可靠的 Android 后台工作",
-  "step.full.notifications.controls.copy": "控制群组活动、聊天、会员资格、连胜、徽章、提醒、锻炼、周期估算和安静时间。跟踪器提醒也可以从跟踪器进行编辑。",
+  "step.full.notifications.controls.copy": "控制群组活动、聊天、成员关系、记录追踪器时的连续达标里程碑、排行榜获胜者、提醒、锻炼、周期估算和安静时段。追踪器提醒也可在对应追踪器中编辑。",
   "step.full.notifications.controls.primaryLabel": "下一步",
   "step.full.notifications.controls.title": "准确选择打扰你的事情",
   "step.full.performance.edit.copy": "固定、重新排序、隐藏或添加兼容的跟踪器。绩效排序与“今日”和“进度”保持独立。",

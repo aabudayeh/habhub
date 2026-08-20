@@ -13,6 +13,10 @@ import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { isAllowedThemeColor, normalizeHexColor } from "@/src/domain/colors";
 import { COMPLETION_INDICATOR_OPTIONS } from "@/src/domain/completionIndicators";
+import {
+  isFixedNavigationPage,
+  normalizeTabOrder,
+} from "@/src/domain/navigation";
 import { supportedLanguages, useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
@@ -30,15 +34,15 @@ const pages: {
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
   { id: "index", label: "Today", icon: "today-outline" },
+  { id: "status", label: "Status", icon: "accessibility-outline" },
   { id: "log", label: "Log", icon: "add-circle-outline" },
   { id: "group", label: "Leaderboard", icon: "people-outline" },
   { id: "insights", label: "Progress", icon: "stats-chart-outline" },
-  { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
   { id: "gym", label: "Workout", icon: "barbell-outline" },
   { id: "calendar", label: "Schedule", icon: "calendar-outline" },
   { id: "journal", label: "Journal", icon: "book-outline" },
   { id: "performance", label: "Performance", icon: "speedometer-outline" },
-  { id: "status", label: "Status", icon: "accessibility-outline" },
+  { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
 ];
 
 const languages = supportedLanguages.map(({ id, label, nativeLabel }) => ({
@@ -99,40 +103,36 @@ export default function DisplaySettings() {
       (page.id !== "calendar" || state.settings.showCalendar) &&
       (page.id !== "journal" || state.settings.showJournal) &&
       (page.id !== "performance" || state.settings.showPerformance) &&
-      (page.id !== "status" || state.settings.showStatus),
+      (page.id !== "status" || state.settings.showStatus !== false),
   );
   const landingPages = pages.filter(
     (page) => page.id === "status" || visible.some((item) => item.id === page.id),
   );
   const navigationOrder = React.useMemo(() => {
-    const saved = state.settings.tabOrder ?? [];
-    const valid = saved.filter(
-      (id, index) =>
-        pages.some((page) => page.id === id) && saved.indexOf(id) === index,
-    );
-    return [
-      ...valid,
-      ...pages.map((page) => page.id).filter((id) => !valid.includes(id)),
-    ];
+    return normalizeTabOrder(state.settings.tabOrder);
   }, [state.settings.tabOrder]);
   const visibleNavigationOrder = navigationOrder.filter((id) =>
     visible.some((page) => page.id === id),
   );
+  const movableNavigationOrder = visibleNavigationOrder.filter(
+    (id) => !isFixedNavigationPage(id),
+  );
 
   function moveNavigationItem(id: LandingPage, direction: -1 | 1) {
+    if (isFixedNavigationPage(id)) return;
     const current = [...navigationOrder];
-    const visibleFrom = visibleNavigationOrder.indexOf(id);
+    const visibleFrom = movableNavigationOrder.indexOf(id);
     const visibleTo = visibleFrom + direction;
     if (
       visibleFrom < 0 ||
       visibleTo < 0 ||
-      visibleTo >= visibleNavigationOrder.length
+      visibleTo >= movableNavigationOrder.length
     )
       return;
     const from = current.indexOf(id);
-    const to = current.indexOf(visibleNavigationOrder[visibleTo]);
+    const to = current.indexOf(movableNavigationOrder[visibleTo]);
     [current[from], current[to]] = [current[to], current[from]];
-    updateSettings({ tabOrder: current });
+    updateSettings({ tabOrder: normalizeTabOrder(current) });
   }
 
   function toggle(key: ToggleKey, value: boolean) {
@@ -377,7 +377,11 @@ export default function DisplaySettings() {
               icon={icon}
               title={title}
               copy={copy}
-              enabled={Boolean(state.settings[key])}
+              enabled={
+                key === "showStatus"
+                  ? state.settings.showStatus !== false
+                  : Boolean(state.settings[key])
+              }
               onChange={(value) => toggle(key, value)}
             />
           ))}
@@ -607,17 +611,22 @@ export default function DisplaySettings() {
             <Ionicons name={navigationOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.faint} />
           </Pressable>
           {navigationOpen
-            ? visibleNavigationOrder.map((id, index) => {
+            ? visibleNavigationOrder.map((id) => {
                 const page = pages.find((item) => item.id === id)!;
+                const movableIndex = movableNavigationOrder.indexOf(id);
+                const canMoveUp = movableIndex > 0;
+                const canMoveDown =
+                  movableIndex >= 0 &&
+                  movableIndex < movableNavigationOrder.length - 1;
                 return (
                   <View key={id} style={[styles.navigationRow, { borderTopColor: colors.border }]}>
                     <Ionicons name={page.icon} size={18} color={accent} />
                     <Text style={[styles.pageText, { color: colors.ink }]}>{page.label}</Text>
-                    <Pressable accessibilityLabel={`Move ${page.label} up`} disabled={index === 0} onPress={() => moveNavigationItem(id, -1)} style={styles.orderButton}>
-                      <Ionicons name="arrow-up" size={17} color={index === 0 ? colors.faint : colors.ink} />
+                    <Pressable accessibilityLabel={`Move ${page.label} up`} disabled={!canMoveUp} onPress={() => moveNavigationItem(id, -1)} style={styles.orderButton}>
+                      <Ionicons name="arrow-up" size={17} color={canMoveUp ? colors.ink : colors.faint} />
                     </Pressable>
-                    <Pressable accessibilityLabel={`Move ${page.label} down`} disabled={index === visibleNavigationOrder.length - 1} onPress={() => moveNavigationItem(id, 1)} style={styles.orderButton}>
-                      <Ionicons name="arrow-down" size={17} color={index === visibleNavigationOrder.length - 1 ? colors.faint : colors.ink} />
+                    <Pressable accessibilityLabel={`Move ${page.label} down`} disabled={!canMoveDown} onPress={() => moveNavigationItem(id, 1)} style={styles.orderButton}>
+                      <Ionicons name="arrow-down" size={17} color={canMoveDown ? colors.ink : colors.faint} />
                     </Pressable>
                   </View>
                 );

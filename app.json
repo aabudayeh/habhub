@@ -2,7 +2,7 @@
   "expo": {
     "name": "HabHub",
     "slug": "metrally",
-    "version": "1.0.13",
+    "version": "1.0.14",
     "orientation": "portrait",
     "icon": "./assets/images/habhub-icon.png",
     "scheme": "paceboard",
@@ -59,6 +59,7 @@
         "android.permission.health.READ_MENSTRUATION",
         "android.permission.health.READ_HEALTH_DATA_HISTORY",
         "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND",
+        "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.PACKAGE_USAGE_STATS"
       ],
       "edgeToEdgeEnabled": false,

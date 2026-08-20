@@ -573,6 +573,16 @@ function SchedulePage() {
           ]}
         >
           <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("Daily overview row")}
+            accessibilityHint={
+              t(
+                expandedRows.has("all")
+                  ? "Collapses this schedule row"
+                  : "Expands this schedule row",
+              )
+            }
+            accessibilityState={{ expanded: expandedRows.has("all") }}
             onPress={() => toggleRow("all")}
             style={styles.rowLabelButton}
           >
@@ -597,6 +607,15 @@ function SchedulePage() {
               // preview only has room for genuinely all-day blocks.
               slotEvents={eventsByDate[date] ?? []}
               date={date}
+              accessibilityLabel={t(
+                "{date}, {slot}, {count} schedule items",
+              )
+                .replace("{date}", t(friendlyDate(date, locale)))
+                .replace("{slot}", t("Daily overview"))
+                .replace(
+                  "{count}",
+                  String((eventsByDate[date] ?? []).length),
+                )}
               editing={editing}
               expanded={expandedRows.has("all")}
               uniformColumnShell
@@ -622,6 +641,19 @@ function SchedulePage() {
             ]}
           >
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("{time} row").replace(
+                "{time}",
+                formatHour(hour, state.settings.timeFormat),
+              )}
+              accessibilityHint={
+                t(
+                  expandedRows.has(String(hour))
+                    ? "Collapses this schedule row"
+                    : "Expands this schedule row",
+                )
+              }
+              accessibilityState={{ expanded: expandedRows.has(String(hour)) }}
               onPress={() => toggleRow(String(hour))}
               style={styles.rowLabelButton}
             >
@@ -641,13 +673,27 @@ function SchedulePage() {
             {dates.map((date) => (
               <ScheduleCell
                 key={date}
-                events={(eventsByDate[date] ?? []).filter(
-                  (event) =>
-                    event.time &&
-                    Number(event.time.slice(0, 2)) === hour,
-                )}
+                events={hourSlotEventsByDate[date]?.[hour] ?? []}
                 slotEvents={hourSlotEventsByDate[date]?.[hour] ?? []}
                 date={date}
+                accessibilityLabel={t(
+                  "{date}, {slot}, {count} schedule items",
+                )
+                  .replace("{date}", t(friendlyDate(date, locale)))
+                  .replace(
+                    "{slot}",
+                    scheduleSlotWindow(
+                      hour,
+                      state.settings.timeFormat,
+                      locale,
+                    ),
+                  )
+                  .replace(
+                    "{count}",
+                    String(
+                      (hourSlotEventsByDate[date]?.[hour] ?? []).length,
+                    ),
+                  )}
                 editing={editing}
                 expanded={expandedRows.has(String(hour))}
                 uniformColumnShell={hour === hours[0]}
@@ -988,6 +1034,7 @@ function ScheduleCell({
   events,
   slotEvents,
   date,
+  accessibilityLabel,
   editing,
   expanded,
   onOpenSlot,
@@ -998,6 +1045,7 @@ function ScheduleCell({
   events: ScheduleEvent[];
   slotEvents: ScheduleEvent[];
   date: string;
+  accessibilityLabel: string;
   editing: boolean;
   expanded: boolean;
   onOpenSlot: (events: ScheduleEvent[]) => void;
@@ -1007,6 +1055,7 @@ function ScheduleCell({
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { t } = useLocalization();
   const lastTap = useRef(0);
   const eventTap = useRef<{ id: string; at: number } | undefined>(undefined);
   const eventTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -1022,8 +1071,7 @@ function ScheduleCell({
     },
     [],
   );
-  const durationEvents = events.filter((event) => event.durationMinutes);
-  const pointEvents = events.filter((event) => !event.durationMinutes);
+  const visibleEvents = events.slice(0, expanded ? events.length : 2);
   const pressEvent = (event: ScheduleEvent) => {
     const now = Date.now();
     if (
@@ -1044,6 +1092,11 @@ function ScheduleCell({
   };
   const cell = (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={t(
+        "Opens this schedule slot. Long press to add an item",
+      )}
       delayLongPress={380}
       onLongPress={(press) => {
         press.stopPropagation();
@@ -1066,59 +1119,7 @@ function ScheduleCell({
       }}
       style={[styles.cell, { borderLeftColor: colors.border }]}
     >
-      {durationEvents.slice(0, expanded ? durationEvents.length : 1).map((event, index) => {
-        const color = event.color ?? accent;
-        const minuteOffset = Number(event.time?.slice(3, 5) ?? 0) / 60 * 48;
-        return (
-          <Pressable
-            key={event.id}
-            delayLongPress={380}
-            onPress={(press) => {
-              press.stopPropagation();
-              pressEvent(event);
-            }}
-            onLongPress={(press) => {
-              press.stopPropagation();
-              if (eventTimer.current) clearTimeout(eventTimer.current);
-              eventTap.current = undefined;
-              onCreate(date);
-            }}
-            style={[
-              styles.event,
-              expanded
-                ? styles.expandedDurationEvent
-                : [
-                    styles.durationEvent,
-                    pointEvents.length
-                      ? styles.splitDurationEvent
-                      : styles.fullDurationEvent,
-                  ],
-              expanded
-                ? {
-                    backgroundColor: `${color}35`,
-                    borderColor: color,
-                  }
-                : {
-                    top: 2 + minuteOffset + index * 3,
-                    height: Math.max(18, Math.min(48 * 4, (event.durationMinutes ?? 1) * 0.8)),
-                    backgroundColor: `${color}35`,
-                    borderColor: color,
-                  },
-            ]}
-          >
-            <Text
-              numberOfLines={expanded ? undefined : 3}
-              ellipsizeMode="clip"
-              adjustsFontSizeToFit
-              minimumFontScale={0.72}
-              style={[styles.eventText, { color }]}
-            >
-              {event.title}
-            </Text>
-          </Pressable>
-        );
-      })}
-      {pointEvents.slice(0, expanded ? pointEvents.length : 2).map((event) => {
+      {visibleEvents.map((event) => {
         const color =
           event.kind === "todo"
             ? event.skipped
@@ -1136,6 +1137,11 @@ function ScheduleCell({
         return (
           <Pressable
             key={event.id}
+            accessibilityRole="button"
+            accessibilityLabel={`${event.title}. ${accessibilityLabel}`}
+            accessibilityHint={t(
+              "Opens all items in this schedule slot. Long press to add an item",
+            )}
             delayLongPress={380}
             onPress={(press) => {
               press.stopPropagation();
@@ -1150,7 +1156,6 @@ function ScheduleCell({
             }}
             style={[
               styles.event,
-              durationEvents.length > 0 && !expanded ? styles.eventBesideDuration : undefined,
               { backgroundColor: `${color}24` },
             ]}
           >
@@ -1171,15 +1176,23 @@ function ScheduleCell({
           </Pressable>
         );
       })}
-      {!expanded && (pointEvents.length > 2 || durationEvents.length > 1) ? (
+      {!expanded && events.length > visibleEvents.length ? (
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t("{count} more items. {slot}")
+            .replace(
+              "{count}",
+              String(events.length - visibleEvents.length),
+            )
+            .replace("{slot}", accessibilityLabel)}
+          accessibilityHint={t("Opens all items in this schedule slot")}
           onPress={(press) => {
             press.stopPropagation();
             onOpenSlot(slotEvents);
           }}
         >
           <Text style={[styles.more, { color: colors.muted }]}>
-            {`+${Math.max(1, events.length - 3)}`}
+            {`+${events.length - visibleEvents.length}`}
           </Text>
         </Pressable>
       ) : null}
@@ -1395,21 +1408,6 @@ const styles = StyleSheet.create({
   },
   cellTarget: { flex: 1, minWidth: 0 },
   event: { borderRadius: 5, paddingHorizontal: 3, paddingVertical: 2 },
-  durationEvent: {
-    position: "absolute",
-    left: 2,
-    borderLeftWidth: 2,
-    zIndex: 4,
-  },
-  // A lone timed activity should read as one complete schedule card. Only
-  // reserve a side column when the same slot also contains point items.
-  fullDurationEvent: { right: 2 },
-  splitDurationEvent: { width: "56%" },
-  expandedDurationEvent: {
-    minHeight: 20,
-    borderLeftWidth: 2,
-  },
-  eventBesideDuration: { marginLeft: "58%" },
   eventText: { fontSize: 5.5, lineHeight: 7, fontWeight: "900" },
   complete: { textDecorationLine: "line-through", opacity: 0.62 },
   more: { fontSize: 5.5, fontWeight: "900", textAlign: "center" },

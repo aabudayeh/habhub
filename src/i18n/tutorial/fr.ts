@@ -256,7 +256,7 @@ export const tutorialFrCatalog = {
   "step.full.notifications.battery.copy": "HabHub peut demander les paramètres d'optimisation de la batterie Android afin que la synchronisation en arrière-plan programmée soit moins susceptible d'être retardée. Le choix final se produit dans la page du système d'exploitation.",
   "step.full.notifications.battery.primaryLabel": "Suivant",
   "step.full.notifications.battery.title": "Autoriser un travail en arrière-plan Android fiable",
-  "step.full.notifications.controls.copy": "Contrôlez l'activité du groupe, le chat, l'adhésion, les séquences, les badges, les rappels, les entraînements, les estimations de cycle et les heures calmes. Les rappels du tracker restent également modifiables depuis leur tracker.",
+  "step.full.notifications.controls.copy": "Contrôlez l’activité du groupe, le chat, l’adhésion, les jalons de série des suivis enregistrés, les gagnants du classement, les rappels, les entraînements, les estimations du cycle et les heures calmes. Les rappels restent aussi modifiables dans leur suivi.",
   "step.full.notifications.controls.primaryLabel": "Suivant",
   "step.full.notifications.controls.title": "Choisissez exactement ce qui vous interrompt",
   "step.full.performance.edit.copy": "Épinglez, réorganisez, masquez ou ajoutez des trackers compatibles. L’ordre des performances reste distinct de Today et Progress.",

@@ -1,4 +1,5 @@
 import {
+  aggregateRecord,
   aggregateGroupByPeriod,
   getGrantedPermissions,
   initialize,
@@ -16,6 +17,7 @@ import {
   authoritativeHealthConnectStepGroups,
   healthSourceEnabled,
   localCalendarAggregateRange,
+  replaceCanonicalStepAggregateForDay,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
@@ -748,16 +750,48 @@ export const healthConnectAdapter: HealthAdapter = {
             // could otherwise exclude the on-device Steps writer or change the
             // platform's priority result. Steps therefore stay unfiltered.
             try {
-              const unfilteredGroups = await aggregateGroupByPeriod({
-                recordType: "Steps",
-                timeRangeFilter: stepTimeRangeFilter,
-                timeRangeSlicer: { period: "DAYS", length: 1 },
-              });
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              const currentStart = new Date(
+                Math.max(stepRange.from.getTime(), todayStart.getTime()),
+              );
+              const currentEnd = new Date(
+                Math.min(stepRange.to.getTime(), Date.now()),
+              );
+              const includesCurrentDay = currentEnd > currentStart;
+              const historicalEnd = new Date(
+                Math.min(stepRange.to.getTime(), todayStart.getTime()),
+              );
+              const [unfilteredGroups, currentAggregate] = await Promise.all([
+                historicalEnd > stepRange.from
+                  ? aggregateGroupByPeriod({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        ...stepTimeRangeFilter,
+                        endTime: historicalEnd.toISOString(),
+                      },
+                      timeRangeSlicer: { period: "DAYS", length: 1 },
+                    })
+                  : Promise.resolve([]),
+                includesCurrentDay
+                  ? aggregateRecord({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        operator: "between",
+                        startTime: currentStart.toISOString(),
+                        endTime: currentEnd.toISOString(),
+                      },
+                    })
+                  : Promise.resolve(null),
+              ]);
               const contributedOrigins = [
                 ...new Set(
-                  unfilteredGroups.flatMap((group) =>
-                    group.result.dataOrigins ?? [],
-                  ),
+                  [
+                    ...unfilteredGroups.flatMap(
+                      (group) => group.result.dataOrigins ?? [],
+                    ),
+                    ...(currentAggregate?.dataOrigins ?? []),
+                  ],
                 ),
               ];
               const observedOrigins = [
@@ -767,7 +801,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 unfilteredGroups,
               );
               successfulReads += 1;
-              return groups.flatMap(
+              const historicalRecords = groups.flatMap(
                 (group): HealthImportRecord[] => {
                   const localDate = group.startTime.slice(0, 10);
                   const count = Number(group.result.COUNT_TOTAL ?? 0);
@@ -801,6 +835,52 @@ export const healthConnectAdapter: HealthAdapter = {
                     },
                   ];
                 },
+              );
+              if (!includesCurrentDay) return historicalRecords;
+              const currentLocalDate = [
+                currentStart.getFullYear(),
+                String(currentStart.getMonth() + 1).padStart(2, "0"),
+                String(currentStart.getDate()).padStart(2, "0"),
+              ].join("-");
+              const currentCount = Number(
+                currentAggregate?.COUNT_TOTAL ?? 0,
+              );
+              const currentSources = [
+                ...new Set(
+                  (currentAggregate?.dataOrigins?.length
+                    ? currentAggregate.dataOrigins
+                    : observedOrigins
+                  ).filter(Boolean),
+                ),
+              ].sort((a, b) => a.localeCompare(b));
+              const currentRecord =
+                currentCount > 0
+                  ? ({
+                      id: `aggregate:steps:${currentLocalDate}`,
+                      provider: "health_connect",
+                      type: "steps",
+                      startTime: currentStart.toISOString(),
+                      endTime: new Date(
+                        Math.max(
+                          currentStart.getTime(),
+                          currentEnd.getTime() - 1,
+                        ),
+                      ).toISOString(),
+                      localDate: currentLocalDate,
+                      value: Math.round(currentCount),
+                      unit: "steps",
+                      origin:
+                        currentSources.length === 1
+                          ? currentSources[0]
+                          : "Health Connect",
+                      sourceOrigins: observedOrigins,
+                      updatedAt: syncRevision,
+                    } satisfies HealthImportRecord)
+                  : undefined;
+              return replaceCanonicalStepAggregateForDay(
+                historicalRecords,
+                currentLocalDate,
+                currentRecord,
               );
             } catch (error) {
               // Raw Steps records can overlap across phone, watch, Samsung,

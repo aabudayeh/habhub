@@ -6,7 +6,10 @@
  */
 export const AUTO_SYNC_SETTLE_MS = 800;
 export const AUTO_SYNC_MAX_BURST_MS = 5_000;
-export const AUTO_SYNC_MAX_INTERACTION_WAIT_MS = 500;
+// A durable local save happens independently. Give navigation/gestures a full
+// quiet window before the heavier account/workspace hashes run on the JS
+// thread; a bounded fallback still drains continuous-edit outboxes.
+export const AUTO_SYNC_MAX_INTERACTION_WAIT_MS = 2_000;
 
 export function nextAutoSyncDelay(
   now: number,

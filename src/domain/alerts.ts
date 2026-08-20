@@ -4,9 +4,12 @@ import { dateKey, dateKeyWithOffset, friendlyDate } from "@/src/domain/date";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import { palette } from "@/src/theme";
-import { AppState } from "@/src/types";
+import {
+  AppState,
+  GroupNotificationEvent,
+} from "@/src/types";
 
-export type AlertCategory = "lead" | "message" | "achievement";
+export type AlertCategory = "lead" | "message" | "achievement" | "challenge";
 export type PaceAlert = {
   id: string;
   category: AlertCategory;
@@ -17,8 +20,12 @@ export type PaceAlert = {
   createdAt: string;
   memberId?: string;
   scope: "personal" | "group";
+  readAt?: string;
 };
-export function buildAlerts(state: AppState): PaceAlert[] {
+export function buildAlerts(
+  state: AppState,
+  groupNotificationEvents: GroupNotificationEvent[] = [],
+): PaceAlert[] {
   const today = dateKey();
   const yesterday = dateKeyWithOffset(-1);
   const tracked = (state.group.metricConfiguration ?? []).filter(
@@ -108,7 +115,27 @@ export function buildAlerts(state: AppState): PaceAlert[] {
         scope: groupConversation || achievement ? "group" : "personal",
       };
     });
-  return [...leads, ...messages].sort((a, b) =>
+  const challengeEvents = groupNotificationEvents.map((event): PaceAlert => {
+    const actor = state.group.members.find(
+      (member) => member.id === event.actorId,
+    );
+    const invitation = event.kind === "challenge_invitation";
+    return {
+      id: `group-notification-${event.id}`,
+      category: "challenge",
+      icon: invitation ? "flag-outline" : "trophy-outline",
+      color: invitation ? palette.primary : palette.lime,
+      title: invitation ? "Challenge started" : "Challenge accepted",
+      detail: invitation
+        ? "Open HabHub to accept or decline."
+        : "A friend accepted your challenge.",
+      createdAt: event.createdAt,
+      memberId: actor?.id,
+      scope: "group",
+      readAt: event.readAt,
+    };
+  });
+  return [...leads, ...messages, ...challengeEvents].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   );
 }

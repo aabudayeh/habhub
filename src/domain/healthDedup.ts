@@ -245,7 +245,33 @@ export function selectCanonicalHealthConnectStepAggregate<
       );
       const entryRevision = String(entry.sourceUpdatedAt ?? entry.recordedAt);
       return entryRevision > selectedRevision ? entry : selected;
-    }, undefined);
+  }, undefined);
+}
+
+/**
+ * A non-bucketed current-day aggregate is fresher than the partial final
+ * period returned beside historical buckets. Replace that one day; never add
+ * the two totals, which would double-count the same Activity records.
+ */
+export function replaceCanonicalStepAggregateForDay<
+  TRecord extends { localDate?: string },
+>(
+  records: readonly TRecord[],
+  localDate: string,
+  current: TRecord | undefined,
+) {
+  const next: TRecord[] = [];
+  let inserted = false;
+  for (const record of records) {
+    if (record.localDate !== localDate) {
+      next.push(record);
+      continue;
+    }
+    if (!inserted && current) next.push(current);
+    inserted = true;
+  }
+  if (!inserted && current) next.push(current);
+  return next;
 }
 
 /** A generic history read may claim the repair version only if it covered it. */

@@ -22,11 +22,14 @@ class HabHubNotificationsService : NotificationsService() {
   override fun onReceiveNotificationResponse(context: Context, intent: Intent) {
     val workoutActionHandled = runCatching {
       val response = getNotificationResponseFromBroadcastIntent(intent)
+      val contentData = response.notification.notificationRequest.content.body
       HabHubWorkoutNotificationStore.applyAction(
         context,
         response.notification.notificationRequest.identifier,
         response.action.identifier,
         System.currentTimeMillis(),
+        contentData?.optString("workoutOwnerId")?.takeIf(String::isNotBlank),
+        contentData?.optString("workoutGeneration")?.takeIf(String::isNotBlank),
       )
     }.getOrDefault(false)
     super.onReceiveNotificationResponse(context, intent)
@@ -49,6 +52,9 @@ internal object HabHubWorkoutNotificationStore {
   private const val PREFS = "habhub-workout-notification-v1"
   private const val FLOW_KEY = "flow"
   private const val ACTIONS_KEY = "actions"
+  private const val ACTIVE_OWNER_KEY = "active-owner"
+  private const val GENERATION_KEY = "generation"
+  private const val DISABLED_KEY = "disabled"
   private const val MAX_ACTIONS = 30
   private val reconciliationRunning = AtomicBoolean(false)
   private val reconciliationRequested = AtomicBoolean(false)
@@ -61,6 +67,8 @@ internal object HabHubWorkoutNotificationStore {
   )
 
   private data class Flow(
+    val ownerId: String,
+    val generation: String,
     val steps: List<Step>,
     var index: Int,
     var paused: Boolean,
@@ -78,6 +86,8 @@ internal object HabHubWorkoutNotificationStore {
     }.getOrDefault(false)
     val next = when {
       existing == null -> incoming
+      existing.ownerId != incoming.ownerId ||
+        existing.generation != incoming.generation -> incoming
       // A foreground transition always receives a fresh phase origin. Keep a
       // newer native transition when a delayed React render arrives after a
       // lock-screen/Wear action; otherwise in-app Next/Pause must replace the
@@ -92,23 +102,66 @@ internal object HabHubWorkoutNotificationStore {
       hasQueuedNativeActions -> existing
       else -> incoming
     }
-    return preferences(context).edit().putString(FLOW_KEY, encodeFlow(next)).commit()
+    return preferences(context).edit()
+      .putBoolean(DISABLED_KEY, false)
+      .putString(ACTIVE_OWNER_KEY, incoming.ownerId)
+      .putString(GENERATION_KEY, incoming.generation)
+      .putString(FLOW_KEY, encodeFlow(next))
+      .commit()
   }
 
   @Synchronized
   fun clear(context: Context) {
-    preferences(context).edit().remove(FLOW_KEY).remove(ACTIONS_KEY).commit()
+    // A committed tombstone is the native privacy fence. A response broadcast
+    // already delivered by Android but waiting for this object's lock observes
+    // disabled=true and cannot recreate actions after account/master cleanup.
+    preferences(context).edit()
+      .putBoolean(DISABLED_KEY, true)
+      .remove(ACTIVE_OWNER_KEY)
+      .remove(GENERATION_KEY)
+      .remove(FLOW_KEY)
+      .remove(ACTIONS_KEY)
+      .commit()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+      val manager =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      manager.activeNotifications
+        .filter { it.tag == NOTIFICATION_ID }
+        .forEach { manager.cancel(it.tag, it.id) }
+    }
   }
 
   @Synchronized
-  fun consumeActions(context: Context): String {
+  fun consumeActions(
+    context: Context,
+    ownerId: String,
+    generation: String,
+  ): String {
     val prefs = preferences(context)
-    val actions = prefs.getString(ACTIONS_KEY, null) ?: "[]"
+    if (prefs.getBoolean(DISABLED_KEY, true)) {
+      prefs.edit().remove(ACTIONS_KEY).commit()
+      return "[]"
+    }
+    if (
+      prefs.getString(ACTIVE_OWNER_KEY, null) != ownerId ||
+      prefs.getString(GENERATION_KEY, null) != generation
+    ) return "[]"
+    val stored = runCatching {
+      JSONArray(prefs.getString(ACTIONS_KEY, null) ?: "[]")
+    }.getOrElse { JSONArray() }
+    val actions = JSONArray()
+    for (index in 0 until stored.length()) {
+      val item = stored.optJSONObject(index) ?: continue
+      if (
+        item.optString("ownerId") == ownerId &&
+        item.optString("generation") == generation
+      ) actions.put(item)
+    }
     // Preserve the native flow until React has replayed every queued action.
     // Its monotonic timestamp guard then rejects intermediate/stale renders
     // and accepts subsequent genuine foreground transitions.
     prefs.edit().remove(ACTIONS_KEY).commit()
-    return actions
+    return actions.toString()
   }
 
   @Synchronized
@@ -117,10 +170,21 @@ internal object HabHubWorkoutNotificationStore {
     notificationId: String,
     action: String,
     occurredAt: Long,
+    ownerId: String?,
+    generation: String?,
   ): Boolean {
     if (
       notificationId != NOTIFICATION_ID ||
       action !in setOf(NEXT_ACTION, PAUSE_ACTION, FINISH_ACTION)
+    ) return false
+
+    val prefs = preferences(context)
+    if (
+      prefs.getBoolean(DISABLED_KEY, true) ||
+      ownerId.isNullOrBlank() ||
+      generation.isNullOrBlank() ||
+      prefs.getString(ACTIVE_OWNER_KEY, null) != ownerId ||
+      prefs.getString(GENERATION_KEY, null) != generation
     ) return false
 
     val flow = readFlow(context)
@@ -168,10 +232,18 @@ internal object HabHubWorkoutNotificationStore {
     }
 
     if (!accepted) return false
-    val prefs = preferences(context)
     val editor = prefs.edit()
     if (flow != null) editor.putString(FLOW_KEY, encodeFlow(flow))
-    editor.putString(ACTIONS_KEY, appendAction(prefs.getString(ACTIONS_KEY, null), action, occurredAt))
+    editor.putString(
+      ACTIONS_KEY,
+      appendAction(
+        prefs.getString(ACTIONS_KEY, null),
+        action,
+        occurredAt,
+        ownerId,
+        generation,
+      ),
+    )
     editor.commit()
     if (flow != null) render(context, flow)
     return true
@@ -359,11 +431,22 @@ internal object HabHubWorkoutNotificationStore {
   private fun preferences(context: Context) =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-  private fun readFlow(context: Context): Flow? =
-    preferences(context).getString(FLOW_KEY, null)?.let(::parseFlow)
+  private fun readFlow(context: Context): Flow? {
+    val prefs = preferences(context)
+    if (prefs.getBoolean(DISABLED_KEY, true)) return null
+    val activeOwner = prefs.getString(ACTIVE_OWNER_KEY, null) ?: return null
+    val generation = prefs.getString(GENERATION_KEY, null) ?: return null
+    val flow = prefs.getString(FLOW_KEY, null)?.let(::parseFlow) ?: return null
+    return flow.takeIf {
+      it.ownerId == activeOwner && it.generation == generation
+    }
+  }
 
   private fun parseFlow(raw: String): Flow? = runCatching {
     val json = JSONObject(raw)
+    val ownerId = json.optString("ownerId")
+    val generation = json.optString("generation")
+    if (ownerId.isBlank() || generation.isBlank()) return@runCatching null
     val sourceSteps = json.optJSONArray("steps") ?: return@runCatching null
     val steps = buildList {
       for (index in 0 until sourceSteps.length()) {
@@ -378,6 +461,8 @@ internal object HabHubWorkoutNotificationStore {
     }
     if (steps.isEmpty()) return@runCatching null
     Flow(
+      ownerId = ownerId,
+      generation = generation,
       steps = steps,
       index = json.optInt("index", 0).coerceIn(0, steps.lastIndex),
       paused = json.optBoolean("paused", false),
@@ -388,6 +473,8 @@ internal object HabHubWorkoutNotificationStore {
   }.getOrNull()
 
   private fun encodeFlow(flow: Flow) = JSONObject().apply {
+    put("ownerId", flow.ownerId)
+    put("generation", flow.generation)
     put(
       "steps",
       JSONArray().apply {
@@ -411,6 +498,8 @@ internal object HabHubWorkoutNotificationStore {
     raw: String?,
     action: String,
     occurredAt: Long,
+    ownerId: String,
+    generation: String,
   ): String {
     val existing = runCatching { JSONArray(raw ?: "[]") }.getOrElse { JSONArray() }
     val next = JSONArray()
@@ -419,6 +508,8 @@ internal object HabHubWorkoutNotificationStore {
     next.put(JSONObject().apply {
       put("action", action)
       put("occurredAt", occurredAt)
+      put("ownerId", ownerId)
+      put("generation", generation)
     })
     return next.toString()
   }

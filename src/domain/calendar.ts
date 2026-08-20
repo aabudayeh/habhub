@@ -47,10 +47,9 @@ function clockMinutes(time: string | undefined) {
 /**
  * Returns whether an event belongs in an hourly Schedule slot.
  *
- * A duration's finishing boundary is intentionally discoverable from the next
- * slot (19:00-20:00 appears in both 19:00 and 20:00). Its starting boundary
- * is not copied into the preceding slot. Point events only belong to the hour
- * in which they start.
+ * Durations use half-open clock ranges: 19:00-20:00 appears in 19:00 only,
+ * while 19:00-20:30 appears in both 19:00 and 20:00. Point events only belong
+ * to the hour in which they start.
  */
 export function scheduleEventTouchesHourSlot(
   event: ScheduleEvent,
@@ -69,7 +68,7 @@ export function scheduleEventTouchesHourSlot(
   )
     return startsAt >= slotStart && startsAt < slotEnd;
   const endsAt = startsAt + duration;
-  return startsAt < slotEnd && endsAt >= slotStart;
+  return startsAt < slotEnd && endsAt > slotStart;
 }
 
 /** Stable, de-duplicated events discoverable from one hourly slot. */

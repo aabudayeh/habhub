@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "Минуты, потраченные на сосредоточенную работу. Записывайте время вручную или используйте таймер активности, чтобы понять свой распорядок дня.",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "Время, потраченное на использование приложений и экрана. Android может оценить это с помощью Usage Access; Интернет и неподдерживаемые устройства могут зарегистрировать его вручную.",
   "Close Today view picker": "Закрыть выбор вида «Сегодня»",
-  "Open Today view picker": "Открыть выбор вида «Сегодня»"
+  "Open Today view picker": "Открыть выбор вида «Сегодня»",
+  "Macros": "Макронутриенты",
+  "Shown macros": "Показанные макронутриенты",
+  "Protein, carbs, and fat for this date range": "Белки, углеводы и жиры за этот период",
+  "Percentages show each selected macro’s share of macro calories.": "Проценты показывают долю калорий каждого выбранного макронутриента.",
+  "Bars show daily intake or daily average": "Столбцы показывают дневное потребление или среднее за день",
+  "No macro details were available in food entries for this range.": "В записях питания за этот период нет данных о макронутриентах.",
+  "Macro calorie percentages": "Процент калорий из макронутриентов",
+  "Double-tap a meal to edit its time": "Дважды нажмите на приём пищи, чтобы изменить время",
+  "Double tap to edit this meal time": "Дважды нажмите, чтобы изменить время приёма пищи",
+  "Edit meal time": "Изменить время приёма пищи",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "Изменится только время. Калории, состав, источник и доступ останутся прежними.",
+  "Save time": "Сохранить время"
 }

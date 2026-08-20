@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "Minuter tillbringade i fokuserat arbete. Logga tiden manuellt eller använd aktivitetstimern för att förstå din rutin.",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "Tid som spenderas med appar och skärmen. Android kan uppskatta det med Usage Access; webben och enheter som inte stöds kan logga det manuellt.",
   "Close Today view picker": "Stäng väljaren för dagens vy",
-  "Open Today view picker": "Öppna väljaren för dagens vy"
+  "Open Today view picker": "Öppna väljaren för dagens vy",
+  "Macros": "Makronäringsämnen",
+  "Shown macros": "Visade makron",
+  "Protein, carbs, and fat for this date range": "Protein, kolhydrater och fett för datumintervallet",
+  "Percentages show each selected macro’s share of macro calories.": "Procenten visar varje valt makros andel av makrokalorierna.",
+  "Bars show daily intake or daily average": "Staplar visar dagligt intag eller dagsgenomsnitt",
+  "No macro details were available in food entries for this range.": "Inga makrouppgifter fanns i matposterna för intervallet.",
+  "Macro calorie percentages": "Procentandelar av makrokalorier",
+  "Double-tap a meal to edit its time": "Dubbeltryck på en måltid för att ändra tiden",
+  "Double tap to edit this meal time": "Dubbeltryck för att ändra måltidstiden",
+  "Edit meal time": "Redigera måltidstid",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "Endast tiden ändras. Kalorier, näring, källa och delning förblir oförändrade.",
+  "Save time": "Spara tid"
 }

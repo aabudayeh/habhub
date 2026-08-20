@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Modal, PanResponder, Pressable, StyleSheet, View } from "react-native";
+import Svg, { Circle } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
 import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
 import {
@@ -15,6 +16,8 @@ import { ExpandableImage } from "@/src/components/ExpandableImage";
 import { FastingClockEditor } from "@/src/components/FastingClockEditor";
 import { FastingProgressBar } from "@/src/components/FastingProgressBar";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
+import { SelectionMenu } from "@/src/components/SelectionMenu";
+import { TimeInput } from "@/src/components/TimeInput";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   Card,
@@ -92,6 +95,13 @@ import {
 } from "@/src/domain/fasting";
 import { ScreenTimeBreakdownCard } from "@/src/screenTime/ScreenTimeBreakdownCard";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
+import {
+  FOOD_MACROS,
+  FoodMacroBucket,
+  FoodMacroId,
+  FoodMacroRange,
+  foodMacroReport,
+} from "@/src/domain/food";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -123,6 +133,7 @@ export default function TrackerDetail() {
   const {
     state,
     deleteEntry,
+    updateFoodEntryTime,
     deletePhoto,
     skipGoal,
     updateMetric,
@@ -143,6 +154,11 @@ export default function TrackerDetail() {
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
   const [recordsOpen, setRecordsOpen] = useState(false);
   const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
+  const [editingFoodEntryId, setEditingFoodEntryId] = useState<string>();
+  const [foodTimeDraft, setFoodTimeDraft] = useState("12:00");
+  const lastFoodTapRef = useRef<{ entryId: string; at: number } | undefined>(
+    undefined,
+  );
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const tracker = state.metrics.find((item) => item.id === trackerId);
@@ -254,6 +270,30 @@ export default function TrackerDetail() {
         b.localDate.localeCompare(a.localDate) ||
         b.recordedAt.localeCompare(a.recordedAt),
     );
+  const editingFoodEntry = editingFoodEntryId
+    ? entries.find((entry) => entry.id === editingFoodEntryId)
+    : undefined;
+  function openFoodTimeEditor(entry: (typeof entries)[number]) {
+    if (tracker?.id !== "food" || entry.source === "calculated") return;
+    const recorded = new Date(entry.recordedAt);
+    if (!Number.isFinite(recorded.getTime())) return;
+    setFoodTimeDraft(
+      `${String(recorded.getHours()).padStart(2, "0")}:${String(
+        recorded.getMinutes(),
+      ).padStart(2, "0")}`,
+    );
+    setEditingFoodEntryId(entry.id);
+  }
+  function handleFoodEntryTap(entry: (typeof entries)[number]) {
+    if (tracker?.id !== "food" || entry.source === "calculated") return;
+    const now = Date.now();
+    const previous = lastFoodTapRef.current;
+    lastFoodTapRef.current = { entryId: entry.id, at: now };
+    if (!previous || previous.entryId !== entry.id || now - previous.at > 360)
+      return;
+    lastFoodTapRef.current = undefined;
+    openFoodTimeEditor(entry);
+  }
   const gymSourceSessions = tracker.gymMapping
     ? (state.gymSessions ?? [])
         .filter(
@@ -1469,6 +1509,15 @@ export default function TrackerDetail() {
           </Text>
         ) : null}
       </Card>
+      {tracker.id === "food" ? (
+        <FoodMacroSection
+          state={state}
+          period={period as FoodMacroRange}
+          dates={dates}
+          anchorDate={day}
+          locale={locale}
+        />
+      ) : null}
       {!isPhoto ? (
         <Card style={styles.recordsCard}>
           <Pressable
@@ -1676,6 +1725,9 @@ export default function TrackerDetail() {
         <Text style={[styles.section, { color: colors.ink }]}>
           Entries
         </Text>
+        {tracker.id === "food" ? (
+          <Text style={[styles.entryEditHint, { color: colors.faint }]}>Double-tap a meal to edit its time</Text>
+        ) : null}
       </View> : null}
       <View style={styles.entries}>
         {gymSourceSessions.map((session) => {
@@ -1732,6 +1784,8 @@ export default function TrackerDetail() {
           const fastDetails = hasFastMetadata
             ? completedFastDetails(entry)
             : undefined;
+          const canEditFoodTime =
+            tracker.id === "food" && entry.source !== "calculated";
           return (
           <React.Fragment key={`${entry.userId}:${entry.id}`}>
           {dates.length > 1 && firstOnDate ? (
@@ -1762,6 +1816,44 @@ export default function TrackerDetail() {
           ) : null}
           {!collapsed ? (
           <Pressable
+            accessibilityRole={canEditFoodTime ? "button" : undefined}
+            accessibilityLabel={
+              canEditFoodTime
+                ? `${entry.label || tracker.name}, ${formatClockTime(
+                    entry.recordedAt,
+                    state.settings.timeFormat,
+                    locale,
+                  )}`
+                : undefined
+            }
+            accessibilityHint={
+              canEditFoodTime
+                ? t("Opens the meal time editor")
+                : undefined
+            }
+            accessibilityActions={
+              canEditFoodTime
+                ? [{ name: "activate", label: t("Edit meal time") }]
+                : undefined
+            }
+            onAccessibilityAction={
+              canEditFoodTime
+                ? (event) => {
+                    if (event.nativeEvent.actionName === "activate")
+                      openFoodTimeEditor(entry);
+                  }
+                : undefined
+            }
+            onAccessibilityTap={
+              canEditFoodTime
+                ? () => openFoodTimeEditor(entry)
+                : undefined
+            }
+            onPress={
+              canEditFoodTime
+                ? () => handleFoodEntryTap(entry)
+                : undefined
+            }
             delayLongPress={450}
             onLongPress={
               entry.source !== "calculated"
@@ -1969,6 +2061,62 @@ export default function TrackerDetail() {
           </Pressable>
         ))}
       </View>
+      <Modal
+        transparent
+        visible={Boolean(editingFoodEntry)}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setEditingFoodEntryId(undefined)}
+      >
+        <Pressable
+          style={styles.foodTimeBackdrop}
+          onPress={() => setEditingFoodEntryId(undefined)}
+        >
+          <Pressable
+            onPress={(event) => event.stopPropagation()}
+            style={[styles.foodTimeSheet, { backgroundColor: colors.card }]}
+          >
+            <View style={styles.foodTimeHeading}>
+              <View style={styles.grow}>
+                <Text style={[styles.foodTimeTitle, { color: colors.ink }]}>Edit meal time</Text>
+                <Text
+                  translate={false}
+                  numberOfLines={1}
+                  style={[styles.foodTimeMeal, { color: colors.muted }]}
+                >
+                  {editingFoodEntry?.label || "Food entry"}
+                </Text>
+              </View>
+              <Ionicons name="time-outline" size={20} color={accent} />
+            </View>
+            <TimeInput
+              value={foodTimeDraft}
+              onChange={setFoodTimeDraft}
+              label="Meal time"
+              wheelPicker
+            />
+            <Text style={[styles.foodTimeNote, { color: colors.muted }]}>Only the time changes. Calories, nutrition, source, and sharing stay the same.</Text>
+            <View style={styles.foodTimeActions}>
+              <Pressable
+                onPress={() => setEditingFoodEntryId(undefined)}
+                style={[styles.foodTimeButton, { borderColor: colors.border }]}
+              >
+                <Text style={[styles.foodTimeButtonText, { color: colors.muted }]}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  if (!editingFoodEntry) return;
+                  updateFoodEntryTime(editingFoodEntry.id, foodTimeDraft);
+                  setEditingFoodEntryId(undefined);
+                }}
+                style={[styles.foodTimeButton, { backgroundColor: accent }]}
+              >
+                <Text preserveColor style={styles.foodTimeSaveText}>Save time</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
       {tracker.id !== "todo_completion" &&
       !entries.length &&
       !dayPhotos.length &&
@@ -1983,6 +2131,378 @@ export default function TrackerDetail() {
       ) : null}
       </View>
     </Screen>
+  );
+}
+
+function FoodMacroSection({
+  state,
+  period,
+  dates,
+  anchorDate,
+  locale,
+}: {
+  state: ReturnType<typeof useApp>["state"];
+  period: FoodMacroRange;
+  dates: string[];
+  anchorDate: string;
+  locale: string;
+}) {
+  const colors = useAppColors();
+  const accent = useGroupAccent();
+  const { t } = useLocalization();
+  const [open, setOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<FoodMacroId[]>(
+    FOOD_MACROS.map((macro) => macro.id),
+  );
+  const goals = useMemo(
+    () => {
+      if (!open) return {};
+      return Object.fromEntries(
+        FOOD_MACROS.flatMap((macro) => {
+          const definition = state.metrics.find(
+            (metric) => metric.id === macro.id,
+          );
+          if (!definition || definition.goalEnabled === false) return [];
+          return [
+            [
+              macro.id,
+              effectiveGoalTarget(
+                state,
+                definition,
+                state.currentUserId,
+                anchorDate,
+              ),
+            ],
+          ];
+        }),
+      ) as Partial<Record<FoodMacroId, number>>;
+    },
+    [anchorDate, open, state],
+  );
+  const report = useMemo(
+    () => {
+      if (!open) return undefined;
+      return foodMacroReport({
+        entries: state.entries,
+        userId: state.currentUserId,
+        range: period,
+        dates,
+        anchorDate,
+        selectedIds,
+        goals,
+        locale,
+      });
+    },
+    [anchorDate, dates, goals, locale, open, period, selectedIds, state.currentUserId, state.entries],
+  );
+  const dayView = dates.length === 1 && period !== "overall";
+  return (
+    <Card style={styles.foodMacroCard}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel="Macros"
+        onPress={() => setOpen((current) => !current)}
+        style={styles.foodMacroHeader}
+      >
+        <View style={[styles.foodMacroIcon, { backgroundColor: colors.primarySoft }]}>
+          <Ionicons name="nutrition-outline" size={17} color={accent} />
+        </View>
+        <View style={styles.grow}>
+          <Text style={[styles.foodMacroTitle, { color: colors.ink }]}>Macros</Text>
+          <Text style={[styles.foodMacroHint, { color: colors.muted }]}>Protein, carbs, and fat for this date range</Text>
+        </View>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={17}
+          color={colors.muted}
+        />
+      </Pressable>
+      {open && report ? (
+        <View style={[styles.foodMacroBody, { borderTopColor: colors.border }]}>
+          <SelectionMenu
+            title="Shown macros"
+            items={FOOD_MACROS.map((macro) => ({
+              id: macro.id,
+              label: macro.label,
+              color: macro.color,
+              icon: macro.icon,
+              group: "Macros",
+            }))}
+            selectedIds={selectedIds}
+            onChange={(ids) => {
+              const valid = FOOD_MACROS.map((macro) => macro.id).filter((id) =>
+                ids.includes(id),
+              );
+              if (valid.length) setSelectedIds(valid);
+            }}
+            multiple
+            searchable={false}
+          />
+          {report.hasData ? (
+            <>
+              <View style={styles.foodMacroPieRow}>
+                <FoodMacroDonut slices={report.slices} colors={colors} />
+                <View style={styles.foodMacroLegend}>
+                  {report.slices.map((slice) => (
+                    <View key={slice.id} style={styles.foodMacroLegendRow}>
+                      <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
+                      <View style={styles.grow}>
+                        <Text translate={false} style={[styles.foodMacroLegendName, { color: colors.ink }]}>{t(slice.label)}</Text>
+                        <Text style={[styles.foodMacroLegendValue, { color: colors.muted }]}>
+                          {slice.percent.toLocaleString(locale, { maximumFractionDigits: 1 })}% · {slice.grams.toLocaleString(locale, { maximumFractionDigits: 1 })} g
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </View>
+              <Text style={[styles.foodMacroCaption, { color: colors.faint }]}>Percentages show each selected macro’s share of macro calories.</Text>
+              {dayView && report.dayValues ? (
+                <View style={styles.foodMacroProgressList}>
+                  {report.slices.map((slice) => (
+                    <FoodMacroProgress
+                      key={slice.id}
+                      slice={slice}
+                      value={report.dayValues![slice.id]}
+                      locale={locale}
+                      colors={colors}
+                    />
+                  ))}
+                </View>
+              ) : (
+                <FoodMacroBars
+                  buckets={report.buckets}
+                  slices={report.slices}
+                  bucketUnit={report.bucketUnit}
+                  locale={locale}
+                  colors={colors}
+                />
+              )}
+            </>
+          ) : (
+            <View style={[styles.foodMacroEmpty, { borderColor: colors.border }]}>
+              <Ionicons name="restaurant-outline" size={19} color={colors.faint} />
+              <Text style={[styles.foodMacroEmptyText, { color: colors.muted }]}>No macro details were available in food entries for this range.</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
+function FoodMacroDonut({
+  slices,
+  colors,
+}: {
+  slices: ReturnType<typeof foodMacroReport>["slices"];
+  colors: ReturnType<typeof useAppColors>;
+}) {
+  const size = 108;
+  const radius = 39;
+  const circumference = 2 * Math.PI * radius;
+  let consumed = 0;
+  return (
+    <View style={styles.foodMacroDonut} accessibilityLabel="Macro calorie percentages">
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={colors.border}
+          strokeWidth={14}
+        />
+        {slices.map((slice) => {
+          const length = (Math.max(0, slice.percent) / 100) * circumference;
+          const offset = -consumed;
+          consumed += length;
+          return (
+            <Circle
+              key={slice.id}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke={slice.color}
+              strokeWidth={14}
+              strokeDasharray={[length, Math.max(0, circumference - length)]}
+              strokeDashoffset={offset}
+              rotation={-90}
+              origin={`${size / 2}, ${size / 2}`}
+            />
+          );
+        })}
+      </Svg>
+      <View pointerEvents="none" style={styles.foodMacroDonutCenter}>
+        <Text translate={false} style={[styles.foodMacroDonutLabel, { color: colors.muted }]}>MACRO</Text>
+        <Text style={[styles.foodMacroDonutValue, { color: colors.ink }]}>%</Text>
+      </View>
+    </View>
+  );
+}
+
+function FoodMacroProgress({
+  slice,
+  value,
+  locale,
+  colors,
+}: {
+  slice: ReturnType<typeof foodMacroReport>["slices"][number];
+  value: number;
+  locale: string;
+  colors: ReturnType<typeof useAppColors>;
+}) {
+  const { t } = useLocalization();
+  const goal = slice.goal;
+  const scale = Math.max(1, value * 1.08, (goal ?? 0) * 1.2);
+  const fill = Math.min(1, Math.max(0, value / scale));
+  const goalPosition = goal ? Math.min(1, Math.max(0, goal / scale)) : undefined;
+  const percentage = goal ? Math.round((value / goal) * 100) : undefined;
+  return (
+    <View style={styles.foodMacroProgress}>
+      <View style={styles.foodMacroProgressHeading}>
+        <View style={styles.foodMacroProgressName}>
+          <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
+          <Text translate={false} style={[styles.foodMacroProgressLabel, { color: colors.ink }]}>{t(slice.label)}</Text>
+        </View>
+        <Text style={[styles.foodMacroProgressValue, { color: colors.muted }]}>
+          {value.toLocaleString(locale, { maximumFractionDigits: 1 })} g
+          {percentage !== undefined ? ` · ${percentage}%` : ""}
+        </Text>
+      </View>
+      <View style={[styles.foodMacroProgressTrack, { backgroundColor: colors.border }]}>
+        <View style={[styles.foodMacroProgressFill, { width: `${fill * 100}%`, backgroundColor: slice.color }]} />
+        {goalPosition !== undefined ? (
+          <View
+            accessibilityLabel={`Goal ${goal} grams`}
+            style={[
+              styles.foodMacroGoalTick,
+              { left: `${goalPosition * 100}%`, backgroundColor: colors.ink },
+            ]}
+          />
+        ) : null}
+      </View>
+      {goal ? (
+        <Text style={[styles.foodMacroGoalCopy, { color: colors.faint }]}>Goal {goal.toLocaleString(locale, { maximumFractionDigits: 1 })} g</Text>
+      ) : null}
+    </View>
+  );
+}
+
+function FoodMacroBars({
+  buckets,
+  slices,
+  bucketUnit,
+  locale,
+  colors,
+}: {
+  buckets: FoodMacroBucket[];
+  slices: ReturnType<typeof foodMacroReport>["slices"];
+  bucketUnit: "day" | "month" | "year";
+  locale: string;
+  colors: ReturnType<typeof useAppColors>;
+}) {
+  const { t } = useLocalization();
+  const values = buckets.flatMap((bucket) =>
+    slices.flatMap((slice) => {
+      const value = bucket.values[slice.id];
+      return value === null ? [] : [value];
+    }),
+  );
+  const max = Math.max(1, ...values, ...slices.map((slice) => slice.goal ?? 0));
+  const axisMax = Math.ceil((max * 1.12) / 10) * 10 || 1;
+  const labelIndexes = [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].filter(
+    (index) => index >= 0,
+  );
+  const axisLabel = bucketUnit === "day" ? "Day" : bucketUnit === "month" ? "Month" : "Year";
+  return (
+    <View style={styles.foodMacroBarsWrap}>
+      <View style={styles.foodMacroBarLegend}>
+        {slices.map((slice) => (
+          <View key={slice.id} style={styles.foodMacroBarLegendItem}>
+            <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
+            <Text translate={false} style={[styles.foodMacroBarLegendText, { color: colors.muted }]}>
+              {t(slice.label)}{slice.goal ? ` · ${t("goal")} ${slice.goal.toLocaleString(locale)} g` : ""}
+            </Text>
+          </View>
+        ))}
+      </View>
+      <View style={styles.foodMacroChartRow}>
+        <View style={styles.foodMacroYAxis}>
+          <Text translate={false} style={[styles.foodMacroAxisUnit, { color: colors.faint }]}>g/day</Text>
+          {[axisMax, axisMax / 2, 0].map((tick) => (
+            <Text key={tick} style={[styles.foodMacroYAxisLabel, { color: colors.muted }]}>
+              {tick.toLocaleString(locale, { maximumFractionDigits: 1 })}
+            </Text>
+          ))}
+        </View>
+        <View style={styles.foodMacroPlot}>
+          {[0, 50, 100].map((top) => (
+            <View key={top} style={[styles.foodMacroGrid, { top: `${top}%`, borderTopColor: colors.border }]} />
+          ))}
+          {slices.flatMap((slice) =>
+            slice.goal
+              ? [
+                  <View
+                    key={`goal-${slice.id}`}
+                    style={[
+                      styles.foodMacroGoalLine,
+                      {
+                        bottom: `${Math.min(1, slice.goal / axisMax) * 100}%`,
+                        borderTopColor: slice.color,
+                      },
+                    ]}
+                  />,
+                ]
+              : [],
+          )}
+          <View style={styles.foodMacroBars}>
+            {buckets.map((bucket) => (
+              <View key={bucket.key} style={styles.foodMacroBarSlot}>
+                {slices.map((slice) => {
+                  const value = bucket.values[slice.id];
+                  return value === null ? (
+                    <View key={slice.id} style={[styles.foodMacroMissingBar, { backgroundColor: colors.border }]} />
+                  ) : (
+                    <View
+                      key={slice.id}
+                      style={[
+                        styles.foodMacroBar,
+                        {
+                          height: `${Math.max(2, (value / axisMax) * 100)}%`,
+                          backgroundColor: slice.color,
+                        },
+                      ]}
+                    />
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+      <View style={styles.foodMacroXAxis}>
+        {labelIndexes.map((index, labelIndex) => (
+          <Text
+            key={`${buckets[index]?.key}-${index}`}
+            numberOfLines={1}
+            style={[
+              styles.foodMacroXAxisLabel,
+              { color: colors.muted },
+              labelIndex === 1 && styles.foodMacroXAxisMiddle,
+              labelIndex === 2 && styles.foodMacroXAxisEnd,
+            ]}
+          >
+            {buckets[index]?.label}
+          </Text>
+        ))}
+      </View>
+      <Text translate={false} style={[styles.foodMacroAxisCaption, { color: colors.faint }]}>
+        {t(axisLabel)} · {t("Bars show daily intake or daily average")}
+      </Text>
+    </View>
   );
 }
 
@@ -3201,6 +3721,160 @@ const styles = StyleSheet.create({
   periodChoiceYesterday: { flex: 1.22 },
   periodChoiceOverall: { flex: 1.08 },
   periodChevron: { marginTop: -2 },
+  foodMacroCard: { gap: 0 },
+  foodMacroHeader: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  foodMacroIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  foodMacroTitle: { fontSize: 10, fontWeight: "900" },
+  foodMacroHint: { fontSize: 7.5, fontWeight: "700", marginTop: 2 },
+  foodMacroBody: { borderTopWidth: 1, paddingTop: 10, marginTop: 7, gap: 10 },
+  foodMacroPieRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 2,
+  },
+  foodMacroDonut: { width: 108, height: 108, position: "relative" },
+  foodMacroDonutCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  foodMacroDonutLabel: { fontSize: 6.5, fontWeight: "900", letterSpacing: 0.8 },
+  foodMacroDonutValue: { fontSize: 16, fontWeight: "900", marginTop: -1 },
+  foodMacroLegend: { flex: 1, minWidth: 0, gap: 7 },
+  foodMacroLegendRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  foodMacroDot: { width: 7, height: 7, borderRadius: 4 },
+  foodMacroLegendName: { fontSize: 9, fontWeight: "900" },
+  foodMacroLegendValue: { fontSize: 8, fontWeight: "700", marginTop: 1 },
+  foodMacroCaption: { fontSize: 7.5, lineHeight: 11, textAlign: "center" },
+  foodMacroProgressList: { gap: 10, marginTop: 2 },
+  foodMacroProgress: { gap: 4 },
+  foodMacroProgressHeading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  foodMacroProgressName: { flexDirection: "row", alignItems: "center", gap: 6 },
+  foodMacroProgressLabel: { fontSize: 9, fontWeight: "900" },
+  foodMacroProgressValue: { fontSize: 8, fontWeight: "800" },
+  foodMacroProgressTrack: {
+    height: 9,
+    borderRadius: 5,
+    position: "relative",
+    overflow: "visible",
+  },
+  foodMacroProgressFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: 5,
+  },
+  foodMacroGoalTick: {
+    position: "absolute",
+    top: -3,
+    bottom: -3,
+    width: 2,
+    borderRadius: 1,
+    marginLeft: -1,
+  },
+  foodMacroGoalCopy: { fontSize: 7, fontWeight: "800", textAlign: "right" },
+  foodMacroEmpty: {
+    minHeight: 62,
+    borderWidth: 1,
+    borderRadius: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  foodMacroEmptyText: { flex: 1, fontSize: 8.5, lineHeight: 13 },
+  foodMacroBarsWrap: { marginTop: 2 },
+  foodMacroBarLegend: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: 12,
+    rowGap: 4,
+    marginBottom: 8,
+  },
+  foodMacroBarLegendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  foodMacroBarLegendText: { fontSize: 7, fontWeight: "800" },
+  foodMacroChartRow: { flexDirection: "row", height: 126 },
+  foodMacroYAxis: {
+    width: 40,
+    paddingRight: 5,
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+  },
+  foodMacroAxisUnit: { position: "absolute", top: -10, right: 5, fontSize: 6.5, fontWeight: "900" },
+  foodMacroYAxisLabel: { fontSize: 6.5, fontWeight: "800" },
+  foodMacroPlot: { flex: 1, position: "relative" },
+  foodMacroGrid: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  foodMacroGoalLine: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    borderTopWidth: 1,
+    borderStyle: "dashed",
+    zIndex: 2,
+  },
+  foodMacroBars: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+    zIndex: 1,
+  },
+  foodMacroBarSlot: {
+    flex: 1,
+    minWidth: 1,
+    height: "100%",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 1,
+  },
+  foodMacroBar: {
+    flex: 1,
+    minWidth: 1,
+    borderTopLeftRadius: 2,
+    borderTopRightRadius: 2,
+    opacity: 0.86,
+  },
+  foodMacroMissingBar: { flex: 1, minWidth: 1, height: 1, opacity: 0.55 },
+  foodMacroXAxis: {
+    height: 14,
+    marginLeft: 40,
+    marginTop: 4,
+    position: "relative",
+  },
+  foodMacroXAxisLabel: {
+    position: "absolute",
+    left: 0,
+    width: 82,
+    fontSize: 6.5,
+    fontWeight: "800",
+  },
+  foodMacroXAxisMiddle: { left: "50%", marginLeft: -41, textAlign: "center" },
+  foodMacroXAxisEnd: { left: undefined, right: 0, textAlign: "right" },
+  foodMacroAxisCaption: { fontSize: 7, fontWeight: "700", textAlign: "center" },
   recordsCard: { gap: 0 },
   recordsHeading: {
     minHeight: 42,
@@ -3477,6 +4151,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  entryEditHint: { maxWidth: "62%", fontSize: 7.5, fontWeight: "700", textAlign: "right" },
   logActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   section: { fontSize: 13, fontWeight: "900" },
   logButton: {
@@ -3517,6 +4192,28 @@ const styles = StyleSheet.create({
   entryTitle: { fontSize: 11, fontWeight: "900" },
   time: { fontSize: 8, marginTop: 3 },
   entryValue: { fontSize: 12, fontWeight: "900" },
+  foodTimeBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,.46)",
+    justifyContent: "flex-end",
+    padding: 12,
+  },
+  foodTimeSheet: { borderRadius: 22, padding: 15, gap: 12 },
+  foodTimeHeading: { flexDirection: "row", alignItems: "center", gap: 10 },
+  foodTimeTitle: { fontSize: 14, fontWeight: "900" },
+  foodTimeMeal: { fontSize: 8.5, marginTop: 2 },
+  foodTimeNote: { fontSize: 8, lineHeight: 12 },
+  foodTimeActions: { flexDirection: "row", gap: 8 },
+  foodTimeButton: {
+    flex: 1,
+    minHeight: 40,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  foodTimeButtonText: { fontSize: 9, fontWeight: "900" },
+  foodTimeSaveText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   note: { fontSize: 9, lineHeight: 14, marginTop: 7 },
   fastEntryDetails: { gap: 1 },
   image: { width: 92, height: 66, borderRadius: 10, marginTop: 8 },

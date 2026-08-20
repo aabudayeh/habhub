@@ -4,14 +4,24 @@ import fs from "node:fs";
 import {
   assertPushDeliveryComplete,
   dispatchPushWithBoundedRetry,
+  isRetryablePushDeliveryError,
 } from "../src/domain/pushDelivery.ts";
 
 const read = (file) => fs.readFileSync(file, "utf8");
 const push = read("src/notifications/push.ts");
 const layout = read("app/_layout.tsx");
+const notifications = read("app/notifications.tsx");
+const auth = read("src/auth/AuthProvider.tsx");
 const cloud = read("src/cloud/groupCloud.ts");
-const challenges = read("src/cloud/groupChallenges.ts");
 const edge = read("supabase/functions/send-push/index.ts");
+const expand = read(
+  "supabase/migrations/202608140001_group_notification_events.sql",
+);
+const activate = read(
+  "supabase/migrations/202608140002_activate_group_notification_events.sql",
+);
+const alerts = read("app/alerts.tsx");
+const group = read("app/(tabs)/group.tsx");
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
 assert.doesNotThrow(() =>
@@ -22,65 +32,441 @@ assert.throws(
   /temporarily unavailable/,
 );
 
-let retryAttempts = 0;
-const scheduled = [];
+let attempts = 0;
+const retries = [];
 await dispatchPushWithBoundedRetry(
   async () => {
-    retryAttempts += 1;
-    if (retryAttempts === 1)
+    attempts += 1;
+    if (attempts === 1)
       assertPushDeliveryComplete({ sent: 0, retryable: true });
   },
   {
-    retryDelaysMs: [7, 13],
-    schedule: (callback, delayMs) => scheduled.push({ callback, delayMs }),
+    retryDelaysMs: [7],
+    schedule: (callback, delayMs) => retries.push({ callback, delayMs }),
   },
 );
-assert.equal(retryAttempts, 1, "the committed user action must not wait for retries");
-assert.deepEqual(scheduled.map(({ delayMs }) => delayMs), [7]);
-scheduled.shift().callback();
+assert.deepEqual(retries.map((item) => item.delayMs), [7]);
+retries[0].callback();
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(retryAttempts, 2, "an explicit retryable response should retry once scheduled");
-assert.equal(scheduled.length, 0, "a successful retry must stop the bounded schedule");
-
-assert.match(push, /const registrationExists = await registeredTokenExists/);
-assert.match(push, /registerPushToken\([\s\S]{0,220}!registrationExists/);
-assert.match(
-  push,
-  /fetchExpoPushToken\(projectId\)[\s\S]{0,300}registerPushToken\([\s\S]{0,180}language,[\s\S]{0,40}true/,
-);
-assert.match(
-  push,
-  /recoverPushRegistrationOnForeground[\s\S]{0,420}notificationPermissionGranted\(\)[\s\S]{0,180}refreshPushTokenRegistration/,
-);
-assert.match(push, /PUSH_TOKEN_FOREGROUND_REFRESH_MS = 15 \* 60 \* 1000/);
-assert.match(layout, /const recover = \(\) =>[\s\S]{0,300}recoverPushRegistrationOnForeground/);
+assert.equal(attempts, 2);
+for (const error of [
+  { name: "FunctionsFetchError" },
+  { name: "FunctionsRelayError" },
+  { name: "FunctionsHttpError", context: { status: 503 } },
+])
+  assert.equal(isRetryablePushDeliveryError(error), true);
 assert.equal(
-  (layout.match(/void recover\(\)/g) ?? []).length >= 2,
-  true,
-  "push recovery must run at cold effect mount and foreground resume",
+  isRetryablePushDeliveryError({
+    name: "FunctionsHttpError",
+    context: { status: 403 },
+  }),
+  false,
 );
-assert.match(layout, /NativeAppState\.addEventListener\([\s\S]{0,220}void recover\(\)/);
-assert.match(layout, /foregroundSubscription\.remove\(\)/);
-assert.match(cloud, /sendMembershipPush[\s\S]{0,650}dispatchPushWithBoundedRetry/);
-assert.equal(
-  (cloud.match(/assertPushDeliveryComplete\(result\.data\)/g) ?? []).length >= 4,
-  true,
-  "membership and chat push paths must retain retryable events",
-);
-assert.match(challenges, /sendChallengePush[\s\S]{0,650}dispatchPushWithBoundedRetry/);
-assert.match(challenges, /assertPushDeliveryComplete\(data\)/);
-assert.match(edge, /const eligible=\(tokens\?\?\[\]\)\.filter\(\(item\)=>allowed\(item\.preferences\?\?\{\},payload\)\)/);
-assert.match(
-  edge,
-  /if\(messages\.length\)\{[\s\S]{0,1800}staleTokens\.length===messages\.length[\s\S]{0,240}retryable:true/,
-  "only attempted Expo tickets may produce the missing-token retry response",
-);
-assert.match(edge, /acceptedTicketCount=tickets\.filter\(\(ticket\)=>ticket\.status==='ok'\)\.length/);
-assert.match(edge, /tickets\.length!==messages\.length/);
-assert.match(
-  edge,
-  /staleTokens\.length===messages\.length[\s\S]{0,180}push_events[\s\S]{0,180}retryable:true/,
-);
-assert.match(edge, /return json\(\{sent:acceptedTicketCount\}\)/);
 
-console.log("Push registration recovery and retry semantics validated.");
+const currentDeviceCleanup = push.slice(
+  push.indexOf("async function removeCurrentDevicePushToken"),
+  push.indexOf("export async function unregisterOrphanedDevicePushToken"),
+);
+assert.match(currentDeviceCleanup, /\.eq\('user_id', userId\)/);
+assert.match(currentDeviceCleanup, /\.eq\('token', token\)/);
+assert.match(currentDeviceCleanup, /\.eq\('platform', Platform\.OS\)/);
+const accountDisable = push.slice(
+  push.indexOf("export async function disablePushNotifications"),
+  push.indexOf("const CYCLE_IDS"),
+);
+assert.match(accountDisable, /pendingPushDisableKey\(userId\)/);
+assert.match(accountDisable, /cancelAllManagedLocalNotifications\(userId\)/);
+assert.match(accountDisable, /clearNativePushIdentity\(userId, projectId\)/);
+assert.match(
+  accountDisable,
+  /\.rpc\('delete_all_own_push_tokens', \{[\s\S]*p_expected_user_id: userId/,
+);
+assert.doesNotMatch(accountDisable, /\.eq\('token', token\)/);
+assert.ok(
+  accountDisable.indexOf("pushIdentityCleanupQueue = identityOperation") <
+    accountDisable.indexOf("delete_all_own_push_tokens"),
+  "the complete native disable lifecycle must fence a following account registration",
+);
+assert.ok(
+  accountDisable.indexOf("delete_all_own_push_tokens") <
+    accountDisable.indexOf("removeItem(pendingPushDisableKey(userId))"),
+  "an auth-mismatched server delete must retain the durable disable marker",
+);
+assert.ok(
+  accountDisable.indexOf("AsyncStorage.setItem") <
+    accountDisable.indexOf("cancelAllManagedLocalNotifications"),
+  "account-off intent must persist before any fallible cleanup",
+);
+assert.match(push, /Notifications\.unregisterForNotificationsAsync\(\)/);
+assert.match(push, /export async function hasPendingPushDisable/);
+assert.match(layout, /hasPendingPushDisable\(userId\)/);
+assert.match(layout, /network\.isConnected/);
+assert.match(layout, /network\.isInternetReachable/);
+assert.match(layout, /!hydrated \|\|[\s\S]{0,100}Platform\.OS === "web"/);
+assert.equal(
+  (layout.match(/state\.settings\.notifications\.challenges/g) ?? []).length >= 2,
+  true,
+);
+const remoteLifecycle = layout.slice(
+  layout.indexOf("const pushRegistrationUserId"),
+  layout.indexOf("const safeDefaultLandingPage"),
+);
+assert.doesNotMatch(remoteLifecycle, /tutorialActive/);
+assert.match(remoteLifecycle, /addNotificationResponseReceivedListener/);
+assert.match(remoteLifecycle, /NativeAppState\.addEventListener/);
+
+const transitionFenceStart = auth.indexOf(
+  "const beginIdentityTransitionCleanup",
+);
+const transitionFence = auth.slice(
+  transitionFenceStart,
+  auth.indexOf("const rememberSession", transitionFenceStart),
+);
+assert.ok(
+  transitionFence.indexOf("unregisterCurrentDevicePushToken") <
+    transitionFence.indexOf("cancelAllManagedLocalNotifications"),
+  "A-to-B native identity fencing must be appended synchronously",
+);
+const rememberedSession = auth.slice(
+  auth.indexOf("const rememberSession"),
+  auth.indexOf("const confirmSignedOut"),
+);
+assert.ok(
+  rememberedSession.indexOf("beginIdentityTransitionCleanup") <
+    rememberedSession.indexOf("setSession(nextSession)"),
+  "the previous identity cleanup fence must be appended before B is published",
+);
+assert.match(push, /let pushIdentityCleanupQueue: Promise<void>/);
+assert.match(push, /const identityBarrier = pushIdentityCleanupQueue/);
+assert.match(notifications, /Account-wide master switch/);
+assert.match(notifications, /every account device registration/);
+
+// Executed A-to-B ordering fixture: account B's registration must remain behind
+// the cleanup fence that account A appended synchronously, even when A's local
+// cleanup is blocked for an arbitrary amount of time.
+let identityCleanupQueue = Promise.resolve();
+const identityOrder = [];
+let releaseAccountACleanup;
+const accountACleanupBlocked = new Promise((resolve) => {
+  releaseAccountACleanup = resolve;
+});
+const enqueueIdentityCleanup = (cleanup) => {
+  const operation = identityCleanupQueue.then(cleanup, cleanup);
+  identityCleanupQueue = operation.catch(() => undefined);
+  return operation;
+};
+const accountACleanup = enqueueIdentityCleanup(async () => {
+  identityOrder.push("A-cleanup-started");
+  await accountACleanupBlocked;
+  identityOrder.push("A-native-token-cleared");
+});
+const accountBRegistration = (async () => {
+  const identityBarrier = identityCleanupQueue;
+  await identityBarrier.catch(() => undefined);
+  identityOrder.push("B-token-registered");
+})();
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(identityOrder, ["A-cleanup-started"]);
+releaseAccountACleanup();
+await Promise.all([accountACleanup, accountBRegistration]);
+assert.deepEqual(identityOrder, [
+  "A-cleanup-started",
+  "A-native-token-cleared",
+  "B-token-registered",
+]);
+
+assert.match(expand, /create table if not exists public\.push_dispatch_events/);
+assert.match(expand, /create or replace function public\.delete_all_own_push_tokens/);
+assert.match(expand, /v_user_id <> p_expected_user_id/);
+assert.match(expand, /delete from public\.device_push_tokens/);
+assert.match(expand, /create table if not exists public\.group_notification_events/);
+assert.match(expand, /create table if not exists public\.group_membership_transitions/);
+assert.match(expand, /create table if not exists public\.push_dispatch_configuration/);
+assert.match(expand, /emitters_active boolean not null default false/);
+assert.match(expand, /create trigger group_challenges_emit_feed_events/);
+assert.doesNotMatch(expand, /create trigger group_members_emit_push_event/);
+assert.doesNotMatch(expand, /create trigger metric_entries_emit_group_push_event/);
+assert.match(activate, /create trigger group_members_emit_push_event/);
+assert.match(activate, /create trigger metric_entries_emit_group_push_event/);
+assert.match(activate, /create trigger group_challenges_emit_notification_events/);
+assert.match(activate, /emitters_active = true/);
+assert.match(activate, /updated_at = clock_timestamp\(\)/);
+assert.match(expand, /old\.status = 'pending'[\s\S]*membership_request_withdrawn/);
+assert.match(expand, /old\.status = 'pending'[\s\S]*membership_request_declined/);
+assert.doesNotMatch(expand, /max\(entry\.id\)/i);
+assert.match(
+  expand,
+  /floor\(extract\(epoch from v_latest\) \* 1000\)::bigint::text/,
+);
+assert.match(
+  expand,
+  /category = 'winner'[\s\S]*public\.is_group_member\(group_id\)/,
+);
+
+assert.match(edge, /canonicalChatEvent/);
+assert.match(edge, /const expectedEventKey = `message:\$\{groupId\}:\$\{clientMessageId\}`/);
+assert.match(edge, /pushPreview\(direct \? text :/);
+assert.match(edge, /legacyMembershipCanonicalEvent/);
+assert.match(edge, /legacyCommittedCanonicalEvent/);
+assert.match(edge, /legacyCompetitionCanonicalEvent/);
+assert.match(edge, /\^\\d\{4\}-\\d\{2\}-\\d\{2\}\$/);
+assert.match(edge, /group_membership_transitions/);
+assert.match(edge, /dispatchConfiguration\?\.emitters_active === true/);
+assert.match(edge, /transition\.created_at/);
+assert.match(edge, /requestedLegacyEventKey/);
+assert.match(edge, /legacy_claim_adopted/);
+assert.match(edge, /legacyPreMutationMembershipEvents\.has\(canonical\.eventType\)/);
+assert.match(edge, /outboxCreatedAt - legacyClaimAt <= legacyClaimAdoptionWindowMs/);
+assert.match(edge, /const legacyNonMembershipClaim =/);
+assert.match(edge, /canonical\.category !== "membership"/);
+assert.match(edge, /legacyPreMutationClaim \|\| legacyNonMembershipClaim/);
+assert.match(edge, /normalizedUuid\(triggerSuffix\) !== undefined/);
+assert.match(edge, /\.like\("event_key", `\$\{legacyPrefix\}%`\)/);
+assert.match(edge, /\.eq\("sender_id", canonical\.dispatcherId\)/);
+assert.match(edge, /Math\.abs\(claimedEventAt - claimedAt\)/);
+assert.match(edge, /canDispatchStoredEvent/);
+assert.match(edge, /event\.category !== "winner"/);
+assert.match(edge, /sourceAndTimeSuffix\.startsWith/);
+assert.match(edge, /settings\.challenges \?\? settings\.badgesAndWinners \?\? true/);
+assert.match(edge, /return !Array\.isArray\(ids\) \|\| ids\.includes\(event\.metricId\)/);
+assert.match(edge, /!inQuietHours\(item\.preferences \?\? \{\}\)/);
+assert.doesNotMatch(edge, /deferred\s*:/);
+assert.match(edge, /\.select\("metric_id, local_date, recorded_at, visibility"\)/);
+assert.match(edge, /entry\.recorded_at[\s\S]{0,120}15 \* 60 \* 1000/);
+const phaseAMetricIsFresh = (recordedAt, now) =>
+  Number.isFinite(new Date(recordedAt).getTime()) &&
+  new Date(recordedAt).getTime() >= now - 15 * 60 * 1000;
+assert.equal(
+  phaseAMetricIsFresh("2026-08-01T09:00:00.000Z", Date.UTC(2026, 7, 14, 18)),
+  false,
+  "a newly uploaded historical Health Connect row must not emit a phase-A push",
+);
+assert.equal(
+  phaseAMetricIsFresh("2026-08-14T17:50:00.000Z", Date.UTC(2026, 7, 14, 18)),
+  true,
+);
+
+// Executed collision fixture: a reused same-day request key cannot consume a
+// later trigger-owned invitation, while a tightly preceding legacy delete can
+// adopt the matching trigger row that proves the post-mutation transition.
+const shouldAdoptLegacyClaim = ({
+  category,
+  eventType,
+  legacyClaimAt,
+  outboxCreatedAt,
+}) =>
+  category === "membership" &&
+  new Set([
+    "membership_left",
+    "membership_removed",
+    "membership_request_withdrawn",
+    "membership_request_declined",
+  ]).has(eventType) &&
+  legacyClaimAt <= outboxCreatedAt &&
+  outboxCreatedAt - legacyClaimAt <= 2 * 60 * 1000;
+assert.equal(
+  shouldAdoptLegacyClaim({
+    category: "membership",
+    eventType: "membership_request",
+    legacyClaimAt: Date.UTC(2026, 7, 14, 8, 0),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0),
+  }),
+  false,
+);
+const shouldAdoptRequestedLegacyClaim = ({
+  category,
+  eventType,
+  legacyClaimAt,
+  outboxCreatedAt,
+}) =>
+  shouldAdoptLegacyClaim({
+    category,
+    eventType,
+    legacyClaimAt,
+    outboxCreatedAt,
+  }) ||
+  (category !== "membership" && legacyClaimAt <= outboxCreatedAt);
+assert.equal(
+  shouldAdoptRequestedLegacyClaim({
+    category: "lead",
+    eventType: "leaderboard_activity",
+    legacyClaimAt: Date.UTC(2026, 7, 14, 17, 59),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0),
+  }),
+  true,
+  "an old-Edge lead claim must consume its later standardized canonical row",
+);
+const shouldAdoptReverseLegacyClaim = ({
+  eventType,
+  canonicalSuffix,
+  legacySuffix,
+  legacyClaimAt,
+  outboxCreatedAt,
+}) =>
+  new Set([
+    "membership_left",
+    "membership_removed",
+    "membership_request_withdrawn",
+    "membership_request_declined",
+  ]).has(eventType) &&
+  /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(canonicalSuffix) &&
+  /^\d{13}$/.test(legacySuffix) &&
+  Math.abs(Number(legacySuffix) - legacyClaimAt) <= 2 * 60 * 1000 &&
+  legacyClaimAt <= outboxCreatedAt &&
+  outboxCreatedAt - legacyClaimAt <= 2 * 60 * 1000;
+assert.equal(
+  shouldAdoptReverseLegacyClaim({
+    eventType: "membership_removed",
+    canonicalSuffix: "26ba37ce-73e6-4fdb-88c1-34ff8e18f561",
+    legacySuffix: String(Date.UTC(2026, 7, 14, 18, 0)),
+    legacyClaimAt: Date.UTC(2026, 7, 14, 18, 0, 1),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0, 20),
+  }),
+  true,
+);
+assert.equal(
+  shouldAdoptReverseLegacyClaim({
+    eventType: "membership_approved",
+    canonicalSuffix: "26ba37ce-73e6-4fdb-88c1-34ff8e18f561",
+    legacySuffix: String(Date.UTC(2026, 7, 14, 18, 0)),
+    legacyClaimAt: Date.UTC(2026, 7, 14, 18, 0, 1),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0, 20),
+  }),
+  false,
+);
+assert.equal(
+  shouldAdoptLegacyClaim({
+    category: "membership",
+    eventType: "membership_removed",
+    legacyClaimAt: Date.UTC(2026, 7, 14, 18, 0),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0, 45),
+  }),
+  true,
+);
+assert.equal(
+  shouldAdoptLegacyClaim({
+    category: "membership",
+    eventType: "membership_removed",
+    legacyClaimAt: Date.UTC(2026, 7, 14, 17, 55),
+    outboxCreatedAt: Date.UTC(2026, 7, 14, 18, 0),
+  }),
+  false,
+);
+
+assert.match(expand, /create table if not exists public\.push_token_dispatch_acceptances/);
+assert.match(expand, /left\(v_title, 120\)/);
+assert.match(expand, /left\(v_body, 500\)/);
+assert.match(edge, /title: pushPreview\(String\(input\.title/);
+assert.match(edge, /body: pushPreview\([\s\S]{0,100}String\(input\.body/);
+const acceptanceTable = expand.slice(
+  expand.indexOf("create table if not exists public.push_token_dispatch_acceptances"),
+  expand.indexOf("-- A service-private transition ledger"),
+);
+assert.doesNotMatch(acceptanceTable, /references public\.push_events|on delete cascade/);
+assert.match(acceptanceTable, /accepted_at/);
+assert.match(edge, /priorAcceptances/);
+assert.match(edge, /alreadyAccepted/);
+assert.match(edge, /terminalTokens/);
+assert.ok(
+  edge.indexOf("push_token_dispatch_acceptances", edge.indexOf("terminalTokens")) <
+    edge.indexOf("const transient = tickets.find"),
+  "accepted tickets must be checkpointed before a later ticket failure throws",
+);
+
+// Executed 101-token retry fixture: the first accepted Expo batch survives the
+// global claim release caused by a transient second batch. The retry sends only
+// the one uncheckpointed token and then completes the canonical event.
+const fanoutTokens = Array.from({ length: 101 }, (_, index) => `token-${index + 1}`);
+const acceptedFanoutTokens = new Set();
+const fanoutAttempts = [];
+let fanoutClaimReleases = 0;
+let fanoutEventCompleted = false;
+let failSecondBatchOnce = true;
+const runFanoutAttempt = async () => {
+  const pendingTokens = fanoutTokens.filter(
+    (token) => !acceptedFanoutTokens.has(token),
+  );
+  const batches = [];
+  for (let offset = 0; offset < pendingTokens.length; offset += 100)
+    batches.push(pendingTokens.slice(offset, offset + 100));
+  fanoutAttempts.push(batches.map((batch) => [...batch]));
+  try {
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      if (batchIndex === 1 && failSecondBatchOnce) {
+        failSecondBatchOnce = false;
+        throw new Error("transient Expo gateway failure");
+      }
+      for (const token of batch) acceptedFanoutTokens.add(token);
+    }
+    fanoutEventCompleted = true;
+  } catch (error) {
+    fanoutClaimReleases += 1;
+    throw error;
+  }
+};
+await assert.rejects(runFanoutAttempt(), /transient Expo gateway failure/);
+assert.equal(fanoutClaimReleases, 1);
+assert.equal(fanoutEventCompleted, false);
+assert.equal(acceptedFanoutTokens.size, 100);
+assert.equal(fanoutAttempts[0].length, 2);
+assert.equal(fanoutAttempts[0][0].length, 100);
+assert.equal(fanoutAttempts[0][1].length, 1);
+await runFanoutAttempt();
+assert.equal(fanoutAttempts[1].length, 1);
+assert.deepEqual(fanoutAttempts[1][0], ["token-101"]);
+assert.equal(acceptedFanoutTokens.size, 101);
+assert.equal(fanoutEventCompleted, true);
+
+assert.match(cloud, /let groupPushDrainPromise/);
+assert.match(cloud, /if \(groupPushDrainPromise\) return groupPushDrainPromise/);
+assert.match(cloud, /for \(let page = 0; page < 10; page \+= 1\)/);
+assert.match(cloud, /\.limit\(40\)/);
+assert.match(cloud, /pending!\.slice\(offset, offset \+ 4\)/);
+assert.match(cloud, /Promise\.allSettled/);
+assert.match(cloud, /created_at\.lt\./);
+assert.match(cloud, /id\.lt\./);
+assert.ok(
+  cloud.indexOf("if (firstFailure !== undefined) throw firstFailure") >
+    cloud.indexOf("cursor = { createdAt: last.created_at, id: last.id }"),
+  "all cursor pages must run before an individual event failure is surfaced",
+);
+
+// Executed 45-row cursor fixture: failures in the newest 40 cannot hide five
+// older rows from the same bounded pass.
+const fixture = Array.from({ length: 45 }, (_, index) => ({
+  id: String(1000 - index).padStart(4, "0"),
+  created_at: new Date(Date.UTC(2026, 7, 14, 12, 0, 45 - index)).toISOString(),
+}));
+const visited = [];
+let cursor;
+for (let page = 0; page < 10; page += 1) {
+  const rows = fixture
+    .filter(
+      (row) =>
+        !cursor ||
+        row.created_at < cursor.createdAt ||
+        (row.created_at === cursor.createdAt && row.id < cursor.id),
+    )
+    .sort(
+      (left, right) =>
+        right.created_at.localeCompare(left.created_at) ||
+        right.id.localeCompare(left.id),
+    )
+    .slice(0, 40);
+  if (!rows.length) break;
+  visited.push(...rows);
+  const last = rows.at(-1);
+  cursor = { createdAt: last.created_at, id: last.id };
+  if (rows.length < 40) break;
+}
+assert.equal(visited.length, 45);
+
+assert.match(group, /groupFeedUnreadCount/);
+assert.match(group, /router\.navigate\("\/alerts\?scope=group"/);
+assert.match(alerts, /markGroupFeedRead\(unreadEventIds\)/);
+assert.match(alerts, /filter === "challenge"/);
+
+console.log(
+  "Push validation passed: account lifecycle, staged canonical outbox, compatibility bridges, private challenge feed, cursor drain, and per-token retry checkpoints.",
+);

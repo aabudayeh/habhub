@@ -33,6 +33,11 @@ declare module 'react-native-health-connect' {
   export function requestPermission(permissions: Permission[]): Promise<Permission[]>;
   export function getGrantedPermissions(): Promise<Permission[]>;
   export function readRecords(recordType: string, options: Record<string, unknown>): Promise<{ records: Record<string, unknown>[]; pageToken?: string }>;
+  export function aggregateRecord(request: {
+    recordType: 'Steps';
+    timeRangeFilter: Record<string, unknown>;
+    dataOriginFilter?: string[];
+  }): Promise<{ COUNT_TOTAL?: number; dataOrigins?: string[] }>;
   export function aggregateGroupByPeriod(request: {
     recordType: 'Steps';
     timeRangeFilter: Record<string, unknown>;

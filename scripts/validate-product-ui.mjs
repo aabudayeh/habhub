@@ -6,16 +6,24 @@ const root = path.resolve(import.meta.dirname, "..");
 const read = (...parts) => fs.readFileSync(path.join(root, ...parts), "utf8");
 
 const tabs = read("app", "(tabs)", "_layout.tsx");
+const navigation = read("src", "domain", "navigation.ts");
 const seed = read("src", "data", "seed.ts");
 const log = read("app", "(tabs)", "log.tsx");
 const today = read("app", "(tabs)", "index.tsx");
 const ui = read("src", "components", "ui.tsx");
 
-for (const [name, source] of [["tab fallback", tabs], ["new-user seed", seed]]) {
-  const gym = source.indexOf('"gym"');
-  const chat = source.indexOf('"chat"');
-  assert.ok(chat >= 0 && gym > chat, `${name} must place Chat before Workout`);
-}
+const seededToday = seed.indexOf('"index"');
+const seededStatus = seed.indexOf('"status"');
+const seededGym = seed.indexOf('"gym"');
+const seededChat = seed.indexOf('"chat"');
+assert.ok(
+  seededToday >= 0 &&
+    seededStatus > seededToday &&
+    seededChat > seededGym,
+  "new-user navigation must place Status after Today and Chat after Workout",
+);
+assert.match(navigation, /return \["index", "status", \.\.\.middle, "chat"\]/);
+assert.match(tabs, /normalizeTabOrder\(state\.settings\.tabOrder\)/);
 assert.match(tabs, /enableFreeze\(true\)/);
 assert.match(tabs, /freezeOnBlur: true/);
 

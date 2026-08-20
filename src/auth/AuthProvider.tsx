@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNetInfo } from '@react-native-community/netinfo';
 import { Session, User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -6,9 +7,27 @@ import React, { createContext, PropsWithChildren, useCallback, useContext, useEf
 import { Platform } from 'react-native';
 
 import { readableAuthError } from '@/src/domain/authErrors';
+import { networkReachability } from '@/src/domain/network';
+import {
+  cachedAuthIdentityPayload,
+  parseCachedAuthIdentity,
+  parseSupabaseStoredAuthUser,
+  supabaseAuthStorageKey,
+} from '@/src/domain/offlineAuth';
 import { cloudConfigured, consumeAuthUrl, isAuthCallbackUrl, supabase } from '@/src/lib/supabase';
+import {
+  cancelAllManagedLocalNotifications,
+  releasePushRegistrationFence,
+  unregisterCurrentDevicePushToken,
+  unregisterOrphanedDevicePushToken,
+} from '@/src/notifications/push';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
+const CACHED_AUTH_IDENTITY_KEY = 'habhub-cached-auth-identity-v1';
+const NATIVE_SESSION_WAIT_MS = 1200;
+const SUPABASE_SESSION_STORAGE_KEY = supabaseAuthStorageKey(
+  process.env.EXPO_PUBLIC_SUPABASE_URL,
+);
 
 type AuthStatus = 'loading' | 'signedOut' | 'signedIn' | 'demo';
 
@@ -48,11 +67,24 @@ function callbackUrl() {
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
+  const network = useNetInfo();
   const [session, setSession] = useState<Session | null>(null);
+  const [offlineUser, setOfflineUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>(cloudConfigured ? 'loading' : 'demo');
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const oauthAttemptRef = useRef<Promise<void> | null>(null);
+  const reconnectSessionRef = useRef<Promise<void> | null>(null);
+  const previousUserIdRef = useRef<string | null>(null);
+  const networkUnavailableRef = useRef(false);
+  const reachability = networkReachability(
+    network.isConnected,
+    network.isInternetReachable,
+  );
+  const networkConfirmedAvailable =
+    reachability === 'online' ||
+    (Platform.OS === 'web' && reachability === 'unknown');
+  networkUnavailableRef.current = !networkConfirmedAvailable;
 
   useEffect(() => {
     if (!supabase) {
@@ -61,37 +93,169 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
 
     let mounted = true;
-    // Never leave the app behind an indefinite auth splash if browser storage
-    // or an OEM credential provider stalls. A late session result still wins.
-    const startupFallback = setTimeout(
-      () => mounted && setStatus('signedOut'),
-      Platform.OS === 'web' ? 2500 : 8000,
-    );
-    Promise.all([supabase.auth.getSession(), AsyncStorage.getItem(DEMO_MODE_KEY)])
-      .then(([result, demoMode]) => {
+    let explicitDemoMode = false;
+    let cachedBootstrapUser: User | null = null;
+    const startedIdentityTransitions = new Set<string>();
+    const beginIdentityTransitionCleanup = (
+      previousUserId: string | null,
+      nextUserId: string | null,
+    ) => {
+      if (!previousUserId || previousUserId === nextUserId) return;
+      const transitionKey = `${previousUserId}:${nextUserId ?? 'signed-out'}`;
+      if (startedIdentityTransitions.has(transitionKey)) return;
+      startedIdentityTransitions.add(transitionKey);
+      {
+        // Append the native-token cleanup barrier synchronously, before the B
+        // session is published below. Otherwise local alarm cleanup's first
+        // await leaves a window where B can register and A then unregisters
+        // that brand-new native identity.
+        let pushCleanupError: unknown;
+        const pushCleanup = unregisterCurrentDevicePushToken(
+          previousUserId,
+        ).catch((error) => {
+          pushCleanupError = error;
+        });
+        // This also covers an unexpected session loss or an account switch.
+        // Native alarm cleanup is serialized ahead of any schedules created
+        // for the next account, so private reminders never cross identities.
+        void (async () => {
+          try {
+            await cancelAllManagedLocalNotifications(previousUserId);
+            await pushCleanup;
+            if (pushCleanupError) throw pushCleanupError;
+          } catch {
+            // Native unregistration runs even when the prior RLS session is
+            // already gone; Edge later removes its DeviceNotRegistered row.
+          } finally {
+            releasePushRegistrationFence(previousUserId);
+          }
+        })();
+      }
+    };
+    const rememberSession = (nextSession: Session) => {
+      const previousUserId = previousUserIdRef.current;
+      beginIdentityTransitionCleanup(previousUserId, nextSession.user.id);
+      previousUserIdRef.current = nextSession.user.id;
+      cachedBootstrapUser = nextSession.user;
+      setOfflineUser(null);
+      setSession(nextSession);
+      setAuthError(null);
+      setStatus('signedIn');
+      void Promise.all([
+        AsyncStorage.removeItem(DEMO_MODE_KEY),
+        AsyncStorage.setItem(
+          CACHED_AUTH_IDENTITY_KEY,
+          cachedAuthIdentityPayload(nextSession.user),
+        ),
+      ]).catch(() => undefined);
+    };
+    const confirmSignedOut = (demoMode: boolean) => {
+      const previousUserId = previousUserIdRef.current;
+      beginIdentityTransitionCleanup(previousUserId, null);
+      previousUserIdRef.current = null;
+      cachedBootstrapUser = null;
+      setSession(null);
+      setOfflineUser(null);
+      void AsyncStorage.removeItem(CACHED_AUTH_IDENTITY_KEY).catch(
+        () => undefined,
+      );
+      if (!previousUserId) {
+        void cancelAllManagedLocalNotifications().catch(() => undefined);
+        void unregisterOrphanedDevicePushToken().catch(() => undefined);
+      }
+      setStatus(demoMode ? 'demo' : 'signedOut');
+    };
+
+    // Restore a non-secret account identity from local storage first. This
+    // lets an already-signed-in account render its own cached state in airplane
+    // mode while Supabase's token refresh is stalled. The cached user never
+    // authorizes network requests; CloudSync stays offline until a real session
+    // and network are available.
+    const localBootstrap = Promise.all([
+      AsyncStorage.getItem(DEMO_MODE_KEY),
+      AsyncStorage.getItem(CACHED_AUTH_IDENTITY_KEY),
+      SUPABASE_SESSION_STORAGE_KEY
+        ? AsyncStorage.getItem(SUPABASE_SESSION_STORAGE_KEY)
+        : Promise.resolve(null),
+    ]).then(([demoMode, cachedIdentity, storedSupabaseSession]) => {
+      explicitDemoMode = demoMode === 'true';
+      const restored =
+        parseCachedAuthIdentity(cachedIdentity) ??
+        parseSupabaseStoredAuthUser(storedSupabaseSession);
+      cachedBootstrapUser = restored as User | null;
+      if (!mounted) return;
+      if (explicitDemoMode) {
+        setStatus('demo');
+        return;
+      }
+      if (cachedBootstrapUser) {
+        previousUserIdRef.current = cachedBootstrapUser.id;
+        setOfflineUser(cachedBootstrapUser);
+        setStatus('signedIn');
+        if (!cachedIdentity)
+          void AsyncStorage.setItem(
+            CACHED_AUTH_IDENTITY_KEY,
+            cachedAuthIdentityPayload(cachedBootstrapUser),
+          ).catch(() => undefined);
+      }
+    });
+    // Bound only the presentation wait. A late local/session result still wins.
+    const startupFallback = setTimeout(() => {
+      if (!mounted) return;
+      if (cachedBootstrapUser && !explicitDemoMode) {
+        setOfflineUser(cachedBootstrapUser);
+        setStatus('signedIn');
+      } else setStatus(explicitDemoMode ? 'demo' : 'signedOut');
+    }, Platform.OS === 'web' ? 2500 : NATIVE_SESSION_WAIT_MS);
+    const sessionRequest = supabase.auth.getSession();
+    void Promise.all([localBootstrap, sessionRequest])
+      .then(([, result]) => {
         if (!mounted) return;
         clearTimeout(startupFallback);
-        const nextSession = result.data.session;
-        setSession(nextSession);
-        setStatus(nextSession ? 'signedIn' : demoMode === 'true' ? 'demo' : 'signedOut');
+        if (result.error) {
+          if (!cachedBootstrapUser && !explicitDemoMode)
+            setStatus('signedOut');
+          return;
+        }
+        if (result.data.session) rememberSession(result.data.session);
+        else if (networkUnavailableRef.current && cachedBootstrapUser) {
+          setOfflineUser(cachedBootstrapUser);
+          setStatus('signedIn');
+        } else confirmSignedOut(explicitDemoMode);
       })
       .catch(() => {
         clearTimeout(startupFallback);
-        if (mounted) setStatus('signedOut');
+        if (!mounted) return;
+        if (cachedBootstrapUser && !explicitDemoMode) {
+          setOfflineUser(cachedBootstrapUser);
+          setStatus('signedIn');
+        } else setStatus(explicitDemoMode ? 'demo' : 'signedOut');
       });
 
     const authSubscription = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
-      setSession(nextSession);
       if (nextSession) {
-        setAuthError(null);
-        AsyncStorage.removeItem(DEMO_MODE_KEY).catch(() => undefined);
-        setStatus('signedIn');
-      } else {
-        AsyncStorage.getItem(DEMO_MODE_KEY)
-          .then((demoMode) => setStatus(demoMode === 'true' ? 'demo' : 'signedOut'))
-          .catch(() => setStatus('signedOut'));
+        rememberSession(nextSession);
+        return;
       }
+      void localBootstrap.then(() => {
+        if (!mounted) return;
+        // A network failure or stalled INITIAL_SESSION is not a sign-out. Keep
+        // the local account usable until Supabase confirms an explicit sign-out
+        // or an online no-session result.
+        if (
+          event !== 'SIGNED_OUT' &&
+          networkUnavailableRef.current &&
+          cachedBootstrapUser &&
+          !explicitDemoMode
+        ) {
+          setSession(null);
+          setOfflineUser(cachedBootstrapUser);
+          setStatus('signedIn');
+          return;
+        }
+        confirmSignedOut(explicitDemoMode);
+      });
     });
 
     const acceptUrl = (url: string | null) => {
@@ -131,6 +295,85 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!supabase) throw new Error('Cloud accounts are not configured for this build.');
     return supabase;
   }, []);
+
+  useEffect(() => {
+    if (
+      !supabase ||
+      !networkConfirmedAvailable ||
+      session ||
+      !offlineUser ||
+      reconnectSessionRef.current
+    )
+      return;
+
+    let active = true;
+    const cachedUserId = offlineUser.id;
+    const queuePriorIdentityCleanup = () => {
+      // Append the push identity barrier before publishing another account or
+      // signed-out state. This mirrors the auth-event path above and prevents
+      // an old account cleanup from unregistering a newly restored token.
+      let pushCleanupError: unknown;
+      const pushCleanup = unregisterCurrentDevicePushToken(cachedUserId).catch(
+        (error) => {
+          pushCleanupError = error;
+        },
+      );
+      void (async () => {
+        try {
+          await cancelAllManagedLocalNotifications(cachedUserId);
+          await pushCleanup;
+          if (pushCleanupError) throw pushCleanupError;
+        } catch {
+          // The durable unregister marker is retained for the next authorized
+          // reconnect if the previous account can no longer reach its row.
+        } finally {
+          releasePushRegistrationFence(cachedUserId);
+        }
+      })();
+    };
+
+    let attempt: Promise<void>;
+    attempt = (async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (!active || error) return;
+      const restored = data.session;
+      if (restored) {
+        if (restored.user.id !== cachedUserId) queuePriorIdentityCleanup();
+        previousUserIdRef.current = restored.user.id;
+        setSession(restored);
+        setOfflineUser(null);
+        setAuthError(null);
+        setStatus('signedIn');
+        await Promise.all([
+          AsyncStorage.removeItem(DEMO_MODE_KEY),
+          AsyncStorage.setItem(
+            CACHED_AUTH_IDENTITY_KEY,
+            cachedAuthIdentityPayload(restored.user),
+          ),
+        ]).catch(() => undefined);
+        return;
+      }
+
+      // A confirmed-online, successful no-session read is an authoritative
+      // sign-out. A timeout/error above intentionally leaves cached UI intact.
+      queuePriorIdentityCleanup();
+      previousUserIdRef.current = null;
+      setSession(null);
+      setOfflineUser(null);
+      setStatus('signedOut');
+      await AsyncStorage.removeItem(CACHED_AUTH_IDENTITY_KEY).catch(
+        () => undefined,
+      );
+    })();
+    reconnectSessionRef.current = attempt;
+    void attempt.finally(() => {
+      if (reconnectSessionRef.current === attempt)
+        reconnectSessionRef.current = null;
+    });
+    return () => {
+      active = false;
+    };
+  }, [networkConfirmedAvailable, offlineUser, session]);
   const reportAuthError = useCallback(
     (error: unknown) => setAuthError(readableAuthError(error)),
     [],
@@ -140,7 +383,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     configured: cloudConfigured,
     status,
     session,
-    user: session?.user ?? null,
+    user: session?.user ?? offlineUser,
     passwordRecovery,
     authError,
     clearAuthError: () => setAuthError(null),
@@ -247,21 +490,43 @@ export function AuthProvider({ children }: PropsWithChildren) {
     },
     continueInDemo: async () => {
       await AsyncStorage.setItem(DEMO_MODE_KEY, 'true');
+      setOfflineUser(null);
       setStatus('demo');
     },
     useCloudAccount: async () => {
       await AsyncStorage.removeItem(DEMO_MODE_KEY);
-      if (!session) setStatus('signedOut');
+      if (session || offlineUser) setStatus('signedIn');
+      else setStatus('signedOut');
     },
     signOut: async () => {
       const client = requireClient();
-      await AsyncStorage.removeItem(DEMO_MODE_KEY);
-      const { error } = await client.auth.signOut();
-      if (error) throw error;
-      setSession(null);
-      setStatus('signedOut');
+      await AsyncStorage.multiRemove([
+        DEMO_MODE_KEY,
+        CACHED_AUTH_IDENTITY_KEY,
+      ]);
+      const userId = session?.user.id ?? offlineUser?.id;
+      setOfflineUser(null);
+      try {
+        if (userId) {
+          await cancelAllManagedLocalNotifications(userId);
+          await unregisterCurrentDevicePushToken(userId).catch((error) => {
+            console.warn(
+              '[auth] Push-token cleanup will continue after sign-out:',
+              readableAuthError(error),
+            );
+          });
+        } else {
+          await cancelAllManagedLocalNotifications();
+        }
+        const { error } = await client.auth.signOut();
+        if (error) throw error;
+        setSession(null);
+        setStatus('signedOut');
+      } finally {
+        if (userId) releasePushRegistrationFence(userId);
+      }
     },
-  }), [authError, passwordRecovery, reportAuthError, requireClient, session, status]);
+  }), [authError, offlineUser, passwordRecovery, reportAuthError, requireClient, session, status]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

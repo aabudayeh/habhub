@@ -211,6 +211,24 @@ const responseMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const notificationMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608140001_group_notification_events.sql",
+  ),
+  "utf8",
+);
+const notificationActivation = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608140002_activate_group_notification_events.sql",
+  ),
+  "utf8",
+);
 const hook = fs.readFileSync(
   path.join(root, "src", "cloud", "useGroupChallenges.ts"),
   "utf8",
@@ -238,10 +256,6 @@ const challengeEditor = fs.readFileSync(
 );
 const sendPush = fs.readFileSync(
   path.join(root, "supabase", "functions", "send-push", "index.ts"),
-  "utf8",
-);
-const cloudSync = fs.readFileSync(
-  path.join(root, "src", "cloud", "CloudSyncProvider.tsx"),
   "utf8",
 );
 const groupScreen = fs.readFileSync(
@@ -309,13 +323,30 @@ assert.doesNotMatch(
   /sendGroupChallengeStartedPush[\s\S]{0,450}Promise\.all/,
   "challenge-start notifications must use one server-side fan-out",
 );
-assert.match(sendPush, /payload\.category==='challenge'/);
-assert.match(sendPush, /expectedEventKey/);
-assert.match(sendPush, /accepted\.includes\(user\.id\)/);
-assert.match(sendPush, /const copy=challengePushCopy\(challengeEvent/);
-assert.match(sendPush, /payload\.titles=copy\.titles;payload\.bodies=copy\.bodies/);
-assert.match(sendPush, /members\.in\('user_id',challengeRecipientIds\?\?\[\]\)/);
-assert.match(sendPush, /payload\.category==='winner'\|\|payload\.category==='challenge'/);
+assert.match(sendPush, /legacyCommittedCanonicalEvent/);
+assert.match(sendPush, /challenge\.creator_id === dispatcherId/);
+assert.match(sendPush, /acceptedIds\.includes\(dispatcherId\)/);
+assert.match(sendPush, /canonical\.category === "challenge"/);
+assert.match(sendPush, /challengePushCopy/);
+assert.match(sendPush, /event\.audience === "challenge_participants"/);
+assert.match(sendPush, /settings\.challenges \?\? settings\.badgesAndWinners \?\? true/);
+assert.match(notificationMigration, /create table if not exists public\.group_notification_events/);
+assert.match(notificationMigration, /create or replace function public\.emit_group_challenge_feed_events/);
+assert.match(
+  notificationMigration,
+  /cross join lateral unnest\(challenge\.participant_ids\)[\s\S]{0,160}join public\.group_members membership[\s\S]{0,220}membership\.status = 'active'/,
+  "the challenge-feed backfill must skip stale or inactive participant UUIDs",
+);
+assert.doesNotMatch(
+  notificationMigration.slice(
+    notificationMigration.indexOf("create or replace function public.emit_group_challenge_feed_events"),
+    notificationMigration.indexOf("create or replace function public.emit_group_membership_push_event"),
+  ),
+  /push_dispatch_events/,
+  "the expand-phase challenge feed trigger must never emit push rows",
+);
+assert.match(notificationActivation, /drop trigger if exists group_challenges_emit_feed_events/);
+assert.match(notificationActivation, /execute function public\.emit_group_challenge_notification_events/);
 assert.match(
   progress,
   /result\.mode === "exact" && hasData/,
@@ -411,9 +442,9 @@ assert.doesNotMatch(
   "dragging the palette must stay local until Apply to avoid repeated group writes",
 );
 assert.match(
-  cloudSync,
-  /membership-approved:\$\{groupId\}:\$\{userId\}:\$\{Date\.now\(\)\}[\s\S]*audience: "user"[\s\S]*recipientId: userId[\s\S]*Your request was approved/,
-  "an accepted member must receive the existing targeted approval notification",
+  notificationMigration,
+  /if old\.status = 'pending' and new\.status = 'active'[\s\S]{0,120}v_actor_id <> new\.user_id then[\s\S]{0,120}v_event_type := 'membership_approved';[\s\S]{0,120}v_audience := 'user';[\s\S]{0,120}v_recipient_id := new\.user_id;[\s\S]{0,240}v_body := 'Your request was approved\./,
+  "the canonical membership trigger must target the accepted member with approval copy",
 );
 
 console.log(

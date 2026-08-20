@@ -1,8 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
-import * as Notifications from "expo-notifications";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   AppText as Text,
@@ -22,90 +21,14 @@ import {
   formatActivityTimer,
 } from "@/src/domain/activityTimer";
 import { dateKey } from "@/src/domain/date";
+import {
+  cancelActivityTimerAlerts,
+  syncActivityTimerAlerts,
+} from "@/src/notifications/activityTimerAlerts";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { ActivityTimer } from "@/src/types";
-
-async function cancelTimerNotifications(timer?: ActivityTimer) {
-  if (!timer || Platform.OS === "web") return;
-  const ids = [
-    timer.notificationId,
-    ...(timer.notificationIds ?? []),
-  ].filter((id): id is string => Boolean(id));
-  await Promise.all(
-    ids.map((id) =>
-      Notifications.cancelScheduledNotificationAsync(id).catch(
-        () => undefined,
-      ),
-    ),
-  );
-}
-
-async function scheduleTimerNotifications({
-  title,
-  mode,
-  targetSeconds,
-  elapsedSeconds,
-  alertMinutes,
-  translate,
-}: {
-  title: string;
-  mode: ActivityTimer["mode"];
-  targetSeconds?: number;
-  elapsedSeconds: number;
-  alertMinutes: number[];
-  translate: (source: string) => string;
-}) {
-  if (Platform.OS === "web")
-    return { notificationId: undefined, notificationIds: [] };
-  const permission = await Notifications.requestPermissionsAsync();
-  if (!permission.granted)
-    return { notificationId: undefined, notificationIds: [] };
-  const notificationIds = await Promise.all(
-    [...new Set(alertMinutes)]
-      .filter((minutes) => minutes > 0 && minutes * 60 > elapsedSeconds)
-      .filter(
-        (minutes) =>
-          mode !== "countdown" ||
-          !targetSeconds ||
-          minutes * 60 < targetSeconds,
-      )
-      .map((minutes) =>
-        Notifications.scheduleNotificationAsync({
-          content: {
-            title: translate(`${title} · ${minutes} min`),
-            body: translate("Your timed activity is still running."),
-            data: { route: "/timer" },
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-            seconds: Math.max(1, Math.round(minutes * 60 - elapsedSeconds)),
-          },
-        }),
-      ),
-  );
-  const remaining =
-    mode === "countdown"
-      ? Math.max(0, (targetSeconds ?? 0) - elapsedSeconds)
-      : 0;
-  const notificationId =
-    mode === "countdown" && remaining >= 1
-      ? await Notifications.scheduleNotificationAsync({
-          content: {
-            title: translate(`${title} complete`),
-            body: translate("Your activity timer has finished."),
-            sound: "default",
-            data: { route: "/timer" },
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-            seconds: Math.max(1, Math.round(remaining)),
-          },
-        })
-      : undefined;
-  return { notificationId, notificationIds };
-}
 
 export default function ActivityTimerPage() {
   const tutorialSandbox = useTutorialSandboxActive();
@@ -124,7 +47,7 @@ export default function ActivityTimerPage() {
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const { language, t } = useLocalization();
+  const { language } = useLocalization();
   const timers = useMemo(
     () =>
       state.activityTimers?.length
@@ -207,18 +130,8 @@ export default function ActivityTimerPage() {
     if (!metric)
       return Alert.alert("Choose a timed tracker", "Add one first if needed.");
     const targetSeconds = mode === "countdown" ? targetMinutes * 60 : undefined;
-    const notifications = tutorialSandbox
-      ? { notificationId: undefined, notificationIds: [] }
-      : await scheduleTimerNotifications({
-      title: localizeMetricName(language, metric),
-      mode,
-      targetSeconds,
-      elapsedSeconds: 0,
-      alertMinutes,
-      translate: t,
-    });
     const id = `timer-${Date.now().toString(36)}`;
-    setActivityTimer({
+    const nextTimer: ActivityTimer = {
       id,
       metricId: metric.id,
       mode,
@@ -228,6 +141,25 @@ export default function ActivityTimerPage() {
       status: "running",
       accumulatedSeconds: 0,
       laps: [],
+    };
+    const notifications = tutorialSandbox
+      ? { notificationId: undefined, notificationIds: [] }
+      :
+          (
+            await syncActivityTimerAlerts(
+              {
+                ...state,
+                activityTimers: [
+                  ...timers.filter((item) => item.id !== id),
+                  nextTimer,
+                ],
+                activeTimer: nextTimer,
+              },
+              { requestPermission: true },
+            )
+          )[id] ?? { notificationId: undefined, notificationIds: [] };
+    setActivityTimer({
+      ...nextTimer,
       ...notifications,
     });
     if (tutorialSandbox)
@@ -240,7 +172,8 @@ export default function ActivityTimerPage() {
   };
   const pause = async () => {
     if (!timer) return;
-    if (!tutorialSandbox) await cancelTimerNotifications(timer);
+    if (!tutorialSandbox)
+      await cancelActivityTimerAlerts(timer, state.currentUserId);
     setActivityTimer({
       ...timer,
       accumulatedSeconds: activityTimerElapsedSeconds(timer),
@@ -252,21 +185,31 @@ export default function ActivityTimerPage() {
   };
   const resume = async () => {
     if (!timer || !metric) return;
-    const notifications = tutorialSandbox
-      ? { notificationId: undefined, notificationIds: [] }
-      : await scheduleTimerNotifications({
-      title: localizeMetricName(language, metric),
-      mode: timer.mode,
-      targetSeconds: timer.targetSeconds,
-      elapsedSeconds: timer.accumulatedSeconds,
-      alertMinutes,
-      translate: t,
-    });
-    setActivityTimer({
+    const nextTimer: ActivityTimer = {
       ...timer,
       startedAt: new Date().toISOString(),
       status: "running",
       pausedAt: undefined,
+      notificationId: undefined,
+      notificationIds: [],
+    };
+    const notifications = tutorialSandbox
+      ? { notificationId: undefined, notificationIds: [] }
+      :
+          (
+            await syncActivityTimerAlerts(
+              {
+                ...state,
+                activityTimers: timers.map((item) =>
+                  item.id === timer.id ? nextTimer : item,
+                ),
+                activeTimer: nextTimer,
+              },
+              { requestPermission: true },
+            )
+          )[timer.id] ?? { notificationId: undefined, notificationIds: [] };
+    setActivityTimer({
+      ...nextTimer,
       ...notifications,
     });
   };
@@ -286,7 +229,8 @@ export default function ActivityTimerPage() {
   };
   const finish = async (target = timer) => {
     if (!target) return;
-    if (!tutorialSandbox) await cancelTimerNotifications(target);
+    if (!tutorialSandbox)
+      await cancelActivityTimerAlerts(target, state.currentUserId);
     const seconds =
       target.mode === "countdown"
         ? Math.min(

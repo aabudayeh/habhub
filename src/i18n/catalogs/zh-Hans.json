@@ -2376,5 +2376,17 @@
   "Minutes spent in focused work. Log time manually or use the activity timer to understand your routine.": "专注工作所花费的时间。手动记录时间或使用活动计时器来了解您的日常活动。",
   "Time spent using apps and the screen. Android can estimate it with Usage Access; web and unsupported devices can log it manually.": "使用应用程序和屏幕所花费的时间。 Android可以通过Usage Access来估计；网络和不支持的设备可以手动记录。",
   "Close Today view picker": "关闭今日视图选择器",
-  "Open Today view picker": "打开今日视图选择器"
+  "Open Today view picker": "打开今日视图选择器",
+  "Macros": "宏量营养素",
+  "Shown macros": "显示的宏量营养素",
+  "Protein, carbs, and fat for this date range": "此日期范围内的蛋白质、碳水化合物和脂肪",
+  "Percentages show each selected macro’s share of macro calories.": "百分比表示各所选宏量营养素占宏量营养素热量的比例。",
+  "Bars show daily intake or daily average": "柱形显示每日摄入量或日均值",
+  "No macro details were available in food entries for this range.": "此范围内的食物记录没有可用的宏量营养素详情。",
+  "Macro calorie percentages": "宏量营养素热量百分比",
+  "Double-tap a meal to edit its time": "双击餐食可修改时间",
+  "Double tap to edit this meal time": "双击可修改这餐的时间",
+  "Edit meal time": "编辑餐食时间",
+  "Only the time changes. Calories, nutrition, source, and sharing stay the same.": "只修改时间。热量、营养、来源和共享设置保持不变。",
+  "Save time": "保存时间"
 }

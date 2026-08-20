@@ -1,4 +1,5 @@
 import { DefaultTheme, ThemeProvider } from "@react-navigation/native";
+import { useNetInfo } from "@react-native-community/netinfo";
 import { Image } from "expo-image";
 import {
   Redirect,
@@ -8,11 +9,11 @@ import {
 } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
-import "@/src/notifications/workoutTimer";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState as NativeAppState,
   ActivityIndicator,
+  InteractionManager,
   Platform,
   StyleSheet,
   View,
@@ -46,6 +47,7 @@ import { LocalizationProvider } from "@/src/i18n";
 import { WebDocumentMetadata } from "@/src/i18n/WebDocumentMetadata";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
 import { shouldWaitForOnboardingAuthority } from "@/src/domain/onboarding";
+import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { ScreenTimeSyncBridge } from "@/src/screenTime/ScreenTimeSyncBridge";
 import { WidgetSnapshotBridge } from "@/src/widgets/WidgetSnapshotBridge";
 import {
@@ -56,7 +58,12 @@ import {
   palette,
 } from "@/src/theme";
 import {
+  allowPushRegistrationForAccount,
+  cancelAllManagedLocalNotifications,
+  disablePushNotifications,
+  hasPendingPushDisable,
   syncCycleNotifications,
+  syncAllLocalNotifications,
   syncGoalNotifications,
   syncGymNotifications,
   syncProductivityNotifications,
@@ -64,6 +71,12 @@ import {
   recoverPushRegistrationOnForeground,
   updatePushPreferences,
 } from "@/src/notifications/push";
+import { subscribeLocalNotificationRefresh } from "@/src/notifications/localRefresh";
+import { resumeManagedLocalNotifications } from "@/src/notifications/localScheduling";
+import { resumeLiveActivityTimerNotifications } from "@/src/notifications/liveTimer";
+import { resumeWorkoutTimerNotifications } from "@/src/notifications/workoutTimer";
+import { syncActivityTimerAlerts } from "@/src/notifications/activityTimerAlerts";
+import { automaticFastProgress } from "@/src/domain/fasting";
 
 const theme = {
   ...DefaultTheme,
@@ -117,6 +130,7 @@ function AppLocalizationBridge() {
 
 function RootNavigator() {
   const auth = useAuth();
+  const network = useNetInfo();
   const tutorial = useTutorial();
   const tutorialActive = Boolean(tutorial.activeSession);
   const cloudSyncStatus = useCloudSyncStatus();
@@ -149,6 +163,43 @@ function RootNavigator() {
     state.settings.onboardingComplete ||
     (onboardingMarker?.accountId === onboardingAccountId &&
       onboardingMarker.complete);
+  const localNotificationsReady =
+    hydrated &&
+    onboardingDone &&
+    (auth.status === "demo" ||
+      (auth.status === "signedIn" &&
+        auth.user?.id === state.currentUserId));
+  const localNotificationSchedulingEnabled =
+    localNotificationsReady &&
+    state.settings.notifications.pushEnabled;
+  const localNotificationCleanupKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !localNotificationsReady ||
+      tutorialActive ||
+      Platform.OS === "web"
+    )
+      return;
+    const accountKey = auth.user?.id ?? `demo:${state.currentUserId}`;
+    if (state.settings.notifications.pushEnabled) {
+      localNotificationCleanupKey.current = null;
+      resumeManagedLocalNotifications(state.currentUserId);
+      resumeLiveActivityTimerNotifications(state.currentUserId);
+      resumeWorkoutTimerNotifications(state.currentUserId);
+      return;
+    }
+    if (localNotificationCleanupKey.current === accountKey) return;
+    localNotificationCleanupKey.current = accountKey;
+    void cancelAllManagedLocalNotifications(auth.user?.id).catch(
+      () => undefined,
+    );
+  }, [
+    auth.user?.id,
+    localNotificationsReady,
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
+    tutorialActive,
+  ]);
   useEffect(() => {
     if (onboardingDone && !state.settings.onboardingComplete)
       updateSettings({ onboardingComplete: true });
@@ -171,9 +222,73 @@ function RootNavigator() {
   );
   const cycleStateRef = useRef(state);
   cycleStateRef.current = state;
-  const cycleNotificationKey = `${cycleSignature}|${state.currentUserId}|${state.settings.notifications.pushEnabled}|${state.settings.notifications.cyclePredictions}|${state.settings.notifications.cyclePhaseUpdates}|${state.settings.notifications.cycleReminderDays}`;
+  const activityTimerNotificationKey = useMemo(
+    () =>
+      JSON.stringify({
+        user: state.currentUserId,
+        timers: (state.activityTimers?.length
+          ? state.activityTimers
+          : state.activeTimer
+            ? [state.activeTimer]
+            : []
+        ).map((timer) => [
+          timer.id,
+          timer.metricId,
+          timer.mode,
+          timer.targetSeconds,
+          timer.startedAt,
+          timer.status,
+          timer.accumulatedSeconds,
+        ]),
+        alertMinutes: state.settings.activityTimerAlertMinutes,
+        enabled: state.settings.notifications.pushEnabled,
+        language: state.settings.language,
+        metricLabels: state.metrics.map((metric) => [
+          metric.id,
+          metric.name,
+        ]),
+      }),
+    [
+      state.activeTimer,
+      state.activityTimers,
+      state.currentUserId,
+      state.metrics,
+      state.settings.activityTimerAlertMinutes,
+      state.settings.language,
+      state.settings.notifications.pushEnabled,
+    ],
+  );
   useEffect(() => {
-    if (tutorialActive) return;
+    if (!localNotificationSchedulingEnabled || tutorialActive) return;
+    const timer = setTimeout(
+      () =>
+        void syncActivityTimerAlerts(cycleStateRef.current).catch(
+          () => undefined,
+        ),
+      600,
+    );
+    return () => clearTimeout(timer);
+  }, [
+    activityTimerNotificationKey,
+    localNotificationSchedulingEnabled,
+    tutorialActive,
+  ]);
+  const cycleNotificationKey = JSON.stringify({
+    cycleSignature,
+    user: state.currentUserId,
+    language: state.settings.language,
+    notifications: {
+      pushEnabled: state.settings.notifications.pushEnabled,
+      cyclePredictions: state.settings.notifications.cyclePredictions,
+      cyclePhaseUpdates: state.settings.notifications.cyclePhaseUpdates,
+      cycleReminderDays: state.settings.notifications.cycleReminderDays,
+      quietHoursEnabled: state.settings.notifications.quietHoursEnabled,
+      quietHoursStart: state.settings.notifications.quietHoursStart,
+      quietHoursEnd: state.settings.notifications.quietHoursEnd,
+    },
+  });
+  useEffect(() => {
+    if (!localNotificationSchedulingEnabled || tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncCycleNotifications(cycleStateRef.current).catch(
@@ -182,41 +297,82 @@ function RootNavigator() {
       1200,
     );
     return () => clearTimeout(timer);
-  }, [cycleNotificationKey, tutorialActive]);
+  }, [cycleNotificationKey, localNotificationSchedulingEnabled, tutorialActive]);
   const goalReminderKey = useMemo(
-    () =>
-      JSON.stringify({
+    () => {
+      const recentFloor = dateWithOffsetFrom(dateKey(), -2);
+      return JSON.stringify({
         user: state.currentUserId,
         periods: state.trackedGoalPeriods,
-        reminders: state.metrics.map((metric) => [
-          metric.id,
-          metric.activeFrom,
-          metric.goalSchedule,
-          metric.reminder,
-          metric.reminders,
-        ]),
-        notifications: {
-          pushEnabled: state.settings.notifications.pushEnabled,
-          reminders: state.settings.notifications.reminders,
-          quietHoursEnabled:
-            state.settings.notifications.quietHoursEnabled,
-          quietHoursStart: state.settings.notifications.quietHoursStart,
-          quietHoursEnd: state.settings.notifications.quietHoursEnd,
+        metrics: state.metrics,
+        semantics: {
+          notifications: state.settings.notifications,
+          language: state.settings.language,
+          dayEndTime: state.settings.dayEndTime,
+          energyProfile: state.settings.energyProfile,
+          memberEnergyProfile:
+            state.energyProfiles?.[state.currentUserId],
+          baselineCalories: state.settings.baselineCalories,
+          fastingRuntimeByMetric: state.settings.fastingRuntimeByMetric,
+          vacationPeriods: state.settings.vacationPeriods,
         },
-      }),
+        recentCompletionInputs: {
+          entries: state.entries
+            .filter(
+              (entry) =>
+                entry.userId === state.currentUserId &&
+                entry.localDate >= recentFloor,
+            )
+            .map((entry) => [
+              entry.id,
+              entry.metricId,
+              entry.localDate,
+              entry.value,
+              entry.recordedAt,
+            ]),
+          statuses: (state.dailyMetricStatuses ?? [])
+            .filter(
+              (status) =>
+                status.userId === state.currentUserId &&
+                status.localDate >= recentFloor,
+            )
+            .map((status) => [
+              status.metricId,
+              status.localDate,
+              status.goalReached,
+              status.exactValue,
+              status.goalEligible,
+            ]),
+          gym: (state.gymSessions ?? [])
+            .filter(
+              (session) =>
+                session.userId === state.currentUserId &&
+                session.localDate >= recentFloor,
+            )
+            .map((session) => [session.id, session.recordedAt]),
+          todos: (state.todos ?? []).map((todo) => [
+            todo.id,
+            todo.completedAt,
+            todo.completedDates,
+            todo.skippedDates,
+          ]),
+        },
+      });
+    },
     [
       state.currentUserId,
       state.metrics,
-      state.settings.notifications.pushEnabled,
-      state.settings.notifications.reminders,
-      state.settings.notifications.quietHoursEnabled,
-      state.settings.notifications.quietHoursStart,
-      state.settings.notifications.quietHoursEnd,
+      state.energyProfiles,
+      state.entries,
+      state.dailyMetricStatuses,
+      state.gymSessions,
+      state.todos,
+      state.settings,
       state.trackedGoalPeriods,
     ],
   );
   useEffect(() => {
-    if (tutorialActive) return;
+    if (!localNotificationSchedulingEnabled || tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncGoalNotifications(cycleStateRef.current).catch(
@@ -224,8 +380,44 @@ function RootNavigator() {
         ),
       1800,
     );
-    return () => clearTimeout(timer);
-  }, [goalReminderKey, tutorialActive]);
+    const now = new Date();
+    const schedulingState = cycleStateRef.current;
+    const nextFastingCompletion = schedulingState.metrics
+      .filter((metric) => Boolean(metric.fastingSettings))
+      .flatMap((metric) => {
+        const progress = automaticFastProgress(
+          schedulingState,
+          schedulingState.currentUserId,
+          now,
+          metric.id,
+        );
+        const startedAt = progress.startedAt
+          ? new Date(progress.startedAt).getTime()
+          : Number.NaN;
+        const completionAt =
+          startedAt + progress.targetMinutes * 60 * 1000;
+        return progress.active && completionAt > now.getTime()
+          ? [completionAt]
+          : [];
+      })
+      .sort((left, right) => left - right)[0];
+    const fastingCompletionTimer = nextFastingCompletion
+      ? setTimeout(
+          () =>
+            void syncGoalNotifications(cycleStateRef.current).catch(
+              () => undefined,
+            ),
+          Math.min(
+            2_147_000_000,
+            Math.max(1_000, nextFastingCompletion - now.getTime() + 1_000),
+          ),
+        )
+      : undefined;
+    return () => {
+      clearTimeout(timer);
+      if (fastingCompletionTimer) clearTimeout(fastingCompletionTimer);
+    };
+  }, [goalReminderKey, localNotificationSchedulingEnabled, tutorialActive]);
   const gymNotificationKey = useMemo(
     () =>
       JSON.stringify({
@@ -250,17 +442,19 @@ function RootNavigator() {
           state.settings.notifications.gymReminders,
           state.settings.notifications.gymAchievements,
           state.settings.notifications.gymReminderDays,
+          state.settings.language,
         ],
       }),
     [
       state.currentUserId,
       state.gymSessions,
+      state.settings.language,
       state.settings.notifications,
       state.settings.showGym,
     ],
   );
   useEffect(() => {
-    if (tutorialActive) return;
+    if (!localNotificationSchedulingEnabled || tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncGymNotifications(cycleStateRef.current).catch(
@@ -269,7 +463,7 @@ function RootNavigator() {
       1800,
     );
     return () => clearTimeout(timer);
-  }, [gymNotificationKey, tutorialActive]);
+  }, [gymNotificationKey, localNotificationSchedulingEnabled, tutorialActive]);
   const productivityNotificationKey = useMemo(
     () =>
       JSON.stringify({
@@ -277,6 +471,7 @@ function RootNavigator() {
         todos: state.todos,
         reminders: state.calendarReminders,
         enabled: state.settings.notifications.pushEnabled,
+        language: state.settings.language,
         todoReminders: state.settings.notifications.todoReminders,
         quiet: [
           state.settings.notifications.quietHoursEnabled,
@@ -287,12 +482,13 @@ function RootNavigator() {
     [
       state.calendarReminders,
       state.currentUserId,
+      state.settings.language,
       state.settings.notifications,
       state.todos,
     ],
   );
   useEffect(() => {
-    if (tutorialActive) return;
+    if (!localNotificationSchedulingEnabled || tutorialActive) return;
     const timer = setTimeout(
       () =>
         void syncProductivityNotifications(cycleStateRef.current).catch(
@@ -301,7 +497,53 @@ function RootNavigator() {
       1800,
     );
     return () => clearTimeout(timer);
-  }, [productivityNotificationKey, tutorialActive]);
+  }, [productivityNotificationKey, localNotificationSchedulingEnabled, tutorialActive]);
+  useEffect(() => {
+    if (
+      !localNotificationSchedulingEnabled ||
+      tutorialActive ||
+      Platform.OS === "web"
+    )
+      return;
+    let active = true;
+    let interactionTask: { cancel: () => void } | undefined;
+    let interactionFallback: ReturnType<typeof setTimeout> | undefined;
+    const refreshLocalSchedules = () => {
+      if (!active) return;
+      void syncAllLocalNotifications(cycleStateRef.current).catch(
+        () => undefined,
+      );
+    };
+    const unsubscribeRefresh = subscribeLocalNotificationRefresh(
+      refreshLocalSchedules,
+    );
+    const refreshAfterInteractions = () => {
+      interactionTask?.cancel();
+      if (interactionFallback) clearTimeout(interactionFallback);
+      let completed = false;
+      const run = () => {
+        if (completed) return;
+        completed = true;
+        if (interactionFallback) clearTimeout(interactionFallback);
+        refreshLocalSchedules();
+      };
+      interactionTask = InteractionManager.runAfterInteractions(run);
+      interactionFallback = setTimeout(run, 1500);
+    };
+    const foregroundSubscription = NativeAppState.addEventListener(
+      "change",
+      (nextState) => {
+        if (nextState === "active") refreshAfterInteractions();
+      },
+    );
+    return () => {
+      active = false;
+      interactionTask?.cancel();
+      if (interactionFallback) clearTimeout(interactionFallback);
+      unsubscribeRefresh();
+      foregroundSubscription.remove();
+    };
+  }, [localNotificationSchedulingEnabled, tutorialActive]);
   const pushRegistrationUserId = auth.user?.id;
   const pushRegistrationKey = useMemo(
     () =>
@@ -316,6 +558,7 @@ function RootNavigator() {
           metricIds: state.settings.notifications.metricIds,
           chatMessages: state.settings.notifications.chatMessages,
           groupMembership: state.settings.notifications.groupMembership,
+          challenges: state.settings.notifications.challenges,
           badgesAndWinners:
             state.settings.notifications.badgesAndWinners,
           quietHoursEnabled:
@@ -336,6 +579,7 @@ function RootNavigator() {
       state.settings.notifications.metricIds,
       state.settings.notifications.chatMessages,
       state.settings.notifications.groupMembership,
+      state.settings.notifications.challenges,
       state.settings.notifications.badgesAndWinners,
       state.settings.notifications.quietHoursEnabled,
       state.settings.notifications.quietHoursStart,
@@ -346,21 +590,60 @@ function RootNavigator() {
   );
   useEffect(() => {
     if (
+      !hydrated ||
       Platform.OS === "web" ||
-      tutorialActive ||
+      !pushRegistrationUserId ||
+      state.settings.notifications.pushEnabled
+    )
+      return;
+    // Account settings may turn off on another device while this phone is
+    // offline. Local cleanup is immediate; the helper retains a durable
+    // server-token deletion marker until any signed-in device reconnects.
+    void disablePushNotifications(pushRegistrationUserId).catch(
+      () => undefined,
+    );
+  }, [
+    hydrated,
+    network.isConnected,
+    network.isInternetReachable,
+    pushRegistrationUserId,
+    state.settings.notifications.pushEnabled,
+  ]);
+  useEffect(() => {
+    if (
+      !hydrated ||
+      Platform.OS === "web" ||
       !pushRegistrationUserId ||
       !state.settings.notifications.pushEnabled
     )
       return;
     const userId = pushRegistrationUserId;
     let active = true;
-    const refresh = () =>
-      updatePushPreferences(
+    const refresh = async () => {
+      if (await hasPendingPushDisable(userId)) {
+        // The user may have killed the process after the durable off marker was
+        // written but before the settings snapshot reached disk. Do not let a
+        // stale hydrated `true` recreate alarms or a remote token.
+        if (active)
+          updateSettings({
+            notifications: {
+              ...cycleStateRef.current.settings.notifications,
+              pushEnabled: false,
+            },
+          });
+        await disablePushNotifications(userId).catch(() => undefined);
+        return false;
+      }
+      await allowPushRegistrationForAccount(userId);
+      if (!active) return false;
+      await updatePushPreferences(
         userId,
         cycleStateRef.current.settings.notifications,
         cycleStateRef.current.settings.language,
         () => active,
-      ).catch(() => undefined);
+      );
+      return active;
+    };
     const recover = () =>
       recoverPushRegistrationOnForeground(
         userId,
@@ -368,23 +651,32 @@ function RootNavigator() {
         cycleStateRef.current.settings.language,
         () => active,
       ).catch(() => undefined);
-    void refresh();
-    void recover();
+    const refreshAndRecover = () =>
+      refresh()
+        .then((allowed) => (allowed ? recover() : undefined))
+        .catch(() => undefined);
+    void refreshAndRecover();
     const foregroundSubscription = NativeAppState.addEventListener(
       "change",
       (nextState) => {
         if (nextState !== "active") return;
-        void recover();
+        void refreshAndRecover();
       },
     );
     const subscription = Notifications.addPushTokenListener(
       () =>
-        void refreshPushTokenRegistration(
-          userId,
-          cycleStateRef.current.settings.notifications,
-          cycleStateRef.current.settings.language,
-          () => active,
-        ).catch(() => undefined),
+        void refresh()
+          .then((allowed) =>
+            allowed
+              ? refreshPushTokenRegistration(
+                  userId,
+                  cycleStateRef.current.settings.notifications,
+                  cycleStateRef.current.settings.language,
+                  () => active,
+                )
+              : undefined,
+          )
+          .catch(() => undefined),
     );
     return () => {
       active = false;
@@ -395,10 +687,11 @@ function RootNavigator() {
     pushRegistrationUserId,
     pushRegistrationKey,
     state.settings.notifications.pushEnabled,
-    tutorialActive,
+    hydrated,
+    updateSettings,
   ]);
   useEffect(() => {
-    if (tutorialActive || Platform.OS === "web") return;
+    if (Platform.OS === "web") return;
     const open = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;
       const route = data?.route;
@@ -433,7 +726,7 @@ function RootNavigator() {
       if (response) open(response);
     });
     return () => subscription.remove();
-  }, [tutorialActive]);
+  }, []);
   const safeDefaultLandingPage = useMemo(() => {
     const target = state.settings.defaultLandingPage ?? "index";
     const visible = {
