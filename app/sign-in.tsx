@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { Redirect, useLocalSearchParams } from "expo-router";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -15,7 +15,7 @@ import {
   AppText as Text,
   AppTextInput as TextInput,
 } from "@/src/components/AppText";
-import { LocalizedAlert as Alert } from "@/src/i18n";
+import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 
 import { Button, Card, Screen } from "@/src/components/ui";
 import { useAuth } from "@/src/auth/AuthProvider";
@@ -32,6 +32,7 @@ export default function SignInScreen() {
   const auth = useAuth();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const t = useTranslation();
   const params = useLocalSearchParams<{ invite?: string }>();
   const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
@@ -341,6 +342,18 @@ export default function SignInScreen() {
         </Text>
         <Pressable
           accessibilityRole="link"
+          accessibilityLabel={t("Read Privacy & Health Data Policy")}
+          onPress={() => router.push("/privacy" as never)}
+          style={styles.policyLink}
+        >
+          <Text
+            style={[styles.policyLinkText, { color: accent }]}
+          >
+            {t("Privacy & Health Data Policy")}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
           onPress={() => void Linking.openURL("https://platform.fatsecret.com")}
           style={styles.attribution}
         >
@@ -480,6 +493,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginHorizontal: 24,
     marginTop: 14,
+  },
+  policyLink: { alignSelf: "center", minHeight: 44, justifyContent: "center" },
+  policyLinkText: {
+    fontSize: 9,
+    lineHeight: 14,
+    fontWeight: "900",
+    textDecorationLine: "underline",
   },
   attribution: { alignSelf: "center", paddingHorizontal: 12, paddingVertical: 7 },
   attributionText: { fontSize: 8, textAlign: "center", textDecorationLine: "underline" },

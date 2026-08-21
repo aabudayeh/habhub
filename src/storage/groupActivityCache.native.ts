@@ -1,6 +1,7 @@
 import * as SQLite from "expo-sqlite";
 
 import {
+  GROUP_ACTIVITY_CACHE_SCHEMA_VERSION,
   type GroupActivityCachePayload,
   type GroupActivityCachePruneOptions,
   type GroupActivityCacheWriteOptions,
@@ -16,6 +17,10 @@ const DATABASE_NAME = "metric-rally-cache.db";
 
 type CacheRow = {
   payload: string;
+};
+
+type CacheAuditRow = CacheRow & {
+  group_id: string;
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | undefined;
@@ -36,6 +41,8 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
           );
           CREATE INDEX IF NOT EXISTS group_activity_cache_updated_at_idx
             ON group_activity_cache(updated_at DESC);
+          DELETE FROM group_activity_cache
+            WHERE schema_version <> ${GROUP_ACTIVITY_CACHE_SCHEMA_VERSION};
         `);
         return database;
       },
@@ -64,6 +71,20 @@ export async function readGroupActivityCache(
       normalizedGroupId,
     );
     return null;
+  }
+  const sanitized = JSON.stringify(stored);
+  if (sanitized !== row.payload) {
+    await database.runAsync(
+      `UPDATE group_activity_cache
+       SET schema_version = ?, remote_version = ?, updated_at = ?, payload = ?
+       WHERE group_id = ? AND payload = ?`,
+      stored.schemaVersion,
+      stored.payload.version ?? null,
+      stored.writtenAt,
+      sanitized,
+      normalizedGroupId,
+      row.payload,
+    );
   }
   return stored.payload;
 }
@@ -111,6 +132,41 @@ export async function writeGroupActivityCache(
        )`,
       maxGroups,
     );
+  });
+}
+
+export async function purgeLegacyGroupActivityCaches(): Promise<void> {
+  const database = await getDatabase();
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    await transaction.runAsync(
+      "DELETE FROM group_activity_cache WHERE schema_version <> ?",
+      GROUP_ACTIVITY_CACHE_SCHEMA_VERSION,
+    );
+    const rows = await transaction.getAllAsync<CacheAuditRow>(
+      "SELECT group_id, payload FROM group_activity_cache",
+    );
+    for (const row of rows) {
+      const stored = parseStoredGroupActivityCache(row.payload, row.group_id);
+      if (!stored) {
+        await transaction.runAsync(
+          "DELETE FROM group_activity_cache WHERE group_id = ?",
+          row.group_id,
+        );
+        continue;
+      }
+      const sanitized = JSON.stringify(stored);
+      if (sanitized === row.payload) continue;
+      await transaction.runAsync(
+        `UPDATE group_activity_cache
+         SET schema_version = ?, remote_version = ?, updated_at = ?, payload = ?
+         WHERE group_id = ?`,
+        stored.schemaVersion,
+        stored.payload.version ?? null,
+        stored.writtenAt,
+        sanitized,
+        row.group_id,
+      );
+    }
   });
 }
 

@@ -34,6 +34,7 @@ import { ScreenTimeAccessCard } from "@/src/screenTime/ScreenTimeAccessCard";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { HealthDataType, SyncMode } from "@/src/types";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { GoogleHealthWebCard } from "@/src/components/GoogleHealthWebCard";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 
 const syncModes: {
@@ -502,7 +503,7 @@ export default function SettingsScreen() {
       <TutorialTarget id="settings-health">
         <SectionHeader title="Connected health data" />
       </TutorialTarget>
-      <Card>
+      {isWebHealthBridge ? <GoogleHealthWebCard /> : <Card>
         <View style={styles.heading}>
           <View style={styles.icon}>
             <Ionicons
@@ -823,12 +824,11 @@ export default function SettingsScreen() {
               : null}
           </>
         ) : null}
-      </Card>
+      </Card>}
       <Text style={styles.disclaimer}>
-        Imported values are group-visible by default, retain their source app,
-        and can still be made private. MyFitnessPal, Samsung Health, and Google
-        Fit data arrive through Apple Health or Health Connect when those apps
-        share it.
+        {isWebHealthBridge
+          ? "Google Health imports follow each tracker's current configured visibility. Group, status, or leaderboard sharing follows that setting. You can change it in the tracker's settings."
+          : "Imported values are group-visible by default, retain their source app, and can still be made private. MyFitnessPal, Samsung Health, and Google Fit data arrive through Apple Health or Health Connect when those apps share it."}
       </Text>
 
       {!isWebHealthBridge ? (

@@ -7,6 +7,12 @@ import * as Linking from 'expo-linking';
 
 import { createPathBoundedFetch } from '@/src/lib/boundedFetch';
 import { AppState } from '@/src/types';
+import {
+  createPostgrestPrivacySchemaFetch,
+  getPrivacyAwareUserSnapshot,
+  getPrivacyAwareUserSnapshotMetadata,
+  syncPrivacyAwareUserSnapshot,
+} from '@/src/cloud/snapshotPrivacy';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -21,15 +27,29 @@ export const cloudConfigured = Boolean(url && publishableKey);
 // keep their independent latency/abort behaviour.
 const MAX_CONCURRENT_REST_REQUESTS = 3;
 const nativeFetch = globalThis.fetch.bind(globalThis);
+// Authenticated snapshots and group projections can contain health data.
+// Prevent the browser HTTP cache from retaining any Supabase response; the
+// app's explicit, privacy-filtered AsyncStorage layer is the only offline
+// persistence boundary.
+const uncachedSupabaseFetch: typeof globalThis.fetch = (input, init) =>
+  nativeFetch(
+    input,
+    Platform.OS === 'web' ? { ...init, cache: 'no-store' } : init,
+  );
+const privacyAwareSupabaseFetch = createPostgrestPrivacySchemaFetch(
+  uncachedSupabaseFetch,
+);
 const boundedSupabaseFetch = createPathBoundedFetch(
-  nativeFetch,
+  privacyAwareSupabaseFetch,
   MAX_CONCURRENT_REST_REQUESTS,
   '/rest/v1/',
 );
 
 export const supabase = cloudConfigured
   ? createClient(url!, publishableKey!, {
-      global: { fetch: boundedSupabaseFetch },
+      global: {
+        fetch: boundedSupabaseFetch,
+      },
       auth: {
         ...(Platform.OS !== 'web'
           ? { storage: AsyncStorage, lock: processLock }
@@ -201,23 +221,19 @@ export async function saveSnapshot(state: AppState) {
   if (!supabase) throw new Error('Cloud backup is not configured.');
   const { data } = await supabase.auth.getUser();
   if (!data.user) throw new Error('Sign in before syncing.');
-  const { error } = await supabase.from('user_snapshots').upsert({
-    user_id: data.user.id,
-    payload: { ...state, photos: [] },
-    updated_at: new Date().toISOString(),
-  });
-  if (error) throw error;
+  const metadata = await getPrivacyAwareUserSnapshotMetadata(supabase);
+  await syncPrivacyAwareUserSnapshot(
+    supabase,
+    { ...state, photos: [] },
+    metadata?.revision ?? 0,
+    `backup:${data.user.id}`,
+  );
 }
 
 export async function loadSnapshot(): Promise<AppState | null> {
   if (!supabase) throw new Error('Cloud backup is not configured.');
   const { data: authData } = await supabase.auth.getUser();
   if (!authData.user) throw new Error('Sign in before syncing.');
-  const { data, error } = await supabase
-    .from('user_snapshots')
-    .select('payload')
-    .eq('user_id', authData.user.id)
-    .maybeSingle();
-  if (error) throw error;
-  return (data?.payload as AppState | undefined) ?? null;
+  const snapshot = await getPrivacyAwareUserSnapshot<AppState>(supabase);
+  return snapshot?.payload ?? null;
 }

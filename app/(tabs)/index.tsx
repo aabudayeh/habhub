@@ -28,6 +28,7 @@ import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import Svg, { Rect } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
+import { GoogleHealthTodayDisclosure } from "@/src/components/GoogleHealthTodayDisclosure";
 import {
   LocalizedAlert as Alert,
   useLocale,
@@ -64,6 +65,7 @@ import {
   dateWithOffsetFrom,
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
+import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
 import {
   canBeTrackedGoal,
   effectiveGoalTarget,
@@ -293,6 +295,14 @@ function Today() {
     });
   }, []);
   const today = dateKey();
+  // A prior Google reading can affect today's latest/journey/formula goals.
+  // Keep animation/completion snapshots memory-only whenever this account has
+  // Google rows, not only when one happens to carry today's local date.
+  const googleHealthTodayMemoryOnly = state.entries.some(
+    (entry) =>
+      entry.userId === state.currentUserId &&
+      isGoogleHealthEntry(entry),
+  );
   const todayHistoryRange = state.settings.todayHistoryRange ?? "week";
   const todayHistoryDates = useMemo(
     () =>
@@ -629,6 +639,17 @@ function Today() {
           goalLiquidMotion.stopAnimation();
         };
       }
+      if (googleHealthTodayMemoryOnly) {
+        void AsyncStorage.removeItem(goalLiquidStorageKey).catch(
+          () => undefined,
+        );
+        setLiquidAnimatedGoalIds([]);
+        return () => {
+          cancelled = true;
+          goalLiquidReveal.stopAnimation();
+          goalLiquidMotion.stopAnimation();
+        };
+      }
       AsyncStorage.getItem(goalLiquidStorageKey)
         .then((saved) => {
           if (cancelled) return;
@@ -711,6 +732,7 @@ function Today() {
       goalLiquidReveal,
       goalLiquidSnapshotKey,
       goalLiquidStorageKey,
+      googleHealthTodayMemoryOnly,
       heroAllMet,
       reduceMotion,
       showGoalsToday,
@@ -764,6 +786,13 @@ function Today() {
       let clearConfetti: ReturnType<typeof setTimeout> | undefined;
       let settleGold: ReturnType<typeof setTimeout> | undefined;
       if (tutorialSandbox) return;
+      if (googleHealthTodayMemoryOnly) {
+        void AsyncStorage.removeItem(celebrationStorageKey).catch(
+          () => undefined,
+        );
+        setGoldPresentation("settled");
+        return;
+      }
       AsyncStorage.getItem(celebrationStorageKey)
         .then((saved) => {
           if (cancelled) return;
@@ -844,7 +873,13 @@ function Today() {
         celebration.setValue(0);
         setConfettiVisible(false);
       };
-    }, [celebration, celebrationStorageKey, goldGoalOrder.length, tutorialSandbox]),
+    }, [
+      celebration,
+      celebrationStorageKey,
+      goldGoalOrder.length,
+      googleHealthTodayMemoryOnly,
+      tutorialSandbox,
+    ]),
   );
   const celebrateTodo = useCallback(
     (todoId: string) => {
@@ -1268,6 +1303,13 @@ function Today() {
         </AnimatedPressable>
         </TutorialTarget>
         </View>
+        <GoogleHealthTodayDisclosure
+          hidden={
+            editing ||
+            tutorialSandbox ||
+            Boolean(tutorial.activeSession)
+          }
+        />
         {showGoalsToday &&
         (tutorialCompletionPreview || (goals.allMet && !allGoalsDismissed)) ? (
           <TutorialTarget id="today-all-complete">

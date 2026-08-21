@@ -599,6 +599,10 @@ function metricHealthType(metric: MetricDefinition | undefined) {
   );
 }
 
+function nativeGoogleOwnershipPriority(entry: MetricEntry) {
+  return entry.sourceProvider === "google_health" ? 1 : 0;
+}
+
 function entryAsHealthRecord(
   entry: MetricEntry,
   type: HealthDataType,
@@ -734,6 +738,7 @@ export function reconcileImportedHealthEntries(
 
     const sorted = [...group].sort(
       (a, b) =>
+        nativeGoogleOwnershipPriority(a) - nativeGoogleOwnershipPriority(b) ||
         healthSourcePriority(a.sourceOrigin, healthType) -
           healthSourcePriority(b.sourceOrigin, healthType) ||
         b.recordedAt.localeCompare(a.recordedAt),
@@ -754,6 +759,68 @@ export function reconcileImportedHealthEntries(
     reconciled.push(...keep);
   }
   return [...untouched, ...reconciled];
+}
+
+/**
+ * Makes Health Connect/HealthKit authoritative over a mirrored Google Health
+ * row regardless of which source arrived first. Only provider-coexistence
+ * metric/day buckets are inspected; conservative semantic matching keeps
+ * genuinely separate meals, workouts, and measurements.
+ */
+export function reconcileGoogleHealthNativeMirrors(
+  entries: MetricEntry[],
+  metrics: MetricDefinition[],
+  sourcePreferences?: Record<string, HealthSourcePreference>,
+  ownerUserId?: string,
+) {
+  const providersByKey = new Map<
+    string,
+    { google: boolean; native: boolean }
+  >();
+  const bucketKey = (entry: MetricEntry) =>
+    `${entry.userId}\u0000${entry.metricId}\u0000${entry.localDate}`;
+  for (const entry of entries) {
+    if (ownerUserId && entry.userId !== ownerUserId) continue;
+    const google = entry.sourceProvider === "google_health";
+    const native =
+      entry.sourceProvider === "health_connect" ||
+      entry.sourceProvider === "apple_health";
+    if (!google && !native) continue;
+    const key = bucketKey(entry);
+    const providers = providersByKey.get(key) ?? {
+      google: false,
+      native: false,
+    };
+    providers.google ||= google;
+    providers.native ||= native;
+    providersByKey.set(key, providers);
+  }
+  const coexistenceKeys = new Set(
+    [...providersByKey]
+      .filter(([, providers]) => providers.google && providers.native)
+      .map(([key]) => key),
+  );
+  if (!coexistenceKeys.size) return entries;
+
+  const affected = entries.filter((entry) =>
+    coexistenceKeys.has(bucketKey(entry)),
+  );
+  const affectedSet = new Set(affected);
+  const reconciled = reconcileImportedHealthEntries(
+    affected,
+    metrics,
+    sourcePreferences,
+    ownerUserId,
+  );
+  if (
+    reconciled.length === affected.length &&
+    reconciled.every((entry) => affectedSet.has(entry))
+  )
+    return entries;
+  return [
+    ...entries.filter((entry) => !affectedSet.has(entry)),
+    ...reconciled,
+  ];
 }
 
 export function mergeHealthEntries(

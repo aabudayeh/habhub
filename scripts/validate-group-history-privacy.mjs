@@ -24,6 +24,9 @@ const accountCollections = read("src/domain/accountCollections.ts");
 const groupActivityCacheTypes = read(
   "src/storage/groupActivityCache.types.ts",
 );
+const groupActivityCacheNative = read(
+  "src/storage/groupActivityCache.native.ts",
+);
 const health = read("src/domain/health.ts");
 const foregroundHealth = read("src/health/HealthSyncProvider.tsx");
 const backgroundHealth = read("src/health/background.native.ts");
@@ -437,8 +440,13 @@ assert.match(
 );
 assert.match(
   groupActivityCacheTypes,
-  /GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 2/,
+  /GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 3/,
   "the privacy release must invalidate pre-fence scoped activity caches",
+);
+assert.match(
+  groupActivityCacheNative,
+  /SELECT group_id, payload FROM group_activity_cache[\s\S]*if \(sanitized === row\.payload\) continue;[\s\S]*UPDATE group_activity_cache[\s\S]*payload = \?/,
+  "Android cleanup must rewrite sensitive same-schema SQLite payloads, not merely filter them at read time",
 );
 assert.match(
   provider,

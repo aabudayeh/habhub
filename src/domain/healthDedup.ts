@@ -62,6 +62,16 @@ export function authoritativeStepEntries<
   const latest = (items: readonly TEntry[]) =>
     items.reduce<TEntry | undefined>((current, candidate) => {
       if (!current) return candidate;
+      const currentProviderPriority = stepProviderPriority(
+        current.sourceProvider,
+      );
+      const candidateProviderPriority = stepProviderPriority(
+        candidate.sourceProvider,
+      );
+      if (candidateProviderPriority !== currentProviderPriority)
+        return candidateProviderPriority > currentProviderPriority
+          ? candidate
+          : current;
       const currentRevision = String(
         current.sourceUpdatedAt ?? current.recordedAt ?? "",
       );
@@ -504,12 +514,25 @@ export function mergeLocalCurrentDayDeviceStepEntries<
 
 type CanonicalStepEntry = {
   sourceRecordId?: unknown;
+  sourceProvider?: unknown;
   sourceUpdatedAt?: unknown;
   recordedAt?: unknown;
   value?: unknown;
 };
 
-/** Selects the newest canonical aggregate and ignores legacy writer totals. */
+/** A phone's native health repository outranks the web-account rollup. */
+function stepProviderPriority(provider: unknown) {
+  const normalized = String(provider ?? "");
+  if (
+    normalized === "health_connect" ||
+    normalized === "apple_health" ||
+    normalized === "healthkit"
+  )
+    return 2;
+  return normalized === "google_health" ? 1 : 0;
+}
+
+/** Selects a native canonical aggregate before a newer Google web rollup. */
 export function selectCanonicalHealthConnectStepAggregate<
   TEntry extends CanonicalStepEntry,
 >(entries: readonly TEntry[]): TEntry | undefined {
@@ -521,6 +544,14 @@ export function selectCanonicalHealthConnectStepAggregate<
     )
     .reduce<TEntry | undefined>((selected, entry) => {
       if (!selected) return entry;
+      const selectedProviderPriority = stepProviderPriority(
+        selected.sourceProvider,
+      );
+      const entryProviderPriority = stepProviderPriority(entry.sourceProvider);
+      if (entryProviderPriority !== selectedProviderPriority)
+        return entryProviderPriority > selectedProviderPriority
+          ? entry
+          : selected;
       const selectedRevision = String(
         selected.sourceUpdatedAt ?? selected.recordedAt,
       );

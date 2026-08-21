@@ -21,6 +21,7 @@ const cloudProvider = fs.readFileSync(
 );
 const groupCloud = fs.readFileSync("src/cloud/groupCloud.ts", "utf8");
 const appProvider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
+const snapshotPrivacy = fs.readFileSync("src/cloud/snapshotPrivacy.ts", "utf8");
 
 assert.match(
   appProvider,
@@ -144,9 +145,9 @@ assert.match(
   "cloud context publication must wait for a real-touch quiet window",
 );
 assert.match(
-  cloudProvider,
-  /select\("revision, updated_at, device_id, schema_version"\)/,
-  "cold start must probe a tiny revision row before downloading snapshot JSON",
+  snapshotPrivacy,
+  /rpc\("get_user_snapshot_metadata",[\s\S]{0,120}p_client_schema_version/,
+  "cold start must capability-gate a tiny revision RPC before downloading snapshot JSON",
 );
 const startupCursorBranch = cloudProvider.indexOf(
   "const cachedSnapshotIsCurrent =",

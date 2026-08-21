@@ -178,7 +178,7 @@ function upgradeNavigationDefaults(
 ): AppState {
   return {
     ...state,
-    version: 26,
+    version: 27,
     settings: {
       ...state.settings,
       ...navigationDefaultsForVersion(state.settings, sourceVersion),
@@ -267,7 +267,7 @@ export function upgradeStateV21(
   };
   const repaired = repairOrphanedGroupMetrics({
     ...state,
-    version: 26,
+    version: 27,
     metrics: withTodo,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
     group,

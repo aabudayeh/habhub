@@ -30,6 +30,7 @@ import {
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
+import { reconcileGoogleHealthNativeMirrors } from "../src/domain/health.ts";
 import {
   HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
   healthPhysicalActivityMigrationKey,
@@ -202,6 +203,130 @@ assert.equal(
   3_435,
   "runtime canonical selection must ignore a lower legacy writer total",
 );
+const nativeAndGoogleCanonicalSteps = [
+  {
+    id: "native-54",
+    metricId: "steps",
+    userId: "owner",
+    localDate: "2026-08-13",
+    source: "imported",
+    sourceProvider: "health_connect",
+    sourceRecordId: "aggregate:steps:2026-08-13",
+    recordedAt: "2026-08-13T08:00:00.000Z",
+    sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
+    value: 54,
+  },
+  {
+    id: "google-27",
+    metricId: "steps",
+    userId: "owner",
+    localDate: "2026-08-13",
+    source: "imported",
+    sourceProvider: "google_health",
+    sourceRecordId: "aggregate:steps:2026-08-13",
+    recordedAt: "2026-08-13T08:05:00.000Z",
+    sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+    value: 27,
+  },
+];
+assert.equal(
+  selectCanonicalHealthConnectStepAggregate(nativeAndGoogleCanonicalSteps)
+    ?.value,
+  54,
+  "a later lower Google rollup must not replace the native canonical Steps total",
+);
+assert.equal(
+  authoritativeStepEntries(nativeAndGoogleCanonicalSteps)[0]?.value,
+  54,
+  "rendered Steps must prefer Health Connect over a later lower Google rollup",
+);
+const stepMetric = {
+  id: "steps",
+  healthMapping: { dataType: "steps", field: "value" },
+};
+for (const coexistenceOrder of [
+  nativeAndGoogleCanonicalSteps,
+  [...nativeAndGoogleCanonicalSteps].reverse(),
+]) {
+  const reconciled = reconcileGoogleHealthNativeMirrors(
+    coexistenceOrder,
+    [stepMetric],
+    undefined,
+    "owner",
+  );
+  assert.deepEqual(
+    reconciled.map((entry) => [entry.sourceProvider, entry.value]),
+    [["health_connect", 54]],
+    "native Steps ownership must remove a mirrored Google fallback in either arrival order",
+  );
+}
+
+const foodMetric = {
+  id: "food",
+  healthMapping: { dataType: "nutrition", field: "value" },
+};
+const googleMeal = {
+  id: "google-meal",
+  metricId: "food",
+  userId: "owner",
+  localDate: "2026-08-13",
+  recordedAt: "2026-08-13T12:00:00.000Z",
+  value: 500,
+  label: "Lunch",
+  nutrition: { proteinG: 30, carbsG: 55, fatG: 18 },
+  visibility: "group",
+  source: "imported",
+  sourceProvider: "google_health",
+  sourceRecordId: "google-health:nutrition:meal",
+  sourceOrigin: "Google Health API",
+};
+const nativeMeal = {
+  ...googleMeal,
+  id: "native-meal",
+  sourceProvider: "health_connect",
+  sourceRecordId: "health-connect:nutrition:meal",
+  sourceOrigin: "Health Connect",
+};
+const separateMeal = {
+  ...googleMeal,
+  id: "google-dinner",
+  recordedAt: "2026-08-13T18:00:00.000Z",
+  value: 300,
+  label: "Dinner",
+  sourceRecordId: "google-health:nutrition:dinner",
+};
+const manualMeal = {
+  ...googleMeal,
+  id: "manual-snack",
+  recordedAt: "2026-08-13T15:00:00.000Z",
+  value: 100,
+  label: "Snack",
+  source: "manual",
+  sourceProvider: undefined,
+  sourceRecordId: undefined,
+  sourceOrigin: undefined,
+};
+for (const coexistenceOrder of [
+  [googleMeal, nativeMeal, separateMeal, manualMeal],
+  [nativeMeal, googleMeal, separateMeal, manualMeal],
+]) {
+  const reconciled = reconcileGoogleHealthNativeMirrors(
+    coexistenceOrder,
+    [foodMetric],
+    undefined,
+    "owner",
+  );
+  assert.deepEqual(
+    new Set(reconciled.map((entry) => entry.id)),
+    new Set(["native-meal", "google-dinner", "manual-snack"]),
+    "native ownership must remove only the mirrored Google meal and preserve disjoint/manual rows",
+  );
+  assert.equal(
+    reconciled.reduce((sum, entry) => sum + Number(entry.value || 0), 0),
+    900,
+    "coexisting native and Google imports must not double the mirrored meal total",
+  );
+}
 
 const requiredHistoricalStart = new Date(2025, 7, 13, 0, 0);
 const rangeCoverageNow = new Date(2026, 7, 13, 12, 0);

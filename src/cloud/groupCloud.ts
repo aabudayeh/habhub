@@ -36,6 +36,9 @@ import {
   vacationDates,
 } from "@/src/domain/vacation";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import {
+  withoutGoogleHealthEntries,
+} from "@/src/domain/googleHealthLocalPrivacy";
 import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import { hasHealthImportIdentity } from "@/src/domain/healthDedup";
 import {
@@ -44,6 +47,7 @@ import {
   type SharedMetricPrivacyFence,
 } from "@/src/domain/sharedMetricPrivacy";
 import { supabase } from "@/src/lib/supabase";
+import { getPrivacyAwareUserSnapshotMetadata } from "@/src/cloud/snapshotPrivacy";
 import { translateUiText } from "@/src/i18n";
 import {
   assertPushDeliveryComplete,
@@ -159,6 +163,7 @@ type CloudActivityStatusRow = {
   exact_value?: number | string | null;
   has_data?: boolean | null;
   privacy_projection_version?: number | string | null;
+  source_provider?: DailyMetricStatus["sourceProvider"] | null;
   updated_at?: string | null;
   account_revision?: number | string | null;
 };
@@ -179,6 +184,7 @@ type CloudDailyStatusUpsertRow = {
   has_data: boolean;
   account_revision: number;
   privacy_projection_version: 2;
+  source_provider: DailyMetricStatus["sourceProvider"] | null;
 };
 
 type GroupActivitySnapshot = {
@@ -387,8 +393,25 @@ function buildCloudDailyStatusRows(
   statusDates: string[],
   accountRevision: number,
 ): CloudDailyStatusUpsertRow[] {
+  // A compact row is Google-derived only when removing Google rows changes
+  // that metric's published value/goal projection. This propagates through
+  // formulas, latest-value carry-forward, and mixed aggregates without
+  // misclassifying unrelated manual/native trackers from the same day.
   const exactProjectionState = sharingProjectionState(state, "exact");
   const statusProjectionState = sharingProjectionState(state, "status");
+  const cacheSafeProjection = (projection: AppState) => {
+    const entries = withoutGoogleHealthEntries(projection.entries);
+    return entries === projection.entries
+      ? projection
+      : { ...projection, entries };
+  };
+  const cacheSafeExactProjectionState = cacheSafeProjection(
+    exactProjectionState,
+  );
+  const cacheSafeStatusProjectionState = cacheSafeProjection(
+    statusProjectionState,
+  );
+  const cacheSafePrivateProjectionState = cacheSafeProjection(state);
   const entryVisibilities = entryVisibilityIndex(
     ownedEntries,
     state.currentUserId,
@@ -514,6 +537,68 @@ function buildCloudDailyStatusRows(
           state.currentUserId,
           localDate,
         );
+        const cacheSafeProjectionState =
+          exactShared
+            ? cacheSafeExactProjectionState
+            : statusVisibility === "private"
+              ? cacheSafePrivateProjectionState
+              : statusVisibility === "status"
+                ? cacheSafeStatusProjectionState
+                : cacheSafeExactProjectionState;
+        const cacheSafeValue = safeMetricValue(
+          cacheSafeProjectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const cacheSafeTarget = effectiveGoalTarget(
+          cacheSafeProjectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const cacheSafeReached = scheduledGoalReached(
+          cacheSafeProjectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const cacheSafeScore =
+          Math.min(
+            metricVisualProgress(
+              cacheSafeProjectionState,
+              metric,
+              state.currentUserId,
+              localDate,
+              cacheSafeValue,
+              cacheSafeTarget,
+            ),
+            1,
+          ) * 100;
+        const cacheSafeGoalProgress =
+          (metric.goalProgressMode === "journey"
+            ? metricVisualProgress(
+                cacheSafeProjectionState,
+                metric,
+                state.currentUserId,
+                localDate,
+                cacheSafeValue,
+              )
+            : displayGoalProgress(metric, cacheSafeValue, cacheSafeTarget)) *
+          100;
+        const cacheSafeHasData = hasMetricData(
+          cacheSafeProjectionState,
+          metric,
+          state.currentUserId,
+          localDate,
+        );
+        const googleHealthProjectionAffected =
+          value !== cacheSafeValue ||
+          target !== cacheSafeTarget ||
+          reached !== cacheSafeReached ||
+          rawScore !== cacheSafeScore ||
+          rawGoalProgress !== cacheSafeGoalProgress ||
+          hasData !== cacheSafeHasData;
         return {
           group_id: state.group.id,
           metric_id: idBySlug.get(groupMetric.id),
@@ -540,6 +625,9 @@ function buildCloudDailyStatusRows(
           has_data: hasData,
           account_revision: accountRevision,
           privacy_projection_version: 2,
+          source_provider: googleHealthProjectionAffected
+            ? "google_health"
+            : null,
         };
       }),
   );
@@ -547,7 +635,7 @@ function buildCloudDailyStatusRows(
 
 async function resolveAccountRevision(
   client: SupabaseClient,
-  userId: string,
+  _userId: string,
   knownRevision?: number,
 ) {
   if (
@@ -555,13 +643,8 @@ async function resolveAccountRevision(
     Number(knownRevision) >= 0
   )
     return Number(knownRevision);
-  const result = await client
-    .from("user_snapshots")
-    .select("revision")
-    .eq("user_id", userId)
-    .single();
-  if (result.error) throw result.error;
-  const revision = Number(result.data.revision);
+  const metadata = await getPrivacyAwareUserSnapshotMetadata(client);
+  const revision = Number(metadata?.revision);
   if (!Number.isSafeInteger(revision) || revision < 0)
     throw new Error("Account sync revision is not available yet.");
   return revision;
@@ -1132,6 +1215,7 @@ export async function loadCloudGroupActivity(
         status.has_data === null || status.has_data === undefined
           ? undefined
           : Boolean(status.has_data),
+      sourceProvider: status.source_provider ?? undefined,
       syncedAt: status.updated_at ?? undefined,
       sourceRevision: Number.isFinite(Number(status.account_revision))
         ? Number(status.account_revision)

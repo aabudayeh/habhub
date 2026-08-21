@@ -2,6 +2,9 @@
 
 MetricRally can still run without credentials, but accounts, cross-device sync, real friend groups, private cloud media, and account deletion require Supabase.
 
+The separate Google Health PWA pilot has security-sensitive ordering, Vault,
+subscriber, and acceptance gates in [GOOGLE_HEALTH_WEB_SYNC.md](./GOOGLE_HEALTH_WEB_SYNC.md).
+
 ## 1. Create the Supabase project
 
 Create a project, then copy its project URL and **publishable key** from the Connect panel. Never expose the service-role key in the Expo app.

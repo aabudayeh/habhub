@@ -6,6 +6,7 @@ import type {
   MetricEntry,
   PhotoUpdate,
 } from "@/src/types";
+import { stateWithoutGoogleHealthLocalData } from "./googleHealthLocalPrivacy";
 
 const serializedValueCache = new WeakMap<object, string | undefined>();
 const durableGroupCache = new WeakMap<Group, string>();
@@ -155,6 +156,9 @@ function sameOwnedRowsByReference<T extends { userId: string }>(
  * projection.
  */
 export function localPersistenceChanged(previous: AppState, next: AppState) {
+  if (previous === next) return false;
+  previous = stateWithoutGoogleHealthLocalData(previous);
+  next = stateWithoutGoogleHealthLocalData(next);
   if (previous === next) return false;
   if (
     previous.version !== next.version ||

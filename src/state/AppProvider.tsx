@@ -24,8 +24,19 @@ import {
 import { createInitialState } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import {
+  applyInheritedTrackerVisibility,
+  purgeGoogleHealthAccountData,
+  purgeGoogleHealthEntryFromMemory,
+  rememberGoogleHealthEntryOverrides,
+  stateWithoutGoogleHealthLocalData,
+  withoutGoogleHealthEntryOverrides,
+} from "@/src/domain/googleHealthLocalPrivacy";
 import { advanceAuthoritativeStateFromRender } from "@/src/domain/authoritativeState";
-import { scheduleResponsiveWork } from "@/src/lib/responsiveWork";
+import {
+  scheduleResponsiveWork,
+  waitForResponsiveTurn,
+} from "@/src/lib/responsiveWork";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
   applyImportedFoodFastBreaks,
@@ -42,6 +53,7 @@ import {
 } from "@/src/domain/food";
 import {
   metricIdsForHealthDataTypes,
+  reconcileGoogleHealthNativeMirrors,
   reconcileImportedHealthEntries,
 } from "@/src/domain/health";
 import {
@@ -113,6 +125,7 @@ import {
 
 export const APP_STORAGE_KEY = "paceboard-state-v1";
 const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
+const GOOGLE_HEALTH_CACHE_SCRUB_KEY = "habhub-google-health-cache-scrub-v2";
 const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 
 /**
@@ -134,13 +147,75 @@ export function appAccountStorageKey(accountId: string) {
 
 export async function readPersistedAccountState(accountId: string) {
   try {
-    const saved = await AsyncStorage.getItem(appAccountStorageKey(accountId));
+    const storageKey = appAccountStorageKey(accountId);
+    const saved = await AsyncStorage.getItem(storageKey);
     if (!saved) return null;
     const parsed = JSON.parse(saved) as AppState;
-    return parsed.currentUserId === accountId ? parsed : null;
+    if (parsed.currentUserId !== accountId) return null;
+    const sanitized = stateWithoutGoogleHealthLocalData(parsed);
+    if (sanitized !== parsed)
+      await AsyncStorage.setItem(storageKey, JSON.stringify(sanitized));
+    return sanitized;
   } catch {
     return null;
   }
+}
+
+/** Remove plaintext Google Health rows left by a pre-privacy pilot build. */
+async function scrubLegacyGoogleHealthAppSnapshots(
+  shouldContinue: () => boolean = () => true,
+) {
+  if ((await AsyncStorage.getItem(GOOGLE_HEALTH_CACHE_SCRUB_KEY)) === "done")
+    return;
+  const allKeys = await AsyncStorage.getAllKeys();
+  const keys = allKeys.filter(
+    (key) => key === APP_STORAGE_KEY || key.startsWith(APP_ACCOUNT_STORAGE_KEY_PREFIX),
+  );
+  const derivedCacheKeys = allKeys.filter(
+    (key) =>
+      key === "habhub-progress-milestones-v1" ||
+      key.startsWith("metric-rally-goal-liquid-v3:") ||
+      key.startsWith("metric-rally-celebrations-v2:"),
+  );
+  if (derivedCacheKeys.length) {
+    await AsyncStorage.multiRemove(derivedCacheKeys);
+  }
+  // This is a migration-only sweep for pilot builds. Active snapshots are
+  // sanitized on every read, so inspect dormant account snapshots one at a
+  // time and yield behind real touches instead of parsing every account on
+  // the first interactive launch.
+  for (const key of keys) {
+    if (!shouldContinue()) return;
+    const turn = waitForResponsiveTurn({
+      minimumDelayMs: 80,
+      maximumDelayMs: 8_000,
+      minimumUserQuietMs: 1_800,
+    });
+    await turn.promise;
+    if (!shouldContinue()) return;
+    const saved = await AsyncStorage.getItem(key);
+    if (
+      !saved ||
+      (!saved.includes('"google_health"') &&
+        !saved.includes("google-health:") &&
+        !saved.includes('"googleHealthEntryOverrides"'))
+    )
+      continue;
+    try {
+      const parsed = JSON.parse(saved) as AppState;
+      const sanitized = stateWithoutGoogleHealthLocalData(parsed);
+      if (sanitized !== parsed) {
+        const current = await AsyncStorage.getItem(key);
+        if (current === saved) {
+          await AsyncStorage.setItem(key, JSON.stringify(sanitized));
+        }
+      }
+    } catch {
+      // The ordinary hydration path already tolerates malformed local state.
+    }
+  }
+  if (!shouldContinue()) return;
+  await AsyncStorage.setItem(GOOGLE_HEALTH_CACHE_SCRUB_KEY, "done");
 }
 
 const localPersistenceProjectionCache = new WeakMap<AppState, AppState>();
@@ -154,10 +229,10 @@ function stateForLocalPersistence(state: AppState): AppState {
   // account boundary remains in force after leaving/switching a cloud group so
   // the previous group's values and signed photo URLs cannot survive there.
   const owned = accountOwnedCollections(state);
-  const projected = {
+  const projected = stateWithoutGoogleHealthLocalData({
     ...state,
     ...owned,
-  };
+  });
   localPersistenceProjectionCache.set(state, projected);
   return projected;
 }
@@ -188,13 +263,15 @@ function mergeBackgroundHealthRows(
   importFromDate?: string,
 ) {
   if (stored.currentUserId !== live.currentUserId) return live;
+  const isNativeProvider = (provider: MetricEntry["sourceProvider"]) =>
+    provider === "apple_health" || provider === "health_connect";
   const storedHealth = stored.entries.filter(
     (entry) =>
       entry.userId === live.currentUserId &&
       // Step-fallback energy/distance/duration rows are calculated locally but
       // still carry the native provider. They are part of the same background
       // Health Connect transaction and must resume with the imported rows.
-      Boolean(entry.sourceProvider),
+      isNativeProvider(entry.sourceProvider),
   );
   const replacesBackgroundWindow = Boolean(
     importFromDate && /^\d{4}-\d{2}-\d{2}$/.test(importFromDate),
@@ -205,7 +282,7 @@ function mergeBackgroundHealthRows(
         (entry) =>
           !(
             entry.userId === live.currentUserId &&
-            Boolean(entry.sourceProvider) &&
+            isNativeProvider(entry.sourceProvider) &&
             entry.localDate >= importFromDate!
           ),
       )
@@ -224,10 +301,17 @@ function mergeBackgroundHealthRows(
       changed = true;
     }
   });
-  return changed
+  const mergedEntries = changed ? [...byId.values()] : live.entries;
+  const reconciledEntries = reconcileGoogleHealthNativeMirrors(
+    mergedEntries,
+    live.metrics,
+    live.settings.healthSync.sourcePreferences,
+    live.currentUserId,
+  );
+  return changed || reconciledEntries !== mergedEntries
     ? {
         ...live,
-        entries: [...byId.values()].sort((left, right) =>
+        entries: reconciledEntries.sort((left, right) =>
           left.recordedAt.localeCompare(right.recordedAt),
         ),
       }
@@ -1236,18 +1320,20 @@ function reducer(state: AppState, action: Action): AppState {
           if (remaining.length) pendingFencesByGroup[state.group.id] = remaining;
           else delete pendingFencesByGroup[state.group.id];
         }
+        const entries = next.entries.map((entry) =>
+          entry.userId === state.currentUserId &&
+          entry.metricId === action.metricId
+            ? applyInheritedTrackerVisibility(
+                entry,
+                next.settings.googleHealthEntryOverrides,
+                action.changes.defaultVisibility!,
+                changedAt,
+              )
+            : entry,
+        );
         next = {
           ...next,
-          entries: next.entries.map((entry) =>
-            entry.userId === state.currentUserId &&
-            entry.metricId === action.metricId
-              ? {
-                  ...entry,
-                  visibility: action.changes.defaultVisibility!,
-                  sourceUpdatedAt: changedAt,
-                }
-              : entry,
-          ),
+          entries,
           dailyMetricStatuses: next.dailyMetricStatuses.map((status) =>
             status.userId === state.currentUserId &&
             status.metricId === action.metricId
@@ -1270,6 +1356,9 @@ function reducer(state: AppState, action: Action): AppState {
               : next.photos,
           settings: {
             ...next.settings,
+            // Tracker defaults are inherited policy, not per-entry overrides.
+            // Google rows without an explicit entry choice are normalized to
+            // this value whenever the protected snapshot is reconciled.
             pendingMetricPrivacyFenceIdsByGroup: pendingFencesByGroup,
           },
         };
@@ -1327,6 +1416,10 @@ function reducer(state: AppState, action: Action): AppState {
         ),
         settings: {
           ...withoutMetricSelections(state.settings, removedIds),
+          googleHealthEntryOverrides: withoutGoogleHealthEntryOverrides(
+            state.settings.googleHealthEntryOverrides,
+            new Set(removedEntryIds),
+          ),
           pendingDeletedEntryIds: [
             ...new Set([
               ...(state.settings.pendingDeletedEntryIds ?? []),
@@ -1360,6 +1453,10 @@ function reducer(state: AppState, action: Action): AppState {
           ),
           settings: {
             ...state.settings,
+            googleHealthEntryOverrides: withoutGoogleHealthEntryOverrides(
+              state.settings.googleHealthEntryOverrides,
+              new Set([target.id]),
+            ),
             pendingDeletedEntryIds: [
               ...new Set([
                 ...(state.settings.pendingDeletedEntryIds ?? []),
@@ -1413,6 +1510,13 @@ function reducer(state: AppState, action: Action): AppState {
             ? updated
             : entry,
         ),
+        settings: {
+          ...state.settings,
+          googleHealthEntryOverrides: rememberGoogleHealthEntryOverrides(
+            state.settings.googleHealthEntryOverrides,
+            [updated],
+          ),
+        },
       };
       return reconcileAutomaticFasting(next, [updated]);
     }
@@ -2694,7 +2798,12 @@ function reducer(state: AppState, action: Action): AppState {
         state.metrics,
         state.settings.healthSync.sourcePreferences,
       );
-      const nextEntries = [...unaffected, ...reconciled];
+      const nextEntries = reconcileGoogleHealthNativeMirrors(
+        [...unaffected, ...reconciled],
+        state.metrics,
+        state.settings.healthSync.sourcePreferences,
+        state.currentUserId,
+      );
       const entriesUnchanged =
         nextEntries.length === state.entries.length &&
         nextEntries.every(
@@ -2836,7 +2945,9 @@ type AppContextValue = {
   updateMetric: (metricId: string, changes: Partial<MetricDefinition>) => void;
   deleteMetric: (metricId: string) => void;
   deleteEntry: (entryId: string) => void;
-  updateFoodEntryTime: (entryId: string, clockTime: string) => void;
+  purgeGoogleHealthData: () => Promise<void>;
+  purgeGoogleHealthEntry: (entryId: string) => Promise<void>;
+  updateFoodEntryTime: (entryId: string, clockTime: string) => Promise<void>;
   skipGoal: (metricId: string, localDate: string) => void;
   deletePhoto: (photoId: string) => void;
   setMetricSection: (
@@ -3157,7 +3268,18 @@ export function AppProvider({
     AsyncStorage.getItem(APP_STORAGE_KEY)
       .then(async (saved) => {
         if (saved) {
-          const restored = JSON.parse(saved) as AppState;
+          const parsed = JSON.parse(saved) as AppState;
+          const restored = stateWithoutGoogleHealthLocalData(parsed);
+          // The active account is fail-closed on its direct hydration path.
+          // A legacy pilot row is removed before rendering even though the
+          // broader dormant-account sweep now waits for an interaction-safe
+          // maintenance turn.
+          if (restored !== parsed) {
+            await AsyncStorage.setItem(
+              APP_STORAGE_KEY,
+              JSON.stringify(restored),
+            );
+          }
           const defaults = createInitialState();
           const restoredVersion = Number(restored.version ?? 1);
           const isDefaultDemo =
@@ -3276,7 +3398,7 @@ export function AppProvider({
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 26,
+            version: 27,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -3583,6 +3705,28 @@ export function AppProvider({
 
   useEffect(() => {
     if (!hydrated || ephemeral) return;
+    let cancelled = false;
+    let task: { cancel: () => void } | null = null;
+    const run = () => {
+      task = null;
+      if (cancelled) return;
+      void scrubLegacyGoogleHealthAppSnapshots(() => !cancelled).catch(
+        () => undefined,
+      );
+    };
+    task = scheduleResponsiveWork(run, {
+      minimumDelayMs: 1_200,
+      maximumDelayMs: 30_000,
+      minimumUserQuietMs: 2_000,
+    });
+    return () => {
+      cancelled = true;
+      task?.cancel();
+    };
+  }, [ephemeral, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || ephemeral) return;
     const previous = persistenceObservedStateRef.current;
     persistenceObservedStateRef.current = state;
     if (previous && !localPersistenceChanged(previous, state)) return;
@@ -3880,6 +4024,32 @@ export function AppProvider({
     () => (ephemeral ? Promise.resolve() : persistLatestState(true)),
     [ephemeral, persistLatestState],
   );
+  const purgeGoogleHealthDataAction = useCallback<
+    AppContextValue["purgeGoogleHealthData"]
+  >(() => {
+    const previous = persistenceStateRef.current;
+    const next = purgeGoogleHealthAccountData(previous);
+    // The Edge Function already committed deletion. Apply the authoritative
+    // result without generating a second local deletion outbox, and flush the
+    // now-sanitized cache before reporting success to the user. This explicit
+    // user action renders urgently even though its authority came from cloud.
+    return commitReducedState(next, true, "local");
+  }, [commitReducedState]);
+  const purgeGoogleHealthEntryAction = useCallback<
+    AppContextValue["purgeGoogleHealthEntry"]
+  >(
+    (entryId) => {
+      const next = purgeGoogleHealthEntryFromMemory(
+        persistenceStateRef.current,
+        entryId,
+      );
+      // The Edge Function already committed the dismissal. Do not create a
+      // plaintext id outbox; just remove the row from memory and flush the
+      // cache-safe projection before the UI reports success.
+      return commitReducedState(next, true, "local");
+    },
+    [commitReducedState],
+  );
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -3959,8 +4129,10 @@ export function AppProvider({
         void commitAction({ type: "updateMetric", metricId, changes }),
       deleteMetric: (metricId) => void commitAction({ type: "deleteMetric", metricId }),
       deleteEntry: (entryId) => void commitAction({ type: "deleteEntry", entryId }),
+      purgeGoogleHealthData: purgeGoogleHealthDataAction,
+      purgeGoogleHealthEntry: purgeGoogleHealthEntryAction,
       updateFoodEntryTime: (entryId, clockTime) =>
-        void commitAction({
+        commitAction({
           type: "updateFoodEntryTime",
           entryId,
           clockTime,
@@ -4104,6 +4276,8 @@ export function AppProvider({
       hydrated,
       importHealthEntriesAction,
       localMutationRevision,
+      purgeGoogleHealthDataAction,
+      purgeGoogleHealthEntryAction,
       stageState,
       replaceState,
       state,

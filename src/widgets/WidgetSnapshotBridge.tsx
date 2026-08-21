@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { AppState as NativeAppState, Image } from "react-native";
 
 import { dateKey } from "@/src/domain/date";
+import { stateWithoutGoogleHealthLocalData } from "@/src/domain/googleHealthLocalPrivacy";
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -163,7 +164,10 @@ export function WidgetSnapshotBridge() {
       // HabHub is closed never produces an empty card. After that, no launcher
       // widget means ordinary app updates skip all avatar/history work.
       if (configurations.length === 0 && seededRef.current) return;
-      const currentState = stateRef.current;
+      // Android stores widget JSON in plaintext SharedPreferences. Build only
+      // from the cache-safe projection; Google values continue to render in
+      // the open app but never influence a durable launcher snapshot.
+      const currentState = stateWithoutGoogleHealthLocalData(stateRef.current);
       const currentLocale = localeRef.current;
       const translate = translationRef.current;
       const currentAccent = accentRef.current;

@@ -79,6 +79,7 @@ import {
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { useApp } from "@/src/state/AppProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { AppLanguage, MetricChartStyle, MetricDefinition } from "@/src/types";
 import { cycleForecast } from "@/src/domain/cycle";
@@ -112,10 +113,16 @@ import {
   FoodNutrientId,
   FoodNutrientSummary,
   foodNutritionReport,
+  editFoodEntryClockTime,
   hasFoodNutrientTracker,
   nextFoodNutrientTrackerOrder,
 } from "@/src/domain/food";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
+import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import {
+  GoogleHealthClientError,
+  invokeGoogleHealth,
+} from "@/src/health/googleHealthWeb";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -147,6 +154,7 @@ export default function TrackerDetail() {
   const {
     state,
     deleteEntry,
+    purgeGoogleHealthEntry,
     updateFoodEntryTime,
     deletePhoto,
     skipGoal,
@@ -154,6 +162,7 @@ export default function TrackerDetail() {
     startFast,
     endFast,
   } = useApp();
+  const cloud = useCloudSyncActions();
   const tutorial = useTutorial();
   const locale = useLocale();
   const { language, t } = useLocalization();
@@ -170,6 +179,9 @@ export default function TrackerDetail() {
   const [collapsedEntryDates, setCollapsedEntryDates] = useState<string[]>([]);
   const [editingFoodEntryId, setEditingFoodEntryId] = useState<string>();
   const [foodTimeDraft, setFoodTimeDraft] = useState("12:00");
+  const [foodTimeSaving, setFoodTimeSaving] = useState(false);
+  const [dismissingGoogleEntryId, setDismissingGoogleEntryId] =
+    useState<string>();
   const lastFoodTapRef = useRef<{ entryId: string; at: number } | undefined>(
     undefined,
   );
@@ -307,6 +319,80 @@ export default function TrackerDetail() {
       return;
     lastFoodTapRef.current = undefined;
     openFoodTimeEditor(entry);
+  }
+  async function saveFoodEntryTime() {
+    if (!editingFoodEntry || foodTimeSaving) return;
+    if (!isGoogleHealthEntry(editingFoodEntry)) {
+      await updateFoodEntryTime(editingFoodEntry.id, foodTimeDraft);
+      setEditingFoodEntryId(undefined);
+      return;
+    }
+    const edited = editFoodEntryClockTime(
+      editingFoodEntry,
+      state.currentUserId,
+      foodTimeDraft,
+      new Date().toISOString(),
+    );
+    if (!edited) {
+      Alert.alert("Invalid meal time", "Choose a valid time for this meal day.");
+      return;
+    }
+    if (edited === editingFoodEntry) {
+      setEditingFoodEntryId(undefined);
+      return;
+    }
+    setFoodTimeSaving(true);
+    try {
+      await invokeGoogleHealth("updateEntry", {
+        entryId: editingFoodEntry.id,
+        patch: {
+          recordedAtOverride: edited.recordedAtOverride!,
+          localDate: edited.localDate,
+        },
+      });
+      // The server owns durability. Apply the confirmed choice in memory only;
+      // AppProvider's plaintext projection strips the Google row and override.
+      await updateFoodEntryTime(editingFoodEntry.id, foodTimeDraft);
+      setEditingFoodEntryId(undefined);
+      await cloud.pullLatest().catch(() => undefined);
+    } catch (error) {
+      const signedOut =
+        error instanceof GoogleHealthClientError &&
+        error.code === "sign_in_required";
+      Alert.alert(
+        "Could not save Google Health time",
+        signedOut
+          ? "Sign in again, then retry. Google Health entry edits must be saved online."
+          : "Check your connection and retry. Google Health entry edits must be confirmed by HabHub cloud before they are saved.",
+      );
+    } finally {
+      setFoodTimeSaving(false);
+    }
+  }
+  async function dismissEntry(entry: (typeof entries)[number]) {
+    if (!isGoogleHealthEntry(entry)) {
+      deleteEntry(entry.id);
+      return;
+    }
+    if (dismissingGoogleEntryId) return;
+    setDismissingGoogleEntryId(entry.id);
+    try {
+      await invokeGoogleHealth("dismissEntry", { entryId: entry.id });
+      await purgeGoogleHealthEntry(entry.id);
+      await cloud.pullLatest().catch(() => undefined);
+    } catch (error) {
+      const signedOut =
+        error instanceof GoogleHealthClientError &&
+        error.code === "sign_in_required";
+      Alert.alert(
+        "Could not hide Google Health entry",
+        signedOut
+          ? "Sign in again, then retry."
+          : "Check your connection and retry. Google Health entries are hidden only after HabHub cloud confirms the change.",
+      );
+    } finally {
+      setDismissingGoogleEntryId(undefined);
+    }
   }
   const gymSourceSessions = tracker.gymMapping
     ? (state.gymSessions ?? [])
@@ -1900,7 +1986,7 @@ export default function TrackerDetail() {
                         {
                           text: "Delete",
                           style: "destructive",
-                          onPress: () => deleteEntry(entry.id),
+                          onPress: () => void dismissEntry(entry),
                         },
                       ],
                     )
@@ -2098,11 +2184,15 @@ export default function TrackerDetail() {
         visible={Boolean(editingFoodEntry)}
         animationType="fade"
         statusBarTranslucent
-        onRequestClose={() => setEditingFoodEntryId(undefined)}
+        onRequestClose={() => {
+          if (!foodTimeSaving) setEditingFoodEntryId(undefined);
+        }}
       >
         <Pressable
           style={styles.foodTimeBackdrop}
-          onPress={() => setEditingFoodEntryId(undefined)}
+          onPress={() => {
+            if (!foodTimeSaving) setEditingFoodEntryId(undefined);
+          }}
         >
           <Pressable
             onPress={(event) => event.stopPropagation()}
@@ -2127,23 +2217,35 @@ export default function TrackerDetail() {
               label="Meal time"
               wheelPicker
             />
-            <Text style={[styles.foodTimeNote, { color: colors.muted }]}>Only the time changes. Calories, nutrition, source, and sharing stay the same.</Text>
+            <Text style={[styles.foodTimeNote, { color: colors.muted }]}>
+              Only the time changes. Calories, nutrition, source, and sharing
+              stay the same.
+              {editingFoodEntry && isGoogleHealthEntry(editingFoodEntry)
+                ? " Google Health entry edits require an online cloud confirmation."
+                : ""}
+            </Text>
             <View style={styles.foodTimeActions}>
               <Pressable
+                disabled={foodTimeSaving}
                 onPress={() => setEditingFoodEntryId(undefined)}
                 style={[styles.foodTimeButton, { borderColor: colors.border }]}
               >
                 <Text style={[styles.foodTimeButtonText, { color: colors.muted }]}>Cancel</Text>
               </Pressable>
               <Pressable
-                onPress={() => {
-                  if (!editingFoodEntry) return;
-                  updateFoodEntryTime(editingFoodEntry.id, foodTimeDraft);
-                  setEditingFoodEntryId(undefined);
-                }}
-                style={[styles.foodTimeButton, { backgroundColor: accent }]}
+                disabled={foodTimeSaving}
+                onPress={() => void saveFoodEntryTime()}
+                style={[
+                  styles.foodTimeButton,
+                  {
+                    backgroundColor: accent,
+                    opacity: foodTimeSaving ? 0.65 : 1,
+                  },
+                ]}
               >
-                <Text preserveColor style={styles.foodTimeSaveText}>Save time</Text>
+                <Text preserveColor style={styles.foodTimeSaveText}>
+                  {foodTimeSaving ? "Saving…" : "Save time"}
+                </Text>
               </Pressable>
             </View>
           </Pressable>

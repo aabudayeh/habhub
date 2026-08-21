@@ -13,6 +13,7 @@ import { translateDomainText } from "@/src/i18n/domain";
 import { onboardingBasicTranslationRows } from "@/src/i18n/onboardingBasic";
 import { avatarSimulatorTranslationRows } from "@/src/i18n/avatarSimulator";
 import { tutorialChromeTranslationRows } from "@/src/i18n/tutorialChrome";
+import { googleHealthTranslationRows } from "@/src/i18n/googleHealth";
 import arGenerated from "@/src/i18n/catalogs/ar.json";
 import deGenerated from "@/src/i18n/catalogs/de.json";
 import esGenerated from "@/src/i18n/catalogs/es.json";
@@ -564,6 +565,7 @@ const allTranslationRows = [
   ...avatarSimulatorTranslationRows,
   ...onboardingBasicTranslationRows,
   ...tutorialChromeTranslationRows,
+  ...googleHealthTranslationRows,
   ...templateTranslationRows,
 ] as const;
 

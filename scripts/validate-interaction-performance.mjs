@@ -58,6 +58,38 @@ assert.match(
   /localPersistenceProjectionCache = new WeakMap<AppState, AppState>/,
   "local persistence must reuse privacy-scoped projections for unchanged state",
 );
+const googleHealthLegacyScrub = appProvider.slice(
+  appProvider.indexOf("async function scrubLegacyGoogleHealthAppSnapshots"),
+  appProvider.indexOf(
+    "const localPersistenceProjectionCache",
+    appProvider.indexOf("async function scrubLegacyGoogleHealthAppSnapshots"),
+  ),
+);
+assert.doesNotMatch(
+  googleHealthLegacyScrub,
+  /multiGet\(keys\)/,
+  "the Google Health migration must not load every account snapshot in one startup batch",
+);
+assert.match(
+  googleHealthLegacyScrub,
+  /for \(const key of keys\)[\s\S]*waitForResponsiveTurn\([\s\S]*minimumUserQuietMs: 1_800[\s\S]*AsyncStorage\.getItem\(key\)/,
+  "dormant account privacy scrubbing must be touch-aware and bounded to one snapshot per turn",
+);
+assert.match(
+  appProvider,
+  /AsyncStorage\.getItem\(APP_STORAGE_KEY\)[\s\S]{0,900}stateWithoutGoogleHealthLocalData\(parsed\)/,
+  "the active snapshot must sanitize directly without waiting for the multi-account migration",
+);
+assert.match(
+  appProvider,
+  /scheduleResponsiveWork\(run, \{[\s\S]{0,160}minimumDelayMs: 1_200,[\s\S]{0,160}minimumUserQuietMs: 2_000/,
+  "the broad app-cache migration must start outside launch and active tap frames",
+);
+assert.match(
+  cloudProvider,
+  /scheduleResponsiveWork\(\(\) => \{[\s\S]{0,300}purgeLegacyGroupActivityCaches\(\)[\s\S]{0,220}minimumDelayMs: 1_500,[\s\S]{0,180}minimumUserQuietMs: 2_000/,
+  "the broad group-cache migration must start only on an interaction-safe turn",
+);
 assert.match(
   cloudProvider,
   /snapshotPayloadCache = new WeakMap<AppState, AppState>/,

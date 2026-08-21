@@ -112,6 +112,15 @@ export async function readGroupActivityCache(
     await removeGroupActivityCache(normalizedGroupId).catch(() => undefined);
     return null;
   }
+  const sanitized = JSON.stringify(stored);
+  if (sanitized !== raw) {
+    await enqueueMutation(async () => {
+      const current = await AsyncStorage.getItem(cacheKey(normalizedGroupId));
+      if (current === raw) {
+        await AsyncStorage.setItem(cacheKey(normalizedGroupId), sanitized);
+      }
+    });
+  }
   return stored.payload;
 }
 
@@ -150,6 +159,42 @@ export function writeGroupActivityCache(
         removed.map((item) => cacheKey(item.groupId)),
       );
     }
+  });
+}
+
+/** Drop legacy schema rows and rewrite any defense-in-depth sanitized payloads. */
+export function purgeLegacyGroupActivityCaches(): Promise<void> {
+  return enqueueMutation(async () => {
+    const cacheKeys = (await AsyncStorage.getAllKeys()).filter((key) =>
+      key.startsWith(CACHE_KEY_PREFIX),
+    );
+    if (!cacheKeys.length) {
+      await AsyncStorage.removeItem(CACHE_INDEX_KEY);
+      return;
+    }
+    const rows = await AsyncStorage.multiGet(cacheKeys);
+    const retained: CacheIndexItem[] = [];
+    const removals: string[] = [];
+    const replacements: [string, string][] = [];
+    for (const [key, raw] of rows) {
+      const stored = raw ? parseStoredGroupActivityCache(raw) : null;
+      if (!stored) {
+        removals.push(key);
+        continue;
+      }
+      retained.push({
+        groupId: normalizeGroupId(stored.payload.groupId),
+        writtenAt: stored.writtenAt,
+      });
+      const sanitized = JSON.stringify(stored);
+      if (sanitized !== raw) replacements.push([key, sanitized]);
+    }
+    retained.sort((left, right) =>
+      right.writtenAt.localeCompare(left.writtenAt),
+    );
+    replacements.push([CACHE_INDEX_KEY, JSON.stringify(retained)]);
+    await AsyncStorage.multiSet(replacements);
+    if (removals.length) await AsyncStorage.multiRemove(removals);
   });
 }
 

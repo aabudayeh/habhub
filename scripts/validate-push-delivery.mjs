@@ -237,7 +237,9 @@ assert.match(edge, /settings\.challenges \?\? settings\.badgesAndWinners \?\? tr
 assert.match(edge, /return !Array\.isArray\(ids\) \|\| ids\.includes\(event\.metricId\)/);
 assert.match(edge, /!inQuietHours\(item\.preferences \?\? \{\}\)/);
 assert.doesNotMatch(edge, /deferred\s*:/);
-assert.match(edge, /\.select\("metric_id, local_date, recorded_at, visibility"\)/);
+assert.match(edge, /\.select\("metric_id, local_date, recorded_at, visibility, source_provider"\)/);
+assert.match(edge, /entry\.source_provider === "google_health"/);
+assert.match(edge, /candidate\.source_provider === "google_health"/);
 assert.match(edge, /entry\.recorded_at[\s\S]{0,120}15 \* 60 \* 1000/);
 const phaseAMetricIsFresh = (recordedAt, now) =>
   Number.isFinite(new Date(recordedAt).getTime()) &&

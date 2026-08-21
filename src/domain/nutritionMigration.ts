@@ -73,7 +73,9 @@ export function upgradeNutritionStateV26(
     }));
   return {
     ...state,
-    version: 26,
+    // v26 is the nutrient data migration; v27 is the current append-only
+    // privacy-capability boundary and performs no additional data mutation.
+    version: 27,
     metrics: [...metrics, ...missingMetrics],
   };
 }

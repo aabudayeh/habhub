@@ -498,7 +498,7 @@ const migratedNutrition = upgradeNutritionStateV26(
   migrationDefaults,
   25,
 );
-assert.equal(migratedNutrition.version, 26);
+assert.equal(migratedNutrition.version, 27);
 assert.equal(migratedNutrition.settings, migrationSettings);
 assert.equal(migratedNutrition.metrics[0].defaultVisibility, "private");
 assert.equal(migratedNutrition.metrics[0].order, 4);

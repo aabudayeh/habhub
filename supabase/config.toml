@@ -59,3 +59,15 @@ verify_jwt = false
 # The function validates the bearer token with auth.getUser itself and keeps
 # the FatSecret client secret exclusively in Supabase's server environment.
 verify_jwt = false
+
+[functions.google-health]
+# OAuth callback is public; authenticated actions call auth.getUser themselves.
+verify_jwt = false
+
+[functions.google-health-webhook]
+# Google authenticates with the configured header plus signed raw payload.
+verify_jwt = false
+
+[functions.google-health-worker]
+# The worker validates an independent high-entropy server secret.
+verify_jwt = false

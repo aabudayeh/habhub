@@ -82,6 +82,11 @@ import {
 } from "@/src/notifications/webPush";
 import { automaticFastProgress } from "@/src/domain/fasting";
 import { markUserInteraction } from "@/src/lib/userInteraction";
+import { captureGoogleHealthCompletionFromBrowserUrl } from "@/src/health/googleHealthCompletionBrowser";
+
+// This runs during root-module evaluation, before AuthProvider and every
+// loading/redirect guard. The completion credential remains in memory only.
+captureGoogleHealthCompletionFromBrowserUrl();
 
 const theme = {
   ...DefaultTheme,
@@ -891,7 +896,8 @@ function RootNavigator() {
     rootSegment === "update-password" ||
     rootSegment === "join" ||
     rootSegment === "onboarding" ||
-    rootSegment === "extension";
+    rootSegment === "extension" ||
+    rootSegment === "privacy";
 
   const accountStateMismatch =
     auth.status === "signedIn" &&
@@ -940,6 +946,7 @@ function RootNavigator() {
     onboardingMarker?.accountId === onboardingAccountId &&
     rootSegment !== "onboarding" &&
     rootSegment !== "extension" &&
+    rootSegment !== "privacy" &&
     !(auth.configured && auth.status === "signedOut")
   )
     return <Redirect href={"/onboarding" as never} />;
@@ -976,6 +983,7 @@ function RootNavigator() {
               <Stack.Screen name="join" options={{ presentation: "modal" }} />
               <Stack.Screen name="onboarding" options={{ animation: "fade" }} />
               <Stack.Screen name="extension" options={{ animation: "fade" }} />
+              <Stack.Screen name="privacy" options={{ animation: "fade" }} />
               <Stack.Screen
                 name="food-search"
                 options={{ presentation: "modal" }}

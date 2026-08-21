@@ -1,6 +1,8 @@
 import type { DailyMetricStatus, MetricEntry } from "@/src/types";
 
-export const GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 2;
+// v3 removes Google Health rows and provider-marked derived status projections
+// from every plaintext browser/SQLite group cache.
+export const GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 3;
 export const DEFAULT_GROUP_ACTIVITY_CACHE_LIMIT = 8;
 
 export type GroupActivityCachePayload = {
@@ -35,4 +37,5 @@ export type GroupActivityCacheApi = {
   ): Promise<void>;
   removeGroupActivityCache(groupId: string): Promise<void>;
   pruneGroupActivityCaches(options?: GroupActivityCachePruneOptions): Promise<void>;
+  purgeLegacyGroupActivityCaches(): Promise<void>;
 };

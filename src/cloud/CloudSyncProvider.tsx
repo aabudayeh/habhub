@@ -49,9 +49,19 @@ import {
   profileProjectionLagsSnapshot,
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
-import { metricIdsForHealthDataTypes } from "@/src/domain/health";
+import {
+  metricIdsForHealthDataTypes,
+  reconcileGoogleHealthNativeMirrors,
+} from "@/src/domain/health";
 import { mergeLocalCurrentDayDeviceStepEntries } from "@/src/domain/healthDedup";
 import { applySharedMetricPrivacyFences } from "@/src/domain/sharedMetricPrivacy";
+import {
+  applyGoogleHealthEntryOverrides,
+  isGoogleHealthEntry,
+  isGoogleHealthEntryId,
+  stateWithoutGoogleHealthLocalData,
+  withoutGoogleHealthDerivedStatuses,
+} from "@/src/domain/googleHealthLocalPrivacy";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
 import {
@@ -64,10 +74,20 @@ import {
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
 import {
+  getPrivacyAwareUserSnapshot,
+  getPrivacyAwareUserSnapshotMetadata,
+  isGoogleHealthPrivacyUpgradeError,
+  privacyAwareSnapshotTopic,
+  type PrivacyAwareSnapshotMetadata,
+  type PrivacyAwareSnapshotRow,
+  syncPrivacyAwareUserSnapshot,
+} from "@/src/cloud/snapshotPrivacy";
+import {
   readPersistedAccountState,
   useApp,
 } from "@/src/state/AppProvider";
 import {
+  purgeLegacyGroupActivityCaches,
   readGroupActivityCache,
   removeGroupActivityCache,
   writeGroupActivityCache,
@@ -125,7 +145,13 @@ const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
 const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v2:";
 const CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX = "habhub-cloud-snapshot-cursor-v1:";
-const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
+const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v4:";
+const LEGACY_CLOUD_MERGE_BASE_KEY_PREFIXES = [
+  "habhub-cloud-merge-base-v2:",
+  "habhub-cloud-merge-base-v3:",
+] as const;
+const GOOGLE_HEALTH_CLOUD_CACHE_SCRUB_KEY =
+  "habhub-google-health-cloud-cache-scrub-v2";
 const ACCOUNT_METADATA_ACK_KEY_PREFIX = "habhub-account-metadata-ack-v1:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
 const MAX_GROUP_READ_RETRY_MS = 2 * 60 * 1000;
@@ -211,15 +237,8 @@ export type PendingGroupRequest = {
   groupName?: string;
 };
 
-type SnapshotRow = {
-  payload: AppState;
-  revision: number;
-  updated_at: string;
-  device_id: string | null;
-  schema_version: number;
-};
-
-type SnapshotMetadata = Omit<SnapshotRow, "payload">;
+type SnapshotRow = PrivacyAwareSnapshotRow<AppState>;
+type SnapshotMetadata = PrivacyAwareSnapshotMetadata;
 
 type CloudMergeBase = {
   version: 2;
@@ -365,6 +384,9 @@ async function writeAccountMetadataAck(userId: string, hash: string) {
 
 async function readCloudMergeBase(userId: string): Promise<CloudMergeBase | null> {
   try {
+    await AsyncStorage.multiRemove(
+      LEGACY_CLOUD_MERGE_BASE_KEY_PREFIXES.map((prefix) => `${prefix}${userId}`),
+    ).catch(() => undefined);
     const saved = await AsyncStorage.getItem(
       `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
     );
@@ -378,11 +400,102 @@ async function readCloudMergeBase(userId: string): Promise<CloudMergeBase | null
   }
 }
 
-async function writeCloudMergeBase(userId: string, base: CloudMergeBase) {
+function mergeBaseForLocalPersistence(
+  base: CloudMergeBase,
+  acknowledgedState: AppState,
+) {
+  const googleEntries = acknowledgedState.entries.filter(isGoogleHealthEntry);
+  const googleEntryIds = new Set(googleEntries.map((entry) => entry.id));
+  const googleEntryKeys = new Set(
+    googleEntries.map((entry) => metricEntryKey(entry.userId, entry.id)),
+  );
+  const locallyCacheableStatuses = new Set(
+    withoutGoogleHealthDerivedStatuses(
+      acknowledgedState.entries,
+      acknowledgedState.dailyMetricStatuses,
+    ).map(dailyStatusKey),
+  );
+  const sanitizedState = stateWithoutGoogleHealthLocalData(acknowledgedState);
+  const settings = { ...base.settings };
+  const collections = { ...base.collections };
+  // Provider ids embed metric/date information and override values contain a
+  // health-event timestamp. Neither belongs in this plaintext merge base.
+  delete settings.googleHealthEntryOverrides;
+  settings.pendingDeletedEntryIds = stableValueHash(
+    sanitizedState.settings.pendingDeletedEntryIds,
+  );
+  settings.deletedEntryIds = stableValueHash(
+    sanitizedState.settings.deletedEntryIds,
+  );
+  settings.dismissedHealthEntryIds = stableValueHash(
+    sanitizedState.settings.dismissedHealthEntryIds,
+  );
+  collections.entries = Object.fromEntries(
+    Object.entries(collections.entries ?? {}).filter(
+      ([entryKey]) =>
+        !googleEntryKeys.has(entryKey) &&
+        !isGoogleHealthEntryId(entryKey.slice(entryKey.indexOf(":") + 1)),
+    ),
+  );
+  collections.dailyMetricStatuses = Object.fromEntries(
+    Object.entries(collections.dailyMetricStatuses ?? {}).filter(
+      ([statusKey]) => locallyCacheableStatuses.has(statusKey),
+    ),
+  );
+  const withoutGoogleIntentKeys = (record: Record<string, string> | undefined) =>
+    Object.fromEntries(
+      Object.entries(record ?? {}).filter(
+        ([entryId]) =>
+          !googleEntryIds.has(entryId) && !isGoogleHealthEntryId(entryId),
+      ),
+    );
+  collections.pendingDeletedEntryIds = withoutGoogleIntentKeys(
+    collections.pendingDeletedEntryIds,
+  );
+  collections.deletedEntryIds = withoutGoogleIntentKeys(
+    collections.deletedEntryIds,
+  );
+  collections.dismissedHealthEntryIds = withoutGoogleIntentKeys(
+    collections.dismissedHealthEntryIds,
+  );
+  return { ...base, settings, collections };
+}
+
+async function writeCloudMergeBase(
+  userId: string,
+  base: CloudMergeBase,
+  acknowledgedState: AppState,
+) {
   await AsyncStorage.setItem(
     `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
-    JSON.stringify(base),
+    JSON.stringify(mergeBaseForLocalPersistence(base, acknowledgedState)),
   );
+}
+
+let googleHealthCloudCacheScrubPromise: Promise<void> | undefined;
+
+function purgeLegacyGoogleHealthCloudCaches() {
+  if (googleHealthCloudCacheScrubPromise)
+    return googleHealthCloudCacheScrubPromise;
+  googleHealthCloudCacheScrubPromise = (async () => {
+    if (
+      (await AsyncStorage.getItem(GOOGLE_HEALTH_CLOUD_CACHE_SCRUB_KEY)) ===
+      "done"
+    )
+      return;
+    const keys = (await AsyncStorage.getAllKeys()).filter(
+      (key) =>
+        LEGACY_CLOUD_MERGE_BASE_KEY_PREFIXES.some((prefix) =>
+          key.startsWith(prefix),
+        ) ||
+        key.startsWith(WORKSPACE_ACK_KEY_PREFIX) ||
+        key.startsWith(CLOUD_SNAPSHOT_ACK_KEY_PREFIX) ||
+        key.startsWith(CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX),
+    );
+    if (keys.length) await AsyncStorage.multiRemove(keys);
+    await AsyncStorage.setItem(GOOGLE_HEALTH_CLOUD_CACHE_SCRUB_KEY, "done");
+  })();
+  return googleHealthCloudCacheScrubPromise;
 }
 
 function waitForCloudCacheWriteTurn() {
@@ -598,13 +711,13 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,
-      version: 26,
+      version: 27,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
   if (sourceVersion >= 19)
     return upgradeStateV21({
       ...state,
-      version: 26,
+      version: 27,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
@@ -615,7 +728,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return upgradeStateV21({
       ...state,
-      version: 26,
+      version: 27,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -640,7 +753,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return upgradeStateV21({
     ...state,
-    version: 26,
+    version: 27,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -1086,7 +1199,11 @@ const accountMetadataHashCache = new WeakMap<AppState, string>();
 function stableHash(state: AppState) {
   const cached = stableHashCache.get(state);
   if (cached) return cached;
-  const payload = snapshotPayload(state);
+  // Snapshot acknowledgements/cursors are persisted in plaintext. Hash only
+  // the cache-safe projection so their digest cannot fingerprint Google row
+  // ids, values, dates, or per-entry overrides. Google imports are reconciled
+  // by the server revision stream rather than by this local account outbox.
+  const payload = snapshotPayload(stateWithoutGoogleHealthLocalData(state));
   // These values only remember which view was open on this device. They can
   // hitch a ride with a later durable account save, but switching a filter or
   // date range must not turn Cloud Account into a permanent "Pending" outbox.
@@ -1261,6 +1378,13 @@ async function resolvePrivateMedia(state: AppState): Promise<AppState> {
         : message,
     ),
   };
+}
+
+function workspaceAckMayPersist(state: AppState) {
+  return !state.entries.some(
+    (entry) =>
+      entry.userId === state.currentUserId && isGoogleHealthEntry(entry),
+  );
 }
 
 /**
@@ -1508,6 +1632,40 @@ function mergeCollectionFromBase<T>(
   return merged;
 }
 
+function mergeEntriesFromBase(
+  remote: MetricEntry[] | undefined,
+  local: MetricEntry[] | undefined,
+  baseHashes?: Record<string, string>,
+) {
+  const merged = mergeCollectionFromBase(
+    remote,
+    local,
+    (entry) => metricEntryKey(entry.userId, entry.id),
+    baseHashes,
+  );
+  const byKey = new Map(
+    merged.map((entry) => [metricEntryKey(entry.userId, entry.id), entry]),
+  );
+  const remoteKeys = new Set(
+    (remote ?? []).map((entry) => metricEntryKey(entry.userId, entry.id)),
+  );
+  for (const entry of remote ?? []) {
+    if (!isGoogleHealthEntry(entry)) continue;
+    const key = metricEntryKey(entry.userId, entry.id);
+    // The server import remains authoritative for raw/provider fields even
+    // when this process still has an in-memory merge base. User-selected time
+    // and visibility live in the separate minimal override registry and are
+    // replayed after this merge.
+    byKey.set(key, entry);
+  }
+  for (const entry of local ?? []) {
+    if (!isGoogleHealthEntry(entry)) continue;
+    const key = metricEntryKey(entry.userId, entry.id);
+    if (!remoteKeys.has(key)) byKey.delete(key);
+  }
+  return [...byKey.values()];
+}
+
 function preserveLocalCurrentDayDeviceSteps(
   incoming: AppState,
   local: AppState,
@@ -1561,6 +1719,12 @@ function mergeStates(
   settings.advancedTutorialComplete = advancedTutorialComplete;
   settings.progressGridDateNavigatorCollapsed =
     local.settings.progressGridDateNavigatorCollapsed;
+  // Google entry mutations are applied locally only after authenticated server
+  // acknowledgement. On every pull, the protected owner snapshot is therefore
+  // the authority for which fields are explicit preferences; a time-only local
+  // edit must never manufacture or preserve an inherited visibility override.
+  settings.googleHealthEntryOverrides =
+    remote.settings.googleHealthEntryOverrides;
   settings.pendingDeletedEntryIds = mergeCollectionFromBase(
     remote.settings.pendingDeletedEntryIds,
     local.settings.pendingDeletedEntryIds,
@@ -1630,10 +1794,9 @@ function mergeStates(
       (item) => item.id,
       base?.collections.metrics,
     ),
-    entries: mergeCollectionFromBase(
+    entries: mergeEntriesFromBase(
       remote.entries,
       local.entries,
-      (entry) => metricEntryKey(entry.userId, entry.id),
       base?.collections.entries,
     ).filter(
       (entry) =>
@@ -1709,8 +1872,26 @@ function mergeStates(
     ),
     lastSavedAt: null,
   };
+  const withGoogleHealthOverrides = {
+    ...merged,
+    entries: applyGoogleHealthEntryOverrides(
+      merged.entries,
+      merged.settings.googleHealthEntryOverrides,
+      local.currentUserId,
+      merged.metrics,
+    ),
+  };
+  const withNativeGoogleOwnership = {
+    ...withGoogleHealthOverrides,
+    entries: reconcileGoogleHealthNativeMirrors(
+      withGoogleHealthOverrides.entries,
+      withGoogleHealthOverrides.metrics,
+      withGoogleHealthOverrides.settings.healthSync.sourcePreferences,
+      local.currentUserId,
+    ),
+  };
   return preserveLocalCurrentDayDeviceSteps(
-    applyAccountMemberProfile(merged, profile),
+    applyAccountMemberProfile(withNativeGoogleOwnership, profile),
     local,
   );
 }
@@ -1827,6 +2008,18 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
     ],
     lastSavedAt: null,
   };
+  accepted.entries = applyGoogleHealthEntryOverrides(
+    accepted.entries,
+    accepted.settings.googleHealthEntryOverrides,
+    userId,
+    accepted.metrics,
+  );
+  accepted.entries = reconcileGoogleHealthNativeMirrors(
+    accepted.entries,
+    accepted.metrics,
+    accepted.settings.healthSync.sourcePreferences,
+    userId,
+  );
   // Cloud group shells are retained as a relational activity cache, but the
   // signed-in member's account identity belongs to the accepted snapshot. If
   // this is omitted, a clean second device can publish its stale cached name
@@ -2302,39 +2495,11 @@ function mergeWorkspaceWithoutRegression(
 }
 
 async function fetchSnapshot(
-  userId: string,
+  _userId: string,
   signal?: AbortSignal,
 ): Promise<SnapshotRow | null> {
   if (!supabase) return null;
-  let query = supabase
-    .from("user_snapshots")
-    .select("payload, revision, updated_at, device_id, schema_version")
-    .eq("user_id", userId);
-  if (signal) query = query.abortSignal(signal);
-  const { data, error } = await query.maybeSingle();
-  if (error) {
-    if (!/revision|device_id|schema_version|schema cache|column/i.test(errorText(error)))
-      throw error;
-    let legacyQuery = supabase
-      .from("user_snapshots")
-      .select("payload, updated_at")
-      .eq("user_id", userId);
-    if (signal) legacyQuery = legacyQuery.abortSignal(signal);
-    const legacy = await legacyQuery.maybeSingle();
-    if (legacy.error) throw legacy.error;
-    return legacy.data
-      ? {
-          payload: legacy.data.payload as AppState,
-          revision: 0,
-          updated_at: legacy.data.updated_at,
-          device_id: null,
-          schema_version: Number(
-            (legacy.data.payload as AppState | undefined)?.version ?? 1,
-          ),
-        }
-      : null;
-  }
-  return data as SnapshotRow | null;
+  return getPrivacyAwareUserSnapshot<AppState>(supabase, signal);
 }
 
 function upgradeBloodPressureMetrics(metrics: AppState["metrics"]) {
@@ -2367,33 +2532,12 @@ async function writeSnapshot(
   deviceId: string,
 ) {
   if (!supabase) throw new Error("Cloud is not configured.");
-  const current = await supabase.rpc("sync_user_snapshot", {
-    expected_revision: expectedRevision,
-    new_payload: payload,
-    client_device_id: deviceId,
-    client_schema_version: payload.version,
-  });
-  if (!current.error) {
-    const result = Array.isArray(current.data) ? current.data[0] : current.data;
-    return {
-      revision: Number(result?.revision ?? expectedRevision + 1),
-      updatedAt: result?.updated_at ?? new Date().toISOString(),
-    };
-  }
-  if (
-    !/sync_user_snapshot|schema cache|function.*does not exist|revision|schema_version|device_id/i.test(
-      errorText(current.error),
-    )
-  )
-    throw current.error;
-  const updatedAt = new Date().toISOString();
-  const legacy = await supabase.from("user_snapshots").upsert({
-    user_id: userId,
+  return syncPrivacyAwareUserSnapshot(
+    supabase,
     payload,
-    updated_at: updatedAt,
-  });
-  if (legacy.error) throw legacy.error;
-  return { revision: 0, updatedAt };
+    expectedRevision,
+    deviceId,
+  );
 }
 
 function errorText(error: unknown) {
@@ -2417,6 +2561,8 @@ function errorText(error: unknown) {
 
 function friendlySyncError(error: unknown) {
   const message = errorText(error);
+  if (isGoogleHealthPrivacyUpgradeError(error))
+    return "This HabHub version cannot safely sync Google Health data. Update HabHub to continue.";
   if (isTransientCloudError(message))
     return "Offline changes are safe on this device and will retry automatically.";
   if (/column.*revision|sync_user_snapshot|schema cache/i.test(message))
@@ -2425,34 +2571,12 @@ function friendlySyncError(error: unknown) {
 }
 
 async function fetchSnapshotMetadata(
-  userId: string,
+  _userId: string,
 ): Promise<SnapshotMetadata | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("user_snapshots")
-    // Deliberately omit payload. On established accounts this turns every
-    // normal native cold start from a multi-megabyte JSON transfer/parse into
-    // one tiny revision probe.
-    .select("revision, updated_at, device_id, schema_version")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (!error) return data as SnapshotMetadata | null;
-  if (!/revision|device_id|schema_version|schema cache|column/i.test(errorText(error)))
-    throw error;
-  const legacy = await supabase
-    .from("user_snapshots")
-    .select("updated_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (legacy.error) throw legacy.error;
-  return legacy.data
-    ? {
-        revision: 0,
-        updated_at: legacy.data.updated_at,
-        device_id: null,
-        schema_version: 1,
-      }
-    : null;
+  // Deliberately omit payload. On established accounts this keeps normal
+  // native cold start to a tiny capability-gated revision probe.
+  return getPrivacyAwareUserSnapshotMetadata(supabase);
 }
 
 /**
@@ -2635,6 +2759,30 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     stateRef.current = state;
   }
 
+  useEffect(() => {
+    // v2 merge bases and group-cache rows may predate Google provenance
+    // filtering. Every active read is already fail-closed; defer the broad
+    // migration sweep so parsing dormant group snapshots cannot contend with
+    // launch/navigation taps. Signed-in ACK readers separately await their
+    // small key-only scrub before loading hashes.
+    let cancelled = false;
+    const task = scheduleResponsiveWork(() => {
+      if (cancelled) return;
+      void Promise.all([
+        purgeLegacyGoogleHealthCloudCaches(),
+        purgeLegacyGroupActivityCaches(),
+      ]).catch(() => undefined);
+    }, {
+      minimumDelayMs: 1_500,
+      maximumDelayMs: 30_000,
+      minimumUserQuietMs: 2_000,
+    });
+    return () => {
+      cancelled = true;
+      task.cancel();
+    };
+  }, []);
+
   const scheduleMergeBaseBuild = useCallback(() => {
     if (
       mergeBaseBuildTaskRef.current ||
@@ -2661,7 +2809,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           mergeBaseWriteRef.current = mergeBaseWriteRef.current
             .catch(() => undefined)
             .then(waitForCloudCacheWriteTurn)
-            .then(() => writeCloudMergeBase(pending.userId, base))
+            .then(() =>
+              writeCloudMergeBase(pending.userId, base, pending.state),
+            )
             .catch(() => undefined);
         })
         .catch(() => undefined)
@@ -2729,7 +2879,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           mergeBaseWriteRef.current = mergeBaseWriteRef.current
             .catch(() => undefined)
             .then(waitForCloudCacheWriteTurn)
-            .then(() => writeCloudMergeBase(pending.userId, base))
+            .then(() =>
+              writeCloudMergeBase(pending.userId, base, pending.state),
+            )
             .catch(() => undefined);
         })
         .catch(() => undefined)
@@ -4026,10 +4178,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             workspaceUploadRequiredGroupsRef.current.delete(
               pushedGroupId,
             );
-            workspaceAckHashesRef.current.set(
-              pushedGroupId,
-              pushedWorkspaceHash,
-            );
+            if (workspaceAckMayPersist(candidate))
+              workspaceAckHashesRef.current.set(
+                pushedGroupId,
+                pushedWorkspaceHash,
+              );
+            else
+              // A workspace digest changes with Google values/ids and is
+              // therefore not written to plaintext storage. The in-memory
+              // hash below still prevents duplicate uploads this session.
+              workspaceAckHashesRef.current.delete(pushedGroupId);
             workspaceAcksPending = true;
             if (workspaceResult.groupConfigurationPushed) {
               groupConfigurationHashRef.current =
@@ -4488,6 +4646,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             "Offline changes are safe on this device and will retry automatically.",
           );
         }
+        // This migration is an ordering boundary, not background maintenance:
+        // old ACK maps and cursors may fingerprint Google rows. Remove them
+        // before any startup reader can load and later rewrite those hashes.
+        await purgeLegacyGoogleHealthCloudCaches();
+        if (cancelled) return;
         const [
           deviceId,
           workspaceAcks,
@@ -5248,72 +5411,33 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     )
       return;
     const client = supabase;
-    let fallbackChannel: ReturnType<typeof client.channel> | null = null;
-    const handleInvalidation = (next: {
-      revision?: number;
-      device_id?: string;
-    }) => {
+    const handleInvalidation = (next: { revision?: number }) => {
       const expectedRevision = Number(next.revision ?? 0);
       if (expectedRevision <= revisionRef.current) return;
       // Database-triggered Broadcast is not covered by channel `self: false`.
-      // Ignore only the exact revision this runtime is currently writing. A
-      // website and extension can share the same persistent device id, so a
-      // blanket same-device guard would incorrectly hide their updates.
+      // The v27 topic deliberately carries only the revision, so ignore the
+      // exact optimistic revision this runtime is writing. If another device
+      // wins that revision, the local write conflicts and its recovery pull
+      // fetches the winner rather than relying on this invalidation.
       if (
-        next.device_id === deviceIdRef.current &&
         expectedRevision === snapshotWriteTargetRevisionRef.current
       )
         return;
       pullLatest(expectedRevision).catch(() => undefined);
     };
-    const startPostgresFallback = () => {
-      if (fallbackChannel) return;
-      // Compatibility only for projects where the compact Broadcast migration
-      // has not been applied yet. The normal path never streams snapshot JSON.
-      fallbackChannel = client
-        .channel(`account-snapshot-fallback:${auth.user!.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "user_snapshots",
-            filter: `user_id=eq.${auth.user!.id}`,
-          },
-          (event) =>
-            handleInvalidation(
-              event.new as { revision?: number; device_id?: string },
-            ),
-        )
-        .subscribe();
-    };
     const channel = client
-      .channel(`account:${auth.user.id}:snapshot`, {
+      .channel(privacyAwareSnapshotTopic(auth.user.id), {
         config: { private: true, broadcast: { self: false } },
       })
       .on(
         "broadcast",
         { event: "snapshot_updated" },
-        (event: { payload?: { revision?: number; device_id?: string } }) =>
+        (event: { payload?: { revision?: number } }) =>
           handleInvalidation(event.payload ?? {}),
       )
-      .subscribe((channelStatus) => {
-        if (channelStatus === "SUBSCRIBED" && fallbackChannel) {
-          const staleFallback = fallbackChannel;
-          fallbackChannel = null;
-          client.removeChannel(staleFallback).catch(() => undefined);
-          return;
-        }
-        if (
-          channelStatus === "CHANNEL_ERROR" ||
-          channelStatus === "TIMED_OUT"
-        )
-          startPostgresFallback();
-      });
+      .subscribe();
     return () => {
       client.removeChannel(channel).catch(() => undefined);
-      if (fallbackChannel)
-        client.removeChannel(fallbackChannel).catch(() => undefined);
     };
   }, [auth.status, auth.user, networkAvailable, pullLatest]);
 

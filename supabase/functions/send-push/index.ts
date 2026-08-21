@@ -952,13 +952,14 @@ async function legacyCommittedCanonicalEvent(
     if (membership?.status !== "active") return { recognized: true };
     const { data: entry, error: entryError } = await admin
       .from("metric_entries")
-      .select("metric_id, local_date, recorded_at, visibility")
+      .select("metric_id, local_date, recorded_at, visibility, source_provider")
       .eq("user_id", dispatcherId)
       .eq("client_generated_id", clientGeneratedId)
       .maybeSingle();
     if (entryError) throw entryError;
     if (
       !entry ||
+      entry.source_provider === "google_health" ||
       entry.visibility === "private" ||
       !Number.isFinite(new Date(entry.recorded_at).getTime()) ||
       new Date(entry.recorded_at).getTime() < Date.now() - 15 * 60 * 1000
@@ -1109,7 +1110,7 @@ async function legacyCompetitionCanonicalEvent(
     if (!metric) return { recognized: true };
     const { data: recentEntries, error: entryError } = await admin
       .from("metric_entries")
-      .select("id, client_generated_id, updated_at")
+      .select("id, client_generated_id, updated_at, source_provider")
       .eq("metric_id", metric.id)
       .eq("user_id", dispatcherId)
       .eq("visibility", "group")
@@ -1125,6 +1126,7 @@ async function legacyCompetitionCanonicalEvent(
     // prefix instead of trusting a lossy split position.
     const entry = (recentEntries ?? [])
       .filter((candidate) => {
+        if (candidate.source_provider === "google_health") return false;
         const sourceId = String(candidate.client_generated_id ?? "");
         return (
           sourceId.length > 0 &&

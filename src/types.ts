@@ -24,7 +24,7 @@ export type ActivityLevel =
   | "very_active"
   | "athlete";
 export type BiologicalSex = "female" | "male" | "unspecified";
-export type HealthProvider = "apple_health" | "health_connect";
+export type HealthProvider = "apple_health" | "health_connect" | "google_health";
 export type HealthDataType =
   | "steps"
   | "active_energy"
@@ -338,6 +338,8 @@ export type NutritionDetails = {
   transFatG?: number;
   monounsaturatedFatG?: number;
   polyunsaturatedFatG?: number;
+  /** Explicit provider total; never inferred from mono/poly values. */
+  unsaturatedFatG?: number;
   omega3G?: number;
   omega6G?: number;
   starchG?: number;
@@ -415,10 +417,27 @@ export type DailyMetricStatus = {
   privacyProjectionVersion?: number;
   /** Distinguishes a real status-only measurement from an empty daily snapshot. */
   hasData?: boolean;
+  /**
+   * Sensitive-source provenance for compact projections. Google-derived
+   * statuses remain cloud/in-memory only and are excluded from device caches.
+   */
+  sourceProvider?: HealthProvider;
   /** Last cloud update for this member's daily group snapshot. */
   syncedAt?: string;
   /** Account snapshot revision that published this shared cloud projection. */
   sourceRevision?: number;
+};
+
+/**
+ * Server-authoritative user choices replayed into a Google Health row in
+ * memory. Plaintext local projections strip this registry together with the
+ * imported measurement, nutrition payload, and provider record.
+ */
+export type GoogleHealthEntryOverride = {
+  recordedAtOverride?: string;
+  localDate?: string;
+  visibility?: Visibility;
+  sourceUpdatedAt: string;
 };
 
 export type SyncMode = "manual" | "battery" | "balanced" | "frequent";
@@ -974,6 +993,8 @@ export type UserSettings = {
   >;
   /** Imported health records the user explicitly hid/deleted. */
   dismissedHealthEntryIds?: string[];
+  /** Minimal edit intent for cloud-only Google rows; never contains a health value. */
+  googleHealthEntryOverrides?: Record<string, GoogleHealthEntryOverride>;
   /** Explicit cloud deletes; absence from a bounded cache is never a delete. */
   pendingDeletedEntryIds?: string[];
   /** Explicit progress-photo deletes awaiting relational cloud acknowledgement. */
@@ -1050,7 +1071,8 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 26;
+  /** v27 signals Google-health-aware fail-closed local persistence. */
+  version: 27;
   currentUserId: string;
   group: Group;
   groups: Group[];

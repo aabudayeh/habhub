@@ -14,6 +14,7 @@ import {
 } from '@/src/i18n/domain';
 import { cycleForecast } from '@/src/domain/cycle';
 import { dateKey, dateWithOffsetFrom } from '@/src/domain/date';
+import { stateWithoutGoogleHealthLocalData } from '@/src/domain/googleHealthLocalPrivacy';
 import {
   effectiveGoalTarget,
   isMetricTrackedOnDate,
@@ -774,7 +775,7 @@ export async function disablePushNotifications(userId: string) {
 
 const CYCLE_IDS = 'north-cycle-notification-ids-v1';
 const GOAL_IDS = 'metric-rally-goal-reminder-ids-v1';
-const GOAL_LEGACY_CLEANUP = 'habhub-goal-reminder-cleanup-v2';
+const GOAL_LEGACY_CLEANUP = 'habhub-goal-reminder-cleanup-v3';
 const GYM_IDS = 'metric-rally-gym-notification-ids-v1';
 const GYM_ACHIEVEMENT = 'metric-rally-gym-achievement-v1';
 const PRODUCTIVITY_IDS = 'metric-rally-productivity-notification-ids-v1';
@@ -1074,6 +1075,8 @@ export async function notifyProgressMilestones(
   nextState: AppState,
   localDate = dateKey(),
 ) {
+  previousState = stateWithoutGoogleHealthLocalData(previousState);
+  nextState = stateWithoutGoogleHealthLocalData(nextState);
   if (Platform.OS === 'web' || localDate !== dateKey()) return;
   const settings = nextState.settings.notifications;
   if (
@@ -1366,7 +1369,7 @@ const drainGoalNotifications = createLatestAsyncDrain<AppState>(
 
 export function syncGoalNotifications(state: AppState) {
   if (Platform.OS === 'web') return Promise.resolve();
-  return drainGoalNotifications(state);
+  return drainGoalNotifications(stateWithoutGoogleHealthLocalData(state));
 }
 
 async function syncCycleNotificationsNow(state: AppState) {
@@ -1722,7 +1725,7 @@ const drainGymNotifications = createLatestAsyncDrain<AppState>(
 
 export function syncCycleNotifications(state: AppState) {
   if (Platform.OS === 'web') return Promise.resolve();
-  return drainCycleNotifications(state);
+  return drainCycleNotifications(stateWithoutGoogleHealthLocalData(state));
 }
 
 export function syncProductivityNotifications(state: AppState) {
@@ -1738,6 +1741,7 @@ export function syncGymNotifications(state: AppState) {
 /** Replenish rolling alarm windows after time-zone/day and foreground changes. */
 export async function syncAllLocalNotifications(state: AppState) {
   if (Platform.OS === 'web') return;
+  state = stateWithoutGoogleHealthLocalData(state);
   await Promise.all([
     syncGoalNotifications(state),
     syncCycleNotifications(state),

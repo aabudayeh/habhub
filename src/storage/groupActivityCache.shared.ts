@@ -4,6 +4,10 @@ import {
   type GroupActivityCachePayload,
   type StoredGroupActivityCache,
 } from "./groupActivityCache.types";
+import {
+  withoutGoogleHealthDerivedStatuses,
+  withoutGoogleHealthEntries,
+} from "../domain/googleHealthLocalPrivacy";
 
 export function normalizeGroupId(groupId: string): string {
   return groupId.trim();
@@ -20,14 +24,19 @@ export function createStoredGroupActivityCache(
   payload: GroupActivityCachePayload,
   writtenAt = new Date().toISOString(),
 ): StoredGroupActivityCache {
+  const entries = withoutGoogleHealthEntries(payload.entries);
+  const dailyMetricStatuses = withoutGoogleHealthDerivedStatuses(
+    payload.entries,
+    payload.dailyMetricStatuses,
+  );
   return {
     schemaVersion: GROUP_ACTIVITY_CACHE_SCHEMA_VERSION,
     writtenAt,
     payload: {
       ...payload,
       groupId: normalizeGroupId(payload.groupId),
-      entries: [...payload.entries],
-      dailyMetricStatuses: [...payload.dailyMetricStatuses],
+      entries: [...entries],
+      dailyMetricStatuses: [...dailyMetricStatuses],
     },
   };
 }
@@ -57,7 +66,19 @@ export function parseStoredGroupActivityCache(
       return null;
     }
 
-    return parsed as StoredGroupActivityCache;
+    const stored = parsed as StoredGroupActivityCache;
+    const entries = withoutGoogleHealthEntries(stored.payload.entries);
+    const dailyMetricStatuses = withoutGoogleHealthDerivedStatuses(
+      stored.payload.entries,
+      stored.payload.dailyMetricStatuses,
+    );
+    return entries === stored.payload.entries &&
+      dailyMetricStatuses === stored.payload.dailyMetricStatuses
+      ? stored
+      : {
+          ...stored,
+          payload: { ...stored.payload, entries, dailyMetricStatuses },
+        };
   } catch {
     return null;
   }

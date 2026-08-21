@@ -46,6 +46,7 @@ import {
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
 import { metricVisualization } from "@/src/domain/visualization";
 import { useApp } from "@/src/state/AppProvider";
+import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
@@ -64,6 +65,11 @@ import {
   TrackerCategory,
   Visibility,
 } from "@/src/types";
+import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import {
+  GoogleHealthClientError,
+  invokeGoogleHealth,
+} from "@/src/health/googleHealthWeb";
 
 const ICONS = [
   "walk-outline",
@@ -289,6 +295,7 @@ export default function TrackerEditor() {
     setTrackedGoal,
     setMetricSection,
   } = useApp();
+  const cloud = useCloudSyncActions();
   const tutorial = useTutorial();
   const sourceMetrics = groupScope
     ? (state.group.metricConfiguration ?? [])
@@ -419,6 +426,7 @@ export default function TrackerEditor() {
   );
   const [goalKindOpen, setGoalKindOpen] = useState(false);
   const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [healthSourceChoiceOpen, setHealthSourceChoiceOpen] = useState(false);
   const [healthFieldChoiceOpen, setHealthFieldChoiceOpen] = useState(false);
   const [scheduleChoiceOpen, setScheduleChoiceOpen] = useState(false);
@@ -1011,7 +1019,8 @@ export default function TrackerEditor() {
     allowExit.current = true;
     onSaved();
   }
-  function save(onSaved: () => void = () => router.back()) {
+  async function save(onSaved: () => void = () => router.back()) {
+    if (saving) return;
     if (bulkPresetMode) {
       savePresetSelection(onSaved);
       return;
@@ -1263,6 +1272,42 @@ export default function TrackerEditor() {
       addToToday: shouldShowToday,
       ...definition
     } = common;
+    const googleVisibilityChange =
+      !groupScope &&
+      tracker &&
+      tracker.defaultVisibility !== visibility &&
+      state.entries.some(
+        (entry) =>
+          entry.userId === state.currentUserId &&
+          entry.metricId === tracker.id &&
+          isGoogleHealthEntry(entry),
+      );
+    if (googleVisibilityChange) {
+      setSaving(true);
+      try {
+        await invokeGoogleHealth("updateMetricVisibility", {
+          metricId: tracker.id,
+          visibility,
+        });
+        // The server has atomically updated inherited rows and fenced old
+        // group projections. Refresh its revision before committing the rest
+        // of this tracker edit locally; a failed refresh is safe to retry.
+        await cloud.pullLatest().catch(() => undefined);
+      } catch (error) {
+        const signedOut =
+          error instanceof GoogleHealthClientError &&
+          error.code === "sign_in_required";
+        Alert.alert(
+          "Could not save Google Health visibility",
+          signedOut
+            ? "Sign in again, then retry."
+            : "Check your connection and retry. Visibility changes for loaded Google Health entries require cloud confirmation.",
+        );
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
     if (groupScope) {
       const sharedDefinition = {
         ...definition,
@@ -1354,7 +1399,7 @@ export default function TrackerEditor() {
           exit();
         },
       },
-      { text: "Save", onPress: () => save(exit) },
+      { text: "Save", onPress: () => void save(exit) },
     ]);
   }
   requestCloseRef.current = requestClose;
@@ -2170,7 +2215,7 @@ export default function TrackerEditor() {
               help={
                 groupScope
                   ? "The group default. Each member may choose a stricter personal visibility."
-                  : "Controls what group members can see for this tracker."
+                  : "Controls what group members can see for this tracker. Loaded Google Health entries require online confirmation; a cold-offline change is applied when cloud sync reconnects."
               }
             />
           {dataType === "number" &&
@@ -3611,7 +3656,9 @@ export default function TrackerEditor() {
                     : "Add tracker"
             }
             icon="checkmark"
-            onPress={() => save()}
+            loading={saving}
+            disabled={saving}
+            onPress={() => void save()}
           />
         </TutorialTarget>
       </View>
