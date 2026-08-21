@@ -24,6 +24,7 @@ import {
 import { createInitialState } from "@/src/data/seed";
 import { entriesForMetric } from "@/src/domain/dataIndex";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import { advanceAuthoritativeStateFromRender } from "@/src/domain/authoritativeState";
 import { scheduleResponsiveWork } from "@/src/lib/responsiveWork";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
@@ -39,11 +40,17 @@ import {
   editFoodEntryClockTime,
   preserveFoodEntryClockOverride,
 } from "@/src/domain/food";
-import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import {
+  metricIdsForHealthDataTypes,
+  reconcileImportedHealthEntries,
+} from "@/src/domain/health";
+import {
+  currentDayStepFloorsForEmptyReplacement,
   isDailyStepReplacementCandidate,
   manualStepEntriesEligibleForReplacement,
+  mergeLocalCurrentDayDeviceStepEntries,
   preserveCurrentDayStepFloor,
+  preserveCurrentDayStepReplacementFloor,
   preserveUnchangedStepFallback,
 } from "@/src/domain/healthDedup";
 import {
@@ -237,6 +244,7 @@ type Action =
       type: "hydrate";
       state: AppState;
       preserveDeviceHealthSync?: boolean;
+      preserveDeviceHealthEntries?: boolean;
     }
   | {
       type: "log";
@@ -843,30 +851,51 @@ function reducer(state: AppState, action: Action): AppState {
               },
             }
           : action.state;
-      // Completing onboarding is monotonic for the current account. A delayed
-      // cloud snapshot must never send a user back into the startup flow.
-      const hydrated =
+      const deviceEntrySafeIncoming =
+        action.preserveDeviceHealthEntries &&
         incoming.currentUserId === state.currentUserId
           ? {
               ...incoming,
+              entries: mergeLocalCurrentDayDeviceStepEntries(
+                incoming.entries,
+                state.entries,
+                {
+                  userId: state.currentUserId,
+                  currentLocalDate: dateKey(),
+                  stepMetricIds: new Set(
+                    metricIdsForHealthDataTypes(
+                      ["steps"],
+                      [...state.metrics, ...incoming.metrics],
+                    ),
+                  ),
+                },
+              ),
+            }
+          : incoming;
+      // Completing onboarding is monotonic for the current account. A delayed
+      // cloud snapshot must never send a user back into the startup flow.
+      const hydrated =
+        deviceEntrySafeIncoming.currentUserId === state.currentUserId
+          ? {
+              ...deviceEntrySafeIncoming,
               settings: {
-                ...incoming.settings,
+                ...deviceEntrySafeIncoming.settings,
                 onboardingComplete:
                   state.settings.onboardingComplete ||
-                  incoming.settings.onboardingComplete,
+                  deviceEntrySafeIncoming.settings.onboardingComplete,
                 onboardingVersion: Math.max(
                   state.settings.onboardingVersion ?? 0,
-                  incoming.settings.onboardingVersion ?? 0,
+                  deviceEntrySafeIncoming.settings.onboardingVersion ?? 0,
                 ),
                 tutorialComplete:
                   state.settings.tutorialComplete ||
-                  incoming.settings.tutorialComplete,
+                  deviceEntrySafeIncoming.settings.tutorialComplete,
                 advancedTutorialComplete:
                   state.settings.advancedTutorialComplete ||
-                  incoming.settings.advancedTutorialComplete,
+                  deviceEntrySafeIncoming.settings.advancedTutorialComplete,
               },
             }
-          : incoming;
+          : deviceEntrySafeIncoming;
       // Presence heartbeats, signed-URL refreshes, and peer-only activity do
       // not affect this account's end-of-day celebration. Avoid rescanning
       // metrics/history for those frequent online-only state wrappers.
@@ -2575,6 +2604,25 @@ function reducer(state: AppState, action: Action): AppState {
       const replacementMetricIds = new Set(
         action.aggregateReplacement?.metricIds ?? [],
       );
+      const currentLocalDate = dateKey();
+      const existingCurrentStepEntriesByMetric = new Map<
+        string,
+        MetricEntry[]
+      >();
+      if (replacementMetricIds.size) {
+        for (const entry of state.entries) {
+          if (
+            entry.userId !== state.currentUserId ||
+            entry.localDate !== currentLocalDate ||
+            !replacementMetricIds.has(entry.metricId)
+          )
+            continue;
+          const dayEntries =
+            existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [];
+          dayEntries.push(entry);
+          existingCurrentStepEntriesByMetric.set(entry.metricId, dayEntries);
+        }
+      }
       const byId = new Map(
         state.entries
           .filter(
@@ -2596,10 +2644,14 @@ function reducer(state: AppState, action: Action): AppState {
         if (dismissed.has(entry.id)) continue;
         const key = metricEntryKey(entry.userId, entry.id);
         const sourceReconciledEntry = replacementMetricIds.has(entry.metricId)
-          ? preserveCurrentDayStepFloor(
-              existingById.get(key),
-              entry,
-              dateKey(),
+          ? preserveCurrentDayStepReplacementFloor(
+              existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [],
+              preserveCurrentDayStepFloor(
+                existingById.get(key),
+                entry,
+                currentLocalDate,
+              ),
+              currentLocalDate,
             )
           : preserveUnchangedStepFallback(existingById.get(key), entry);
         const nextEntry = preserveFoodEntryClockOverride(
@@ -2607,6 +2659,22 @@ function reducer(state: AppState, action: Action): AppState {
           sourceReconciledEntry,
         );
         byId.set(key, nextEntry);
+      }
+      if (
+        replacementMetricIds.size &&
+        action.fromDate <= currentLocalDate &&
+        (action.aggregateReplacement?.throughDate ?? "") >= currentLocalDate
+      ) {
+        for (const entry of currentDayStepFloorsForEmptyReplacement(
+          state.entries,
+          action.entries,
+          {
+            userId: state.currentUserId,
+            currentLocalDate,
+            stepMetricIds: replacementMetricIds,
+          },
+        ))
+          byId.set(metricEntryKey(entry.userId, entry.id), entry);
       }
       const targetMetrics = new Set(action.metricIds);
       const affected: MetricEntry[] = [];
@@ -2870,8 +2938,12 @@ type AppContextValue = {
   localMutationRevision: number;
   replaceState: (
     state: AppState,
-    options?: { source?: "cloud" | "local" },
-  ) => void;
+    options?: {
+      source?: "cloud" | "local";
+      /** Await the device cache write before publishing a dependent ACK. */
+      persistImmediately?: boolean;
+    },
+  ) => Promise<void>;
   resetDemo: () => void;
 };
 
@@ -2914,10 +2986,49 @@ export function AppProvider({
   const persistenceResumeReadTaskRef = useRef<{
     cancel: () => void;
   } | null>(null);
+  const cloudRenderTaskRef = useRef<{ cancel: () => void } | null>(null);
   const persistenceDirtyRef = useRef(false);
   const persistenceRevisionRef = useRef(0);
   const persistenceObservedStateRef = useRef<AppState | null>(null);
-  persistenceStateRef.current = state;
+  const renderedStateRef = useRef(state);
+  persistenceStateRef.current = advanceAuthoritativeStateFromRender(
+    persistenceStateRef.current,
+    renderedStateRef.current,
+    state,
+  );
+  if (renderedStateRef.current !== state) {
+    renderedStateRef.current = state;
+  }
+
+  const cancelQueuedCloudRender = useCallback(() => {
+    cloudRenderTaskRef.current?.cancel();
+    cloudRenderTaskRef.current = null;
+  }, []);
+
+  const queueCloudRender = useCallback(() => {
+    if (cloudRenderTaskRef.current) return;
+    let completed = false;
+    let task: { cancel: () => void } | null = null;
+    const render = () => {
+      completed = true;
+      if (cloudRenderTaskRef.current === task)
+        cloudRenderTaskRef.current = null;
+      // Read the ref at execution time. Several realtime/cache publications
+      // can land during one network pass; the screen needs only the newest
+      // authoritative state, never an intermediate full-context redraw.
+      const latest = persistenceStateRef.current;
+      startTransition(() =>
+        dispatch({ type: "replaceLocal", state: latest }),
+      );
+    };
+    task = scheduleResponsiveWork(render, {
+      minimumDelayMs: 80,
+      maximumDelayMs: 2_500,
+      minimumUserQuietMs: 1_500,
+    });
+    if (completed) task.cancel();
+    else cloudRenderTaskRef.current = task;
+  }, []);
 
   const persistLatestState = useCallback((immediate = false): Promise<void> => {
     if (ephemeral) return Promise.resolve();
@@ -3586,11 +3697,12 @@ export function AppProvider({
       persistenceResumeReadTaskRef.current = null;
       if (persistenceIdleFallbackTimerRef.current)
         clearTimeout(persistenceIdleFallbackTimerRef.current);
+      cancelQueuedCloudRender();
       // Do not leave a coalesced persistence promise waiting on a foreground
       // timer when the provider/app is being torn down.
       persistenceDeferredRunRef.current?.();
     },
-    [],
+    [cancelQueuedCloudRender],
   );
 
   const commitReducedState = useCallback(
@@ -3600,7 +3712,10 @@ export function AppProvider({
       source: "local" | "cloud" = "local",
     ) => {
       const previous = persistenceStateRef.current;
-      if (next === previous) return Promise.resolve();
+      if (next === previous)
+        return persistImmediately
+          ? persistLatestState(true)
+          : Promise.resolve();
       const durableChange =
         source === "local" || localPersistenceChanged(previous, next);
       const committed = {
@@ -3621,21 +3736,35 @@ export function AppProvider({
         return Promise.resolve();
       }
       if (source === "cloud") {
-        // Server hydration can replace large history collections and wake many
-        // context consumers. Keep refs/durability authoritative immediately,
-        // but let taps and navigation render ahead of that non-urgent view.
-        startTransition(() =>
-          dispatch({ type: "replaceLocal", state: committed }),
-        );
-      } else dispatch({ type: "replaceLocal", state: committed });
-      if (!durableChange) return Promise.resolve();
+        // Keep refs/durability authoritative immediately, but coalesce all
+        // cache/realtime publications into one touch-aware transition. A sync
+        // that commits account, group shell, activity and presence in quick
+        // succession must not redraw every AppContext consumer four times.
+        queueCloudRender();
+      } else {
+        // A user edit is urgent and already includes the newest queued cloud
+        // state because reducers read persistenceStateRef. Cancel the obsolete
+        // background publication before rendering that local result now.
+        cancelQueuedCloudRender();
+        dispatch({ type: "replaceLocal", state: committed });
+      }
+      if (!durableChange)
+        return persistImmediately
+          ? persistLatestState(true)
+          : Promise.resolve();
       persistenceDirtyRef.current = true;
       persistenceRevisionRef.current += 1;
       if (persistImmediately) return persistLatestState(true);
       scheduleDeferredPersistence();
       return Promise.resolve();
     },
-    [ephemeral, persistLatestState, scheduleDeferredPersistence],
+    [
+      cancelQueuedCloudRender,
+      ephemeral,
+      persistLatestState,
+      queueCloudRender,
+      scheduleDeferredPersistence,
+    ],
   );
 
   const commitAction = useCallback(
@@ -3653,23 +3782,31 @@ export function AppProvider({
   const replaceState = useCallback(
     (
       nextState: AppState,
-      options?: { source?: "cloud" | "local" },
+      options?: {
+        source?: "cloud" | "local";
+        persistImmediately?: boolean;
+      },
     ) => {
       const next = reducer(persistenceStateRef.current, {
         type: "hydrate",
         state: nextState,
         preserveDeviceHealthSync: true,
+        preserveDeviceHealthEntries:
+          (options?.source ?? "cloud") === "cloud",
       });
-      void commitReducedState(
+      const operation = commitReducedState(
         next,
-        false,
+        options?.persistImmediately ?? false,
         options?.source ?? "cloud",
-      ).catch(() => undefined);
+      );
+      if (options?.persistImmediately) return operation;
+      return operation.catch(() => undefined);
     },
     [commitReducedState],
   );
 
   const stageState = useCallback((nextState: AppState) => {
+    cancelQueuedCloudRender();
     if (persistenceTimerRef.current) {
       clearTimeout(persistenceTimerRef.current);
       persistenceTimerRef.current = null;
@@ -3689,7 +3826,7 @@ export function AppProvider({
     persistenceObservedStateRef.current = next;
     persistenceDirtyRef.current = false;
     dispatch({ type: "replaceLocal", state: next });
-  }, []);
+  }, [cancelQueuedCloudRender]);
 
   // These callbacks sit on provider/effect boundaries. Keeping their identity
   // stable prevents every unrelated entry, message, or presence update from

@@ -11,10 +11,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.health.connect.HealthConnectManager
 import android.net.Uri
 import android.os.Build
+import android.os.OutcomeReceiver
 import android.os.PowerManager
 import android.os.Process
+import android.os.ext.SdkExtensions
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
@@ -63,7 +66,12 @@ class HabHubNativeModule(
   override fun getConstants(): Map<String, Any> = mapOf(
     "nativeWorkoutActions" to true,
     "localPhoneStepRecording" to true,
+    "healthConnectOnDeviceSteps" to healthConnectOnDeviceStepsAvailable(),
   )
+
+  private fun healthConnectOnDeviceStepsAvailable() =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+      SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 20
 
   private fun physicalActivityPermissionGranted() =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
@@ -71,6 +79,91 @@ class HabHubNativeModule(
         reactContext,
         Manifest.permission.ACTIVITY_RECOGNITION,
       ) == PackageManager.PERMISSION_GRANTED
+
+  /**
+   * Returns the official Health Connect origins for this phone's own step
+   * counter. Android 14 originally used `android`; June 2026 Health Connect
+   * builds use an app-scoped synthetic package name (SPN), which must be
+   * discovered rather than hard-coded.
+   */
+  @ReactMethod
+  fun getCurrentDeviceStepOrigins(promise: Promise) {
+    val origins = Arguments.createArray().apply { pushString("android") }
+    if (
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+      SdkExtensions.getExtensionVersion(Build.VERSION_CODES.UPSIDE_DOWN_CAKE) >= 11
+    ) {
+      try {
+        val manager = reactContext.getSystemService(HealthConnectManager::class.java)
+        fun addOrigin(dataSource: Any?) {
+          val dataOrigin = dataSource
+            ?.javaClass
+            ?.getMethod("getDeviceDataOrigin")
+            ?.invoke(dataSource)
+          val packageName = dataOrigin
+            ?.javaClass
+            ?.getMethod("getPackageName")
+            ?.invoke(dataOrigin)
+            ?.toString()
+            ?.trim()
+          if (!packageName.isNullOrEmpty() && packageName != "android")
+            origins.pushString(packageName)
+        }
+
+        // The API is supplied by an SDK extension and is not present in the
+        // base android.jar used by every managed build. Reflection after the
+        // documented extension check keeps older devices load-safe while
+        // invoking the public framework API where it exists.
+        val synchronousMethod = manager
+          ?.javaClass
+          ?.methods
+          ?.firstOrNull {
+            it.name == "getCurrentDeviceDataSource" && it.parameterCount == 0
+          }
+        if (synchronousMethod != null) {
+          addOrigin(synchronousMethod.invoke(manager))
+          promise.resolve(origins)
+          return
+        }
+
+        // Newer framework stubs expose the same API through the standard
+        // Executor/OutcomeReceiver shape (U extension 22+). Support both
+        // signatures so a platform update cannot silently lose SPN discovery.
+        val asynchronousMethod = manager
+          ?.javaClass
+          ?.methods
+          ?.firstOrNull {
+            it.name == "getCurrentDeviceDataSource" && it.parameterCount == 2
+          }
+        if (asynchronousMethod != null) {
+          val receiver = object : OutcomeReceiver<Any, Throwable> {
+            override fun onResult(result: Any) {
+              try {
+                addOrigin(result)
+              } catch (_: Throwable) {
+                // The generic `android` origin remains a valid legacy filter.
+              }
+              promise.resolve(origins)
+            }
+
+            override fun onError(error: Throwable) {
+              promise.resolve(origins)
+            }
+          }
+          asynchronousMethod.invoke(
+            manager,
+            reactContext.mainExecutor,
+            receiver,
+          )
+          return
+        }
+      } catch (_: Throwable) {
+        // Older vendor framework builds can report an extension without this
+        // optional source API. The legacy `android` origin remains safe.
+      }
+    }
+    promise.resolve(origins)
+  }
 
   /**
    * Starts persistent, battery-efficient on-device recording without keeping

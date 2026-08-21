@@ -8,9 +8,11 @@ import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
 import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
   aggregateRangeThroughLocalDate,
+  currentDayStepFloorsForEmptyReplacement,
   isDailyStepReplacementCandidate,
   mergeHealthSourcePreferences,
   preserveCurrentDayStepFloor,
+  preserveCurrentDayStepReplacementFloor,
 } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
@@ -100,18 +102,57 @@ TaskManager.defineTask(TASK_NAME, async () => {
       : [];
     const stepMetricSet = new Set(stepMetricIds);
     const replacementThrough = aggregateRangeThroughLocalDate(to);
+    const currentLocalDate = dateKey(to);
     const existingById = new Map(
       state.entries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
     );
+    const existingCurrentStepEntriesByMetric = new Map<
+      string,
+      AppState['entries']
+    >();
+    for (const entry of state.entries) {
+      if (
+        entry.userId !== state.currentUserId ||
+        entry.localDate !== currentLocalDate ||
+        !stepMetricSet.has(entry.metricId)
+      )
+        continue;
+      const dayEntries =
+        existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [];
+      dayEntries.push(entry);
+      existingCurrentStepEntriesByMetric.set(entry.metricId, dayEntries);
+    }
     const revisionSafeEntries = entries.map((entry) =>
       stepMetricSet.has(entry.metricId)
-        ? preserveCurrentDayStepFloor(
-            existingById.get(`${entry.userId}:${entry.id}`),
-            entry,
-            dateKey(to),
+        ? preserveCurrentDayStepReplacementFloor(
+            existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [],
+            preserveCurrentDayStepFloor(
+              existingById.get(`${entry.userId}:${entry.id}`),
+              entry,
+              currentLocalDate,
+            ),
+            currentLocalDate,
           )
         : entry,
     );
+    const currentDayFloors =
+      stepMetricIds.length &&
+      dateKey(from) <= currentLocalDate &&
+      replacementThrough >= currentLocalDate
+        ? currentDayStepFloorsForEmptyReplacement(
+            state.entries,
+            revisionSafeEntries,
+            {
+              userId: state.currentUserId,
+              currentLocalDate,
+              stepMetricIds: stepMetricSet,
+            },
+          )
+        : [];
+    const revisionSafeEntriesWithFloors = [
+      ...revisionSafeEntries,
+      ...currentDayFloors,
+    ];
     const replacementBase = stepMetricIds.length
       ? {
           ...state,
@@ -137,9 +178,9 @@ TaskManager.defineTask(TASK_NAME, async () => {
               ...state.settings,
               healthSync: { ...state.settings.healthSync, sourcePreferences },
             },
-      entries: mergeHealthEntries(replacementBase, revisionSafeEntries, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
+      entries: mergeHealthEntries(replacementBase, revisionSafeEntriesWithFloors, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
       lastSavedAt: new Date().toISOString(),
-    }, revisionSafeEntries);
+    }, revisionSafeEntriesWithFloors);
     const nextStatus: PersistedHealthStatus = {
       ...status,
       connectionEnabled: true,

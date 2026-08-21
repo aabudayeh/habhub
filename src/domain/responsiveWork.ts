@@ -3,12 +3,19 @@ export type ResponsiveWorkOptions = {
   minimumDelayMs?: number;
   /** Continuous animations cannot postpone durable work indefinitely. */
   maximumDelayMs?: number;
+  /**
+   * Require this much quiet time after the latest real touch. Unlike the hard
+   * timer above, a fresh touch resets this gate: an actively used foreground
+   * app always wins over cache hydration and cloud presentation work.
+   */
+  minimumUserQuietMs?: number;
 };
 
 export type ResponsiveWorkDriver<TTimer> = {
   afterInteractions: (work: () => void) => { cancel: () => void };
   setTimer: (work: () => void, delayMs: number) => TTimer;
   clearTimer: (timer: TTimer) => void;
+  millisecondsSinceUserInteraction?: () => number;
 };
 
 export type ResponsiveWorkTask = { cancel: () => void };
@@ -43,6 +50,23 @@ export function scheduleResponsiveWork<TTimer>(
   };
   const run = () => {
     if (finished) return;
+    const minimumUserQuietMs = Math.max(
+      0,
+      options.minimumUserQuietMs ?? 0,
+    );
+    const quietFor =
+      driver.millisecondsSinceUserInteraction?.() ??
+      Number.POSITIVE_INFINITY;
+    if (minimumUserQuietMs > 0 && quietFor < minimumUserQuietMs) {
+      interaction?.cancel();
+      interaction = null;
+      if (minimumTimer !== null) driver.clearTimer(minimumTimer);
+      minimumTimer = driver.setTimer(
+        armInteraction,
+        Math.max(1, minimumUserQuietMs - quietFor),
+      );
+      return;
+    }
     finished = true;
     clear();
     work();

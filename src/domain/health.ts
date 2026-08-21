@@ -1,12 +1,12 @@
 import { dateKey } from '@/src/domain/date';
 import {
   deduplicateHealthImportRecords,
+  displayedImportedStepCandidate,
   hasHealthImportIdentity,
   healthRecordsAreEquivalent,
   healthSourceEnabled,
   healthSourceId,
   healthSourcePriority,
-  selectCanonicalHealthConnectStepAggregate,
 } from '@/src/domain/healthDedup';
 import { metricEntryKey } from '@/src/domain/metricEntry';
 import { FOOD_NUTRIENTS } from '@/src/domain/food';
@@ -723,50 +723,11 @@ export function reconcileImportedHealthEntries(
       continue;
     }
     if (healthType === "steps") {
-      const selectedPlatformAggregate =
-        selectCanonicalHealthConnectStepAggregate(group);
-      if (selectedPlatformAggregate) {
-        const selected = selectedPlatformAggregate;
-        if (Number(selected.value) > 0)
-          reconciled.push(
-            Number(selected.value) === Math.round(Number(selected.value))
-              ? selected
-              : { ...selected, value: Math.round(Number(selected.value)) },
-          );
-        continue;
-      }
-      const bySource = new Map<string, MetricEntry[]>();
-      for (const entry of group) {
-        const source = healthSourceId(entry.sourceOrigin);
-        const items = bySource.get(source);
-        if (items) items.push(entry);
-        else bySource.set(source, [entry]);
-      }
-      const sourceTotals = [...bySource.values()].map((items) => {
-        const hasDailyAggregate = items.some(
-          (entry) =>
-            entry.sourceRecordId?.startsWith("daily:") ||
-            entry.id.includes(":daily:"),
-        );
-        const total = hasDailyAggregate
-          ? Math.max(...items.map((entry) => Number(entry.value || 0)))
-          : items.reduce((sum, entry) => sum + Number(entry.value || 0), 0);
-        const template = [...items].sort((a, b) =>
-          b.recordedAt.localeCompare(a.recordedAt),
-        )[0];
-        return { template, total };
-      });
-      sourceTotals.sort(
-        (a, b) =>
-          healthSourcePriority(a.template.sourceOrigin, "steps") -
-            healthSourcePriority(b.template.sourceOrigin, "steps") ||
-          b.total - a.total,
-      );
-      const selected = sourceTotals[0];
-      if (selected?.total > 0)
+      const selected = displayedImportedStepCandidate(group);
+      if (selected && selected.total > 0)
         reconciled.push({
           ...selected.template,
-          value: Math.round(selected.total),
+          value: selected.total,
         });
       continue;
     }

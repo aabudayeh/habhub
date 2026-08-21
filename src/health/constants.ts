@@ -8,8 +8,12 @@ export const HEALTH_INITIAL_DAYS = 30;
  * Connect's priority-aware aggregate and repairs rows imported by older builds.
  */
 export const HEALTH_STEPS_IMPORT_VERSION = 2;
-/** One automatic, post-hydration request per native device/account/version. */
-export const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION = 1;
+/**
+ * One automatic, post-hydration request per native device/account/version.
+ * Version 2 retries for users whose v1 marker was committed before Android's
+ * Physical Activity dialog could actually open or finish.
+ */
+export const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION = 2;
 const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_KEY =
   'paceboard-health-physical-activity-migration';
 

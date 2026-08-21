@@ -160,6 +160,110 @@ export function preserveCurrentDayStepFloor<
     : revisionReconciled;
 }
 
+/**
+ * A canonical aggregate migration can replace an older Android-device row
+ * with a different id. Preserve the value the UI was already showing for the
+ * open day while still adopting the canonical identity, otherwise the first
+ * refresh after an upgrade can visibly halve today's Steps total.
+ */
+export function preserveCurrentDayStepReplacementFloor<
+  TEntry extends ImportedDailyAggregate,
+>(
+  existingDayEntries: readonly TEntry[],
+  incoming: TEntry,
+  currentLocalDate: string,
+): TEntry {
+  if (
+    incoming.localDate !== currentLocalDate ||
+    !isCanonicalHealthConnectStepAggregate(
+      String(incoming.sourceRecordId ?? ""),
+    )
+  )
+    return incoming;
+  const previous = displayedImportedStepCandidate(
+    existingDayEntries.filter(
+      (entry) =>
+        entry.localDate === currentLocalDate &&
+        entry.metricId === incoming.metricId &&
+        entry.userId === incoming.userId &&
+        hasHealthImportIdentity(entry),
+    ),
+  );
+  const previousValue = Number(previous?.total);
+  const incomingValue = Number(incoming.value);
+  if (
+    !previous ||
+    !Number.isFinite(previousValue) ||
+    !Number.isFinite(incomingValue) ||
+    previousValue <= incomingValue
+  )
+    return incoming;
+  return {
+    ...incoming,
+    value: previousValue,
+    sourceOrigin: previous.template.sourceOrigin ?? incoming.sourceOrigin,
+  };
+}
+
+/**
+ * A successful live read may transiently contain no positive current-day row.
+ * Keep the already confirmed imported total for the still-open local day; the
+ * aggregate replacement may continue clearing fallbacks and historical rows.
+ */
+export function currentDayStepFloorsForEmptyReplacement<
+  TEntry extends ImportedDailyAggregate & { id?: unknown },
+>(
+  existingEntries: readonly TEntry[],
+  incomingEntries: readonly TEntry[],
+  options: {
+    userId: string;
+    currentLocalDate: string;
+    stepMetricIds: ReadonlySet<string>;
+  },
+): TEntry[] {
+  const floors: TEntry[] = [];
+  for (const metricId of options.stepMetricIds) {
+    const matchesDayMetric = (entry: TEntry) =>
+      entry.userId === options.userId &&
+      entry.localDate === options.currentLocalDate &&
+      String(entry.metricId ?? "") === metricId;
+    const incoming = displayedImportedStepCandidate(
+      incomingEntries.filter(
+        (entry) =>
+          matchesDayMetric(entry) &&
+          entry.sourceProvider === "health_connect" &&
+          entry.source === "imported",
+      ),
+    );
+    if (incoming && incoming.total > 0) continue;
+    const existing = displayedImportedStepCandidate(
+      existingEntries.filter(
+        (entry) =>
+          matchesDayMetric(entry) &&
+          entry.sourceProvider === "health_connect" &&
+          entry.source === "imported" &&
+          !String(entry.sourceRecordId ?? "").startsWith("step-fallback:"),
+      ),
+    );
+    if (!existing || existing.total <= 0) continue;
+    if (
+      isCanonicalHealthConnectStepAggregate(
+        String(existing.template.sourceRecordId ?? ""),
+      ) &&
+      Number(existing.template.value) === existing.total
+    ) {
+      floors.push(existing.template);
+      continue;
+    }
+    floors.push({
+      ...existing.template,
+      value: existing.total,
+      sourceRecordId: `aggregate:steps:${options.currentLocalDate}`,
+    });
+  }
+  return floors;
+}
+
 type StepFallbackEntry = HealthImportIdentity & {
   metricId?: unknown;
   userId?: unknown;
@@ -269,10 +373,140 @@ export function isCanonicalHealthConnectStepAggregate(
   return identity?.startsWith("aggregate:steps:") === true;
 }
 
+/** Device-owned current-day origins that can be fresher than cloud state. */
+export function isAndroidDeviceStepOrigin(origin: unknown) {
+  const normalized = String(origin ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    normalized === "android" ||
+    normalized.startsWith("com.android.healthconnect.phone.")
+  );
+}
+
+/**
+ * Merge the framework-discovered current-device source with an SPN exposed by
+ * a current aggregate/raw record. Some extension builds expose the SPN through
+ * only one of these surfaces, so neither discovery path is sufficient alone.
+ */
+export function resolveCurrentDeviceStepOrigins(
+  discoveredOrigins: readonly unknown[],
+  observedOrigins: readonly unknown[],
+) {
+  return [
+    ...new Set(
+      [
+        ...discoveredOrigins,
+        ...observedOrigins.filter(isAndroidDeviceStepOrigin),
+      ]
+        .map((origin) => String(origin ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/**
+ * A clean cloud snapshot must not roll a locally observed live phone total
+ * backwards on restart. Only the current account's confirmed imported
+ * Health Connect Steps display total is eligible. This includes a legacy
+ * interval group during upgrade and a canonical multi-source row whose main
+ * label is merely "Health Connect"; manual rows, calculated fallbacks, other
+ * accounts, and completed days remain entirely server-owned.
+ */
+export function mergeLocalCurrentDayDeviceStepEntries<
+  TEntry extends ImportedDailyAggregate & { id?: unknown },
+>(
+  remoteEntries: TEntry[],
+  localEntries: readonly TEntry[],
+  options: {
+    userId: string;
+    currentLocalDate: string;
+    stepMetricIds: ReadonlySet<string>;
+  },
+): TEntry[] {
+  const localByMetric = new Map<string, TEntry[]>();
+  for (const entry of localEntries) {
+    const metricId = String(entry.metricId ?? "");
+    if (
+      entry.userId !== options.userId ||
+      entry.localDate !== options.currentLocalDate ||
+      !options.stepMetricIds.has(metricId) ||
+      entry.sourceProvider !== "health_connect" ||
+      !hasHealthImportIdentity(entry) ||
+      entry.source === "manual" ||
+      String(entry.sourceRecordId ?? "").startsWith("step-fallback:") ||
+      !Number.isFinite(Number(entry.value)) ||
+      Number(entry.value) <= 0
+    )
+      continue;
+    const grouped = localByMetric.get(metricId);
+    if (grouped) grouped.push(entry);
+    else localByMetric.set(metricId, [entry]);
+  }
+  if (!localByMetric.size) return remoteEntries;
+
+  const preserved = new Map<
+    string,
+    { local: { template: TEntry; total: number }; remote?: TEntry }
+  >();
+  for (const [metricId, localEntriesForMetric] of localByMetric) {
+    const local = displayedImportedStepCandidate(localEntriesForMetric);
+    if (!local?.total) continue;
+    const remoteEntriesForMetric = remoteEntries.filter(
+      (entry) =>
+        entry.userId === options.userId &&
+        entry.localDate === options.currentLocalDate &&
+        String(entry.metricId ?? "") === metricId &&
+        entry.source !== "manual" &&
+        hasHealthImportIdentity(entry),
+    );
+    const remoteDisplayed = displayedImportedStepCandidate(
+      remoteEntriesForMetric,
+    );
+    const remoteCanonical = selectCanonicalHealthConnectStepAggregate(
+      remoteEntriesForMetric.filter(
+        (entry) => entry.sourceProvider === "health_connect",
+      ),
+    );
+    const remoteTotal = Number(remoteDisplayed?.total) || 0;
+    if (local.total > remoteTotal)
+      preserved.set(metricId, { local, remote: remoteCanonical });
+  }
+  if (!preserved.size) return remoteEntries;
+
+  return [
+    ...remoteEntries.filter(
+      (entry) =>
+        !(
+          entry.userId === options.userId &&
+          entry.localDate === options.currentLocalDate &&
+          preserved.has(String(entry.metricId ?? "")) &&
+          entry.source !== "manual" &&
+          hasHealthImportIdentity(entry)
+        ),
+    ),
+    ...[...preserved.values()].flatMap(({ local, remote }) => {
+      const template = remote ?? local.template;
+      return [
+        {
+          ...template,
+          value: local.total,
+          sourceRecordId: `aggregate:steps:${options.currentLocalDate}`,
+          sourceOrigin:
+            local.template.sourceOrigin ?? template.sourceOrigin,
+          sourceUpdatedAt:
+            local.template.sourceUpdatedAt ?? template.sourceUpdatedAt,
+        },
+      ];
+    }),
+  ];
+}
+
 type CanonicalStepEntry = {
-  sourceRecordId?: string;
-  sourceUpdatedAt?: string;
-  recordedAt: string;
+  sourceRecordId?: unknown;
+  sourceUpdatedAt?: unknown;
+  recordedAt?: unknown;
+  value?: unknown;
 };
 
 /** Selects the newest canonical aggregate and ignores legacy writer totals. */
@@ -281,7 +515,9 @@ export function selectCanonicalHealthConnectStepAggregate<
 >(entries: readonly TEntry[]): TEntry | undefined {
   return entries
     .filter((entry) =>
-      isCanonicalHealthConnectStepAggregate(entry.sourceRecordId),
+      isCanonicalHealthConnectStepAggregate(
+        String(entry.sourceRecordId ?? ""),
+      ),
     )
     .reduce<TEntry | undefined>((selected, entry) => {
       if (!selected) return entry;
@@ -291,6 +527,66 @@ export function selectCanonicalHealthConnectStepAggregate<
       const entryRevision = String(entry.sourceUpdatedAt ?? entry.recordedAt);
       return entryRevision > selectedRevision ? entry : selected;
   }, undefined);
+}
+
+/**
+ * Mirrors the Steps value shown before canonical migration. A legacy source
+ * can contain several interval rows (27 + 27 = 54); selecting only its newest
+ * row would recreate the exact half-total regression during replacement.
+ */
+export function displayedImportedStepCandidate<
+  TEntry extends ImportedDailyAggregate & { id?: unknown },
+>(
+  entries: readonly TEntry[],
+): { template: TEntry; total: number } | undefined {
+  const imported = entries.filter(hasHealthImportIdentity);
+  const canonical = selectCanonicalHealthConnectStepAggregate(imported);
+  if (canonical) {
+    const total = Number(canonical.value);
+    return Number.isFinite(total)
+      ? { template: canonical, total: Math.max(0, Math.round(total)) }
+      : undefined;
+  }
+  const bySource = new Map<string, TEntry[]>();
+  for (const entry of imported) {
+    const source = healthSourceId(String(entry.sourceOrigin ?? ""));
+    const grouped = bySource.get(source);
+    if (grouped) grouped.push(entry);
+    else bySource.set(source, [entry]);
+  }
+  const candidates = [...bySource.values()].flatMap((items) => {
+    const values = items
+      .map((entry) => Number(entry.value))
+      .filter(Number.isFinite);
+    if (!values.length) return [];
+    const hasDailyAggregate = items.some(
+      (entry) =>
+        String(entry.sourceRecordId ?? "").startsWith("daily:") ||
+        String(entry.id ?? "").includes(":daily:"),
+    );
+    const total = hasDailyAggregate
+      ? Math.max(...values)
+      : values.reduce((sum, value) => sum + value, 0);
+    const template = [...items].sort((left, right) =>
+      String(right.recordedAt ?? "").localeCompare(
+        String(left.recordedAt ?? ""),
+      ),
+    )[0];
+    return [{ template, total: Math.max(0, Math.round(total)) }];
+  });
+  candidates.sort(
+    (left, right) =>
+      healthSourcePriority(
+        String(left.template.sourceOrigin ?? ""),
+        "steps",
+      ) -
+        healthSourcePriority(
+          String(right.template.sourceOrigin ?? ""),
+          "steps",
+        ) ||
+      right.total - left.total,
+  );
+  return candidates[0];
 }
 
 /**
@@ -347,6 +643,7 @@ export function combineDisjointStepWindows(
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
   disjointPhoneCandidate: number | null | undefined,
+  androidDeviceCount?: number | null,
 ) {
   const healthConnect = Number.isFinite(healthConnectCount)
     ? Math.max(0, Math.round(healthConnectCount))
@@ -354,10 +651,24 @@ export function reconcileCurrentDayStepTotal(
   const localPhone = Number.isFinite(disjointPhoneCandidate)
     ? Math.max(0, Math.round(disjointPhoneCandidate as number))
     : null;
-  const usedLocalPhone = localPhone !== null && localPhone > healthConnect;
+  const androidDevice = Number.isFinite(androidDeviceCount)
+    ? Math.max(0, Math.round(androidDeviceCount as number))
+    : null;
+  const count = Math.max(
+    healthConnect,
+    localPhone ?? 0,
+    androidDevice ?? 0,
+  );
+  const usedAndroidDevice =
+    androidDevice !== null &&
+    androidDevice === count &&
+    androidDevice > healthConnect;
+  const usedLocalPhone =
+    !usedAndroidDevice && localPhone !== null && localPhone > healthConnect;
   return {
-    count: usedLocalPhone ? localPhone : healthConnect,
+    count,
     usedLocalPhone,
+    usedAndroidDevice,
   };
 }
 

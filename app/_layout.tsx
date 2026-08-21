@@ -81,6 +81,7 @@ import {
   subscribeWebPushSubscriptionChanges,
 } from "@/src/notifications/webPush";
 import { automaticFastProgress } from "@/src/domain/fasting";
+import { markUserInteraction } from "@/src/lib/userInteraction";
 
 const theme = {
   ...DefaultTheme,
@@ -94,7 +95,13 @@ const theme = {
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={styles.root}>
+    <GestureHandlerRootView
+      style={styles.root}
+      onTouchStart={() => markUserInteraction()}
+      onTouchMove={() => markUserInteraction()}
+      onTouchEnd={() => markUserInteraction()}
+      onTouchCancel={() => markUserInteraction()}
+    >
       <AuthProvider>
         <AppProvider>
           <TutorialProvider guides={TUTORIAL_GUIDES}>

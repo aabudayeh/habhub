@@ -244,6 +244,13 @@ function requireCloud() {
   return supabase;
 }
 
+function throwIfCloudReadAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error("Cloud read deferred for user interaction.");
+  error.name = "AbortError";
+  throw error;
+}
+
 function cloudErrorText(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (error && typeof error === "object") {
@@ -832,6 +839,7 @@ async function signedUrls(paths: string[]) {
 export async function loadCloudMessages(
   state: AppState,
   groupId: string,
+  signal?: AbortSignal,
 ): Promise<ChatMessage[]> {
   const client = requireCloud();
   const localGroupMessages = state.messages
@@ -851,12 +859,15 @@ export async function loadCloudMessages(
     overlap.setMinutes(overlap.getMinutes() - 5);
     query = query.gte("created_at", overlap.toISOString());
   }
+  if (signal) query = query.abortSignal(signal);
   const { data, error } = await query.limit(SHARED_MESSAGE_CACHE_LIMIT);
   if (error) throw error;
+  throwIfCloudReadAborted(signal);
   const rows = data ?? [];
   const urls = await signedUrls(
     rows.map((message) => message.image_path).filter(Boolean),
   );
+  throwIfCloudReadAborted(signal);
   const remote: ChatMessage[] = rows.map((message) => ({
     id: message.client_generated_id ?? message.id,
     groupId,
@@ -891,6 +902,7 @@ export async function loadCloudGroupActivity(
   state: AppState,
   groupId: string,
   sinceDate?: string,
+  signal?: AbortSignal,
 ): Promise<
   Pick<AppState, "entries" | "dailyMetricStatuses"> & {
     version?: number;
@@ -910,10 +922,13 @@ export async function loadCloudGroupActivity(
   const recentEntrySince = dateKey(activityStart);
   const requestedEntrySince =
     requestedSince > recentEntrySince ? requestedSince : recentEntrySince;
-  const snapshotResult = await client.rpc("get_group_activity_snapshot", {
+  let snapshotQuery = client.rpc("get_group_activity_snapshot", {
     p_group_id: groupId,
     p_since_date: requestedSince,
   });
+  if (signal) snapshotQuery = snapshotQuery.abortSignal(signal);
+  const snapshotResult = await snapshotQuery;
+  throwIfCloudReadAborted(signal);
   const missingSnapshotRpc =
     snapshotResult.error?.code === "PGRST202" ||
     snapshotResult.error?.code === "42883";
@@ -939,11 +954,14 @@ export async function loadCloudGroupActivity(
   // RPC exists, entries and statuses are read from one MVCC-consistent server
   // snapshot instead of two requests that can observe different write stages.
   if (missingSnapshotRpc) {
-    const metricResult = await client
+    let metricQuery = client
       .from("metric_definitions")
       .select("id, slug")
       .eq("group_id", groupId)
       .is("archived_at", null);
+    if (signal) metricQuery = metricQuery.abortSignal(signal);
+    const metricResult = await metricQuery;
+    throwIfCloudReadAborted(signal);
     if (metricResult.error) throw metricResult.error;
     metricRows = metricResult.data ?? [];
     const metricIds = metricRows.map((row) => row.id);
@@ -955,8 +973,10 @@ export async function loadCloudGroupActivity(
               .select("*")
               .in("metric_id", metricIds)
               .order("recorded_at");
-            query = query.gte("local_date", requestedEntrySince);
-            return query.range(from, to);
+             query = query.gte("local_date", requestedEntrySince);
+            let pageQuery = query.range(from, to);
+            if (signal) pageQuery = pageQuery.abortSignal(signal);
+            return pageQuery;
           })
         : Promise.resolve([]),
       loadAllPages((from, to) => {
@@ -967,9 +987,12 @@ export async function loadCloudGroupActivity(
           .order("local_date");
         if (requestedSince)
           query = query.gte("local_date", requestedSince);
-        return query.range(from, to);
+        let pageQuery = query.range(from, to);
+        if (signal) pageQuery = pageQuery.abortSignal(signal);
+        return pageQuery;
       }),
     ]);
+    throwIfCloudReadAborted(signal);
   }
   const slugById = new Map((metricRows ?? []).map((row) => [row.id, row.slug]));
   const privacyFences: SharedMetricPrivacyFence[] = (
@@ -986,6 +1009,7 @@ export async function loadCloudGroupActivity(
       .map((entry) => entry.image_path)
       .filter((path): path is string => Boolean(path)),
   );
+  throwIfCloudReadAborted(signal);
   // The fence RPC may commit just before the owner's history rewrite. Even if
   // RLS still authorizes that narrow race response, exact rows at or below the
   // fence revision are stale and must fail closed.
@@ -1182,16 +1206,20 @@ export async function loadCloudGroupActivity(
   };
 }
 
-async function groupMembers(groupIds: string[]) {
+async function groupMembers(groupIds: string[], signal?: AbortSignal) {
   const client = requireCloud();
   if (!groupIds.length)
     return new Map<string, { active: Member[]; pending: Member[] }>();
-  const currentMembership = await client
+  let currentMembershipQuery = client
     .from("group_members")
     .select(
       "group_id, user_id, role, status, last_seen_at, last_data_synced_at",
     )
     .in("group_id", groupIds);
+  if (signal)
+    currentMembershipQuery = currentMembershipQuery.abortSignal(signal);
+  const currentMembership = await currentMembershipQuery;
+  throwIfCloudReadAborted(signal);
   let membership: {
     group_id: string;
     user_id: string;
@@ -1206,10 +1234,13 @@ async function groupMembers(groupIds: string[]) {
     // Allow the app update to remain usable while the additive migration is
     // being deployed. Approval status and presence must not regress merely
     // because the new freshness column is not visible in the schema cache yet.
-    const compatible = await client
+    let compatibleQuery = client
       .from("group_members")
       .select("group_id, user_id, role, status, last_seen_at")
       .in("group_id", groupIds);
+    if (signal) compatibleQuery = compatibleQuery.abortSignal(signal);
+    const compatible = await compatibleQuery;
+    throwIfCloudReadAborted(signal);
     if (!compatible.error) {
       membership = (compatible.data ?? []).map((row) => ({
         ...row,
@@ -1218,10 +1249,13 @@ async function groupMembers(groupIds: string[]) {
     } else if (!/status|last_seen_at|column/i.test(compatible.error.message)) {
       throw compatible.error;
     } else {
-      const legacy = await client
+      let legacyQuery = client
         .from("group_members")
         .select("group_id, user_id, role")
         .in("group_id", groupIds);
+      if (signal) legacyQuery = legacyQuery.abortSignal(signal);
+      const legacy = await legacyQuery;
+      throwIfCloudReadAborted(signal);
       if (legacy.error) throw legacy.error;
       membership = (legacy.data ?? []).map((row) => ({
         ...row,
@@ -1231,10 +1265,13 @@ async function groupMembers(groupIds: string[]) {
       })) as typeof membership;
     }
   } else if (/status|last_seen_at|column/i.test(currentMembership.error.message)) {
-    const legacy = await client
+    let legacyQuery = client
       .from("group_members")
       .select("group_id, user_id, role")
       .in("group_id", groupIds);
+    if (signal) legacyQuery = legacyQuery.abortSignal(signal);
+    const legacy = await legacyQuery;
+    throwIfCloudReadAborted(signal);
     if (legacy.error) throw legacy.error;
     membership = (legacy.data ?? []).map((row) => ({
       ...row,
@@ -1246,19 +1283,26 @@ async function groupMembers(groupIds: string[]) {
     throw currentMembership.error;
   }
   const userIds = [...new Set((membership ?? []).map((row) => row.user_id))];
-  const { data: profiles, error: profileError } = userIds.length
-    ? await client
+  const profiles = userIds.length
+    ? await (async () => {
+        let profileQuery = client
         .from("profiles")
         .select("id, display_name, avatar_path, account_revision")
-        .in("id", userIds)
-    : { data: [], error: null };
-  if (profileError) throw profileError;
+          .in("id", userIds);
+        if (signal) profileQuery = profileQuery.abortSignal(signal);
+        const profileResult = await profileQuery;
+        throwIfCloudReadAborted(signal);
+        if (profileResult.error) throw profileResult.error;
+        return profileResult.data ?? [];
+      })()
+    : [];
   const profileMap = new Map(
     (profiles ?? []).map((profile) => [profile.id, profile]),
   );
   const urls = await signedUrls(
     (profiles ?? []).map((profile) => profile.avatar_path).filter(Boolean),
   );
+  throwIfCloudReadAborted(signal);
   const result = new Map<string, { active: Member[]; pending: Member[] }>();
   for (const membershipRow of membership ?? []) {
     const profile = profileMap.get(membershipRow.user_id);
@@ -1291,16 +1335,25 @@ async function groupMembers(groupIds: string[]) {
   return result;
 }
 
-export async function loadCloudGroupShells(): Promise<Group[]> {
+export async function loadCloudGroupShells(
+  signal?: AbortSignal,
+): Promise<Group[]> {
   const client = requireCloud();
-  const currentMemberships = await client
+  let currentMembershipQuery = client
     .from("group_members")
     .select("group_id, role, status");
+  if (signal)
+    currentMembershipQuery = currentMembershipQuery.abortSignal(signal);
+  const currentMemberships = await currentMembershipQuery;
+  throwIfCloudReadAborted(signal);
   let memberships = currentMemberships.data;
   if (currentMemberships.error) {
     if (!/status|column|schema cache/i.test(currentMemberships.error.message))
       throw currentMemberships.error;
-    const legacy = await client.from("group_members").select("group_id, role");
+    let legacyQuery = client.from("group_members").select("group_id, role");
+    if (signal) legacyQuery = legacyQuery.abortSignal(signal);
+    const legacy = await legacyQuery;
+    throwIfCloudReadAborted(signal);
     if (legacy.error) throw legacy.error;
     memberships = (legacy.data ?? []).map((row) => ({ ...row, status: "active" }));
   }
@@ -1310,24 +1363,31 @@ export async function loadCloudGroupShells(): Promise<Group[]> {
     .filter((row) => row.status !== "pending")
     .map((row) => row.group_id);
   if (!groupIds.length) return [];
+  let groupsQuery = client
+    .from("groups")
+    .select(
+      "id, name, invite_code, template_name, settings, configuration_revision",
+    )
+    .in("id", groupIds);
+  let metricsQuery = client
+    .from("metric_definitions")
+    .select("*")
+    .in("group_id", groupIds)
+    .is("archived_at", null);
+  if (signal) {
+    groupsQuery = groupsQuery.abortSignal(signal);
+    metricsQuery = metricsQuery.abortSignal(signal);
+  }
   const [
     { data: rows, error: groupError },
     { data: metrics, error: metricError },
     members,
   ] = await Promise.all([
-    client
-      .from("groups")
-      .select(
-        "id, name, invite_code, template_name, settings, configuration_revision",
-      )
-      .in("id", groupIds),
-    client
-      .from("metric_definitions")
-      .select("*")
-      .in("group_id", groupIds)
-      .is("archived_at", null),
-    groupMembers(groupIds),
+    groupsQuery,
+    metricsQuery,
+    groupMembers(groupIds, signal),
   ]);
+  throwIfCloudReadAborted(signal);
   if (groupError) throw groupError;
   if (metricError) throw metricError;
   return (rows ?? []).map(
@@ -1553,12 +1613,14 @@ export async function loadCloudWorkspace(
     -(SHARED_ACTIVITY_CACHE_DAYS - 1),
   ),
   preloadedShells?: Group[],
+  signal?: AbortSignal,
 ): Promise<AppState> {
   const client = requireCloud();
   // Startup already loads the group shells to select the active workspace.
   // Reuse that consistent snapshot instead of immediately issuing the same
   // membership/profile/metric request set a second time.
-  const shells = preloadedShells ?? (await loadCloudGroupShells());
+  const shells = preloadedShells ?? (await loadCloudGroupShells(signal));
+  throwIfCloudReadAborted(signal);
   const group = shells.find((candidate) => candidate.id === groupId);
   if (!group)
     throw new Error("This group is unavailable or you no longer have access.");
@@ -1635,28 +1697,34 @@ export async function loadCloudWorkspace(
         },
         groupId,
         activitySinceDate,
+        signal,
       ),
       (async () => {
-        const { data, error } = await client
+        let query = client
           .from("messages")
           .select("*")
           .eq("group_id", groupId)
           .order("created_at", { ascending: false })
           .limit(SHARED_MESSAGE_CACHE_LIMIT);
-          if (error) throw error;
-          return data ?? [];
+        if (signal) query = query.abortSignal(signal);
+        const { data, error } = await query;
+        if (error) throw error;
+        return data ?? [];
       })(),
       (async () => {
-        const { data, error } = await client
+        let query = client
           .from("photo_updates")
           .select("*")
           .eq("group_id", groupId)
           .order("created_at", { ascending: false })
           .limit(SHARED_PHOTO_CACHE_LIMIT);
-          if (error) throw error;
-          return data ?? [];
+        if (signal) query = query.abortSignal(signal);
+        const { data, error } = await query;
+        if (error) throw error;
+        return data ?? [];
       })(),
     ]);
+  throwIfCloudReadAborted(signal);
   onActivityLoaded?.({
     version: activity.version,
     updatedAt: activity.updatedAt,
@@ -1666,13 +1734,19 @@ export async function loadCloudWorkspace(
   const mediaIds = photoRows.map(
     (photo) => photo.media_asset_id,
   );
-  const { data: media, error: mediaError } = mediaIds.length
-    ? await client
-        .from("media_assets")
-        .select("id, storage_path, captured_at")
-        .in("id", mediaIds)
-    : { data: [], error: null };
-  if (mediaError) throw mediaError;
+  const media = mediaIds.length
+    ? await (async () => {
+        let mediaQuery = client
+          .from("media_assets")
+          .select("id, storage_path, captured_at")
+          .in("id", mediaIds);
+        if (signal) mediaQuery = mediaQuery.abortSignal(signal);
+        const mediaResult = await mediaQuery;
+        throwIfCloudReadAborted(signal);
+        if (mediaResult.error) throw mediaResult.error;
+        return mediaResult.data ?? [];
+      })()
+    : [];
   const mediaById = new Map((media ?? []).map((item) => [item.id, item]));
   const paths = [
     ...messageRows
@@ -1681,6 +1755,7 @@ export async function loadCloudWorkspace(
     ...(media ?? []).map((item) => item.storage_path).filter(Boolean),
   ];
   const urls = await signedUrls(paths);
+  throwIfCloudReadAborted(signal);
   // The activity RPC owns the bounded group window. Preserve unrelated and
   // older local data, then overlay its collision-safe snapshot. This keeps
   // pending owner rows and local image URIs while allowing an authoritative

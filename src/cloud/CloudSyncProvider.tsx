@@ -49,6 +49,8 @@ import {
   profileProjectionLagsSnapshot,
 } from "@/src/domain/accountProfile";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { metricIdsForHealthDataTypes } from "@/src/domain/health";
+import { mergeLocalCurrentDayDeviceStepEntries } from "@/src/domain/healthDedup";
 import { applySharedMetricPrivacyFences } from "@/src/domain/sharedMetricPrivacy";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import { suggestedAccountName } from "@/src/domain/profileName";
@@ -100,9 +102,16 @@ import {
 import { networkReachability } from "@/src/domain/network";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
 import {
+  canBootstrapCloudSnapshotCursor,
+  cloudSnapshotCursorForAcknowledgement,
+  cloudSnapshotCursorMatches,
+  type CloudSnapshotCursor,
+} from "@/src/domain/cloudSnapshotCursor";
+import {
   scheduleResponsiveWork,
   waitForResponsiveTurn,
 } from "@/src/lib/responsiveWork";
+import { subscribeUserInteraction } from "@/src/lib/userInteraction";
 
 const DEVICE_ID_KEY = "paceboard-cloud-device-id-v1";
 const PENDING_GROUP_KEY = "metric-rally-pending-group-v1";
@@ -115,6 +124,7 @@ const GROUP_CONFIGURATION_ACK_KEY_PREFIX =
   "habhub-group-configuration-ack-v2:";
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = "habhub-cloud-checkpoint-v1:";
 const CLOUD_SNAPSHOT_ACK_KEY_PREFIX = "habhub-cloud-snapshot-ack-v2:";
+const CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX = "habhub-cloud-snapshot-cursor-v1:";
 const CLOUD_MERGE_BASE_KEY_PREFIX = "habhub-cloud-merge-base-v2:";
 const ACCOUNT_METADATA_ACK_KEY_PREFIX = "habhub-account-metadata-ack-v1:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
@@ -208,6 +218,8 @@ type SnapshotRow = {
   device_id: string | null;
   schema_version: number;
 };
+
+type SnapshotMetadata = Omit<SnapshotRow, "payload">;
 
 type CloudMergeBase = {
   version: 2;
@@ -310,6 +322,36 @@ async function writeCloudSnapshotAck(userId: string, hash: string) {
   );
 }
 
+async function readCloudSnapshotCursor(userId: string) {
+  try {
+    const saved = await AsyncStorage.getItem(
+      `${CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX}${userId}`,
+    );
+    if (!saved) return null;
+    const cursor = JSON.parse(saved) as CloudSnapshotCursor;
+    return Number.isSafeInteger(cursor.revision) &&
+      typeof cursor.updatedAt === "string" &&
+      typeof cursor.acknowledgedHash === "string"
+      ? cursor
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCloudSnapshotCursor(
+  userId: string,
+  metadata: SnapshotMetadata,
+  acknowledgedHash: string,
+) {
+  await AsyncStorage.setItem(
+    `${CLOUD_SNAPSHOT_CURSOR_KEY_PREFIX}${userId}`,
+    JSON.stringify(
+      cloudSnapshotCursorForAcknowledgement(metadata, acknowledgedHash),
+    ),
+  );
+}
+
 async function readAccountMetadataAck(userId: string) {
   return AsyncStorage.getItem(`${ACCOUNT_METADATA_ACK_KEY_PREFIX}${userId}`);
 }
@@ -345,24 +387,10 @@ async function writeCloudMergeBase(userId: string, base: CloudMergeBase) {
 
 function waitForCloudCacheWriteTurn() {
   if (NativeAppState.currentState !== "active") return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    let completed = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let task: ReturnType<typeof InteractionManager.runAfterInteractions> | null =
-      null;
-    const run = () => {
-      if (completed) return;
-      completed = true;
-      if (timer) clearTimeout(timer);
-      task?.cancel();
-      resolve();
-    };
-    task = InteractionManager.runAfterInteractions(run);
-    if (completed) task.cancel();
-    // Continuous animations must not strand the conflict base forever, but a
-    // foreground tap/navigation frame gets priority over its JSON encoding.
-    timer = setTimeout(run, 4_000);
-  });
+  return waitForResponsiveTurn({
+    maximumDelayMs: 4_000,
+    minimumUserQuietMs: 1_600,
+  }).promise;
 }
 
 async function yieldCloudMaintenanceToUi() {
@@ -374,8 +402,42 @@ async function yieldCloudMaintenanceToUi() {
   const turn = waitForResponsiveTurn({
     minimumDelayMs: 12,
     maximumDelayMs: 360,
+    minimumUserQuietMs: 1_600,
   });
   await turn.promise;
+}
+
+/**
+ * Native cloud reads can return a large JSON body. Abort and restart an
+ * automatic read when a new touch begins so response parsing/projection never
+ * repeatedly lands in the middle of active navigation. Background execution
+ * and web keep the ordinary one-shot request behavior.
+ */
+async function readCloudResponsively<T>(
+  read: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  for (;;) {
+    await yieldCloudMaintenanceToUi();
+    const canAbortForTouch =
+      Platform.OS !== "web" && NativeAppState.currentState === "active";
+    const controller = canAbortForTouch ? new AbortController() : null;
+    const unsubscribe = controller
+      ? subscribeUserInteraction(() => controller.abort())
+      : () => undefined;
+    try {
+      const result = await read(controller?.signal);
+      // Storage-signing and compatibility helpers are not all abortable. A
+      // touch that landed while one of them was pending still invalidates this
+      // presentation turn; retry after quiet instead of parsing/merging now.
+      if (controller?.signal.aborted) continue;
+      return result;
+    } catch (error) {
+      if (!controller?.signal.aborted) throw error;
+      // The touch is the new quiet-window boundary. Retry only after it ends.
+    } finally {
+      unsubscribe();
+    }
+  }
 }
 
 async function readWorkspaceAcks(userId: string) {
@@ -917,6 +979,7 @@ async function hashLargeCollectionResponsively<T>(
     const turn = waitForResponsiveTurn({
       minimumDelayMs: 8,
       maximumDelayMs: 280,
+      minimumUserQuietMs: 1_600,
     });
     await turn.promise;
   }
@@ -1445,6 +1508,25 @@ function mergeCollectionFromBase<T>(
   return merged;
 }
 
+function preserveLocalCurrentDayDeviceSteps(
+  incoming: AppState,
+  local: AppState,
+): AppState {
+  if (incoming.currentUserId !== local.currentUserId) return incoming;
+  const entries = mergeLocalCurrentDayDeviceStepEntries(
+    incoming.entries,
+    local.entries,
+    {
+      userId: local.currentUserId,
+      currentLocalDate: dateKey(),
+      stepMetricIds: new Set(
+        metricIdsForHealthDataTypes(["steps"], local.metrics),
+      ),
+    },
+  );
+  return entries === incoming.entries ? incoming : { ...incoming, entries };
+}
+
 function mergeStates(
   remote: AppState,
   local: AppState,
@@ -1627,7 +1709,10 @@ function mergeStates(
     ),
     lastSavedAt: null,
   };
-  return applyAccountMemberProfile(merged, profile);
+  return preserveLocalCurrentDayDeviceSteps(
+    applyAccountMemberProfile(merged, profile),
+    local,
+  );
 }
 
 /** Native authorization and transient UI state belong to this device. */
@@ -1700,6 +1785,19 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
   const keepForeignStatuses = local.dailyMetricStatuses.filter(
     (item) => item.userId !== userId,
   );
+  const acceptedOwnedEntries = mergeLocalCurrentDayDeviceStepEntries(
+    remoteWithDeviceSettings.entries.filter(
+      (entry) => entry.userId === userId,
+    ),
+    local.entries,
+    {
+      userId: local.currentUserId,
+      currentLocalDate: dateKey(),
+      stepMetricIds: new Set(
+        metricIdsForHealthDataTypes(["steps"], local.metrics),
+      ),
+    },
+  );
   const accepted: AppState = {
     ...remoteWithDeviceSettings,
     group: activeGroup,
@@ -1708,12 +1806,7 @@ function acceptCleanRemoteState(remote: AppState, local: AppState): AppState {
       remoteWithDeviceSettings.group.id === local.group.id
         ? local.selectedGroupMetricId
         : remoteWithDeviceSettings.selectedGroupMetricId,
-    entries: [
-      ...remoteWithDeviceSettings.entries.filter(
-        (entry) => entry.userId === userId,
-      ),
-      ...keepForeign(local.entries),
-    ],
+    entries: [...acceptedOwnedEntries, ...keepForeign(local.entries)],
     photos: [
       ...remoteWithDeviceSettings.photos.filter(
         (photo) => photo.userId === userId,
@@ -2208,21 +2301,26 @@ function mergeWorkspaceWithoutRegression(
   return applyAccountMemberProfile(merged, selectedAccountProfile);
 }
 
-async function fetchSnapshot(userId: string): Promise<SnapshotRow | null> {
+async function fetchSnapshot(
+  userId: string,
+  signal?: AbortSignal,
+): Promise<SnapshotRow | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase
+  let query = supabase
     .from("user_snapshots")
     .select("payload, revision, updated_at, device_id, schema_version")
-    .eq("user_id", userId)
-    .maybeSingle();
+    .eq("user_id", userId);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query.maybeSingle();
   if (error) {
     if (!/revision|device_id|schema_version|schema cache|column/i.test(errorText(error)))
       throw error;
-    const legacy = await supabase
+    let legacyQuery = supabase
       .from("user_snapshots")
       .select("payload, updated_at")
-      .eq("user_id", userId)
-      .maybeSingle();
+      .eq("user_id", userId);
+    if (signal) legacyQuery = legacyQuery.abortSignal(signal);
+    const legacy = await legacyQuery.maybeSingle();
     if (legacy.error) throw legacy.error;
     return legacy.data
       ? {
@@ -2326,6 +2424,37 @@ function friendlySyncError(error: unknown) {
   return message || "Cloud sync failed. Your local data is still safe.";
 }
 
+async function fetchSnapshotMetadata(
+  userId: string,
+): Promise<SnapshotMetadata | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from("user_snapshots")
+    // Deliberately omit payload. On established accounts this turns every
+    // normal native cold start from a multi-megabyte JSON transfer/parse into
+    // one tiny revision probe.
+    .select("revision, updated_at, device_id, schema_version")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!error) return data as SnapshotMetadata | null;
+  if (!/revision|device_id|schema_version|schema cache|column/i.test(errorText(error)))
+    throw error;
+  const legacy = await supabase
+    .from("user_snapshots")
+    .select("updated_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (legacy.error) throw legacy.error;
+  return legacy.data
+    ? {
+        revision: 0,
+        updated_at: legacy.data.updated_at,
+        device_id: null,
+        schema_version: 1,
+      }
+    : null;
+}
+
 /**
  * PostgREST reports an exhausted/temporarily busy connection pool as PGRST003.
  * It is recoverable in the same way as a network timeout: keep the durable
@@ -2352,6 +2481,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     hydrated,
     localMutationRevision,
     replaceState,
+    flushLocalPersistence,
     stageState,
   } = useApp();
   const auth = useAuth();
@@ -2456,9 +2586,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   networkAvailableRef.current = networkAvailable;
   const previousNetworkAvailableRef = useRef(networkAvailable);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const idleSyncRef = useRef<
-    ReturnType<typeof InteractionManager.runAfterInteractions> | null
-  >(null);
+  const idleSyncRef = useRef<{ cancel: () => void } | null>(null);
   const idleSyncFallbackTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
@@ -2467,6 +2595,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const suppressGroupRefreshUntilRef = useRef(0);
   const groupLoadSequenceRef = useRef(0);
   const activityLoadSequenceRef = useRef(0);
+  const groupRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const messageRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const activityRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const activityVersionByGroupRef = useRef(new Map<string, number>());
@@ -2546,6 +2675,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }, {
       minimumDelayMs: Platform.OS === "web" ? 0 : 120,
       maximumDelayMs: Platform.OS === "web" ? 1_000 : 2_800,
+      minimumUserQuietMs: Platform.OS === "web" ? 0 : 1_600,
     });
     if (!started) mergeBaseBuildTaskRef.current = task;
     else task.cancel();
@@ -2629,7 +2759,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     const active = conflictRefreshRef.current;
     if (active?.userId === userId) return active.promise;
     let promise: Promise<SnapshotRow | null>;
-    promise = fetchSnapshot(userId).finally(() => {
+    promise = readCloudResponsively((signal) =>
+      fetchSnapshot(userId, signal),
+    ).finally(() => {
       if (conflictRefreshRef.current?.promise === promise)
         conflictRefreshRef.current = null;
     });
@@ -2682,13 +2814,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const groupId = remote.group.id;
       const explicitlyPending =
         live.settings.pendingGroupConfigurationIds?.includes(groupId) === true;
-      const acknowledged =
-        groupConfigurationAckHashesRef.current.get(groupId) ?? null;
       const preserveLocalGroupConfiguration =
-        live.group.id === groupId &&
-        (explicitlyPending ||
-          (acknowledged !== null &&
-            groupConfigurationHash(live) !== acknowledged));
+        live.group.id === groupId && explicitlyPending;
       const preserveLocalAccountProfile =
         accountMetadataHash(live) !== accountMetadataHashRef.current;
       const next = mergeWorkspaceWithoutRegression(
@@ -2708,15 +2835,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           groupId,
           nextConfigurationHash,
         );
-        if (auth.user)
-          void writeGroupConfigurationAcks(
-            auth.user.id,
-            groupConfigurationAckHashesRef.current,
-          ).catch(() => undefined);
       }
       return next;
     },
-    [auth.user],
+    [],
   );
 
   const flushChatOutbox = useCallback(() => {
@@ -3296,12 +3418,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     // A global loading state here made every tab appear to reload.
     if (workspaceConflictGateRef.current?.userId !== operationUserId)
       setErrorMessage(null);
+    await yieldCloudMaintenanceToUi();
+    if (!operationIsCurrent()) return;
     const pullStartAccountHash = stableHash(stateRef.current);
     const accountWasDirty = pullStartAccountHash !== hashRef.current;
     try {
-      const remote = await fetchSnapshot(operationUserId);
+      const remote = await readCloudResponsively((signal) =>
+        fetchSnapshot(operationUserId, signal),
+      );
       if (!operationIsCurrent()) return;
       if (!remote) return;
+      // Response parsing happens before this continuation. Keep the remaining
+      // payload upgrade/hash/merge work out of a newly-started navigation.
+      await yieldCloudMaintenanceToUi();
+      if (!operationIsCurrent()) return;
       revisionRef.current = remote.revision;
       const bound = bindStateToAccount(remote.payload, operationUser);
       // Reuse matching signed URLs from the rendered cache. Signing media is a
@@ -3326,14 +3456,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         ? mergeStates(resolvedRemote, stateRef.current, mergeBaseRef.current)
         : acceptCleanRemoteState(resolvedRemote, stateRef.current);
       const resolvedHash = stableHash(resolved);
+      const shouldAcknowledgeRemoteSnapshot =
+        !preserveLocalAccount || resolvedHash === remoteHash;
       hashRef.current = remoteHash;
+      let acceptedMetadataHash: string | null = null;
       if (!preserveLocalAccount) {
-        const acceptedMetadataHash = accountMetadataHash(resolved);
+        acceptedMetadataHash = accountMetadataHash(resolved);
         accountMetadataHashRef.current = acceptedMetadataHash;
-        void writeAccountMetadataAck(
-          operationUserId,
-          acceptedMetadataHash,
-        ).catch(() => undefined);
       }
       workspaceHashRef.current = isCloudGroupId(resolved.group.id)
         ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
@@ -3341,19 +3470,37 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       groupConfigurationHashRef.current = isCloudGroupId(resolved.group.id)
         ? (groupConfigurationAckHashesRef.current.get(resolved.group.id) ?? null)
         : null;
-      replaceState(
-        resolved,
-        preserveLocalAccount ? { source: "local" } : { source: "cloud" },
-      );
+      // Advance the cloud ref before awaiting the disk boundary. A local edit
+      // that lands during that write is reduced from this state and must remain
+      // authoritative after the await.
       stateRef.current = resolved;
+      await replaceState(
+        resolved,
+        {
+          source: preserveLocalAccount ? "local" : "cloud",
+          persistImmediately: shouldAcknowledgeRemoteSnapshot,
+        },
+      );
+      if (!operationIsCurrent()) return;
+      if (acceptedMetadataHash)
+        await writeAccountMetadataAck(
+          operationUserId,
+          acceptedMetadataHash,
+        ).catch(() => undefined);
       rememberCloudMergeBase(operationUserId, bound);
       recordServerSyncedAt(remote.updated_at);
       // Also seeds the acknowledgement for upgraded clients whose cached and
       // remote durable state already match exactly.
-      if (!preserveLocalAccount || resolvedHash === remoteHash)
+      if (shouldAcknowledgeRemoteSnapshot) {
         await writeCloudSnapshotAck(operationUserId, remoteHash).catch(
           () => undefined,
         );
+        await writeCloudSnapshotCursor(
+          operationUserId,
+          remote,
+          remoteHash,
+        ).catch(() => undefined);
+      }
       if (!operationIsCurrent()) return;
       const conflictGate = workspaceConflictGateRef.current;
       if (conflictGate?.userId === operationUserId) {
@@ -3370,9 +3517,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         nextRetryAtRef.current = 0;
         setNextRetryAt(0);
       }
-      InteractionManager.runAfterInteractions(() => {
+      scheduleResponsiveWork(() => {
         resolvePrivateMedia(bound)
-          .then((mediaState) => {
+          .then(async (mediaState) => {
+            await yieldCloudMaintenanceToUi();
             if (!operationIsCurrent()) return;
             const withMedia = mergePrivateMediaUrls(
               stateRef.current,
@@ -3385,7 +3533,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // Exhausted Storage egress or a transient signing failure must not
           // turn an otherwise successful account pull into a sync error.
           .catch(() => undefined);
-      });
+      }, { minimumDelayMs: 120, maximumDelayMs: 2_000, minimumUserQuietMs: 1_600 });
       if (isCloudGroupId(resolved.group.id)) {
         // "Get latest" returns as soon as the private account snapshot is
         // merged. The heavier group workspace catches up after interactions,
@@ -3393,11 +3541,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const groupId = resolved.group.id;
         const groupSequence = ++groupLoadSequenceRef.current;
         activityLoadSequenceRef.current += 1;
-        InteractionManager.runAfterInteractions(() => {
-          loadCloudWorkspace(
-            stateRef.current,
-            groupId,
-            (metadata) => recordActivityMetadata(groupId, metadata),
+        scheduleResponsiveWork(() => {
+          readCloudResponsively((signal) =>
+            loadCloudWorkspace(
+              stateRef.current,
+              groupId,
+              (metadata) => recordActivityMetadata(groupId, metadata),
+              undefined,
+              undefined,
+              signal,
+            ),
           )
             .then((loaded) => {
               if (
@@ -3422,6 +3575,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
               scheduleGroupReadRetry(groupId);
             });
+        }, {
+          minimumDelayMs: 300,
+          maximumDelayMs: 3_000,
+          minimumUserQuietMs: 1_800,
         });
       }
     } catch (error) {
@@ -3598,6 +3755,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (forceAttempt) setStatus("syncing");
       if (!deferGroupRetry) setErrorMessage(null);
       try {
+        // Network callbacks can resume while a user is pressing a tab. Hold
+        // all snapshot projection/hash work until that real touch settles.
+        await yieldCloudMaintenanceToUi();
+        if (!operationIsCurrent()) return;
         const deviceId = deviceIdRef.current ?? (await getDeviceId());
         if (!operationIsCurrent()) return;
         deviceIdRef.current = deviceId;
@@ -3650,18 +3811,20 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // Establish the private snapshot revision before mutating relational
         // group rows. A stale device now conflicts and merges first, so it
         // cannot temporarily re-publish older visibility or deleted content.
+        await yieldCloudMaintenanceToUi();
+        if (!operationIsCurrent()) return;
         await persistPrivateSnapshot();
         if (!operationIsCurrent()) return;
         const pushedAccountMetadataHash = accountMetadataHash(candidate);
         const accountMetadataNeedsUpload =
           pushedAccountMetadataHash !== accountMetadataHashRef.current;
         let accountMetadataSynced = !accountMetadataNeedsUpload;
+        let accountMetadataAckPending = false;
+        let workspaceAcksPending = false;
+        let groupConfigurationAcksPending = false;
         const acknowledgeAccountMetadata = () => {
           accountMetadataHashRef.current = pushedAccountMetadataHash;
-          return writeAccountMetadataAck(
-            operationUserId,
-            pushedAccountMetadataHash,
-          ).catch(() => undefined);
+          accountMetadataAckPending = true;
         };
         let nextWorkspaceHash = workspaceHash(candidate);
         const nextGroupConfigurationHash = groupConfigurationHash(candidate);
@@ -3671,14 +3834,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           candidate.settings.pendingGroupConfigurationIds?.includes(
             candidate.group.id,
           ) === true;
-        const acknowledgedGroupConfigurationHash =
-          groupConfigurationAckHashesRef.current.get(candidate.group.id) ??
-          null;
-        const shouldPushGroupConfiguration =
-          pendingGroupConfiguration ||
-          (acknowledgedGroupConfigurationHash !== null &&
-            nextGroupConfigurationHash !==
-              acknowledgedGroupConfigurationHash);
+        // Only the reducer's explicit durable outbox marker authorizes a group
+        // settings upload. A stale/missing ACK hash is not proof of a user edit
+        // and must never republish an older cached configuration after a crash.
+        const shouldPushGroupConfiguration = pendingGroupConfiguration;
         const groupWorkspaceNeedsUpload =
           isCloudGroupId(candidate.group.id) &&
           (forceWorkspace ||
@@ -3736,7 +3895,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
             workspaceWasUploaded = true;
             accountMetadataSynced = true;
-            await acknowledgeAccountMetadata();
+            acknowledgeAccountMetadata();
             if (!operationIsCurrent()) return;
             if (workspaceResult.activityVersion !== undefined)
               activityVersionByGroupRef.current.set(
@@ -3871,11 +4030,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               pushedGroupId,
               pushedWorkspaceHash,
             );
-            await writeWorkspaceAcks(
-              operationUserId,
-              workspaceAckHashesRef.current,
-            ).catch(() => undefined);
-            if (!operationIsCurrent()) return;
+            workspaceAcksPending = true;
             if (workspaceResult.groupConfigurationPushed) {
               groupConfigurationHashRef.current =
                 nextGroupConfigurationHash;
@@ -3883,11 +4038,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 pushedGroupId,
                 nextGroupConfigurationHash,
               );
-              await writeGroupConfigurationAcks(
-                operationUserId,
-                groupConfigurationAckHashesRef.current,
-              ).catch(() => undefined);
-              if (!operationIsCurrent()) return;
+              groupConfigurationAcksPending = true;
             }
           } catch (error) {
             const workspaceErrorText = errorText(error);
@@ -3897,9 +4048,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               // device's explicitly pending edits, then let the serialized
               // retry publish them against the new revision.
               try {
-                const loaded = await loadCloudWorkspace(
-                  stateRef.current,
-                  pushedGroupId,
+                const loaded = await readCloudResponsively((signal) =>
+                  loadCloudWorkspace(
+                    stateRef.current,
+                    pushedGroupId,
+                    undefined,
+                    undefined,
+                    undefined,
+                    signal,
+                  ),
                 );
                 if (operationIsCurrent()) {
                   const rebased = mergeRemoteWorkspace(
@@ -4016,15 +4173,50 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           await pushCloudAccountMetadata(candidate, revisionRef.current);
           if (!operationIsCurrent()) return;
           accountMetadataSynced = true;
-          await acknowledgeAccountMetadata();
+          acknowledgeAccountMetadata();
           if (!operationIsCurrent()) return;
         }
+        await yieldCloudMaintenanceToUi();
+        if (!operationIsCurrent()) return;
         await persistPrivateSnapshot();
+        if (!operationIsCurrent()) return;
+        // The server revision is not a durable acknowledgement until the
+        // corresponding (or newer locally edited) state is on this device.
+        // Otherwise a crash can restart from an older cache, misclassify it as
+        // a local edit, and upload it over the revision that just succeeded.
+        await flushLocalPersistence();
+        if (!operationIsCurrent()) return;
+        if (accountMetadataAckPending)
+          await writeAccountMetadataAck(
+            operationUserId,
+            pushedAccountMetadataHash,
+          ).catch(() => undefined);
+        if (workspaceAcksPending)
+          await writeWorkspaceAcks(
+            operationUserId,
+            workspaceAckHashesRef.current,
+          ).catch(() => undefined);
+        if (groupConfigurationAcksPending)
+          await writeGroupConfigurationAcks(
+            operationUserId,
+            groupConfigurationAckHashesRef.current,
+          ).catch(() => undefined);
         if (!operationIsCurrent()) return;
         hashRef.current = candidateHash;
         await writeCloudSnapshotAck(operationUserId, candidateHash).catch(
           () => undefined,
         );
+        if (syncedAt)
+          await writeCloudSnapshotCursor(
+            operationUserId,
+            {
+              revision: revisionRef.current,
+              updated_at: syncedAt,
+              device_id: deviceId,
+              schema_version: candidate.version,
+            },
+            candidateHash,
+          ).catch(() => undefined);
         if (!operationIsCurrent()) return;
         if (workspaceSynced) {
           if (!isCloudGroupId(candidate.group.id)) {
@@ -4155,6 +4347,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.user,
     ensureLatestCloudMergeBase,
     fetchConflictSnapshot,
+    flushLocalPersistence,
     hasUnsyncedLocalChanges,
     mergeRemoteWorkspace,
     recordServerSyncedAt,
@@ -4266,6 +4459,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const task = waitForResponsiveTurn({
         minimumDelayMs,
         maximumDelayMs,
+        minimumUserQuietMs: 1_600,
       });
       responsiveTasks.add(task);
       try {
@@ -4300,6 +4494,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           groupConfigurationAcks,
           accountMetadataAck,
           acknowledgedSnapshotHash,
+          savedSnapshotCursor,
           savedMergeBase,
           savedCheckpoint,
           onboardingComplete,
@@ -4309,6 +4504,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           readGroupConfigurationAcks(user.id),
           readAccountMetadataAck(user.id),
           readCloudSnapshotAck(user.id),
+          readCloudSnapshotCursor(user.id),
           readCloudMergeBase(user.id),
           readCloudSyncCheckpoint(user.id),
           onboardingCompletedLocally(user.id),
@@ -4365,7 +4561,55 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         // first navigation/tap frames priority before starting online restore.
         await waitForUi(280, 1_200);
         if (cancelled) return;
-        const remote = await fetchSnapshot(user.id);
+        const remoteMetadata = await fetchSnapshotMetadata(user.id);
+        if (cancelled) return;
+        // A persisted cursor proves what the server acknowledged, but not that
+        // the matching local snapshot reached AsyncStorage before a crash. Hash
+        // the actual restored cache after another real touch-quiet turn before
+        // allowing the metadata-only fast path.
+        await waitForUi(0, 1_200);
+        if (cancelled) return;
+        const accountIdentityMatches =
+          stateRef.current.currentUserId === user.id &&
+          !isDemoBoundState(stateRef.current);
+        const currentSnapshotHash = acknowledgedSnapshotHash
+          ? stableHash(stateRef.current)
+          : "";
+        const cursorMatches = cloudSnapshotCursorMatches(
+          savedSnapshotCursor,
+          remoteMetadata,
+          acknowledgedSnapshotHash,
+          currentSnapshotHash,
+          accountIdentityMatches,
+        );
+        const canBootstrapCursor = canBootstrapCloudSnapshotCursor({
+          hasCursor: Boolean(savedSnapshotCursor),
+          metadata: remoteMetadata,
+          acknowledgedHash: acknowledgedSnapshotHash,
+          currentHash: currentSnapshotHash,
+          savedCheckpoint,
+          accountIdentityMatches,
+        });
+        const cachedSnapshotIsCurrent = cursorMatches || canBootstrapCursor;
+        if (
+          canBootstrapCursor &&
+          remoteMetadata &&
+          acknowledgedSnapshotHash
+        )
+          void writeCloudSnapshotCursor(
+            user.id,
+            remoteMetadata,
+            acknowledgedSnapshotHash,
+          ).catch(() => undefined);
+        // Only changed/new accounts pay the cost of downloading and parsing
+        // the full JSON snapshot. The cursor is written together with the hash
+        // acknowledgement, so it can never bless an unmerged remote revision.
+        const remote =
+          remoteMetadata && !cachedSnapshotIsCurrent
+            ? await readCloudResponsively((signal) =>
+                fetchSnapshot(user.id, signal),
+              )
+            : null;
         if (cancelled) return;
         // Payload upgrades, hashing and three-way merges are synchronous. Start
         // them after any navigation animation that occurred during the fetch.
@@ -4388,7 +4632,71 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         initializedUserRef.current = user.id;
         remoteInitializationPendingRef.current = false;
         let correctedAccountState = false;
-        if (remote) {
+        if (cachedSnapshotIsCurrent && remoteMetadata) {
+          revisionRef.current = remoteMetadata.revision;
+          hashRef.current = acknowledgedSnapshotHash;
+          const live = stateRef.current;
+          workspaceHashRef.current = isCloudGroupId(live.group.id)
+            ? (workspaceAckHashesRef.current.get(live.group.id) ?? null)
+            : null;
+          if (isCloudGroupId(live.group.id) && !workspaceHashRef.current)
+            workspaceUploadRequiredGroupsRef.current.add(live.group.id);
+          groupConfigurationHashRef.current = isCloudGroupId(live.group.id)
+            ? (groupConfigurationAckHashesRef.current.get(live.group.id) ??
+              null)
+            : null;
+          recordServerSyncedAt(remoteMetadata.updated_at);
+          setPendingChanges(hasUnsyncedLocalChanges());
+          setStatus("synced");
+
+          // Relational group rows have their own revision stream. Refresh them
+          // eventually, but only after a real touch-quiet window; the cached
+          // group remains fully usable while the request waits.
+          const groupHydration = scheduleResponsiveWork(() => {
+            (async () => {
+              await initialNetworkWorkSettled;
+              if (cancelled || nextRetryAtRef.current > Date.now()) return;
+              const existingGroups = await readCloudResponsively((signal) =>
+                loadCloudGroupShells(signal),
+              );
+              if (cancelled || !existingGroups.length) return;
+              const current = stateRef.current;
+              const targetGroup =
+                existingGroups.find(
+                  (group) => group.id === current.group.id,
+                ) ?? existingGroups[0];
+              const loaded = await readCloudResponsively((signal) =>
+                loadCloudWorkspace(
+                  { ...current, groups: existingGroups },
+                  targetGroup.id,
+                  (metadata) =>
+                    recordActivityMetadata(targetGroup.id, metadata),
+                  undefined,
+                  existingGroups,
+                  signal,
+                ),
+              );
+              await waitForUi(0, 2_500);
+              if (cancelled) return;
+              const next = mergeRemoteWorkspace(loaded, stateRef.current);
+              stateRef.current = next;
+              replaceState(next, { source: "cloud" });
+              markGroupReadSucceeded(targetGroup.id);
+            })().catch((groupError) => {
+              if (cancelled) return;
+              setErrorMessage(
+                `Account ready; group refresh will retry: ${errorText(groupError)}`,
+              );
+              const groupId = stateRef.current.group.id;
+              if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
+            });
+          }, {
+            minimumDelayMs: 3_000,
+            maximumDelayMs: 12_000,
+            minimumUserQuietMs: 1_800,
+          });
+          responsiveTasks.add(groupHydration);
+        } else if (remote) {
           revisionRef.current = remote.revision;
           const identityWasReset =
             identityResetUserRef.current === user.id;
@@ -4455,16 +4763,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               },
             };
           if (!cancelled) {
+            const resolvedHash = stableHash(resolved);
+            const shouldAcknowledgeRemoteSnapshot =
+              !correctedAccountState &&
+              (!localWasDirty || resolvedHash === remoteHash);
             hashRef.current = correctedAccountState
               ? null
               : remoteHash;
+            let acceptedMetadataHash: string | null = null;
             if (!correctedAccountState && !localWasDirty) {
-              const acceptedMetadataHash = accountMetadataHash(resolved);
+              acceptedMetadataHash = accountMetadataHash(resolved);
               accountMetadataHashRef.current = acceptedMetadataHash;
-              void writeAccountMetadataAck(
-                user.id,
-                acceptedMetadataHash,
-              ).catch(() => undefined);
             }
             workspaceHashRef.current = isCloudGroupId(resolved.group.id)
               ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
@@ -4481,20 +4790,38 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                   resolved.group.id,
                 ) ?? null)
               : null;
-            replaceState(
-              resolved,
-              localWasDirty ? { source: "local" } : { source: "cloud" },
-            );
+            // Publish this authoritative value before waiting for storage. A
+            // user edit during the flush is then based on `resolved` and updates
+            // stateRef through the normal urgent local-render path; never assign
+            // the older value again after the await.
             stateRef.current = resolved;
+            await replaceState(
+              resolved,
+              {
+                source: localWasDirty ? "local" : "cloud",
+                persistImmediately: shouldAcknowledgeRemoteSnapshot,
+              },
+            );
+            if (cancelled) return;
+            if (acceptedMetadataHash)
+              await writeAccountMetadataAck(
+                user.id,
+                acceptedMetadataHash,
+              ).catch(() => undefined);
             if (!correctedAccountState)
               rememberCloudMergeBase(user.id, bound);
             recordServerSyncedAt(remote.updated_at);
-            const resolvedHash = stableHash(resolved);
             setPendingChanges(hasUnsyncedLocalChanges());
-            if (!localWasDirty || resolvedHash === remoteHash)
+            if (shouldAcknowledgeRemoteSnapshot) {
               await writeCloudSnapshotAck(user.id, remoteHash).catch(
                 () => undefined,
               );
+              await writeCloudSnapshotCursor(
+                user.id,
+                remote,
+                remoteHash,
+              ).catch(() => undefined);
+            }
             setStatus("synced");
           }
           // Signed media URLs and group history are cache hydration, not an
@@ -4518,26 +4845,32 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               try {
                 hydratedState = mergePrivateMediaUrls(
                   hydratedState,
-                  await resolvePrivateMedia(bound),
+                  await readCloudResponsively(() => resolvePrivateMedia(bound)),
                 );
               } catch {
                 // The account and group cache remain usable even when Storage
                 // signing is temporarily unavailable or egress is restricted.
               }
-              const existingGroups = await loadCloudGroupShells();
+              const existingGroups = await readCloudResponsively((signal) =>
+                loadCloudGroupShells(signal),
+              );
               const targetGroup =
                 existingGroups.find(
                   (group) => group.id === hydratedState.group.id,
                 ) ?? existingGroups[0];
               if (targetGroup)
-                hydratedState = await loadCloudWorkspace(
-                  { ...hydratedState, groups: existingGroups },
-                  targetGroup.id,
-                  (metadata) =>
-                    recordActivityMetadata(targetGroup.id, metadata),
-                  undefined,
-                  existingGroups,
+                hydratedState = await readCloudResponsively((signal) =>
+                  loadCloudWorkspace(
+                    { ...hydratedState, groups: existingGroups },
+                    targetGroup.id,
+                    (metadata) =>
+                      recordActivityMetadata(targetGroup.id, metadata),
+                    undefined,
+                    existingGroups,
+                    signal,
+                  ),
                 );
+              await waitForUi(0, 2_500);
               if (cancelled) return;
               const next = mergeRemoteWorkspace(
                 hydratedState,
@@ -4555,7 +4888,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
               }
             });
-          }, { minimumDelayMs: 1_200, maximumDelayMs: 4_000 });
+          }, {
+            minimumDelayMs: 1_200,
+            maximumDelayMs: 4_000,
+            minimumUserQuietMs: 1_800,
+          });
           responsiveTasks.add(groupHydration);
         } else {
           const bound = bindStateToAccount(stateRef.current, user);
@@ -4579,17 +4916,23 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
                 return;
               }
-              const existingGroups = await loadCloudGroupShells();
+              const existingGroups = await readCloudResponsively((signal) =>
+                loadCloudGroupShells(signal),
+              );
               if (!existingGroups.length || cancelled) return;
               const targetGroup = existingGroups[0];
-              const loaded = await loadCloudWorkspace(
-                { ...stateRef.current, groups: existingGroups },
-                targetGroup.id,
-                (metadata) =>
-                  recordActivityMetadata(targetGroup.id, metadata),
-                undefined,
-                existingGroups,
+              const loaded = await readCloudResponsively((signal) =>
+                loadCloudWorkspace(
+                  { ...stateRef.current, groups: existingGroups },
+                  targetGroup.id,
+                  (metadata) =>
+                    recordActivityMetadata(targetGroup.id, metadata),
+                  undefined,
+                  existingGroups,
+                  signal,
+                ),
               );
+              await waitForUi(0, 2_500);
               if (cancelled) return;
               const next = mergeRemoteWorkspace(
                 loaded,
@@ -4611,13 +4954,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 if (isCloudGroupId(groupId)) scheduleGroupReadRetry(groupId);
               }
             });
-          }, { minimumDelayMs: 1_200, maximumDelayMs: 4_000 });
+          }, {
+            minimumDelayMs: 1_200,
+            maximumDelayMs: 4_000,
+            minimumUserQuietMs: 1_800,
+          });
           responsiveTasks.add(groupHydration);
         }
         if (cancelled) return;
         identityResetUserRef.current = null;
         if (
-          !remote ||
+          (!cachedSnapshotIsCurrent && !remote) ||
           correctedAccountState ||
           hasUnsyncedLocalChanges()
         ) {
@@ -4795,19 +5142,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         setPendingChanges(true);
         performSync().catch(() => undefined);
       };
-      // Prefer an idle turn so hashing a large offline snapshot never competes
-      // with the tap/navigation frame. Infinite animations can keep React
-      // Native's interaction queue busy, so a short hard fallback guarantees
-      // the automatic outbox cannot remain stuck until manual Cloud Sync.
-      const idleTask = InteractionManager.runAfterInteractions(runSyncCheck);
+      // InteractionManager alone does not classify a discrete press as an
+      // interaction. The root touch pulse keeps this hash pass behind actual
+      // taps as well as navigation animations. Repeated touches may postpone
+      // cloud work, while the independent local persistence outbox remains
+      // durable immediately.
+      const idleTask = scheduleResponsiveWork(runSyncCheck, {
+        maximumDelayMs: AUTO_SYNC_MAX_INTERACTION_WAIT_MS,
+        minimumUserQuietMs: 1_600,
+      });
       if (completed) idleTask.cancel();
-      else {
-        idleSyncRef.current = idleTask;
-        idleSyncFallbackTimerRef.current = setTimeout(
-          runSyncCheck,
-          AUTO_SYNC_MAX_INTERACTION_WAIT_MS,
-        );
-      }
+      else idleSyncRef.current = idleTask;
     };
     timerRef.current = setTimeout(
       saveWhenReady,
@@ -4987,7 +5332,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       if (approvalCheckInFlight) return;
       approvalCheckInFlight = true;
       try {
-        const shells = await loadCloudGroupShells();
+        const shells = await readCloudResponsively((signal) =>
+          loadCloudGroupShells(signal),
+        );
         const shell = shells.find((group) => group.id === groupId);
         if (cancelled || !shell) return;
         // Show approval immediately from the lightweight group shell. History
@@ -5010,10 +5357,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         requestToWatch = null;
         setPendingGroup(null);
-        loadCloudWorkspace(
-          optimistic,
-          groupId,
-          (metadata) => recordActivityMetadata(groupId, metadata),
+        readCloudResponsively((signal) =>
+          loadCloudWorkspace(
+            optimistic,
+            groupId,
+            (metadata) => recordActivityMetadata(groupId, metadata),
+            undefined,
+            undefined,
+            signal,
+          ),
         )
           .then((next) => {
             if (cancelled || stateRef.current.group.id !== groupId) return;
@@ -5119,40 +5471,55 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     evictUnavailableGroup,
   ]);
 
-  const refreshGroup = useCallback(async () => {
-    if (!isCloudGroupId(stateRef.current.group.id)) return;
+  const refreshGroup = useCallback((): Promise<void> => {
+    if (!isCloudGroupId(stateRef.current.group.id)) return Promise.resolve();
+    if (groupRefreshPromiseRef.current)
+      return groupRefreshPromiseRef.current;
     const groupId = stateRef.current.group.id;
-    const sequence = ++groupLoadSequenceRef.current;
-    activityLoadSequenceRef.current += 1;
-    let loaded: AppState;
-    try {
-      loaded = await loadCloudWorkspace(
-        stateRef.current,
-        groupId,
-        (metadata) => recordActivityMetadata(groupId, metadata),
-      );
-    } catch (error) {
-      if (isDefinitiveGroupMembershipLoss(error)) {
-        await evictUnavailableGroup(groupId);
-        return;
+    let operation: Promise<void>;
+    operation = (async () => {
+      const sequence = ++groupLoadSequenceRef.current;
+      activityLoadSequenceRef.current += 1;
+      await yieldCloudMaintenanceToUi();
+      if (stateRef.current.group.id !== groupId) return;
+      let loaded: AppState;
+      try {
+        loaded = await readCloudResponsively((signal) =>
+          loadCloudWorkspace(
+            stateRef.current,
+            groupId,
+            (metadata) => recordActivityMetadata(groupId, metadata),
+            undefined,
+            undefined,
+            signal,
+          ),
+        );
+      } catch (error) {
+        if (isDefinitiveGroupMembershipLoss(error)) {
+          await evictUnavailableGroup(groupId);
+          return;
+        }
+        scheduleGroupReadRetry(groupId);
+        throw error;
       }
-      scheduleGroupReadRetry(groupId);
-      throw error;
-    }
-    if (
-      sequence !== groupLoadSequenceRef.current ||
-      stateRef.current.group.id !== groupId
-    )
-      return;
-    const refreshed = mergeRemoteWorkspace(
-      loaded,
-      stateRef.current,
-    );
-    stateRef.current = refreshed;
-    workspaceHashRef.current =
-      workspaceAckHashesRef.current.get(groupId) ?? null;
-    replaceState(refreshed, { source: "cloud" });
-    markGroupReadSucceeded(groupId);
+      await yieldCloudMaintenanceToUi();
+      if (
+        sequence !== groupLoadSequenceRef.current ||
+        stateRef.current.group.id !== groupId
+      )
+        return;
+      const refreshed = mergeRemoteWorkspace(loaded, stateRef.current);
+      stateRef.current = refreshed;
+      workspaceHashRef.current =
+        workspaceAckHashesRef.current.get(groupId) ?? null;
+      replaceState(refreshed, { source: "cloud" });
+      markGroupReadSucceeded(groupId);
+    })().finally(() => {
+      if (groupRefreshPromiseRef.current === operation)
+        groupRefreshPromiseRef.current = null;
+    });
+    groupRefreshPromiseRef.current = operation;
+    return operation;
   }, [
     markGroupReadSucceeded,
     mergeRemoteWorkspace,
@@ -5170,7 +5537,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     let operation: Promise<void>;
     operation = (async () => {
       try {
-        const messages = await loadCloudMessages(stateRef.current, groupId);
+        await yieldCloudMaintenanceToUi();
+        if (stateRef.current.group.id !== groupId) return;
+        const messages = await readCloudResponsively((signal) =>
+          loadCloudMessages(stateRef.current, groupId, signal),
+        );
+        await yieldCloudMaintenanceToUi();
         if (stateRef.current.group.id !== groupId) return;
         clearMessageReadRetry(groupId);
         if (messagesEquivalent(stateRef.current.messages, messages)) return;
@@ -5220,12 +5592,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           const groupId = stateRef.current.group.id;
           if (!isCloudGroupId(groupId)) continue;
           const sequence = ++activityLoadSequenceRef.current;
+          await yieldCloudMaintenanceToUi();
+          if (stateRef.current.group.id !== groupId) continue;
           let activity: Awaited<ReturnType<typeof loadCloudGroupActivity>>;
           try {
-            activity = await loadCloudGroupActivity(
-              stateRef.current,
-              groupId,
-              queuedSince ?? undefined,
+            activity = await readCloudResponsively((signal) =>
+              loadCloudGroupActivity(
+                stateRef.current,
+                groupId,
+                queuedSince ?? undefined,
+                signal,
+              ),
             );
           } catch (error) {
             // The request was removed from the queue before its network read.
@@ -5238,6 +5615,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             scheduleActivityReadRetry(groupId);
             throw error;
           }
+          await yieldCloudMaintenanceToUi();
           if (
             sequence !== activityLoadSequenceRef.current ||
             stateRef.current.group.id !== groupId
@@ -5334,13 +5712,17 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = next;
           replaceState(next, { source: "cloud" });
           const cached = cachedGroupActivity(next, groupId);
-          InteractionManager.runAfterInteractions(() => {
+          scheduleResponsiveWork(() => {
             writeGroupActivityCache({
               groupId,
               version: activity.version,
               updatedAt: activity.updatedAt,
               ...cached,
             }).catch(() => undefined);
+          }, {
+            minimumDelayMs: 120,
+            maximumDelayMs: 4_000,
+            minimumUserQuietMs: 1_600,
           });
         }
         clearActivityReadRetry(stateRef.current.group.id);
@@ -5525,17 +5907,25 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const sequence = ++groupLoadSequenceRef.current;
       activityLoadSequenceRef.current += 1;
       const hydrate = async () => {
+        await yieldCloudMaintenanceToUi();
+        if (stateRef.current.group.id !== groupId) return base;
         // Start the authoritative request immediately. Reading SQLite must not
         // sit in front of the network request; the cache and server race in
         // parallel, while each still commits as one complete snapshot.
-        const workspacePromise = loadCloudWorkspace(
-          base,
-          groupId,
-          (metadata) => recordActivityMetadata(groupId, metadata),
+        const workspacePromise = readCloudResponsively((signal) =>
+          loadCloudWorkspace(
+            base,
+            groupId,
+            (metadata) => recordActivityMetadata(groupId, metadata),
+            undefined,
+            undefined,
+            signal,
+          ),
         );
         const cached = await readGroupActivityCache(groupId).catch(
           () => null,
         );
+        await yieldCloudMaintenanceToUi();
         if (
           cached &&
           sequence === groupLoadSequenceRef.current &&
@@ -5562,7 +5952,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = next;
           replaceState(next, { source: "cloud" });
         }
-        return workspacePromise;
+        const workspace = await workspacePromise;
+        await yieldCloudMaintenanceToUi();
+        return workspace;
       };
       hydrate()
         .then((loaded) => {
@@ -5585,12 +5977,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
           const cachePayload = cachedGroupActivity(next, groupId);
-          InteractionManager.runAfterInteractions(() => {
+          scheduleResponsiveWork(() => {
             writeGroupActivityCache({
               groupId,
               updatedAt: new Date().toISOString(),
               ...cachePayload,
             }).catch(() => undefined);
+          }, {
+            minimumDelayMs: 120,
+            maximumDelayMs: 4_000,
+            minimumUserQuietMs: 1_600,
           });
         })
         .catch((error) => {
@@ -6172,11 +6568,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           groupId,
           createdConfigurationHash,
         );
+        await replaceState(next, {
+          source: "local",
+          persistImmediately: true,
+        });
+        if (stateRef.current.currentUserId !== auth.user!.id) return;
         await writeGroupConfigurationAcks(
           auth.user!.id,
           groupConfigurationAckHashesRef.current,
         ).catch(() => undefined);
-        replaceState(next, { source: "local" });
         setPendingChanges(true);
         hydrateGroupInBackground(groupId);
       },

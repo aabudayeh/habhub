@@ -22,11 +22,14 @@ import {
   partitionStepAggregateRange,
   reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
+  resolveCurrentDeviceStepOrigins,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
 
 type AndroidPhoneStepsModule = {
+  healthConnectOnDeviceSteps?: boolean;
+  getCurrentDeviceStepOrigins?: () => Promise<string[]>;
   startLocalPhoneStepRecording?: () => Promise<boolean>;
   readLocalPhoneSteps?: (
     fromEpochMs: number,
@@ -42,6 +45,43 @@ const androidPhoneSteps = NativeModules.HabHubAndroid as
   | AndroidPhoneStepsModule
   | undefined;
 const LOCAL_PHONE_STEP_READ_TIMEOUT_MS = 1_500;
+const CURRENT_DEVICE_ORIGIN_TIMEOUT_MS = 1_500;
+const STEP_ORIGIN_DISCOVERY_RETRY_MS = 10 * 60_000;
+let rememberedCurrentDeviceStepOrigins = ["android"];
+let nextRawStepOriginDiscoveryAt = 0;
+
+async function currentDeviceStepOrigins() {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const origins = await Promise.race([
+    Promise.resolve()
+      .then(() => androidPhoneSteps?.getCurrentDeviceStepOrigins?.() ?? [])
+      .catch(() => []),
+    new Promise<string[]>((resolve) => {
+      timeout = setTimeout(() => resolve([]), CURRENT_DEVICE_ORIGIN_TIMEOUT_MS);
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+  rememberedCurrentDeviceStepOrigins = resolveCurrentDeviceStepOrigins(
+    [...rememberedCurrentDeviceStepOrigins, ...(origins ?? [])],
+    [],
+  );
+  return rememberedCurrentDeviceStepOrigins;
+}
+
+function rememberCurrentDeviceStepOrigins(observedOrigins: readonly unknown[]) {
+  rememberedCurrentDeviceStepOrigins = resolveCurrentDeviceStepOrigins(
+    rememberedCurrentDeviceStepOrigins,
+    observedOrigins,
+  );
+  return rememberedCurrentDeviceStepOrigins;
+}
+
+function hasCurrentDeviceStepSpn(origins: readonly string[]) {
+  return origins.some((origin) =>
+    origin.toLowerCase().startsWith("com.android.healthconnect.phone."),
+  );
+}
 
 function physicalActivityRuntimePermissionRequired() {
   return Number(Platform.Version) >= 29;
@@ -741,6 +781,36 @@ export const healthConnectAdapter: HealthAdapter = {
         return [];
       }
     };
+    const discoverCurrentDeviceStepOriginsFromRaw = async (
+      start: Date,
+      end: Date,
+    ) => {
+      const observed: string[] = [];
+      let pageToken: string | undefined;
+      // This is origin discovery, not a data import. A small newest-first cap
+      // prevents an unusually busy Health Connect store from creating JS work
+      // on the interaction lane merely to find one stable phone SPN.
+      for (let page = 0; page < 3; page += 1) {
+        const result = await readRecords("Steps", {
+          timeRangeFilter: {
+            operator: "between",
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+          },
+          ascendingOrder: false,
+          pageSize: 500,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        observed.push(
+          ...(result.records as Record<string, unknown>[]).map(origin),
+        );
+        const resolved = resolveCurrentDeviceStepOrigins([], observed);
+        if (hasCurrentDeviceStepSpn(resolved)) return resolved;
+        pageToken = result.pageToken;
+        if (!pageToken) break;
+      }
+      return resolveCurrentDeviceStepOrigins([], observed);
+    };
     const enabledRecords = (records: Record<string, unknown>[]) =>
       records.filter((record) =>
         healthSourceEnabled(origin(record), sourcePreferences),
@@ -881,18 +951,24 @@ export const healthConnectAdapter: HealthAdapter = {
             // summed from raw records. Health Connect's unfiltered aggregate is
             // the platform-authoritative value: it applies the user's Activity
             // priority and removes overlaps across phone/watch/app writers.
-            // Never replace it with an origin-filtered Samsung value. Samsung's
-            // Health Connect export can be behind its own UI, and an origin
-            // filter also bypasses Health Connect's cross-writer deduplication.
+            // Never replace it with an origin-filtered third-party value.
+            // Android's official current-device source is the one exception
+            // for the still-open day: it gives us a non-additive live phone
+            // candidate when another priority writer has not caught up yet.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
-            // platform's priority result. Steps therefore stay unfiltered.
+            // platform's priority result.
             try {
               const currentStart = stepSlices.current?.from;
               const currentEnd = stepSlices.current?.to;
               const includesCurrentDay = Boolean(stepSlices.current);
-              const [unfilteredGroups, currentAggregate, localPhoneSlice] =
+              const [
+                unfilteredGroups,
+                currentAggregate,
+                localPhoneSlice,
+                discoveredDeviceOrigins,
+              ] =
                 await Promise.all([
                   stepSlices.historical
                     ? aggregateGroupByPeriod({
@@ -917,7 +993,59 @@ export const healthConnectAdapter: HealthAdapter = {
                   includesCurrentDay
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
                     : Promise.resolve(null),
+                  includesCurrentDay
+                    ? currentDeviceStepOrigins()
+                    : Promise.resolve([]),
                 ]);
+              // The unfiltered Activity aggregate is still authoritative for
+              // history and normally for today. Android 14+ also exposes this
+              // phone's own TYPE_STEP_COUNTER data under `android` or a
+              // per-app synthetic package name. Read that official origin for
+              // the open day so a temporarily higher-priority, lagging writer
+              // cannot replace 54 live phone steps with (for example) 27.
+              // This is a competing full-day candidate, never an additive
+              // source, so phone/watch overlap cannot be double-counted.
+              let androidDeviceOrigins = rememberCurrentDeviceStepOrigins([
+                ...discoveredDeviceOrigins,
+                ...(currentAggregate?.dataOrigins ?? []),
+              ]);
+              const onDeviceHealthConnectStepsAvailable =
+                androidPhoneSteps?.healthConnectOnDeviceSteps ??
+                Number(Platform.Version) >= 34;
+              if (
+                includesCurrentDay &&
+                onDeviceHealthConnectStepsAvailable &&
+                !hasCurrentDeviceStepSpn(androidDeviceOrigins) &&
+                Date.now() >= nextRawStepOriginDiscoveryAt
+              ) {
+                nextRawStepOriginDiscoveryAt =
+                  Date.now() + STEP_ORIGIN_DISCOVERY_RETRY_MS;
+                // A few framework-extension combinations omit the SPN from the
+                // manager method and from a priority-resolved aggregate. A
+                // bounded raw read is used only to discover that source name;
+                // its rows are never summed. The source-filtered aggregate
+                // below remains the sole device candidate.
+                const rawDeviceOrigins =
+                  await discoverCurrentDeviceStepOriginsFromRaw(
+                    currentStart!,
+                    currentEnd!,
+                  ).catch(() => []);
+                androidDeviceOrigins = rememberCurrentDeviceStepOrigins(
+                  rawDeviceOrigins,
+                );
+              }
+              const androidDeviceAggregate =
+                includesCurrentDay && androidDeviceOrigins.length
+                  ? await aggregateRecord({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        operator: "between",
+                        startTime: currentStart!.toISOString(),
+                        endTime: currentEnd!.toISOString(),
+                      },
+                      dataOriginFilter: androidDeviceOrigins,
+                    }).catch(() => null)
+                  : null;
               const contributedOrigins = [
                 ...new Set(
                   [
@@ -925,6 +1053,7 @@ export const healthConnectAdapter: HealthAdapter = {
                       (group) => group.result.dataOrigins ?? [],
                     ),
                     ...(currentAggregate?.dataOrigins ?? []),
+                    ...(androidDeviceAggregate?.dataOrigins ?? []),
                   ],
                 ),
               ];
@@ -1005,6 +1134,7 @@ export const healthConnectAdapter: HealthAdapter = {
               const reconciledCurrent = reconcileCurrentDayStepTotal(
                 Number(currentAggregate?.COUNT_TOTAL ?? 0),
                 disjointPhoneCandidate,
+                Number(androidDeviceAggregate?.COUNT_TOTAL ?? 0),
               );
               const currentCount = reconciledCurrent.count;
               const currentSources = [
@@ -1032,12 +1162,15 @@ export const healthConnectAdapter: HealthAdapter = {
                       value: Math.round(currentCount),
                       unit: "steps",
                       origin:
-                        reconciledCurrent.usedLocalPhone
+                        reconciledCurrent.usedLocalPhone ||
+                        reconciledCurrent.usedAndroidDevice
                           ? "Android phone (live)"
                           : currentSources.length === 1
                           ? currentSources[0]
                           : "Health Connect",
-                      sourceOrigins: reconciledCurrent.usedLocalPhone
+                      sourceOrigins:
+                        reconciledCurrent.usedLocalPhone ||
+                        reconciledCurrent.usedAndroidDevice
                         ? [
                             ...new Set([
                               ...observedOrigins,

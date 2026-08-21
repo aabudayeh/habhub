@@ -6,6 +6,7 @@ function fakeDriver() {
   let nextTimerId = 1;
   const timers = new Map();
   const interactions = [];
+  let quietFor = Number.POSITIVE_INFINITY;
   return {
     driver: {
       afterInteractions(work) {
@@ -21,6 +22,9 @@ function fakeDriver() {
       clearTimer(id) {
         timers.delete(id);
       },
+      millisecondsSinceUserInteraction() {
+        return quietFor;
+      },
     },
     fireTimer(delayMs) {
       const match = [...timers].find(([, timer]) => timer.delayMs === delayMs);
@@ -29,13 +33,63 @@ function fakeDriver() {
       match[1].work();
     },
     fireInteraction() {
-      const entry = interactions.shift();
+      let entry;
+      while ((entry = interactions.shift())?.cancelled) {
+        // Skip callbacks cancelled when a newer touch reset the quiet gate.
+      }
       assert.ok(entry, "Expected queued interaction work");
-      if (!entry.cancelled) entry.work();
+      entry.work();
     },
     pendingTimers: () => timers.size,
     pendingInteractions: () => interactions.filter((entry) => !entry.cancelled).length,
+    setQuietFor(value) {
+      quietFor = value;
+    },
   };
+}
+
+{
+  const fake = fakeDriver();
+  let runs = 0;
+  fake.setQuietFor(50);
+  scheduleResponsiveWork(fake.driver, () => (runs += 1), {
+    maximumDelayMs: 1_000,
+    minimumUserQuietMs: 500,
+  });
+  // Even the hard maintenance deadline must not land on a fresh native tap.
+  fake.fireTimer(1_000);
+  assert.equal(runs, 0);
+  fake.setQuietFor(500);
+  fake.fireTimer(450);
+  fake.fireInteraction();
+  assert.equal(runs, 1);
+}
+
+{
+  const fake = fakeDriver();
+  let runs = 0;
+  fake.setQuietFor(0);
+  scheduleResponsiveWork(fake.driver, () => (runs += 1), {
+    maximumDelayMs: 1_000,
+    minimumUserQuietMs: 1_500,
+  });
+  fake.fireTimer(1_000);
+  assert.equal(runs, 0);
+  // A fresh touch every second continues past the nominal maximum deadline.
+  // Each interaction callback re-checks the real-touch clock before work.
+  fake.setQuietFor(500);
+  fake.fireTimer(1_500);
+  fake.fireInteraction();
+  for (let second = 2; second <= 6; second += 1) {
+    fake.setQuietFor(500);
+    fake.fireTimer(1_000);
+    fake.fireInteraction();
+    assert.equal(runs, 0, `heavy work ran during touch second ${second}`);
+  }
+  fake.setQuietFor(1_500);
+  fake.fireTimer(1_000);
+  fake.fireInteraction();
+  assert.equal(runs, 1);
 }
 
 {
@@ -105,5 +159,5 @@ function fakeDriver() {
 }
 
 console.log(
-  "Responsive work validation passed (quiet-window, hard deadline, cancellation, and synchronous interaction driver).",
+  "Responsive work validation passed (delay, hard deadline, real-touch quiet gate, cancellation, and synchronous interaction driver).",
 );

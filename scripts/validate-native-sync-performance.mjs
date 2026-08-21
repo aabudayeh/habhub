@@ -8,6 +8,12 @@ import {
   shouldAuditHistoricalSummary,
 } from "../src/domain/cloudMaintenance.ts";
 import { localPersistenceChanged } from "../src/domain/localPersistence.ts";
+import { advanceAuthoritativeStateFromRender } from "../src/domain/authoritativeState.ts";
+import {
+  canBootstrapCloudSnapshotCursor,
+  cloudSnapshotCursorForAcknowledgement,
+  cloudSnapshotCursorMatches,
+} from "../src/domain/cloudSnapshotCursor.ts";
 
 const cloudProvider = fs.readFileSync(
   "src/cloud/CloudSyncProvider.tsx",
@@ -16,29 +22,76 @@ const cloudProvider = fs.readFileSync(
 const groupCloud = fs.readFileSync("src/cloud/groupCloud.ts", "utf8");
 const appProvider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 
+assert.match(
+  appProvider,
+  /if \(next === previous\)[\s\S]{0,160}persistImmediately[\s\S]{0,100}persistLatestState\(true\)/,
+  "an unchanged ACKing replacement must still drain an earlier pending device-cache write",
+);
+assert.match(
+  appProvider,
+  /if \(!durableChange\)[\s\S]{0,160}persistImmediately[\s\S]{0,100}persistLatestState\(true\)/,
+  "a transient-only ACKing replacement must still drain an earlier pending durable write",
+);
+
 // Every provider state replacement is deliberately classified. This makes a
 // newly-added optimistic/user mutation fail this gate instead of silently
 // inheriting the cloud default and losing its automatic publication signal.
 const replaceStateCalls = [
   ...cloudProvider.matchAll(/\breplaceState\([\s\S]*?\);/g),
 ].map((match) => match[0]);
-assert.equal(replaceStateCalls.length, 35, "update the source-classification fixture when replaceState calls change");
+assert.equal(
+  replaceStateCalls.length,
+  36,
+  "update the source-classification fixture when replaceState calls change",
+);
 replaceStateCalls.forEach((call, index) =>
   assert.match(
     call,
-    /source:\s*"(?:cloud|local)"/,
+    /source:\s*(?:"(?:cloud|local)"|[A-Za-z][\w]*\s*\?\s*"local"\s*:\s*"cloud")/,
     `replaceState call ${index + 1} must explicitly classify its source`,
   ),
 );
 assert.equal(
-  cloudProvider.match(/source:\s*"local"/g)?.length,
+  (cloudProvider.match(/source:\s*"local"/g)?.length ?? 0) +
+    (cloudProvider.match(/source:\s*[A-Za-z][\w]*\s*\?\s*"local"\s*:\s*"cloud"/g)?.length ?? 0),
   12,
   "local/hybrid outbox replacements must retain their publication signal",
 );
 assert.match(cloudProvider, /replaceState\(evicted, \{ source: "local" \}\)/);
 assert.match(
   cloudProvider,
-  /preserveLocalAccount \? \{ source: "local" \} : \{ source: "cloud" \}/,
+  /source:\s*preserveLocalAccount\s*\?\s*"local"\s*:\s*"cloud"/,
+);
+assert.match(
+  cloudProvider,
+  /readCloudResponsively[\s\S]{0,900}subscribeUserInteraction\(\(\) => controller\.abort\(\)\)/,
+  "a touch must abort an in-flight native payload read before JSON projection",
+);
+assert.match(
+  cloudProvider,
+  /const result = await read\(controller\?\.signal\);[\s\S]{0,250}controller\?\.signal\.aborted[\s\S]{0,100}continue/,
+  "even a non-abortable helper response must be discarded when a touch landed while it was pending",
+);
+assert.ok(
+  (cloudProvider.match(/await yieldCloudMaintenanceToUi\(\);[\s\S]{0,160}await persistPrivateSnapshot\(\)/g)?.length ?? 0) >= 2,
+  "full private snapshot serialization must re-enter a real touch-quiet lane immediately before each write",
+);
+assert.match(
+  cloudProvider,
+  /function waitForCloudCacheWriteTurn[\s\S]{0,400}minimumUserQuietMs: 1_600/,
+  "merge-base JSON persistence must use the real-touch quiet gate",
+);
+assert.ok(
+  (groupCloud.match(/abortSignal\(signal\)/g)?.length ?? 0) >= 17,
+  "every account/group response branch must stop before parsing after a touch",
+);
+assert.ok(
+  [
+    ...cloudProvider.matchAll(
+      /writeGroupActivityCache\([\s\S]{0,450}minimumUserQuietMs: 1_600/g,
+    ),
+  ].length >= 2,
+  "large SQLite group-cache serialization must wait for real-touch quiet",
 );
 assert.match(
   cloudProvider,
@@ -72,23 +125,242 @@ assert.match(
 );
 assert.match(
   appProvider,
-  /if \(!durableChange\) return Promise\.resolve\(\)/,
-  "presence/signed-URL wrappers must skip monolithic JSON persistence",
+  /if \(!durableChange\)[\s\S]{0,180}return persistImmediately[\s\S]{0,80}\? persistLatestState\(true\)[\s\S]{0,80}: Promise\.resolve\(\)/,
+  "presence/signed-URL wrappers must skip monolithic JSON persistence unless an ACK must drain an earlier durable write",
 );
 assert.match(
   appProvider,
-  /if \(source === "cloud"\) \{[\s\S]{0,500}startTransition\(\(\) =>[\s\S]{0,180}dispatch\(\{ type: "replaceLocal", state: committed \}\)/,
-  "cloud hydration renders must yield priority to native taps/navigation",
+  /if \(source === "cloud"\) \{[\s\S]{0,500}queueCloudRender\(\)/,
+  "cloud hydration renders must enter the coalesced interaction-priority lane",
 );
 assert.match(
   appProvider,
-  /else dispatch\(\{ type: "replaceLocal", state: committed \}\)/,
+  /cancelQueuedCloudRender\(\);[\s\S]{0,120}dispatch\(\{ type: "replaceLocal", state: committed \}\)/,
   "local edits must remain on the urgent render lane",
+);
+assert.match(
+  appProvider,
+  /minimumUserQuietMs: 1_500/,
+  "cloud context publication must wait for a real-touch quiet window",
+);
+assert.match(
+  cloudProvider,
+  /select\("revision, updated_at, device_id, schema_version"\)/,
+  "cold start must probe a tiny revision row before downloading snapshot JSON",
+);
+const startupCursorBranch = cloudProvider.indexOf(
+  "const cachedSnapshotIsCurrent =",
+);
+const startupPayloadSelectionStart = cloudProvider.indexOf(
+  "const remote =",
+  startupCursorBranch,
+);
+const startupPayloadSelectionEnd = cloudProvider.indexOf(
+  ": null;",
+  startupPayloadSelectionStart,
+);
+assert.ok(
+  startupCursorBranch >= 0 &&
+    startupPayloadSelectionStart >= 0 &&
+    startupPayloadSelectionEnd > startupPayloadSelectionStart,
+  "startup snapshot payload selection must remain identifiable",
+);
+const startupPayloadSelection = cloudProvider.slice(
+  startupPayloadSelectionStart,
+  startupPayloadSelectionEnd,
+);
+assert.match(
+  startupPayloadSelection,
+  /remoteMetadata && !cachedSnapshotIsCurrent/,
+  "unchanged acknowledged revisions must not enter the payload read branch",
+);
+assert.match(
+  startupPayloadSelection,
+  /readCloudResponsively\(\(signal\)[\s\S]*fetchSnapshot\(user\.id, signal\)/,
+  "changed snapshots must delay and abort their full payload read around touches",
 );
 assert.match(
   cloudProvider,
   /const renderedStateRef = useRef\(state\);[\s\S]{0,500}if \(renderedStateRef\.current !== state\)[\s\S]{0,500}stateRef\.current = state/,
   "an interim status render must not overwrite a transition-pending cloud ref",
+);
+
+// A parent render carrying the old React value must not overwrite a newer
+// cloud-authoritative ref before its deferred transition commits.
+const renderedA = { revision: 1 };
+const cloudB = { revision: 2 };
+assert.equal(
+  advanceAuthoritativeStateFromRender(cloudB, renderedA, renderedA),
+  cloudB,
+);
+assert.equal(
+  canBootstrapCloudSnapshotCursor({
+    hasCursor: false,
+    metadata: { revision: 7, updated_at: "2026-08-21T11:59:00.000Z" },
+    acknowledgedHash: "hash-7",
+    currentHash: "hash-7",
+    savedCheckpoint: "2026-08-21T11:59:00.000Z",
+    accountIdentityMatches: true,
+  }),
+  true,
+  "an exact pre-cursor ACK/checkpoint pair must avoid one upgrade full fetch",
+);
+assert.equal(
+  canBootstrapCloudSnapshotCursor({
+    hasCursor: false,
+    metadata: { revision: 8, updated_at: "2026-08-21T12:01:00.000Z" },
+    acknowledgedHash: "hash-7",
+    currentHash: "hash-7",
+    savedCheckpoint: "2026-08-21T11:59:00.000Z",
+    accountIdentityMatches: true,
+  }),
+  false,
+  "a newer server timestamp must still fetch and merge the payload",
+);
+assert.ok(
+  (cloudProvider.match(/mergeLocalCurrentDayDeviceStepEntries\(/g)?.length ?? 0) >= 2,
+  "clean and dirty cloud snapshot merges must preserve the higher confirmed current-day Steps total",
+);
+assert.equal(
+  advanceAuthoritativeStateFromRender(cloudB, renderedA, cloudB),
+  cloudB,
+);
+
+// A successful local upload stores the exact revision+hash cursor. The next
+// cold start can use its lightweight metadata response; remote advancement or
+// a mismatched ACK still forces a full merge.
+const localUploadCursor = cloudSnapshotCursorForAcknowledgement(
+  { revision: 8, updated_at: "2026-08-21T12:00:00.000Z" },
+  "hash-8",
+);
+assert.equal(
+  cloudSnapshotCursorMatches(
+    localUploadCursor,
+    { revision: 8, updated_at: "2026-08-21T12:00:00.000Z" },
+    "hash-8",
+    "hash-8",
+    true,
+  ),
+  true,
+);
+assert.equal(
+  cloudSnapshotCursorMatches(
+    localUploadCursor,
+    { revision: 9, updated_at: "2026-08-21T12:01:00.000Z" },
+    "hash-8",
+    "hash-8",
+    true,
+  ),
+  false,
+);
+assert.equal(
+  cloudSnapshotCursorMatches(
+    localUploadCursor,
+    { revision: 8, updated_at: "2026-08-21T12:00:00.000Z" },
+    "older-hash",
+    "older-hash",
+    true,
+  ),
+  false,
+);
+assert.equal(
+  cloudSnapshotCursorMatches(
+    localUploadCursor,
+    { revision: 8, updated_at: "2026-08-21T12:00:00.000Z" },
+    "hash-8",
+    "stale-local-cache",
+    true,
+  ),
+  false,
+  "a crash-before-local-persist must not let a matching cursor bless stale cached state",
+);
+assert.equal(
+  cloudSnapshotCursorMatches(
+    localUploadCursor,
+    { revision: 8, updated_at: "2026-08-21T12:00:00.000Z" },
+    "hash-8",
+    "hash-8",
+    false,
+  ),
+  false,
+  "a cursor from another cached account must never skip the server payload",
+);
+assert.match(
+  cloudProvider,
+  /await waitForUi\(0, 1_200\);[\s\S]{0,800}currentSnapshotHash[\s\S]{0,500}cloudSnapshotCursorMatches\([\s\S]{0,300}currentSnapshotHash[\s\S]{0,200}accountIdentityMatches/,
+  "startup must re-check the restored cache after a real touch-quiet turn before using its cursor",
+);
+const startupAccept = cloudProvider.slice(
+  cloudProvider.indexOf("let resolved = correctedAccountState"),
+  cloudProvider.indexOf("setStatus(\"synced\")", cloudProvider.indexOf("let resolved = correctedAccountState")),
+);
+assert.ok(
+  startupAccept.indexOf("await replaceState(") >= 0 &&
+    startupAccept.indexOf("persistImmediately: shouldAcknowledgeRemoteSnapshot") >
+      startupAccept.indexOf("await replaceState(") &&
+    startupAccept.indexOf("await writeCloudSnapshotAck") >
+      startupAccept.indexOf("persistImmediately: shouldAcknowledgeRemoteSnapshot") &&
+    startupAccept.indexOf("await writeCloudSnapshotCursor") >
+      startupAccept.indexOf("persistImmediately: shouldAcknowledgeRemoteSnapshot") &&
+    startupAccept.indexOf("await writeAccountMetadataAck") >
+      startupAccept.indexOf("await replaceState("),
+  "every startup state that acknowledges the remote snapshot must durably persist before its account/snapshot ACKs can make a later launch trust that revision",
+);
+assert.ok(
+  startupAccept.indexOf("stateRef.current = resolved") <
+      startupAccept.indexOf("await replaceState(") &&
+    startupAccept.indexOf("stateRef.current = resolved", startupAccept.indexOf("await replaceState(") + 1) === -1,
+  "a local edit during startup persistence must not be overwritten by a post-await stale ref assignment",
+);
+const ordinaryPull = cloudProvider.slice(
+  cloudProvider.indexOf("const pullLatestOnce"),
+  cloudProvider.indexOf("const scheduleRequiredPull"),
+);
+assert.ok(
+  ordinaryPull.indexOf("stateRef.current = resolved") <
+      ordinaryPull.indexOf("await replaceState(") &&
+    ordinaryPull.indexOf("persistImmediately: shouldAcknowledgeRemoteSnapshot") >
+      ordinaryPull.indexOf("await replaceState(") &&
+    ordinaryPull.indexOf("await writeCloudSnapshotAck") >
+      ordinaryPull.indexOf("await replaceState(") &&
+    ordinaryPull.indexOf("stateRef.current = resolved", ordinaryPull.indexOf("await replaceState(") + 1) === -1,
+  "ordinary pulls must persist before ACK and retain a local edit that lands during the awaited flush",
+);
+const uploadAck = cloudProvider.slice(
+  cloudProvider.indexOf("await persistPrivateSnapshot();", cloudProvider.indexOf("const performSync")),
+  cloudProvider.indexOf("if (workspaceSynced)", cloudProvider.indexOf("await persistPrivateSnapshot();", cloudProvider.indexOf("const performSync"))),
+);
+assert.ok(
+  uploadAck.indexOf("await flushLocalPersistence()") >= 0 &&
+    uploadAck.indexOf("await writeAccountMetadataAck") >
+      uploadAck.indexOf("await flushLocalPersistence()") &&
+    uploadAck.indexOf("await writeWorkspaceAcks") >
+      uploadAck.indexOf("await flushLocalPersistence()") &&
+    uploadAck.indexOf("await writeGroupConfigurationAcks") >
+      uploadAck.indexOf("await flushLocalPersistence()") &&
+    uploadAck.indexOf("await writeCloudSnapshotAck") >
+      uploadAck.indexOf("await flushLocalPersistence()") &&
+    uploadAck.indexOf("await writeCloudSnapshotCursor") >
+      uploadAck.indexOf("await flushLocalPersistence()"),
+  "successful uploads must flush the acknowledged-or-newer local cache before storing their ACK/cursor",
+);
+assert.match(
+  cloudProvider,
+  /const preserveLocalGroupConfiguration =\s*live\.group\.id === groupId && explicitlyPending/,
+  "only the explicit durable group-configuration outbox may preserve local settings over a server hydration",
+);
+assert.match(
+  cloudProvider,
+  /const shouldPushGroupConfiguration = pendingGroupConfiguration/,
+  "an ACK hash mismatch alone must never authorize republishing cached group settings",
+);
+assert.doesNotMatch(
+  cloudProvider.slice(
+    cloudProvider.indexOf("const mergeRemoteWorkspace"),
+    cloudProvider.indexOf("const flushChatOutbox"),
+  ),
+  /writeGroupConfigurationAcks/,
+  "remote workspace merging must not persist an ACK before its caller persists the accepted state",
 );
 
 const dirtyPull = cloudProvider.slice(
@@ -436,5 +708,5 @@ assert.doesNotMatch(
 );
 
 console.log(
-  `Native sync performance validation passed (35 classified replacements; 50k-row transient check ${presenceMs.toFixed(1)} ms).`,
+  `Native sync performance validation passed (36 classified replacements; 50k-row transient check ${presenceMs.toFixed(1)} ms).`,
 );

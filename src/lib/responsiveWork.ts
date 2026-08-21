@@ -4,12 +4,14 @@ import {
   ResponsiveWorkOptions,
   scheduleResponsiveWork as scheduleWithDriver,
 } from "@/src/domain/responsiveWork";
+import { millisecondsSinceUserInteraction } from "@/src/lib/userInteraction";
 
 const nativeDriver = {
   afterInteractions: (work: () => void) =>
     InteractionManager.runAfterInteractions(work),
   setTimer: (work: () => void, delayMs: number) => setTimeout(work, delayMs),
   clearTimer: (timer: ReturnType<typeof setTimeout>) => clearTimeout(timer),
+  millisecondsSinceUserInteraction,
 };
 
 export function scheduleResponsiveWork(
