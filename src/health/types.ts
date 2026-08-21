@@ -54,6 +54,10 @@ export type HealthAdapter = {
     dataTypes: HealthDataType[],
   ) => Promise<{ connected: boolean; backgroundAccess: boolean }>;
   requestPermissions: (dataTypes: HealthDataType[], backgroundAccess: boolean) => Promise<void>;
+  /** Requests the optional live phone-step permission from a direct user action. */
+  prepareCurrentDaySteps?: () => Promise<void>;
+  /** Stops any provider-owned local recording when the user disconnects. */
+  disconnect?: () => Promise<void>;
   read: (request: HealthReadRequest) => Promise<HealthImportRecord[]>;
   openSettings: () => Promise<void>;
 };

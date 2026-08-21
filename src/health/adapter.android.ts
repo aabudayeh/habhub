@@ -36,6 +36,9 @@ export const nativeHealthAdapter: HealthAdapter = expoGo
         },
       requestPermissions: async (dataTypes, backgroundAccess) =>
         (await installedAdapter()).requestPermissions(dataTypes, backgroundAccess),
+      prepareCurrentDaySteps: async () =>
+        (await installedAdapter()).prepareCurrentDaySteps?.(),
+      disconnect: async () => (await installedAdapter()).disconnect?.(),
       read: async (request) => (await installedAdapter()).read(request),
       openSettings: async () => (await installedAdapter()).openSettings(),
     };

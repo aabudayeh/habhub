@@ -8,6 +8,7 @@ import {
   authoritativeHealthConnectStepGroups,
   authoritativeStepEntries,
   aggregateRangeThroughLocalDate,
+  combineDisjointStepWindows,
   deduplicateHealthImportRecords,
   healthSourceId,
   historicalStepRepairStart,
@@ -16,13 +17,19 @@ import {
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
   partitionStepAggregateRange,
+  preserveCurrentDayStepFloor,
   preserveUnchangedDailyAggregateRevision,
   preserveUnchangedStepFallback,
   preferredHealthSourceOrigin,
+  reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
+import {
+  HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
+  healthPhysicalActivityMigrationKey,
+} from "../src/health/constants.ts";
 
 const record = (overrides = {}) => ({
   id: "record",
@@ -44,6 +51,16 @@ assert.equal(
   packageManifest.dependencies?.["react-native-health-connect"],
   "4.1.3",
   "Android health reads must use the production-stable Health Connect client wrapper",
+);
+assert.notEqual(
+  healthPhysicalActivityMigrationKey("account-a"),
+  healthPhysicalActivityMigrationKey("account-b"),
+  "the Physical Activity migration marker must be scoped per account",
+);
+assert.match(
+  healthPhysicalActivityMigrationKey("account-a"),
+  new RegExp(`:v${HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION}:account-a$`),
+  "the Physical Activity migration marker must be versioned for future native changes",
 );
 
 const platformPriorityAggregate = [
@@ -84,6 +101,26 @@ assert.deepEqual(
     ["direct-today", 3_435],
   ],
   "the fresh direct aggregate must replace, never add to, today's period bucket",
+);
+assert.deepEqual(
+  combineDisjointStepWindows(5_000, 140),
+  5_140,
+  "a first-day subscription must combine only the pre-subscription Health Connect prefix and local-phone suffix",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(5_000, 5_140),
+  { count: 5_140, usedLocalPhone: true },
+  "a fresher local phone recording may fill today's Health Connect batching gap",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(6_200, 5_140),
+  { count: 6_200, usedLocalPhone: false },
+  "a larger priority-aware phone/watch/app aggregate must remain canonical",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(5_000, 5_140).count,
+  5_140,
+  "overlapping Health Connect and phone totals must never be summed",
 );
 const authoritativeAggregateWithDisabledContributor =
   deduplicateHealthImportRecords(
@@ -443,6 +480,9 @@ assert.equal(timezoneSafeSteps[0].localDate, "2026-08-10");
 
 const stableAggregate = {
   id: "health:health_connect:steps:aggregate:steps:2026-08-13:steps",
+  metricId: "steps",
+  userId: "owner",
+  localDate: "2026-08-13",
   sourceProvider: "health_connect",
   sourceRecordId: "aggregate:steps:2026-08-13",
   sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
@@ -464,6 +504,45 @@ assert.equal(
   }).sourceUpdatedAt,
   "2026-08-13T08:05:00.000Z",
   "a changed partial-day aggregate must receive the latest sync revision",
+);
+assert.equal(
+  preserveCurrentDayStepFloor(
+    stableAggregate,
+    {
+      ...stableAggregate,
+      sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+      value: 1_700,
+    },
+    "2026-08-13",
+  ),
+  stableAggregate,
+  "a stale lower refresh must not make today's confirmed pedometer total go backwards",
+);
+assert.equal(
+  preserveCurrentDayStepFloor(
+    stableAggregate,
+    {
+      ...stableAggregate,
+      sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+      value: 3_600,
+    },
+    "2026-08-13",
+  ).value,
+  3_600,
+  "a higher current-day refresh must remain publishable",
+);
+assert.equal(
+  preserveCurrentDayStepFloor(
+    stableAggregate,
+    {
+      ...stableAggregate,
+      sourceUpdatedAt: "2026-08-14T00:05:00.000Z",
+      value: 1_700,
+    },
+    "2026-08-14",
+  ).value,
+  1_700,
+  "after day rollover Health Connect must be allowed to correct a historical total downward",
 );
 const stableFallback = {
   id: "fallback",
@@ -563,7 +642,12 @@ const meals = deduplicateHealthImportRecords([
     unit: "kcal",
     origin: "com.sec.android.app.shealth",
     label: "Oats and yogurt",
-    nutrition: { proteinG: 24, carbsG: 55, fatG: 10 },
+    nutrition: {
+      proteinG: 24,
+      carbsG: 55,
+      fatG: 10,
+      vitaminCMg: 120,
+    },
   }),
   record({
     id: "mfp-lunch",
@@ -580,6 +664,74 @@ const meals = deduplicateHealthImportRecords([
 assert.deepEqual(
   meals.map((item) => item.id).sort(),
   ["mfp-breakfast", "mfp-lunch"],
+);
+assert.equal(
+  meals.find((item) => item.id === "mfp-breakfast")?.nutrition?.vitaminCMg,
+  120,
+  "a canonical duplicate meal must retain complementary normalized nutrients",
+);
+
+const disjointMicronutrients = deduplicateHealthImportRecords([
+  record({
+    id: "apple-vitamin-c",
+    provider: "apple_health",
+    type: "nutrition",
+    startTime: "2026-08-10T09:00:00.000Z",
+    endTime: "2026-08-10T09:00:00.000Z",
+    value: 0,
+    unit: "mg",
+    origin: "com.vendor.food-a",
+    nutrition: { vitaminCMg: 90 },
+  }),
+  record({
+    id: "apple-iron",
+    provider: "apple_health",
+    type: "nutrition",
+    startTime: "2026-08-10T09:02:00.000Z",
+    endTime: "2026-08-10T09:02:00.000Z",
+    value: 0,
+    unit: "mg",
+    origin: "com.vendor.food-b",
+    nutrition: { ironMg: 12 },
+  }),
+]);
+assert.deepEqual(
+  disjointMicronutrients.map((item) => item.id).sort(),
+  ["apple-iron", "apple-vitamin-c"],
+  "nearby records with non-overlapping nutrient keys must both survive",
+);
+const mirroredVitaminC = deduplicateHealthImportRecords([
+  record({
+    id: "vitamin-c-primary",
+    provider: "apple_health",
+    type: "nutrition",
+    startTime: "2026-08-10T10:00:00.000Z",
+    endTime: "2026-08-10T10:00:00.000Z",
+    value: 0,
+    unit: "mg",
+    origin: "com.myfitnesspal.ios",
+    nutrition: { vitaminCMg: 90 },
+  }),
+  record({
+    id: "vitamin-c-mirror",
+    provider: "apple_health",
+    type: "nutrition",
+    startTime: "2026-08-10T10:01:00.000Z",
+    endTime: "2026-08-10T10:01:00.000Z",
+    value: 0,
+    unit: "mg",
+    origin: "com.vendor.food-b",
+    nutrition: { vitaminCMg: 90.5 },
+  }),
+]);
+assert.equal(
+  mirroredVitaminC.length,
+  1,
+  "the same close nutrient from two writers is one mirrored dietary sample",
+);
+assert.deepEqual(
+  new Set(mirroredVitaminC[0].sourceOrigins),
+  new Set(["com.myfitnesspal.ios", "com.vendor.food-b"]),
 );
 
 const weights = deduplicateHealthImportRecords([
@@ -624,6 +776,16 @@ assert.match(
   androidHealthSource,
   /includesCurrentDay[\s\S]{0,1600}\? aggregateRecord\(\{[\s\S]{0,200}recordType: "Steps"/,
   "the partial current day must use a direct unfiltered aggregate",
+);
+assert.match(
+  androidHealthSource,
+  /readLocalPhoneSteps\(currentStart!, currentEnd!\)[\s\S]{0,5000}coverageStartEpochMs[\s\S]{0,1600}combineDisjointStepWindows\([\s\S]{0,300}reconcileCurrentDayStepTotal\([\s\S]{0,200}disjointPhoneCandidate/,
+  "today must build a non-overlapping Health Connect-prefix/local-phone-suffix candidate before reconciliation",
+);
+assert.match(
+  androidHealthSource,
+  /LOCAL_PHONE_STEP_READ_TIMEOUT_MS = 1_500[\s\S]{0,1600}Promise\.race/,
+  "the optional local recorder must never strand a Health Connect refresh",
 );
 assert.match(
   androidHealthSource,
@@ -721,17 +883,9 @@ assert.deepEqual(
   [path.join("app", "(tabs)", "log.tsx")],
   "no assistant, timer, or incidental caller may request the Log Steps capability",
 );
-const localPersistenceChangedStart = appProviderSource.indexOf(
-  "function localPersistenceChanged",
-);
-const localPersistenceChangedEnd = appProviderSource.indexOf(
-  "type Action",
-  localPersistenceChangedStart,
-);
-assert.ok(localPersistenceChangedStart >= 0 && localPersistenceChangedEnd > 0);
-const localPersistenceChangedSource = appProviderSource.slice(
-  localPersistenceChangedStart,
-  localPersistenceChangedEnd,
+const localPersistenceChangedSource = fs.readFileSync(
+  path.join(root, "src", "domain", "localPersistence.ts"),
+  "utf8",
 );
 assert.doesNotMatch(localPersistenceChangedSource, /previous\.photos !== next\.photos/);
 assert.doesNotMatch(localPersistenceChangedSource, /previous\.messages !== next\.messages/);
@@ -778,6 +932,116 @@ const backgroundHealthSource = fs.readFileSync(
   "utf8",
 );
 const appConfig = fs.readFileSync(path.join(root, "app.json"), "utf8");
+const androidNativeSource = fs.readFileSync(
+  path.join(
+    root,
+    "plugins",
+    "habhub-android",
+    "java",
+    "HabHubNativeModule.kt",
+  ),
+  "utf8",
+);
+const androidPluginSource = fs.readFileSync(
+  path.join(root, "plugins", "withHabHubAndroid.js"),
+  "utf8",
+);
+assert.match(
+  appConfig,
+  /android\.permission\.ACTIVITY_RECOGNITION/,
+  "direct phone-step recording must declare Physical Activity access",
+);
+assert.match(
+  androidHealthSource,
+  /PermissionsAndroid\.request\(permission\)/,
+  "Physical Activity access must be requested in the explicit health connection flow",
+);
+assert.match(
+  androidHealthSource,
+  /Number\(Platform\.Version\) >= 29[\s\S]{0,500}if \(!physicalActivityRuntimePermissionRequired\(\)\) return true/,
+  "Android 8 and 9 must bypass the API-29-only Physical Activity runtime check",
+);
+assert.match(
+  androidNativeSource,
+  /LocalDataReadRequest\.Builder\(\)[\s\S]{0,300}\.read\(LocalDataType\.TYPE_STEP_COUNT_DELTA\)[\s\S]{0,700}getDataSet\(LocalDataType\.TYPE_STEP_COUNT_DELTA\)[\s\S]{0,900}getStartTime\(TimeUnit\.MILLISECONDS\)/,
+  "the native bridge must read detailed accountless deltas and expose their first covered instant",
+);
+assert.match(
+  androidNativeSource,
+  /LOCAL_RECORDING_CLIENT_STEPS_MIN_VERSION_CODE/,
+  "steps-only recording must accept the official lower Play services floor",
+);
+assert.match(
+  androidNativeSource,
+  /startLocalPhoneStepRecording[\s\S]{0,900}\.subscribe\(LocalDataType\.TYPE_STEP_COUNT_DELTA\)/,
+  "an already-granted migration must start persistent local recording without waiting for a data read",
+);
+assert.match(
+  androidHealthSource,
+  /async function prepareLocalPhoneStepRecording\(\)[\s\S]{0,300}requestLocalPhoneStepPermission[\s\S]{0,300}startLocalPhoneStepRecording/,
+  "the migration must subscribe immediately after the API-appropriate permission check",
+);
+assert.equal(
+  (androidHealthSource.match(/await prepareLocalPhoneStepRecording\(\)/g) ?? [])
+    .length,
+  2,
+  "both foreground and background Health permission paths must start local Steps recording immediately",
+);
+assert.match(
+  androidHealthSource,
+  /prepareCurrentDaySteps:\s*prepareLocalPhoneStepRecording/,
+  "the one-time migration and manual retry must reuse the same permission-plus-subscription path",
+);
+assert.match(
+  androidNativeSource,
+  /getValue\(LocalField\.FIELD_STEPS\)[\s\S]{0,100}\.asInt\(\)/,
+  "the integer step field must use LocalValue's typed accessor",
+);
+assert.doesNotMatch(
+  androidNativeSource,
+  /getValue\(LocalField\.FIELD_STEPS\)[\s\S]{0,100}\.toString\(\)/,
+  "step parsing must not depend on LocalValue's display string",
+);
+assert.match(
+  androidNativeSource,
+  /stopLocalPhoneStepRecording[\s\S]{0,800}\.unsubscribe\(LocalDataType\.TYPE_STEP_COUNT_DELTA\)/,
+  "disconnecting health must end the persistent phone-step subscription",
+);
+assert.match(
+  healthProviderSource,
+  /granted\?\.connected === false[\s\S]{0,700}nativeHealthAdapter\.disconnect\?\.\(\)/,
+  "revoking Health Connect access must also end local phone recording",
+);
+assert.match(
+  healthProviderSource,
+  /reason === 'manual'[\s\S]{0,300}currentHealth\.dataTypes\.steps[\s\S]{0,700}nativeHealthAdapter\.prepareCurrentDaySteps\?\.\(\)/,
+  "an existing connected user must get Physical Activity access from the deliberate manual health-sync action",
+);
+assert.match(
+  healthProviderSource,
+  /Platform\.OS === 'android' && auth\.status === 'signedIn'/,
+  "the one-time migration must exclude web, iOS, demo, and signed-out sessions",
+);
+assert.match(
+  healthProviderSource,
+  /const markerKey =[\s\S]{0,700}!hydrated[\s\S]{0,300}status !== 'ready'[\s\S]{0,400}persisted\.connectionEnabled !== true[\s\S]{0,300}!state\.settings\.onboardingComplete/,
+  "the one-time migration must wait for hydration, completed onboarding, ready status, and a connected device",
+);
+assert.match(
+  healthProviderSource,
+  /if \(syncingRef\.current\)[\s\S]{0,3000}InteractionManager\.runAfterInteractions[\s\S]{0,500}PHYSICAL_ACTIVITY_MIGRATION_DELAY_MS/,
+  "the migration must yield to screen interactions and any first native sync",
+);
+assert.match(
+  healthProviderSource,
+  /AsyncStorage\.getItem\(markerKey\)[\s\S]{0,300}if \(existing\)[\s\S]{0,900}AsyncStorage\.setItem\(markerKey[\s\S]{0,500}void nativeHealthAdapter\.prepareCurrentDaySteps/,
+  "the account/version attempt marker must be persisted before the one-shot permission request",
+);
+assert.match(
+  androidPluginSource,
+  /play-services-fitness:21\.3\.0/,
+  "the config plugin must reproduce the official local Recording API dependency",
+);
 for (const [dataType, recordType, permission] of [
   ["body_water_mass", "BodyWaterMass", "READ_BODY_WATER_MASS"],
   ["bone_mass", "BoneMass", "READ_BONE_MASS"],
@@ -812,6 +1076,11 @@ assert.doesNotMatch(
   appleHealthSource,
   /BodyWaterMass|BoneMass/,
   "unsupported body-water and bone identifiers must not be requested from HealthKit",
+);
+assert.match(
+  appleHealthSource,
+  /config\.type === 'nutrition'[\s\S]{0,700}queryQuantitySamples\(config\.identifier[\s\S]{0,900}sample\.uuid[\s\S]{0,500}sourceName\(sample\)/,
+  "Apple dietary reads must retain sample UUID, time, and writer for semantic dedup",
 );
 assert.match(
   settingsSource,
@@ -933,10 +1202,15 @@ for (const source of [appProviderSource, backgroundHealthSource]) {
   );
   assert.match(
     source,
-    /preserveUnchangedDailyAggregateRevision/,
-    "foreground and background imports must preserve unchanged aggregate revisions",
+    /preserveCurrentDayStepFloor/,
+    "foreground and background imports must preserve the highest confirmed current-day aggregate",
   );
 }
+assert.match(
+  healthDedupSource,
+  /preserveCurrentDayStepFloor[\s\S]{0,700}preserveUnchangedDailyAggregateRevision/,
+  "the current-day floor must retain unchanged revision/object reconciliation",
+);
 assert.match(
   appProviderSource,
   /isDailyStepReplacementCandidate\([\s\S]{0,500}includeFallbacks:\s*action\.aggregateReplacement\?\.removeStepFallbacks === true/,

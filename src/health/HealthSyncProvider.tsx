@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState as NativeAppState, InteractionManager } from 'react-native';
+import { AppState as NativeAppState, InteractionManager, Platform } from 'react-native';
 
+import { useAuth } from '@/src/auth/AuthProvider';
 import { dateKey } from '@/src/domain/date';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
 import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
@@ -17,6 +18,7 @@ import { nativeHealthAdapter } from '@/src/health/adapter';
 import { configureBackgroundHealthSync } from '@/src/health/background';
 import {
   HEALTH_INITIAL_DAYS,
+  healthPhysicalActivityMigrationKey,
   HEALTH_STEPS_IMPORT_VERSION,
   HEALTH_TODAY_STEPS_ACTIVE_REFRESH_MS,
   HEALTH_STATUS_STORAGE_KEY,
@@ -45,6 +47,7 @@ const STEPS_REPAIR_NEXT_CHUNK_DELAY_MS = 4_000;
 const STEPS_REPAIR_RETRY_MS = 15 * 60 * 1000;
 const FOREGROUND_STEPS_SETTLE_DELAY_MS = 700;
 const FOREGROUND_STEPS_INTERACTION_MAX_WAIT_MS = 1_200;
+const PHYSICAL_ACTIVITY_MIGRATION_DELAY_MS = 4_000;
 
 type ActiveHealthOperation = 'full' | 'steps-refresh' | 'steps-repair';
 
@@ -139,10 +142,16 @@ function syncStart(
 }
 
 export function HealthSyncProvider({ children }: PropsWithChildren) {
-  const { state, updateSettings, importHealthEntries } = useApp();
+  const { state, hydrated, updateSettings, importHealthEntries } = useApp();
+  const auth = useAuth();
+  const signedInNativeAccountId =
+    Platform.OS === 'android' && auth.status === 'signedIn'
+      ? (auth.user?.id ?? null)
+      : null;
   const [status, setStatus] = useState<HealthSyncStatus>('checking');
   const [availability, setAvailability] = useState<HealthAdapterAvailability | null>(null);
   const [persisted, setPersisted] = useState<PersistedHealthStatus>({ lastSyncedAt: null, importedCount: 0, error: null });
+  const [physicalActivityMigrationCompletedKey, setPhysicalActivityMigrationCompletedKey] = useState<string | null>(null);
   const [backgroundRegistration, setBackgroundRegistration] = useState<
     HealthSyncContextValue['backgroundRegistration']
   >('disabled');
@@ -344,6 +353,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
               statusKey,
               JSON.stringify(restored),
             ).catch(() => undefined);
+            await nativeHealthAdapter.disconnect?.().catch(() => undefined);
           } else if (
             restored.connectionEnabled === undefined &&
             granted?.connected
@@ -391,6 +401,116 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     return () => { cancelled = true; };
   }, [state.currentUserId]);
 
+  useEffect(() => {
+    const accountId = signedInNativeAccountId;
+    const markerKey = accountId
+      ? healthPhysicalActivityMigrationKey(accountId)
+      : null;
+    if (
+      !accountId ||
+      !markerKey ||
+      markerKey === physicalActivityMigrationCompletedKey ||
+      !hydrated ||
+      accountId !== state.currentUserId ||
+      status !== 'ready' ||
+      !availability?.available ||
+      nativeHealthAdapter.provider !== 'health_connect' ||
+      persisted.connectionEnabled !== true ||
+      !state.settings.onboardingComplete ||
+      !state.settings.healthSync.enabled ||
+      !state.settings.healthSync.dataTypes.steps
+    )
+      return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let interaction: ReturnType<
+      typeof InteractionManager.runAfterInteractions
+    > | null = null;
+
+    const clearScheduled = () => {
+      interaction?.cancel();
+      interaction = null;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+    const eligibleNow = () => {
+      const current = stateRef.current;
+      return (
+        NativeAppState.currentState === 'active' &&
+        current.currentUserId === accountId &&
+        current.settings.onboardingComplete &&
+        current.settings.healthSync.enabled &&
+        current.settings.healthSync.dataTypes.steps &&
+        persistedRef.current.connectionEnabled === true
+      );
+    };
+    const attempt = async () => {
+      if (cancelled || !eligibleNow()) return;
+      // Let any launch/resume import finish first. The migration is optional
+      // setup and must never occupy or queue the user's first native sync.
+      if (syncingRef.current) {
+        timer = setTimeout(() => {
+          timer = null;
+          void attempt();
+        }, 1_000);
+        return;
+      }
+      try {
+        const existing = await AsyncStorage.getItem(markerKey);
+        if (cancelled) return;
+        if (existing) {
+          setPhysicalActivityMigrationCompletedKey(markerKey);
+          return;
+        }
+        if (!eligibleNow()) return;
+        // Persist before opening Android's dialog. A denial, dismissal, or
+        // process death therefore cannot create a prompt loop on reopen.
+        await AsyncStorage.setItem(markerKey, new Date().toISOString());
+        if (cancelled || !eligibleNow()) return;
+        void nativeHealthAdapter.prepareCurrentDaySteps?.().catch(
+          () => undefined,
+        );
+        setPhysicalActivityMigrationCompletedKey(markerKey);
+      } catch {
+        // A failed marker write must not risk a repeating system prompt. Leave
+        // the migration untouched; explicit Settings > Sync now remains safe.
+      }
+    };
+    const schedule = () => {
+      clearScheduled();
+      interaction = InteractionManager.runAfterInteractions(() => {
+        interaction = null;
+        if (cancelled || NativeAppState.currentState !== 'active') return;
+        timer = setTimeout(() => {
+          timer = null;
+          void attempt();
+        }, PHYSICAL_ACTIVITY_MIGRATION_DELAY_MS);
+      });
+    };
+    const subscription = NativeAppState.addEventListener('change', (next) => {
+      if (next === 'active') schedule();
+      else clearScheduled();
+    });
+    if (NativeAppState.currentState === 'active') schedule();
+    return () => {
+      cancelled = true;
+      subscription.remove();
+      clearScheduled();
+    };
+  }, [
+    availability?.available,
+    hydrated,
+    persisted.connectionEnabled,
+    physicalActivityMigrationCompletedKey,
+    state.currentUserId,
+    state.settings.healthSync.dataTypes.steps,
+    state.settings.healthSync.enabled,
+    state.settings.onboardingComplete,
+    status,
+    signedInNativeAccountId,
+  ]);
+
   const scheduleBackfill = useCallback((delayMs: number) => {
     if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
     backfillTimerRef.current = setTimeout(() => {
@@ -405,6 +525,15 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       });
     }, delayMs);
   }, []);
+
+  const markPhysicalActivityMigrationAttempt = useCallback(
+    async (accountId: string) => {
+      const key = healthPhysicalActivityMigrationKey(accountId);
+      setPhysicalActivityMigrationCompletedKey(key);
+      await AsyncStorage.setItem(key, new Date().toISOString());
+    },
+    [],
+  );
 
   const scheduleStepsRepair = useCallback((delayMs: number) => {
     if (stepsRepairTimerRef.current) clearTimeout(stepsRepairTimerRef.current);
@@ -704,6 +833,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         const initialHistoryImport =
           current.settings.healthSync.initialHistoryImportPending === true;
         if (reason === 'history') {
+          if (
+            dataTypes.includes('steps') &&
+            signedInNativeAccountId === current.currentUserId
+          )
+            void markPhysicalActivityMigrationAttempt(
+              signedInNativeAccountId,
+            ).catch(() => undefined);
           await nativeHealthAdapter.requestPermissions(
             dataTypes,
             current.settings.healthSync.backgroundAccess,
@@ -950,7 +1086,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     })();
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, rememberHealthSources, saveStatus, scheduleBackfill]);
+  }, [importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, saveStatus, scheduleBackfill, signedInNativeAccountId]);
   runSyncRef.current = runSync;
 
   const connect = useCallback(async (options?: {
@@ -964,6 +1100,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       healthSyncSchedule(current.syncMode).requestsBackground;
     setStatus('requesting');
     try {
+      if (
+        dataTypes.includes('steps') &&
+        signedInNativeAccountId === stateRef.current.currentUserId
+      )
+        void markPhysicalActivityMigrationAttempt(
+          signedInNativeAccountId,
+        ).catch(() => undefined);
       await nativeHealthAdapter.requestPermissions(
         dataTypes,
         requestedBackgroundAccess,
@@ -1032,7 +1175,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       setStatus('error');
       throw error;
     }
-  }, [availability, runSync, saveStatus, updateSettings]);
+  }, [availability, markPhysicalActivityMigrationAttempt, runSync, saveStatus, signedInNativeAccountId, updateSettings]);
 
   const setSyncMode = useCallback(async (mode: SyncMode) => {
     const currentState = stateRef.current;
@@ -1046,6 +1189,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       const dataTypes = enabledHealthDataTypes(healthSync.dataTypes);
       setStatus('requesting');
       try {
+        if (
+          dataTypes.includes('steps') &&
+          signedInNativeAccountId === currentState.currentUserId
+        )
+          void markPhysicalActivityMigrationAttempt(
+            signedInNativeAccountId,
+          ).catch(() => undefined);
         await nativeHealthAdapter.requestPermissions(dataTypes, true);
       } catch (error) {
         setStatus('ready');
@@ -1076,7 +1226,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     });
     updateSettings({ syncMode: mode, healthSync });
     setStatus(healthSync.enabled ? 'ready' : 'idle');
-  }, [saveStatus, updateSettings]);
+  }, [markPhysicalActivityMigrationAttempt, saveStatus, signedInNativeAccountId, updateSettings]);
 
   const disconnect = useCallback(async () => {
     setCloudSyncPaused('health-backfill', false);
@@ -1085,6 +1235,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       clearTimeout(backfillTimerRef.current);
       backfillTimerRef.current = null;
     }
+    await nativeHealthAdapter.disconnect?.().catch(() => undefined);
     const current = stateRef.current.settings.healthSync;
     await saveStatus({
       ...persistedRef.current,
@@ -1495,6 +1646,31 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     return [...byId.values()].sort((a, b) => a.origin.localeCompare(b.origin));
   }, [sourceOrigins, state.settings.healthSync.sourcePreferences]);
 
+  const syncNow = useCallback(
+    async (reason: 'open' | 'pull' | 'manual' = 'manual') => {
+      const currentHealth = stateRef.current.settings.healthSync;
+      // Existing connected users have already completed Health Connect's
+      // consent flow. A deliberate tap on Settings > Sync now is the safe,
+      // contextual migration point for Android's separate Physical Activity
+      // prompt; passive launch/resume refreshes never open a system dialog.
+      if (
+        reason === 'manual' &&
+        currentHealth.enabled &&
+        currentHealth.dataTypes.steps
+      ) {
+        if (signedInNativeAccountId === stateRef.current.currentUserId)
+          void markPhysicalActivityMigrationAttempt(
+            signedInNativeAccountId,
+          ).catch(() => undefined);
+        await nativeHealthAdapter.prepareCurrentDaySteps?.().catch(
+          () => undefined,
+        );
+      }
+      return runSync(reason);
+    },
+    [markPhysicalActivityMigrationAttempt, runSync, signedInNativeAccountId],
+  );
+
   const value = useMemo<HealthSyncContextValue>(() => ({
     status,
     availability,
@@ -1506,13 +1682,13 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     sourceOrigins,
     sourceOptions,
     connect,
-    syncNow: (reason = 'manual') => runSync(reason),
+    syncNow,
     syncHistory: () => runSync('history'),
     setSyncMode,
     setSourceEnabled,
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
-  }), [availability, backgroundRegistration, connect, disconnect, persisted, runSync, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status]);
+  }), [availability, backgroundRegistration, connect, disconnect, persisted, runSync, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }

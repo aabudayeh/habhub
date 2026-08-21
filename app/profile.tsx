@@ -44,7 +44,7 @@ export default function ProfileScreen(){
     updateMemberAvatar(me.id,asset.base64?`data:${asset.mimeType??'image/jpeg'};base64,${asset.base64}`:asset.uri);
   }
   return <Screen keyboardShouldPersistTaps="handled">
-    <PageHeader eyebrow="Personal" title="My profile" subtitle="Your photo, body and energy profile, and personal metric goals." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
+    <PageHeader eyebrow="Personal" title="My profile" subtitle="Your photo, body and energy profile, and tracked goals." showMenu={false} action={<IconButton icon="close" label="Close" onPress={()=>router.back()}/>}/>
     <Card style={styles.identity}>
       <View style={styles.identityRow}>
         <View><Avatar initials={me.initials} color={accent} size={72} uri={me.avatarUri}/><Pressable accessibilityRole="button" accessibilityLabel={t("Edit")} onPress={choosePhoto} style={[styles.camera,{backgroundColor:accent,borderColor:colors.card}]}><Ionicons name="camera" size={15} color={palette.white}/></Pressable></View>

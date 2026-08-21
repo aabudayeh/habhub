@@ -1,5 +1,6 @@
 package __ANDROID_PACKAGE__
 
+import android.Manifest
 import android.app.AppOpsManager
 import android.app.AlarmManager
 import android.app.Notification
@@ -9,20 +10,30 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.fitness.FitnessLocal
+import com.google.android.gms.fitness.LocalRecordingClient
+import com.google.android.gms.fitness.data.LocalDataType
+import com.google.android.gms.fitness.data.LocalField
+import com.google.android.gms.fitness.request.LocalDataReadRequest
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.math.roundToLong
 
@@ -51,7 +62,122 @@ class HabHubNativeModule(
 
   override fun getConstants(): Map<String, Any> = mapOf(
     "nativeWorkoutActions" to true,
+    "localPhoneStepRecording" to true,
   )
+
+  private fun physicalActivityPermissionGranted() =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+      ContextCompat.checkSelfPermission(
+        reactContext,
+        Manifest.permission.ACTIVITY_RECOGNITION,
+      ) == PackageManager.PERMISSION_GRANTED
+
+  /**
+   * Starts persistent, battery-efficient on-device recording without keeping
+   * an app-owned sensor listener or foreground service alive.
+   */
+  @ReactMethod
+  fun startLocalPhoneStepRecording(promise: Promise) {
+    if (!physicalActivityPermissionGranted()) {
+      promise.resolve(false)
+      return
+    }
+    val playServices = GoogleApiAvailability.getInstance()
+      .isGooglePlayServicesAvailable(
+        reactContext,
+        LocalRecordingClient.LOCAL_RECORDING_CLIENT_STEPS_MIN_VERSION_CODE,
+      )
+    if (playServices != ConnectionResult.SUCCESS) {
+      promise.resolve(false)
+      return
+    }
+    FitnessLocal.getLocalRecordingClient(reactContext)
+      .subscribe(LocalDataType.TYPE_STEP_COUNT_DELTA)
+      .addOnSuccessListener { promise.resolve(true) }
+      .addOnFailureListener { promise.resolve(false) }
+  }
+
+  /**
+   * Reads the accountless Android Recording API. Its step deltas are a phone
+   * view that overlaps Health Connect, so JavaScript may use this only as a
+   * current-day floor and must never add it to the Health Connect aggregate.
+   */
+  @ReactMethod
+  fun readLocalPhoneSteps(from: Double, to: Double, promise: Promise) {
+    val safeFrom = from.toLong()
+    val safeTo = to.toLong().coerceAtMost(System.currentTimeMillis())
+    if (!physicalActivityPermissionGranted() || safeFrom >= safeTo) {
+      promise.resolve(null)
+      return
+    }
+    val playServices = GoogleApiAvailability.getInstance()
+      .isGooglePlayServicesAvailable(
+        reactContext,
+        LocalRecordingClient.LOCAL_RECORDING_CLIENT_STEPS_MIN_VERSION_CODE,
+      )
+    if (playServices != ConnectionResult.SUCCESS) {
+      promise.resolve(null)
+      return
+    }
+    val client = FitnessLocal.getLocalRecordingClient(reactContext)
+    client.subscribe(LocalDataType.TYPE_STEP_COUNT_DELTA)
+      .addOnSuccessListener {
+        val request = LocalDataReadRequest.Builder()
+          .read(LocalDataType.TYPE_STEP_COUNT_DELTA)
+          .setTimeRange(safeFrom, safeTo, TimeUnit.MILLISECONDS)
+          .build()
+        client.readData(request)
+          .addOnSuccessListener { response ->
+            val points = response
+              .getDataSet(LocalDataType.TYPE_STEP_COUNT_DELTA)
+              .dataPoints
+            if (points.isEmpty()) {
+              promise.resolve(null)
+              return@addOnSuccessListener
+            }
+            val count = points
+              .sumOf { point ->
+                point.getValue(LocalField.FIELD_STEPS)
+                  .asInt()
+                  .toDouble()
+              }
+            val coverageStart = points.minOf { point ->
+              point.getStartTime(TimeUnit.MILLISECONDS)
+            }
+            promise.resolve(
+              Arguments.createMap().apply {
+                putDouble("count", count.coerceAtLeast(0.0))
+                putDouble("coverageStartEpochMs", coverageStart.toDouble())
+              },
+            )
+          }
+          .addOnFailureListener {
+            // Health Connect remains fully usable when Play services or the
+            // optional local recorder is unavailable on this device.
+            promise.resolve(null)
+          }
+      }
+      .addOnFailureListener {
+        promise.resolve(null)
+      }
+  }
+
+  @ReactMethod
+  fun stopLocalPhoneStepRecording(promise: Promise) {
+    val playServices = GoogleApiAvailability.getInstance()
+      .isGooglePlayServicesAvailable(
+        reactContext,
+        LocalRecordingClient.LOCAL_RECORDING_CLIENT_STEPS_MIN_VERSION_CODE,
+      )
+    if (playServices != ConnectionResult.SUCCESS) {
+      promise.resolve(false)
+      return
+    }
+    FitnessLocal.getLocalRecordingClient(reactContext)
+      .unsubscribe(LocalDataType.TYPE_STEP_COUNT_DELTA)
+      .addOnSuccessListener { promise.resolve(true) }
+      .addOnFailureListener { promise.resolve(false) }
+  }
 
   private fun usageAccessGranted(): Boolean {
     val appOps = reactContext.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager

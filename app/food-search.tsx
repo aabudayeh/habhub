@@ -25,6 +25,7 @@ import {
   Screen,
 } from "@/src/components/ui";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { FOOD_NUTRIENTS } from "@/src/domain/food";
 import {
   foodByBarcode,
   FoodProduct,
@@ -189,6 +190,14 @@ function FoodSearchContent({
     const factor = Math.max(0, Number(multiplier.replace(",", ".")) || 0);
     const scaled = (value?: number) =>
       optional(value === undefined ? undefined : value * factor);
+    const nutritionDetails = Object.fromEntries(
+      FOOD_NUTRIENTS.flatMap((nutrient) => {
+        const amount = selected[nutrient.nutritionKey];
+        return amount === undefined
+          ? []
+          : [[nutrient.nutritionKey, amount * factor] as const];
+      }),
+    );
     router.replace({
       pathname: "/(tabs)/log",
       params: {
@@ -210,6 +219,7 @@ function FoodSearchContent({
         vitaminC: scaled(selected.vitaminCMg),
         vitaminD: scaled(selected.vitaminDMcg),
         vitaminB12: scaled(selected.vitaminB12Mcg),
+        nutritionDetails: JSON.stringify(nutritionDetails),
       },
     });
   }

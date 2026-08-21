@@ -533,7 +533,7 @@ assert.match(
   /dailyMetricStatuses: next\.dailyMetricStatuses\.map\([\s\S]*visibility: action\.changes\.defaultVisibility/,
 );
 assert.match(health, /export function healthVisibilityByMetric/);
-assert.match(health, /importedMetricVisibility\(visibility,metric\.id\)/);
+assert.match(health, /importedMetricVisibility\(visibility,\s*metric\.id\)/);
 assert.match(foregroundHealth, /healthVisibilityByMetric\(current\.metrics\)/);
 assert.match(backgroundHealth, /healthVisibilityByMetric\(state\.metrics\)/);
 

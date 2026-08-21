@@ -321,8 +321,8 @@ assert.match(
 );
 assert.match(
   groupCloudSource,
-  /supplementalStatuses = excludeAlreadyPublishedDailyStatusRows\(\s*fastRecentStatuses,\s*statuses/,
-  "the detailed workspace pass must exclude its already-published recent rows",
+  /const fastRecentDateSet = new Set\(fastRecentDates\);[\s\S]{0,220}const supplementalStatusDates = statusDates\.filter\([\s\S]{0,180}!fastRecentDateSet\.has\(localDate\)[\s\S]{0,260}buildCloudDailyStatusRows\([\s\S]{0,180}supplementalStatusDates/,
+  "the detailed workspace pass must build only dates outside its already-published recent window",
 );
 assert.match(
   statusNoopMigration,

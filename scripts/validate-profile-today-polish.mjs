@@ -11,6 +11,8 @@ const typesSource = read("src/types.ts");
 const seedSource = read("src/data/seed.ts");
 const todaySource = read("app/(tabs)/index.tsx");
 const profileSource = read("src/components/ProfileEditors.tsx");
+const profilePageSource = read("app/profile.tsx");
+const metricDetailSource = read("app/metric-detail.tsx");
 
 assert.match(
   typesSource,
@@ -115,6 +117,26 @@ assert.match(
   profileSource,
   /rateInput:\s*\{[\s\S]{0,80}flex:\s*1,[\s\S]{0,50}minWidth:\s*0/,
   "The custom-rate input must stay inside its compact editor on web.",
+);
+assert.match(
+  profileSource,
+  /title="Tracked goals"/,
+  "The profile subsection must use the product's Tracked goals terminology.",
+);
+assert.match(
+  profilePageSource,
+  /subtitle="Your photo, body and energy profile, and tracked goals\."/,
+  "The profile header must use the same Tracked goals terminology.",
+);
+assert.match(
+  metricDetailSource,
+  /const canOpenWorkout = tracker\.id === "workout"/,
+  "Only the Workout tracker should receive the direct Gym shortcut.",
+);
+assert.match(
+  metricDetailSource,
+  /accessibilityLabel="Open workout page"[\s\S]{0,180}router\.navigate\("\/gym" as never\)/,
+  "The Workout detail quick-action row must open the Gym page accessibly.",
 );
 
 console.log(

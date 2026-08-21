@@ -44,6 +44,28 @@ const QUANTITIES: QuantityConfig[] = [
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminC',type:'nutrition',unit:'mg',nutritionField:'vitaminCMg' },
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminD',type:'nutrition',unit:'mcg',nutritionField:'vitaminDMcg' },
   { identifier:'HKQuantityTypeIdentifierDietaryVitaminB12',type:'nutrition',unit:'mcg',nutritionField:'vitaminB12Mcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatMonounsaturated',type:'nutrition',unit:'g',nutritionField:'monounsaturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatPolyunsaturated',type:'nutrition',unit:'g',nutritionField:'polyunsaturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPhosphorus',type:'nutrition',unit:'mg',nutritionField:'phosphorusMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryZinc',type:'nutrition',unit:'mg',nutritionField:'zincMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCopper',type:'nutrition',unit:'mg',nutritionField:'copperMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryManganese',type:'nutrition',unit:'mg',nutritionField:'manganeseMg' },
+  { identifier:'HKQuantityTypeIdentifierDietarySelenium',type:'nutrition',unit:'mcg',nutritionField:'seleniumMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryIodine',type:'nutrition',unit:'mcg',nutritionField:'iodineMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminA',type:'nutrition',unit:'mcg',nutritionField:'vitaminAMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminE',type:'nutrition',unit:'mg',nutritionField:'vitaminEMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminK',type:'nutrition',unit:'mcg',nutritionField:'vitaminKMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryThiamin',type:'nutrition',unit:'mg',nutritionField:'thiaminMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryRiboflavin',type:'nutrition',unit:'mg',nutritionField:'riboflavinMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryNiacin',type:'nutrition',unit:'mg',nutritionField:'niacinMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPantothenicAcid',type:'nutrition',unit:'mg',nutritionField:'pantothenicAcidMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminB6',type:'nutrition',unit:'mg',nutritionField:'vitaminB6Mg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFolate',type:'nutrition',unit:'mcg',nutritionField:'folateMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCaffeine',type:'nutrition',unit:'mg',nutritionField:'caffeineMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryBiotin',type:'nutrition',unit:'mcg',nutritionField:'biotinMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryChloride',type:'nutrition',unit:'mg',nutritionField:'chlorideMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryChromium',type:'nutrition',unit:'mcg',nutritionField:'chromiumMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryMolybdenum',type:'nutrition',unit:'mcg',nutritionField:'molybdenumMcg' },
   { identifier: 'HKQuantityTypeIdentifierDietaryWater', type: 'water', unit: 'L' },
   { identifier: 'HKQuantityTypeIdentifierBodyFatPercentage', type: 'body_fat', unit: '%' },
   { identifier: 'HKQuantityTypeIdentifierLeanBodyMass', type: 'lean_body_mass', unit: 'kg' },
@@ -82,6 +104,38 @@ function sourceNames(value: Record<string, unknown>) {
 async function readQuantity(config: QuantityConfig, from: Date, to: Date, selection:AppleSourceSelection): Promise<HealthImportRecord[]> {
   if(selection.disabled)return[];
   const filter={date:{startDate:from,endDate:to},...(selection.sources?{sources:selection.sources}:{})};
+  if (config.type === 'nutrition') {
+    // Dietary statistics combine every writer before source-aware dedup can
+    // see them. Samples retain UUID, clock time and writer, letting mirrored
+    // meals collapse while complementary nutrients and genuine meals remain.
+    const samples = await queryQuantitySamples(config.identifier, {
+      limit: 0,
+      ascending: true,
+      unit: config.unit,
+      filter,
+    });
+    return samples.flatMap((sample) => {
+      const value = Number(sample.quantity ?? 0);
+      if (!(value > 0)) return [];
+      const start = asDate(sample.startDate, from);
+      const end = asDate(sample.endDate, start);
+      const nutrition = config.nutritionField
+        ? ({ [config.nutritionField]: value } as NutritionDetails)
+        : undefined;
+      return [{
+        id: String(sample.uuid ?? `${config.identifier}:${end.toISOString()}`),
+        provider: 'apple_health' as const,
+        type: config.type,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        value: config.nutritionField ? 0 : value,
+        unit: config.unit,
+        origin: sourceName(sample),
+        sourceOrigins: sourceNames(sample),
+        nutrition,
+      }];
+    });
+  }
   if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'heart_rate') {
     const samples = await queryQuantitySamples(config.identifier, {
       limit: 0,

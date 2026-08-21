@@ -535,7 +535,7 @@ function tutorialJournal(anchorDate: string): JournalNote[] {
       id: "tutorial-note-recipe",
       userId: TUTORIAL_DEMO_USER_ID,
       title: "Breakfast idea",
-      body: "## Berry oat bowl\n- Oats and yoghurt\n- Frozen berries\n- Almonds\n[Open the food tracker](https://sethstar-habhub.expo.app/log)",
+      body: "## Berry oat bowl\n- Oats and yoghurt\n- Frozen berries\n- Almonds\n[Open the food tracker](https://habhub.expo.app/log)",
       createdAt: instant(anchorDate, 0, "08:20"),
       updatedAt: instant(anchorDate, 0, "08:25"),
       localDate: shiftDate(anchorDate, 0),

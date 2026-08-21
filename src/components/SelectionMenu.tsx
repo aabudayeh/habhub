@@ -22,6 +22,7 @@ export function SelectionMenu({
   selectedIds,
   onChange,
   multiple = true,
+  minimumSelected = 0,
   emptyLabel = "None selected",
   searchable = true,
   compactIcon = false,
@@ -32,6 +33,8 @@ export function SelectionMenu({
   selectedIds: string[];
   onChange: (ids: string[]) => void;
   multiple?: boolean;
+  /** Keep one-or-more selectors from exposing a misleading Clear action. */
+  minimumSelected?: number;
   emptyLabel?: string;
   searchable?: boolean;
   /** Render only the filter icon while retaining the same accessible modal. */
@@ -77,6 +80,8 @@ export function SelectionMenu({
       setOpen(false);
       return;
     }
+    if (selectedIds.includes(id) && selectedIds.length <= minimumSelected)
+      return;
     onChange(
       selectedIds.includes(id)
         ? selectedIds.filter((item) => item !== id)
@@ -90,6 +95,7 @@ export function SelectionMenu({
         accessibilityRole="button"
         accessibilityLabel={t(title)}
         accessibilityHint={t("Open selection")}
+        hitSlop={compactIcon ? 6 : undefined}
         onPress={() => setOpen(true)}
         style={[
           compactIcon ? styles.compactTrigger : styles.trigger,
@@ -144,12 +150,24 @@ export function SelectionMenu({
             ) : null}
             {multiple && items.length ? (
               <View style={styles.bulk}>
-                <Pressable onPress={() => onChange(items.map((item) => item.id))}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Select all")}
+                  hitSlop={8}
+                  onPress={() => onChange(items.map((item) => item.id))}
+                >
                   <Text style={[styles.bulkText, { color: accent }]}>Select all</Text>
                 </Pressable>
-                <Pressable onPress={() => onChange([])}>
-                  <Text style={[styles.bulkText, { color: accent }]}>Clear</Text>
-                </Pressable>
+                {minimumSelected === 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Clear")}
+                    hitSlop={8}
+                    onPress={() => onChange([])}
+                  >
+                    <Text style={[styles.bulkText, { color: accent }]}>Clear</Text>
+                  </Pressable>
+                ) : null}
               </View>
             ) : null}
             <ScrollView
@@ -168,6 +186,9 @@ export function SelectionMenu({
                     return (
                       <Pressable
                         key={item.id}
+                        accessibilityRole={multiple ? "checkbox" : "radio"}
+                        accessibilityState={{ checked }}
+                        accessibilityLabel={item.label}
                         onPress={() => choose(item.id)}
                         style={[
                           styles.row,
@@ -228,6 +249,7 @@ export function SelectionMenu({
               ) : null}
             </ScrollView>
             <Pressable
+              accessibilityRole="button"
               onPress={() => setOpen(false)}
               style={[styles.done, { backgroundColor: accent }]}
             >

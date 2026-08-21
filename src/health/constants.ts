@@ -8,6 +8,14 @@ export const HEALTH_INITIAL_DAYS = 30;
  * Connect's priority-aware aggregate and repairs rows imported by older builds.
  */
 export const HEALTH_STEPS_IMPORT_VERSION = 2;
+/** One automatic, post-hydration request per native device/account/version. */
+export const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION = 1;
+const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_KEY =
+  'paceboard-health-physical-activity-migration';
+
+export function healthPhysicalActivityMigrationKey(accountId: string) {
+  return `${HEALTH_PHYSICAL_ACTIVITY_MIGRATION_KEY}:v${HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION}:${accountId}`;
+}
 /** A foreground return may refresh today's one-bucket aggregate this often. */
 export const HEALTH_TODAY_STEPS_MIN_INTERVAL_MS = 20_000;
 /** Health Connect batches on-device steps about once per minute. */

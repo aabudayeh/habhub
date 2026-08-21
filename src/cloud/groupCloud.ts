@@ -20,10 +20,12 @@ import {
   scheduledGoalReached,
 } from "@/src/domain/metrics";
 import { leaderboardRows } from "@/src/domain/leaderboard";
-import {
-  excludeAlreadyPublishedDailyStatusRows,
-} from "@/src/domain/cloudSyncProjection";
 import { confirmedCloudPublishRevision } from "@/src/domain/cloudConflict";
+import {
+  cloudEntryNeedsItemDetail,
+  type HistoricalSummaryAudit,
+  shouldAuditHistoricalSummary,
+} from "@/src/domain/cloudMaintenance";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
@@ -74,6 +76,16 @@ const METRIC_PUSH_FRESHNESS_MS = 30 * 60 * 1000;
 const attemptedWinnerEvents = new Set<string>();
 let groupPushDrainPromise: Promise<void> | null = null;
 let groupPushDrainRequested = false;
+type HistoricalSummaryAuditCache = HistoricalSummaryAudit & {
+  expectedStatusCount: number;
+  remoteStatusCount: number;
+  remoteSharedHistoryStart?: string;
+  latestRemoteStatusUpdatedAt?: string;
+};
+const historicalSummaryAuditByGroup = new Map<
+  string,
+  HistoricalSummaryAuditCache
+>();
 const COLORS = [
   "#0FBFB8",
   "#FF5750",
@@ -248,12 +260,25 @@ function cloudErrorText(error: unknown) {
     : "The cloud did not return an error description.";
 }
 
+type SharingProjectionMode = "exact" | "status";
+
+const sharingProjectionCache = new WeakMap<
+  AppState,
+  Partial<Record<SharingProjectionMode, AppState>>
+>();
+
 function sharingProjectionState(
   state: AppState,
-  allowedVisibilities: ReadonlySet<MetricEntry["visibility"]>,
+  mode: SharingProjectionMode,
 ): AppState {
+  const cached = sharingProjectionCache.get(state)?.[mode];
+  if (cached) return cached;
+  const allowedVisibilities =
+    mode === "exact"
+      ? new Set<MetricEntry["visibility"]>(["group"])
+      : new Set<MetricEntry["visibility"]>(["group", "status"]);
   const owns = (userId: string) => userId === state.currentUserId;
-  return {
+  const projection = {
     ...state,
     entries: state.entries.filter(
       (entry) =>
@@ -273,6 +298,73 @@ function sharingProjectionState(
       (status) => !owns(status.userId),
     ),
   };
+  const byMode = sharingProjectionCache.get(state) ?? {};
+  byMode[mode] = projection;
+  sharingProjectionCache.set(state, byMode);
+  return projection;
+}
+
+type EntryVisibilityIndex = {
+  exact: Set<string>;
+  status: Set<string>;
+  private: Set<string>;
+};
+
+const entryVisibilityIndexCache = new WeakMap<
+  MetricEntry[],
+  Map<string, EntryVisibilityIndex>
+>();
+
+function entryVisibilityIndex(
+  entries: MetricEntry[],
+  userId: string,
+): EntryVisibilityIndex {
+  const byUser = entryVisibilityIndexCache.get(entries);
+  const cached = byUser?.get(userId);
+  if (cached) return cached;
+  const index: EntryVisibilityIndex = {
+    exact: new Set<string>(),
+    status: new Set<string>(),
+    private: new Set<string>(),
+  };
+  entries.forEach((entry) => {
+    if (entry.userId !== userId) return;
+    const key = `${entry.metricId}:${entry.localDate}`;
+    if (entry.visibility === "group") index.exact.add(key);
+    else if (entry.visibility === "status") index.status.add(key);
+    else index.private.add(key);
+  });
+  const nextByUser = byUser ?? new Map<string, EntryVisibilityIndex>();
+  nextByUser.set(userId, index);
+  if (!byUser) entryVisibilityIndexCache.set(entries, nextByUser);
+  return index;
+}
+
+const visibilityByDateCache = new WeakMap<
+  object[],
+  Map<string, Map<string, Set<MetricEntry["visibility"]>>>
+>();
+
+function sourceVisibilityByDate<T extends {
+  localDate: string;
+  userId: string;
+  visibility: MetricEntry["visibility"];
+}>(rows: T[], userId: string) {
+  const byUser = visibilityByDateCache.get(rows);
+  const cached = byUser?.get(userId);
+  if (cached) return cached;
+  const index = new Map<string, Set<MetricEntry["visibility"]>>();
+  rows.forEach((row) => {
+    if (row.userId !== userId) return;
+    const visibilities = index.get(row.localDate) ?? new Set();
+    visibilities.add(row.visibility);
+    index.set(row.localDate, visibilities);
+  });
+  const nextByUser =
+    byUser ?? new Map<string, Map<string, Set<MetricEntry["visibility"]>>>();
+  nextByUser.set(userId, index);
+  if (!byUser) visibilityByDateCache.set(rows, nextByUser);
+  return index;
 }
 
 /** Status-only sharing exposes a progress band, never an invertible percent. */
@@ -288,29 +380,28 @@ function buildCloudDailyStatusRows(
   statusDates: string[],
   accountRevision: number,
 ): CloudDailyStatusUpsertRow[] {
-  const exactProjectionState = sharingProjectionState(
-    state,
-    new Set<MetricEntry["visibility"]>(["group"]),
+  const exactProjectionState = sharingProjectionState(state, "exact");
+  const statusProjectionState = sharingProjectionState(state, "status");
+  const entryVisibilities = entryVisibilityIndex(
+    ownedEntries,
+    state.currentUserId,
   );
-  const statusProjectionState = sharingProjectionState(
-    state,
-    new Set<MetricEntry["visibility"]>(["group", "status"]),
+  const photoVisibilities = sourceVisibilityByDate(
+    state.photos,
+    state.currentUserId,
   );
-  const exactSharedEntryDays = new Set<string>();
-  const statusSharedEntryDays = new Set<string>();
-  const privateEntryDays = new Set<string>();
-  ownedEntries.forEach((entry) => {
-    const key = `${entry.metricId}:${entry.localDate}`;
-    if (entry.visibility === "group") exactSharedEntryDays.add(key);
-    else if (entry.visibility === "status") statusSharedEntryDays.add(key);
-    else privateEntryDays.add(key);
-  });
+  const gymVisibilities = sourceVisibilityByDate(
+    state.gymSessions ?? [],
+    state.currentUserId,
+  );
+  const personalMetricById = new Map(
+    state.metrics.map((metric) => [metric.id, metric]),
+  );
   return statusDates.flatMap((localDate) =>
     (state.group.metricConfiguration ?? [])
       .filter((groupMetric) => {
         const personalMetric =
-          state.metrics.find((metric) => metric.id === groupMetric.id) ??
-          groupMetric;
+          personalMetricById.get(groupMetric.id) ?? groupMetric;
         return (
           groupMetric.dataType !== "text" &&
           idBySlug.has(groupMetric.id) &&
@@ -323,39 +414,25 @@ function buildCloudDailyStatusRows(
         );
       })
       .map((groupMetric) => {
-        const metric =
-          state.metrics.find((candidate) => candidate.id === groupMetric.id) ??
-          groupMetric;
+        const metric = personalMetricById.get(groupMetric.id) ?? groupMetric;
         const entryDayKey = `${metric.id}:${localDate}`;
-        const hasExactSharedEntry = exactSharedEntryDays.has(entryDayKey);
-        const hasStatusSharedEntry = statusSharedEntryDays.has(entryDayKey);
-        const hasPrivateEntry = privateEntryDays.has(entryDayKey);
-        const sourceVisibilities = [
+        const hasExactSharedEntry = entryVisibilities.exact.has(entryDayKey);
+        const hasStatusSharedEntry = entryVisibilities.status.has(entryDayKey);
+        const hasPrivateEntry = entryVisibilities.private.has(entryDayKey);
+        const sourceVisibilities = new Set<MetricEntry["visibility"]>([
           ...(metric.dataType === "photo"
-            ? state.photos
-                .filter(
-                  (photo) =>
-                    photo.userId === state.currentUserId &&
-                    photo.localDate === localDate,
-                )
-                .map((photo) => photo.visibility)
+            ? (photoVisibilities.get(localDate) ?? [])
             : []),
           ...(metric.gymMapping
-            ? (state.gymSessions ?? [])
-                .filter(
-                  (session) =>
-                    session.userId === state.currentUserId &&
-                    session.localDate === localDate,
-                )
-                .map((session) => session.visibility)
+            ? (gymVisibilities.get(localDate) ?? [])
             : []),
-        ];
+        ]);
         const hasExactSharedSource =
-          hasExactSharedEntry || sourceVisibilities.includes("group");
+          hasExactSharedEntry || sourceVisibilities.has("group");
         const hasStatusSharedSource =
-          hasStatusSharedEntry || sourceVisibilities.includes("status");
+          hasStatusSharedEntry || sourceVisibilities.has("status");
         const hasPrivateSource =
-          hasPrivateEntry || sourceVisibilities.includes("private");
+          hasPrivateEntry || sourceVisibilities.has("private");
         const statusVisibility = hasExactSharedSource
           ? ("group" as const)
           : hasStatusSharedSource
@@ -2065,6 +2142,7 @@ export async function pushCloudWorkspace(
     localDates: string[];
   }) => void,
   accountRevision?: number,
+  yieldForUi?: () => Promise<void>,
 ) {
   if (!isCloudGroupId(state.group.id))
     return {
@@ -2076,6 +2154,7 @@ export async function pushCloudWorkspace(
       acknowledgedPrivacyFenceMetricIds: [],
     };
   const client = requireCloud();
+  const yieldMaintenance = yieldForUi ?? (() => Promise.resolve());
   const current = state.group.members.find(
     (member) => member.id === state.currentUserId,
   );
@@ -2182,6 +2261,7 @@ export async function pushCloudWorkspace(
     );
     if (fenceResult.error) throw fenceResult.error;
   }
+  await yieldMaintenance();
   const ownedEntries = state.entries.filter(
     (entry) =>
       entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
@@ -2268,6 +2348,7 @@ export async function pushCloudWorkspace(
       syncedAt: fastRecentCheckpoint.updatedAt,
       localDates: fastRecentDates,
     });
+  await yieldMaintenance();
   const detailedOwnedEntries = ownedEntries.filter((entry) => {
     if (supersededSharedStepFallbackIds.has(entry.id)) return false;
     const metric =
@@ -2275,17 +2356,13 @@ export async function pushCloudWorkspace(
       state.group.metricConfiguration?.find(
         (candidate) => candidate.id === entry.metricId,
       );
-    if (entry.source !== "imported") return true;
     // Imported high-frequency sensor records are represented by one compact
     // exact daily status. Retain only imported rows whose item-level detail is
-    // useful in a shared log (meals, named workouts, notes or images).
-    return Boolean(
-      entry.imageStoragePath ||
-        entry.note ||
-        entry.nutrition ||
-      (entry.label &&
-          ["food", "workout", "gym"].includes(metric?.category ?? "")),
-    );
+    // useful in a shared log (meals, named workouts, user/source notes or
+    // images). The generated "Synced from ..." note is provenance already
+    // carried by sourceOrigin; treating it as user detail defeats compaction
+    // and uploads every raw sensor row.
+    return cloudEntryNeedsItemDetail(entry, metric?.category);
   });
   const rawOwnedEntries = detailedOwnedEntries.filter(
     (entry) => entry.visibility === "group",
@@ -2600,24 +2677,37 @@ export async function pushCloudWorkspace(
   statusStart.setHours(12, 0, 0, 0);
   statusStart.setDate(statusStart.getDate() - SHARED_ACTIVITY_CACHE_DAYS);
   const recentStatusSinceDate = dateKey(statusStart);
-  const localSharedHistoryDates = [
-    ...ownedEntries
-      .filter((entry) => entry.visibility !== "private")
-      .map((entry) => entry.localDate),
-    ...state.dailyMetricStatuses
-      .filter(
-        (status) =>
-          status.groupId === state.group.id &&
-          status.userId === state.currentUserId &&
-          status.visibility !== "private",
-      )
-      .map((status) => status.localDate),
-  ];
-  const localSharedHistoryStart = [...localSharedHistoryDates].sort()[0];
-  let remoteSharedHistoryStart: string | undefined;
-  let latestRemoteStatusUpdatedAt: string | undefined;
-  let remoteStatusCount = 0;
-  if (localSharedHistoryStart) {
+  await yieldMaintenance();
+  const localSharedHistoryDateSet = new Set<string>();
+  ownedEntries.forEach((entry) => {
+    if (entry.visibility !== "private")
+      localSharedHistoryDateSet.add(entry.localDate);
+  });
+  state.dailyMetricStatuses.forEach((status) => {
+    if (
+      status.groupId === state.group.id &&
+      status.userId === state.currentUserId &&
+      status.visibility !== "private"
+    )
+      localSharedHistoryDateSet.add(status.localDate);
+  });
+  const localSharedHistoryDates = [...localSharedHistoryDateSet].sort();
+  const localSharedHistoryStart = localSharedHistoryDates[0];
+  const auditKey = `${state.currentUserId}:${state.group.id}`;
+  const cachedAudit = historicalSummaryAuditByGroup.get(auditKey);
+  const auditHistory = shouldAuditHistoricalSummary({
+    now: Date.now(),
+    cached: cachedAudit,
+    earliestLocalDate: localSharedHistoryStart,
+    distinctLocalDateCount: localSharedHistoryDates.length,
+    groupMetricSetChanged,
+    pendingPrivacyFenceCount: pendingPrivacyFenceMetricIds.length,
+  });
+  let remoteSharedHistoryStart = cachedAudit?.remoteSharedHistoryStart;
+  let latestRemoteStatusUpdatedAt = cachedAudit?.latestRemoteStatusUpdatedAt;
+  let remoteStatusCount = cachedAudit?.remoteStatusCount ?? 0;
+  let expectedStatusCount = cachedAudit?.expectedStatusCount ?? 0;
+  if (auditHistory && localSharedHistoryStart) {
     const [coverage, latest, count] = await Promise.all([
       client
         .from("daily_metric_status")
@@ -2656,27 +2746,38 @@ export async function pushCloudWorkspace(
     remoteSharedHistoryStart = coverage.data?.local_date;
     latestRemoteStatusUpdatedAt = latest.data?.updated_at;
     remoteStatusCount = count.count ?? 0;
-  }
-  // The old coverage check compared only the earliest day. A Health Connect
-  // backfill could therefore publish an old first day and a recent window,
-  // yet leave missing days between them forever. Compare the compact row
-  // count too; recent no-data rows are included so normal 30-day publishing
-  // does not look like a gap.
-  const expectedCoverageDates = [
-    ...new Set(
-      [...localSharedHistoryDates, ...fastRecentDates].filter(
-        (localDate) =>
-          localDate >= (localSharedHistoryStart ?? localDate) && localDate <= today,
+    await yieldMaintenance();
+    // The old coverage check compared only the earliest day. A Health Connect
+    // backfill could therefore publish an old first day and a recent window,
+    // yet leave missing days between them forever. Compare the compact row
+    // count too; recent no-data rows are included so normal 30-day publishing
+    // does not look like a gap.
+    const expectedCoverageDates = [
+      ...new Set(
+        [...localSharedHistoryDates, ...fastRecentDates].filter(
+          (localDate) =>
+            localDate >= localSharedHistoryStart && localDate <= today,
+        ),
       ),
-    ),
-  ];
-  const expectedStatusCount = buildCloudDailyStatusRows(
-    state,
-    idBySlug,
-    ownedEntries,
-    expectedCoverageDates,
-    publishRevision,
-  ).filter((status) => status.visibility !== "private").length;
+    ];
+    expectedStatusCount = buildCloudDailyStatusRows(
+      state,
+      idBySlug,
+      ownedEntries,
+      expectedCoverageDates,
+      publishRevision,
+    ).filter((status) => status.visibility !== "private").length;
+  }
+  if (auditHistory)
+    historicalSummaryAuditByGroup.set(auditKey, {
+      auditedAt: Date.now(),
+      earliestLocalDate: localSharedHistoryStart,
+      distinctLocalDateCount: localSharedHistoryDates.length,
+      expectedStatusCount,
+      remoteStatusCount,
+      remoteSharedHistoryStart,
+      latestRemoteStatusUpdatedAt,
+    });
   const needsHistoricalSummaryRepair = Boolean(
     (localSharedHistoryStart || pendingPrivacyFenceMetricIds.length) &&
       (groupMetricSetChanged ||
@@ -2775,11 +2876,16 @@ export async function pushCloudWorkspace(
       dateKey(),
     ]),
   ];
-  const statuses = buildCloudDailyStatusRows(
+  await yieldMaintenance();
+  const fastRecentDateSet = new Set(fastRecentDates);
+  const supplementalStatusDates = statusDates.filter(
+    (localDate) => !fastRecentDateSet.has(localDate),
+  );
+  const supplementalStatuses = buildCloudDailyStatusRows(
     state,
     idBySlug,
     ownedEntries,
-    statusDates,
+    supplementalStatusDates,
     publishRevision,
   );
   const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) =>
@@ -2798,13 +2904,8 @@ export async function pushCloudWorkspace(
   // honest recent-sync timestamp instead of seeing "No data" for minutes.
   const recentSince = recentCommitSinceDate;
   // The fast pass above already wrote every applicable row in the newest
-  // 30-day window. The historical calculation can include those same rows;
-  // never upsert them twice in one publication (about 500 redundant UPDATEs
-  // for a typical 17-tracker workspace).
-  const supplementalStatuses = excludeAlreadyPublishedDailyStatusRows(
-    fastRecentStatuses,
-    statuses,
-  );
+  // 30-day window. Calculate only older/supplemental dates instead of deriving
+  // about 500 duplicate rows and then throwing them away.
   const supplementalRecentStatuses = supplementalStatuses.filter(
     (status) => status.local_date >= recentSince,
   );
@@ -2828,11 +2929,34 @@ export async function pushCloudWorkspace(
   const activityCommit = needsHistoricalCommit
     ? await commitActivity(activityCommitDates)
     : fastRecentCheckpoint;
+  const completedAudit = historicalSummaryAuditByGroup.get(auditKey);
+  if (completedAudit && activityCommit.updatedAt)
+    historicalSummaryAuditByGroup.set(auditKey, {
+      ...completedAudit,
+      // A successful historical commit filled the coverage just audited.
+      // Carry that compact acknowledgement forward so routine syncs do not
+      // rebuild the same multi-year summary until an audit key changes.
+      remoteStatusCount: needsHistoricalSummaryRepair
+        ? Math.max(
+            completedAudit.remoteStatusCount,
+            completedAudit.expectedStatusCount,
+          )
+        : completedAudit.remoteStatusCount,
+      remoteSharedHistoryStart:
+        needsHistoricalSummaryRepair && localSharedHistoryStart
+          ? !completedAudit.remoteSharedHistoryStart ||
+            localSharedHistoryStart < completedAudit.remoteSharedHistoryStart
+            ? localSharedHistoryStart
+            : completedAudit.remoteSharedHistoryStart
+          : completedAudit.remoteSharedHistoryStart,
+      latestRemoteStatusUpdatedAt: activityCommit.updatedAt,
+    });
 
   // Notifications may expose an exact value or a ranking change. Dispatch
   // only after the detailed entries, compact statuses, and revision-checked
   // activity checkpoint are all durable. A stale publish that loses its CAS
   // race therefore cannot announce data that the group never received.
+  await yieldMaintenance();
   await Promise.all([
     dispatchCommittedEntryNotifications(),
     dispatchCommittedLeadNotifications(),
@@ -2942,6 +3066,7 @@ export async function pushCloudWorkspace(
     );
   }
 
+  await yieldMaintenance();
   const activeMemberIds = new Set(
     state.group.members.map((member) => member.id),
   );

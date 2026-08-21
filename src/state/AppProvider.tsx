@@ -3,6 +3,7 @@ import { Image } from "expo-image";
 import React, {
   createContext,
   PropsWithChildren,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -33,6 +34,7 @@ import {
   startManualFast,
 } from "@/src/domain/fasting";
 import { metricEntryKey } from "@/src/domain/metricEntry";
+import { localPersistenceChanged } from "@/src/domain/localPersistence";
 import {
   editFoodEntryClockTime,
   preserveFoodEntryClockOverride,
@@ -41,7 +43,7 @@ import { reconcileImportedHealthEntries } from "@/src/domain/health";
 import {
   isDailyStepReplacementCandidate,
   manualStepEntriesEligibleForReplacement,
-  preserveUnchangedDailyAggregateRevision,
+  preserveCurrentDayStepFloor,
   preserveUnchangedStepFallback,
 } from "@/src/domain/healthDedup";
 import {
@@ -223,90 +225,6 @@ function mergeBackgroundHealthRows(
         ),
       }
     : live;
-}
-
-function sameOwnedRowsByReference<T extends { userId: string }>(
-  left: T[],
-  right: T[],
-  userId: string,
-) {
-  return sameRowsByReference(
-    left,
-    right,
-    (row) => row.userId === userId,
-  );
-}
-
-function sameRowsByReference<T>(
-  left: T[],
-  right: T[],
-  included: (row: T) => boolean,
-) {
-  if (left === right) return true;
-  let leftIndex = 0;
-  let rightIndex = 0;
-  while (true) {
-    while (leftIndex < left.length && !included(left[leftIndex]))
-      leftIndex += 1;
-    while (rightIndex < right.length && !included(right[rightIndex]))
-      rightIndex += 1;
-    const leftRow = left[leftIndex];
-    const rightRow = right[rightIndex];
-    if (!leftRow || !rightRow) return leftRow === rightRow;
-    if (leftRow !== rightRow) return false;
-    leftIndex += 1;
-    rightIndex += 1;
-  }
-}
-
-/**
- * Friend activity is cached separately by CloudSyncProvider. Avoid scheduling
- * a second monolithic app snapshot when only those transient rows changed.
- */
-function localPersistenceChanged(previous: AppState, next: AppState) {
-  if (previous === next) return false;
-  if (
-    previous.version !== next.version ||
-    previous.currentUserId !== next.currentUserId ||
-    previous.group !== next.group ||
-    previous.groups !== next.groups ||
-    previous.energyProfiles !== next.energyProfiles ||
-    previous.metrics !== next.metrics ||
-    previous.gymPlans !== next.gymPlans ||
-    previous.gymSessions !== next.gymSessions ||
-    previous.gymExerciseGoals !== next.gymExerciseGoals ||
-    previous.todos !== next.todos ||
-    previous.journalNotes !== next.journalNotes ||
-    previous.calendarReminders !== next.calendarReminders ||
-    previous.activityTimers !== next.activityTimers ||
-    previous.activeTimer !== next.activeTimer ||
-    previous.settings !== next.settings ||
-    previous.trackedGoalPeriods !== next.trackedGoalPeriods ||
-    previous.selectedGroupMetricId !== next.selectedGroupMetricId
-  )
-    return true;
-  return !(
-    sameOwnedRowsByReference(
-      previous.entries,
-      next.entries,
-      next.currentUserId,
-    ) &&
-    sameOwnedRowsByReference(
-      previous.dailyMetricStatuses,
-      next.dailyMetricStatuses,
-      next.currentUserId,
-    ) &&
-    sameOwnedRowsByReference(
-      previous.photos,
-      next.photos,
-      next.currentUserId,
-    ) &&
-    sameRowsByReference(
-      previous.messages,
-      next.messages,
-      (message) => message.senderId === next.currentUserId,
-    )
-  );
 }
 
 type Action =
@@ -949,10 +867,15 @@ function reducer(state: AppState, action: Action): AppState {
               },
             }
           : incoming;
-      return finalizeEndOfDayGoals(
-        hydrated,
-        dateWithOffsetFrom(dateKey(), -1),
-      );
+      // Presence heartbeats, signed-URL refreshes, and peer-only activity do
+      // not affect this account's end-of-day celebration. Avoid rescanning
+      // metrics/history for those frequent online-only state wrappers.
+      return localPersistenceChanged(state, hydrated)
+        ? finalizeEndOfDayGoals(
+            hydrated,
+            dateWithOffsetFrom(dateKey(), -1),
+          )
+        : hydrated;
     }
     case "log": {
       const localDate = action.details?.localDate ?? dateKey();
@@ -2673,9 +2596,10 @@ function reducer(state: AppState, action: Action): AppState {
         if (dismissed.has(entry.id)) continue;
         const key = metricEntryKey(entry.userId, entry.id);
         const sourceReconciledEntry = replacementMetricIds.has(entry.metricId)
-          ? preserveUnchangedDailyAggregateRevision(
+          ? preserveCurrentDayStepFloor(
               existingById.get(key),
               entry,
+              dateKey(),
             )
           : preserveUnchangedStepFallback(existingById.get(key), entry);
         const nextEntry = preserveFoodEntryClockOverride(
@@ -2942,7 +2866,12 @@ type AppContextValue = {
   flushLocalPersistence: () => Promise<void>;
   /** Swap an account boundary in memory without persisting a clean placeholder. */
   stageState: (state: AppState) => void;
-  replaceState: (state: AppState) => void;
+  /** Monotonic signal for user/device edits that need a cloud outbox check. */
+  localMutationRevision: number;
+  replaceState: (
+    state: AppState,
+    options?: { source?: "cloud" | "local" },
+  ) => void;
   resetDemo: () => void;
 };
 
@@ -2963,6 +2892,7 @@ export function AppProvider({
     () => initialState ?? createInitialState(),
   );
   const [hydrated, setHydrated] = useState(ephemeral);
+  const [localMutationRevision, setLocalMutationRevision] = useState(0);
   const persistenceStateRef = useRef(state);
   const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -3235,7 +3165,7 @@ export function AppProvider({
           const restoredState: AppState = {
             ...defaults,
             ...restored,
-            version: 25,
+            version: 26,
             settings: {
               ...defaults.settings,
               ...restored.settings,
@@ -3624,6 +3554,7 @@ export function AppProvider({
                 persistenceDirtyRef.current = true;
                 persistenceRevisionRef.current += 1;
                 dispatch({ type: "replaceLocal", state: committed });
+                setLocalMutationRevision((revision) => revision + 1);
               }
             } catch {
               // Keep the last valid in-memory snapshot if storage was interrupted.
@@ -3663,18 +3594,43 @@ export function AppProvider({
   );
 
   const commitReducedState = useCallback(
-    (next: AppState, persistImmediately = false) => {
-      if (next === persistenceStateRef.current) return Promise.resolve();
-      const committed = { ...next, lastSavedAt: new Date().toISOString() };
+    (
+      next: AppState,
+      persistImmediately = false,
+      source: "local" | "cloud" = "local",
+    ) => {
+      const previous = persistenceStateRef.current;
+      if (next === previous) return Promise.resolve();
+      const durableChange =
+        source === "local" || localPersistenceChanged(previous, next);
+      const committed = {
+        ...next,
+        // Presence timestamps and refreshed signed URLs are deliberately not
+        // written to the monolithic offline snapshot. Preserve its true save
+        // boundary when a cloud-only wrapper is all that changed.
+        lastSavedAt: durableChange
+          ? new Date().toISOString()
+          : previous.lastSavedAt,
+      };
       persistenceStateRef.current = committed;
       persistenceObservedStateRef.current = committed;
+      if (source === "local")
+        setLocalMutationRevision((revision) => revision + 1);
       if (ephemeral) {
         dispatch({ type: "replaceLocal", state: committed });
         return Promise.resolve();
       }
+      if (source === "cloud") {
+        // Server hydration can replace large history collections and wake many
+        // context consumers. Keep refs/durability authoritative immediately,
+        // but let taps and navigation render ahead of that non-urgent view.
+        startTransition(() =>
+          dispatch({ type: "replaceLocal", state: committed }),
+        );
+      } else dispatch({ type: "replaceLocal", state: committed });
+      if (!durableChange) return Promise.resolve();
       persistenceDirtyRef.current = true;
       persistenceRevisionRef.current += 1;
-      dispatch({ type: "replaceLocal", state: committed });
       if (persistImmediately) return persistLatestState(true);
       scheduleDeferredPersistence();
       return Promise.resolve();
@@ -3695,13 +3651,20 @@ export function AppProvider({
   );
 
   const replaceState = useCallback(
-    (nextState: AppState) => {
+    (
+      nextState: AppState,
+      options?: { source?: "cloud" | "local" },
+    ) => {
       const next = reducer(persistenceStateRef.current, {
         type: "hydrate",
         state: nextState,
         preserveDeviceHealthSync: true,
       });
-      void commitReducedState(next).catch(() => undefined);
+      void commitReducedState(
+        next,
+        false,
+        options?.source ?? "cloud",
+      ).catch(() => undefined);
     },
     [commitReducedState],
   );
@@ -3992,6 +3955,7 @@ export function AppProvider({
       importHealthEntries: importHealthEntriesAction,
       flushLocalPersistence: flushLocalPersistenceAction,
       stageState,
+      localMutationRevision,
       replaceState,
       resetDemo: () => void commitAction({ type: "reset" }),
     }),
@@ -4002,6 +3966,7 @@ export function AppProvider({
       flushLocalPersistenceAction,
       hydrated,
       importHealthEntriesAction,
+      localMutationRevision,
       stageState,
       replaceState,
       state,

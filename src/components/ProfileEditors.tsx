@@ -455,7 +455,7 @@ export function MetricGoalsEditor() {
   return (
     <>
       <CollapsibleSectionHeader
-        title="Metric goals"
+        title="Tracked goals"
         collapsed={collapsed}
         onToggle={() => setCollapsed((value) => !value)}
         action={

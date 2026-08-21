@@ -365,6 +365,19 @@ function waitForCloudCacheWriteTurn() {
   });
 }
 
+async function yieldCloudMaintenanceToUi() {
+  if (
+    Platform.OS === "web" ||
+    NativeAppState.currentState !== "active"
+  )
+    return;
+  const turn = waitForResponsiveTurn({
+    minimumDelayMs: 12,
+    maximumDelayMs: 360,
+  });
+  await turn.promise;
+}
+
 async function readWorkspaceAcks(userId: string) {
   try {
     const saved = await AsyncStorage.getItem(
@@ -523,13 +536,13 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (sourceVersion >= 20)
     return upgradeStateV21({
       ...state,
-      version: 25,
+      version: 26,
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
   if (sourceVersion >= 19)
     return upgradeStateV21({
       ...state,
-      version: 25,
+      version: 26,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: { ...state.settings, fontScale: state.settings.fontScale ?? 1 },
     }, defaults, sourceVersion);
@@ -540,7 +553,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   if (!historicalStart)
     return upgradeStateV21({
       ...state,
-      version: 25,
+      version: 26,
       metrics: upgradeBloodPressureMetrics(state.metrics),
       settings: {
         ...state.settings,
@@ -565,7 +578,7 @@ function bindStateToAccount(state: AppState, user: User): AppState {
   );
   return upgradeStateV21({
     ...state,
-    version: 25,
+    version: 26,
     settings: {
       ...state.settings,
       fontScale: state.settings.fontScale ?? 1,
@@ -888,14 +901,52 @@ function hashCollection<T>(
   );
 }
 
+async function hashLargeCollectionResponsively<T>(
+  items: T[] | undefined,
+  keyFor: (item: T) => string,
+  shouldContinue: () => boolean,
+) {
+  const result: Record<string, string> = {};
+  const rows = items ?? [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const item = rows[index];
+    result[keyFor(item)] = stableValueHash(item);
+    if ((index + 1) % 1_500 !== 0 || index + 1 >= rows.length) continue;
+    if (!shouldContinue()) return null;
+    if (NativeAppState.currentState !== "active") continue;
+    const turn = waitForResponsiveTurn({
+      minimumDelayMs: 8,
+      maximumDelayMs: 280,
+    });
+    await turn.promise;
+  }
+  return shouldContinue() ? result : null;
+}
+
 /**
  * Compact three-way merge base for account fields commonly edited from both
- * mobile and the web companion. Hashes distinguish an unchanged cached value
- * from an offline edit or deletion without duplicating the account payload in
- * AsyncStorage.
+ * mobile and the web companion. The entry/status maps can contain years of
+ * imported Health history, so build those two maps cooperatively instead of
+ * monopolizing Android's JS thread while the user is navigating.
  */
-function createCloudMergeBase(state: AppState): CloudMergeBase {
+async function createCloudMergeBaseResponsively(
+  state: AppState,
+  shouldContinue: () => boolean,
+): Promise<CloudMergeBase | null> {
   const payload = snapshotPayload(state);
+  if (!shouldContinue()) return null;
+  const entries = await hashLargeCollectionResponsively(
+    payload.entries,
+    (item) => metricEntryKey(item.userId, item.id),
+    shouldContinue,
+  );
+  if (!entries) return null;
+  const dailyMetricStatuses = await hashLargeCollectionResponsively(
+    payload.dailyMetricStatuses,
+    dailyStatusKey,
+    shouldContinue,
+  );
+  if (!dailyMetricStatuses) return null;
   const timers = payload.activityTimers?.length
     ? payload.activityTimers
     : payload.activeTimer
@@ -936,18 +987,13 @@ function createCloudMergeBase(state: AppState): CloudMergeBase {
         (id) => id,
       ),
       metrics: hashCollection(payload.metrics, (item) => item.id),
-      entries: hashCollection(payload.entries, (item) =>
-        metricEntryKey(item.userId, item.id),
-      ),
+      entries,
       photos: hashCollection(
         payload.photos,
         (item) => `${item.userId}:${item.id}`,
       ),
       messages: hashCollection(payload.messages, (item) => item.id),
-      dailyMetricStatuses: hashCollection(
-        payload.dailyMetricStatuses,
-        dailyStatusKey,
-      ),
+      dailyMetricStatuses,
       gymPlans: hashCollection(
         payload.gymPlans,
         (item) => `${item.userId}:${item.id}`,
@@ -2301,7 +2347,13 @@ function isDefinitiveGroupMembershipLoss(error: unknown) {
 }
 
 export function CloudSyncProvider({ children }: PropsWithChildren) {
-  const { state, hydrated, replaceState, stageState } = useApp();
+  const {
+    state,
+    hydrated,
+    localMutationRevision,
+    replaceState,
+    stageState,
+  } = useApp();
   const auth = useAuth();
   const network = useNetInfo();
   const reachability = networkReachability(
@@ -2435,19 +2487,142 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const chatRecoveryPromiseRef = useRef<Promise<void> | null>(null);
   const chatOutboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mergeBaseWriteRef = useRef<Promise<void>>(Promise.resolve());
-  stateRef.current = state;
+  const mergeBaseBuildTaskRef = useRef<{ cancel: () => void } | null>(null);
+  const mergeBaseBuildPromiseRef = useRef<Promise<void> | null>(null);
+  const mergeBaseBuildGenerationRef = useRef(0);
+  const mergeBaseBuiltGenerationRef = useRef(0);
+  const pendingMergeBaseRef = useRef<{
+    userId: string;
+    state: AppState;
+    generation: number;
+  } | null>(null);
+  const scheduleMergeBaseBuildRef = useRef<(() => void) | null>(null);
+  const renderedStateRef = useRef(state);
+  if (renderedStateRef.current !== state) {
+    // Cloud replacements update `stateRef` before AppProvider schedules their
+    // transition render. An unrelated urgent status render can happen first;
+    // only a genuinely new provider state may replace that authoritative ref.
+    renderedStateRef.current = state;
+    stateRef.current = state;
+  }
+
+  const scheduleMergeBaseBuild = useCallback(() => {
+    if (
+      mergeBaseBuildTaskRef.current ||
+      mergeBaseBuildPromiseRef.current ||
+      !pendingMergeBaseRef.current
+    )
+      return;
+    let started = false;
+    const task = scheduleResponsiveWork(() => {
+      started = true;
+      mergeBaseBuildTaskRef.current = null;
+      const pending = pendingMergeBaseRef.current;
+      pendingMergeBaseRef.current = null;
+      if (!pending) return;
+      const current = () =>
+        mergeBaseBuildGenerationRef.current === pending.generation &&
+        stateRef.current.currentUserId === pending.userId;
+      let operation: Promise<void>;
+      operation = createCloudMergeBaseResponsively(pending.state, current)
+        .then((base) => {
+          if (!base || !current()) return;
+          mergeBaseRef.current = base;
+          mergeBaseBuiltGenerationRef.current = pending.generation;
+          mergeBaseWriteRef.current = mergeBaseWriteRef.current
+            .catch(() => undefined)
+            .then(waitForCloudCacheWriteTurn)
+            .then(() => writeCloudMergeBase(pending.userId, base))
+            .catch(() => undefined);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (mergeBaseBuildPromiseRef.current === operation)
+            mergeBaseBuildPromiseRef.current = null;
+          if (pendingMergeBaseRef.current)
+            scheduleMergeBaseBuildRef.current?.();
+        });
+      mergeBaseBuildPromiseRef.current = operation;
+    }, {
+      minimumDelayMs: Platform.OS === "web" ? 0 : 120,
+      maximumDelayMs: Platform.OS === "web" ? 1_000 : 2_800,
+    });
+    if (!started) mergeBaseBuildTaskRef.current = task;
+    else task.cancel();
+  }, []);
+  scheduleMergeBaseBuildRef.current = scheduleMergeBaseBuild;
 
   const rememberCloudMergeBase = useCallback(
     (userId: string, acknowledgedState: AppState) => {
-      const base = createCloudMergeBase(acknowledgedState);
-      mergeBaseRef.current = base;
-      mergeBaseWriteRef.current = mergeBaseWriteRef.current
-        .catch(() => undefined)
-        .then(waitForCloudCacheWriteTurn)
-        .then(() => writeCloudMergeBase(userId, base))
-        .catch(() => undefined);
+      const generation = mergeBaseBuildGenerationRef.current + 1;
+      mergeBaseBuildGenerationRef.current = generation;
+      pendingMergeBaseRef.current = {
+        userId,
+        state: acknowledgedState,
+        generation,
+      };
+      scheduleMergeBaseBuildRef.current?.();
     },
     [],
+  );
+
+  const ensureLatestCloudMergeBase = useCallback(async (userId: string) => {
+    // Normal acknowledgements stay off the interaction lane. A dirty pull or
+    // revision conflict, however, must merge against the newest acknowledged
+    // base; using the previous base can misclassify both sides as changed and
+    // overwrite a newer remote edit. Force/drain only that rare correctness
+    // path, and always let a cancelled generation settle before retrying.
+    while (stateRef.current.currentUserId === userId) {
+      const active = mergeBaseBuildPromiseRef.current;
+      if (active) {
+        await active;
+        continue;
+      }
+      const pending = pendingMergeBaseRef.current;
+      if (!pending || pending.userId !== userId) return;
+      if (mergeBaseBuiltGenerationRef.current >= pending.generation) {
+        pendingMergeBaseRef.current = null;
+        return;
+      }
+      mergeBaseBuildTaskRef.current?.cancel();
+      mergeBaseBuildTaskRef.current = null;
+      pendingMergeBaseRef.current = null;
+      const current = () =>
+        mergeBaseBuildGenerationRef.current === pending.generation &&
+        stateRef.current.currentUserId === pending.userId;
+      let operation: Promise<void>;
+      operation = createCloudMergeBaseResponsively(pending.state, current)
+        .then((base) => {
+          if (!base || !current()) return;
+          mergeBaseRef.current = base;
+          mergeBaseBuiltGenerationRef.current = pending.generation;
+          mergeBaseWriteRef.current = mergeBaseWriteRef.current
+            .catch(() => undefined)
+            .then(waitForCloudCacheWriteTurn)
+            .then(() => writeCloudMergeBase(pending.userId, base))
+            .catch(() => undefined);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (mergeBaseBuildPromiseRef.current === operation)
+            mergeBaseBuildPromiseRef.current = null;
+          if (pendingMergeBaseRef.current)
+            scheduleMergeBaseBuildRef.current?.();
+        });
+      mergeBaseBuildPromiseRef.current = operation;
+      await operation;
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      mergeBaseBuildGenerationRef.current += 1;
+      mergeBaseBuiltGenerationRef.current = 0;
+      pendingMergeBaseRef.current = null;
+      mergeBaseBuildTaskRef.current?.cancel();
+      mergeBaseBuildTaskRef.current = null;
+    },
+    [auth.user?.id],
   );
 
   const fetchConflictSnapshot = useCallback((userId: string) => {
@@ -2803,7 +2978,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       activityCoverageSinceByGroupRef.current.delete(groupId);
       workspaceAckHashesRef.current.delete(groupId);
       groupConfigurationAckHashesRef.current.delete(groupId);
-      replaceState(evicted);
+      replaceState(evicted, { source: "local" });
       await removeGroupActivityCache(groupId).catch(() => undefined);
       setPendingChanges(true);
     },
@@ -3066,7 +3241,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       });
       if (next && next !== live) {
         stateRef.current = next;
-        replaceState(next);
+        replaceState(next, { source: "cloud" });
       }
     },
     [auth.status, replaceState],
@@ -3143,6 +3318,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       // changes appear briefly and then get overwritten by the phone cache.
       // Dirty/offline clients and edits made while this request was in flight
       // still keep their outbox and merge by stable ids.
+      if (preserveLocalAccount) {
+        await ensureLatestCloudMergeBase(operationUserId);
+        if (!operationIsCurrent()) return;
+      }
       const resolved = preserveLocalAccount
         ? mergeStates(resolvedRemote, stateRef.current, mergeBaseRef.current)
         : acceptCleanRemoteState(resolvedRemote, stateRef.current);
@@ -3162,7 +3341,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       groupConfigurationHashRef.current = isCloudGroupId(resolved.group.id)
         ? (groupConfigurationAckHashesRef.current.get(resolved.group.id) ?? null)
         : null;
-      replaceState(resolved);
+      replaceState(
+        resolved,
+        preserveLocalAccount ? { source: "local" } : { source: "cloud" },
+      );
       stateRef.current = resolved;
       rememberCloudMergeBase(operationUserId, bound);
       recordServerSyncedAt(remote.updated_at);
@@ -3198,7 +3380,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             );
             if (withMedia === stateRef.current) return;
             stateRef.current = withMedia;
-            replaceState(withMedia);
+            replaceState(withMedia, { source: "cloud" });
           })
           // Exhausted Storage egress or a transient signing failure must not
           // turn an otherwise successful account pull into a sync error.
@@ -3231,7 +3413,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               stateRef.current = next;
               workspaceHashRef.current =
                 workspaceAckHashesRef.current.get(groupId) ?? null;
-              replaceState(next);
+              replaceState(next, { source: "cloud" });
               markGroupReadSucceeded(groupId);
             })
             .catch((groupError) => {
@@ -3252,6 +3434,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }
   }, [
     auth.user,
+    ensureLatestCloudMergeBase,
     hasUnsyncedLocalChanges,
     mergeRemoteWorkspace,
     markGroupReadSucceeded,
@@ -3433,7 +3616,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         }
         let candidateHash = stableHash(candidate);
         if (candidate !== stateRef.current) {
-          replaceState(candidate);
+          replaceState(candidate, { source: "cloud" });
           stateRef.current = candidate;
         }
         let syncedAt: string | null = null;
@@ -3535,10 +3718,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 );
                 if (published && published !== live) {
                   stateRef.current = published;
-                  replaceState(published);
+                  replaceState(published, { source: "cloud" });
                 }
               },
               revisionRef.current,
+              yieldCloudMaintenanceToUi,
             );
             if (!operationIsCurrent()) return;
             if (!workspaceResult.workspacePushed)
@@ -3678,7 +3862,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             nextWorkspaceHash = workspaceHash(candidate);
             if (acknowledgedState !== liveAfterWorkspacePush) {
               stateRef.current = acknowledgedState;
-              replaceState(acknowledgedState);
+              replaceState(acknowledgedState, { source: "cloud" });
             }
             workspaceUploadRequiredGroupsRef.current.delete(
               pushedGroupId,
@@ -3723,7 +3907,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                     stateRef.current,
                   );
                   stateRef.current = rebased;
-                  replaceState(rebased);
+                  replaceState(rebased, { source: "cloud" });
                 }
               } catch {
                 // Keep the durable local outbox. The normal retry below will
@@ -3799,7 +3983,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             );
             if (published && published !== live) {
               stateRef.current = published;
-              replaceState(published);
+              replaceState(published, { source: "cloud" });
             }
           }
         }
@@ -3817,7 +4001,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           candidateHash = stableHash(candidate);
           if (candidate !== stateRef.current) {
             stateRef.current = candidate;
-            replaceState(candidate);
+            replaceState(candidate, { source: "cloud" });
           }
         }
         // A profile rename/body-profile edit is global account metadata, not a
@@ -3915,6 +4099,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 observedRevision: remote.revision,
               };
             revisionRef.current = remote.revision;
+            await ensureLatestCloudMergeBase(operationUserId);
+            if (!operationIsCurrent()) return;
             const merged = mergeStates(
               bindStateToAccount(remote.payload, operationUser),
               stateRef.current,
@@ -3924,7 +4110,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               operationUserId,
               bindStateToAccount(remote.payload, operationUser),
             );
-            replaceState(merged);
+            // The remote snapshot is the new merge base, while `merged` still
+            // contains a durable local outbox that the scheduled retry must
+            // publish. Classify that hybrid rebase explicitly as local.
+            replaceState(merged, { source: "local" });
             stateRef.current = merged;
             setPendingChanges(true);
             setErrorMessage(
@@ -3964,6 +4153,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return operation;
   }, [
     auth.user,
+    ensureLatestCloudMergeBase,
     fetchConflictSnapshot,
     hasUnsyncedLocalChanges,
     mergeRemoteWorkspace,
@@ -4040,7 +4230,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       });
       if (published && published !== stateRef.current) {
         stateRef.current = published;
-        replaceState(published);
+        replaceState(published, { source: "cloud" });
       }
     })();
     leaderboardPublishPromiseRef.current = operation;
@@ -4147,7 +4337,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             },
           };
           stateRef.current = markedComplete;
-          replaceState(markedComplete);
+          // This device-local completion flag is an account outbox value even
+          // though startup restored it from its small durable checkpoint.
+          replaceState(markedComplete, { source: "local" });
         }
         if (!networkAvailableRef.current) {
           // Local reducers and persistence stay fully usable offline. Mark the
@@ -4238,6 +4430,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           // A persisted acknowledgement distinguishes an offline local edit
           // from an older-but-clean cache. Clean clients accept newer website,
           // extension, or phone changes; dirty clients preserve their outbox.
+          if (localWasDirty) {
+            await ensureLatestCloudMergeBase(user.id);
+            if (cancelled) return;
+          }
           let resolved = correctedAccountState
             ? stateRef.current
             : localWasDirty
@@ -4285,7 +4481,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                   resolved.group.id,
                 ) ?? null)
               : null;
-            replaceState(resolved);
+            replaceState(
+              resolved,
+              localWasDirty ? { source: "local" } : { source: "cloud" },
+            );
             stateRef.current = resolved;
             if (!correctedAccountState)
               rememberCloudMergeBase(user.id, bound);
@@ -4345,7 +4544,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 stateRef.current,
               );
               stateRef.current = next;
-              replaceState(next);
+              replaceState(next, { source: "cloud" });
               if (targetGroup) markGroupReadSucceeded(targetGroup.id);
             })().catch((groupError) => {
               if (!cancelled) {
@@ -4361,7 +4560,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         } else {
           const bound = bindStateToAccount(stateRef.current, user);
           stateRef.current = bound;
-          replaceState(bound);
+          replaceState(bound, { source: "cloud" });
           revisionRef.current = 0;
           hashRef.current = null;
           workspaceHashRef.current = isCloudGroupId(bound.group.id)
@@ -4401,7 +4600,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
                 workspaceAckHashesRef.current.get(targetGroup.id) ?? null;
               if (!workspaceHashRef.current)
                 workspaceUploadRequiredGroupsRef.current.add(targetGroup.id);
-              replaceState(next);
+              replaceState(next, { source: "cloud" });
               markGroupReadSucceeded(targetGroup.id);
             })().catch((groupError) => {
               if (!cancelled) {
@@ -4483,6 +4682,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.status,
     auth.user,
     accountBoundaryReadyUserId,
+    ensureLatestCloudMergeBase,
     hydrated,
     hasUnsyncedLocalChanges,
     initializationAttempt,
@@ -4618,7 +4818,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     auth.user?.id,
     hasUnsyncedLocalChanges,
     performSync,
-    state,
+    localMutationRevision,
   ]);
 
   useEffect(
@@ -4806,7 +5006,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         workspaceHashRef.current = null;
         groupConfigurationHashRef.current =
           groupConfigurationAckHashesRef.current.get(groupId) ?? null;
-        replaceState(optimistic);
+        replaceState(optimistic, { source: "local" });
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         requestToWatch = null;
         setPendingGroup(null);
@@ -4824,7 +5024,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             stateRef.current = merged;
             workspaceHashRef.current =
               workspaceAckHashesRef.current.get(groupId) ?? null;
-            replaceState(merged);
+            replaceState(merged, { source: "cloud" });
             markGroupReadSucceeded(groupId);
           })
           .catch((error) => {
@@ -4951,7 +5151,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     stateRef.current = refreshed;
     workspaceHashRef.current =
       workspaceAckHashesRef.current.get(groupId) ?? null;
-    replaceState(refreshed);
+    replaceState(refreshed, { source: "cloud" });
     markGroupReadSucceeded(groupId);
   }, [
     markGroupReadSucceeded,
@@ -4977,7 +5177,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const next = { ...stateRef.current, messages };
         stateRef.current = next;
         // Do not hash or reload the full group workspace for a chat-only update.
-        replaceState(next);
+        replaceState(next, { source: "cloud" });
       } catch (error) {
         scheduleMessageReadRetry(groupId);
         throw error;
@@ -5132,7 +5332,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             ),
           };
           stateRef.current = next;
-          replaceState(next);
+          replaceState(next, { source: "cloud" });
           const cached = cachedGroupActivity(next, groupId);
           InteractionManager.runAfterInteractions(() => {
             writeGroupActivityCache({
@@ -5360,7 +5560,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               cached.version,
             );
           stateRef.current = next;
-          replaceState(next);
+          replaceState(next, { source: "cloud" });
         }
         return workspacePromise;
       };
@@ -5381,7 +5581,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           workspaceHashRef.current = workspaceUploadRequired
             ? null
             : (workspaceAckHashesRef.current.get(groupId) ?? null);
-          replaceState(next);
+          replaceState(next, { source: "cloud" });
           markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
           const cachePayload = cachedGroupActivity(next, groupId);
@@ -5618,7 +5818,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           }
           if (next !== live) {
             stateRef.current = next;
-            replaceState(next);
+            replaceState(next, { source: "cloud" });
           }
           // Names apply from the tiny realtime row immediately. Only a changed
           // private-bucket object needs the deferred shell refresh for a new
@@ -5653,7 +5853,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           }
           if (next !== live) {
             stateRef.current = next;
-            replaceState(next);
+            replaceState(next, { source: "cloud" });
           }
         },
       )
@@ -5976,7 +6176,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           auth.user!.id,
           groupConfigurationAckHashesRef.current,
         ).catch(() => undefined);
-        replaceState(next);
+        replaceState(next, { source: "local" });
         setPendingChanges(true);
         hydrateGroupInBackground(groupId);
       },
@@ -6041,7 +6241,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         workspaceHashRef.current = null;
         groupConfigurationHashRef.current =
           groupConfigurationAckHashesRef.current.get(groupId) ?? null;
-        replaceState(next);
+        replaceState(next, { source: "local" });
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
         setPendingGroup(null);
@@ -6067,7 +6267,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         groupConfigurationHashRef.current = isCloudGroupId(groupId)
           ? (groupConfigurationAckHashesRef.current.get(groupId) ?? null)
           : null;
-        replaceState(next);
+        replaceState(next, { source: "local" });
         if (isCloudGroupId(groupId)) hydrateGroupInBackground(groupId);
       },
       leaveGroup: async (groupId) => {
@@ -6112,7 +6312,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         groupConfigurationHashRef.current = isCloudGroupId(nextGroup.id)
           ? (groupConfigurationAckHashesRef.current.get(nextGroup.id) ?? null)
           : null;
-        replaceState(next);
+        replaceState(next, { source: "local" });
         try {
           await leaveCloudGroup(groupId);
           // Send only after the membership mutation commits. The trigger-owned
@@ -6123,7 +6323,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             leavingGroup,
           );
           stateRef.current = purged;
-          replaceState(purged);
+          replaceState(purged, { source: "local" });
           await removeGroupActivityCache(groupId).catch(() => undefined);
           activityVersionByGroupRef.current.delete(groupId);
           activityCoverageSinceByGroupRef.current.delete(groupId);
@@ -6134,7 +6334,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             hydrateGroupInBackground(nextGroup.id);
         } catch (error) {
           stateRef.current = before;
-          replaceState(before);
+          replaceState(before, { source: "local" });
           throw error;
         }
       },
@@ -6185,7 +6385,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         });
         if (optimistic && optimistic !== live) {
           stateRef.current = optimistic;
-          replaceState(optimistic);
+          replaceState(optimistic, { source: "cloud" });
         }
         await flushPendingGroupPushEvents().catch(() => undefined);
         refreshGroup().catch(() => undefined);
@@ -6214,7 +6414,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             ),
           };
           stateRef.current = next;
-          replaceState(next);
+          replaceState(next, { source: "cloud" });
         }
         refreshGroup().catch(() => undefined);
       },

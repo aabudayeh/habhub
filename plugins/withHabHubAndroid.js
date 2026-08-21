@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   AndroidConfig,
+  withAppBuildGradle,
   withAndroidManifest,
   withDangerousMod,
   withMainApplication,
@@ -85,6 +86,17 @@ function withNativeManifest(config, packageName) {
       !manifest["uses-permission"].some(
         (permission) =>
           permission.$?.["android:name"] ===
+          "android.permission.ACTIVITY_RECOGNITION",
+      )
+    ) {
+      manifest["uses-permission"].push({
+        $: { "android:name": "android.permission.ACTIVITY_RECOGNITION" },
+      });
+    }
+    if (
+      !manifest["uses-permission"].some(
+        (permission) =>
+          permission.$?.["android:name"] ===
           "android.permission.PACKAGE_USAGE_STATS",
       )
     ) {
@@ -157,6 +169,30 @@ function withNativeManifest(config, packageName) {
     });
 
     return androidConfig;
+  });
+}
+
+function withPhoneStepRecording(config) {
+  return withAppBuildGradle(config, (appBuildGradle) => {
+    if (appBuildGradle.modResults.language !== "groovy") {
+      throw new Error("HabHub Android integration requires a Groovy app build file.");
+    }
+    const dependency =
+      'implementation("com.google.android.gms:play-services-fitness:21.3.0")';
+    let contents = appBuildGradle.modResults.contents;
+    if (!contents.includes(dependency)) {
+      const dependenciesBlock = /^dependencies\s*\{/m;
+      if (!dependenciesBlock.test(contents)) {
+        throw new Error("Could not locate the Android dependencies block.");
+      }
+      contents = contents.replace(
+        dependenciesBlock,
+        (match) =>
+          `${match}\n    // Accountless, on-device Recording API used only as a live phone-step fallback.\n    ${dependency}`,
+      );
+    }
+    appBuildGradle.modResults.contents = contents;
+    return appBuildGradle;
   });
 }
 
@@ -235,5 +271,6 @@ module.exports = function withHabHubAndroid(config) {
   }
   config = withNativeManifest(config, packageName);
   config = withNativePackageRegistration(config);
+  config = withPhoneStepRecording(config);
   return withNativeFiles(config, packageName);
 };

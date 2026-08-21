@@ -46,6 +46,10 @@ const statusPageSource = fs.readFileSync(
   path.join(root, "app", "(tabs)", "status.tsx"),
   "utf8",
 );
+const uiSource = fs.readFileSync(
+  path.join(root, "src", "components", "ui.tsx"),
+  "utf8",
+);
 const seedSource = fs.readFileSync(
   path.join(root, "src", "data", "seed.ts"),
   "utf8",
@@ -151,6 +155,41 @@ assert.match(
   seedSource,
   /statusAvatarCalculationSource: "bmi"/,
   "new users must default the avatar calculation source to BMI",
+);
+assert.match(
+  typesSource,
+  /statusDateNavigatorCollapsed\?: boolean/,
+  "the Status date disclosure must be a persisted personal setting",
+);
+assert.match(
+  seedSource,
+  /statusDateNavigatorCollapsed: false/,
+  "new users must start with the Status date controls visible",
+);
+assert.match(
+  statusPageSource,
+  /const dateNavigatorOpen =\s*state\.settings\.statusDateNavigatorCollapsed !== true/,
+  "Status must restore the user's date-control disclosure",
+);
+assert.match(
+  statusPageSource,
+  /onToggleDateView=\{\(\) => \{[\s\S]{0,300}statusDateNavigatorCollapsed: dateNavigatorOpen/,
+  "Status must persist the user's date-control disclosure",
+);
+assert.match(
+  statusPageSource,
+  /const FLANK_RING_SIZE = 68;\s*const RING_SIZE = FLANK_RING_SIZE;/,
+  "the lower Status tracker circles must match the preferred flank-circle size",
+);
+assert.match(
+  statusPageSource,
+  /<Screen minimumBottomPadding=\{16\}>/,
+  "Status must not retain the global oversized scroll tail below its final card",
+);
+assert.match(
+  uiSource,
+  /minimumBottomPadding\?: number[\s\S]{0,900}typeof minimumBottomPadding === "number"/,
+  "Screen must expose a bounded per-page bottom-padding override",
 );
 assert.match(
   statusPageSource,

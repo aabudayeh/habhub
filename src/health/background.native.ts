@@ -10,7 +10,7 @@ import {
   aggregateRangeThroughLocalDate,
   isDailyStepReplacementCandidate,
   mergeHealthSourcePreferences,
-  preserveUnchangedDailyAggregateRevision,
+  preserveCurrentDayStepFloor,
 } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
 import { HEALTH_INITIAL_DAYS, HEALTH_STATUS_STORAGE_KEY } from '@/src/health/constants';
@@ -105,9 +105,10 @@ TaskManager.defineTask(TASK_NAME, async () => {
     );
     const revisionSafeEntries = entries.map((entry) =>
       stepMetricSet.has(entry.metricId)
-        ? preserveUnchangedDailyAggregateRevision(
+        ? preserveCurrentDayStepFloor(
             existingById.get(`${entry.userId}:${entry.id}`),
             entry,
+            dateKey(to),
           )
         : entry,
     );

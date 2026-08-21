@@ -27,8 +27,8 @@ file_size_limit = "50MiB"
 
 [auth]
 enabled = true
-site_url = "https://sethstar-habhub.expo.app"
-additional_redirect_urls = ["paceboard://**", "http://localhost:8081/**", "http://localhost:8090/**", "https://sethstar-habhub.expo.app/**", "https://sethstar-habhub--*.expo.app/**"]
+site_url = "https://habhub.expo.app"
+additional_redirect_urls = ["paceboard://**", "http://localhost:8081/**", "http://localhost:8090/**", "https://habhub.expo.app/**", "https://sethstar-habhub.expo.app/**", "https://sethstar-habhub--*.expo.app/**"]
 jwt_expiry = 3600
 enable_signup = true
 

@@ -22,7 +22,7 @@
     "validate:i18n": "node scripts/validate-i18n.mjs",
     "validate:avatar": "node scripts/validate-status-avatar.mjs",
     "validate:avatar-simulator": "node scripts/validate-status-avatar-simulator.mjs",
-    "validate:health": "node --no-warnings --experimental-strip-types scripts/validate-health-dedup.mjs",
+    "validate:health": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-health-dedup.mjs",
     "validate:food": "node --no-warnings --experimental-strip-types --experimental-loader ./scripts/typescript-resolver-loader.mjs scripts/validate-food-metric.mjs",
     "validate:navigation": "node --no-warnings --experimental-strip-types scripts/validate-navigation-defaults.mjs",
     "validate:progress-grid": "node scripts/validate-progress-grid-navigation.mjs",

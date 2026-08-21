@@ -151,18 +151,18 @@ const native = fs.readFileSync(
   "plugins/habhub-android/java/HabHubNativeModule.kt",
   "utf8",
 );
-const generatedNativePath =
-  "android/app/src/main/java/app/paceboard/mobile/HabHubNativeModule.kt";
-if (fs.existsSync(generatedNativePath)) {
-  const generatedNative = fs.readFileSync(generatedNativePath, "utf8");
-  assert.equal(
-    generatedNative.replace(/\r\n/g, "\n"),
-    native
-      .replace(/^package\s+[^\r\n]+/m, "package app.paceboard.mobile")
-      .replace(/\r\n/g, "\n"),
-    "generated Android module must match its config-plugin template",
-  );
-}
+const nativePlugin = fs.readFileSync("plugins/withHabHubAndroid.js", "utf8");
+const easIgnore = fs.readFileSync(".easignore", "utf8");
+assert.match(
+  nativePlugin,
+  /NATIVE_SOURCES[\s\S]{0,300}"HabHubNativeModule\.kt"[\s\S]{0,9000}replace\(\/\^package[\s\S]{0,500}fs\.writeFileSync\(path\.join\(javaRoot, fileName\), source\)/,
+  "managed prebuild must install the authoritative HabHub native template under the configured package",
+);
+assert.match(
+  easIgnore,
+  /^\/android\/$/m,
+  "EAS must regenerate Android from the tracked config plugin instead of packaging a stale ignored tree",
+);
 assert.match(native, /UsageEvents\.Event\.ACTIVITY_PAUSED ->/);
 assert.match(native, /UsageEvents\.Event\.ACTIVITY_STOPPED -> Unit/);
 assert.doesNotMatch(

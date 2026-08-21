@@ -1,7 +1,7 @@
-export const DEFAULT_APP_URL = "https://sethstar-habhub.expo.app";
+export const DEFAULT_APP_URL = "https://habhub.expo.app";
 
 const LEGACY_APP_URLS = new Set([
-  "https://habhub.expo.app",
+  "https://sethstar-habhub.expo.app",
   "https://sethypoo-habhub.expo.app",
 ]);
 

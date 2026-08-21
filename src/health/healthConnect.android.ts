@@ -7,6 +7,7 @@ import {
   readRecords,
   requestPermission,
 } from "react-native-health-connect";
+import { NativeModules, PermissionsAndroid, Platform } from "react-native";
 
 import {
   exerciseFromActivityName,
@@ -15,13 +16,86 @@ import {
 } from "@/src/domain/exerciseCatalog";
 import {
   authoritativeHealthConnectStepGroups,
+  combineDisjointStepWindows,
   healthSourceEnabled,
   localCalendarAggregateRange,
   partitionStepAggregateRange,
+  reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
+
+type AndroidPhoneStepsModule = {
+  startLocalPhoneStepRecording?: () => Promise<boolean>;
+  readLocalPhoneSteps?: (
+    fromEpochMs: number,
+    toEpochMs: number,
+  ) => Promise<{
+    count: number;
+    coverageStartEpochMs: number;
+  } | null>;
+  stopLocalPhoneStepRecording?: () => Promise<boolean>;
+};
+
+const androidPhoneSteps = NativeModules.HabHubAndroid as
+  | AndroidPhoneStepsModule
+  | undefined;
+const LOCAL_PHONE_STEP_READ_TIMEOUT_MS = 1_500;
+
+function physicalActivityRuntimePermissionRequired() {
+  return Number(Platform.Version) >= 29;
+}
+
+async function hasLocalPhoneStepPermission() {
+  if (!physicalActivityRuntimePermissionRequired()) return true;
+  return PermissionsAndroid.check(
+    PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION,
+  );
+}
+
+async function requestLocalPhoneStepPermission() {
+  if (!physicalActivityRuntimePermissionRequired()) return true;
+  const permission = PermissionsAndroid.PERMISSIONS.ACTIVITY_RECOGNITION;
+  if (await PermissionsAndroid.check(permission)) return true;
+  return (
+    (await PermissionsAndroid.request(permission)) ===
+    PermissionsAndroid.RESULTS.GRANTED
+  );
+}
+
+async function prepareLocalPhoneStepRecording() {
+  const granted = await requestLocalPhoneStepPermission().catch(() => false);
+  if (!granted) return;
+  await androidPhoneSteps?.startLocalPhoneStepRecording?.().catch(
+    () => false,
+  );
+}
+
+async function readLocalPhoneSteps(from: Date, to: Date) {
+  if (
+    !androidPhoneSteps?.readLocalPhoneSteps ||
+    !(await hasLocalPhoneStepPermission())
+  )
+    return null;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const count = await Promise.race([
+    androidPhoneSteps
+      .readLocalPhoneSteps(from.getTime(), to.getTime())
+      .catch(() => null),
+    new Promise<null>((resolve) => {
+      timeout = setTimeout(() => resolve(null), LOCAL_PHONE_STEP_READ_TIMEOUT_MS);
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+  return count &&
+    Number.isFinite(count.count) &&
+    count.count >= 0 &&
+    Number.isFinite(count.coverageStartEpochMs)
+    ? count
+    : null;
+}
 
 const RECORD_TYPES: Record<HealthDataType, string> = {
   steps: "Steps",
@@ -328,31 +402,79 @@ function overlaps(record: Record<string, unknown>, start: string, end: string) {
 }
 
 function nutrition(record: Record<string, unknown>): NutritionDetails {
-  const oneDecimal = (value: number) => Math.round(value * 10) / 10;
+  const optionalNested = (...keys: string[]) => {
+    let current: unknown = record;
+    for (const key of keys)
+      current =
+        typeof current === "object" && current
+          ? (current as Record<string, unknown>)[key]
+          : undefined;
+    if (current === undefined || current === null || current === "")
+      return undefined;
+    const parsed = Number(current);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  };
+  const mass = (field: string, unit: "g" | "mg" | "mcg") => {
+    const grams = optionalNested(field, "inGrams");
+    const milligrams = optionalNested(field, "inMilligrams");
+    const micrograms = optionalNested(field, "inMicrograms");
+    const value =
+      unit === "g"
+        ? (grams ??
+          (milligrams === undefined ? undefined : milligrams / 1000) ??
+          (micrograms === undefined ? undefined : micrograms / 1_000_000))
+        : unit === "mg"
+          ? (milligrams ??
+            (grams === undefined ? undefined : grams * 1000) ??
+            (micrograms === undefined ? undefined : micrograms / 1000))
+          : (micrograms ??
+            (milligrams === undefined ? undefined : milligrams * 1000) ??
+            (grams === undefined ? undefined : grams * 1_000_000));
+    if (value === undefined) return undefined;
+    const precision = unit === "mcg" ? 100 : 1000;
+    return Math.round(value * precision) / precision;
+  };
   return {
     mealType: MEAL_NAMES[Number(record.mealType)],
-    proteinG: oneDecimal(nestedNumber(record, "protein", "inGrams")),
-    fatG: oneDecimal(nestedNumber(record, "totalFat", "inGrams")),
-    carbsG: oneDecimal(nestedNumber(record, "totalCarbohydrate", "inGrams")),
-    fiberG: oneDecimal(nestedNumber(record, "dietaryFiber", "inGrams")),
-    sodiumMg: Math.round(
-      nestedNumber(record, "sodium", "inMilligrams") ||
-        nestedNumber(record, "sodium", "inGrams") * 1000,
-    ),
-    sugarG: oneDecimal(nestedNumber(record, "sugar", "inGrams")),
-    saturatedFatG: oneDecimal(nestedNumber(record, "saturatedFat", "inGrams")),
-    cholesterolMg: Math.round(
-      nestedNumber(record, "cholesterol", "inMilligrams"),
-    ),
-    potassiumMg: Math.round(nestedNumber(record, "potassium", "inMilligrams")),
-    calciumMg: Math.round(nestedNumber(record, "calcium", "inMilligrams")),
-    ironMg: oneDecimal(nestedNumber(record, "iron", "inMilligrams")),
-    magnesiumMg: Math.round(nestedNumber(record, "magnesium", "inMilligrams")),
-    vitaminCMg: oneDecimal(nestedNumber(record, "vitaminC", "inMilligrams")),
-    vitaminDMcg: oneDecimal(nestedNumber(record, "vitaminD", "inMicrograms")),
-    vitaminB12Mcg: oneDecimal(
-      nestedNumber(record, "vitaminB12", "inMicrograms"),
-    ),
+    proteinG: mass("protein", "g"),
+    fatG: mass("totalFat", "g"),
+    carbsG: mass("totalCarbohydrate", "g"),
+    fiberG: mass("dietaryFiber", "g"),
+    sodiumMg: mass("sodium", "mg"),
+    sugarG: mass("sugar", "g"),
+    saturatedFatG: mass("saturatedFat", "g"),
+    cholesterolMg: mass("cholesterol", "mg"),
+    potassiumMg: mass("potassium", "mg"),
+    calciumMg: mass("calcium", "mg"),
+    ironMg: mass("iron", "mg"),
+    magnesiumMg: mass("magnesium", "mg"),
+    vitaminCMg: mass("vitaminC", "mg"),
+    vitaminDMcg: mass("vitaminD", "mcg"),
+    vitaminB12Mcg: mass("vitaminB12", "mcg"),
+    transFatG: mass("transFat", "g"),
+    monounsaturatedFatG: mass("monounsaturatedFat", "g"),
+    polyunsaturatedFatG: mass("polyunsaturatedFat", "g"),
+    phosphorusMg: mass("phosphorus", "mg"),
+    zincMg: mass("zinc", "mg"),
+    copperMg: mass("copper", "mg"),
+    manganeseMg: mass("manganese", "mg"),
+    seleniumMcg: mass("selenium", "mcg"),
+    iodineMcg: mass("iodine", "mcg"),
+    vitaminAMcg: mass("vitaminA", "mcg"),
+    vitaminEMg: mass("vitaminE", "mg"),
+    vitaminKMcg: mass("vitaminK", "mcg"),
+    thiaminMg: mass("thiamin", "mg"),
+    riboflavinMg: mass("riboflavin", "mg"),
+    niacinMg: mass("niacin", "mg"),
+    pantothenicAcidMg: mass("pantothenicAcid", "mg"),
+    vitaminB6Mg: mass("vitaminB6", "mg"),
+    folateMcg: mass("folate", "mcg"),
+    folicAcidMcg: mass("folicAcid", "mcg"),
+    caffeineMg: mass("caffeine", "mg"),
+    biotinMcg: mass("biotin", "mcg"),
+    chlorideMg: mass("chloride", "mg"),
+    chromiumMcg: mass("chromium", "mcg"),
+    molybdenumMcg: mass("molybdenum", "mcg"),
   };
 }
 
@@ -558,6 +680,8 @@ export const healthConnectAdapter: HealthAdapter = {
           history,
           { accessType: "read", recordType: "BackgroundAccessPermission" },
         ]);
+        if (dataTypes.includes("steps"))
+          await prepareLocalPhoneStepRecording();
         return;
       } catch {
         // Some devices expose normal records but not the optional background feature.
@@ -570,6 +694,12 @@ export const healthConnectAdapter: HealthAdapter = {
       // standard Health Connect read window.
       await requestPermission(base);
     }
+    if (dataTypes.includes("steps"))
+      await prepareLocalPhoneStepRecording();
+  },
+  prepareCurrentDaySteps: prepareLocalPhoneStepRecording,
+  disconnect: async () => {
+    await androidPhoneSteps?.stopLocalPhoneStepRecording?.().catch(() => false);
   },
   read: async ({ from, to, dataTypes, sourcePreferences }) => {
     const options = {
@@ -762,28 +892,32 @@ export const healthConnectAdapter: HealthAdapter = {
               const currentStart = stepSlices.current?.from;
               const currentEnd = stepSlices.current?.to;
               const includesCurrentDay = Boolean(stepSlices.current);
-              const [unfilteredGroups, currentAggregate] = await Promise.all([
-                stepSlices.historical
-                  ? aggregateGroupByPeriod({
-                      recordType: "Steps",
-                      timeRangeFilter: {
-                        ...stepTimeRangeFilter,
-                        endTime: stepSlices.historical.to.toISOString(),
-                      },
-                      timeRangeSlicer: { period: "DAYS", length: 1 },
-                    })
-                  : Promise.resolve([]),
-                includesCurrentDay
-                  ? aggregateRecord({
-                      recordType: "Steps",
-                      timeRangeFilter: {
-                        operator: "between",
-                        startTime: currentStart!.toISOString(),
-                        endTime: currentEnd!.toISOString(),
-                      },
-                    })
-                  : Promise.resolve(null),
-              ]);
+              const [unfilteredGroups, currentAggregate, localPhoneSlice] =
+                await Promise.all([
+                  stepSlices.historical
+                    ? aggregateGroupByPeriod({
+                        recordType: "Steps",
+                        timeRangeFilter: {
+                          ...stepTimeRangeFilter,
+                          endTime: stepSlices.historical.to.toISOString(),
+                        },
+                        timeRangeSlicer: { period: "DAYS", length: 1 },
+                      })
+                    : Promise.resolve([]),
+                  includesCurrentDay
+                    ? aggregateRecord({
+                        recordType: "Steps",
+                        timeRangeFilter: {
+                          operator: "between",
+                          startTime: currentStart!.toISOString(),
+                          endTime: currentEnd!.toISOString(),
+                        },
+                      })
+                    : Promise.resolve(null),
+                  includesCurrentDay
+                    ? readLocalPhoneSteps(currentStart!, currentEnd!)
+                    : Promise.resolve(null),
+                ]);
               const contributedOrigins = [
                 ...new Set(
                   [
@@ -839,9 +973,40 @@ export const healthConnectAdapter: HealthAdapter = {
               const currentSlice = stepSlices.current;
               if (!currentSlice) return historicalRecords;
               const currentLocalDate = currentSlice.localDate;
-              const currentCount = Number(
-                currentAggregate?.COUNT_TOTAL ?? 0,
+              let disjointPhoneCandidate: number | null = null;
+              if (localPhoneSlice) {
+                const coverageStartMs = Math.min(
+                  currentSlice.to.getTime(),
+                  Math.max(
+                    currentSlice.from.getTime(),
+                    localPhoneSlice.coverageStartEpochMs,
+                  ),
+                );
+                const prefixCount =
+                  coverageStartMs <= currentSlice.from.getTime()
+                    ? 0
+                    : Number(
+                        (
+                          await aggregateRecord({
+                            recordType: "Steps",
+                            timeRangeFilter: {
+                              operator: "between",
+                              startTime: currentSlice.from.toISOString(),
+                              endTime: new Date(coverageStartMs).toISOString(),
+                            },
+                          })
+                        ).COUNT_TOTAL ?? 0,
+                      );
+                disjointPhoneCandidate = combineDisjointStepWindows(
+                  prefixCount,
+                  localPhoneSlice.count,
+                );
+              }
+              const reconciledCurrent = reconcileCurrentDayStepTotal(
+                Number(currentAggregate?.COUNT_TOTAL ?? 0),
+                disjointPhoneCandidate,
               );
+              const currentCount = reconciledCurrent.count;
               const currentSources = [
                 ...new Set(
                   (currentAggregate?.dataOrigins?.length
@@ -867,10 +1032,19 @@ export const healthConnectAdapter: HealthAdapter = {
                       value: Math.round(currentCount),
                       unit: "steps",
                       origin:
-                        currentSources.length === 1
+                        reconciledCurrent.usedLocalPhone
+                          ? "Android phone (live)"
+                          : currentSources.length === 1
                           ? currentSources[0]
                           : "Health Connect",
-                      sourceOrigins: observedOrigins,
+                      sourceOrigins: reconciledCurrent.usedLocalPhone
+                        ? [
+                            ...new Set([
+                              ...observedOrigins,
+                              "Android phone (live)",
+                            ]),
+                          ]
+                        : observedOrigins,
                       updatedAt: syncRevision,
                     } satisfies HealthImportRecord)
                   : undefined;

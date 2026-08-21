@@ -3,7 +3,7 @@ import { PropsWithChildren } from 'react';
 
 const appOrigin =
   process.env.EXPO_PUBLIC_APP_URL?.trim().replace(/\/$/, '') ||
-  'https://sethstar-habhub.expo.app';
+  'https://habhub.expo.app';
 
 export default function RootHtml({ children }: PropsWithChildren) {
   return (

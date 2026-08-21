@@ -11,6 +11,7 @@ import { reconcileAutomaticFasting } from "../src/domain/fasting.ts";
 import { networkReachability } from "../src/domain/network.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import "./validate-responsive-work.mjs";
+import "./validate-native-sync-performance.mjs";
 
 const ui = fs.readFileSync("src/components/ui.tsx", "utf8");
 const calendar = fs.readFileSync("src/domain/calendar.ts", "utf8");

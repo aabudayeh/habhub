@@ -1,7 +1,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Modal, PanResponder, Pressable, StyleSheet, View } from "react-native";
+import {
+  Modal,
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
 import { LocalizedAlert as Alert, useLocale, useLocalization } from "@/src/i18n";
@@ -97,11 +104,18 @@ import { ScreenTimeBreakdownCard } from "@/src/screenTime/ScreenTimeBreakdownCar
 import { useTutorial } from "@/src/tutorial/TutorialContext";
 import {
   FOOD_MACROS,
-  FoodMacroBucket,
+  FOOD_NUTRIENTS,
   FoodMacroId,
   FoodMacroRange,
-  foodMacroReport,
+  FoodMacroSlice,
+  FoodNutrientBucket,
+  FoodNutrientId,
+  FoodNutrientSummary,
+  foodNutritionReport,
+  hasFoodNutrientTracker,
+  nextFoodNutrientTrackerOrder,
 } from "@/src/domain/food";
+import { trackerPresets } from "@/src/domain/trackerCatalog";
 
 const DETAIL_PERIODS: { id: Exclude<LeaderboardPeriod, "custom">; label: string }[] = [
   { id: "today", label: "Today" },
@@ -649,6 +663,7 @@ export default function TrackerDetail() {
     !isFasting &&
     tracker.manualEntry !== false &&
     tracker.dataType !== "calculated";
+  const canOpenWorkout = tracker.id === "workout";
   return (
     <Screen>
       <PageHeader
@@ -876,7 +891,7 @@ export default function TrackerDetail() {
           </Card>
         ) : null}
       </View>
-      {canSkipToday || canAddEntry || tracker.timerEnabled || isFasting ? (
+      {canSkipToday || canAddEntry || canOpenWorkout || tracker.timerEnabled || isFasting ? (
         <OptionalTutorialTarget enabled={isFasting} id="fasting-controls">
           <View style={styles.detailQuickActions}>
           {canSkipToday ? (
@@ -915,6 +930,23 @@ export default function TrackerDetail() {
             >
               <Ionicons name="add" size={16} color={palette.white} />
               <Text style={styles.quickAddText}>Add</Text>
+            </Pressable>
+          ) : null}
+          {canOpenWorkout ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open workout page"
+              onPress={() => router.navigate("/gym" as never)}
+              style={[
+                styles.skipToday,
+                {
+                  borderColor: colors.border,
+                  backgroundColor: colors.primarySoft,
+                },
+              ]}
+            >
+              <Ionicons name="barbell-outline" size={16} color={accent} />
+              <Text style={[styles.skipTodayText, { color: accent }]}>Workout</Text>
             </Pressable>
           ) : null}
           {tracker.timerEnabled && !isFasting ? (
@@ -1510,7 +1542,7 @@ export default function TrackerDetail() {
         ) : null}
       </Card>
       {tracker.id === "food" ? (
-        <FoodMacroSection
+        <FoodNutritionSection
           state={state}
           period={period as FoodMacroRange}
           dates={dates}
@@ -2134,7 +2166,7 @@ export default function TrackerDetail() {
   );
 }
 
-function FoodMacroSection({
+function FoodNutritionSection({
   state,
   period,
   dates,
@@ -2150,22 +2182,33 @@ function FoodMacroSection({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { t } = useLocalization();
+  const { addMetric, updateMetric, updateSettings } = useApp();
   const [open, setOpen] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<FoodMacroId[]>(
-    FOOD_MACROS.map((macro) => macro.id),
+  const nutrientIds = useMemo(
+    () => FOOD_NUTRIENTS.map((nutrient) => nutrient.id),
+    [],
+  );
+  const rememberedIds = useMemo(
+    () => {
+      const stored = state.settings.foodNutrientIds?.filter(
+        (id): id is FoodNutrientId => nutrientIds.includes(id as FoodNutrientId),
+      );
+      return stored?.length ? stored : FOOD_MACROS.map((macro) => macro.id);
+    },
+    [nutrientIds, state.settings.foodNutrientIds],
   );
   const goals = useMemo(
     () => {
       if (!open) return {};
       return Object.fromEntries(
-        FOOD_MACROS.flatMap((macro) => {
+        FOOD_NUTRIENTS.flatMap((nutrient) => {
           const definition = state.metrics.find(
-            (metric) => metric.id === macro.id,
+            (metric) => metric.id === nutrient.id,
           );
           if (!definition || definition.goalEnabled === false) return [];
           return [
             [
-              macro.id,
+              nutrient.id,
               effectiveGoalTarget(
                 state,
                 definition,
@@ -2175,115 +2218,247 @@ function FoodMacroSection({
             ],
           ];
         }),
-      ) as Partial<Record<FoodMacroId, number>>;
+      ) as Partial<Record<FoodNutrientId, number>>;
     },
     [anchorDate, open, state],
   );
   const report = useMemo(
     () => {
       if (!open) return undefined;
-      return foodMacroReport({
+      return foodNutritionReport({
         entries: state.entries,
         userId: state.currentUserId,
         range: period,
         dates,
         anchorDate,
-        selectedIds,
         goals,
         locale,
       });
     },
-    [anchorDate, dates, goals, locale, open, period, selectedIds, state.currentUserId, state.entries],
+    [anchorDate, dates, goals, locale, open, period, state.currentUserId, state.entries],
   );
   const dayView = dates.length === 1 && period !== "overall";
+  const selectedIds = useMemo(() => {
+    if (!report) return [];
+    const rememberedAvailable = report.availableIds.filter((id) =>
+      rememberedIds.includes(id),
+    );
+    if (rememberedAvailable.length) return rememberedAvailable;
+    const defaultAvailable = report.availableIds.filter((id) =>
+      FOOD_MACROS.some((macro) => macro.id === id),
+    );
+    return defaultAvailable.length ? defaultAvailable : report.availableIds.slice(0, 1);
+  }, [rememberedIds, report]);
+  const shownNutrients = useMemo(
+    () => report?.nutrients.filter((nutrient) => selectedIds.includes(nutrient.id)) ?? [],
+    [report, selectedIds],
+  );
+  const rangeMode = state.settings.foodNutritionRangeMode ?? "average";
+  const openNutrient = useCallback(
+    (id: FoodNutrientId) => {
+      if (!hasFoodNutrientTracker(state.metrics, id)) {
+        const preset = trackerPresets(state, true).find(
+          (item) => item.templateId === id,
+        );
+        if (!preset) {
+          Alert.alert("Tracker not found");
+          return;
+        }
+        const activeFrom = dateKey();
+        addMetric({
+          ...preset,
+          activeFrom,
+          addToToday: false,
+          trackGoal: false,
+        });
+        updateMetric(id, {
+          activeFrom,
+          order: nextFoodNutrientTrackerOrder(state.metrics),
+        });
+      }
+      router.push({
+        pathname: "/metric-detail",
+        params: { metric: id, date: anchorDate, period },
+      });
+    },
+    [addMetric, anchorDate, period, state, updateMetric],
+  );
   return (
     <Card style={styles.foodMacroCard}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: open }}
-        accessibilityLabel="Macros"
-        onPress={() => setOpen((current) => !current)}
-        style={styles.foodMacroHeader}
-      >
-        <View style={[styles.foodMacroIcon, { backgroundColor: colors.primarySoft }]}>
-          <Ionicons name="nutrition-outline" size={17} color={accent} />
-        </View>
-        <View style={styles.grow}>
-          <Text style={[styles.foodMacroTitle, { color: colors.ink }]}>Macros</Text>
-          <Text style={[styles.foodMacroHint, { color: colors.muted }]}>Protein, carbs, and fat for this date range</Text>
-        </View>
-        <Ionicons
-          name={open ? "chevron-up" : "chevron-down"}
-          size={17}
-          color={colors.muted}
-        />
-      </Pressable>
-      {open && report ? (
-        <View style={[styles.foodMacroBody, { borderTopColor: colors.border }]}>
+      <View style={styles.foodMacroHeader}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          accessibilityLabel="Nutrition"
+          onPress={() => setOpen((current) => !current)}
+          style={styles.foodNutritionHeaderToggle}
+        >
+          <View style={[styles.foodMacroIcon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="nutrition-outline" size={17} color={accent} />
+          </View>
+          <View style={styles.grow}>
+            <Text style={[styles.foodMacroTitle, { color: colors.ink }]}>Nutrition</Text>
+            <Text style={[styles.foodMacroHint, { color: colors.muted }]}>Macros, vitamins, minerals and more</Text>
+          </View>
+          <Ionicons
+            name={open ? "chevron-up" : "chevron-down"}
+            size={17}
+            color={colors.muted}
+          />
+        </Pressable>
+        {open && report?.availableIds.length ? (
           <SelectionMenu
-            title="Shown macros"
-            items={FOOD_MACROS.map((macro) => ({
-              id: macro.id,
-              label: macro.label,
-              color: macro.color,
-              icon: macro.icon,
-              group: "Macros",
+            title="Shown nutrients"
+            items={FOOD_NUTRIENTS.filter((nutrient) =>
+              report.availableIds.includes(nutrient.id),
+            ).map((nutrient) => ({
+              id: nutrient.id,
+              label: nutrient.label,
+              color: nutrient.color,
+              icon: nutrient.icon,
+              group: nutrient.group,
+              sublabel: displayNutrientUnit(nutrient.unit),
             }))}
             selectedIds={selectedIds}
             onChange={(ids) => {
-              const valid = FOOD_MACROS.map((macro) => macro.id).filter((id) =>
+              const selectedAvailable = report.availableIds.filter((id) =>
                 ids.includes(id),
               );
-              if (valid.length) setSelectedIds(valid);
+              if (!selectedAvailable.length) return;
+              const unavailableRemembered = rememberedIds.filter(
+                (id) => !report.availableIds.includes(id),
+              );
+              updateSettings({
+                foodNutrientIds: [
+                  ...unavailableRemembered,
+                  ...selectedAvailable,
+                ],
+              });
             }}
             multiple
-            searchable={false}
+            minimumSelected={1}
+            compactIcon
+            icon="options-outline"
           />
+        ) : null}
+      </View>
+      {open && report ? (
+        <View style={[styles.foodMacroBody, { borderTopColor: colors.border }]}>
           {report.hasData ? (
             <>
               <View style={styles.foodMacroPieRow}>
-                <FoodMacroDonut slices={report.slices} colors={colors} />
-                <View style={styles.foodMacroLegend}>
-                  {report.slices.map((slice) => (
-                    <View key={slice.id} style={styles.foodMacroLegendRow}>
+                <FoodMacroDonut
+                  slices={report.macroSlices}
+                  colors={colors}
+                  onOpenNutrient={openNutrient}
+                />
+                <View
+                  style={[
+                    styles.foodMacroLegend,
+                    !dayView && styles.foodNutritionLegendWithMode,
+                  ]}
+                >
+                  {report.macroSlices.map((slice) => (
+                    <Pressable
+                      key={slice.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${slice.label}, ${formatNutrientValue(slice.value, slice.unit, locale)}, ${slice.percent}%`}
+                      onPress={() => openNutrient(slice.id)}
+                      style={styles.foodMacroLegendRow}
+                    >
                       <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
                       <View style={styles.grow}>
                         <Text translate={false} style={[styles.foodMacroLegendName, { color: colors.ink }]}>{t(slice.label)}</Text>
                         <Text style={[styles.foodMacroLegendValue, { color: colors.muted }]}>
-                          {slice.percent.toLocaleString(locale, { maximumFractionDigits: 1 })}% · {slice.grams.toLocaleString(locale, { maximumFractionDigits: 1 })} g
+                          {slice.percent.toLocaleString(locale, { maximumFractionDigits: 1 })}% · {formatNutrientValue(slice.value, slice.unit, locale)}
                         </Text>
                       </View>
-                    </View>
+                    </Pressable>
                   ))}
                 </View>
+                {!dayView ? (
+                  <View
+                    accessibilityRole="tablist"
+                    style={[
+                      styles.foodNutritionModeSwitch,
+                      { backgroundColor: colors.canvas, borderColor: colors.border },
+                    ]}
+                  >
+                    {(["average", "individual"] as const).map((mode) => {
+                      const selected = rangeMode === mode;
+                      return (
+                        <Pressable
+                          key={mode}
+                          accessibilityRole="tab"
+                          accessibilityState={{ selected }}
+                          accessibilityLabel={mode === "average" ? "Average" : "Individual"}
+                          hitSlop={10}
+                          onPress={() => updateSettings({ foodNutritionRangeMode: mode })}
+                          style={[
+                            styles.foodNutritionModeChoice,
+                            selected && { backgroundColor: accent },
+                          ]}
+                        >
+                          <Text
+                            preserveColor={selected}
+                            style={[
+                              styles.foodNutritionModeText,
+                              { color: selected ? "#FFFFFF" : colors.muted },
+                            ]}
+                          >
+                            {mode === "average" ? "Average" : "Individual"}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ) : null}
               </View>
-              <Text style={[styles.foodMacroCaption, { color: colors.faint }]}>Percentages show each selected macro’s share of macro calories.</Text>
+              <Text style={[styles.foodMacroCaption, { color: colors.faint }]}>Macro calorie share · tap any nutrient to open its tracker</Text>
               {dayView && report.dayValues ? (
                 <View style={styles.foodMacroProgressList}>
-                  {report.slices.map((slice) => (
-                    <FoodMacroProgress
-                      key={slice.id}
-                      slice={slice}
-                      value={report.dayValues![slice.id]}
+                  {shownNutrients.map((nutrient) => (
+                    <FoodNutrientProgress
+                      key={nutrient.id}
+                      nutrient={nutrient}
+                      value={report.dayValues?.[nutrient.id] ?? 0}
                       locale={locale}
                       colors={colors}
+                      onPress={() => openNutrient(nutrient.id)}
+                    />
+                  ))}
+                </View>
+              ) : rangeMode === "average" ? (
+                <View style={styles.foodMacroProgressList}>
+                  <Text style={[styles.foodNutritionAverageCaption, { color: colors.faint }]}>
+                    Average on days each nutrient was recorded
+                  </Text>
+                  {shownNutrients.map((nutrient) => (
+                    <FoodNutrientProgress
+                      key={nutrient.id}
+                      nutrient={nutrient}
+                      value={report.averageValues[nutrient.id] ?? 0}
+                      locale={locale}
+                      colors={colors}
+                      onPress={() => openNutrient(nutrient.id)}
                     />
                   ))}
                 </View>
               ) : (
-                <FoodMacroBars
+                <FoodNutrientBars
                   buckets={report.buckets}
-                  slices={report.slices}
+                  nutrients={shownNutrients}
                   bucketUnit={report.bucketUnit}
                   locale={locale}
                   colors={colors}
+                  onOpenNutrient={openNutrient}
                 />
               )}
             </>
           ) : (
             <View style={[styles.foodMacroEmpty, { borderColor: colors.border }]}>
               <Ionicons name="restaurant-outline" size={19} color={colors.faint} />
-              <Text style={[styles.foodMacroEmptyText, { color: colors.muted }]}>No macro details were available in food entries for this range.</Text>
+              <Text style={[styles.foodMacroEmptyText, { color: colors.muted }]}>No nutrition details were available in food entries for this range.</Text>
             </View>
           )}
         </View>
@@ -2295,16 +2470,18 @@ function FoodMacroSection({
 function FoodMacroDonut({
   slices,
   colors,
+  onOpenNutrient,
 }: {
-  slices: ReturnType<typeof foodMacroReport>["slices"];
+  slices: FoodMacroSlice[];
   colors: ReturnType<typeof useAppColors>;
+  onOpenNutrient: (id: FoodMacroId) => void;
 }) {
   const size = 108;
   const radius = 39;
   const circumference = 2 * Math.PI * radius;
   let consumed = 0;
   return (
-    <View style={styles.foodMacroDonut} accessibilityLabel="Macro calorie percentages">
+    <View style={styles.foodMacroDonut} accessibilityLabel="Macro calorie share">
       <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <Circle
           cx={size / 2}
@@ -2321,6 +2498,9 @@ function FoodMacroDonut({
           return (
             <Circle
               key={slice.id}
+              accessible
+              accessibilityLabel={`${slice.label}, ${slice.percent}%`}
+              onPress={() => onOpenNutrient(slice.id)}
               cx={size / 2}
               cy={size / 2}
               r={radius}
@@ -2343,40 +2523,47 @@ function FoodMacroDonut({
   );
 }
 
-function FoodMacroProgress({
-  slice,
+function FoodNutrientProgress({
+  nutrient,
   value,
   locale,
   colors,
+  onPress,
 }: {
-  slice: ReturnType<typeof foodMacroReport>["slices"][number];
+  nutrient: FoodNutrientSummary;
   value: number;
   locale: string;
   colors: ReturnType<typeof useAppColors>;
+  onPress: () => void;
 }) {
   const { t } = useLocalization();
-  const goal = slice.goal;
+  const goal = nutrient.goal;
   const scale = Math.max(1, value * 1.08, (goal ?? 0) * 1.2);
   const fill = Math.min(1, Math.max(0, value / scale));
   const goalPosition = goal ? Math.min(1, Math.max(0, goal / scale)) : undefined;
   const percentage = goal ? Math.round((value / goal) * 100) : undefined;
   return (
-    <View style={styles.foodMacroProgress}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${nutrient.label}, ${formatNutrientValue(value, nutrient.unit, locale)}${percentage === undefined ? "" : `, ${percentage}%`}`}
+      onPress={onPress}
+      style={styles.foodMacroProgress}
+    >
       <View style={styles.foodMacroProgressHeading}>
         <View style={styles.foodMacroProgressName}>
-          <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
-          <Text translate={false} style={[styles.foodMacroProgressLabel, { color: colors.ink }]}>{t(slice.label)}</Text>
+          <View style={[styles.foodMacroDot, { backgroundColor: nutrient.color }]} />
+          <Text translate={false} style={[styles.foodMacroProgressLabel, { color: colors.ink }]}>{t(nutrient.label)}</Text>
         </View>
         <Text style={[styles.foodMacroProgressValue, { color: colors.muted }]}>
-          {value.toLocaleString(locale, { maximumFractionDigits: 1 })} g
+          {formatNutrientValue(value, nutrient.unit, locale)}
           {percentage !== undefined ? ` · ${percentage}%` : ""}
         </Text>
       </View>
       <View style={[styles.foodMacroProgressTrack, { backgroundColor: colors.border }]}>
-        <View style={[styles.foodMacroProgressFill, { width: `${fill * 100}%`, backgroundColor: slice.color }]} />
+        <View style={[styles.foodMacroProgressFill, { width: `${fill * 100}%`, backgroundColor: nutrient.color }]} />
         {goalPosition !== undefined ? (
           <View
-            accessibilityLabel={`Goal ${goal} grams`}
+            accessibilityLabel={`Goal ${formatNutrientValue(goal ?? 0, nutrient.unit, locale)}`}
             style={[
               styles.foodMacroGoalTick,
               { left: `${goalPosition * 100}%`, backgroundColor: colors.ink },
@@ -2385,34 +2572,65 @@ function FoodMacroProgress({
         ) : null}
       </View>
       {goal ? (
-        <Text style={[styles.foodMacroGoalCopy, { color: colors.faint }]}>Goal {goal.toLocaleString(locale, { maximumFractionDigits: 1 })} g</Text>
+        <Text style={[styles.foodMacroGoalCopy, { color: colors.faint }]}>Goal {formatNutrientValue(goal, nutrient.unit, locale)}</Text>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
-function FoodMacroBars({
+function FoodNutrientBars({
   buckets,
-  slices,
+  nutrients,
   bucketUnit,
   locale,
   colors,
+  onOpenNutrient,
 }: {
-  buckets: FoodMacroBucket[];
-  slices: ReturnType<typeof foodMacroReport>["slices"];
+  buckets: FoodNutrientBucket[];
+  nutrients: FoodNutrientSummary[];
   bucketUnit: "day" | "month" | "year";
   locale: string;
   colors: ReturnType<typeof useAppColors>;
+  onOpenNutrient: (id: FoodNutrientId) => void;
 }) {
   const { t } = useLocalization();
-  const values = buckets.flatMap((bucket) =>
-    slices.flatMap((slice) => {
-      const value = bucket.values[slice.id];
-      return value === null ? [] : [value];
+  // Give adjacent series separate touch lanes. Inflating tiny bars with
+  // hitSlop makes sibling targets overlap and can open the wrong nutrient;
+  // horizontal scrolling keeps dense selections compact and deterministic.
+  const barTouchWidth = 24;
+  const bucketWidth = Math.max(
+    28,
+    nutrients.length * barTouchWidth + Math.max(0, nutrients.length - 1),
+  );
+  const nutrientMax = Object.fromEntries(
+    nutrients.map((nutrient) => [
+      nutrient.id,
+      Math.max(
+        1,
+        ...buckets.flatMap((bucket) => {
+          const value = bucket.values[nutrient.id];
+          return value === null || value === undefined ? [] : [value];
+        }),
+      ),
+    ]),
+  ) as Partial<Record<FoodNutrientId, number>>;
+  const percentFor = (nutrient: FoodNutrientSummary, value: number) =>
+    nutrient.goal
+      ? (value / nutrient.goal) * 100
+      : (value / (nutrientMax[nutrient.id] ?? 1)) * 100;
+  const percentages = buckets.flatMap((bucket) =>
+    nutrients.flatMap((nutrient) => {
+      const value = bucket.values[nutrient.id];
+      return value === null || value === undefined
+        ? []
+        : [percentFor(nutrient, value)];
     }),
   );
-  const max = Math.max(1, ...values, ...slices.map((slice) => slice.goal ?? 0));
-  const axisMax = Math.ceil((max * 1.12) / 10) * 10 || 1;
+  const axisMax = Math.max(100, Math.ceil((Math.max(1, ...percentages) * 1.08) / 25) * 25);
+  const chartWidth = Math.max(
+    240,
+    buckets.length * bucketWidth + Math.max(0, buckets.length - 1) * 2,
+  );
   const labelIndexes = [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].filter(
     (index) => index >= 0,
   );
@@ -2420,90 +2638,134 @@ function FoodMacroBars({
   return (
     <View style={styles.foodMacroBarsWrap}>
       <View style={styles.foodMacroBarLegend}>
-        {slices.map((slice) => (
-          <View key={slice.id} style={styles.foodMacroBarLegendItem}>
-            <View style={[styles.foodMacroDot, { backgroundColor: slice.color }]} />
+        {nutrients.map((nutrient) => (
+          <Pressable
+            key={nutrient.id}
+            accessibilityRole="button"
+            onPress={() => onOpenNutrient(nutrient.id)}
+            style={styles.foodMacroBarLegendItem}
+          >
+            <View style={[styles.foodMacroDot, { backgroundColor: nutrient.color }]} />
             <Text translate={false} style={[styles.foodMacroBarLegendText, { color: colors.muted }]}>
-              {t(slice.label)}{slice.goal ? ` · ${t("goal")} ${slice.goal.toLocaleString(locale)} g` : ""}
+              {t(nutrient.label)} · {displayNutrientUnit(nutrient.unit)} · {nutrient.goal ? `${t("goal")} ${formatNutrientValue(nutrient.goal, nutrient.unit, locale)}` : t("range maximum")}
             </Text>
-          </View>
+          </Pressable>
         ))}
       </View>
       <View style={styles.foodMacroChartRow}>
         <View style={styles.foodMacroYAxis}>
-          <Text translate={false} style={[styles.foodMacroAxisUnit, { color: colors.faint }]}>g/day</Text>
+          <Text style={[styles.foodMacroAxisUnit, { color: colors.faint }]}>Relative %</Text>
           {[axisMax, axisMax / 2, 0].map((tick) => (
             <Text key={tick} style={[styles.foodMacroYAxisLabel, { color: colors.muted }]}>
               {tick.toLocaleString(locale, { maximumFractionDigits: 1 })}
             </Text>
           ))}
         </View>
-        <View style={styles.foodMacroPlot}>
-          {[0, 50, 100].map((top) => (
-            <View key={top} style={[styles.foodMacroGrid, { top: `${top}%`, borderTopColor: colors.border }]} />
-          ))}
-          {slices.flatMap((slice) =>
-            slice.goal
-              ? [
+        <ScrollView
+          horizontal
+          accessibilityLabel="Nutrient history chart"
+          showsHorizontalScrollIndicator={false}
+          style={styles.foodMacroChartScroll}
+          contentContainerStyle={{ width: chartWidth }}
+        >
+          <View style={[styles.foodMacroScrollablePlot, { width: chartWidth }]}>
+            <View style={styles.foodMacroPlot}>
+              {[0, 50, 100].map((top) => (
+                <View key={top} style={[styles.foodMacroGrid, { top: `${top}%`, borderTopColor: colors.border }]} />
+              ))}
+              <View style={styles.foodMacroBars}>
+                {buckets.map((bucket) => (
                   <View
-                    key={`goal-${slice.id}`}
-                    style={[
-                      styles.foodMacroGoalLine,
-                      {
-                        bottom: `${Math.min(1, slice.goal / axisMax) * 100}%`,
-                        borderTopColor: slice.color,
-                      },
-                    ]}
-                  />,
-                ]
-              : [],
-          )}
-          <View style={styles.foodMacroBars}>
-            {buckets.map((bucket) => (
-              <View key={bucket.key} style={styles.foodMacroBarSlot}>
-                {slices.map((slice) => {
-                  const value = bucket.values[slice.id];
-                  return value === null ? (
-                    <View key={slice.id} style={[styles.foodMacroMissingBar, { backgroundColor: colors.border }]} />
-                  ) : (
-                    <View
-                      key={slice.id}
-                      style={[
-                        styles.foodMacroBar,
-                        {
-                          height: `${Math.max(2, (value / axisMax) * 100)}%`,
-                          backgroundColor: slice.color,
-                        },
-                      ]}
-                    />
-                  );
-                })}
+                    key={bucket.key}
+                    style={[styles.foodMacroBarSlot, { width: bucketWidth }]}
+                  >
+                    {nutrients.map((nutrient) => {
+                      const value = bucket.values[nutrient.id];
+                      const relativePercent =
+                        value === null || value === undefined
+                          ? 0
+                          : percentFor(nutrient, value);
+                      return (
+                        <Pressable
+                          key={nutrient.id}
+                          accessibilityRole="button"
+                          accessibilityState={{ disabled: value === null || value === undefined }}
+                          accessibilityLabel={`${bucket.label}, ${nutrient.label}, ${value === null || value === undefined ? t("not recorded") : formatNutrientValue(value, nutrient.unit, locale)}${nutrient.goal && value !== null && value !== undefined ? `, ${Math.round(relativePercent)}%` : ""}`}
+                          disabled={value === null || value === undefined}
+                          onPress={() => onOpenNutrient(nutrient.id)}
+                          style={[
+                            styles.foodMacroBarTarget,
+                            { width: barTouchWidth },
+                          ]}
+                        >
+                          {value === null || value === undefined ? (
+                            <View style={[styles.foodMacroMissingBar, { backgroundColor: colors.border }]} />
+                          ) : (
+                            <View
+                              style={[
+                                styles.foodMacroBar,
+                                {
+                                  height: `${Math.max(2, Math.min(100, relativePercent / axisMax * 100))}%`,
+                                  backgroundColor: nutrient.color,
+                                },
+                              ]}
+                            />
+                          )}
+                          {nutrient.goal ? (
+                            <View
+                              accessibilityLabel={`Goal ${formatNutrientValue(nutrient.goal, nutrient.unit, locale)}`}
+                              style={[
+                                styles.foodMacroBarGoalTick,
+                                {
+                                  bottom: `${Math.min(1, 100 / axisMax) * 100}%`,
+                                  borderTopColor: colors.muted,
+                                },
+                              ]}
+                            />
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ))}
               </View>
-            ))}
+            </View>
+            <View style={styles.foodMacroXAxis}>
+              {labelIndexes.map((index, labelIndex) => (
+                <Text
+                  key={`${buckets[index]?.key}-${index}`}
+                  numberOfLines={1}
+                  style={[
+                    styles.foodMacroXAxisLabel,
+                    { color: colors.muted },
+                    labelIndex === 1 && styles.foodMacroXAxisMiddle,
+                    labelIndex === 2 && styles.foodMacroXAxisEnd,
+                  ]}
+                >
+                  {buckets[index]?.label}
+                </Text>
+              ))}
+            </View>
           </View>
-        </View>
-      </View>
-      <View style={styles.foodMacroXAxis}>
-        {labelIndexes.map((index, labelIndex) => (
-          <Text
-            key={`${buckets[index]?.key}-${index}`}
-            numberOfLines={1}
-            style={[
-              styles.foodMacroXAxisLabel,
-              { color: colors.muted },
-              labelIndex === 1 && styles.foodMacroXAxisMiddle,
-              labelIndex === 2 && styles.foodMacroXAxisEnd,
-            ]}
-          >
-            {buckets[index]?.label}
-          </Text>
-        ))}
+        </ScrollView>
       </View>
       <Text translate={false} style={[styles.foodMacroAxisCaption, { color: colors.faint }]}>
-        {t(axisLabel)} · {t("Bars show daily intake or daily average")}
+        {t(axisLabel)} · {t("Goal bars show percent of goal; no-goal bars show percent of range maximum")}
       </Text>
     </View>
   );
+}
+
+function displayNutrientUnit(unit: FoodNutrientSummary["unit"]) {
+  return unit === "mcg" ? "µg" : unit;
+}
+
+function formatNutrientValue(
+  value: number,
+  unit: FoodNutrientSummary["unit"],
+  locale: string,
+) {
+  return `${value.toLocaleString(locale, { maximumFractionDigits: 2 })} ${displayNutrientUnit(unit)}`;
 }
 
 function TodoTrackerEntries({
@@ -3665,29 +3927,12 @@ function nutritionLine(
     ReturnType<typeof useApp>["state"]["entries"][number]["nutrition"]
   >,
 ) {
-  const labels: Record<string, string> = {
-    proteinG: "Protein",
-    fatG: "Fat",
-    carbsG: "Carbs",
-    fiberG: "Fiber",
-    sodiumMg: "Sodium",
-    sugarG: "Sugar",
-    saturatedFatG: "Saturated fat",
-    cholesterolMg: "Cholesterol",
-    potassiumMg: "Potassium",
-    calciumMg: "Calcium",
-    ironMg: "Iron",
-    magnesiumMg: "Magnesium",
-    vitaminCMg: "Vitamin C",
-    vitaminDMcg: "Vitamin D",
-    vitaminB12Mcg: "Vitamin B12",
-  };
-  return Object.entries(nutrition)
-    .filter(([, value]) => Number(value) > 0)
-    .map(
-      ([key, value]) =>
-        `${labels[key] ?? key} ${Math.round(Number(value) * 10) / 10}`,
-    )
+  return FOOD_NUTRIENTS.flatMap((nutrient) => {
+    const value = Number(nutrition[nutrient.nutritionKey]);
+    return Number.isFinite(value) && value > 0
+      ? [`${nutrient.label} ${Math.round(value * 100) / 100} ${displayNutrientUnit(nutrient.unit)}`]
+      : [];
+  })
     .join(" · ");
 }
 const styles = StyleSheet.create({
@@ -3728,6 +3973,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 9,
   },
+  foodNutritionHeaderToggle: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
   foodMacroIcon: {
     width: 32,
     height: 32,
@@ -3753,11 +4005,31 @@ const styles = StyleSheet.create({
   foodMacroDonutLabel: { fontSize: 6.5, fontWeight: "900", letterSpacing: 0.8 },
   foodMacroDonutValue: { fontSize: 16, fontWeight: "900", marginTop: -1 },
   foodMacroLegend: { flex: 1, minWidth: 0, gap: 7 },
+  foodNutritionLegendWithMode: { paddingTop: 29 },
+  foodNutritionModeSwitch: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    height: 25,
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 2,
+    flexDirection: "row",
+  },
+  foodNutritionModeChoice: {
+    minWidth: 48,
+    paddingHorizontal: 5,
+    borderRadius: 5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  foodNutritionModeText: { fontSize: 6.5, fontWeight: "900" },
   foodMacroLegendRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   foodMacroDot: { width: 7, height: 7, borderRadius: 4 },
   foodMacroLegendName: { fontSize: 9, fontWeight: "900" },
   foodMacroLegendValue: { fontSize: 8, fontWeight: "700", marginTop: 1 },
   foodMacroCaption: { fontSize: 7.5, lineHeight: 11, textAlign: "center" },
+  foodNutritionAverageCaption: { fontSize: 7.5, fontWeight: "800", textAlign: "center" },
   foodMacroProgressList: { gap: 10, marginTop: 2 },
   foodMacroProgress: { gap: 4 },
   foodMacroProgressHeading: {
@@ -3812,29 +4084,24 @@ const styles = StyleSheet.create({
   },
   foodMacroBarLegendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
   foodMacroBarLegendText: { fontSize: 7, fontWeight: "800" },
-  foodMacroChartRow: { flexDirection: "row", height: 126 },
+  foodMacroChartRow: { flexDirection: "row", height: 144 },
   foodMacroYAxis: {
     width: 40,
+    height: 126,
     paddingRight: 5,
     justifyContent: "space-between",
     alignItems: "flex-end",
   },
-  foodMacroAxisUnit: { position: "absolute", top: -10, right: 5, fontSize: 6.5, fontWeight: "900" },
+  foodMacroAxisUnit: { position: "absolute", top: -10, right: 5, fontSize: 6, fontWeight: "900" },
   foodMacroYAxisLabel: { fontSize: 6.5, fontWeight: "800" },
-  foodMacroPlot: { flex: 1, position: "relative" },
+  foodMacroChartScroll: { flex: 1 },
+  foodMacroScrollablePlot: { height: 144 },
+  foodMacroPlot: { height: 126, position: "relative" },
   foodMacroGrid: {
     position: "absolute",
     left: 0,
     right: 0,
     borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  foodMacroGoalLine: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    borderTopWidth: 1,
-    borderStyle: "dashed",
-    zIndex: 2,
   },
   foodMacroBars: {
     ...StyleSheet.absoluteFillObject,
@@ -3844,24 +4111,47 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   foodMacroBarSlot: {
-    flex: 1,
-    minWidth: 1,
+    flexGrow: 0,
+    flexShrink: 0,
     height: "100%",
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 1,
   },
+  foodMacroBarTarget: {
+    flexGrow: 0,
+    flexShrink: 0,
+    minWidth: 24,
+    height: "100%",
+    position: "relative",
+  },
   foodMacroBar: {
-    flex: 1,
-    minWidth: 1,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
     borderTopLeftRadius: 2,
     borderTopRightRadius: 2,
     opacity: 0.86,
   },
-  foodMacroMissingBar: { flex: 1, minWidth: 1, height: 1, opacity: 0.55 },
+  foodMacroBarGoalTick: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    borderTopWidth: 1,
+    borderStyle: "dashed",
+    zIndex: 2,
+  },
+  foodMacroMissingBar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 1,
+    opacity: 0.55,
+  },
   foodMacroXAxis: {
     height: 14,
-    marginLeft: 40,
     marginTop: 4,
     position: "relative",
   },

@@ -9,6 +9,7 @@ import {
   selectCanonicalHealthConnectStepAggregate,
 } from '@/src/domain/healthDedup';
 import { metricEntryKey } from '@/src/domain/metricEntry';
+import { FOOD_NUTRIENTS } from '@/src/domain/food';
 import { HealthImportRecord } from '@/src/health/types';
 import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
 
@@ -16,7 +17,7 @@ const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   steps: ['steps'],
   active_energy: ['exercise'],
   weight: ['weight'],
-  nutrition: ['food', 'protein', 'fat', 'carbs', 'fiber', 'sodium','sugar','saturated_fat','cholesterol','potassium','calcium','iron','magnesium','vitamin_c','vitamin_d','vitamin_b12'],
+  nutrition: ['food', ...FOOD_NUTRIENTS.map((nutrient) => nutrient.id)],
   water: ['water'],
   workouts: ['workout','workout_duration','workout_calories','workout_distance'],
   body_fat: ['body_fat'],
@@ -42,7 +43,11 @@ export function metricIdsForHealthDataTypes(dataTypes: HealthDataType[],metrics?
   return [...new Set(dataTypes.flatMap((type) => METRICS_BY_DATA_TYPE[type]??[]))];
 }
 
-const NUTRITION_FIELDS:Partial<Record<HealthMetricField,keyof NutritionDetails>>={protein:'proteinG',fat:'fatG',carbs:'carbsG',fiber:'fiberG',sodium:'sodiumMg',sugar:'sugarG',saturated_fat:'saturatedFatG',cholesterol:'cholesterolMg',potassium:'potassiumMg',calcium:'calciumMg',iron:'ironMg',magnesium:'magnesiumMg',vitamin_c:'vitaminCMg',vitamin_d:'vitaminDMcg',vitamin_b12:'vitaminB12Mcg'};
+const NUTRITION_FIELDS: Partial<
+  Record<HealthMetricField, keyof NutritionDetails>
+> = Object.fromEntries(
+  FOOD_NUTRIENTS.map((nutrient) => [nutrient.id, nutrient.nutritionKey]),
+);
 function mappedValue(record:HealthImportRecord,metric:MetricDefinition){const field=metric.healthMapping?.field;if(!field)return undefined;if(field==='value')return metric.dataType==='boolean'?Number(record.value)>0:Number(record.value);if(field==='duration_minutes'){const minutes=record.measurements?.durationMinutes;if(minutes===undefined)return undefined;return metric.unit.toLowerCase().startsWith('hr')?minutes/60:minutes;}if(field==='active_calories')return record.measurements?.activeCalories;if(field==='distance_km')return record.measurements?.distanceKm;if(field==='systolic')return record.measurements?.systolic;if(field==='diastolic')return record.measurements?.diastolic;const nutritionField=NUTRITION_FIELDS[field];const value=nutritionField?record.nutrition?.[nutritionField]:undefined;return typeof value==='number'?value:undefined;}
 
 function healthMappingMatchesRecord(
@@ -99,6 +104,28 @@ function entryFor(
   };
 }
 
+function nutritionSidecarEntry(
+  record: HealthImportRecord,
+  userId: string,
+  metricId: string,
+  value: number | boolean,
+  visibility: Visibility,
+): MetricEntry {
+  const full = entryFor(record, userId, metricId, value, visibility);
+  const {
+    label: _mealLabel,
+    note: _mealNote,
+    nutrition: _fullNutrition,
+    ...sidecar
+  } = full;
+  return {
+    ...sidecar,
+    // A linked nutrient entry may be shared as tracker data, but it must not
+    // carry a private meal name, note, or the full nutrition object with it.
+    // sourceProvider/sourceRecordId/sourceOrigin retain dedup provenance.
+  };
+}
+
 export type HealthImportVisibility =
   | Visibility
   | Readonly<Record<string, Visibility>>;
@@ -110,6 +137,16 @@ function importedMetricVisibility(
   return typeof visibility === "string"
     ? visibility
     : (visibility[metricId] ?? "group");
+}
+
+function importedNutritionSidecarVisibility(
+  visibility: HealthImportVisibility,
+  metricId: string,
+) {
+  if (typeof visibility === "string") return visibility;
+  // A canonical Food setting governs its linked values. If Food was removed,
+  // respect the nutrient tracker itself and otherwise fail closed.
+  return visibility.food ?? visibility[metricId] ?? "private";
 }
 
 export function healthVisibilityByMetric(metrics: readonly MetricDefinition[]) {
@@ -150,7 +187,23 @@ export function mapHealthRecordsToEntries(
     if(metrics){
       for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
-        const entry=entryFor(record,userId,metric.id,value,importedMetricVisibility(visibility,metric.id),record.nutrition);
+        const entry =
+          record.type === 'nutrition' && metric.id !== 'food'
+            ? nutritionSidecarEntry(
+                record,
+                userId,
+                metric.id,
+                value,
+                importedNutritionSidecarVisibility(visibility, metric.id),
+              )
+            : entryFor(
+                record,
+                userId,
+                metric.id,
+                value,
+                importedMetricVisibility(visibility, metric.id),
+                record.nutrition,
+              );
         entries.push(entry);entryById.set(entry.id,entry);
       }
       for(const metric of (compoundByType.get(record.type) ?? []).filter((item)=>
@@ -184,14 +237,23 @@ export function mapHealthRecordsToEntries(
           (metric.submetrics??[]).find((field)=>field.showProgressBar&&submetricValues[field.id]!==undefined) ??
           (metric.submetrics??[]).find((field)=>!field.linkedMetricId&&submetricValues[field.id]!==undefined);
         if(!primary)continue;
-        const entry=entryFor(
-          record,
-          userId,
-          metric.id,
-          submetricValues[primary.id],
-          importedMetricVisibility(visibility,metric.id),
-          record.nutrition,
-        );
+        const entry =
+          record.type === 'nutrition' && metric.id !== 'food'
+            ? nutritionSidecarEntry(
+                record,
+                userId,
+                metric.id,
+                submetricValues[primary.id],
+                importedNutritionSidecarVisibility(visibility, metric.id),
+              )
+            : entryFor(
+                record,
+                userId,
+                metric.id,
+                submetricValues[primary.id],
+                importedMetricVisibility(visibility, metric.id),
+                record.nutrition,
+              );
         entry.submetricValues=submetricValues;
         entries.push(entry);entryById.set(entry.id,entry);
       }
@@ -219,14 +281,44 @@ export function mapHealthRecordsToEntries(
     }
     if (record.type !== 'nutrition') continue;
     const nutrition = record.nutrition;
-    if (Number(record.value) > 0) entries.push(entryFor(record, userId, 'food', Number(record.value), importedMetricVisibility(visibility,'food'), nutrition));
-    const macroEntries: [keyof NutritionDetails, string][] = [
-      ['proteinG', 'protein'], ['fatG', 'fat'], ['carbsG', 'carbs'], ['fiberG', 'fiber'], ['sodiumMg', 'sodium'],
-      ['sugarG','sugar'],['saturatedFatG','saturated_fat'],['cholesterolMg','cholesterol'],['potassiumMg','potassium'],['calciumMg','calcium'],['ironMg','iron'],['magnesiumMg','magnesium'],['vitaminCMg','vitamin_c'],['vitaminDMcg','vitamin_d'],['vitaminB12Mcg','vitamin_b12'],
-    ];
-    for (const [field, metricId] of macroEntries) {
+    const pushNutritionEntry = (
+      metricId: string,
+      value: number,
+      details?: NutritionDetails,
+    ) => {
+      const id = importedId(record, metricId);
+      // When configured metrics are supplied, the generic import loop above
+      // has already emitted matching nutrition trackers. Keep this fallback
+      // for legacy/unconfigured callers without returning duplicate IDs.
+      if (entryById.has(id)) return;
+      const entry =
+        metricId === 'food'
+          ? entryFor(
+              record,
+              userId,
+              metricId,
+              value,
+              importedNutritionSidecarVisibility(visibility, metricId),
+              details,
+            )
+          : nutritionSidecarEntry(
+              record,
+              userId,
+              metricId,
+              value,
+              importedNutritionSidecarVisibility(visibility, metricId),
+            );
+      entries.push(entry);
+      entryById.set(id, entry);
+    };
+    if (Number(record.value) > 0)
+      pushNutritionEntry('food', Number(record.value), nutrition);
+    for (const nutrientDefinition of FOOD_NUTRIENTS) {
+      const field = nutrientDefinition.nutritionKey;
+      const metricId = nutrientDefinition.id;
       const value = nutrition?.[field];
-      if (typeof value === 'number' && value > 0) entries.push(entryFor(record, userId, metricId, ['sodium','cholesterol','potassium','calcium','magnesium'].includes(metricId)?Math.round(value):Math.round(value*10)/10, importedMetricVisibility(visibility,metricId)));
+      if (typeof value === 'number' && value > 0)
+        pushNutritionEntry(metricId, value);
     }
   }
   return appendStepFallbackEntries(entries,userId,visibility,metrics,profileOrWeight);

@@ -1,7 +1,9 @@
 import type { HealthImportRecord } from "../health/types";
+import { FOOD_NUTRIENTS } from "./food";
 import type {
   HealthDataType,
   HealthSourcePreference,
+  NutritionDetails,
 } from "../types";
 
 const MINUTE_MS = 60_000;
@@ -113,6 +115,49 @@ export function preserveUnchangedDailyAggregateRevision<
   )
     return incoming;
   return existing;
+}
+
+/**
+ * A pedometer total cannot legitimately decrease before local midnight. Keep
+ * the highest confirmed canonical total for the open day when Health Connect
+ * briefly republishes a stale/lower snapshot (for example after app restart).
+ * Completed days deliberately do not use this floor, so Health Connect can
+ * still apply source-priority changes and corrections after day rollover.
+ */
+export function preserveCurrentDayStepFloor<
+  TEntry extends ImportedDailyAggregate,
+>(
+  existing: TEntry | undefined,
+  incoming: TEntry,
+  currentLocalDate: string,
+): TEntry {
+  const revisionReconciled = preserveUnchangedDailyAggregateRevision(
+    existing,
+    incoming,
+  );
+  if (
+    !existing ||
+    existing.localDate !== currentLocalDate ||
+    incoming.localDate !== currentLocalDate ||
+    !isCanonicalHealthConnectStepAggregate(
+      String(existing.sourceRecordId ?? ""),
+    ) ||
+    !isCanonicalHealthConnectStepAggregate(
+      String(incoming.sourceRecordId ?? ""),
+    ) ||
+    existing.sourceProvider !== incoming.sourceProvider ||
+    existing.sourceRecordId !== incoming.sourceRecordId ||
+    existing.metricId !== incoming.metricId ||
+    existing.userId !== incoming.userId
+  )
+    return revisionReconciled;
+  const existingValue = Number(existing.value);
+  const incomingValue = Number(incoming.value);
+  return Number.isFinite(existingValue) &&
+    Number.isFinite(incomingValue) &&
+    incomingValue < existingValue
+    ? existing
+    : revisionReconciled;
 }
 
 type StepFallbackEntry = HealthImportIdentity & {
@@ -272,6 +317,48 @@ export function replaceCanonicalStepAggregateForDay<
   }
   if (!inserted && current) next.push(current);
   return next;
+}
+
+/**
+ * Combines only adjacent, non-overlapping windows: Health Connect from local
+ * midnight up to the first locally recorded delta, then Android's local phone
+ * deltas from that exact boundary onward.
+ */
+export function combineDisjointStepWindows(
+  healthConnectPrefixCount: number,
+  localPhoneSuffixCount: number,
+) {
+  const prefix = Number.isFinite(healthConnectPrefixCount)
+    ? Math.max(0, Math.round(healthConnectPrefixCount))
+    : 0;
+  const suffix = Number.isFinite(localPhoneSuffixCount)
+    ? Math.max(0, Math.round(localPhoneSuffixCount))
+    : 0;
+  return prefix + suffix;
+}
+
+/**
+ * Reconciles two full-day candidates without summing their overlapping data.
+ * Health Connect can lag its minute-batched on-device writer; a candidate
+ * assembled from disjoint Health Connect-prefix and local-phone-suffix windows
+ * can fill that live gap. The platform aggregate wins when it catches up or
+ * contains a larger phone/watch/app total.
+ */
+export function reconcileCurrentDayStepTotal(
+  healthConnectCount: number,
+  disjointPhoneCandidate: number | null | undefined,
+) {
+  const healthConnect = Number.isFinite(healthConnectCount)
+    ? Math.max(0, Math.round(healthConnectCount))
+    : 0;
+  const localPhone = Number.isFinite(disjointPhoneCandidate)
+    ? Math.max(0, Math.round(disjointPhoneCandidate as number))
+    : null;
+  const usedLocalPhone = localPhone !== null && localPhone > healthConnect;
+  return {
+    count: usedLocalPhone ? localPhone : healthConnect,
+    usedLocalPhone,
+  };
 }
 
 /** A generic history read may claim the repair version only if it covered it. */
@@ -577,15 +664,77 @@ function nutritionEquivalent(
     !rightName.includes(leftName)
   )
     return false;
-  const pairs: [number | undefined, number | undefined, number][] = [
-    [left.nutrition?.proteinG, right.nutrition?.proteinG, 1],
-    [left.nutrition?.carbsG, right.nutrition?.carbsG, 1],
-    [left.nutrition?.fatG, right.nutrition?.fatG, 1],
-  ];
-  return (
-    closeNumber(numeric(left.value), numeric(right.value), 2, 0.08) &&
-    pairs.every(([a, b, tolerance]) => closeNumber(a, b, tolerance, 0.08))
-  );
+  if (
+    left.nutrition?.mealType &&
+    right.nutrition?.mealType &&
+    left.nutrition.mealType !== right.nutrition.mealType
+  )
+    return false;
+  let sharedSignature = false;
+  const leftCalories = positiveNumber(left.value);
+  const rightCalories = positiveNumber(right.value);
+  if (leftCalories !== undefined && rightCalories !== undefined) {
+    sharedSignature = true;
+    if (!closeNumber(leftCalories, rightCalories, 2, 0.08)) return false;
+  }
+  for (const nutrient of FOOD_NUTRIENTS) {
+    const a = positiveNumber(left.nutrition?.[nutrient.nutritionKey]);
+    const b = positiveNumber(right.nutrition?.[nutrient.nutritionKey]);
+    if (a === undefined || b === undefined) continue;
+    sharedSignature = true;
+    const tolerance =
+      nutrient.id === "protein" ||
+      nutrient.id === "carbs" ||
+      nutrient.id === "fat"
+        ? 1
+        : nutrient.unit === "g"
+          ? 0.2
+          : 0.1;
+    if (!closeNumber(a, b, tolerance, 0.08)) return false;
+  }
+  // Separate Apple/Health Connect dietary quantities often have zero calories
+  // and exactly one populated field. Only the same populated nutrient can be
+  // a duplicate; disjoint micronutrients must both survive.
+  return sharedSignature;
+}
+
+function positiveNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function mergeEquivalentNutritionRecords(
+  preferred: HealthImportRecord,
+  alternate: HealthImportRecord,
+): HealthImportRecord {
+  const nutrition: NutritionDetails = {};
+  const mealType = preferred.nutrition?.mealType ?? alternate.nutrition?.mealType;
+  if (mealType) nutrition.mealType = mealType;
+  for (const nutrient of FOOD_NUTRIENTS) {
+    const preferredValue = positiveNumber(
+      preferred.nutrition?.[nutrient.nutritionKey],
+    );
+    const alternateValue = positiveNumber(
+      alternate.nutrition?.[nutrient.nutritionKey],
+    );
+    const value = preferredValue ?? alternateValue;
+    if (value !== undefined) nutrition[nutrient.nutritionKey] = value;
+  }
+  const preferredCalories = positiveNumber(preferred.value);
+  const alternateCalories = positiveNumber(alternate.value);
+  return {
+    ...preferred,
+    value: preferredCalories ?? alternateCalories ?? preferred.value,
+    label: preferred.label ?? alternate.label,
+    note: preferred.note ?? alternate.note,
+    nutrition: Object.keys(nutrition).length ? nutrition : undefined,
+    sourceOrigins: [
+      ...new Set([
+        ...healthRecordOrigins(preferred),
+        ...healthRecordOrigins(alternate),
+      ]),
+    ],
+  };
 }
 
 /**
@@ -778,8 +927,18 @@ export function deduplicateHealthImportRecords(
     );
     const keep: HealthImportRecord[] = [];
     for (const record of group) {
-      if (!keep.some((candidate) => healthRecordsAreEquivalent(candidate, record)))
+      const equivalentIndex = keep.findIndex((candidate) =>
+        healthRecordsAreEquivalent(candidate, record),
+      );
+      if (equivalentIndex < 0) {
         keep.push(record);
+        continue;
+      }
+      if (record.type === "nutrition")
+        keep[equivalentIndex] = mergeEquivalentNutritionRecords(
+          keep[equivalentIndex],
+          record,
+        );
     }
     chosen.push(...keep);
   }

@@ -63,7 +63,36 @@ export type HealthMetricField =
   | "magnesium"
   | "vitamin_c"
   | "vitamin_d"
-  | "vitamin_b12";
+  | "vitamin_b12"
+  | "sugar_alcohol"
+  | "alcohol"
+  | "trans_fat"
+  | "monounsaturated_fat"
+  | "polyunsaturated_fat"
+  | "omega_3"
+  | "omega_6"
+  | "starch"
+  | "phosphorus"
+  | "zinc"
+  | "copper"
+  | "manganese"
+  | "selenium"
+  | "iodine"
+  | "vitamin_a"
+  | "vitamin_e"
+  | "vitamin_k"
+  | "vitamin_b1"
+  | "vitamin_b2"
+  | "vitamin_b3"
+  | "vitamin_b5"
+  | "vitamin_b6"
+  | "vitamin_b9"
+  | "folic_acid"
+  | "caffeine"
+  | "biotin"
+  | "chloride"
+  | "chromium"
+  | "molybdenum";
 export type HealthMetricMapping = {
   dataType: HealthDataType;
   field: HealthMetricField;
@@ -304,6 +333,36 @@ export type NutritionDetails = {
   vitaminCMg?: number;
   vitaminDMcg?: number;
   vitaminB12Mcg?: number;
+  sugarAlcoholG?: number;
+  alcoholG?: number;
+  transFatG?: number;
+  monounsaturatedFatG?: number;
+  polyunsaturatedFatG?: number;
+  omega3G?: number;
+  omega6G?: number;
+  starchG?: number;
+  phosphorusMg?: number;
+  zincMg?: number;
+  copperMg?: number;
+  manganeseMg?: number;
+  seleniumMcg?: number;
+  iodineMcg?: number;
+  vitaminAMcg?: number;
+  vitaminEMg?: number;
+  vitaminKMcg?: number;
+  thiaminMg?: number;
+  riboflavinMg?: number;
+  niacinMg?: number;
+  pantothenicAcidMg?: number;
+  vitaminB6Mg?: number;
+  folateMcg?: number;
+  /** Synthetic folic acid is distinct from total food folate when a source provides both. */
+  folicAcidMcg?: number;
+  caffeineMg?: number;
+  biotinMcg?: number;
+  chlorideMg?: number;
+  chromiumMcg?: number;
+  molybdenumMcg?: number;
 };
 
 export type PhotoUpdate = {
@@ -816,6 +875,8 @@ export type UserSettings = {
   statusAvatarStyle?: StatusAvatarStyle;
   /** Defaults to BMI; composition is used only when both required readings exist. */
   statusAvatarCalculationSource?: StatusAvatarCalculationSource;
+  /** Remember whether the Status range/date controls were collapsed. */
+  statusDateNavigatorCollapsed?: boolean;
   /** Put the to-do block below goal trackers instead of above them. */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */
@@ -866,6 +927,10 @@ export type UserSettings = {
   showWeightManagementSummary?: boolean;
   /** Whether logged active energy raises that day's food allowance. */
   foodGoalMode: FoodGoalMode;
+  /** Remembered nutrients in the Food detail filter, including temporarily unavailable ones. */
+  foodNutrientIds?: string[];
+  /** Preferred multi-day nutrition visualization. */
+  foodNutritionRangeMode?: "average" | "individual";
   /** Personal Start/End state keyed by intermittent-fasting metric id. */
   fastingRuntimeByMetric?: Record<string, FastingRuntimeSetting>;
   /** Personal pause periods protect goal streaks without inventing measurements. */
@@ -985,7 +1050,7 @@ export type Group = {
 };
 
 export type AppState = {
-  version: 25;
+  version: 26;
   currentUserId: string;
   group: Group;
   groups: Group[];

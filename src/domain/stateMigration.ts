@@ -11,6 +11,7 @@ import {
   navigationDefaultsForVersion,
   normalizeTabOrder,
 } from "@/src/domain/navigation";
+import { upgradeNutritionStateV26 } from "@/src/domain/nutritionMigration";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -177,7 +178,7 @@ function upgradeNavigationDefaults(
 ): AppState {
   return {
     ...state,
-    version: 25,
+    version: 26,
     settings: {
       ...state.settings,
       ...navigationDefaultsForVersion(state.settings, sourceVersion),
@@ -195,6 +196,7 @@ export function upgradeStateV21(
   // device can upload a v25-shaped snapshot that still contains the retired
   // gym summary ids, and it must converge on the same canonical trackers.
   state = consolidateWorkoutTrackers(state, defaults);
+  state = upgradeNutritionStateV26(state, defaults, sourceVersion);
   const screenTimeEntries = repairLegacyScreenTimeEntries(state.entries);
   if (screenTimeEntries !== state.entries)
     state = { ...state, entries: screenTimeEntries };
@@ -265,7 +267,7 @@ export function upgradeStateV21(
   };
   const repaired = repairOrphanedGroupMetrics({
     ...state,
-    version: 25,
+    version: 26,
     metrics: withTodo,
     groups: groups.map((item) => (item.id === group.id ? group : item)),
     group,

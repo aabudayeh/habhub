@@ -55,8 +55,8 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors } from "@/src/theme";
 
 const SEGMENTS = 32;
-const RING_SIZE = 76;
 const FLANK_RING_SIZE = 68;
+const RING_SIZE = FLANK_RING_SIZE;
 
 function ProgressRing({
   progress,
@@ -196,7 +196,8 @@ export default function StatusPage() {
   const narrowStatus = viewportWidth < 360;
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
-  const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
+  const dateNavigatorOpen =
+    state.settings.statusDateNavigatorCollapsed !== true;
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [avatarSourceEditorOpen, setAvatarSourceEditorOpen] = useState(false);
   const [avatarSimulatorOpen, setAvatarSimulatorOpen] = useState(false);
@@ -405,7 +406,7 @@ export default function StatusPage() {
 
   return (
     <GestureDetector gesture={swipe}>
-      <Screen>
+      <Screen minimumBottomPadding={16}>
         <PageHeader
           tutorialId="status-header"
           title="Status"
@@ -417,7 +418,9 @@ export default function StatusPage() {
           dateViewOpen={dateNavigatorOpen}
           onToggleDateView={() => {
             if (dateNavigatorOpen) setCalendarOpen(false);
-            setDateNavigatorOpen((open) => !open);
+            updateSettings({
+              statusDateNavigatorCollapsed: dateNavigatorOpen,
+            });
           }}
         />
         {period !== "overall" && dateNavigatorOpen ? (

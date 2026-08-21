@@ -26,6 +26,11 @@ import {
   useTutorial,
 } from "@/src/components/TutorialSpotlight";
 import { dateKey } from "@/src/domain/date";
+import {
+  FOOD_NUTRIENTS,
+  hasFoodNutrientTracker,
+  parsePositiveFoodNutrientAmount,
+} from "@/src/domain/food";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import {
   formatMetricValue,
@@ -40,9 +45,52 @@ import {
   useAppColors,
   useGroupAccent,
 } from "@/src/theme";
-import { Visibility } from "@/src/types";
+import { NutritionDetails, Visibility } from "@/src/types";
 
 type MealType = "breakfast" | "lunch" | "dinner" | "snack";
+
+const EXISTING_FOOD_NUTRITION_KEYS = new Set<keyof NutritionDetails>([
+  "proteinG",
+  "fatG",
+  "carbsG",
+  "fiberG",
+  "sodiumMg",
+  "sugarG",
+  "saturatedFatG",
+  "cholesterolMg",
+  "potassiumMg",
+  "calciumMg",
+  "ironMg",
+  "magnesiumMg",
+  "vitaminCMg",
+  "vitaminDMcg",
+  "vitaminB12Mcg",
+]);
+
+const SUPPLEMENTAL_FOOD_NUTRIENTS = FOOD_NUTRIENTS.filter(
+  (nutrient) => !EXISTING_FOOD_NUTRITION_KEYS.has(nutrient.nutritionKey),
+);
+
+function parsedSupplementalNutrition(raw: string | undefined) {
+  const values: Partial<Record<keyof NutritionDetails, string>> = {};
+  if (!raw) return values;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const nutrient of SUPPLEMENTAL_FOOD_NUTRIENTS) {
+      const value = parsed[nutrient.nutritionKey];
+      const amount = parsePositiveFoodNutrientAmount(
+        typeof value === "string" || typeof value === "number"
+          ? value
+          : undefined,
+      );
+      if (amount !== undefined)
+        values[nutrient.nutritionKey] = String(amount);
+    }
+  } catch {
+    // A malformed deep link must not prevent a manual food log.
+  }
+  return values;
+}
 
 const privacyOptions: {
   value: Visibility;
@@ -79,6 +127,7 @@ function LogScreen() {
     vitaminC?: string;
     vitaminD?: string;
     vitaminB12?: string;
+    nutritionDetails?: string;
   }>();
   const { state, logMetric, addPhoto, updateMetric } = useApp();
   const navigation = useNavigation();
@@ -160,6 +209,9 @@ function LogScreen() {
   const [vitaminC, setVitaminC] = useState("");
   const [vitaminD, setVitaminD] = useState("");
   const [vitaminB12, setVitaminB12] = useState("");
+  const [supplementalNutrition, setSupplementalNutrition] = useState<
+    Partial<Record<keyof NutritionDetails, string>>
+  >({});
   const [nutritionOpen, setNutritionOpen] = useState(false);
   const [moreNutrition, setMoreNutrition] = useState(false);
   const [workoutDuration, setWorkoutDuration] = useState("");
@@ -200,6 +252,7 @@ function LogScreen() {
       vitaminC ||
       vitaminD ||
       vitaminB12 ||
+      Object.values(supplementalNutrition).some((raw) => raw?.trim()) ||
       workoutDuration ||
       workoutCalories ||
       workoutDistance ||
@@ -260,6 +313,9 @@ function LogScreen() {
     setVitaminC(params.vitaminC ?? "");
     setVitaminD(params.vitaminD ?? "");
     setVitaminB12(params.vitaminB12 ?? "");
+    setSupplementalNutrition(
+      parsedSupplementalNutrition(params.nutritionDetails),
+    );
     // Search and barcode results should be immediately reviewable. Manually
     // opened food logs keep nutrition tucked away until the user asks for it.
     setNutritionOpen(true);
@@ -277,6 +333,7 @@ function LogScreen() {
     params.vitaminC,
     params.vitaminD,
     params.vitaminB12,
+    params.nutritionDetails,
     params.protein,
     params.saturatedFat,
     params.sodium,
@@ -349,6 +406,7 @@ function LogScreen() {
     setVitaminC("");
     setVitaminD("");
     setVitaminB12("");
+    setSupplementalNutrition({});
     setNutritionOpen(false);
     setMoreNutrition(false);
     setWorkoutDuration("");
@@ -387,24 +445,30 @@ function LogScreen() {
       );
       return false;
     }
-    const nutrition = {
+    const nutrition: NutritionDetails = {
       mealType,
-      proteinG: Number(protein) || undefined,
-      fatG: Number(fat) || undefined,
-      carbsG: Number(carbs) || undefined,
-      fiberG: Number(fiber) || undefined,
-      sodiumMg: Number(sodium) || undefined,
-      sugarG: Number(sugar) || undefined,
-      saturatedFatG: Number(saturatedFat) || undefined,
-      cholesterolMg: Number(cholesterol) || undefined,
-      potassiumMg: Number(potassium) || undefined,
-      calciumMg: Number(calcium) || undefined,
-      ironMg: Number(iron) || undefined,
-      magnesiumMg: Number(magnesium) || undefined,
-      vitaminCMg: Number(vitaminC) || undefined,
-      vitaminDMcg: Number(vitaminD) || undefined,
-      vitaminB12Mcg: Number(vitaminB12) || undefined,
+      proteinG: parsePositiveFoodNutrientAmount(protein),
+      fatG: parsePositiveFoodNutrientAmount(fat),
+      carbsG: parsePositiveFoodNutrientAmount(carbs),
+      fiberG: parsePositiveFoodNutrientAmount(fiber),
+      sodiumMg: parsePositiveFoodNutrientAmount(sodium),
+      sugarG: parsePositiveFoodNutrientAmount(sugar),
+      saturatedFatG: parsePositiveFoodNutrientAmount(saturatedFat),
+      cholesterolMg: parsePositiveFoodNutrientAmount(cholesterol),
+      potassiumMg: parsePositiveFoodNutrientAmount(potassium),
+      calciumMg: parsePositiveFoodNutrientAmount(calcium),
+      ironMg: parsePositiveFoodNutrientAmount(iron),
+      magnesiumMg: parsePositiveFoodNutrientAmount(magnesium),
+      vitaminCMg: parsePositiveFoodNutrientAmount(vitaminC),
+      vitaminDMcg: parsePositiveFoodNutrientAmount(vitaminD),
+      vitaminB12Mcg: parsePositiveFoodNutrientAmount(vitaminB12),
     };
+    for (const nutrient of SUPPLEMENTAL_FOOD_NUTRIENTS) {
+      const raw = supplementalNutrition[nutrient.nutritionKey] ?? "";
+      const amount = parsePositiveFoodNutrientAmount(raw);
+      if (amount !== undefined)
+        nutrition[nutrient.nutritionKey] = amount;
+    }
     const details = {
       label: label.trim() || undefined,
       note: note.trim() || undefined,
@@ -605,10 +669,18 @@ function LogScreen() {
           ["vitamin_c", vitaminC],
           ["vitamin_d", vitaminD],
           ["vitamin_b12", vitaminB12],
+          ...SUPPLEMENTAL_FOOD_NUTRIENTS.map(
+            (nutrient) =>
+              [
+                nutrient.id,
+                supplementalNutrition[nutrient.nutritionKey] ?? "",
+              ] as const,
+          ),
         ] as const
       ).forEach(([metricId, raw]) => {
-        const amount = Number(raw.replace(",", "."));
-        if (Number.isFinite(amount) && amount > 0)
+        if (!hasFoodNutrientTracker(state.metrics, metricId)) return;
+        const amount = parsePositiveFoodNutrientAmount(raw);
+        if (amount !== undefined)
           logMetric(metricId, amount, visibility, "add", {
             label: label.trim() || selected.name,
             note: note.trim() || undefined,
@@ -1449,14 +1521,25 @@ function LogScreen() {
                           label: "Vitamin D",
                           value: vitaminD,
                           set: setVitaminD,
-                          unit: "mcg",
+                          unit: "µg",
                         },
                         {
                           label: "Vitamin B12",
                           value: vitaminB12,
                           set: setVitaminB12,
-                          unit: "mcg",
+                          unit: "µg",
                         },
+                        ...SUPPLEMENTAL_FOOD_NUTRIENTS.map((nutrient) => ({
+                          label: nutrient.label,
+                          value:
+                            supplementalNutrition[nutrient.nutritionKey] ?? "",
+                          set: (next: string) =>
+                            setSupplementalNutrition((current) => ({
+                              ...current,
+                              [nutrient.nutritionKey]: next,
+                            })),
+                          unit: nutrient.unit === "mcg" ? "µg" : nutrient.unit,
+                        })),
                       ].map((item) => (
                         <View key={item.label} style={styles.nutritionField}>
                           <Text style={styles.nutritionLabel}>{item.label}</Text>

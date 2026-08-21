@@ -57,11 +57,14 @@ export function Screen({
   onScrollEndDrag,
   onMomentumScrollEnd,
   scrollEventThrottle,
+  minimumBottomPadding,
   ...props
 }: ScrollViewProps & {
   scrollRef?: React.RefObject<ScrollView | null>;
   fixedTop?: ReactNode;
   refreshEnabled?: boolean;
+  /** Override the page default when a compact screen does not need tab-clearance space. */
+  minimumBottomPadding?: number;
 }) {
   const compact = useCompactMode();
   const colors = useAppColors();
@@ -74,7 +77,12 @@ export function Screen({
   const tutorialTargetMeasurersRef = useRef(new Map<number, () => void>());
   const tutorialMeasureFrameRef = useRef<number | null>(null);
   const insets = useSafeAreaInsets();
-  const basePaddingBottom = compact ? 90 : 120;
+  const basePaddingBottom =
+    typeof minimumBottomPadding === "number"
+      ? Math.max(0, minimumBottomPadding)
+      : compact
+        ? 90
+        : 120;
   const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
   const userPaddingBottom =
     typeof userPaddingBottomRaw === "number" ? userPaddingBottomRaw : 0;

@@ -86,11 +86,11 @@ assert.match(display, /page\.id !== "status" \|\| state\.settings\.showStatus !=
 assert.match(display, /key === "showStatus"[\s\S]{0,100}state\.settings\.showStatus !== false/);
 assert.match(display, /isFixedNavigationPage\(id\)/);
 assert.match(onboarding, /landingPage === "status" \|\| state\.settings\.showStatus !== false/);
-assert.match(seed, /version: 25/);
+assert.match(seed, /version: 26/);
 assert.match(seed, /showStatus: true/);
-assert.match(provider, /const restoredState: AppState = \{[\s\S]{0,100}version: 25/);
+assert.match(provider, /const restoredState: AppState = \{[\s\S]{0,100}version: 26/);
 assert.doesNotMatch(cloudProvider, /version: 24/);
 
 console.log(
-  "Status-first-pair, Chat-right-edge, visibility, onboarding, and v25 migration defaults validated.",
+  "Status-first-pair, Chat-right-edge, visibility, onboarding, and v26 migration defaults validated.",
 );

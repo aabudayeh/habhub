@@ -2,7 +2,14 @@ import { getLocales } from "expo-localization";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
+import {
+  usdaCalories,
+  usdaMassNutrientAs,
+  usdaTotalSugarsG,
+  type UsdaNutrientRow,
+} from "@/src/domain/usdaNutrition";
 import { supabase } from "@/src/lib/supabase";
+import type { NutritionDetails } from "@/src/types";
 
 export type FoodProduct = {
   code: string;
@@ -15,27 +22,12 @@ export type FoodProduct = {
   completeNutrition: boolean;
   source: "Open Food Facts" | "FatSecret" | "USDA" | "Offline";
   verified?: boolean;
-  proteinG?: number;
-  fatG?: number;
-  carbsG?: number;
-  fiberG?: number;
-  sodiumMg?: number;
-  sugarG?: number;
-  saturatedFatG?: number;
-  cholesterolMg?: number;
-  potassiumMg?: number;
-  calciumMg?: number;
-  ironMg?: number;
-  magnesiumMg?: number;
-  vitaminCMg?: number;
-  vitaminDMcg?: number;
-  vitaminB12Mcg?: number;
   /** Search-only metadata; the logging UI intentionally ignores these fields. */
   searchAliases?: string[];
   countryTags?: string[];
   popularityScore?: number;
   localeMatch?: boolean;
-};
+} & Partial<Omit<NutritionDetails, "mealType">>;
 
 export type FoodSearchOptions = {
   /** Newest first. Used only as a small, on-device tie-breaker. */
@@ -129,6 +121,7 @@ function food(code: string, name: string, calories: number, proteinG: number, fa
 }
 
 function number(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
@@ -157,7 +150,13 @@ function parseProduct(product: RawProduct): FoodProduct | null {
   // has a predictable basis. Fall back to a serving only when 100g is absent.
   const hasPer100g = number(nutrients["energy-kcal_100g"]) !== undefined;
   const suffix = hasPer100g ? "100g" : "serving";
-  const nutrient = (key: string) => number(nutrients[`${key}_${suffix}`]);
+  const nutrient = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = number(nutrients[`${key}_${suffix}`]);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  };
   const calories = nutrient("energy-kcal");
   if (calories === undefined || calories <= 0) return null;
   const sodiumG = nutrient("sodium");
@@ -215,6 +214,23 @@ function parseProduct(product: RawProduct): FoodProduct | null {
     calciumMg: multiply(nutrient("calcium"), 1000), ironMg: multiply(nutrient("iron"), 1000),
     magnesiumMg: multiply(nutrient("magnesium"), 1000), vitaminCMg: multiply(nutrient("vitamin-c"), 1000),
     vitaminDMcg: multiply(nutrient("vitamin-d"), 1_000_000), vitaminB12Mcg: multiply(nutrient("vitamin-b12"), 1_000_000),
+    // Open Food Facts normalizes alcohol as % volume, not grams. Without a
+    // serving volume it cannot be safely stored in the app's alcoholG field.
+    sugarAlcoholG: nutrient("polyols"),
+    transFatG: nutrient("trans-fat"), monounsaturatedFatG: nutrient("monounsaturated-fat"),
+    polyunsaturatedFatG: nutrient("polyunsaturated-fat"), omega3G: nutrient("omega-3-fat"),
+    omega6G: nutrient("omega-6-fat"), starchG: nutrient("starch"),
+    phosphorusMg: multiply(nutrient("phosphorus"), 1000), zincMg: multiply(nutrient("zinc"), 1000),
+    copperMg: multiply(nutrient("copper"), 1000), manganeseMg: multiply(nutrient("manganese"), 1000),
+    seleniumMcg: multiply(nutrient("selenium"), 1_000_000), iodineMcg: multiply(nutrient("iodine"), 1_000_000),
+    vitaminAMcg: multiply(nutrient("vitamin-a"), 1_000_000), vitaminEMg: multiply(nutrient("vitamin-e"), 1000),
+    vitaminKMcg: multiply(nutrient("vitamin-k"), 1_000_000), thiaminMg: multiply(nutrient("vitamin-b1"), 1000),
+    riboflavinMg: multiply(nutrient("vitamin-b2"), 1000), niacinMg: multiply(nutrient("vitamin-pp", "vitamin-b3"), 1000),
+    pantothenicAcidMg: multiply(nutrient("vitamin-b5"), 1000), vitaminB6Mg: multiply(nutrient("vitamin-b6"), 1000),
+    folateMcg: multiply(nutrient("vitamin-b9", "folates"), 1_000_000), folicAcidMcg: multiply(nutrient("folic-acid"), 1_000_000),
+    caffeineMg: multiply(nutrient("caffeine"), 1000), biotinMcg: multiply(nutrient("biotin", "vitamin-b7", "vitamin-b8"), 1_000_000),
+    chlorideMg: multiply(nutrient("chloride"), 1000), chromiumMcg: multiply(nutrient("chromium"), 1_000_000),
+    molybdenumMcg: multiply(nutrient("molybdenum"), 1_000_000),
   };
 }
 
@@ -291,7 +307,7 @@ async function request(url: string, attempts = 3) {
       // Browsers control User-Agent themselves; native fetch permits the
       // identifying header requested by Open Food Facts.
       if (Platform.OS !== "web")
-        headers["User-Agent"] = "HabHub/1.0 (https://sethstar-habhub.expo.app)";
+        headers["User-Agent"] = "HabHub/1.0 (https://habhub.expo.app)";
       const response = await fetch(url, { headers, signal: controller.signal });
       if (response.ok) return response.json() as Promise<Record<string, unknown>>;
       last = new Error(`Food database request failed (${response.status}).`);
@@ -489,31 +505,41 @@ async function usdaSearch(term: string): Promise<FoodProduct[]> {
   const url = `${USDA_API}/foods/search?${parameters.toString()}`;
   const data = await request(url, 2);
   return ((data.foods as Record<string, any>[] | undefined) ?? []).flatMap((raw) => {
-    const nutrients = raw.foodNutrients ?? [];
-    const nutrient = (...names: string[]) => number(nutrients.find((item: any) => names.includes(String(item.nutrientName).toLowerCase()))?.value);
-    const calories = number(
-      nutrients.find(
-        (item: any) =>
-          (String(item.nutrientNumber) === "208" ||
-            Number(item.nutrientId) === 1008 ||
-            String(item.nutrientName).toLowerCase() === "energy") &&
-          String(item.unitName).toLowerCase() === "kcal",
-      )?.value,
-    );
+    const nutrients = (raw.foodNutrients ?? []) as UsdaNutrientRow[];
+    const nutrientAs = (
+      targetUnit: "g" | "mg" | "mcg",
+      ...identities: (number | string)[]
+    ) => usdaMassNutrientAs(nutrients, targetUnit, ...identities);
+    const calories = usdaCalories(nutrients);
     if (!raw.description || calories === undefined) return [];
     const verified = ["Foundation", "SR Legacy", "Survey (FNDDS)"].includes(raw.dataType);
-    const macros = [nutrient("protein"), nutrient("total lipid (fat)"), nutrient("carbohydrate, by difference"), nutrient("fiber, total dietary")];
+    const macros = [nutrientAs("g", "protein"), nutrientAs("g", "total lipid (fat)"), nutrientAs("g", "carbohydrate, by difference"), nutrientAs("g", "fiber, total dietary")];
     const completeNutrition = macros.filter((value) => value !== undefined).length >= 3;
     return [{
       code: `usda:${raw.fdcId}`, name: raw.description, brand: raw.brandName,
       basis: "100 g", calories: Math.round(calories), source: "USDA" as const,
       verified, completeNutrition, qualityScore: verified ? 160 : 95,
       searchAliases: [raw.additionalDescriptions, raw.foodCategory, raw.brandOwner].filter(Boolean),
-      proteinG: nutrient("protein"), fatG: nutrient("total lipid (fat)"), carbsG: nutrient("carbohydrate, by difference"),
-      fiberG: nutrient("fiber, total dietary"), sugarG: nutrient("sugars, total including nlea", "sugars, total"),
-      saturatedFatG: nutrient("fatty acids, total saturated"), sodiumMg: nutrient("sodium, na"), cholesterolMg: nutrient("cholesterol"),
-      potassiumMg: nutrient("potassium, k"), calciumMg: nutrient("calcium, ca"), ironMg: nutrient("iron, fe"), magnesiumMg: nutrient("magnesium, mg"),
-      vitaminCMg: nutrient("vitamin c, total ascorbic acid"), vitaminDMcg: nutrient("vitamin d (d2 + d3)"), vitaminB12Mcg: nutrient("vitamin b-12"),
+      proteinG: nutrientAs("g", "protein"), fatG: nutrientAs("g", "total lipid (fat)"), carbsG: nutrientAs("g", "carbohydrate, by difference"),
+      fiberG: nutrientAs("g", "fiber, total dietary"), sugarG: usdaTotalSugarsG(nutrients),
+      saturatedFatG: nutrientAs("g", "fatty acids, total saturated"), sodiumMg: nutrientAs("mg", "sodium, na"), cholesterolMg: nutrientAs("mg", "cholesterol"),
+      potassiumMg: nutrientAs("mg", "potassium, k"), calciumMg: nutrientAs("mg", "calcium, ca"), ironMg: nutrientAs("mg", "iron, fe"), magnesiumMg: nutrientAs("mg", "magnesium, mg"),
+      vitaminCMg: nutrientAs("mg", "vitamin c, total ascorbic acid"), vitaminDMcg: nutrientAs("mcg", "vitamin d (d2 + d3)"), vitaminB12Mcg: nutrientAs("mcg", "vitamin b-12"),
+      sugarAlcoholG: nutrientAs("g", "sugar alcohol", "sugar alcohols"), alcoholG: nutrientAs("g", "alcohol, ethyl"),
+      transFatG: nutrientAs("g", "fatty acids, total trans"), monounsaturatedFatG: nutrientAs("g", "fatty acids, total monounsaturated"),
+      polyunsaturatedFatG: nutrientAs("g", "fatty acids, total polyunsaturated"), omega3G: nutrientAs("g", "fatty acids, total n-3", "fatty acids, total omega 3"),
+      omega6G: nutrientAs("g", "fatty acids, total n-6", "fatty acids, total omega 6"), starchG: nutrientAs("g", "starch"),
+      phosphorusMg: nutrientAs("mg", "phosphorus, p"), zincMg: nutrientAs("mg", "zinc, zn"),
+      copperMg: nutrientAs("mg", "copper, cu"), manganeseMg: nutrientAs("mg", "manganese, mn"),
+      seleniumMcg: nutrientAs("mcg", "selenium, se"), iodineMcg: nutrientAs("mcg", "iodine, i"),
+      vitaminAMcg: nutrientAs("mcg", "vitamin a, rae"), vitaminEMg: nutrientAs("mg", "vitamin e (alpha-tocopherol)"),
+      vitaminKMcg: nutrientAs("mcg", "vitamin k (phylloquinone)"), thiaminMg: nutrientAs("mg", "thiamin"),
+      riboflavinMg: nutrientAs("mg", "riboflavin"), niacinMg: nutrientAs("mg", "niacin"),
+      pantothenicAcidMg: nutrientAs("mg", "pantothenic acid"), vitaminB6Mg: nutrientAs("mg", "vitamin b-6"),
+      folateMcg: nutrientAs("mcg", "folate, total"), folicAcidMcg: nutrientAs("mcg", "folic acid"),
+      caffeineMg: nutrientAs("mg", "caffeine"), biotinMcg: nutrientAs("mcg", "biotin"),
+      chlorideMg: nutrientAs("mg", "chloride", "chlorine, cl"), chromiumMcg: nutrientAs("mcg", "chromium, cr"),
+      molybdenumMcg: nutrientAs("mcg", "molybdenum, mo"),
     }];
   });
 }

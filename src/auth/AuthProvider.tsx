@@ -63,7 +63,7 @@ function callbackUrl() {
   if (typeof window !== 'undefined' && window.location?.origin) {
     return `${window.location.origin}/auth-callback`;
   }
-  return `${configuredOrigin || 'https://sethstar-habhub.expo.app'}/auth-callback`;
+  return `${configuredOrigin || 'https://habhub.expo.app'}/auth-callback`;
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
