@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "HabHub läser bara de hälsokategorier du väljer för att uppdatera dina privata mål och de gruppframsteg du tillåter att delas.",
+    "NSHealthUpdateUsageDescription": "HabHub skriver inte hälsodata om du inte uttryckligen väljer en framtida exportfunktion.",
+    "NSCameraUsageDescription": "HabHub använder bara kameran när du väljer att ta en framstegsbild.",
+    "NSPhotoLibraryUsageDescription": "HabHub använder bara dina bilder när du väljer att lägga till en framstegsuppdatering.",
+    "NSPhotoLibraryAddUsageDescription": "HabHub sparar bara en bild när du väljer att exportera eller dela den."
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

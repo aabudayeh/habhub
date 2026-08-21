@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "يقرأ HabHub فقط فئات البيانات الصحية التي تختارها لتحديث أهدافك الخاصة وتقدم المجموعة الذي سمحت بمشاركته.",
+    "NSHealthUpdateUsageDescription": "لا يكتب HabHub بيانات صحية إلا إذا اخترت صراحةً ميزة تصدير مستقبلية.",
+    "NSCameraUsageDescription": "يستخدم HabHub الكاميرا فقط عندما تختار التقاط صورة للتقدم.",
+    "NSPhotoLibraryUsageDescription": "يستخدم HabHub صورك فقط عندما تختار إضافة تحديث للتقدم.",
+    "NSPhotoLibraryAddUsageDescription": "يحفظ HabHub صورة فقط عندما تختار تصديرها أو مشاركتها."
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

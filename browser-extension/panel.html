@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>HabHub Live Companion</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <img src="habhub-icon.png" alt="" />
+        <div class="brand-copy">
+          <strong>HabHub</strong>
+          <span id="connection-label">Connecting live companion…</span>
+        </div>
+      </div>
+      <div class="toolbar-actions">
+        <button id="refresh" class="icon-button" type="button" aria-label="Refresh companion" title="Refresh companion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+        </button>
+        <button id="open-site" class="icon-button" type="button" aria-label="Open full HabHub website" title="Open full HabHub website">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="offline" class="offline" hidden>
+      Offline. HabHub will show locally saved data and sync when you reconnect.
+    </div>
+
+    <main>
+      <section id="loading" class="loading" aria-live="polite">
+        <div class="skeleton hero-skeleton">
+          <div class="skeleton-line short"></div>
+          <div class="skeleton-line title"></div>
+          <div class="skeleton-line"></div>
+        </div>
+        <div class="section-label">To-dos</div>
+        <div class="skeleton row-skeleton"></div>
+        <div class="section-label">Trackers</div>
+        <div class="skeleton tracker-skeleton"></div>
+        <div class="skeleton tracker-skeleton"></div>
+        <div class="loading-copy">Loading your saved Today view, active timers and schedule…</div>
+      </section>
+
+      <iframe
+        id="app"
+        title="HabHub live companion"
+        allow="clipboard-read; clipboard-write"
+        referrerpolicy="strict-origin-when-cross-origin"
+      ></iframe>
+
+      <section id="load-error" class="load-error" hidden>
+        <div class="error-icon" aria-hidden="true">!</div>
+        <h1>Companion could not load</h1>
+        <p>Your data is safe. Check your connection, then retry. If you have not used HabHub in this browser yet, sign in once on the website.</p>
+        <button id="retry" class="primary-button" type="button">Try again</button>
+        <button id="sign-in" class="secondary-button" type="button">Open HabHub sign in</button>
+      </section>
+
+      <section id="auth-required" class="load-error" hidden>
+        <div class="account-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5.5 20c.7-4 2.9-6 6.5-6s5.8 2 6.5 6"/></svg>
+        </div>
+        <h1 id="auth-title">Sign in to HabHub</h1>
+        <p id="auth-copy">Open HabHub once in this browser, sign in, then refresh the companion.</p>
+        <button id="auth-sign-in" class="primary-button" type="button">Open HabHub sign in</button>
+        <button id="auth-retry" class="secondary-button" type="button">I have signed in - retry</button>
+      </section>
+    </main>
+
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

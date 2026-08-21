@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+  android:configure="__ANDROID_PACKAGE__.HabHubWidgetConfigActivity"
+  android:description="@string/habhub_widget_description"
+  android:initialLayout="@layout/habhub_widget"
+  android:minHeight="105dp"
+  android:minResizeHeight="105dp"
+  android:minResizeWidth="110dp"
+  android:minWidth="110dp"
+  android:resizeMode="horizontal|vertical"
+  android:targetCellHeight="2"
+  android:targetCellWidth="2"
+  android:updatePeriodMillis="0"
+  android:widgetCategory="home_screen"
+  android:widgetFeatures="configuration_optional|reconfigurable" />
+

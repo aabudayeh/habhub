@@ -1,0 +1,192 @@
+# Production deployment
+
+MetricRally can still run without credentials, but accounts, cross-device sync, real friend groups, private cloud media, and account deletion require Supabase.
+
+The separate Google Health PWA pilot has security-sensitive ordering, Vault,
+subscriber, and acceptance gates in [GOOGLE_HEALTH_WEB_SYNC.md](./GOOGLE_HEALTH_WEB_SYNC.md).
+
+## 1. Create the Supabase project
+
+Create a project, then copy its project URL and **publishable key** from the Connect panel. Never expose the service-role key in the Expo app.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Fill in at least:
+
+```text
+EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+```
+
+Apply every migration and deploy the authenticated deletion function:
+
+```powershell
+pnpm.cmd dlx supabase@latest login
+pnpm.cmd dlx supabase@latest link --project-ref YOUR_PROJECT_REF
+pnpm.cmd dlx supabase@latest db push --dry-run
+pnpm.cmd dlx supabase@latest db push
+pnpm.cmd dlx supabase@latest functions deploy delete-account
+pnpm.cmd dlx supabase@latest functions deploy send-push
+```
+
+The fifth migration adds revisioned account sync, registered devices, realtime group invalidation, idempotent photo/message writes, and RLS-backed group access to private Storage objects. The sixth adds health-source provenance, connection/cursor storage, deduplication constraints, and owner-only RLS.
+
+## 2. Configure authentication
+
+In Supabase Authentication > URL Configuration, set the final web Site URL and allow these redirects:
+
+```text
+paceboard://auth-callback
+http://localhost:8081/auth-callback
+https://YOUR_WEB_DOMAIN/auth-callback
+```
+
+For reliable production email, configure a custom SMTP provider. Email/password, sign-up, password reset, and magic links work after email is enabled.
+
+Google and Apple buttons additionally require their providers to be enabled in Supabase. Use the callback URL shown by Supabase when creating the Google/Apple OAuth client. Apple sign-in also requires the corresponding Apple Developer configuration.
+
+## 3. Test the cloud path locally
+
+Restart Expo after changing `.env`:
+
+```powershell
+pnpm.cmd start
+```
+
+Test with two different accounts:
+
+1. Create an account on device/browser A.
+2. Create a **cloud group** and copy its invite code.
+3. Join that code from account B.
+4. Log an exact-value group metric, a status-only metric, a private metric, a chat image, and a progress photo.
+5. Confirm B sees only the authorized versions.
+6. Sign into A from a second device and confirm account changes synchronize.
+7. Test export, sign-out, and account deletion.
+
+## 4. Configure EAS
+
+Log in and attach the project to your Expo account:
+
+```powershell
+pnpm.cmd dlx eas-cli@latest login
+pnpm.cmd dlx eas-cli@latest init
+pnpm.cmd dlx eas-cli@latest build:configure
+pnpm.cmd dlx eas-cli@latest update:configure
+```
+
+Add the two public Supabase values to each EAS environment you use. They are public client configuration, not server secrets:
+
+```powershell
+pnpm.cmd dlx eas-cli@latest env:create --environment preview --name EXPO_PUBLIC_SUPABASE_URL --value https://YOUR_PROJECT.supabase.co --visibility plaintext
+pnpm.cmd dlx eas-cli@latest env:create --environment preview --name EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY --value YOUR_PUBLISHABLE_KEY --visibility plaintext
+pnpm.cmd dlx eas-cli@latest env:create --environment production --name EXPO_PUBLIC_SUPABASE_URL --value https://YOUR_PROJECT.supabase.co --visibility plaintext
+pnpm.cmd dlx eas-cli@latest env:create --environment production --name EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY --value YOUR_PUBLISHABLE_KEY --visibility plaintext
+```
+
+Add the legal/support URL variables from `.env.example` before store submission.
+
+## 5. Configure standards-based Web Push
+
+Web Push uses one VAPID P-256 keypair for the web origin. Generate the pair once
+with a reputable Web Push tool. The public key is browser configuration; the
+private key must never enter Expo, the web bundle, Git, or an `EXPO_PUBLIC_`
+variable.
+
+Set the public key for the static Expo export:
+
+```text
+EXPO_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY=URL_SAFE_PUBLIC_KEY
+```
+
+Set the matching Edge Function secrets:
+
+```powershell
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_PUBLIC_KEY=URL_SAFE_PUBLIC_KEY
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_PRIVATE_KEY=URL_SAFE_PRIVATE_KEY
+pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_SUBJECT=mailto:notifications@YOUR_DOMAIN
+```
+
+Use this rollout order so the native Expo path never depends on an incomplete
+browser rollout:
+
+1. Apply `202608200001_web_push_subscriptions.sql`.
+2. Set and verify all three VAPID Edge secrets.
+3. Deploy `send-push`.
+4. Export and deploy the HTTPS web app with the matching public key.
+5. From the installed PWA, enable notifications with the in-app switch and
+   verify a chat/group event while the PWA is closed.
+
+Do not rotate the VAPID pair casually: existing browser subscriptions are bound
+to its public key. The client can replace a subscription after a deliberate
+rotation, but every browser must reopen once to register the replacement.
+
+On iPhone and iPad, add HabHub to the Home Screen and open that installed app
+before enabling notifications. Web Push currently carries server-owned chat,
+group, leaderboard, membership, and challenge events. Native timed tracker and
+to-do reminders remain device-scheduled; equivalent closed-browser reminder
+delivery would require a separate server-side scheduler.
+
+## 6. Build and deploy
+
+Health sync, barcode scanning, and push notifications are configured in `app.json`. They require a new native EAS build. Remote push is not available in Expo Go on Android; test it in the preview/release APK. Test Apple Health on a physical iPhone. On Android, test Health Connect on Android 8+; Android 14 includes it in the system, while older supported versions may require the Health Connect app.
+
+Before distributing the Android production build, complete Google Play's Health Connect declaration for every requested read category. Confirm Samsung Health, MyFitnessPal, or Google Fit is allowed to write into Health Connect if you want its data to appear. On iOS, allow compatible apps to write into Apple Health and grant MetricRally read access when prompted.
+
+Run the release checks:
+
+```powershell
+pnpm.cmd validate:cloud
+pnpm.cmd typecheck
+pnpm.cmd lint
+pnpm.cmd export:web
+```
+
+Android preview:
+
+```powershell
+pnpm.cmd dlx eas-cli@latest build --profile preview --platform android
+```
+
+iOS preview:
+
+```powershell
+pnpm.cmd dlx eas-cli@latest build --profile preview --platform ios
+```
+
+Production store binaries:
+
+```powershell
+pnpm.cmd dlx eas-cli@latest build --profile production --platform all
+pnpm.cmd dlx eas-cli@latest submit --profile production --platform android
+pnpm.cmd dlx eas-cli@latest submit --profile production --platform ios
+```
+
+Static web hosting:
+
+```powershell
+pnpm.cmd export:web
+pnpm.cmd dlx eas-cli@latest deploy --prod
+```
+
+You may instead upload `dist/` to another static host. Add that exact domain to the Supabase redirect allowlist.
+
+## 7. Store-launch responsibilities
+
+Before public release:
+
+- Replace `app.paceboard.mobile` if you want an identifier owned by your domain. Do this before distributing test builds.
+- Provide final icons, screenshots, store copy, privacy policy, terms, and a support URL.
+- Complete Apple/Google health and nutrition disclosures before enabling device-health imports.
+- Configure database backups and a staging Supabase project.
+- Review consent, data retention, deletion, incident response, and processor agreements for health-related data.
+- Test deep links, OAuth, email confirmation, offline conflicts, large text, photos, RLS boundaries, and deletion on physical iOS and Android devices.
+
+## Troubleshooting
+
+- `pnpm is not recognized`: install Node.js, then run `corepack enable`, or `npm install -g pnpm`.
+- PowerShell blocks `pnpm.ps1`: use `pnpm.cmd` as shown above.
+- “Apply the latest Supabase migrations”: run `supabase db push`, then restart the app.
+- OAuth returns to the browser: verify `paceboard://auth-callback` is allowlisted and rebuild after changing the app scheme.
+- A friend cannot see a photo: confirm the photo is group-visible; private Storage URLs are generated only when relational RLS grants access.

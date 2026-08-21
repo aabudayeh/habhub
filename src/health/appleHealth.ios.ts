@@ -1,0 +1,253 @@
+import {
+  isHealthDataAvailableAsync,
+  queryQuantitySamples,
+  querySources,
+  queryStatisticsCollectionForQuantity,
+  queryWorkoutSamples,
+  requestAuthorization,
+} from '@kingstinct/react-native-healthkit';
+import { CategoryTypes } from '@kingstinct/react-native-healthkit/modules';
+import { Linking } from 'react-native';
+
+import { appleWorkoutExercise, exerciseFromActivityName } from '@/src/domain/exerciseCatalog';
+import { healthSourceEnabled } from '@/src/domain/healthDedup';
+import { HealthAdapter, HealthImportRecord } from '@/src/health/types';
+import { HealthDataType, NutritionDetails } from '@/src/types';
+
+type AppleSource = Awaited<ReturnType<typeof querySources>>[number];
+type AppleSourceSelection = { sources?: AppleSource[]; disabled: boolean };
+
+type QuantityConfig = {
+  identifier: string;
+  type: HealthDataType;
+  unit: string;
+  nutritionField?: keyof NutritionDetails;
+};
+
+const QUANTITIES: QuantityConfig[] = [
+  { identifier: 'HKQuantityTypeIdentifierStepCount', type: 'steps', unit: 'count' },
+  { identifier: 'HKQuantityTypeIdentifierActiveEnergyBurned', type: 'active_energy', unit: 'kcal' },
+  { identifier: 'HKQuantityTypeIdentifierBodyMass', type: 'weight', unit: 'kg' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryEnergyConsumed', type: 'nutrition', unit: 'kcal' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryProtein', type: 'nutrition', unit: 'g', nutritionField: 'proteinG' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryFatTotal', type: 'nutrition', unit: 'g', nutritionField: 'fatG' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryCarbohydrates', type: 'nutrition', unit: 'g', nutritionField: 'carbsG' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryFiber', type: 'nutrition', unit: 'g', nutritionField: 'fiberG' },
+  { identifier: 'HKQuantityTypeIdentifierDietarySodium', type: 'nutrition', unit: 'mg', nutritionField: 'sodiumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietarySugar',type:'nutrition',unit:'g',nutritionField:'sugarG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatSaturated',type:'nutrition',unit:'g',nutritionField:'saturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCholesterol',type:'nutrition',unit:'mg',nutritionField:'cholesterolMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPotassium',type:'nutrition',unit:'mg',nutritionField:'potassiumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCalcium',type:'nutrition',unit:'mg',nutritionField:'calciumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryIron',type:'nutrition',unit:'mg',nutritionField:'ironMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryMagnesium',type:'nutrition',unit:'mg',nutritionField:'magnesiumMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminC',type:'nutrition',unit:'mg',nutritionField:'vitaminCMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminD',type:'nutrition',unit:'mcg',nutritionField:'vitaminDMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminB12',type:'nutrition',unit:'mcg',nutritionField:'vitaminB12Mcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatMonounsaturated',type:'nutrition',unit:'g',nutritionField:'monounsaturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFatPolyunsaturated',type:'nutrition',unit:'g',nutritionField:'polyunsaturatedFatG' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPhosphorus',type:'nutrition',unit:'mg',nutritionField:'phosphorusMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryZinc',type:'nutrition',unit:'mg',nutritionField:'zincMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCopper',type:'nutrition',unit:'mg',nutritionField:'copperMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryManganese',type:'nutrition',unit:'mg',nutritionField:'manganeseMg' },
+  { identifier:'HKQuantityTypeIdentifierDietarySelenium',type:'nutrition',unit:'mcg',nutritionField:'seleniumMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryIodine',type:'nutrition',unit:'mcg',nutritionField:'iodineMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminA',type:'nutrition',unit:'mcg',nutritionField:'vitaminAMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminE',type:'nutrition',unit:'mg',nutritionField:'vitaminEMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminK',type:'nutrition',unit:'mcg',nutritionField:'vitaminKMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryThiamin',type:'nutrition',unit:'mg',nutritionField:'thiaminMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryRiboflavin',type:'nutrition',unit:'mg',nutritionField:'riboflavinMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryNiacin',type:'nutrition',unit:'mg',nutritionField:'niacinMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryPantothenicAcid',type:'nutrition',unit:'mg',nutritionField:'pantothenicAcidMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryVitaminB6',type:'nutrition',unit:'mg',nutritionField:'vitaminB6Mg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryFolate',type:'nutrition',unit:'mcg',nutritionField:'folateMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryCaffeine',type:'nutrition',unit:'mg',nutritionField:'caffeineMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryBiotin',type:'nutrition',unit:'mcg',nutritionField:'biotinMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryChloride',type:'nutrition',unit:'mg',nutritionField:'chlorideMg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryChromium',type:'nutrition',unit:'mcg',nutritionField:'chromiumMcg' },
+  { identifier:'HKQuantityTypeIdentifierDietaryMolybdenum',type:'nutrition',unit:'mcg',nutritionField:'molybdenumMcg' },
+  { identifier: 'HKQuantityTypeIdentifierDietaryWater', type: 'water', unit: 'L' },
+  { identifier: 'HKQuantityTypeIdentifierBodyFatPercentage', type: 'body_fat', unit: '%' },
+  { identifier: 'HKQuantityTypeIdentifierLeanBodyMass', type: 'lean_body_mass', unit: 'kg' },
+  { identifier: 'HKQuantityTypeIdentifierRestingHeartRate', type: 'heart_rate', unit: 'count/min' },
+  { identifier: 'HKQuantityTypeIdentifierBloodGlucose', type: 'blood_glucose', unit: 'mg/dL' },
+];
+
+async function readCategories(type:HealthDataType,identifier:'HKCategoryTypeIdentifierSleepAnalysis'|'HKCategoryTypeIdentifierMenstrualFlow',from:Date,to:Date,selection:AppleSourceSelection):Promise<HealthImportRecord[]>{
+  if(selection.disabled)return[];
+  const samples=await CategoryTypes.queryCategorySamples(identifier,{limit:0,ascending:true,filter:{date:{startDate:from,endDate:to},...(selection.sources?{sources:selection.sources}:{})}});
+  return samples.flatMap((sample)=>{const start=asDate(sample.startDate,from);const end=asDate(sample.endDate,start);const numeric=Number(sample.value);if(type==='sleep'&&![1,3,4,5].includes(numeric))return[];if(type==='menstruation'&&numeric===5)return[];const durationMinutes=Math.max(0,(end.getTime()-start.getTime())/60000);return[{id:String(sample.uuid??`${identifier}:${start.toISOString()}`),provider:'apple_health' as const,type,startTime:start.toISOString(),endTime:end.toISOString(),value:type==='sleep'?durationMinutes/60:true,unit:type==='sleep'?'hr':'',origin:sourceName(sample),sourceOrigins:sourceNames(sample),measurements:type==='sleep'?{durationMinutes}:undefined}];});
+}
+
+function asDate(value: unknown, fallback: Date) {
+  const date = value instanceof Date ? value : new Date(String(value ?? fallback.toISOString()));
+  return Number.isNaN(date.getTime()) ? fallback : date;
+}
+
+function nestedNumber(value: unknown, ...keys: string[]) {
+  let current: unknown = value;
+  for (const key of keys) current = typeof current === 'object' && current ? (current as Record<string, unknown>)[key] : undefined;
+  return typeof current === 'number' && Number.isFinite(current) ? current : 0;
+}
+
+function sourceName(value: Record<string, unknown>) {
+  return sourceNames(value)[0] ?? 'Apple Health';
+}
+
+function sourceNames(value: Record<string, unknown>) {
+  const sources = Array.isArray(value.sources) ? value.sources : [];
+  const revisionSource = (value.sourceRevision as Record<string, unknown> | undefined)?.source;
+  const all = [...sources, ...(revisionSource ? [revisionSource] : [])] as Record<string, unknown>[];
+  return [...new Set(all.map((source)=>String(source?.bundleIdentifier??source?.name??'')).filter(Boolean))];
+}
+
+async function readQuantity(config: QuantityConfig, from: Date, to: Date, selection:AppleSourceSelection): Promise<HealthImportRecord[]> {
+  if(selection.disabled)return[];
+  const filter={date:{startDate:from,endDate:to},...(selection.sources?{sources:selection.sources}:{})};
+  if (config.type === 'nutrition') {
+    // Dietary statistics combine every writer before source-aware dedup can
+    // see them. Samples retain UUID, clock time and writer, letting mirrored
+    // meals collapse while complementary nutrients and genuine meals remain.
+    const samples = await queryQuantitySamples(config.identifier, {
+      limit: 0,
+      ascending: true,
+      unit: config.unit,
+      filter,
+    });
+    return samples.flatMap((sample) => {
+      const value = Number(sample.quantity ?? 0);
+      if (!(value > 0)) return [];
+      const start = asDate(sample.startDate, from);
+      const end = asDate(sample.endDate, start);
+      const nutrition = config.nutritionField
+        ? ({ [config.nutritionField]: value } as NutritionDetails)
+        : undefined;
+      return [{
+        id: String(sample.uuid ?? `${config.identifier}:${end.toISOString()}`),
+        provider: 'apple_health' as const,
+        type: config.type,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        value: config.nutritionField ? 0 : value,
+        unit: config.unit,
+        origin: sourceName(sample),
+        sourceOrigins: sourceNames(sample),
+        nutrition,
+      }];
+    });
+  }
+  if (config.type === 'weight' || config.type === 'body_fat' || config.type === 'lean_body_mass' || config.type === 'heart_rate') {
+    const samples = await queryQuantitySamples(config.identifier, {
+      limit: 0,
+      ascending: true,
+      unit: config.unit,
+      filter,
+    });
+    return samples.map((sample) => {
+      const start = asDate(sample.startDate, from);
+      const end = asDate(sample.endDate, start);
+      return {
+        id: String(sample.uuid ?? `${config.identifier}:${end.toISOString()}`),
+        provider: 'apple_health' as const,
+        type: config.type,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        value: Number(sample.quantity ?? 0),
+        unit: config.unit,
+        origin: sourceName(sample),
+        sourceOrigins: sourceNames(sample),
+      };
+    });
+  }
+  const buckets = await queryStatisticsCollectionForQuantity(
+    config.identifier,
+    ['cumulativeSum'],
+    from,
+    { day: 1 },
+    { unit: config.unit, filter: { ...filter, date: { startDate: from, endDate: to, strictStartDate: true, strictEndDate: true } } },
+  );
+  return buckets.flatMap((bucket) => {
+    const value = nestedNumber(bucket, 'sumQuantity', 'quantity');
+    if (value <= 0) return [];
+    const start = asDate(bucket.startDate, from);
+    const end = asDate(bucket.endDate, start);
+    const nutrition = config.nutritionField ? { [config.nutritionField]: value } as NutritionDetails : undefined;
+    return [{
+      id: `${config.identifier}:${start.toISOString().slice(0, 10)}`,
+      provider: 'apple_health' as const,
+      type: config.type,
+      startTime: start.toISOString(),
+      endTime: end.toISOString(),
+      value: config.type === 'nutrition' && config.nutritionField ? 0 : value,
+      unit: config.unit,
+      origin: sourceName(bucket),
+      sourceOrigins: sourceNames(bucket),
+      nutrition,
+    }];
+  });
+}
+
+export const appleHealthAdapter: HealthAdapter = {
+  provider: 'apple_health',
+  availability: async () => ({
+    available: await isHealthDataAvailableAsync(),
+    provider: 'apple_health',
+    title: 'Apple Health',
+    detail: 'Imports permitted data from Apple Health, including data written there by compatible apps and wearables.',
+  }),
+  requestPermissions: async (dataTypes) => {
+    const toRead = QUANTITIES.filter((item) => dataTypes.includes(item.type)).map((item) => item.identifier);
+    if (dataTypes.includes('workouts')) toRead.push('HKWorkoutTypeIdentifier');
+    if(dataTypes.includes('sleep'))toRead.push('HKCategoryTypeIdentifierSleepAnalysis');
+    if(dataTypes.includes('menstruation'))toRead.push('HKCategoryTypeIdentifierMenstrualFlow');
+    if (!toRead.length) throw new Error('Choose at least one health data category.');
+    await requestAuthorization({ toRead });
+  },
+  read: async ({ from, to, dataTypes, sourcePreferences }) => {
+    const sourceCache=new Map<string,Promise<AppleSourceSelection>>();
+    const selectionFor=(identifier:string)=>{
+      const cached=sourceCache.get(identifier);if(cached)return cached;
+      const result=querySources(identifier,{date:{startDate:from,endDate:to}}).then((sources)=>{
+        const enabled=sources.filter((source)=>healthSourceEnabled(source.bundleIdentifier||source.name,sourcePreferences));
+        return {sources:enabled.length<sources.length?enabled:undefined,disabled:sources.length>0&&!enabled.length};
+      }).catch(()=>({sources:undefined,disabled:false}));
+      sourceCache.set(identifier,result);return result;
+    };
+    const records = (await Promise.all(QUANTITIES.filter((item) => dataTypes.includes(item.type)).map(async(item) => readQuantity(item, from, to,await selectionFor(item.identifier))))).flat();
+    if(dataTypes.includes('sleep'))records.push(...await readCategories('sleep','HKCategoryTypeIdentifierSleepAnalysis',from,to,await selectionFor('HKCategoryTypeIdentifierSleepAnalysis')));
+    if(dataTypes.includes('menstruation'))records.push(...await readCategories('menstruation','HKCategoryTypeIdentifierMenstrualFlow',from,to,await selectionFor('HKCategoryTypeIdentifierMenstrualFlow')));
+    if (!dataTypes.includes('workouts')) return records;
+    const workoutSelection=await selectionFor('HKWorkoutTypeIdentifier');
+    if(workoutSelection.disabled)return records;
+    const workouts = await queryWorkoutSamples({ limit: 0, ascending: true, filter: { date: { startDate: from, endDate: to },...(workoutSelection.sources?{sources:workoutSelection.sources}:{}) } });
+    return [...records, ...workouts.map((workout): HealthImportRecord => {
+      const raw = workout as unknown as Record<string, unknown>;
+      const start = asDate(workout.startDate, from);
+      const end = asDate(workout.endDate, start);
+      const nativeActivity = workout.workoutActivityType;
+      const activity =
+        appleWorkoutExercise(Number(nativeActivity)) ??
+        exerciseFromActivityName(String(nativeActivity ?? ''));
+      return {
+        id: String(workout.uuid ?? `workout:${start.toISOString()}`),
+        provider: 'apple_health',
+        type: 'workouts',
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        value: Math.max(1,(end.getTime()-start.getTime())/60000),
+        unit: 'min',
+        origin: sourceName(workout),
+        sourceOrigins: sourceNames(workout),
+        label: activity?.name ?? (Number.isFinite(Number(nativeActivity)) ? `Workout (${nativeActivity})` : 'Workout'),
+        activityKey: activity?.key,
+        workoutRecordKind: 'session',
+        measurements: {
+          durationMinutes: Math.max(0,(end.getTime()-start.getTime())/60000),
+          activeCalories: nestedNumber(raw,'totalEnergyBurned','quantity') || Number(raw.totalEnergyBurned ?? 0),
+          distanceKm: nestedNumber(raw,'totalDistance','quantity') || Number(raw.totalDistance ?? 0),
+        },
+      };
+    })];
+  },
+  openSettings: async () => { await Linking.openSettings(); },
+};

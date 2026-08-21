@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@android:color/transparent"
+  android:clickable="true"
+  android:focusable="true">
+
+  <!--
+    RemoteViews cannot reproduce the Today card's clipped fills, dimensional
+    surface, or selected high-resolution avatar with ordinary XML drawables.
+    Native Canvas renders one anti-aliased static snapshot at launcher size;
+    this ImageView displays it without decoding the full avatar sprite grid.
+  -->
+  <ImageView
+    android:id="@+id/widget_card_image"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:contentDescription="@null"
+    android:importantForAccessibility="no"
+    android:scaleType="fitXY" />
+</FrameLayout>

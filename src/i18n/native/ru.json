@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "HabHub читает только выбранные вами категории данных о здоровье, чтобы обновлять личные цели и разрешённый вами прогресс группы.",
+    "NSHealthUpdateUsageDescription": "HabHub не записывает данные о здоровье, если вы явно не выберете будущую функцию экспорта.",
+    "NSCameraUsageDescription": "HabHub использует камеру только тогда, когда вы решаете сделать фотографию прогресса.",
+    "NSPhotoLibraryUsageDescription": "HabHub использует ваши фотографии только тогда, когда вы решаете добавить обновление прогресса.",
+    "NSPhotoLibraryAddUsageDescription": "HabHub сохраняет изображение только тогда, когда вы решаете экспортировать его или поделиться им."
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "HabHub",
+    "NSHealthShareUsageDescription": "HabHub lit uniquement les catégories de santé que vous choisissez afin de mettre à jour vos objectifs privés et la progression de groupe que vous autorisez à partager.",
+    "NSHealthUpdateUsageDescription": "HabHub n’écrit aucune donnée de santé sauf si vous choisissez explicitement une future fonction d’exportation.",
+    "NSCameraUsageDescription": "HabHub utilise l’appareil photo uniquement lorsque vous choisissez de prendre une photo de progression.",
+    "NSPhotoLibraryUsageDescription": "HabHub utilise vos photos uniquement lorsque vous choisissez d’ajouter une mise à jour de progression.",
+    "NSPhotoLibraryAddUsageDescription": "HabHub enregistre une image uniquement lorsque vous choisissez de l’exporter ou de la partager."
+  },
+  "android": {
+    "app_name": "HabHub"
+  }
+}

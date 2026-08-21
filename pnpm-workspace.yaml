@@ -1,0 +1,21 @@
+allowBuilds:
+  '@firebase/util': true
+  protobufjs: true
+  unrs-resolver: false
+virtualStoreDirMaxLength: 60
+packageExtensions:
+  '@kingstinct/react-native-healthkit@*':
+    dependencies:
+      '@expo/config-plugins': 54.0.5
+  'expo-health-connect@*':
+    dependencies:
+      '@expo/config-plugins': 54.0.5
+minimumReleaseAgeExclude:
+  - '@supabase/auth-js@2.110.6'
+  - '@supabase/functions-js@2.110.6'
+  - '@supabase/postgrest-js@2.110.6'
+  - '@supabase/realtime-js@2.110.6'
+  - '@supabase/storage-js@2.110.6'
+  - '@supabase/supabase-js@2.110.6'
+patchedDependencies:
+  react-native@0.81.5: patches/react-native@0.81.5.patch

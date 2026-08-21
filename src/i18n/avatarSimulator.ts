@@ -1,0 +1,43 @@
+/** Curated accessibility and reference-marker copy for the avatar simulator. */
+export const avatarSimulatorTranslationRows = [
+  [
+    "C marks the current logged value",
+    "يشير C إلى القيمة الحالية المسجلة",
+    "C marca el valor actual registrado",
+    "C 表示当前记录值",
+    "C markerar det aktuella loggade värdet",
+    "C markiert den aktuell protokollierten Wert",
+    "C показывает текущее записанное значение",
+    "C indique la valeur actuellement enregistrée",
+  ],
+  [
+    "R marks an adult reference, not a medical target",
+    "يشير R إلى قيمة مرجعية للبالغين، وليس هدفًا طبيًا",
+    "R marca una referencia para adultos, no un objetivo médico",
+    "R 表示成人参考值，并非医疗目标",
+    "R markerar en vuxenreferens, inte ett medicinskt mål",
+    "R markiert einen Referenzwert für Erwachsene, kein medizinisches Ziel",
+    "R показывает справочное значение для взрослых, а не медицинскую цель",
+    "R indique une référence adulte, pas un objectif médical",
+  ],
+  [
+    "C = logged. R uses the adult healthy-BMI midpoint; body composition uses an age/sex reference, not medical advice.",
+    "C = مسجل. يستخدم R منتصف نطاق مؤشر كتلة الجسم الصحي للبالغين؛ ويستخدم تكوين الجسم مرجعًا حسب العمر والجنس، وليس نصيحة طبية.",
+    "C = registrado. R usa el punto medio del IMC saludable para adultos; la composición corporal usa una referencia por edad y sexo, no es consejo médico.",
+    "C = 已记录。R 使用成人健康 BMI 区间中点；身体成分采用年龄和性别参考值，并非医疗建议。",
+    "C = loggat. R använder mittpunkten i intervallet för hälsosamt BMI hos vuxna; kroppssammansättningen använder en ålders- och könsreferens, inte medicinsk rådgivning.",
+    "C = protokolliert. R verwendet die Mitte des gesunden BMI-Bereichs für Erwachsene; die Körperzusammensetzung nutzt eine Alters- und Geschlechtsreferenz, keine medizinische Beratung.",
+    "C = записано. R использует середину диапазона здорового ИМТ для взрослых; состав тела использует справочные данные по возрасту и полу и не является медицинской рекомендацией.",
+    "C = enregistré. R utilise le milieu de la plage d’IMC sain chez l’adulte ; la composition corporelle utilise une référence selon l’âge et le sexe, et non un avis médical.",
+  ],
+  [
+    "C = logged. R is a general adult reference based on available profile details; missing details use adult defaults. It is not a medical target.",
+    "C = قيمة مسجلة. R مرجع عام للبالغين يستخدم بيانات الملف المتاحة؛ عند نقصها تُستخدم قيم افتراضية للبالغين. ليس هدفًا طبيًا.",
+    "C = valor registrado. R es una referencia general para adultos basada en los datos disponibles del perfil; si faltan datos, usa valores predeterminados de adulto. No es un objetivo médico.",
+    "C = 已记录值。R 是根据可用个人资料生成的一般成人参考值；资料缺失时使用成人默认值。它不是医疗目标。",
+    "C = loggat värde. R är en allmän vuxenreferens baserad på tillgängliga profiluppgifter; saknade uppgifter ersätts med standardvärden för vuxna. Det är inte ett medicinskt mål.",
+    "C = protokollierter Wert. R ist ein allgemeiner Erwachsenen-Referenzwert auf Basis verfügbarer Profildaten; fehlende Angaben werden durch Erwachsenen-Standardwerte ersetzt. Es ist kein medizinisches Ziel.",
+    "C = записанное значение. R — общий ориентир для взрослых, рассчитанный по доступным данным профиля; при нехватке данных используются стандартные значения для взрослых. Это не медицинская цель.",
+    "C = valeur enregistrée. R est une référence adulte générale fondée sur les informations de profil disponibles ; les informations manquantes utilisent des valeurs adultes par défaut. Ce n’est pas un objectif médical.",
+  ],
+] as const;
