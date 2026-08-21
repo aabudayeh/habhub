@@ -63,3 +63,8 @@ app-example
 # Additional workspace noise
 .pnpm-store/
 /artifacts/
+dist-android-check/
+dist-android-check-2/
+supabase/.temp/
+.vscode/
+artifacts/
