@@ -11,7 +11,7 @@ function source(relativePath) {
     failures.push(`${relativePath}: file is missing`);
     return "";
   }
-  return fs.readFileSync(absolutePath, "utf8");
+  return fs.readFileSync(absolutePath, "utf8").replace(/\r\n/g, "\n");
 }
 
 function requireTokens(relativePath, tokens) {
