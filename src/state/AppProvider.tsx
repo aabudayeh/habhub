@@ -48,7 +48,9 @@ import {
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import { localPersistenceChanged } from "@/src/domain/localPersistence";
 import {
+  capturedFoodNutrients,
   editFoodEntryClockTime,
+  isFoodNutrientTrackerId,
   preserveFoodEntryClockOverride,
 } from "@/src/domain/food";
 import {
@@ -913,6 +915,16 @@ function withLocalDeletionTombstones(
   };
 }
 
+function entriesShareSourceRecord(left: MetricEntry, right: MetricEntry) {
+  return Boolean(
+    left.sourceRecordId &&
+      right.sourceRecordId &&
+      left.userId === right.userId &&
+      left.sourceProvider === right.sourceProvider &&
+      left.sourceRecordId === right.sourceRecordId,
+  );
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "replaceLocal":
@@ -1028,15 +1040,60 @@ function reducer(state: AppState, action: Action): AppState {
       // an imported row is neither removed locally nor sent to the deletion
       // outbox. The newest manual/device revision controls the displayed daily
       // total, so a later device sync can safely reclaim authority.
-      const entriesToReplace = authorizedManualSteps
+      const directEntriesToReplace = authorizedManualSteps
         ? manualStepEntriesEligibleForReplacement(replacementCandidates)
         : replacementCandidates;
+      const directReplacementSet = new Set(directEntriesToReplace);
+      const entriesToReplace =
+        action.metricId === "food" && directEntriesToReplace.length
+          ? state.entries.filter(
+              (entry) =>
+                directReplacementSet.has(entry) ||
+                directEntriesToReplace.some((foodEntry) =>
+                  entriesShareSourceRecord(foodEntry, entry),
+                ),
+            )
+          : directEntriesToReplace;
       const replacedEntries = new Set(entriesToReplace);
       const cleanedEntries = replacedEntries.size
         ? state.entries.filter((entry) => !replacedEntries.has(entry))
         : state.entries;
       const replacedEntryIds = entriesToReplace.map((entry) => entry.id);
       const changedAt = new Date().toISOString();
+      const primaryEntryId = uniqueId("entry");
+      const manualFoodSourceRecordId =
+        action.metricId === "food" ? `manual-food:${primaryEntryId}` : undefined;
+      const primaryEntry: MetricEntry = {
+        id: primaryEntryId,
+        metricId: action.metricId,
+        userId: state.currentUserId,
+        value: action.value,
+        visibility: action.visibility,
+        note: action.details?.note,
+        label: action.details?.label,
+        imageUri: action.details?.imageUri,
+        localDate,
+        recordedAt: action.details?.recordedAt ?? changedAt,
+        source: "manual",
+        sourceUpdatedAt: changedAt,
+        sourceRecordId: manualFoodSourceRecordId,
+        nutrition: action.details?.nutrition,
+        submetricValues: action.details?.submetricValues,
+      };
+      const nutrientSidecars: MetricEntry[] = capturedFoodNutrients(
+        action.metricId === "food" ? action.details?.nutrition : undefined,
+      ).map(({ metricId, value }) => ({
+        id: `${primaryEntryId}:nutrient:${metricId}`,
+        metricId,
+        userId: state.currentUserId,
+        value,
+        visibility: action.visibility,
+        localDate,
+        recordedAt: primaryEntry.recordedAt,
+        source: "manual",
+        sourceUpdatedAt: changedAt,
+        sourceRecordId: manualFoodSourceRecordId,
+      }));
       let nextState: AppState = {
         ...state,
         settings: replacedEntryIds.length
@@ -1058,25 +1115,11 @@ function reducer(state: AppState, action: Action): AppState {
           : state.settings,
         entries: [
           ...cleanedEntries,
-          {
-            id: uniqueId("entry"),
-            metricId: action.metricId,
-            userId: state.currentUserId,
-            value: action.value,
-            visibility: action.visibility,
-            note: action.details?.note,
-            label: action.details?.label,
-            imageUri: action.details?.imageUri,
-            localDate,
-            recordedAt: action.details?.recordedAt ?? changedAt,
-            source: "manual",
-            sourceUpdatedAt: changedAt,
-            nutrition: action.details?.nutrition,
-            submetricValues: action.details?.submetricValues,
-          },
+          primaryEntry,
+          ...nutrientSidecars,
         ],
       };
-      const addedEntry = nextState.entries.at(-1)!;
+      const addedEntry = primaryEntry;
       if (metric?.id === "food")
         nextState = reconcileAutomaticFasting(nextState, [addedEntry]);
       else if (metric?.fastingSettings)
@@ -1444,29 +1487,51 @@ function reducer(state: AppState, action: Action): AppState {
           (entry) => entry.id === action.entryId && entry.userId === state.currentUserId,
         );
         if (!target || target.source === "calculated") return state;
+        // A nutrient sidecar is a projection of its linked Food record. It
+        // cannot be removed independently without letting the Food chart and
+        // provider refresh recreate a contradictory value. The detail UI
+        // routes these rows to the parent meal instead; keep the reducer
+        // defensive for callers that bypass that UI.
+        const linkedFoodParent =
+          isFoodNutrientTrackerId(target.metricId) && target.sourceRecordId
+            ? state.entries.find(
+                (entry) =>
+                  entry.metricId === "food" &&
+                  entriesShareSourceRecord(entry, target),
+              )
+            : undefined;
+        if (linkedFoodParent) return state;
+        const linkedFoodEntries =
+          target.metricId === "food" && target.sourceRecordId
+            ? state.entries.filter(
+                (entry) => entriesShareSourceRecord(entry, target),
+              )
+            : [target];
+        const linkedEntryKeys = new Set(
+          linkedFoodEntries.map((entry) => metricEntryKey(entry.userId, entry.id)),
+        );
+        const linkedEntryIds = linkedFoodEntries.map((entry) => entry.id);
         const next: AppState = {
           ...state,
           entries: state.entries.filter(
-            (entry) =>
-              metricEntryKey(entry.userId, entry.id) !==
-              metricEntryKey(state.currentUserId, action.entryId),
+            (entry) => !linkedEntryKeys.has(metricEntryKey(entry.userId, entry.id)),
           ),
           settings: {
             ...state.settings,
             googleHealthEntryOverrides: withoutGoogleHealthEntryOverrides(
               state.settings.googleHealthEntryOverrides,
-              new Set([target.id]),
+              new Set(linkedEntryIds),
             ),
             pendingDeletedEntryIds: [
               ...new Set([
                 ...(state.settings.pendingDeletedEntryIds ?? []),
-                target.id,
+                ...linkedEntryIds,
               ]),
             ],
             deletedEntryIds: [
               ...new Set([
                 ...(state.settings.deletedEntryIds ?? []),
-                target.id,
+                ...linkedEntryIds,
               ]),
             ],
             dismissedHealthEntryIds:
@@ -1474,7 +1539,7 @@ function reducer(state: AppState, action: Action): AppState {
                 ? [
                     ...new Set([
                       ...(state.settings.dismissedHealthEntryIds ?? []),
-                      target.id,
+                      ...linkedEntryIds,
                     ]),
                   ]
                 : state.settings.dismissedHealthEntryIds,
@@ -1504,12 +1569,28 @@ function reducer(state: AppState, action: Action): AppState {
       if (!updated || updated === target) return state;
       const next: AppState = {
         ...state,
-        entries: state.entries.map((entry) =>
-          metricEntryKey(entry.userId, entry.id) ===
-          metricEntryKey(state.currentUserId, action.entryId)
-            ? updated
-            : entry,
-        ),
+        entries: state.entries.map((entry) => {
+          if (
+            metricEntryKey(entry.userId, entry.id) ===
+            metricEntryKey(state.currentUserId, action.entryId)
+          )
+            return updated;
+          const linkedNutrient =
+            target.metricId === "food" &&
+            target.sourceRecordId &&
+            entry.userId === target.userId &&
+            entry.metricId !== "food" &&
+            entry.sourceProvider === target.sourceProvider &&
+            entry.sourceRecordId === target.sourceRecordId;
+          return linkedNutrient
+            ? {
+                ...entry,
+                localDate: updated.localDate,
+                recordedAt: updated.recordedAt,
+                sourceUpdatedAt: updated.sourceUpdatedAt,
+              }
+            : entry;
+        }),
         settings: {
           ...state.settings,
           googleHealthEntryOverrides: rememberGoogleHealthEntryOverrides(

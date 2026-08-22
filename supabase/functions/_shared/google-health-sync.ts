@@ -146,6 +146,14 @@ const FIELD_TO_NUTRITION_KEY: Record<string, string> = {
   molybdenum: "molybdenumMcg",
 };
 
+// Canonical nutrition tracker ids deliberately mirror their Health mapping
+// field. Provider-only fields without a tracker (for example Google's general
+// unsaturated-fat total) remain on the parent Food payload instead of creating
+// an unrecognised/ghost metric entry.
+const NUTRITION_SIDECAR_FIELDS = Object.entries(FIELD_TO_NUTRITION_KEY).map(
+  ([metricId, nutritionKey]) => ({ metricId, nutritionKey }),
+);
+
 function asObject(value: unknown): JsonObject {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonObject
@@ -409,11 +417,16 @@ function safeId(value: string) {
   return value.replace(/[^A-Za-z0-9:._-]+/g, "-").slice(0, 360);
 }
 
+function validVisibility(value: unknown) {
+  const visibility = String(value ?? "");
+  return ["private", "status", "group"].includes(visibility)
+    ? visibility
+    : undefined;
+}
+
 function baseEntry(record: InternalRecord, userId: string, metric: Metric, value: number | boolean, syncedAt: string) {
   const metricId = String(metric.id);
-  const visibility = ["private", "status", "group"].includes(String(metric.defaultVisibility))
-    ? String(metric.defaultVisibility)
-    : "private";
+  const visibility = validVisibility(metric.defaultVisibility) ?? "private";
   const sourceRecordId = record.dataType === "steps"
     ? `aggregate:steps:${record.localDate}`
     : `google-health:${record.externalId}`;
@@ -571,8 +584,13 @@ function snapshotWithEntryPreferences(snapshot: Snapshot, preferences: EntryPref
 
 function mapRecordsToEntries(records: InternalRecord[], snapshot: Snapshot, userId: string, syncedAt: string) {
   const metrics = Array.isArray(snapshot.metrics) ? snapshot.metrics : [];
+  const metricsById = new Map(
+    metrics.flatMap((metric) => metric.id ? [[String(metric.id), metric] as const] : []),
+  );
+  const foodVisibility = validVisibility(metricsById.get("food")?.defaultVisibility);
   const mapped: Array<{ externalId: string; dataType: string; localDate: string; entry: JsonObject }> = [];
   for (const record of records) {
+    const emittedEntryIds = new Set<string>();
     for (const metric of metrics) {
       if (!metric.id) continue;
       let entry: JsonObject | undefined;
@@ -603,8 +621,41 @@ function mapRecordsToEntries(records: InternalRecord[], snapshot: Snapshot, user
           };
         }
       }
-      if (entry)
+      if (entry) {
+        const entryId = String(entry.id ?? "");
+        if (!entryId || emittedEntryIds.has(entryId)) continue;
+        emittedEntryIds.add(entryId);
         mapped.push({ externalId: record.externalId, dataType: record.dataType, localDate: record.localDate, entry });
+      }
+    }
+    if (record.dataType !== "nutrition") continue;
+    for (const { metricId, nutritionKey } of NUTRITION_SIDECAR_FIELDS) {
+      const value = positive(record.nutrition?.[nutritionKey]);
+      if (value === undefined) continue;
+      const entryId = safeId(`google-health:${record.externalId}:${metricId}`);
+      // A configured nutrient tracker was already materialised by the normal
+      // mapping path. The fallback is only for absent/incomplete definitions.
+      if (emittedEntryIds.has(entryId)) continue;
+      const nutrientMetric = metricsById.get(metricId);
+      const visibility = validVisibility(nutrientMetric?.defaultVisibility)
+        ?? foodVisibility
+        ?? "private";
+      const entry = baseEntry(
+        record,
+        userId,
+        { ...nutrientMetric, id: metricId, defaultVisibility: visibility },
+        value,
+        syncedAt,
+      );
+      emittedEntryIds.add(entryId);
+      mapped.push({
+        externalId: record.externalId,
+        dataType: record.dataType,
+        // Reconciliation ownership stays on the immutable provider date even
+        // when a user later moves an entry to another display date.
+        localDate: record.localDate,
+        entry,
+      });
     }
   }
   return mapped;

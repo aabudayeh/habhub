@@ -192,8 +192,9 @@ class HabHubNativeModule(
 
   /**
    * Reads the accountless Android Recording API. Its step deltas are a phone
-   * view that overlaps Health Connect, so JavaScript may use this only as a
-   * current-day floor and must never add it to the Health Connect aggregate.
+   * view that overlaps Health Connect, so JavaScript may use this only when
+   * the unfiltered current-day Health Connect aggregate is empty and must
+   * never add it to or override a positive Health Connect total.
    */
   @ReactMethod
   fun readLocalPhoneSteps(from: Double, to: Double, promise: Promise) {
@@ -613,6 +614,12 @@ class HabHubNativeModule(
   @ReactMethod
   fun syncWorkoutTimerNotificationFlow(flow: String, promise: Promise) {
     promise.resolve(HabHubWorkoutNotificationStore.sync(reactContext, flow))
+  }
+
+  @ReactMethod
+  fun suspendWorkoutTimerNotificationPersistence(promise: Promise) {
+    HabHubWorkoutNotificationStore.suspendPersistence(reactContext)
+    promise.resolve(true)
   }
 
   @ReactMethod

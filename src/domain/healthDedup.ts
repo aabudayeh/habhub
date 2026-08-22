@@ -128,11 +128,10 @@ export function preserveUnchangedDailyAggregateRevision<
 }
 
 /**
- * A pedometer total cannot legitimately decrease before local midnight. Keep
- * the highest confirmed canonical total for the open day when Health Connect
- * briefly republishes a stale/lower snapshot (for example after app restart).
- * Completed days deliberately do not use this floor, so Health Connect can
- * still apply source-priority changes and corrections after day rollover.
+ * Keep a confirmed current-day aggregate only when the next read has no
+ * positive value. A positive unfiltered Health Connect aggregate is already
+ * priority-aware and deduplicated, and may legitimately decrease when Health
+ * Connect applies a source-priority/deletion correction during the open day.
  */
 export function preserveCurrentDayStepFloor<
   TEntry extends ImportedDailyAggregate,
@@ -161,20 +160,19 @@ export function preserveCurrentDayStepFloor<
     existing.userId !== incoming.userId
   )
     return revisionReconciled;
-  const existingValue = Number(existing.value);
   const incomingValue = Number(incoming.value);
-  return Number.isFinite(existingValue) &&
-    Number.isFinite(incomingValue) &&
-    incomingValue < existingValue
+  return Number(existing.value) > 0 &&
+    (!Number.isFinite(incomingValue) || incomingValue <= 0)
     ? existing
     : revisionReconciled;
 }
 
 /**
- * A canonical aggregate migration can replace an older Android-device row
- * with a different id. Preserve the value the UI was already showing for the
- * open day while still adopting the canonical identity, otherwise the first
- * refresh after an upgrade can visibly halve today's Steps total.
+ * A canonical aggregate migration can replace older Android-device rows with
+ * a different id. A positive canonical total must replace those rows even if
+ * it is lower: summing or flooring legacy source rows bypasses Health
+ * Connect's priority-aware deduplication. Only a non-positive migration read
+ * may retain the previously confirmed display total.
  */
 export function preserveCurrentDayStepReplacementFloor<
   TEntry extends ImportedDailyAggregate,
@@ -205,7 +203,8 @@ export function preserveCurrentDayStepReplacementFloor<
     !previous ||
     !Number.isFinite(previousValue) ||
     !Number.isFinite(incomingValue) ||
-    previousValue <= incomingValue
+    incomingValue > 0 ||
+    previousValue <= 0
   )
     return incoming;
   return {
@@ -416,12 +415,11 @@ export function resolveCurrentDeviceStepOrigins(
 }
 
 /**
- * A clean cloud snapshot must not roll a locally observed live phone total
- * backwards on restart. Only the current account's confirmed imported
- * Health Connect Steps display total is eligible. This includes a legacy
- * interval group during upgrade and a canonical multi-source row whose main
- * label is merely "Health Connect"; manual rows, calculated fallbacks, other
- * accounts, and completed days remain entirely server-owned.
+ * A clean cloud snapshot that has no positive native canonical total must not
+ * erase the locally confirmed current-day Health Connect total. Conversely, a
+ * positive native canonical row from the server is allowed to replace a
+ * higher local value: it may carry an authoritative source-priority or
+ * deletion correction. Google web totals never displace the phone-native row.
  */
 export function mergeLocalCurrentDayDeviceStepEntries<
   TEntry extends ImportedDailyAggregate & { id?: unknown },
@@ -470,16 +468,17 @@ export function mergeLocalCurrentDayDeviceStepEntries<
         entry.source !== "manual" &&
         hasHealthImportIdentity(entry),
     );
-    const remoteDisplayed = displayedImportedStepCandidate(
-      remoteEntriesForMetric,
-    );
     const remoteCanonical = selectCanonicalHealthConnectStepAggregate(
       remoteEntriesForMetric.filter(
         (entry) => entry.sourceProvider === "health_connect",
       ),
     );
-    const remoteTotal = Number(remoteDisplayed?.total) || 0;
-    if (local.total > remoteTotal)
+    const remoteCanonicalValue = Number(remoteCanonical?.value);
+    const hasPositiveRemoteNativeCanonical =
+      Boolean(remoteCanonical) &&
+      Number.isFinite(remoteCanonicalValue) &&
+      remoteCanonicalValue > 0;
+    if (!hasPositiveRemoteNativeCanonical)
       preserved.set(metricId, { local, remote: remoteCanonical });
   }
   if (!preserved.size) return remoteEntries;
@@ -665,11 +664,11 @@ export function combineDisjointStepWindows(
 }
 
 /**
- * Reconciles two full-day candidates without summing their overlapping data.
- * Health Connect can lag its minute-batched on-device writer; a candidate
- * assembled from disjoint Health Connect-prefix and local-phone-suffix windows
- * can fill that live gap. The platform aggregate wins when it catches up or
- * contains a larger phone/watch/app total.
+ * Reconciles overlapping current-day candidates without summing them. A
+ * positive unfiltered Health Connect aggregate is the sole authority because
+ * it applies the user's Activity source priority and deduplicates overlaps;
+ * source-filtered SPN and Local Recording totals are fallbacks only when that
+ * aggregate is empty.
  */
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
@@ -685,11 +684,14 @@ export function reconcileCurrentDayStepTotal(
   const androidDevice = Number.isFinite(androidDeviceCount)
     ? Math.max(0, Math.round(androidDeviceCount as number))
     : null;
-  const count = Math.max(
-    healthConnect,
-    localPhone ?? 0,
-    androidDevice ?? 0,
-  );
+  if (healthConnect > 0) {
+    return {
+      count: healthConnect,
+      usedLocalPhone: false,
+      usedAndroidDevice: false,
+    };
+  }
+  const count = Math.max(localPhone ?? 0, androidDevice ?? 0);
   const usedAndroidDevice =
     androidDevice !== null &&
     androidDevice === count &&

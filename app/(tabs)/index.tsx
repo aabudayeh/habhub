@@ -43,10 +43,7 @@ import {
   TutorialTarget,
   useTutorial,
 } from "@/src/components/TutorialSpotlight";
-import {
-  todoAppearsOnDate,
-  todoResolvedOnDate,
-} from "@/src/domain/schedule";
+import { todoAppearsOnDate } from "@/src/domain/schedule";
 import {
   ALL_GOALS_COMPLETE_COLOR,
   GOAL_COMPLETE_COLOR,
@@ -66,6 +63,7 @@ import {
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import { isFoodNutrientTrackerId } from "@/src/domain/food";
 import {
   canBeTrackedGoal,
   effectiveGoalTarget,
@@ -79,10 +77,10 @@ import {
   metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
-  trackedGoalSummary,
   weightProgressStats,
   weeklyDeficitBalance,
 } from "@/src/domain/metrics";
+import { todayHeroSummary } from "@/src/domain/todayHero";
 import {
   estimateWeightPlan,
   weightManagementSummaryVisible,
@@ -325,7 +323,8 @@ function Today() {
   const user = state.group.members.find(
     (item) => item.id === state.currentUserId,
   )!;
-  const goals = trackedGoalSummary(state, state.currentUserId, today);
+  const todayHero = todayHeroSummary(state, state.currentUserId, today);
+  const goals = todayHero.trackedGoals;
   const showGoalsToday = state.settings.showGoalsToday !== false;
   const weekly = weeklyDeficitBalance(state, state.currentUserId, today);
   const showWeightSummary = weightManagementSummaryVisible(state.settings);
@@ -356,33 +355,19 @@ function Today() {
           ? `Target ${weightPlan.targetWeightKg.toFixed(1)} kg · est. ${expectedWeightDate}`
           : undefined
     : undefined;
-  const activeTodayView = (state.settings.trackerViewFilters ?? []).find(
-    (filter) => filter.id === state.settings.activeTodayTrackerViewFilterId,
-  );
-  const customTodoVisible = activeTodayView?.includeTodos !== false;
-  const customTodoIds = activeTodayView?.todoIds;
-  const todayTodos =
-    state.settings.showTodosToday === false || !customTodoVisible
-      ? []
-      : (state.todos ?? []).filter(
-          (todo) =>
-            (customTodoIds === undefined || customTodoIds.includes(todo.id)) &&
-            todoAppearsOnDate(todo, today),
-        );
-  const completedTodayTodos = todayTodos.filter((todo) =>
-    todoResolvedOnDate(todo, today),
-  ).length;
-  const heroUsesGoals = showGoalsToday;
-  const heroTotal = heroUsesGoals ? goals.total : todayTodos.length;
+  const customTodoVisible = todayHero.todoVisible;
+  const customTodoIds = todayHero.todoIds;
+  const todayTodos = todayHero.todos;
+  const completedTodayTodos = todayHero.completedTodos;
+  const heroUsesGoals = todayHero.usesGoals;
+  const heroTotal = todayHero.total;
   const tutorialCompletionPreview =
     tutorialSandbox &&
     tutorial.activeStep?.id === "full.today.all-complete" &&
     heroTotal > 0;
   const heroMet = tutorialCompletionPreview
     ? heroTotal
-    : heroUsesGoals
-      ? goals.met
-      : completedTodayTodos;
+    : todayHero.met;
   const heroProgress = heroTotal ? heroMet / heroTotal : 0;
   const heroAllMet = heroTotal > 0 && heroMet === heroTotal;
   const visible = useMemo(() => {
@@ -447,10 +432,15 @@ function Today() {
   const extra = editing || state.settings.showAllTodayTiles
     ? []
     : visible.slice(tileLimit);
+  // Food's linked nutrient definitions support deep-linked detail/history,
+  // but they are not ordinary hidden Today cards. Keep them out of the
+  // restore sheet until a user explicitly enables a section from that
+  // nutrient's tracker settings.
   const hiddenTrackers = state.metrics
     .filter(
       (metric) =>
         !isInternalTracker(metric) &&
+        !isFoodNutrientTrackerId(metric.id) &&
         !metric.sections.today &&
         metric.activeFrom <= today,
     )
@@ -465,53 +455,17 @@ function Today() {
     [],
   );
   const [reduceMotion, setReduceMotion] = useState(false);
-  const unavailableGoalIds = new Set(
-    goals.unavailable.map((metric) => metric.id),
-  );
-  const featuredGoalProgress = goals.metrics.map((item) => {
-    const unavailable = unavailableGoalIds.has(item.id);
-    const met = scheduledGoalReached(
-      state,
-      item,
-      state.currentUserId,
-      today,
-    );
-    const value = unavailable
-      ? 0
-      : safeMetricValue(state, item, state.currentUserId, today);
-    const progress = unavailable
-      ? 0
-      : met
-        ? 1
-        : Math.max(
-            0,
-            Math.min(
-              1,
-              metricVisualProgress(
-                state,
-                item,
-                state.currentUserId,
-                today,
-                value,
-                effectiveGoalTarget(
-                  state,
-                  item,
-                  state.currentUserId,
-                  today,
-                ),
-              ),
-            ),
-          );
-    const roundedValue = Math.round(value * 10_000) / 10_000;
-    const roundedProgress = Math.round(progress * 10_000) / 10_000;
+  const featuredGoalProgress = todayHero.goalProgress.map((item) => {
+    const roundedValue = Math.round(item.value * 10_000) / 10_000;
+    const roundedProgress = Math.round(item.progress * 10_000) / 10_000;
     return {
       id: item.id,
-      met,
-      progress,
-      unavailable,
+      met: item.met,
+      progress: item.progress,
+      unavailable: item.unavailable,
       snapshot: {
         progress: roundedProgress,
-        signature: `${unavailable ? 1 : 0}:${met ? 1 : 0}:${roundedValue}:${roundedProgress}`,
+        signature: `${item.unavailable ? 1 : 0}:${item.met ? 1 : 0}:${roundedValue}:${roundedProgress}`,
       },
     };
   });

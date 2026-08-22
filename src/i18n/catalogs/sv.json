@@ -2437,5 +2437,22 @@
   "Fats": "Fetter",
   "Other nutrients": "Övriga näringsämnen",
   "Minerals": "Mineraler",
-  "Vitamins": "Vitaminer"
+  "Vitamins": "Vitaminer",
+  "Carbohydrates & sugars": "Kolhydrater och sockerarter",
+  "Sugars, sugar alcohols and starch": "Sockerarter, sockeralkoholer och stärkelse",
+  "Fats & fatty acids": "Fetter och fettsyror",
+  "Saturated, trans, mono, poly and omegas": "Mättat fett, transfett, enkel- och fleromättat fett samt omega",
+  "Minerals & electrolytes": "Mineraler och elektrolyter",
+  "Sodium, potassium, calcium and trace minerals": "Natrium, kalium, kalcium och spårämnen",
+  "A, B, C, D, E, K and related forms": "A, B, C, D, E, K och närliggande former",
+  "Cholesterol, alcohol and caffeine": "Kolesterol, alkohol och koffein",
+  "Managed from Food": "Hanteras från Mat",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Det här näringsämnet hör till en länkad matpost. Öppna Mat för att hantera eller ta bort måltiden utan att näringssummorna hamnar ur synk.",
+  "Open Food": "Öppna Mat",
+  "Every to-do complete": "Alla uppgifter klara",
+  "No to-dos today": "Inga uppgifter idag",
+  "goal left": "mål kvar",
+  "goals left": "mål kvar",
+  "to-do left": "uppgift kvar",
+  "to-dos left": "uppgifter kvar"
 }

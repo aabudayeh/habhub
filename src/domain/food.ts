@@ -603,6 +603,26 @@ export const FOOD_MACROS = FOOD_NUTRIENTS.filter(
     nutrient.id === "protein" || nutrient.id === "carbs" || nutrient.id === "fat",
 );
 
+const FOOD_NUTRIENT_IDS = new Set<string>(
+  FOOD_NUTRIENTS.map((nutrient) => nutrient.id),
+);
+
+/** True for the built-in trackers that are linked to Food nutrition fields. */
+export function isFoodNutrientTrackerId(id: string): id is FoodNutrientId {
+  return FOOD_NUTRIENT_IDS.has(id);
+}
+
+/** Positive nutrient quantities actually carried by one Food record. */
+export function capturedFoodNutrients(nutrition: NutritionDetails | undefined) {
+  if (!nutrition) return [];
+  return FOOD_NUTRIENTS.flatMap((nutrient) => {
+    const value = Number(nutrition[nutrient.nutritionKey]);
+    return Number.isFinite(value) && value > 0
+      ? [{ metricId: nutrient.id, value }]
+      : [];
+  });
+}
+
 export function hasFoodNutrientTracker(
   metrics: readonly { id: string }[],
   id: FoodNutrientId,

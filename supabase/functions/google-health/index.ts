@@ -420,7 +420,7 @@ async function handleAction(request: Request) {
         action === "updateEntry" &&
         (!body.patch || typeof body.patch !== "object" || Array.isArray(body.patch))
       ) return jsonResponse(request, { error: "invalid_entry_mutation" }, 400);
-      const mutation = await admin.rpc("mutate_google_health_entry", {
+      const mutation = await admin.rpc("mutate_google_health_food_family", {
         p_user_id: user.id,
         p_entry_id: body.entryId,
         p_action: action === "updateEntry" ? "update" : "dismiss",

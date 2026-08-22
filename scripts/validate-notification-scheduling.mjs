@@ -17,6 +17,13 @@ import {
   workoutActionMatchesActiveGeneration,
 } from "../src/domain/notificationScheduling.ts";
 import { createLatestAsyncDrain } from "../src/domain/latestAsyncDrain.ts";
+import {
+  formatWorkoutNotificationElapsed,
+  WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
+  workoutNotificationElapsedSeconds,
+  workoutWebNotificationBody,
+  workoutWebNotificationSignature,
+} from "../src/domain/workoutNotifications.ts";
 
 const base = {
   localDate: "2026-08-11",
@@ -177,6 +184,61 @@ assert.equal(
   }),
   false,
   "an old notification action must not enter a newly active account generation",
+);
+
+assert.equal(formatWorkoutNotificationElapsed(3_661), "61:01");
+assert.equal(
+  workoutNotificationElapsedSeconds({
+    phase: "work",
+    phaseStartedAt: 1_000,
+    phaseElapsedSeconds: 7,
+    now: 16_999,
+  }),
+  22,
+  "a running web notification must include the saved and live phase time",
+);
+assert.equal(
+  workoutNotificationElapsedSeconds({
+    phase: "paused",
+    phaseStartedAt: 1_000,
+    phaseElapsedSeconds: 7,
+    now: 16_999,
+  }),
+  7,
+  "a paused web notification must not keep accruing elapsed time",
+);
+assert.equal(
+  workoutWebNotificationBody("0:07 elapsed · Finish set", 67),
+  "1:07 elapsed · Finish set",
+  "web refreshes must replace, rather than duplicate, the elapsed prefix",
+);
+const workoutSignatureInput = {
+  ownerId: "account-a",
+  title: "Bench press · Set 2/4",
+  body: "1:00 elapsed · Finish set",
+  phase: "work",
+};
+assert.equal(
+  workoutWebNotificationSignature({
+    ...workoutSignatureInput,
+    elapsedSeconds: 60,
+  }),
+  workoutWebNotificationSignature({
+    ...workoutSignatureInput,
+    elapsedSeconds: 60 + WEB_WORKOUT_NOTIFICATION_REFRESH_MS / 1000 - 1,
+  }),
+  "same refresh-window notification work must coalesce",
+);
+assert.notEqual(
+  workoutWebNotificationSignature({
+    ...workoutSignatureInput,
+    elapsedSeconds: 60,
+  }),
+  workoutWebNotificationSignature({
+    ...workoutSignatureInput,
+    elapsedSeconds: 60 + WEB_WORKOUT_NOTIFICATION_REFRESH_MS / 1000,
+  }),
+  "the next refresh window must update the live elapsed display",
 );
 const queuedAccountAActions = [
   {
@@ -376,6 +438,7 @@ const androidNotificationServiceSource = fs.readFileSync(
   "plugins/habhub-android/java/HabHubNotificationsService.kt",
   "utf8",
 );
+const gymSource = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
 assert.match(source, /createLatestAsyncDrain<AppState>/);
 assert.match(
   source,
@@ -442,6 +505,15 @@ assert.match(workoutTimerSource, /resumeWorkoutTimerNotifications/);
 assert.match(workoutTimerSource, /clearWorkoutTimerNotifications/);
 assert.match(workoutTimerSource, /ownerId: string/);
 assert.match(workoutTimerSource, /workoutGeneration: flow\.generation/);
+assert.match(workoutTimerSource, /window\.Notification\.permission !== "granted"/);
+assert.match(workoutTimerSource, /registration\.getNotifications\(\{[\s\S]{0,80}tag: WORKOUT_TIMER_NOTIFICATION/);
+assert.match(workoutTimerSource, /registration\.showNotification/);
+assert.match(workoutTimerSource, /silent: true/);
+assert.match(workoutTimerSource, /route: "\/gym"/);
+assert.match(workoutTimerSource, /suspendWorkoutTimerNotificationPersistence/);
+assert.match(gymSource, /document\.visibilityState === "visible"/);
+assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
+assert.match(gymSource, /state\.settings\.notifications\.pushEnabled/);
 assert.match(
   workoutTimerSource,
   /consumeWorkoutTimerActions\(ownerId: string\)[\s\S]{0,1800}item\.ownerId === ownerId && item\.generation === generation/,
@@ -450,6 +522,16 @@ assert.match(
 assert.match(androidNotificationServiceSource, /DISABLED_KEY/);
 assert.match(androidNotificationServiceSource, /ACTIVE_OWNER_KEY/);
 assert.match(androidNotificationServiceSource, /GENERATION_KEY/);
+assert.match(androidNotificationServiceSource, /HabHubWorkoutNotificationPersistenceReceiver/);
+assert.match(androidNotificationServiceSource, /PRESENTATION_ENABLED_KEY/);
+assert.match(androidNotificationServiceSource, /REPOST_TOKEN_KEY/);
+assert.match(androidNotificationServiceSource, /repostDelaysMs/);
+assert.match(androidNotificationServiceSource, /flow\.finished/);
+assert.match(androidNotificationServiceSource, /setDeleteIntent\(dismissedPendingIntent/);
+assert.match(androidNotificationServiceSource, /manager\.activeNotifications\.any \{ it\.tag == NOTIFICATION_ID \}/);
+assert.match(androidNotificationServiceSource, /setOngoing\(false\)/);
+assert.doesNotMatch(androidNotificationServiceSource, /startForegroundService/);
+assert.match(androidPluginSource, /HabHubWorkoutNotificationPersistenceReceiver/);
 assert.match(
   androidNotificationServiceSource,
   /fun consumeActions\([\s\S]{0,350}ACTIVE_OWNER_KEY[\s\S]{0,200}GENERATION_KEY[\s\S]{0,600}item\.optString\("ownerId"\) == ownerId[\s\S]{0,120}item\.optString\("generation"\) == generation/,
@@ -462,7 +544,7 @@ assert.match(
 );
 assert.match(
   androidNotificationServiceSource,
-  /fun clear\([\s\S]{0,900}manager\.cancel\(it\.tag, it\.id\)/,
+  /fun clear\([\s\S]{0,1400}manager\.cancel\(it\.tag, it\.id\)/,
   "native cleanup must remove a row recreated immediately before the tombstone won the receiver lock",
 );
 assert.match(

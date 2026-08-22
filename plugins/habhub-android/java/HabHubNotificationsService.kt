@@ -1,10 +1,19 @@
 package __ANDROID_PACKAGE__
 
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
+import expo.modules.notifications.notifications.model.Notification as ExpoNotification
+import expo.modules.notifications.notifications.model.NotificationAction
+import expo.modules.notifications.notifications.model.NotificationContent
+import expo.modules.notifications.notifications.model.NotificationRequest
+import expo.modules.notifications.notifications.model.NotificationResponse
 import expo.modules.notifications.service.NotificationsService
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,11 +52,35 @@ class HabHubNotificationsService : NotificationsService() {
   }
 }
 
+/**
+ * A user-dismissed workout row is restored while its private native flow is
+ * still active. This is an explicit broadcast, not a foreground service: the
+ * system chronometer keeps displaying elapsed time and the receiver performs
+ * one bounded, backoff-controlled local repost.
+ */
+class HabHubWorkoutNotificationPersistenceReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent) {
+    if (intent.action != HabHubWorkoutNotificationStore.DISMISSED_ACTION) return
+    val ownerId = intent.getStringExtra(HabHubWorkoutNotificationStore.OWNER_EXTRA)
+    val generation = intent.getStringExtra(HabHubWorkoutNotificationStore.GENERATION_EXTRA)
+    if (ownerId.isNullOrBlank() || generation.isNullOrBlank()) return
+    val pendingResult = goAsync()
+    HabHubWorkoutNotificationStore.restoreAfterUserDismissal(
+      context.applicationContext,
+      ownerId,
+      generation,
+    ) { pendingResult.finish() }
+  }
+}
+
 internal object HabHubWorkoutNotificationStore {
   const val NOTIFICATION_ID = "metricrally-workout-timer-live"
   const val NEXT_ACTION = "workout-next"
   const val PAUSE_ACTION = "workout-pause"
   const val FINISH_ACTION = "workout-finish"
+  const val DISMISSED_ACTION = "app.paceboard.mobile.WORKOUT_NOTIFICATION_DISMISSED"
+  const val OWNER_EXTRA = "workoutOwnerId"
+  const val GENERATION_EXTRA = "workoutGeneration"
 
   private const val PREFS = "habhub-workout-notification-v1"
   private const val FLOW_KEY = "flow"
@@ -55,7 +88,16 @@ internal object HabHubWorkoutNotificationStore {
   private const val ACTIVE_OWNER_KEY = "active-owner"
   private const val GENERATION_KEY = "generation"
   private const val DISABLED_KEY = "disabled"
+  private const val PRESENTATION_ENABLED_KEY = "presentation-enabled"
+  private const val REPOST_TOKEN_KEY = "repost-token"
+  private const val LAST_DISMISS_AT_KEY = "last-dismiss-at"
+  private const val DISMISS_STREAK_KEY = "dismiss-streak"
+  private const val SYSTEM_NOTIFICATION_ID_KEY = "system-notification-id"
+  private const val SMALL_ICON_KEY = "small-icon"
+  private const val WORKOUT_CHANNEL_ID = "workout-timer"
+  private const val DISMISS_STREAK_WINDOW_MS = 30_000L
   private const val MAX_ACTIONS = 30
+  private val repostDelaysMs = longArrayOf(900L, 1_500L, 2_500L, 4_000L, 5_000L)
   private val reconciliationRunning = AtomicBoolean(false)
   private val reconciliationRequested = AtomicBoolean(false)
   private val stabilizationDelaysMs = longArrayOf(75L, 150L, 300L, 600L, 1_200L)
@@ -104,6 +146,8 @@ internal object HabHubWorkoutNotificationStore {
     }
     return preferences(context).edit()
       .putBoolean(DISABLED_KEY, false)
+      .putBoolean(PRESENTATION_ENABLED_KEY, true)
+      .putLong(REPOST_TOKEN_KEY, preferences(context).getLong(REPOST_TOKEN_KEY, 0L) + 1L)
       .putString(ACTIVE_OWNER_KEY, incoming.ownerId)
       .putString(GENERATION_KEY, incoming.generation)
       .putString(FLOW_KEY, encodeFlow(next))
@@ -117,10 +161,14 @@ internal object HabHubWorkoutNotificationStore {
     // disabled=true and cannot recreate actions after account/master cleanup.
     preferences(context).edit()
       .putBoolean(DISABLED_KEY, true)
+      .putBoolean(PRESENTATION_ENABLED_KEY, false)
+      .putLong(REPOST_TOKEN_KEY, preferences(context).getLong(REPOST_TOKEN_KEY, 0L) + 1L)
       .remove(ACTIVE_OWNER_KEY)
       .remove(GENERATION_KEY)
       .remove(FLOW_KEY)
       .remove(ACTIONS_KEY)
+      .remove(LAST_DISMISS_AT_KEY)
+      .remove(DISMISS_STREAK_KEY)
       .commit()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
       val manager =
@@ -129,6 +177,77 @@ internal object HabHubWorkoutNotificationStore {
         .filter { it.tag == NOTIFICATION_ID }
         .forEach { manager.cancel(it.tag, it.id) }
     }
+  }
+
+  @Synchronized
+  fun suspendPersistence(context: Context) {
+    val prefs = preferences(context)
+    prefs.edit()
+      .putBoolean(PRESENTATION_ENABLED_KEY, false)
+      .putLong(REPOST_TOKEN_KEY, prefs.getLong(REPOST_TOKEN_KEY, 0L) + 1L)
+      .remove(LAST_DISMISS_AT_KEY)
+      .remove(DISMISS_STREAK_KEY)
+      .commit()
+  }
+
+  /**
+   * Coalesce duplicate OEM/delete broadcasts and add a short bounded backoff
+   * when a user repeatedly swipes the same active workout row. The generation
+   * token is checked again under the store lock before posting, so foreground,
+   * master-off, finish, and account cleanup always win the race.
+   */
+  fun restoreAfterUserDismissal(
+    context: Context,
+    ownerId: String,
+    generation: String,
+    finish: () -> Unit,
+  ) {
+    val plan = synchronized(this) {
+      val prefs = preferences(context)
+      val flow = readFlow(context)
+      if (
+        flow == null ||
+        flow.finished ||
+        flow.ownerId != ownerId ||
+        flow.generation != generation ||
+        !prefs.getBoolean(PRESENTATION_ENABLED_KEY, false)
+      ) null
+      else {
+        val now = System.currentTimeMillis()
+        val previousDismiss = prefs.getLong(LAST_DISMISS_AT_KEY, 0L)
+        val previousStreak = prefs.getInt(DISMISS_STREAK_KEY, 0)
+        val streak = if (now - previousDismiss <= DISMISS_STREAK_WINDOW_MS) {
+          previousStreak + 1
+        } else {
+          1
+        }
+        val token = prefs.getLong(REPOST_TOKEN_KEY, 0L) + 1L
+        prefs.edit()
+          .putLong(REPOST_TOKEN_KEY, token)
+          .putLong(LAST_DISMISS_AT_KEY, now)
+          .putInt(DISMISS_STREAK_KEY, streak)
+          .commit()
+        Pair(token, repostDelaysMs[(streak - 1).coerceIn(0, repostDelaysMs.lastIndex)])
+      }
+    }
+    if (plan == null) {
+      finish()
+      return
+    }
+    runCatching {
+      thread(name = "habhub-workout-notification-restore") {
+        try {
+          Thread.sleep(plan.second)
+          runCatching {
+            repostIfStillActive(context, ownerId, generation, plan.first)
+          }
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+        } finally {
+          finish()
+        }
+      }
+    }.onFailure { finish() }
   }
 
   @Synchronized
@@ -368,6 +487,9 @@ internal object HabHubWorkoutNotificationStore {
       .setCategory(Notification.CATEGORY_STOPWATCH)
       .setContentTitle(title)
       .setContentText(body)
+      .setAutoCancel(false)
+      .setOngoing(false)
+      .setDeleteIntent(dismissedPendingIntent(context, flow))
 
     if (flow.finished || flow.paused) {
       builder
@@ -405,8 +527,178 @@ internal object HabHubWorkoutNotificationStore {
       }
     }
     builder.setActions(*visibleActions.toTypedArray())
+    val smallIcon = active.notification.smallIcon?.resId ?: 0
+    preferences(context).edit()
+      .putInt(SYSTEM_NOTIFICATION_ID_KEY, active.id)
+      .putInt(SMALL_ICON_KEY, smallIcon)
+      .commit()
     manager.notify(active.tag, active.id, builder.build())
     return true
+  }
+
+  @Synchronized
+  private fun repostIfStillActive(
+    context: Context,
+    ownerId: String,
+    generation: String,
+    token: Long,
+  ) {
+    val prefs = preferences(context)
+    val flow = readFlow(context) ?: return
+    if (
+      flow.finished ||
+      flow.ownerId != ownerId ||
+      flow.generation != generation ||
+      !prefs.getBoolean(PRESENTATION_ENABLED_KEY, false) ||
+      prefs.getLong(REPOST_TOKEN_KEY, 0L) != token
+    ) return
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (!manager.areNotificationsEnabled()) return
+    if (manager.activeNotifications.any { it.tag == NOTIFICATION_ID }) return
+    ensureWorkoutChannel(manager)
+    val systemId = prefs.getInt(SYSTEM_NOTIFICATION_ID_KEY, NOTIFICATION_ID.hashCode())
+    val notification = buildPersistentNotification(context, flow) ?: return
+    // The token/presentation state cannot change until this synchronized post
+    // returns. A foreground suspend that follows immediately cancels this row.
+    manager.notify(NOTIFICATION_ID, systemId, notification)
+  }
+
+  private fun buildPersistentNotification(context: Context, flow: Flow): Notification? {
+    val step = flow.steps.getOrNull(flow.index.coerceIn(0, flow.steps.lastIndex))
+      ?: return null
+    val phase = if (flow.paused) "paused" else step.phase
+    val phaseLabel = when {
+      phase == "paused" -> "PAUSED"
+      phase == "work" -> "WORK"
+      else -> "REST"
+    }
+    val title = "$phaseLabel · ${step.title}"
+    val body = if (flow.paused) {
+      "Paused at ${formatElapsed(flow.phaseElapsedMs)} · ${step.body}"
+    } else {
+      step.body
+    }
+    val data = JSONObject().apply {
+      put("route", "/gym")
+      put("workoutTimer", true)
+      put(OWNER_EXTRA, flow.ownerId)
+      put(GENERATION_EXTRA, flow.generation)
+    }
+    val content = NotificationContent.Builder()
+      .setTitle(title)
+      .setText(body)
+      .setBody(data)
+      .setAutoDismiss(false)
+      .setSticky(false)
+      .build()
+    val expoNotification = ExpoNotification(
+      NotificationRequest(NOTIFICATION_ID, content, null),
+    )
+    val icon = preferences(context).getInt(SMALL_ICON_KEY, 0)
+      .takeIf { it != 0 }
+      ?: context.applicationInfo.icon
+    if (icon == 0) return null
+    val firstAction = if (flow.index < flow.steps.lastIndex) {
+      NotificationAction(NEXT_ACTION, "Next", false)
+    } else {
+      NotificationAction(FINISH_ACTION, "Finish workout", true)
+    }
+    val pauseAction = NotificationAction(
+      PAUSE_ACTION,
+      if (flow.paused) "Resume" else "Pause",
+      false,
+    )
+    val defaultAction = NotificationAction(
+      NotificationResponse.DEFAULT_ACTION_IDENTIFIER,
+      "Open workout",
+      true,
+    )
+    val color = when (phase) {
+      "work" -> Color.parseColor("#A7F432")
+      "paused" -> Color.parseColor("#D95852")
+      else -> Color.parseColor("#E9A23B")
+    }
+    val builder = Notification.Builder(context, WORKOUT_CHANNEL_ID)
+      .setSmallIcon(icon)
+      .setContentTitle(title)
+      .setContentText(body)
+      .setStyle(Notification.BigTextStyle().bigText(body))
+      .setContentIntent(
+        NotificationsService.createNotificationResponseIntent(
+          context,
+          expoNotification,
+          defaultAction,
+        ),
+      )
+      .setDeleteIntent(dismissedPendingIntent(context, flow))
+      .setOnlyAlertOnce(true)
+      .setVisibility(Notification.VISIBILITY_PUBLIC)
+      .setCategory(Notification.CATEGORY_STOPWATCH)
+      .setColor(color)
+      .setAutoCancel(false)
+      .setOngoing(false)
+      .setTimeoutAfter(0L)
+      .addAction(
+        Notification.Action.Builder(
+          icon,
+          firstAction.title,
+          NotificationsService.createNotificationResponseIntent(
+            context,
+            expoNotification,
+            firstAction,
+          ),
+        ).build(),
+      )
+      .addAction(
+        Notification.Action.Builder(
+          icon,
+          pauseAction.title,
+          NotificationsService.createNotificationResponseIntent(
+            context,
+            expoNotification,
+            pauseAction,
+          ),
+        ).build(),
+      )
+    if (flow.paused) {
+      builder.setUsesChronometer(false).setShowWhen(false)
+    } else {
+      builder
+        .setShowWhen(true)
+        .setWhen(flow.phaseStartedAt - flow.phaseElapsedMs)
+        .setUsesChronometer(true)
+        .setChronometerCountDown(false)
+    }
+    return builder.build()
+  }
+
+  private fun dismissedPendingIntent(context: Context, flow: Flow): PendingIntent {
+    val intent = Intent(context, HabHubWorkoutNotificationPersistenceReceiver::class.java)
+      .setAction(DISMISSED_ACTION)
+      .putExtra(OWNER_EXTRA, flow.ownerId)
+      .putExtra(GENERATION_EXTRA, flow.generation)
+    return PendingIntent.getBroadcast(
+      context,
+      "${flow.ownerId}:${flow.generation}".hashCode(),
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
+  private fun ensureWorkoutChannel(manager: NotificationManager) {
+    if (manager.getNotificationChannel(WORKOUT_CHANNEL_ID) != null) return
+    manager.createNotificationChannel(
+      NotificationChannel(
+        WORKOUT_CHANNEL_ID,
+        "Live workout timer",
+        NotificationManager.IMPORTANCE_HIGH,
+      ).apply {
+        setSound(null, null)
+        enableVibration(false)
+        setShowBadge(false)
+        lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+      },
+    )
   }
 
   private fun relabel(action: Notification.Action, title: String): Notification.Action {

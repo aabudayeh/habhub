@@ -114,8 +114,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(5_000, 5_140),
-  { count: 5_140, usedLocalPhone: true, usedAndroidDevice: false },
-  "a fresher local phone recording may fill today's Health Connect batching gap",
+  { count: 5_000, usedLocalPhone: false, usedAndroidDevice: false },
+  "a positive priority-aware Health Connect aggregate must not be overridden by a phone-only total",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140),
@@ -124,13 +124,18 @@ assert.deepEqual(
 );
 assert.equal(
   reconcileCurrentDayStepTotal(5_000, 5_140).count,
-  5_140,
+  5_000,
   "overlapping Health Connect and phone totals must never be summed",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
-  { count: 54, usedLocalPhone: false, usedAndroidDevice: true },
-  "the official Android-device aggregate must repair the observed 54-to-27 priority-writer undercount without summing sources",
+  { count: 27, usedLocalPhone: false, usedAndroidDevice: false },
+  "a source-filtered Android-device aggregate must not bypass Health Connect Activity priority",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(2_887, 3_072, 3_072),
+  { count: 2_887, usedLocalPhone: false, usedAndroidDevice: false },
+  "the authoritative 2,887 total must correct a larger 3,072 phone-local candidate",
 );
 const scopedPhoneOrigin =
   "com.android.healthconnect.phone.a1b2c3d4e5f607182930";
@@ -143,9 +148,14 @@ assert.deepEqual(
   "an SPN exposed by the current aggregate must repair native discovery that returned only the legacy android origin",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(27, null, 54),
+  reconcileCurrentDayStepTotal(0, null, 54),
   { count: 54, usedLocalPhone: false, usedAndroidDevice: true },
-  "the aggregate-discovered SPN candidate must recover the exact 54-to-27 repro even without Local Recording coverage",
+  "the aggregate-discovered SPN candidate may recover an empty unfiltered read",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(0, 54, null),
+  { count: 54, usedLocalPhone: true, usedAndroidDevice: false },
+  "Local Recording may recover an empty unfiltered read",
 );
 const authoritativeAggregateWithDisabledContributor =
   deduplicateHealthImportRecords(
@@ -654,18 +664,37 @@ assert.equal(
   "2026-08-13T08:05:00.000Z",
   "a changed partial-day aggregate must receive the latest sync revision",
 );
+const correctedLiveAggregate = preserveCurrentDayStepFloor(
+  { ...stableAggregate, value: 3_072 },
+  {
+    ...stableAggregate,
+    sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+    value: 2_887,
+  },
+  "2026-08-13",
+);
+assert.equal(
+  correctedLiveAggregate.value,
+  2_887,
+  "a positive unfiltered Health Connect correction must update today's 3,072 display to 2,887",
+);
+assert.equal(
+  correctedLiveAggregate.sourceUpdatedAt,
+  "2026-08-13T08:05:00.000Z",
+  "a positive downward correction must retain its new authoritative revision",
+);
 assert.equal(
   preserveCurrentDayStepFloor(
     stableAggregate,
     {
       ...stableAggregate,
       sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
-      value: 1_700,
+      value: 0,
     },
     "2026-08-13",
   ),
   stableAggregate,
-  "a stale lower refresh must not make today's confirmed pedometer total go backwards",
+  "a transient zero read must not erase today's confirmed aggregate",
 );
 assert.equal(
   preserveCurrentDayStepFloor(
@@ -723,8 +752,8 @@ const migratedCurrentDayTotal = preserveCurrentDayStepReplacementFloor(
 );
 assert.equal(
   migratedCurrentDayTotal.value,
-  54,
-  "canonical migration must not halve a higher imported Android-device total already displayed for today",
+  27,
+  "a positive canonical aggregate must replace summed legacy source rows",
 );
 assert.equal(
   migratedCurrentDayTotal.sourceRecordId,
@@ -733,8 +762,8 @@ assert.equal(
 );
 assert.equal(
   migratedCurrentDayTotal.sourceOrigin,
-  "com.android.healthconnect.phone.scoped",
-  "the migration floor must retain truthful Android-device attribution",
+  "Health Connect",
+  "the canonical migration must retain authoritative Health Connect attribution",
 );
 const emptyLiveReadFloor = currentDayStepFloorsForEmptyReplacement(
   [
@@ -854,8 +883,8 @@ assert.equal(
       entry.localDate === "2026-08-13" &&
       entry.sourceRecordId === "aggregate:steps:2026-08-13",
   )?.value,
-  54,
-  "a stale clean cloud snapshot must not reproduce the observed 54-to-27 drop on restart",
+  27,
+  "a positive native canonical cloud row may correct a higher legacy local source sum",
 );
 assert.equal(
   cloudRestartEntries.find((entry) => entry.id === "remote-manual")?.value,
@@ -874,13 +903,6 @@ const dirtyCloudSteps = mergeLocalCurrentDayDeviceStepEntries(
       source: "imported",
       sourceOrigin: "Health Connect",
       value: 27,
-    },
-    legacyAndroidDeviceTotal,
-    {
-      ...legacyAndroidDeviceTotal,
-      id: "health:health_connect:steps:legacy-device-row-2:steps",
-      sourceRecordId: "legacy-device-row-2",
-      recordedAt: "2026-08-13T08:01:00.000Z",
     },
   ],
   [
@@ -901,15 +923,15 @@ const dirtyCloudSteps = mergeLocalCurrentDayDeviceStepEntries(
 const dirtyCloudRenderedSteps = authoritativeStepEntries(dirtyCloudSteps);
 assert.equal(
   dirtyCloudRenderedSteps[0]?.value,
-  54,
-  "a dirty merge of remote canonical 27 plus two local legacy 27 rows must still render 54",
+  27,
+  "a positive remote native canonical total must replace two higher local legacy rows",
 );
 assert.equal(
   dirtyCloudSteps.filter(
     (entry) => entry.source !== "manual" && entry.localDate === "2026-08-13",
   ).length,
   1,
-  "dirty cloud protection must remove competing legacy imported rows after canonicalizing the 54 floor",
+  "the authoritative native cloud snapshot must not re-add competing local legacy rows",
 );
 const missingRemoteSteps = mergeLocalCurrentDayDeviceStepEntries(
   [],
@@ -968,25 +990,19 @@ const cloudRestartMultiSource = mergeLocalCurrentDayDeviceStepEntries(
 );
 assert.equal(
   cloudRestartMultiSource[0]?.value,
-  54,
-  "a canonical multi-source local total must survive restart even when its primary attribution is Health Connect",
+  27,
+  "a positive native cloud correction must be accepted even when the local canonical total is higher",
 );
-const crossDeviceCloudSteps = mergeLocalCurrentDayDeviceStepEntries(
+const nativeAndGoogleSameAccountSteps = mergeLocalCurrentDayDeviceStepEntries(
   [
     {
       ...stableAggregate,
-      id: "health:healthkit:steps:aggregate:steps:2026-08-13:steps",
+      id: "health:google_health:steps:aggregate:steps:2026-08-13:steps",
       source: "imported",
-      sourceProvider: "healthkit",
-      sourceOrigin: "Apple Health",
+      sourceProvider: "google_health",
+      sourceOrigin: "Google Health",
       sourceUpdatedAt: "2026-08-13T08:10:00.000Z",
-      value: 20,
-    },
-    {
-      ...stableAggregate,
-      source: "imported",
-      sourceOrigin: "Health Connect",
-      value: 27,
+      value: 4_000,
     },
   ],
   [
@@ -994,7 +1010,8 @@ const crossDeviceCloudSteps = mergeLocalCurrentDayDeviceStepEntries(
       ...stableAggregate,
       source: "imported",
       sourceOrigin: "Health Connect",
-      value: 54,
+      sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+      value: 2_887,
     },
   ],
   {
@@ -1004,30 +1021,14 @@ const crossDeviceCloudSteps = mergeLocalCurrentDayDeviceStepEntries(
   },
 );
 assert.equal(
-  crossDeviceCloudSteps[0]?.sourceProvider,
+  nativeAndGoogleSameAccountSteps[0]?.sourceProvider,
   "health_connect",
-  "an Android floor must never borrow a newer HealthKit canonical template",
-);
-const crossDeviceSecondRestart = mergeLocalCurrentDayDeviceStepEntries(
-  [
-    {
-      ...stableAggregate,
-      source: "imported",
-      sourceOrigin: "Health Connect",
-      value: 27,
-    },
-  ],
-  crossDeviceCloudSteps,
-  {
-    userId: "owner",
-    currentLocalDate: "2026-08-13",
-    stepMetricIds: new Set(["steps"]),
-  },
+  "an APK Health Connect total must outrank a Google web total for the same account",
 );
 assert.equal(
-  crossDeviceSecondRestart[0]?.value,
-  54,
-  "the preserved Android floor must remain device-owned and survive a second restart",
+  nativeAndGoogleSameAccountSteps[0]?.value,
+  2_887,
+  "Google web sync must not add to or replace the native APK aggregate",
 );
 const unchangedCloudSteps = [
   {
@@ -1293,7 +1294,12 @@ assert.match(
 assert.match(
   androidHealthSource,
   /readLocalPhoneSteps\(currentStart!, currentEnd!\)[\s\S]{0,9000}coverageStartEpochMs[\s\S]{0,1600}combineDisjointStepWindows\([\s\S]{0,300}reconcileCurrentDayStepTotal\([\s\S]{0,300}disjointPhoneCandidate[\s\S]{0,200}androidDeviceAggregate/,
-  "today must reconcile the non-overlapping Recording candidate and official Android-device aggregate",
+  "today must retain empty-read fallbacks from Local Recording and the official Android-device aggregate",
+);
+assert.match(
+  androidHealthSource,
+  /authoritativeCurrentCount[\s\S]{0,240}needsPhoneFallback\s*=\s*[\s\S]{0,120}!\(authoritativeCurrentCount > 0\)[\s\S]{0,500}needsPhoneFallback\s*\?\s*await Promise\.all/,
+  "phone-local reads must run only when the unfiltered current-day aggregate is empty",
 );
 assert.match(
   androidHealthSource,
@@ -1370,7 +1376,7 @@ assert.match(
 );
 assert.match(
   appProviderSource,
-  /const entriesToReplace = authorizedManualSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
+  /const directEntriesToReplace = authorizedManualSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
   "authorized manual Steps must replace only provenance-free manual candidates",
 );
 assert.match(
@@ -1751,12 +1757,12 @@ for (const source of [appProviderSource, backgroundHealthSource]) {
   assert.match(
     source,
     /preserveCurrentDayStepFloor/,
-    "foreground and background imports must preserve the highest confirmed current-day aggregate",
+    "foreground and background imports must accept positive corrections while retaining transient non-positive reads",
   );
   assert.match(
     source,
     /preserveCurrentDayStepReplacementFloor/,
-    "foreground and background canonical migration must preserve a differently identified current-day device total",
+    "foreground and background canonical migration must reconcile differently identified current-day rows",
   );
   assert.match(
     source,
@@ -1767,7 +1773,7 @@ for (const source of [appProviderSource, backgroundHealthSource]) {
 assert.match(
   healthDedupSource,
   /preserveCurrentDayStepFloor[\s\S]{0,700}preserveUnchangedDailyAggregateRevision/,
-  "the current-day floor must retain unchanged revision/object reconciliation",
+  "the current-day correction guard must retain unchanged revision/object reconciliation",
 );
 assert.match(
   appProviderSource,
@@ -1777,7 +1783,7 @@ assert.match(
 assert.match(
   appProviderSource,
   /preserveDeviceHealthEntries[\s\S]{0,700}mergeLocalCurrentDayDeviceStepEntries\([\s\S]{0,500}metricIdsForHealthDataTypes\([\s\S]{0,100}\["steps"\]/,
-  "every cloud hydrate path must preserve a higher confirmed local current-day Steps display total",
+  "every cloud hydrate path must preserve native current-day Steps when no positive native cloud total exists",
 );
 assert.match(
   appProviderSource,

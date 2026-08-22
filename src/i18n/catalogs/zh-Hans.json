@@ -2437,5 +2437,22 @@
   "Fats": "脂肪",
   "Other nutrients": "其他营养素",
   "Minerals": "矿物质",
-  "Vitamins": "维生素"
+  "Vitamins": "维生素",
+  "Carbohydrates & sugars": "碳水化合物和糖",
+  "Sugars, sugar alcohols and starch": "糖、糖醇和淀粉",
+  "Fats & fatty acids": "脂肪和脂肪酸",
+  "Saturated, trans, mono, poly and omegas": "饱和脂肪、反式脂肪、单不饱和脂肪、多不饱和脂肪和欧米伽",
+  "Minerals & electrolytes": "矿物质和电解质",
+  "Sodium, potassium, calcium and trace minerals": "钠、钾、钙和微量矿物质",
+  "A, B, C, D, E, K and related forms": "A、B、C、D、E、K 及相关形式",
+  "Cholesterol, alcohol and caffeine": "胆固醇、酒精和咖啡因",
+  "Managed from Food": "在食物中管理",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "此营养素属于关联的食物记录。请打开“食物”来管理或删除该餐，以免营养总量不同步。",
+  "Open Food": "打开食物",
+  "Every to-do complete": "所有待办事项均已完成",
+  "No to-dos today": "今天没有待办事项",
+  "goal left": "个目标待完成",
+  "goals left": "个目标待完成",
+  "to-do left": "项待办事项待完成",
+  "to-dos left": "项待办事项待完成"
 }

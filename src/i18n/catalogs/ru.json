@@ -2437,5 +2437,22 @@
   "Fats": "Жиры",
   "Other nutrients": "Другие нутриенты",
   "Minerals": "Минералы",
-  "Vitamins": "Витамины"
+  "Vitamins": "Витамины",
+  "Carbohydrates & sugars": "Углеводы и сахара",
+  "Sugars, sugar alcohols and starch": "Сахара, сахарные спирты и крахмал",
+  "Fats & fatty acids": "Жиры и жирные кислоты",
+  "Saturated, trans, mono, poly and omegas": "Насыщенные, транс-, моно- и полиненасыщенные жиры и омега",
+  "Minerals & electrolytes": "Минералы и электролиты",
+  "Sodium, potassium, calcium and trace minerals": "Натрий, калий, кальций и микроэлементы",
+  "A, B, C, D, E, K and related forms": "A, B, C, D, E, K и родственные формы",
+  "Cholesterol, alcohol and caffeine": "Холестерин, алкоголь и кофеин",
+  "Managed from Food": "Управляется в разделе «Еда»",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Этот нутриент относится к связанной записи о еде. Откройте раздел «Еда», чтобы изменить или удалить прием пищи, не нарушая согласованность итогов по нутриентам.",
+  "Open Food": "Открыть раздел «Еда»",
+  "Every to-do complete": "Все задачи выполнены",
+  "No to-dos today": "Сегодня нет задач",
+  "goal left": "цель осталась",
+  "goals left": "цели осталось",
+  "to-do left": "задача осталась",
+  "to-dos left": "задачи осталось"
 }

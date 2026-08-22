@@ -2437,5 +2437,22 @@
   "Fats": "Fette",
   "Other nutrients": "Weitere Nährstoffe",
   "Minerals": "Mineralstoffe",
-  "Vitamins": "Vitamine"
+  "Vitamins": "Vitamine",
+  "Carbohydrates & sugars": "Kohlenhydrate & Zucker",
+  "Sugars, sugar alcohols and starch": "Zucker, Zuckeralkohole und Stärke",
+  "Fats & fatty acids": "Fette & Fettsäuren",
+  "Saturated, trans, mono, poly and omegas": "Gesättigte, Trans-, einfach und mehrfach ungesättigte sowie Omega-Fettsäuren",
+  "Minerals & electrolytes": "Mineralstoffe & Elektrolyte",
+  "Sodium, potassium, calcium and trace minerals": "Natrium, Kalium, Calcium und Spurenelemente",
+  "A, B, C, D, E, K and related forms": "A, B, C, D, E, K und verwandte Formen",
+  "Cholesterol, alcohol and caffeine": "Cholesterin, Alkohol und Koffein",
+  "Managed from Food": "Über Essen verwalten",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Dieser Nährstoff gehört zu einem verknüpften Essenseintrag. Öffne Essen, um die Mahlzeit zu verwalten oder zu entfernen, ohne dass die Nährstoffsummen voneinander abweichen.",
+  "Open Food": "Essen öffnen",
+  "Every to-do complete": "Jede Aufgabe erledigt",
+  "No to-dos today": "Heute keine Aufgaben",
+  "goal left": "Ziel übrig",
+  "goals left": "Ziele übrig",
+  "to-do left": "Aufgabe übrig",
+  "to-dos left": "Aufgaben übrig"
 }

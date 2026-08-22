@@ -431,13 +431,18 @@ export function GoogleHealthWebCard() {
     }
   }, [accountId]);
 
+  const connectBlockedNotice = phoneReady
+    ? disclosureAccepted
+      ? null
+      : "Accept the data-use disclosure to unlock Google account authorization."
+    : "Finish Step 1 to unlock Google account authorization.";
+
   const connect = useCallback(async () => {
-    if (
-      !hasLiveSession ||
-      !phoneReady ||
-      !disclosureAccepted ||
-      typeof window === "undefined"
-    ) return;
+    if (!hasLiveSession || typeof window === "undefined") return;
+    if (!phoneReady || !disclosureAccepted) {
+      setNotice(connectBlockedNotice);
+      return;
+    }
     const requestGeneration = ++requestGenerationRef.current;
     setNotice(null);
     setSyncResult(null);
@@ -464,7 +469,14 @@ export function GoogleHealthWebCard() {
       setConnection(response.connection);
       const authorizationUrl = response.authorizationUrl!;
       if (popup && !popup.closed) {
-        popup.location.replace(authorizationUrl);
+        try {
+          popup.location.replace(authorizationUrl);
+        } catch {
+          if (!popup.closed) popup.close();
+          popupRef.current = null;
+          window.location.assign(authorizationUrl);
+          return;
+        }
         stopPopupPoll();
         popupPollRef.current = setInterval(() => {
           if (popup?.closed) {
@@ -488,7 +500,14 @@ export function GoogleHealthWebCard() {
       setOperation(null);
       setNotice(clientErrorCopy(error));
     }
-  }, [disclosureAccepted, hasLiveSession, phoneReady, refreshStatus, stopPopupPoll]);
+  }, [
+    connectBlockedNotice,
+    disclosureAccepted,
+    hasLiveSession,
+    phoneReady,
+    refreshStatus,
+    stopPopupPoll,
+  ]);
 
   const syncNow = useCallback(async () => {
     const requestGeneration = ++requestGenerationRef.current;
@@ -863,12 +882,7 @@ export function GoogleHealthWebCard() {
                 }
                 icon="logo-google"
                 loading={operation === "connecting"}
-                disabled={
-                  busy ||
-                  !phoneReady ||
-                  !disclosureAccepted ||
-                  !hasLiveSession
-                }
+                disabled={busy || !hasLiveSession}
                 onPress={() => void connect()}
               />
             </View>

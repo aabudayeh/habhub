@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import initPgQuery from "npm:pg-query-emscripten@5.1.0";
 
-const migrationPath = "supabase/migrations/202608210001_google_health_web_sync.sql";
-const sql = await Deno.readTextFile(migrationPath);
+const migrationPaths = [
+  "supabase/migrations/202608210001_google_health_web_sync.sql",
+  "supabase/migrations/202608220001_google_health_array_initializers.sql",
+  "supabase/migrations/202608220002_google_health_food_family_mutations.sql",
+];
 
 function statements(source: string) {
   const output: string[] = [];
@@ -80,30 +83,44 @@ function statements(source: string) {
   return output;
 }
 
-const topLevelStatements = statements(sql);
-const parser = await initPgQuery();
-for (const [index, statement] of topLevelStatements.entries()) {
-  // Administrative statements have deterministic signatures asserted by the
-  // backend contract validator. Skipping them here avoids a known WASM heap
-  // bug after ~80 sequential parse calls while retaining every DDL/RPC/cron
-  // statement with meaningful syntax risk.
-  const classified = statement.replace(/^(?:\s*--[^\n]*(?:\n|$))+/, "").trimStart();
-  if (/^(?:comment\s+on|revoke\s+all|grant\s+|drop\s+trigger|create\s+trigger|create\s+index|create\s+or\s+replace\s+function)\b/i.test(classified))
-    continue;
-  let parsed;
-  try {
-    parsed = parser.parse(statement);
-  } catch (error) {
-    throw new Error(`PostgreSQL parser crashed in statement ${index + 1} (${statement.slice(0, 80)}): ${String(error)}`);
+let statementCount = 0;
+const sqlByPath = await Promise.all(migrationPaths.map(async (migrationPath) => ({
+  migrationPath,
+  sql: await Deno.readTextFile(migrationPath),
+})));
+for (const { migrationPath, sql } of sqlByPath) {
+  const topLevelStatements = statements(sql);
+  statementCount += topLevelStatements.length;
+  const parser = await initPgQuery();
+  for (const [index, statement] of topLevelStatements.entries()) {
+    // Administrative statements have deterministic signatures asserted by the
+    // backend contract validator. Skipping them here avoids a known WASM heap
+    // bug after ~80 sequential parse calls while retaining every DDL/RPC/cron
+    // statement with meaningful syntax risk.
+    const classified = statement.replace(/^(?:\s*--[^\n]*(?:\n|$))+/, "").trimStart();
+    if (/^(?:comment\s+on|revoke\s+all|grant\s+|drop\s+trigger|create\s+trigger|create\s+index|create\s+or\s+replace\s+function)\b/i.test(classified))
+      continue;
+    let parsed;
+    try {
+      parsed = parser.parse(statement);
+    } catch (error) {
+      throw new Error(
+        `PostgreSQL parser crashed in ${migrationPath} statement ${index + 1} ` +
+          `(${statement.slice(0, 80)}): ${String(error)}`,
+      );
+    }
+    assert.equal(
+      parsed.error,
+      null,
+      `PostgreSQL syntax error in ${migrationPath} statement ${index + 1}: ` +
+        `${parsed.error?.message ?? "unknown"}`,
+    );
   }
-  assert.equal(
-    parsed.error,
-    null,
-    `PostgreSQL syntax error in statement ${index + 1}: ${parsed.error?.message ?? "unknown"}`,
-  );
 }
 
-const functions = sql.match(/create\s+or\s+replace\s+function[\s\S]*?\$\$;/gi) ?? [];
+const functions = sqlByPath.flatMap(({ sql }) =>
+  sql.match(/create\s+or\s+replace\s+function[\s\S]*?\$\$;/gi) ?? []
+);
 assert.ok(functions.length >= 15, "expected the complete Google Health RPC surface");
 for (const statement of functions) {
   const plpgsqlParser = await initPgQuery();
@@ -114,5 +131,5 @@ for (const statement of functions) {
 }
 
 console.log(
-  `Google Health SQL syntax validated (${topLevelStatements.length} statements, ${functions.length} PL/pgSQL functions).`,
+  `Google Health SQL syntax validated (${statementCount} statements, ${functions.length} PL/pgSQL functions).`,
 );

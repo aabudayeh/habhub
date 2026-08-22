@@ -618,6 +618,60 @@ assert.deepEqual(
 );
 assert.ok(!singleDismissed.settings.pendingDeletedEntryIds.includes(googleEntry.id));
 assert.ok(!singleDismissed.settings.dismissedHealthEntryIds?.includes(googleEntry.id));
+const googleFoodFamily = [
+  {
+    ...googleEntry,
+    id: "google-health:lunch:food",
+    metricId: "food",
+    sourceRecordId: "google-health:nutrition-log:lunch",
+  },
+  {
+    ...googleEntry,
+    id: "google-health:lunch:fiber",
+    metricId: "fiber",
+    sourceRecordId: "google-health:nutrition-log:lunch",
+  },
+  {
+    ...googleEntry,
+    id: "google-health:other:protein",
+    metricId: "protein",
+    sourceRecordId: "google-health:nutrition-log:other",
+  },
+];
+const foodFamilyDismissed = purgeGoogleHealthEntryFromMemory(
+  {
+    currentUserId: "owner",
+    entries: [...googleFoodFamily, healthConnectEntry],
+    dailyMetricStatuses: [],
+    settings: {
+      pendingDeletedEntryIds: googleFoodFamily.map((entry) => entry.id),
+      dismissedHealthEntryIds: googleFoodFamily.map((entry) => entry.id),
+      googleHealthEntryOverrides: Object.fromEntries(
+        googleFoodFamily.map((entry) => [
+          entry.id,
+          { visibility: "private", sourceUpdatedAt: entry.sourceUpdatedAt },
+        ]),
+      ),
+    },
+  },
+  "google-health:lunch:food",
+);
+assert.deepEqual(
+  foodFamilyDismissed.entries.map((entry) => entry.id),
+  ["google-health:other:protein", healthConnectEntry.id],
+  "a confirmed Google Food dismissal must remove every linked nutrient projection but no other source record",
+);
+assert.deepEqual(foodFamilyDismissed.settings.pendingDeletedEntryIds, [
+  "google-health:other:protein",
+]);
+assert.deepEqual(foodFamilyDismissed.settings.dismissedHealthEntryIds, [
+  "google-health:other:protein",
+]);
+assert.deepEqual(
+  Object.keys(foodFamilyDismissed.settings.googleHealthEntryOverrides),
+  ["google-health:other:protein"],
+  "the family purge must clear only the server-confirmed source-family preferences",
+);
 const coexistenceAfterGoogleDelete = purgeGoogleHealthAccountData(
   {
     currentUserId: "owner",
@@ -713,7 +767,7 @@ for (const action of [
 ]) {
   assert.ok(client.includes(`"${action}"`), `typed client must support ${action}`);
 }
-assert.ok(client.includes('supabase.functions.invoke(\n    "google-health"'));
+assert.match(client, /supabase\.functions\.invoke\(\r?\n\s+"google-health"/);
 assert.ok(client.includes('parsed.hostname !== "accounts.google.com"'));
 assert.ok(client.includes("completionToken"));
 assert.ok(client.includes("isGoogleHealthCompletionToken"));
@@ -821,8 +875,8 @@ assert.ok(cloudProvider.includes("mergeEntriesFromBase"));
 assert.ok(cloudProvider.includes("isGoogleHealthEntryId"));
 assert.ok(cloudProvider.includes("applyGoogleHealthEntryOverrides"));
 assert.ok(
-  cloudProvider.includes(
-    "settings.googleHealthEntryOverrides =\n    remote.settings.googleHealthEntryOverrides",
+  /settings\.googleHealthEntryOverrides =\r?\n\s+remote\.settings\.googleHealthEntryOverrides/.test(
+    cloudProvider,
   ),
   "the protected remote registry must be authoritative on pull",
 );

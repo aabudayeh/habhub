@@ -53,18 +53,10 @@ app-example
 /work/
 /tmp/
 /outputs/
+/.eas-inspect/
 
 # Local editor metadata
 /.idea/
 
 # The public invite landing page is deployed as a separate Sites project.
 /invite-site/
-
-# Additional workspace noise
-.pnpm-store/
-/artifacts/
-dist-android-check/
-dist-android-check-2/
-supabase/.temp/
-.vscode/
-artifacts/

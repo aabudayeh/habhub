@@ -34,6 +34,9 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -41,6 +44,9 @@ data class HabHubWidgetConfiguration(
   val widgetId: Int,
   val trackerId: String,
   val range: String,
+  val backgroundMode: String = "theme",
+  val backgroundColor: String = "#081B49",
+  val backgroundOpacity: Int = 100,
 )
 
 object HabHubWidgetStore {
@@ -48,6 +54,9 @@ object HabHubWidgetStore {
   private const val SNAPSHOT = "snapshot"
   private const val TRACKER_PREFIX = "tracker_"
   private const val RANGE_PREFIX = "range_"
+  private const val BACKGROUND_MODE_PREFIX = "background_mode_"
+  private const val BACKGROUND_COLOR_PREFIX = "background_color_"
+  private const val BACKGROUND_OPACITY_PREFIX = "background_opacity_"
 
   private fun preferences(context: Context) =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -91,22 +100,30 @@ object HabHubWidgetStore {
     widgetId: Int,
     trackerId: String,
     range: String,
+    backgroundMode: String = "theme",
+    backgroundColor: String = "#081B49",
+    backgroundOpacity: Int = 100,
   ) {
     preferences(context).edit()
-      // Status is the single supported widget. Normalize older Featured and
-      // per-tracker configurations as soon as the launcher touches them.
-      .putString("$TRACKER_PREFIX$widgetId", "__avatar__")
+      .putString("$TRACKER_PREFIX$widgetId", normalizedTracker(trackerId))
       .putString("$RANGE_PREFIX$widgetId", normalizedRange(range))
+      .putString("$BACKGROUND_MODE_PREFIX$widgetId", normalizedBackgroundMode(backgroundMode))
+      .putString("$BACKGROUND_COLOR_PREFIX$widgetId", normalizedColor(backgroundColor))
+      .putInt("$BACKGROUND_OPACITY_PREFIX$widgetId", backgroundOpacity.coerceIn(0, 100))
       .apply()
   }
 
-  fun configuration(context: Context, widgetId: Int) = HabHubWidgetConfiguration(
-    widgetId,
-    "__avatar__",
-    normalizedRange(
-      preferences(context).getString("$RANGE_PREFIX$widgetId", "week") ?: "week",
-    ),
-  )
+  fun configuration(context: Context, widgetId: Int): HabHubWidgetConfiguration {
+    val prefs = preferences(context)
+    return HabHubWidgetConfiguration(
+      widgetId,
+      normalizedTracker(prefs.getString("$TRACKER_PREFIX$widgetId", "__avatar__") ?: "__avatar__"),
+      normalizedRange(prefs.getString("$RANGE_PREFIX$widgetId", "week") ?: "week"),
+      normalizedBackgroundMode(prefs.getString("$BACKGROUND_MODE_PREFIX$widgetId", "theme") ?: "theme"),
+      normalizedColor(prefs.getString("$BACKGROUND_COLOR_PREFIX$widgetId", DEFAULT_BACKGROUND) ?: DEFAULT_BACKGROUND),
+      prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 100).coerceIn(0, 100),
+    )
+  }
 
   fun configurations(context: Context): List<HabHubWidgetConfiguration> =
     preferences(context).all.keys
@@ -116,17 +133,38 @@ object HabHubWidgetStore {
       .map { configuration(context, it) }
       .toList()
 
+  fun hasConfiguration(context: Context, widgetId: Int) =
+    preferences(context).contains("$TRACKER_PREFIX$widgetId")
+
   fun delete(context: Context, widgetIds: IntArray) {
     preferences(context).edit().apply {
       widgetIds.forEach { widgetId ->
         remove("$TRACKER_PREFIX$widgetId")
         remove("$RANGE_PREFIX$widgetId")
+        remove("$BACKGROUND_MODE_PREFIX$widgetId")
+        remove("$BACKGROUND_COLOR_PREFIX$widgetId")
+        remove("$BACKGROUND_OPACITY_PREFIX$widgetId")
       }
     }.apply()
   }
 
   private fun normalizedRange(range: String) =
     if (range in setOf("week", "month", "year")) range else "week"
+
+  private fun normalizedTracker(trackerId: String) =
+    if (trackerId == "__avatar__") "__avatar__" else "__featured__"
+
+  private fun normalizedBackgroundMode(mode: String) =
+    if (mode in setOf("theme", "transparent", "custom")) mode else "theme"
+
+  private fun normalizedColor(value: String) = try {
+    Color.parseColor(value)
+    value
+  } catch (_: Exception) {
+    DEFAULT_BACKGROUND
+  }
+
+  private const val DEFAULT_BACKGROUND = "#081B49"
 }
 
 abstract class HabHubWidgetProvider : AppWidgetProvider() {
@@ -154,6 +192,7 @@ abstract class HabHubWidgetProvider : AppWidgetProvider() {
 
 class HabHubSmallWidgetProvider : HabHubWidgetProvider()
 class HabHubSquareWidgetProvider : HabHubWidgetProvider()
+class HabHubWideCompactWidgetProvider : HabHubWidgetProvider()
 class HabHubWideWidgetProvider : HabHubWidgetProvider()
 
 private data class HabHubWidgetSize(
@@ -172,6 +211,7 @@ object HabHubWidgetRenderer {
   private val providers = arrayOf(
     HabHubSmallWidgetProvider::class.java,
     HabHubSquareWidgetProvider::class.java,
+    HabHubWideCompactWidgetProvider::class.java,
     HabHubWideWidgetProvider::class.java,
   )
   private val avatarCache = object : LruCache<String, Bitmap>(2 * 1024 * 1024) {
@@ -192,18 +232,24 @@ object HabHubWidgetRenderer {
     val manager = AppWidgetManager.getInstance(context)
     val configuration = HabHubWidgetStore.configuration(context, widgetId)
     val snapshot = HabHubWidgetStore.snapshot(context)
-    val selected = snapshot.optJSONObject("avatar")
+    val selected = if (configuration.trackerId == "__avatar__") {
+      snapshot.optJSONObject("avatar")
+    } else {
+      snapshot.optJSONObject("featured")
+        ?: findTracker(snapshot.optJSONArray("trackers"), "__featured__")
+        ?: snapshot.optJSONArray("trackers")?.optJSONObject(0)
+    }
     val item = selected ?: emptySnapshot(context, configuration.trackerId)
     val size = widgetSize(context, manager, widgetId)
     val views = RemoteViews(context.packageName, R.layout.habhub_widget)
     views.setImageViewBitmap(
       R.id.widget_card_image,
-      renderCard(context, item, size),
+      renderCard(context, item, size, configuration),
     )
     views.setCharSequence(
       R.id.widget_root,
       "setContentDescription",
-      contentDescription(item),
+      contentDescription(context, item),
     )
     views.setOnClickPendingIntent(
       R.id.widget_root,
@@ -228,11 +274,14 @@ object HabHubWidgetRenderer {
     val wideWidgetIds = manager.getAppWidgetIds(
       ComponentName(context, HabHubWideWidgetProvider::class.java),
     )
+    val wideCompactWidgetIds = manager.getAppWidgetIds(
+      ComponentName(context, HabHubWideCompactWidgetProvider::class.java),
+    )
     val smallWidgetIds = manager.getAppWidgetIds(
       ComponentName(context, HabHubSmallWidgetProvider::class.java),
     )
-    val fallbackWidth = if (widgetId in wideWidgetIds) 250 else 110
-    val fallbackHeight = if (widgetId in smallWidgetIds) 48 else 105
+    val fallbackWidth = if (widgetId in wideWidgetIds || widgetId in wideCompactWidgetIds) 250 else 110
+    val fallbackHeight = if (widgetId in smallWidgetIds || widgetId in wideCompactWidgetIds) 48 else 105
     val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, fallbackWidth)
       .takeIf { it > 0 } ?: fallbackWidth
     val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, fallbackHeight)
@@ -253,13 +302,29 @@ object HabHubWidgetRenderer {
     put("deepLink", if (requestedId == "__avatar__") "paceboard://status" else "paceboard://")
   }
 
-  private fun contentDescription(item: JSONObject): String = listOf(
-    item.optString("eyebrow"),
-    item.optString("value"),
-    item.optString("subtitle"),
-    item.optString("weightLabel"),
-    item.optString("bodyCompositionLabel"),
-  ).filter { it.isNotBlank() }.joinToString(". ")
+  private fun contentDescription(context: Context, item: JSONObject): String {
+    val values = mutableListOf<String>()
+    if (item.optString("id") == "__avatar__") {
+      values += context.getString(R.string.habhub_widget_status_avatar)
+      values += "${(item.optDouble("progress", 0.0) * 100.0).roundToInt()}%"
+      item.optJSONArray("goals")?.let { goals ->
+        for (index in 0 until goals.length()) {
+          goals.optJSONObject(index)?.let { goal ->
+            values += listOf(goal.optString("title"), goal.optString("value"))
+              .filter { it.isNotBlank() }
+              .joinToString(" ")
+          }
+        }
+      }
+    } else {
+      values += listOf(
+        item.optString("eyebrow"),
+        item.optString("value"),
+        item.optString("subtitle"),
+      ).filter { it.isNotBlank() }
+    }
+    return values.filter { it.isNotBlank() }.joinToString(". ")
+  }
 
   private fun findTracker(trackers: JSONArray?, trackerId: String): JSONObject? {
     if (trackers == null) return null
@@ -274,6 +339,7 @@ object HabHubWidgetRenderer {
     context: Context,
     item: JSONObject,
     size: HabHubWidgetSize,
+    configuration: HabHubWidgetConfiguration,
   ): Bitmap {
     var scale = context.resources.displayMetrics.density.coerceIn(2f, 3f)
     val requestedPixels = size.widthDp * size.heightDp * scale * scale
@@ -293,14 +359,16 @@ object HabHubWidgetRenderer {
       item.optString("progressColor"),
       parseColor(if (allComplete) GOAL_GOLD else GOAL_LIME, Color.rgb(184, 228, 92)),
     )
-    drawCardSurface(canvas, size, item, allComplete)
-    drawProgressOutline(
-      canvas,
-      size,
-      progress,
-      item.optString("fillMode", "clockwise"),
-      accent,
-    )
+    drawCardSurface(canvas, size, item, allComplete, configuration)
+    if (item.optString("id") == "__avatar__" || item.optBoolean("showProgressOutline", true)) {
+      drawProgressOutline(
+        canvas,
+        size,
+        progress,
+        item.optString("fillMode", "clockwise"),
+        accent,
+      )
+    }
     if (item.optString("id") == "__avatar__") {
       drawAvatarCard(context, canvas, size, item, progress, accent)
     } else {
@@ -314,11 +382,21 @@ object HabHubWidgetRenderer {
     size: HabHubWidgetSize,
     item: JSONObject,
     allComplete: Boolean,
+    configuration: HabHubWidgetConfiguration,
   ) {
     val inset = 1.5f
     val rect = RectF(inset, inset, size.widthDp - inset, size.heightDp - inset)
     val radius = if (size.compact) 15f else 19f
-    val supplied = parseColor(item.optString("backgroundColor"), Color.rgb(8, 27, 73))
+    val supplied = when (configuration.backgroundMode) {
+      "custom" -> parseColor(configuration.backgroundColor, Color.rgb(8, 27, 73))
+      else -> parseColor(item.optString("backgroundColor"), Color.rgb(8, 27, 73))
+    }
+    val opacity = when (configuration.backgroundMode) {
+      "transparent" -> configuration.backgroundOpacity.coerceIn(0, 100)
+      "custom" -> configuration.backgroundOpacity.coerceIn(0, 100)
+      else -> 100
+    }
+    val alpha = (255f * opacity / 100f).roundToInt()
     val top = if (allComplete) {
       blendColor(Color.rgb(54, 39, 8), supplied, 0.56f)
     } else {
@@ -331,8 +409,8 @@ object HabHubWidgetRenderer {
         rect.top,
         rect.right,
         rect.bottom,
-        top,
-        bottom,
+        withAlpha(top, alpha),
+        withAlpha(bottom, alpha),
         Shader.TileMode.CLAMP,
       )
     }
@@ -347,7 +425,7 @@ object HabHubWidgetRenderer {
         size.widthDp * 0.84f,
         -size.heightDp * 0.08f,
         max(size.widthDp, size.heightDp) * 0.76f,
-        intArrayOf(withAlpha(glowColor, 72), withAlpha(glowColor, 0)),
+        intArrayOf(withAlpha(glowColor, (72f * opacity / 100f).roundToInt()), withAlpha(glowColor, 0)),
         floatArrayOf(0f, 1f),
         Shader.TileMode.CLAMP,
       )
@@ -359,7 +437,7 @@ object HabHubWidgetRenderer {
         0f,
         size.widthDp,
         size.heightDp,
-        intArrayOf(Color.TRANSPARENT, Color.argb(24, 255, 255, 255), Color.TRANSPARENT),
+        intArrayOf(Color.TRANSPARENT, Color.argb((24f * opacity / 100f).roundToInt(), 255, 255, 255), Color.TRANSPARENT),
         floatArrayOf(0f, 0.44f, 1f),
         Shader.TileMode.CLAMP,
       )
@@ -445,14 +523,22 @@ object HabHubWidgetRenderer {
         textPaint(8f, Color.argb(220, 224, 234, 250), true),
       )
     }
-    drawProgressBadge(canvas, badgeCenterX, badgeCenterY, badgeDiameter, progress, accent)
+    drawProgressBadge(
+      canvas,
+      badgeCenterX,
+      badgeCenterY,
+      badgeDiameter,
+      progress,
+      accent,
+      item.optString("completionIcon", "ellipse-outline"),
+    )
 
     val barLeft = pad
     val barRight = size.widthDp - pad
     val barHeight = if (size.compact) 3.2f else 5.2f
     val goals = item.optJSONArray("goals") ?: JSONArray()
     val barTop = if (size.compact) {
-      size.heightDp - pad + 1f
+      if (goals.length() > 0) size.heightDp - 14f else size.heightDp - pad + 1f
     } else if (goals.length() > 0) {
       61f
     } else {
@@ -465,7 +551,16 @@ object HabHubWidgetRenderer {
       canvas.drawRoundRect(fill, barHeight, barHeight, fillPaint(accent))
     }
 
-    if (!size.compact) {
+    if (size.compact && goals.length() > 0) {
+      drawCompactGoalTiles(
+        canvas,
+        size,
+        goals,
+        barTop + barHeight + 2.5f,
+        size.heightDp - 4f,
+        accent,
+      )
+    } else if (!size.compact) {
       drawGoalTiles(
         canvas,
         size,
@@ -477,6 +572,38 @@ object HabHubWidgetRenderer {
     }
   }
 
+  private fun drawCompactGoalTiles(
+    canvas: Canvas,
+    size: HabHubWidgetSize,
+    goals: JSONArray,
+    top: Float,
+    bottom: Float,
+    accent: Int,
+  ) {
+    val count = min(goals.length(), if (size.wide) 6 else 4)
+    if (count <= 0 || bottom <= top) return
+    val gap = 3f
+    val tileSize = min(bottom - top, (size.widthDp - 18f - gap * (count - 1)) / count)
+    val totalWidth = tileSize * count + gap * (count - 1)
+    val startX = (size.widthDp - totalWidth) / 2f
+    repeat(count) { index ->
+      val goal = goals.optJSONObject(index) ?: return@repeat
+      val left = startX + index * (tileSize + gap)
+      val rect = RectF(left, top, left + tileSize, top + tileSize)
+      val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+      canvas.drawRoundRect(rect, 1.8f, 1.8f, fillPaint(Color.argb(35, 255, 255, 255)))
+      if (goalProgress > 0f) {
+        canvas.drawRoundRect(
+          RectF(rect.left, rect.bottom - rect.height() * goalProgress, rect.right, rect.bottom),
+          1.8f,
+          1.8f,
+          fillPaint(withAlpha(accent, if (goal.optBoolean("met", false)) 205 else 130)),
+        )
+      }
+      canvas.drawRoundRect(rect, 1.8f, 1.8f, strokePaint(withAlpha(accent, 175), 0.65f))
+    }
+  }
+
   private fun drawProgressBadge(
     canvas: Canvas,
     centerX: Float,
@@ -484,19 +611,136 @@ object HabHubWidgetRenderer {
     diameter: Float,
     progress: Float,
     accent: Int,
+    completionIcon: String,
   ) {
     val radius = diameter / 2f
     canvas.drawCircle(centerX, centerY, radius, fillPaint(Color.argb(31, 255, 255, 255)))
     canvas.drawCircle(centerX, centerY, radius - 1f, strokePaint(Color.argb(72, 255, 255, 255), 1f))
     val arc = RectF(centerX - radius + 1f, centerY - radius + 1f, centerX + radius - 1f, centerY + radius - 1f)
     canvas.drawArc(arc, -90f, progress * 360f, false, strokePaint(accent, 2.3f))
-    drawCenteredText(
+    drawCompletionIcon(
       canvas,
-      "${(progress * 100f).roundToInt()}%",
       centerX,
       centerY,
-      textPaint(if (diameter < 30f) 7.5f else 9f, Color.WHITE, true),
+      diameter * 0.43f,
+      completionIcon,
+      if (progress > 0f) accent else Color.argb(215, 255, 255, 255),
     )
+  }
+
+  private fun drawCompletionIcon(
+    canvas: Canvas,
+    centerX: Float,
+    centerY: Float,
+    radius: Float,
+    icon: String,
+    color: Int,
+  ) {
+    val stroke = strokePaint(color, max(1.15f, radius * 0.13f))
+    when {
+      icon.startsWith("square") -> canvas.drawRoundRect(
+        RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
+        radius * 0.18f,
+        radius * 0.18f,
+        stroke,
+      )
+      icon.startsWith("flash") -> canvas.drawPath(Path().apply {
+        moveTo(centerX + radius * 0.12f, centerY - radius)
+        lineTo(centerX - radius * 0.58f, centerY + radius * 0.10f)
+        lineTo(centerX - radius * 0.08f, centerY + radius * 0.05f)
+        lineTo(centerX - radius * 0.23f, centerY + radius)
+        lineTo(centerX + radius * 0.62f, centerY - radius * 0.20f)
+        lineTo(centerX + radius * 0.10f, centerY - radius * 0.12f)
+        close()
+      }, fillPaint(color))
+      icon.startsWith("heart") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY + radius * 0.82f)
+        cubicTo(centerX - radius * 1.18f, centerY + radius * 0.10f, centerX - radius * 0.82f, centerY - radius * 0.88f, centerX, centerY - radius * 0.30f)
+        cubicTo(centerX + radius * 0.82f, centerY - radius * 0.88f, centerX + radius * 1.18f, centerY + radius * 0.10f, centerX, centerY + radius * 0.82f)
+        close()
+      }, stroke)
+      icon.startsWith("star") || icon.startsWith("sparkles") -> {
+        val path = Path()
+        repeat(10) { index ->
+          val angle = -PI / 2.0 + index * PI / 5.0
+          val pointRadius = if (index % 2 == 0) radius else radius * 0.43f
+          val x = centerX + (cos(angle) * pointRadius).toFloat()
+          val y = centerY + (sin(angle) * pointRadius).toFloat()
+          if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        path.close()
+        canvas.drawPath(path, stroke)
+      }
+      icon.startsWith("diamond") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY - radius)
+        lineTo(centerX + radius * 0.82f, centerY)
+        lineTo(centerX, centerY + radius)
+        lineTo(centerX - radius * 0.82f, centerY)
+        close()
+      }, stroke)
+      icon.startsWith("happy") -> {
+        canvas.drawCircle(centerX, centerY, radius, stroke)
+        canvas.drawCircle(centerX - radius * 0.34f, centerY - radius * 0.20f, radius * 0.09f, fillPaint(color))
+        canvas.drawCircle(centerX + radius * 0.34f, centerY - radius * 0.20f, radius * 0.09f, fillPaint(color))
+        canvas.drawArc(RectF(centerX - radius * 0.48f, centerY - radius * 0.15f, centerX + radius * 0.48f, centerY + radius * 0.58f), 18f, 144f, false, stroke)
+      }
+      icon.startsWith("water") || icon.startsWith("leaf") || icon.startsWith("flame") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY - radius)
+        cubicTo(centerX + radius * 0.82f, centerY - radius * 0.10f, centerX + radius * 0.70f, centerY + radius, centerX, centerY + radius)
+        cubicTo(centerX - radius * 0.70f, centerY + radius, centerX - radius * 0.82f, centerY - radius * 0.10f, centerX, centerY - radius)
+        close()
+      }, stroke)
+      icon.startsWith("fitness") -> {
+        canvas.drawLine(centerX - radius * 0.62f, centerY, centerX + radius * 0.62f, centerY, stroke)
+        canvas.drawLine(centerX - radius * 0.72f, centerY - radius * 0.46f, centerX - radius * 0.72f, centerY + radius * 0.46f, stroke)
+        canvas.drawLine(centerX + radius * 0.72f, centerY - radius * 0.46f, centerX + radius * 0.72f, centerY + radius * 0.46f, stroke)
+      }
+      icon.startsWith("cafe") || icon.startsWith("beer") -> {
+        canvas.drawRoundRect(
+          RectF(centerX - radius * 0.72f, centerY - radius * 0.62f, centerX + radius * 0.42f, centerY + radius * 0.62f),
+          radius * 0.12f,
+          radius * 0.12f,
+          stroke,
+        )
+        canvas.drawArc(
+          RectF(centerX + radius * 0.20f, centerY - radius * 0.30f, centerX + radius * 0.86f, centerY + radius * 0.35f),
+          -85f,
+          170f,
+          false,
+          stroke,
+        )
+      }
+      icon.startsWith("shield") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY - radius)
+        lineTo(centerX + radius * 0.78f, centerY - radius * 0.62f)
+        lineTo(centerX + radius * 0.62f, centerY + radius * 0.35f)
+        lineTo(centerX, centerY + radius)
+        lineTo(centerX - radius * 0.62f, centerY + radius * 0.35f)
+        lineTo(centerX - radius * 0.78f, centerY - radius * 0.62f)
+        close()
+      }, stroke)
+      icon.startsWith("rocket") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY - radius)
+        cubicTo(centerX + radius * 0.62f, centerY - radius * 0.58f, centerX + radius * 0.66f, centerY + radius * 0.28f, centerX, centerY + radius * 0.72f)
+        cubicTo(centerX - radius * 0.66f, centerY + radius * 0.28f, centerX - radius * 0.62f, centerY - radius * 0.58f, centerX, centerY - radius)
+        close()
+      }, stroke)
+      icon.startsWith("trophy") -> {
+        canvas.drawArc(RectF(centerX - radius * 0.68f, centerY - radius * 0.75f, centerX + radius * 0.68f, centerY + radius * 0.35f), 0f, 180f, false, stroke)
+        canvas.drawLine(centerX, centerY + radius * 0.30f, centerX, centerY + radius * 0.72f, stroke)
+        canvas.drawLine(centerX - radius * 0.48f, centerY + radius * 0.74f, centerX + radius * 0.48f, centerY + radius * 0.74f, stroke)
+      }
+      icon.startsWith("ribbon") -> {
+        canvas.drawCircle(centerX, centerY - radius * 0.28f, radius * 0.60f, stroke)
+        canvas.drawLine(centerX - radius * 0.28f, centerY + radius * 0.22f, centerX - radius * 0.45f, centerY + radius, stroke)
+        canvas.drawLine(centerX + radius * 0.28f, centerY + radius * 0.22f, centerX + radius * 0.45f, centerY + radius, stroke)
+      }
+      icon.startsWith("planet") || icon.startsWith("compass") -> {
+        canvas.drawCircle(centerX, centerY, radius * 0.68f, stroke)
+        canvas.drawOval(RectF(centerX - radius, centerY - radius * 0.32f, centerX + radius, centerY + radius * 0.32f), stroke)
+      }
+      else -> canvas.drawCircle(centerX, centerY, radius, stroke)
+    }
   }
 
   private fun drawGoalTiles(
@@ -564,20 +808,14 @@ object HabHubWidgetRenderer {
   ) {
     val avatarBitmap = avatarBitmap(context, item.optString("avatarUri"))
     val heightScale = item.optDouble("heightScale", 1.0).toFloat().coerceIn(0.9f, 1.1f)
-    val availableHeight = when {
-      size.compact -> size.heightDp - 6f
-      size.wide -> size.heightDp - 12f
-      else -> size.heightDp - 31f
-    }
+    val goals = item.optJSONArray("goals") ?: JSONArray()
+    val hasBottomGoals = !size.compact && goals.length() > 4
+    val availableHeight = if (hasBottomGoals) size.heightDp * 0.70f else size.heightDp - 8f
     val avatarHeight = availableHeight * heightScale
     val resolvedHeight = min(avatarHeight, availableHeight + 2f)
     val avatarWidth = resolvedHeight * 328f / 512f
-    val centerX = if (size.compact) max(24f, size.widthDp * 0.27f) else size.widthDp / 2f
-    val top = when {
-      size.compact -> (size.heightDp - resolvedHeight) / 2f
-      size.wide -> 5f
-      else -> 14f
-    }
+    val centerX = size.widthDp / 2f
+    val top = if (hasBottomGoals) 4f else (size.heightDp - resolvedHeight) / 2f
     val destination = RectF(
       centerX - avatarWidth / 2f,
       top,
@@ -593,7 +831,7 @@ object HabHubWidgetRenderer {
       item.optString("avatarStyle", "silhouette") == "body_model",
     )
 
-    val pillWidth = if (size.compact) 23f else 30f
+    val pillWidth = if (size.compact) 23f else 28f
     val pillHeight = if (size.compact) 10.5f else 14f
     val pillCenterY = destination.top + destination.height() * 0.48f
     val pill = RectF(
@@ -612,62 +850,69 @@ object HabHubWidgetRenderer {
       textPaint(if (size.compact) 6.2f else 7.5f, Color.WHITE, true),
     )
 
-    val eyebrow = item.optString("eyebrow", item.optString("title", "STATUS"))
-      .uppercase(Locale.getDefault())
-    if (size.compact) {
-      val factsLeft = min(size.widthDp - 38f, centerX + avatarWidth / 2f + 6f)
-      val factsWidth = size.widthDp - factsLeft - 8f
-      drawText(canvas, eyebrow, factsLeft, 12f, factsWidth, textPaint(6.3f, withAlpha(accent, 240), true, 0.1f))
-      drawText(canvas, item.optString("weightLabel"), factsLeft, 27f, factsWidth, textPaint(8f, Color.WHITE, true))
-      drawText(canvas, item.optString("bodyCompositionLabel"), factsLeft, 39f, factsWidth, textPaint(6.5f, Color.argb(215, 224, 234, 250), false))
-    } else if (size.wide) {
-      drawAvatarFact(
-        canvas,
-        eyebrow,
-        item.optString("weightLabel"),
-        12f,
-        size.widthDp / 2f - avatarWidth / 2f - 9f,
-        size.heightDp,
-        accent,
-      )
-      drawAvatarFact(
-        canvas,
-        item.optString("subtitle").uppercase(Locale.getDefault()),
-        item.optString("bodyCompositionLabel"),
-        size.widthDp / 2f + avatarWidth / 2f + 9f,
-        size.widthDp - 12f,
-        size.heightDp,
-        accent,
-      )
-    } else {
-      drawText(canvas, eyebrow, 9f, 13f, size.widthDp - 18f, textPaint(6.5f, withAlpha(accent, 235), true, 0.1f))
-      val facts = listOf(item.optString("weightLabel"), item.optString("bodyCompositionLabel"))
-        .filter { it.isNotBlank() }
-        .joinToString("  \u00B7  ")
-      drawCenteredEllipsizedText(
-        canvas,
-        facts,
-        size.widthDp / 2f,
-        size.heightDp - 7f,
-        size.widthDp - 16f,
-        textPaint(6.2f, Color.argb(220, 231, 238, 250), true),
-      )
+    drawStatusGoalCircles(canvas, size, goals, destination, accent)
+  }
+
+  private fun drawStatusGoalCircles(
+    canvas: Canvas,
+    size: HabHubWidgetSize,
+    goals: JSONArray,
+    avatar: RectF,
+    accent: Int,
+  ) {
+    if (goals.length() <= 0) return
+    val diameter = when {
+      size.compact -> min(15f, size.heightDp * 0.31f)
+      size.wide -> min(22f, size.heightDp * 0.22f)
+      else -> min(19f, size.widthDp * 0.18f)
+    }
+    val radius = diameter / 2f
+    val sideGap = max(3f, radius * 0.42f)
+    val leftX = max(radius + 5f, avatar.left - sideGap - radius)
+    val rightX = min(size.widthDp - radius - 5f, avatar.right + sideGap + radius)
+    val flankY = avatar.top + avatar.height() * 0.48f
+    val flankPositions = listOf(leftX to flankY, rightX to flankY)
+    val flankCount = min(2, goals.length())
+    repeat(flankCount) { index ->
+      goals.optJSONObject(index)?.let { goal ->
+        drawStatusGoalCircle(canvas, flankPositions[index].first, flankPositions[index].second, radius, goal, accent)
+      }
+    }
+    if (size.compact || goals.length() <= flankCount) return
+    val bottomCount = min(goals.length() - flankCount, if (size.wide) 6 else 3)
+    val gap = min(7f, diameter * 0.35f)
+    val totalWidth = bottomCount * diameter + max(0, bottomCount - 1) * gap
+    val startX = (size.widthDp - totalWidth) / 2f + radius
+    val y = size.heightDp - radius - 5f
+    repeat(bottomCount) { offset ->
+      goals.optJSONObject(flankCount + offset)?.let { goal ->
+        drawStatusGoalCircle(canvas, startX + offset * (diameter + gap), y, radius, goal, accent)
+      }
     }
   }
 
-  private fun drawAvatarFact(
+  private fun drawStatusGoalCircle(
     canvas: Canvas,
-    eyebrow: String,
-    value: String,
-    left: Float,
-    right: Float,
-    height: Float,
+    centerX: Float,
+    centerY: Float,
+    radius: Float,
+    goal: JSONObject,
     accent: Int,
   ) {
-    if (right - left < 22f) return
-    val center = (left + right) / 2f
-    drawCenteredEllipsizedText(canvas, eyebrow, center, height * 0.39f, right - left, textPaint(6.2f, withAlpha(accent, 235), true, 0.08f))
-    drawCenteredEllipsizedText(canvas, value, center, height * 0.57f, right - left, textPaint(8.2f, Color.WHITE, true))
+    val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val met = goal.optBoolean("met", goalProgress >= 1f)
+    val goalAccent = parseColor(
+      goal.optString("color"),
+      if (met) parseColor(GOAL_GOLD, accent) else accent,
+    )
+    canvas.drawCircle(centerX, centerY, radius, fillPaint(Color.argb(42, 255, 255, 255)))
+    canvas.drawCircle(centerX, centerY, radius - 0.8f, strokePaint(Color.argb(88, 255, 255, 255), 0.85f))
+    if (goalProgress > 0f) {
+      val arc = RectF(centerX - radius + 1f, centerY - radius + 1f, centerX + radius - 1f, centerY + radius - 1f)
+      canvas.drawArc(arc, -90f, goalProgress * 360f, false, strokePaint(goalAccent, if (radius < 9f) 1.25f else 1.7f))
+    }
+    val mark = if (met) "\u2713" else "${(goalProgress * 100f).roundToInt()}"
+    drawCenteredText(canvas, mark, centerX, centerY, textPaint(if (radius < 9f) 5.2f else 6.4f, Color.WHITE, true))
   }
 
   private fun drawAvatarLayers(

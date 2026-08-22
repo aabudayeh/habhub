@@ -5,7 +5,6 @@ import {
   Modal,
   PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
 } from "react-native";
@@ -115,6 +114,7 @@ import {
   foodNutritionReport,
   editFoodEntryClockTime,
   hasFoodNutrientTracker,
+  isFoodNutrientTrackerId,
   nextFoodNutrientTrackerOrder,
 } from "@/src/domain/food";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
@@ -207,8 +207,11 @@ export default function TrackerDetail() {
     [day, period, state.settings.weekStartsOn],
   );
   useEffect(() => {
-    setCollapsedEntryDates(dates.length > 1 ? dates : []);
-  }, [dates]);
+    const collapsedByDefault = ["week", "month", "year", "overall"].includes(
+      period,
+    );
+    setCollapsedEntryDates(collapsedByDefault ? dates : []);
+  }, [dates, period]);
   function shiftRange(direction: number) {
     const next = shiftedPeriodAnchor(
       period,
@@ -394,6 +397,56 @@ export default function TrackerDetail() {
       setDismissingGoogleEntryId(undefined);
     }
   }
+  function promptEntryRemoval(entry: (typeof entries)[number]) {
+    const linkedFoodParent =
+      isFoodNutrientTrackerId(entry.metricId) && entry.sourceRecordId
+        ? state.entries.find(
+            (candidate) =>
+              candidate.userId === entry.userId &&
+              candidate.metricId === "food" &&
+              candidate.sourceProvider === entry.sourceProvider &&
+              candidate.sourceRecordId === entry.sourceRecordId,
+          )
+        : undefined;
+    if (linkedFoodParent) {
+      Alert.alert(
+        t("Managed from Food"),
+        t(
+          "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.",
+        ),
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: t("Open Food"),
+            onPress: () =>
+              router.push({
+                pathname: "/metric-detail",
+                params: {
+                  metric: "food",
+                  date: linkedFoodParent.localDate,
+                  period,
+                },
+              }),
+          },
+        ],
+      );
+      return;
+    }
+    Alert.alert(
+      entry.source === "imported" ? "Hide imported entry?" : "Delete entry?",
+      entry.source === "imported"
+        ? "This imported record will remain hidden after future health syncs."
+        : "This removes this manually logged item.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => void dismissEntry(entry),
+        },
+      ],
+    );
+  }
   const gymSourceSessions = tracker.gymMapping
     ? (state.gymSessions ?? [])
         .filter(
@@ -408,6 +461,23 @@ export default function TrackerDetail() {
             b.recordedAt.localeCompare(a.recordedAt),
         )
     : [];
+  const gymEntryDates = new Set(
+    gymSourceSessions.map((session) => session.localDate),
+  );
+  const entryCountsByDate = new Map<string, number>();
+  for (const localDate of [
+    ...entries.map((entry) => entry.localDate),
+    ...gymSourceSessions.map((session) => session.localDate),
+  ])
+    entryCountsByDate.set(localDate, (entryCountsByDate.get(localDate) ?? 0) + 1);
+  const entryCountForDate = (localDate: string) =>
+    entryCountsByDate.get(localDate) ?? 0;
+  const toggleEntryDate = (localDate: string) =>
+    setCollapsedEntryDates((current) =>
+      current.includes(localDate)
+        ? current.filter((date) => date !== localDate)
+        : [...current, localDate],
+    );
   const pairedBloodPressure = (entry: (typeof entries)[number]) => {
     if (!isBloodPressure) return null;
     const diastolicId = state.metrics.find(
@@ -1848,14 +1918,44 @@ export default function TrackerDetail() {
         ) : null}
       </View> : null}
       <View style={styles.entries}>
-        {gymSourceSessions.map((session) => {
+        {gymSourceSessions.map((session, index) => {
           const contribution = gymSessionMetricValue(
             session,
             tracker.gymMapping!,
           );
           const clock = gymSessionClockBounds(session);
+          const firstOnDate =
+            index === 0 ||
+            gymSourceSessions[index - 1].localDate !== session.localDate;
+          const collapsed = collapsedEntryDates.includes(session.localDate);
           return (
-            <Card key={`gym:${session.id}`} style={styles.entry}>
+            <React.Fragment key={`gym:${session.id}`}>
+            {dates.length > 1 && firstOnDate ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !collapsed }}
+                onPress={() => toggleEntryDate(session.localDate)}
+                style={[styles.dateGroupHeader, { borderColor: colors.border }]}
+              >
+                <Text
+                  style={[styles.entryTitle, { color: colors.ink }]}
+                >
+                  {friendlyDate(session.localDate, locale)}
+                </Text>
+                <View style={styles.dateGroupMeta}>
+                  <Text style={[styles.time, { color: colors.muted }]}>
+                    {entryCountForDate(session.localDate)}
+                  </Text>
+                  <Ionicons
+                    name={collapsed ? "chevron-down" : "chevron-up"}
+                    size={16}
+                    color={accent}
+                  />
+                </View>
+              </Pressable>
+            ) : null}
+            {!collapsed ? (
+            <Card style={styles.entry}>
               <View style={styles.entryTop}>
                 <View style={styles.grow}>
                   <Text style={[styles.entryTitle, { color: colors.ink }]}>
@@ -1881,6 +1981,8 @@ export default function TrackerDetail() {
                 {session.exercises.map((exercise) => localizeExerciseName(language, exercise)).join(", ")}
               </Text>
             </Card>
+            ) : null}
+            </React.Fragment>
           );
         })}
         {entries.map((entry, index) => {
@@ -1906,15 +2008,11 @@ export default function TrackerDetail() {
             tracker.id === "food" && entry.source !== "calculated";
           return (
           <React.Fragment key={`${entry.userId}:${entry.id}`}>
-          {dates.length > 1 && firstOnDate ? (
+          {dates.length > 1 && firstOnDate && !gymEntryDates.has(entry.localDate) ? (
             <Pressable
-              onPress={() =>
-                setCollapsedEntryDates((current) =>
-                  current.includes(entry.localDate)
-                    ? current.filter((date) => date !== entry.localDate)
-                    : [...current, entry.localDate],
-                )
-              }
+              accessibilityRole="button"
+              accessibilityState={{ expanded: !collapsed }}
+              onPress={() => toggleEntryDate(entry.localDate)}
               style={[styles.dateGroupHeader, { borderColor: colors.border }]}
             >
               <Text style={[styles.entryTitle, { color: colors.ink }]}>
@@ -1922,7 +2020,7 @@ export default function TrackerDetail() {
               </Text>
               <View style={styles.dateGroupMeta}>
                 <Text style={[styles.time, { color: colors.muted }]}>
-                  {entries.filter((item) => item.localDate === entry.localDate).length}
+                  {entryCountForDate(entry.localDate)}
                 </Text>
                 <Ionicons
                   name={collapsed ? "chevron-down" : "chevron-up"}
@@ -1975,21 +2073,7 @@ export default function TrackerDetail() {
             delayLongPress={450}
             onLongPress={
               entry.source !== "calculated"
-                ? () =>
-                    Alert.alert(
-                      entry.source === "imported" ? "Hide imported entry?" : "Delete entry?",
-                      entry.source === "imported"
-                        ? "This imported record will remain hidden after future health syncs."
-                        : "This removes this manually logged item.",
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        {
-                          text: "Delete",
-                          style: "destructive",
-                          onPress: () => void dismissEntry(entry),
-                        },
-                      ],
-                    )
+                ? () => promptEntryRemoval(entry)
                 : undefined
             }
           >
@@ -2376,6 +2460,7 @@ function FoodNutritionSection({
         updateMetric(id, {
           activeFrom,
           order: nextFoodNutrientTrackerOrder(state.metrics),
+          sections: { today: false, group: false, insights: false },
         });
       }
       router.push({
@@ -2668,7 +2753,7 @@ function FoodNutrientProgress({
             accessibilityLabel={`Goal ${formatNutrientValue(goal ?? 0, nutrient.unit, locale)}`}
             style={[
               styles.foodMacroGoalTick,
-              { left: `${goalPosition * 100}%`, backgroundColor: colors.ink },
+              { left: `${goalPosition * 100}%`, backgroundColor: palette.amber },
             ]}
           />
         ) : null}
@@ -2696,14 +2781,6 @@ function FoodNutrientBars({
   onOpenNutrient: (id: FoodNutrientId) => void;
 }) {
   const { t } = useLocalization();
-  // Give adjacent series separate touch lanes. Inflating tiny bars with
-  // hitSlop makes sibling targets overlap and can open the wrong nutrient;
-  // horizontal scrolling keeps dense selections compact and deterministic.
-  const barTouchWidth = 24;
-  const bucketWidth = Math.max(
-    28,
-    nutrients.length * barTouchWidth + Math.max(0, nutrients.length - 1),
-  );
   const nutrientMax = Object.fromEntries(
     nutrients.map((nutrient) => [
       nutrient.id,
@@ -2729,10 +2806,6 @@ function FoodNutrientBars({
     }),
   );
   const axisMax = Math.max(100, Math.ceil((Math.max(1, ...percentages) * 1.08) / 25) * 25);
-  const chartWidth = Math.max(
-    240,
-    buckets.length * bucketWidth + Math.max(0, buckets.length - 1) * 2,
-  );
   const labelIndexes = [...new Set([0, Math.floor((buckets.length - 1) / 2), buckets.length - 1])].filter(
     (index) => index >= 0,
   );
@@ -2763,14 +2836,11 @@ function FoodNutrientBars({
             </Text>
           ))}
         </View>
-        <ScrollView
-          horizontal
+        <View
           accessibilityLabel="Nutrient history chart"
-          showsHorizontalScrollIndicator={false}
-          style={styles.foodMacroChartScroll}
-          contentContainerStyle={{ width: chartWidth }}
+          style={styles.foodMacroChartViewport}
         >
-          <View style={[styles.foodMacroScrollablePlot, { width: chartWidth }]}>
+          <View style={styles.foodMacroScrollablePlot}>
             <View style={styles.foodMacroPlot}>
               {[0, 50, 100].map((top) => (
                 <View key={top} style={[styles.foodMacroGrid, { top: `${top}%`, borderTopColor: colors.border }]} />
@@ -2779,7 +2849,7 @@ function FoodNutrientBars({
                 {buckets.map((bucket) => (
                   <View
                     key={bucket.key}
-                    style={[styles.foodMacroBarSlot, { width: bucketWidth }]}
+                    style={styles.foodMacroBarSlot}
                   >
                     {nutrients.map((nutrient) => {
                       const value = bucket.values[nutrient.id];
@@ -2795,10 +2865,7 @@ function FoodNutrientBars({
                           accessibilityLabel={`${bucket.label}, ${nutrient.label}, ${value === null || value === undefined ? t("not recorded") : formatNutrientValue(value, nutrient.unit, locale)}${nutrient.goal && value !== null && value !== undefined ? `, ${Math.round(relativePercent)}%` : ""}`}
                           disabled={value === null || value === undefined}
                           onPress={() => onOpenNutrient(nutrient.id)}
-                          style={[
-                            styles.foodMacroBarTarget,
-                            { width: barTouchWidth },
-                          ]}
+                          style={styles.foodMacroBarTarget}
                         >
                           {value === null || value === undefined ? (
                             <View style={[styles.foodMacroMissingBar, { backgroundColor: colors.border }]} />
@@ -2820,7 +2887,7 @@ function FoodNutrientBars({
                                 styles.foodMacroBarGoalTick,
                                 {
                                   bottom: `${Math.min(1, 100 / axisMax) * 100}%`,
-                                  borderTopColor: colors.muted,
+                                  borderTopColor: palette.amber,
                                 },
                               ]}
                             />
@@ -2849,7 +2916,7 @@ function FoodNutrientBars({
               ))}
             </View>
           </View>
-        </ScrollView>
+        </View>
       </View>
       <Text translate={false} style={[styles.foodMacroAxisCaption, { color: colors.faint }]}>
         {t(axisLabel)} · {t("Goal bars show percent of goal; no-goal bars show percent of range maximum")}
@@ -4196,8 +4263,8 @@ const styles = StyleSheet.create({
   },
   foodMacroAxisUnit: { position: "absolute", top: -10, right: 5, fontSize: 6, fontWeight: "900" },
   foodMacroYAxisLabel: { fontSize: 6.5, fontWeight: "800" },
-  foodMacroChartScroll: { flex: 1 },
-  foodMacroScrollablePlot: { height: 144 },
+  foodMacroChartViewport: { flex: 1, minWidth: 0 },
+  foodMacroScrollablePlot: { flex: 1, minWidth: 0, height: 144 },
   foodMacroPlot: { height: 126, position: "relative" },
   foodMacroGrid: {
     position: "absolute",
@@ -4209,21 +4276,20 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 2,
+    gap: 1,
     zIndex: 1,
   },
   foodMacroBarSlot: {
-    flexGrow: 0,
-    flexShrink: 0,
+    flex: 1,
+    minWidth: 0,
     height: "100%",
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 1,
+    gap: 0,
   },
   foodMacroBarTarget: {
-    flexGrow: 0,
-    flexShrink: 0,
-    minWidth: 24,
+    flex: 1,
+    minWidth: 0,
     height: "100%",
     position: "relative",
   },
@@ -4240,8 +4306,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    borderTopWidth: 1,
-    borderStyle: "dashed",
+    borderTopWidth: 2,
     zIndex: 2,
   },
   foodMacroMissingBar: {
