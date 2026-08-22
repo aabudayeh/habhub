@@ -271,6 +271,15 @@ const periodMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const notificationUuidHotfix = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608220008_challenge_notification_uuid_aggregate_fix.sql",
+  ),
+  "utf8",
+);
 const challengeWorker = fs.readFileSync(
   path.join(
     root,
@@ -594,6 +603,14 @@ assert.match(periodMigration, /'Lead changed'/);
 assert.match(periodMigration, /challenge_standing/);
 assert.match(periodMigration, /challenge_reminder/);
 assert.match(periodMigration, /challenge_result/);
+assert.doesNotMatch(periodMigration, /min\(standing\.user_id\)/);
+assert.match(
+  periodMigration,
+  /\(array_agg\(standing\.user_id order by standing\.user_id\)\)\[1\]/,
+);
+assert.match(notificationUuidHotfix, /pg_get_functiondef/);
+assert.match(notificationUuidHotfix, /min\(standing\.user_id\)/);
+assert.match(notificationUuidHotfix, /array_agg\(standing\.user_id/);
 assert.match(groupNotificationEvents, /occurrence_date/);
 assert.match(groupNotificationEvents, /\.limit\(500\)/);
 assert.match(groupScreen, /allEvents: groupFeedEvents/);

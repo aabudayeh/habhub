@@ -506,7 +506,7 @@ returns table (
   display_name text,
   total numeric,
   rank_value numeric,
-  position bigint,
+  standing_position bigint,
   winner boolean
 )
 language sql
@@ -641,19 +641,20 @@ as $$
   ),
   ranked as (
     select scored.*,
-           row_number() over (order by scored.sort_value, scored.user_id) as position,
+           row_number() over (order by scored.sort_value, scored.user_id)
+             as standing_position,
            count(*) over () as competitor_count,
            min(scored.sort_value) filter (where scored.eligible) over ()
              as winning_value
       from scored
   )
   select ranked.user_id, ranked.display_name, ranked.total,
-         ranked.sort_value as rank_value, ranked.position,
+         ranked.sort_value as rank_value, ranked.standing_position,
          ranked.competitor_count >= 2
            and ranked.eligible
            and ranked.sort_value = ranked.winning_value as winner
     from ranked
-   order by ranked.position;
+   order by ranked.standing_position;
 $$;
 
 revoke all on function public.group_challenge_exact_standings(uuid, date, date)
@@ -936,11 +937,11 @@ begin
         v_challenge.occurrence_date,
         v_challenge.occurrence_end_date
       )
-     order by position limit 1;
+     order by standing_position limit 1;
 
     select array_agg(standing.user_id order by standing.user_id),
            string_agg(standing.display_name, ', ' order by standing.display_name),
-           min(standing.user_id)
+           (array_agg(standing.user_id order by standing.user_id))[1]
       into v_winner_ids, v_winner_names, v_actor_id
       from public.group_challenge_exact_standings(
         v_challenge.id,
@@ -1118,14 +1119,14 @@ begin
         if v_self.user_id is null then
           v_detail := 'Log ' || v_challenge.metric_name ||
             ' to join the live standings.';
-        elsif v_self.position = 1 then
+        elsif v_self.standing_position = 1 then
           select * into v_neighbor
             from public.group_challenge_exact_standings(
               v_challenge.id,
               v_challenge.occurrence_date,
               v_challenge.occurrence_end_date
             )
-           where position = 2;
+           where standing_position = 2;
           if v_neighbor.user_id is null then
             v_detail := 'You are first. Keep building your lead.';
           else
@@ -1146,7 +1147,7 @@ begin
               v_challenge.occurrence_date,
               v_challenge.occurrence_end_date
             )
-           where position = v_self.position - 1;
+           where standing_position = v_self.standing_position - 1;
           v_gap := abs(
             coalesce(v_neighbor.rank_value, v_self.rank_value) - v_self.rank_value
           );
