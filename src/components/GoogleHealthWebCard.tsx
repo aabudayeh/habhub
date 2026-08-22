@@ -500,7 +500,14 @@ export function GoogleHealthWebCard() {
       setOperation(null);
       setNotice(clientErrorCopy(error));
     }
-  }, [connectBlockedNotice, hasLiveSession, refreshStatus, stopPopupPoll]);
+  }, [
+    connectBlockedNotice,
+    disclosureAccepted,
+    hasLiveSession,
+    phoneReady,
+    refreshStatus,
+    stopPopupPoll,
+  ]);
 
   const syncNow = useCallback(async () => {
     const requestGeneration = ++requestGenerationRef.current;

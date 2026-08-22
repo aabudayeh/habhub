@@ -713,7 +713,7 @@ for (const action of [
 ]) {
   assert.ok(client.includes(`"${action}"`), `typed client must support ${action}`);
 }
-assert.ok(client.includes('supabase.functions.invoke(\n    "google-health"'));
+assert.match(client, /supabase\.functions\.invoke\(\r?\n\s+"google-health"/);
 assert.ok(client.includes('parsed.hostname !== "accounts.google.com"'));
 assert.ok(client.includes("completionToken"));
 assert.ok(client.includes("isGoogleHealthCompletionToken"));
@@ -821,8 +821,8 @@ assert.ok(cloudProvider.includes("mergeEntriesFromBase"));
 assert.ok(cloudProvider.includes("isGoogleHealthEntryId"));
 assert.ok(cloudProvider.includes("applyGoogleHealthEntryOverrides"));
 assert.ok(
-  cloudProvider.includes(
-    "settings.googleHealthEntryOverrides =\n    remote.settings.googleHealthEntryOverrides",
+  /settings\.googleHealthEntryOverrides =\r?\n\s+remote\.settings\.googleHealthEntryOverrides/.test(
+    cloudProvider,
   ),
   "the protected remote registry must be authoritative on pull",
 );

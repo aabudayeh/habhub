@@ -952,9 +952,9 @@ export const healthConnectAdapter: HealthAdapter = {
             // the platform-authoritative value: it applies the user's Activity
             // priority and removes overlaps across phone/watch/app writers.
             // Never replace it with an origin-filtered third-party value.
-            // Android's official current-device source is the one exception
-            // for the still-open day: it gives us a non-additive live phone
-            // candidate when another priority writer has not caught up yet.
+            // SPN and Local Recording reads are used only if the unfiltered
+            // aggregate is empty. They must never override a positive platform
+            // total, even when a phone-only candidate is larger.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
@@ -963,48 +963,44 @@ export const healthConnectAdapter: HealthAdapter = {
               const currentStart = stepSlices.current?.from;
               const currentEnd = stepSlices.current?.to;
               const includesCurrentDay = Boolean(stepSlices.current);
-              const [
-                unfilteredGroups,
-                currentAggregate,
-                localPhoneSlice,
-                discoveredDeviceOrigins,
-              ] =
-                await Promise.all([
-                  stepSlices.historical
-                    ? aggregateGroupByPeriod({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          ...stepTimeRangeFilter,
-                          endTime: stepSlices.historical.to.toISOString(),
-                        },
-                        timeRangeSlicer: { period: "DAYS", length: 1 },
-                      })
-                    : Promise.resolve([]),
-                  includesCurrentDay
-                    ? aggregateRecord({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          operator: "between",
-                          startTime: currentStart!.toISOString(),
-                          endTime: currentEnd!.toISOString(),
-                        },
-                      })
-                    : Promise.resolve(null),
-                  includesCurrentDay
-                    ? readLocalPhoneSteps(currentStart!, currentEnd!)
-                    : Promise.resolve(null),
-                  includesCurrentDay
-                    ? currentDeviceStepOrigins()
-                    : Promise.resolve([]),
-                ]);
-              // The unfiltered Activity aggregate is still authoritative for
-              // history and normally for today. Android 14+ also exposes this
-              // phone's own TYPE_STEP_COUNTER data under `android` or a
-              // per-app synthetic package name. Read that official origin for
-              // the open day so a temporarily higher-priority, lagging writer
-              // cannot replace 54 live phone steps with (for example) 27.
-              // This is a competing full-day candidate, never an additive
-              // source, so phone/watch overlap cannot be double-counted.
+              const [unfilteredGroups, currentAggregate] = await Promise.all([
+                stepSlices.historical
+                  ? aggregateGroupByPeriod({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        ...stepTimeRangeFilter,
+                        endTime: stepSlices.historical.to.toISOString(),
+                      },
+                      timeRangeSlicer: { period: "DAYS", length: 1 },
+                    })
+                  : Promise.resolve([]),
+                includesCurrentDay
+                  ? aggregateRecord({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        operator: "between",
+                        startTime: currentStart!.toISOString(),
+                        endTime: currentEnd!.toISOString(),
+                      },
+                    })
+                  : Promise.resolve(null),
+              ]);
+              const authoritativeCurrentCount = Number(
+                currentAggregate?.COUNT_TOTAL ?? 0,
+              );
+              const needsPhoneFallback =
+                includesCurrentDay && !(authoritativeCurrentCount > 0);
+              const [localPhoneSlice, discoveredDeviceOrigins] =
+                needsPhoneFallback
+                  ? await Promise.all([
+                      readLocalPhoneSteps(currentStart!, currentEnd!),
+                      currentDeviceStepOrigins(),
+                    ])
+                  : [null, []];
+              // The unfiltered Activity aggregate is authoritative for history
+              // and every positive current-day read. Android 14+ also exposes
+              // this phone's TYPE_STEP_COUNTER data under `android` or an SPN;
+              // consult that source only as an empty-aggregate fallback.
               let androidDeviceOrigins = rememberCurrentDeviceStepOrigins([
                 ...discoveredDeviceOrigins,
                 ...(currentAggregate?.dataOrigins ?? []),
@@ -1013,7 +1009,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 androidPhoneSteps?.healthConnectOnDeviceSteps ??
                 Number(Platform.Version) >= 34;
               if (
-                includesCurrentDay &&
+                needsPhoneFallback &&
                 onDeviceHealthConnectStepsAvailable &&
                 !hasCurrentDeviceStepSpn(androidDeviceOrigins) &&
                 Date.now() >= nextRawStepOriginDiscoveryAt
@@ -1035,7 +1031,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 );
               }
               const androidDeviceAggregate =
-                includesCurrentDay && androidDeviceOrigins.length
+                needsPhoneFallback && androidDeviceOrigins.length
                   ? await aggregateRecord({
                       recordType: "Steps",
                       timeRangeFilter: {
@@ -1132,7 +1128,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 );
               }
               const reconciledCurrent = reconcileCurrentDayStepTotal(
-                Number(currentAggregate?.COUNT_TOTAL ?? 0),
+                authoritativeCurrentCount,
                 disjointPhoneCandidate,
                 Number(androidDeviceAggregate?.COUNT_TOTAL ?? 0),
               );
