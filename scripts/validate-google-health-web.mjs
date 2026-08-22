@@ -800,15 +800,24 @@ assert.ok(card.includes("First sync imports up to 90 days"));
 assert.ok(card.includes("heart-rate averages up to 14 days"));
 assert.ok(!card.includes("allowlist"));
 assert.ok(!card.includes("7 days"));
-assert.ok(card.includes("When pilot webhooks are configured"));
+assert.ok(card.includes("syncs automatically after connection"));
+assert.ok(card.includes("Importing available data automatically"));
+assert.ok(card.includes("observeRunningSync"));
+assert.ok(card.includes('invokeGoogleHealth("status")'));
+assert.ok(card.includes('code === "sync_busy"'));
+assert.ok(card.includes("baselineLastSyncedAt"));
+assert.ok(card.includes("lastSyncedAt !== baselineLastSyncedAt"));
+assert.ok(card.includes("Google Health connected and synced automatically"));
+assert.ok(!card.includes("connected. Use Sync now to import"));
 assert.ok(card.includes("data reached HabHub cloud"));
 assert.ok(card.includes("const partial = result.errors.length > 0"));
-assert.ok(card.includes("one or more categories could not refresh"));
+assert.ok(card.includes("these did not refresh"));
 assert.ok(card.includes("try Sync now again later"));
-assert.ok(!card.includes("result.errors.map"));
+assert.ok(card.includes("result.errors.map((error) => dataTypeLabel(error.dataType))"));
+assert.ok(!card.includes("error.code).join"));
 assert.ok(
   card.indexOf("await cloud.pullLatest();") <
-    card.indexOf('"Google Health sync finished."'),
+    card.indexOf("setNotice(observedSyncCopy(latest, initial))"),
 );
 assert.ok(card.includes('"access_denied"'));
 assert.ok(card.includes("HabHub collects the activity and fitness"));

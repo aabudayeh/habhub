@@ -32,10 +32,21 @@ import {
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useApp } from "@/src/state/AppProvider";
 
-type Operation = "checking" | "connecting" | "syncing" | "disconnecting" | "deleting";
+type Operation =
+  | "checking"
+  | "connecting"
+  | "initialSyncing"
+  | "syncing"
+  | "disconnecting"
+  | "deleting";
 type CallbackOutcome = "connected" | "error";
 
 const oauthMessageType = "habhub:google-health-oauth";
+const initialSyncWaitMs = 100_000;
+
+function pause(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
 
 function firstParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
@@ -97,20 +108,79 @@ function clientErrorCopy(error: unknown) {
     return "Google access was declined, or this account is not eligible for the pilot. Contact HabHub support if access is denied.";
   if (code === "invalid_completion")
     return "That Google connection could not be confirmed. Please start again.";
+  if (code === "sync_busy")
+    return "A Google Health sync is already running. HabHub will wait for it and refresh automatically.";
   if (code === "rate_limited")
-    return "Google Health is busy. Please wait and try again.";
+    return "Google Health synced recently. Wait a minute before checking again; automatic updates remain on.";
   if (code === "network_error")
     return "Could not reach Google Health. Check your connection and try again.";
   if (code === "connection_required")
     return "Connect Google Health before syncing.";
   if (code === "invalid_response" || code === "invalid_authorization_url")
     return "Google Health returned an unexpected response.";
+  if (code === "reauthorization_required")
+    return "Google Health authorization expired. Reconnect your Google account to continue syncing.";
+  if (code === "scope_denied" || code.includes("permission"))
+    return "Google Health permission needs attention. Reconnect and approve the categories you want to import.";
+  if (code === "timeout")
+    return "Google Health took too long to respond. Automatic updates will retry; you can also try Sync now later.";
+  if (code === "provider_error" || code.startsWith("provider_"))
+    return "Google Health did not return health data. Open Google Health on your phone, confirm the categories are visible and shared, then try Sync now again.";
   return "Google Health could not complete that request.";
+}
+
+function dataTypeLabel(dataType: string) {
+  const labels: Record<string, string> = {
+    steps: "Steps",
+    "active-energy-burned": "Active energy",
+    "heart-rate": "Heart rate",
+    weight: "Weight",
+    "body-fat": "Body fat",
+    "blood-glucose": "Blood glucose",
+    sleep: "Sleep",
+    exercise: "Workouts",
+    "hydration-log": "Water",
+    "nutrition-log": "Nutrition",
+  };
+  return labels[dataType] ?? dataType.replaceAll("-", " ");
+}
+
+function syncResultCopy(result: GoogleHealthSyncResult) {
+  if (!result.errors.length) {
+    if (!result.dataTypes.length)
+      return "No Google Health categories are approved. Reconnect Google Health and approve at least one category.";
+    if (!result.imported && !result.deleted)
+      return "Google Health checked every approved category. No new or changed items were available.";
+    return "Google Health sync finished and HabHub is up to date.";
+  }
+
+  const failed = result.errors.map((error) => dataTypeLabel(error.dataType));
+  const failedCopy = failed.join(", ");
+  if (!result.dataTypes.length)
+    return `No Google Health categories refreshed (${failedCopy}). Open Google Health on your phone, confirm the data is visible and shared, then try again.`;
+  return `Google Health refreshed ${result.dataTypes.length} categories, but these did not refresh: ${failedCopy}. Successful data is already in HabHub.`;
+}
+
+function observedSyncCopy(connection: GoogleHealthConnection, initial: boolean) {
+  if (connection.state === "error")
+    return clientErrorCopy(
+      new GoogleHealthClientError(connection.lastError ?? "reauthorization_required"),
+    );
+  if (connection.lastError) {
+    const detail = clientErrorCopy(new GoogleHealthClientError(connection.lastError));
+    return initial
+      ? `Google Health connected and completed its first check, but at least one category needs attention. ${detail}`
+      : `The running Google Health sync finished, but at least one category needs attention. ${detail}`;
+  }
+  return initial
+    ? "Google Health connected and synced automatically. HabHub is up to date."
+    : "The running Google Health sync finished. HabHub is up to date.";
 }
 
 function statusLabel(connection: GoogleHealthConnection | null, operation: Operation | null) {
   if (operation === "checking") return "Checking…";
   if (operation === "connecting") return "Waiting for Google…";
+  if (operation === "initialSyncing") return "Importing…";
   if (operation === "syncing") return "Syncing…";
   if (operation === "disconnecting") return "Disconnecting…";
   if (operation === "deleting") return "Deleting…";
@@ -209,7 +279,7 @@ export function GoogleHealthWebCard() {
       const response = await invokeGoogleHealth("status");
       if (requestGenerationRef.current !== requestGeneration) return null;
       setConnection(response.connection);
-      if (response.connection.state === "error" && response.connection.lastError) {
+      if (response.connection.lastError) {
         setNotice(
           clientErrorCopy(new GoogleHealthClientError(response.connection.lastError)),
         );
@@ -224,6 +294,114 @@ export function GoogleHealthWebCard() {
         setOperation((current) => (current === "checking" ? null : current));
     }
   }, [accountId, hasLiveSession]);
+
+  const observeRunningSync = useCallback(async ({
+    initial,
+    requestGeneration,
+    startingConnection,
+    baselineLastSyncedAt,
+  }: {
+    initial: boolean;
+    requestGeneration: number;
+    startingConnection: GoogleHealthConnection;
+    baselineLastSyncedAt: string | null;
+  }) => {
+    let latest = startingConnection;
+    let completed = initial
+      ? Boolean(latest.lastSyncedAt || latest.lastError)
+      : Boolean(
+          latest.lastSyncedAt &&
+          latest.lastSyncedAt !== baselineLastSyncedAt
+        );
+    let failedStatusChecks = 0;
+    let pollAttempt = 0;
+    const deadline = Date.now() + initialSyncWaitMs;
+
+    setOperation(initial ? "initialSyncing" : "syncing");
+    setNotice(
+      initial
+        ? "Google Health connected. Importing available data automatically…"
+        : "A Google Health sync is already running. HabHub is waiting for it to finish…",
+    );
+
+    while (!completed && latest.state !== "error" && Date.now() < deadline) {
+      const delay = Math.min(5_000, 700 * 1.45 ** pollAttempt);
+      pollAttempt += 1;
+      await pause(delay);
+      if (requestGenerationRef.current !== requestGeneration) return;
+      try {
+        const response = await invokeGoogleHealth("status");
+        if (requestGenerationRef.current !== requestGeneration) return;
+        latest = response.connection;
+        setConnection(latest);
+        failedStatusChecks = 0;
+        completed = initial
+          ? Boolean(latest.lastSyncedAt || latest.lastError)
+          : Boolean(
+              latest.lastSyncedAt &&
+              latest.lastSyncedAt !== baselineLastSyncedAt
+            );
+      } catch (error) {
+        failedStatusChecks += 1;
+        if (failedStatusChecks < 3) continue;
+        if (requestGenerationRef.current !== requestGeneration) return;
+        setNotice(clientErrorCopy(error));
+        setOperation(null);
+        return;
+      }
+    }
+
+    if (requestGenerationRef.current !== requestGeneration) return;
+    if (!completed && latest.state !== "error") {
+      setNotice(
+        initial
+          ? "Google Health is connected. The first import is taking longer than usual and will keep running in the background. HabHub will load it automatically when it arrives."
+          : "Google Health is still syncing in the background. HabHub will load the result automatically when it finishes.",
+      );
+      setOperation(null);
+      return;
+    }
+
+    try {
+      await cloud.pullLatest();
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setNotice(observedSyncCopy(latest, initial));
+    } catch {
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setNotice(
+        initial
+          ? "Google Health finished its first sync in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically."
+          : "Google Health finished syncing in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically.",
+      );
+    } finally {
+      if (requestGenerationRef.current === requestGeneration) setOperation(null);
+    }
+  }, [cloud]);
+
+  const confirmAndObserveAutomaticSync = useCallback(async (
+    requestGeneration: number,
+  ) => {
+    try {
+      const response = await invokeGoogleHealth("status");
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setConnection(response.connection);
+      if (response.connection.state !== "connected") {
+        setOperation(null);
+        setNotice("Google Health connection was not confirmed. Please start again.");
+        return;
+      }
+      await observeRunningSync({
+        initial: true,
+        requestGeneration,
+        startingConnection: response.connection,
+        baselineLastSyncedAt: null,
+      });
+    } catch (error) {
+      if (requestGenerationRef.current !== requestGeneration) return;
+      setOperation(null);
+      setNotice(clientErrorCopy(error));
+    }
+  }, [observeRunningSync]);
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -281,23 +459,21 @@ export function GoogleHealthWebCard() {
       if (payload?.type !== oauthMessageType) return;
       stopPopupPoll();
       popupRef.current = null;
-      setOperation(null);
       const failureNotice = reasonCopy(safeCallbackReason(payload.reason));
-      void refreshStatus(true).then((confirmed) => {
-        if (payload.outcome !== "connected") {
-          setNotice(failureNotice);
-          return;
-        }
-        if (confirmed?.state === "connected")
-          setNotice("Google Health connected. Use Sync now to import available data.");
-        else if (confirmed)
-          setNotice("Google Health connection was not confirmed. Please start again.");
-      });
+      const requestGeneration = ++requestGenerationRef.current;
+      if (payload.outcome !== "connected") {
+        setOperation(null);
+        setNotice(failureNotice);
+      } else {
+        setOperation("initialSyncing");
+        setNotice("Google Health connected. Importing available data automatically…");
+        void confirmAndObserveAutomaticSync(requestGeneration);
+      }
       window.focus();
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [refreshStatus, stopPopupPoll]);
+  }, [confirmAndObserveAutomaticSync, stopPopupPoll]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -317,13 +493,13 @@ export function GoogleHealthWebCard() {
     setSyncResult(null);
     setOperation("connecting");
 
-    void invokeGoogleHealth("complete", {
-      completionToken: completion.token ?? undefined,
-    })
-      .then((response) => {
+    void (async () => {
+      try {
+        const response = await invokeGoogleHealth("complete", {
+          completionToken: completion.token ?? undefined,
+        });
         if (requestGenerationRef.current !== requestGeneration) return;
         setConnection(response.connection);
-        setOperation(null);
         if (response.connection.state !== "connected")
           throw new GoogleHealthClientError("invalid_completion");
 
@@ -335,9 +511,13 @@ export function GoogleHealthWebCard() {
           window.setTimeout(() => window.close(), 120);
           return;
         }
-        setNotice("Google Health connected. Use Sync now to import available data.");
-      })
-      .catch((error) => {
+        await observeRunningSync({
+          initial: true,
+          requestGeneration,
+          startingConnection: response.connection,
+          baselineLastSyncedAt: null,
+        });
+      } catch (error) {
         if (requestGenerationRef.current !== requestGeneration) return;
         setOperation(null);
         const reason =
@@ -353,8 +533,9 @@ export function GoogleHealthWebCard() {
           );
           window.setTimeout(() => window.close(), 120);
         }
-      });
-  }, [accountId, hasLiveSession]);
+      }
+    })();
+  }, [accountId, hasLiveSession, observeRunningSync]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -371,22 +552,22 @@ export function GoogleHealthWebCard() {
         window.location.origin,
       );
       window.setTimeout(() => window.close(), 120);
+      router.replace("/settings" as never);
+      return;
     }
 
-    setOperation(null);
     const failureNotice = reasonCopy(reason);
-    void refreshStatus(true).then((confirmed) => {
-      if (outcome !== "connected") {
-        setNotice(failureNotice);
-        return;
-      }
-      if (confirmed?.state === "connected")
-        setNotice("Google Health connected. Use Sync now to import available data.");
-      else if (confirmed)
-        setNotice("Google Health connection was not confirmed. Please start again.");
-    });
+    const requestGeneration = ++requestGenerationRef.current;
+    if (outcome !== "connected") {
+      setOperation(null);
+      setNotice(failureNotice);
+    } else {
+      setOperation("initialSyncing");
+      setNotice("Google Health connected. Importing available data automatically…");
+      void confirmAndObserveAutomaticSync(requestGeneration);
+    }
     router.replace("/settings" as never);
-  }, [params.google_health, params.reason, refreshStatus]);
+  }, [confirmAndObserveAutomaticSync, params.google_health, params.reason]);
 
   useEffect(
     () => () => {
@@ -511,6 +692,7 @@ export function GoogleHealthWebCard() {
 
   const syncNow = useCallback(async () => {
     const requestGeneration = ++requestGenerationRef.current;
+    const baselineLastSyncedAt = connection?.lastSyncedAt ?? null;
     setNotice(null);
     setSyncResult(null);
     setOperation("syncing");
@@ -529,11 +711,7 @@ export function GoogleHealthWebCard() {
       try {
         await cloud.pullLatest();
         if (requestGenerationRef.current !== requestGeneration) return;
-        setNotice(
-          partial
-            ? "Google Health synced the available categories, but one or more categories could not refresh. Try Sync now again."
-            : "Google Health sync finished.",
-        );
+        setNotice(syncResultCopy(result));
       } catch {
         if (requestGenerationRef.current !== requestGeneration) return;
         setNotice(
@@ -544,11 +722,54 @@ export function GoogleHealthWebCard() {
       }
     } catch (error) {
       if (requestGenerationRef.current !== requestGeneration) return;
-      setNotice(clientErrorCopy(error));
+      const code = error instanceof GoogleHealthClientError
+        ? error.code
+        : "request_failed";
+      if (code === "sync_busy") {
+        const current = connection ?? {
+          state: "connected" as const,
+          provider: "google_health" as const,
+          email: null,
+          scopes: [],
+          lastSyncedAt: baselineLastSyncedAt,
+          lastError: null,
+        };
+        await observeRunningSync({
+          initial: false,
+          requestGeneration,
+          startingConnection: current,
+          baselineLastSyncedAt,
+        });
+        return;
+      }
+
+      const completedProviderAttempt =
+        code.startsWith("provider_") ||
+        code.includes("permission") ||
+        ["scope_denied", "timeout", "rate_limited"].includes(code);
+      if (completedProviderAttempt) {
+        try {
+          const response = await invokeGoogleHealth("status");
+          if (requestGenerationRef.current !== requestGeneration) return;
+          setConnection(response.connection);
+          await cloud.pullLatest().catch(() => undefined);
+          if (requestGenerationRef.current !== requestGeneration) return;
+          setNotice(
+            code === "rate_limited"
+              ? clientErrorCopy(error)
+              : observedSyncCopy(response.connection, false),
+          );
+        } catch {
+          if (requestGenerationRef.current !== requestGeneration) return;
+          setNotice(clientErrorCopy(error));
+        }
+      } else {
+        setNotice(clientErrorCopy(error));
+      }
     } finally {
       if (requestGenerationRef.current === requestGeneration) setOperation(null);
     }
-  }, [cloud]);
+  }, [cloud, connection, observeRunningSync]);
 
   const disconnect = useCallback(async () => {
     const requestGeneration = ++requestGenerationRef.current;
@@ -819,15 +1040,15 @@ export function GoogleHealthWebCard() {
             <View style={styles.buttons}>
               <View style={styles.grow}>
                 <Button
-                  label="Sync now"
+                  label={operation === "initialSyncing" ? "Importing automatically" : "Sync now"}
                   icon="refresh-outline"
-                  loading={operation === "syncing"}
+                  loading={operation === "syncing" || operation === "initialSyncing"}
                   disabled={busy}
                   onPress={() => void syncNow()}
                 />
               </View>
             </View>
-            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>When pilot webhooks are configured, they keep the connection updated in the background. Sync now checks immediately.</Text>
+            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>Google Health syncs automatically after connection and when new phone data arrives. Sync now checks immediately.</Text>
             <View style={styles.connectionLinks}>
               <Pressable
                 accessibilityRole="button"
