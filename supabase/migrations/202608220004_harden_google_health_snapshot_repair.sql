@@ -157,32 +157,38 @@ revoke all on function public.merge_google_health_server_snapshot(uuid, jsonb)
 -- Serialize the one-time forward repair with all ordinary snapshot writers.
 -- Every supported Google import/mutation also updates and locks this table, so
 -- the helper below observes one coherent ownership/preferences generation.
-lock table public.user_snapshots in share row exclusive mode;
+-- Supabase's migration executor can dispatch top-level statements separately,
+-- so keep the transaction-only LOCK and its repair UPDATE in one DO block.
+do $repair$
+begin
+  lock table public.user_snapshots in share row exclusive mode;
 
--- Re-evaluate the helper from the UPDATE target's current payload. In
--- particular, do not replay a payload materialized before the row was locked.
-update public.user_snapshots snapshot
-   set payload = public.merge_google_health_server_snapshot(
-         snapshot.user_id,
-         snapshot.payload
-       ),
-       revision = snapshot.revision + 1,
-       device_id = 'google-health-server',
-       updated_at = now()
- where (
-   exists (
-     select 1
-       from public.google_health_import_records owned
-      where owned.user_id = snapshot.user_id
+  -- Re-evaluate the helper from the UPDATE target's current payload. In
+  -- particular, do not replay a payload materialized before the row was locked.
+  update public.user_snapshots snapshot
+     set payload = public.merge_google_health_server_snapshot(
+           snapshot.user_id,
+           snapshot.payload
+         ),
+         revision = snapshot.revision + 1,
+         device_id = 'google-health-server',
+         updated_at = now()
+   where (
+     exists (
+       select 1
+         from public.google_health_import_records owned
+        where owned.user_id = snapshot.user_id
+     )
+     or exists (
+       select 1
+         from public.google_health_entry_preferences preference
+        where preference.user_id = snapshot.user_id
+     )
    )
-   or exists (
-     select 1
-       from public.google_health_entry_preferences preference
-      where preference.user_id = snapshot.user_id
-   )
- )
- and snapshot.payload is distinct from
-   public.merge_google_health_server_snapshot(
-     snapshot.user_id,
-     snapshot.payload
-   );
+   and snapshot.payload is distinct from
+     public.merge_google_health_server_snapshot(
+       snapshot.user_id,
+       snapshot.payload
+     );
+end;
+$repair$;
