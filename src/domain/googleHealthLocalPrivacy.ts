@@ -377,19 +377,36 @@ export function purgeGoogleHealthEntryFromMemory(
       isGoogleHealthEntry(entry),
   );
   if (!target) return state;
-  const sensitiveMetricDay = googleHealthMetricDayKey(target);
+  // The server dismisses a Food record and its nutrient projections as one
+  // source-owned family. Mirror that authoritative result immediately so a
+  // confirmed deletion cannot leave nutrient rows visible until the pull that
+  // follows. Non-Food rows remain independently dismissible.
+  const removedEntries = state.entries.filter(
+    (entry) =>
+      entry.userId === accountId &&
+      isGoogleHealthEntry(entry) &&
+      (entry.id === entryId ||
+        (target.metricId === "food" &&
+          Boolean(target.sourceRecordId) &&
+          entry.sourceProvider === target.sourceProvider &&
+          entry.sourceRecordId === target.sourceRecordId)),
+  );
+  const removedIds = new Set(removedEntries.map((entry) => entry.id));
+  const sensitiveMetricDays = new Set(
+    removedEntries.map(googleHealthMetricDayKey),
+  );
   const entries = state.entries.filter(
-    (entry) => !(entry.userId === accountId && entry.id === entryId),
+    (entry) => !(entry.userId === accountId && removedIds.has(entry.id)),
   );
   const dailyMetricStatuses = state.dailyMetricStatuses.filter(
     (status) =>
       status.userId !== accountId ||
       (status.sourceProvider !== "google_health" &&
-        googleHealthMetricDayKey(status) !== sensitiveMetricDay),
+        !sensitiveMetricDays.has(googleHealthMetricDayKey(status))),
   );
   const withoutEntryId = (values: string[] | undefined) => {
-    if (!values?.includes(entryId)) return values;
-    const filtered = values.filter((id) => id !== entryId);
+    if (!values?.some((id) => removedIds.has(id))) return values;
+    const filtered = values.filter((id) => !removedIds.has(id));
     return filtered.length ? filtered : undefined;
   };
   return {
@@ -407,7 +424,7 @@ export function purgeGoogleHealthEntryFromMemory(
       ),
       googleHealthEntryOverrides: withoutGoogleHealthEntryOverrides(
         state.settings.googleHealthEntryOverrides,
-        new Set([entryId]),
+        removedIds,
       ),
     },
   };
