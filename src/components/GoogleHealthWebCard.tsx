@@ -43,9 +43,50 @@ type CallbackOutcome = "connected" | "error";
 
 const oauthMessageType = "habhub:google-health-oauth";
 const initialSyncWaitMs = 100_000;
+const backgroundSyncPollMinimumMs = 15_000;
+const backgroundSyncPollMaximumMs = 60_000;
 
-function pause(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+function pause(milliseconds: number, signal: AbortSignal) {
+  return new Promise<boolean>((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve(completed);
+    };
+    const onAbort = () => finish(false);
+    const timer = setTimeout(() => finish(true), milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function waitForVisiblePage(signal: AbortSignal) {
+  if (
+    Platform.OS !== "web" ||
+    typeof document === "undefined" ||
+    document.visibilityState !== "hidden"
+  ) return Promise.resolve(!signal.aborted);
+
+  return new Promise<boolean>((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    const finish = (visible: boolean) => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      signal.removeEventListener("abort", onAbort);
+      resolve(visible);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") finish(true);
+    };
+    const onAbort = () => finish(false);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function firstParam(value: string | string[] | undefined) {
@@ -172,6 +213,10 @@ function observedSyncCopy(connection: GoogleHealthConnection, initial: boolean) 
       ? `Google Health connected and completed its first check, but at least one category needs attention. ${detail}`
       : `The running Google Health sync finished, but at least one category needs attention. ${detail}`;
   }
+  if (connection.importedCount === 0)
+    return initial
+      ? "Google Health completed its first check, but no health entries were imported. Open Google Health on your phone, confirm your data is visible and shared, then try Sync now."
+      : "Google Health completed its check, but no Google Health entries are available in HabHub yet. Confirm your phone data is visible and shared, then try again.";
   return initial
     ? "Google Health connected and synced automatically. HabHub is up to date."
     : "The running Google Health sync finished. HabHub is up to date.";
@@ -258,6 +303,7 @@ export function GoogleHealthWebCard() {
     typeof captureGoogleHealthCompletionFromBrowserUrl
   > | null>(null);
   const requestGenerationRef = useRef(0);
+  const syncObserverAbortRef = useRef<AbortController | null>(null);
   const platform = useMemo(detectedPhonePlatform, []);
   const accountId = auth.user?.id ?? null;
   const hasLiveSession = Boolean(auth.session && accountId);
@@ -267,8 +313,19 @@ export function GoogleHealthWebCard() {
     popupPollRef.current = null;
   }, []);
 
+  const cancelSyncObserver = useCallback(() => {
+    syncObserverAbortRef.current?.abort();
+    syncObserverAbortRef.current = null;
+  }, []);
+
+  const beginRequest = useCallback(() => {
+    cancelSyncObserver();
+    requestGenerationRef.current += 1;
+    return requestGenerationRef.current;
+  }, [cancelSyncObserver]);
+
   const refreshStatus = useCallback(async (quiet = false): Promise<GoogleHealthConnection | null> => {
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     if (!hasLiveSession || !accountId) {
       setConnection(null);
       setOperation(null);
@@ -293,28 +350,39 @@ export function GoogleHealthWebCard() {
       if (requestGenerationRef.current === requestGeneration)
         setOperation((current) => (current === "checking" ? null : current));
     }
-  }, [accountId, hasLiveSession]);
+  }, [accountId, beginRequest, hasLiveSession]);
 
   const observeRunningSync = useCallback(async ({
     initial,
     requestGeneration,
     startingConnection,
     baselineLastSyncedAt,
+    waitForRunningSync = false,
   }: {
     initial: boolean;
     requestGeneration: number;
     startingConnection: GoogleHealthConnection;
     baselineLastSyncedAt: string | null;
+    waitForRunningSync?: boolean;
   }) => {
+    if (requestGenerationRef.current !== requestGeneration) return;
+    cancelSyncObserver();
+    const observerController = new AbortController();
+    syncObserverAbortRef.current = observerController;
+    const { signal } = observerController;
     let latest = startingConnection;
     let completed = initial
       ? Boolean(latest.lastSyncedAt || latest.lastError)
-      : Boolean(
-          latest.lastSyncedAt &&
-          latest.lastSyncedAt !== baselineLastSyncedAt
-        );
+      : waitForRunningSync
+        ? !latest.syncing
+        : Boolean(
+            latest.lastSyncedAt &&
+            latest.lastSyncedAt !== baselineLastSyncedAt
+          );
     let failedStatusChecks = 0;
     let pollAttempt = 0;
+    let backgroundPollAttempt = 0;
+    let observingInBackground = false;
     const deadline = Date.now() + initialSyncWaitMs;
 
     setOperation(initial ? "initialSyncing" : "syncing");
@@ -324,59 +392,71 @@ export function GoogleHealthWebCard() {
         : "A Google Health sync is already running. HabHub is waiting for it to finish…",
     );
 
-    while (!completed && latest.state !== "error" && Date.now() < deadline) {
-      const delay = Math.min(5_000, 700 * 1.45 ** pollAttempt);
-      pollAttempt += 1;
-      await pause(delay);
-      if (requestGenerationRef.current !== requestGeneration) return;
-      try {
-        const response = await invokeGoogleHealth("status");
-        if (requestGenerationRef.current !== requestGeneration) return;
-        latest = response.connection;
-        setConnection(latest);
-        failedStatusChecks = 0;
-        completed = initial
-          ? Boolean(latest.lastSyncedAt || latest.lastError)
-          : Boolean(
-              latest.lastSyncedAt &&
-              latest.lastSyncedAt !== baselineLastSyncedAt
-            );
-      } catch (error) {
-        failedStatusChecks += 1;
-        if (failedStatusChecks < 3) continue;
-        if (requestGenerationRef.current !== requestGeneration) return;
-        setNotice(clientErrorCopy(error));
-        setOperation(null);
-        return;
-      }
-    }
-
-    if (requestGenerationRef.current !== requestGeneration) return;
-    if (!completed && latest.state !== "error") {
-      setNotice(
-        initial
-          ? "Google Health is connected. The first import is taking longer than usual and will keep running in the background. HabHub will load it automatically when it arrives."
-          : "Google Health is still syncing in the background. HabHub will load the result automatically when it finishes.",
-      );
-      setOperation(null);
-      return;
-    }
-
     try {
-      await cloud.pullLatest();
-      if (requestGenerationRef.current !== requestGeneration) return;
-      setNotice(observedSyncCopy(latest, initial));
-    } catch {
-      if (requestGenerationRef.current !== requestGeneration) return;
-      setNotice(
-        initial
-          ? "Google Health finished its first sync in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically."
-          : "Google Health finished syncing in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically.",
-      );
+      while (!completed && latest.state !== "error") {
+        if (!observingInBackground && Date.now() >= deadline) {
+          observingInBackground = true;
+          setNotice(
+            initial
+              ? "Google Health is connected. The first import is taking longer than usual and is still running in the background. HabHub will load it automatically when it arrives."
+              : "Google Health is still syncing in the background. HabHub will load the result automatically when it finishes.",
+          );
+          setOperation(null);
+        }
+
+        if (observingInBackground && !(await waitForVisiblePage(signal))) return;
+        const delay = observingInBackground
+          ? Math.min(
+              backgroundSyncPollMaximumMs,
+              backgroundSyncPollMinimumMs * 1.45 ** backgroundPollAttempt,
+            )
+          : Math.min(5_000, 700 * 1.45 ** pollAttempt);
+        if (observingInBackground) backgroundPollAttempt += 1;
+        else pollAttempt += 1;
+        if (!(await pause(delay, signal))) return;
+        if (requestGenerationRef.current !== requestGeneration) return;
+        try {
+          const response = await invokeGoogleHealth("status");
+          if (requestGenerationRef.current !== requestGeneration || signal.aborted) return;
+          latest = response.connection;
+          setConnection(latest);
+          failedStatusChecks = 0;
+          completed = initial
+            ? Boolean(latest.lastSyncedAt || latest.lastError)
+            : waitForRunningSync
+              ? !latest.syncing
+              : Boolean(
+                  latest.lastSyncedAt &&
+                  latest.lastSyncedAt !== baselineLastSyncedAt
+                );
+        } catch (error) {
+          failedStatusChecks += 1;
+          if (failedStatusChecks < 3) continue;
+          if (requestGenerationRef.current !== requestGeneration || signal.aborted) return;
+          setNotice(clientErrorCopy(error));
+          return;
+        }
+      }
+
+      if (requestGenerationRef.current !== requestGeneration || signal.aborted) return;
+      try {
+        await cloud.pullLatest();
+        if (requestGenerationRef.current !== requestGeneration || signal.aborted) return;
+        setNotice(observedSyncCopy(latest, initial));
+      } catch {
+        if (requestGenerationRef.current !== requestGeneration || signal.aborted) return;
+        setNotice(
+          initial
+            ? "Google Health finished its first sync in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically."
+            : "Google Health finished syncing in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically.",
+        );
+      }
     } finally {
+      if (syncObserverAbortRef.current === observerController)
+        syncObserverAbortRef.current = null;
       if (requestGenerationRef.current === requestGeneration) setOperation(null);
     }
-  }, [cloud]);
+  }, [cancelSyncObserver, cloud]);
 
   const confirmAndObserveAutomaticSync = useCallback(async (
     requestGeneration: number,
@@ -404,7 +484,7 @@ export function GoogleHealthWebCard() {
   }, [observeRunningSync]);
 
   useEffect(() => {
-    requestGenerationRef.current += 1;
+    beginRequest();
     stopPopupPoll();
     if (popupRef.current && !popupRef.current.closed) popupRef.current.close();
     popupRef.current = null;
@@ -415,7 +495,7 @@ export function GoogleHealthWebCard() {
     setOperation(null);
     setDisclosureAccepted(false);
     setDisclosureLoaded(false);
-  }, [accountId, stopPopupPoll]);
+  }, [accountId, beginRequest, stopPopupPoll]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || !accountId || typeof window === "undefined") {
@@ -460,7 +540,7 @@ export function GoogleHealthWebCard() {
       stopPopupPoll();
       popupRef.current = null;
       const failureNotice = reasonCopy(safeCallbackReason(payload.reason));
-      const requestGeneration = ++requestGenerationRef.current;
+      const requestGeneration = beginRequest();
       if (payload.outcome !== "connected") {
         setOperation(null);
         setNotice(failureNotice);
@@ -473,7 +553,7 @@ export function GoogleHealthWebCard() {
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [confirmAndObserveAutomaticSync, stopPopupPoll]);
+  }, [beginRequest, confirmAndObserveAutomaticSync, stopPopupPoll]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -488,7 +568,7 @@ export function GoogleHealthWebCard() {
     pendingCompletionRef.current = { present: false, token: null };
     clearCapturedGoogleHealthCompletion();
 
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     setNotice(null);
     setSyncResult(null);
     setOperation("connecting");
@@ -535,7 +615,7 @@ export function GoogleHealthWebCard() {
         }
       }
     })();
-  }, [accountId, hasLiveSession, observeRunningSync]);
+  }, [accountId, beginRequest, hasLiveSession, observeRunningSync]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -557,7 +637,7 @@ export function GoogleHealthWebCard() {
     }
 
     const failureNotice = reasonCopy(reason);
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     if (outcome !== "connected") {
       setOperation(null);
       setNotice(failureNotice);
@@ -567,13 +647,15 @@ export function GoogleHealthWebCard() {
       void confirmAndObserveAutomaticSync(requestGeneration);
     }
     router.replace("/settings" as never);
-  }, [confirmAndObserveAutomaticSync, params.google_health, params.reason]);
+  }, [beginRequest, confirmAndObserveAutomaticSync, params.google_health, params.reason]);
 
   useEffect(
     () => () => {
+      requestGenerationRef.current += 1;
+      cancelSyncObserver();
       stopPopupPoll();
     },
-    [stopPopupPoll],
+    [cancelSyncObserver, stopPopupPoll],
   );
 
   const updatePhoneReady = useCallback((ready: boolean) => {
@@ -624,7 +706,7 @@ export function GoogleHealthWebCard() {
       setNotice(connectBlockedNotice);
       return;
     }
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     setNotice(null);
     setSyncResult(null);
     setOperation("connecting");
@@ -682,6 +764,7 @@ export function GoogleHealthWebCard() {
       setNotice(clientErrorCopy(error));
     }
   }, [
+    beginRequest,
     connectBlockedNotice,
     disclosureAccepted,
     hasLiveSession,
@@ -691,8 +774,7 @@ export function GoogleHealthWebCard() {
   ]);
 
   const syncNow = useCallback(async () => {
-    const requestGeneration = ++requestGenerationRef.current;
-    const baselineLastSyncedAt = connection?.lastSyncedAt ?? null;
+    const requestGeneration = beginRequest();
     setNotice(null);
     setSyncResult(null);
     setOperation("syncing");
@@ -726,19 +808,38 @@ export function GoogleHealthWebCard() {
         ? error.code
         : "request_failed";
       if (code === "sync_busy") {
-        const current = connection ?? {
-          state: "connected" as const,
-          provider: "google_health" as const,
-          email: null,
-          scopes: [],
-          lastSyncedAt: baselineLastSyncedAt,
-          lastError: null,
-        };
+        let current: GoogleHealthConnection;
+        try {
+          const statusResponse = await invokeGoogleHealth("status");
+          if (requestGenerationRef.current !== requestGeneration) return;
+          current = statusResponse.connection;
+          setConnection(current);
+        } catch (statusError) {
+          if (requestGenerationRef.current !== requestGeneration) return;
+          setNotice(clientErrorCopy(statusError));
+          return;
+        }
+        if (!current.syncing) {
+          try {
+            await cloud.pullLatest();
+            if (requestGenerationRef.current !== requestGeneration) return;
+            setNotice(observedSyncCopy(current, false));
+          } catch {
+            if (requestGenerationRef.current !== requestGeneration) return;
+            setNotice(
+              "The running Google Health sync finished in HabHub cloud, but this screen could not refresh yet. HabHub will retry automatically.",
+            );
+          }
+          return;
+        }
         await observeRunningSync({
           initial: false,
           requestGeneration,
           startingConnection: current,
-          baselineLastSyncedAt,
+          // Pair the live lease signal with this fresh status snapshot. Never
+          // compare a busy attempt against the card's potentially stale state.
+          baselineLastSyncedAt: current.lastSyncedAt,
+          waitForRunningSync: true,
         });
         return;
       }
@@ -769,10 +870,10 @@ export function GoogleHealthWebCard() {
     } finally {
       if (requestGenerationRef.current === requestGeneration) setOperation(null);
     }
-  }, [cloud, connection, observeRunningSync]);
+  }, [beginRequest, cloud, observeRunningSync]);
 
   const disconnect = useCallback(async () => {
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     setNotice(null);
     setOperation("disconnecting");
     try {
@@ -787,10 +888,10 @@ export function GoogleHealthWebCard() {
     } finally {
       if (requestGenerationRef.current === requestGeneration) setOperation(null);
     }
-  }, []);
+  }, [beginRequest]);
 
   const deleteGoogleData = useCallback(async () => {
-    const requestGeneration = ++requestGenerationRef.current;
+    const requestGeneration = beginRequest();
     setNotice(null);
     setOperation("deleting");
     try {
@@ -808,7 +909,7 @@ export function GoogleHealthWebCard() {
     } finally {
       if (requestGenerationRef.current === requestGeneration) setOperation(null);
     }
-  }, [cloud, purgeGoogleHealthData]);
+  }, [beginRequest, cloud, purgeGoogleHealthData]);
 
   const connected = connection?.state === "connected";
   const busy = operation !== null;

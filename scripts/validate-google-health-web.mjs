@@ -773,6 +773,10 @@ assert.ok(client.includes("completionToken"));
 assert.ok(client.includes("isGoogleHealthCompletionToken"));
 assert.ok(client.includes("parseGoogleHealthSyncErrors"));
 assert.ok(client.includes("errors: parseGoogleHealthSyncErrors(sync.errors)"));
+assert.ok(client.includes("importedCount: number"));
+assert.ok(client.includes("importedCount: parseCount(input.importedCount)"));
+assert.ok(client.includes("syncing: boolean"));
+assert.ok(client.includes("syncing: input.syncing === true"));
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(dataType)"));
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(code)"));
 assert.ok(!/CLIENT_SECRET|GOOGLE_HEALTH_SECRET|EXPO_PUBLIC_GOOGLE/i.test(client));
@@ -807,6 +811,21 @@ assert.ok(card.includes('invokeGoogleHealth("status")'));
 assert.ok(card.includes('code === "sync_busy"'));
 assert.ok(card.includes("baselineLastSyncedAt"));
 assert.ok(card.includes("lastSyncedAt !== baselineLastSyncedAt"));
+assert.ok(card.includes("baselineLastSyncedAt: current.lastSyncedAt"));
+assert.ok(card.includes('const statusResponse = await invokeGoogleHealth("status")'));
+assert.ok(card.includes("if (!current.syncing)"));
+assert.ok(card.includes("waitForRunningSync: true"));
+assert.ok(card.includes("? !latest.syncing"));
+assert.ok(card.includes("connection.importedCount === 0"));
+assert.ok(card.includes("no health entries were imported"));
+assert.ok(card.includes("cancelSyncObserver"));
+assert.ok(card.includes("syncObserverAbortRef.current?.abort()"));
+assert.ok(card.includes("waitForVisiblePage(signal)"));
+assert.ok(card.includes("backgroundSyncPollMaximumMs"));
+assert.match(
+  card,
+  /requestGenerationRef\.current \+= 1;\r?\n\s+cancelSyncObserver\(\);/,
+);
 assert.ok(card.includes("Google Health connected and synced automatically"));
 assert.ok(!card.includes("connected. Use Sync now to import"));
 assert.ok(card.includes("data reached HabHub cloud"));

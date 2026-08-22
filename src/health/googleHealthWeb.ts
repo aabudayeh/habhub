@@ -16,6 +16,8 @@ export type GoogleHealthConnection = {
   scopes: string[];
   lastSyncedAt: string | null;
   lastError: string | null;
+  importedCount: number;
+  syncing: boolean;
 };
 
 export type GoogleHealthSyncResult = {
@@ -125,6 +127,8 @@ function parseConnection(value: unknown): GoogleHealthConnection {
     scopes,
     lastSyncedAt: validTimestamp(input.lastSyncedAt),
     lastError: optionalString(input.lastError),
+    importedCount: parseCount(input.importedCount),
+    syncing: input.syncing === true,
   };
 }
 

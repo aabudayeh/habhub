@@ -1256,6 +1256,8 @@ assert.ok(
 assert.ok(deleteAccount.indexOf("deleteGoogleHealthData") < deleteAccount.indexOf("deleteUser"));
 assert.match(sync, /requiredScope/);
 assert.match(sync, /activeGrantedScopes\.has\(definition\.requiredScope\)/);
+assert.match(sync, /last_error_code,sync_lease_until/);
+assert.match(sync, /syncing: Number\.isFinite\(syncLeaseUntil\) && syncLeaseUntil > Date\.now\(\)/);
 assert.match(sync, /for \(const definition of definitions\)/);
 assert.ok(!/Promise\.all\(\s*definitions\.map/.test(sync));
 assert.match(api, /MIN_HEALTH_REQUEST_INTERVAL_MS = 450/);

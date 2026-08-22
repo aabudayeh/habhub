@@ -1189,7 +1189,7 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
     { count: importedCount, error: importedCountError },
   ] = await Promise.all([
     admin.from("google_health_connections")
-      .select("status,google_email,granted_scopes,last_synced_at,last_error_code")
+      .select("status,google_email,granted_scopes,last_synced_at,last_error_code,sync_lease_until")
       .eq("user_id", userId)
       .maybeSingle(),
     admin.from("google_health_import_records")
@@ -1199,7 +1199,16 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
   if (connectionError) throw connectionError;
   if (importedCountError) throw importedCountError;
   if (!connection)
-    return { state: "disconnected", provider: "google_health", scopes: [], importedCount: importedCount ?? 0 };
+    return {
+      state: "disconnected",
+      provider: "google_health",
+      scopes: [],
+      importedCount: importedCount ?? 0,
+      syncing: false,
+    };
+  const syncLeaseUntil = typeof connection.sync_lease_until === "string"
+    ? Date.parse(connection.sync_lease_until)
+    : Number.NaN;
   return {
     state: connection.status,
     provider: "google_health",
@@ -1208,6 +1217,7 @@ export async function connectionStatus(admin: SupabaseClient, userId: string) {
     lastSyncedAt: connection.last_synced_at ?? null,
     lastError: connection.last_error_code ?? null,
     importedCount: importedCount ?? 0,
+    syncing: Number.isFinite(syncLeaseUntil) && syncLeaseUntil > Date.now(),
   };
 }
 
