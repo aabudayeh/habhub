@@ -4,6 +4,7 @@ import path from "node:path";
 
 const root = process.cwd();
 const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+const normalizeEol = (value) => value.replace(/\r\n/g, "\n");
 
 const chat = read("app/(tabs)/chat.tsx");
 const tabs = read("app/(tabs)/_layout.tsx");
@@ -43,8 +44,10 @@ const nativeSource = read(
   "android/app/src/main/java/app/paceboard/mobile/HabHubWidgetProvider.kt",
 );
 assert.equal(
-  pluginSource.replace("__ANDROID_PACKAGE__", "app.paceboard.mobile"),
-  nativeSource,
+  normalizeEol(
+    pluginSource.replace("__ANDROID_PACKAGE__", "app.paceboard.mobile"),
+  ),
+  normalizeEol(nativeSource),
   "Generated widget renderer must match its config-plugin source",
 );
 
