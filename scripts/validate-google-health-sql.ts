@@ -4,6 +4,7 @@ import initPgQuery from "npm:pg-query-emscripten@5.1.0";
 const migrationPaths = [
   "supabase/migrations/202608210001_google_health_web_sync.sql",
   "supabase/migrations/202608220001_google_health_array_initializers.sql",
+  "supabase/migrations/202608220002_google_health_food_family_mutations.sql",
 ];
 
 function statements(source: string) {
