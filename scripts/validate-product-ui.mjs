@@ -11,6 +11,8 @@ const seed = read("src", "data", "seed.ts");
 const log = read("app", "(tabs)", "log.tsx");
 const today = read("app", "(tabs)", "index.tsx");
 const ui = read("src", "components", "ui.tsx");
+const status = read("app", "(tabs)", "status.tsx");
+const metricEditor = read("app", "metric-editor.tsx");
 
 const seededToday = seed.indexOf('"index"');
 const seededStatus = seed.indexOf('"status"');
@@ -54,6 +56,40 @@ assert.doesNotMatch(
   today,
   /heroOutlineSegment/,
   "the rounded card outline cannot be assembled from square edge segments",
+);
+
+assert.match(
+  status,
+  /<View style=\{styles\.compactHeaderSpacing\}>[\s\S]{0,180}<PageHeader[\s\S]{0,180}title="Status"/,
+  "Status must opt into its compact header-to-content spacing without changing shared safe-area layout",
+);
+assert.match(
+  status,
+  /compactHeaderSpacing:\s*\{\s*marginBottom:\s*-[1-9]\d*\s*\}/,
+  "Status compact spacing must bring the period controls closer to the title",
+);
+
+assert.match(metricEditor, /const promptOpen = useRef\(false\)/);
+assert.match(
+  metricEditor,
+  /useWebBeforeUnload\([\s\S]{0,180}!tutorialSandbox[\s\S]{0,180}dirtyRef\.current[\s\S]{0,180}!allowExit\.current/,
+  "Tracker drafts must warn before a browser refresh or tab close",
+);
+assert.match(
+  metricEditor,
+  /navigation\.addListener\("beforeRemove"[\s\S]{0,500}event\.preventDefault\(\)[\s\S]{0,500}navigation\.dispatch\(event\.data\.action\)/,
+  "Tracker drafts must intercept native and in-app navigation before leaving",
+);
+for (const label of ["Keep editing", "Discard", "Save"])
+  assert.match(
+    metricEditor,
+    new RegExp(`text: "${label}"`),
+    `Unsaved tracker prompt must expose the ${label} action`,
+  );
+assert.match(
+  metricEditor,
+  /function markSavedAndLeave[\s\S]{0,220}initialDraftSignature\.current = draftSignature[\s\S]{0,120}dirtyRef\.current = false/,
+  "A successful tracker save must mark the current draft clean before leaving",
 );
 
 console.log("Product navigation and compact UI validation passed.");

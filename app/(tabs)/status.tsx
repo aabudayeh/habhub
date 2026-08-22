@@ -407,11 +407,13 @@ export default function StatusPage() {
   return (
     <GestureDetector gesture={swipe}>
       <Screen minimumBottomPadding={16}>
-        <PageHeader
-          tutorialId="status-header"
-          title="Status"
-          showMenu
-        />
+        <View style={styles.compactHeaderSpacing}>
+          <PageHeader
+            tutorialId="status-header"
+            title="Status"
+            showMenu
+          />
+        </View>
         <PeriodChoiceBar
           period={period}
           onChange={choosePeriod}
@@ -736,6 +738,9 @@ export default function StatusPage() {
 }
 
 const styles = StyleSheet.create({
+  // Keep the shared safe-area/header geometry, while moving Status' first
+  // control a little closer to its short one-line title.
+  compactHeaderSpacing: { marginBottom: -5 },
   statusCard: { gap: 16, paddingHorizontal: 10, paddingVertical: 18 },
   personWrap: { alignItems: "center", justifyContent: "center", gap: 5 },
   avatarStage: {

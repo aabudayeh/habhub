@@ -48,6 +48,7 @@ import { metricVisualization } from "@/src/domain/visualization";
 import { useApp } from "@/src/state/AppProvider";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
+import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   Aggregation,
@@ -297,6 +298,7 @@ export default function TrackerEditor() {
   } = useApp();
   const cloud = useCloudSyncActions();
   const tutorial = useTutorial();
+  const tutorialSandbox = useTutorialSandboxActive();
   const sourceMetrics = groupScope
     ? (state.group.metricConfiguration ?? [])
     : state.metrics;
@@ -753,11 +755,15 @@ export default function TrackerEditor() {
   const initialDraftSignature = useRef(draftSignature);
   const dirtyRef = useRef(false);
   const allowExit = useRef(false);
+  const promptOpen = useRef(false);
   const requestCloseRef = useRef<(exit?: () => void) => void>(
     () => undefined,
   );
   dirtyRef.current = draftSignature !== initialDraftSignature.current;
-  useWebBeforeUnload(() => dirtyRef.current && !allowExit.current);
+  useWebBeforeUnload(
+    () =>
+      !tutorialSandbox && dirtyRef.current && !allowExit.current,
+  );
   const source = SOURCES.find((item) => item.id === healthType);
   const reusableGroupings = [
     ...new Set(
@@ -1016,8 +1022,7 @@ export default function TrackerEditor() {
     }
     if (groupScope) addGroupMetrics(metrics);
     else addMetrics(metrics);
-    allowExit.current = true;
-    onSaved();
+    markSavedAndLeave(onSaved);
   }
   async function save(onSaved: () => void = () => router.back()) {
     if (saving) return;
@@ -1380,37 +1385,86 @@ export default function TrackerEditor() {
           },
         },
       });
+    markSavedAndLeave(onSaved);
+  }
+  function leave(exit: () => void) {
     allowExit.current = true;
-    onSaved();
+    promptOpen.current = false;
+    exit();
+    // Navigation consumes its action synchronously. Resetting the bypass keeps
+    // the editor protected if a browser history action cannot actually leave.
+    setTimeout(() => {
+      allowExit.current = false;
+    }, 0);
+  }
+  function markSavedAndLeave(exit: () => void) {
+    initialDraftSignature.current = draftSignature;
+    dirtyRef.current = false;
+    leave(exit);
+  }
+  function discardAndLeave(exit: () => void) {
+    // Treat the explicit discard as resolved before browser history moves;
+    // popstate can arrive after the temporary allow-exit bypass is reset.
+    initialDraftSignature.current = draftSignature;
+    dirtyRef.current = false;
+    leave(exit);
   }
   function requestClose(exit: () => void = () => router.back()) {
-    if (!dirtyRef.current) {
-      allowExit.current = true;
-      exit();
+    // Guided practice runs against throwaway state. Its route transitions must
+    // never be interrupted by a real-data save prompt.
+    if (tutorialSandbox || !dirtyRef.current) {
+      leave(exit);
       return;
     }
-    Alert.alert("Save your changes?", "You have unsaved tracker changes.", [
-      { text: "Keep editing", style: "cancel" },
+    if (promptOpen.current) return;
+    promptOpen.current = true;
+    Alert.alert(
+      "Save your changes?",
+      "You have unsaved tracker changes.",
+      [
+        {
+          text: "Keep editing",
+          style: "cancel",
+          onPress: () => {
+            promptOpen.current = false;
+          },
+        },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => discardAndLeave(exit),
+        },
+        {
+          text: "Save",
+          onPress: () => {
+            promptOpen.current = false;
+            void save(exit);
+          },
+        },
+      ],
       {
-        text: "Discard",
-        style: "destructive",
-        onPress: () => {
-          allowExit.current = true;
-          exit();
+        cancelable: true,
+        onDismiss: () => {
+          promptOpen.current = false;
         },
       },
-      { text: "Save", onPress: () => void save(exit) },
-    ]);
+    );
   }
   requestCloseRef.current = requestClose;
   useEffect(
     () =>
       navigation.addListener("beforeRemove", (event) => {
-        if (allowExit.current || !dirtyRef.current) return;
+        if (
+          tutorialSandbox ||
+          allowExit.current ||
+          !dirtyRef.current
+        )
+          return;
         event.preventDefault();
+        if (promptOpen.current) return;
         requestCloseRef.current(() => navigation.dispatch(event.data.action));
       }),
-    [navigation],
+    [navigation, tutorialSandbox],
   );
   useEffect(() => {
     if (groupScope || focus !== "notifications") return;
@@ -1469,8 +1523,7 @@ export default function TrackerEditor() {
           onPress: () => {
             if (groupScope) deleteGroupMetric(tracker.id);
             else deleteMetric(tracker.id);
-            allowExit.current = true;
-            router.back();
+            discardAndLeave(() => router.back());
           },
         },
       ],
