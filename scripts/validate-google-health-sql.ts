@@ -5,6 +5,7 @@ const migrationPaths = [
   "supabase/migrations/202608210001_google_health_web_sync.sql",
   "supabase/migrations/202608220001_google_health_array_initializers.sql",
   "supabase/migrations/202608220002_google_health_food_family_mutations.sql",
+  "supabase/migrations/202608220003_preserve_google_health_server_snapshot.sql",
 ];
 
 function statements(source: string) {

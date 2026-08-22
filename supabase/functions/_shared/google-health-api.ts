@@ -142,11 +142,45 @@ export async function getGoogleHealthIdentity(accessToken: string) {
 }
 
 export type CivilDate = { year: number; month: number; day: number };
+export type CivilTime = {
+  hours: number;
+  minutes: number;
+  seconds: number;
+  nanos: number;
+};
 
 function civilDate(date: string): CivilDate {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!match) throw new Error("Invalid civil date");
   return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
+function civilMidnight(date: string) {
+  const time: CivilTime = {
+    hours: 0,
+    minutes: 0,
+    seconds: 0,
+    nanos: 0,
+  };
+  return { date: civilDate(date), time };
+}
+
+function dailyRollUpRequestBody(
+  fromDate: string,
+  throughDateExclusive: string,
+) {
+  return {
+    range: {
+      // Google Health's CivilDateTime schema requires a complete CivilTime.
+      // An empty object is not interpreted as midnight and makes every daily
+      // rollup request fail before Steps/energy/heart-rate can be returned.
+      start: civilMidnight(fromDate),
+      end: civilMidnight(throughDateExclusive),
+    },
+    windowSizeDays: 1,
+    pageSize: 100,
+    dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
+  };
 }
 
 export async function dailyRollUp(
@@ -163,18 +197,17 @@ export async function dailyRollUp(
     `${API_ROOT}/users/me/dataTypes/${encodeURIComponent(dataType)}/dataPoints:dailyRollUp`,
     {
       method: "POST",
-      body: JSON.stringify({
-        range: {
-          start: { date: civilDate(fromDate), time: {} },
-          end: { date: civilDate(throughDateExclusive), time: {} },
-        },
-        windowSizeDays: 1,
-        pageSize: 100,
-        dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
-      }),
+      body: JSON.stringify(dailyRollUpRequestBody(
+        fromDate,
+        throughDateExclusive,
+      )),
     },
   );
 }
+
+// Pure request fixtures exercise the exact production JSON without making a
+// provider call or exposing OAuth credentials.
+export const googleHealthApiTestHooks = { dailyRollUpRequestBody };
 
 export async function reconcileDataPoints(
   accessToken: string,

@@ -4,6 +4,7 @@ import {
   decryptSecret,
   encryptSecret,
 } from "../supabase/functions/_shared/google-health-crypto.ts";
+import { googleHealthApiTestHooks } from "../supabase/functions/_shared/google-health-api.ts";
 import { googleHealthSyncTestHooks } from "../supabase/functions/_shared/google-health-sync.ts";
 import { readBoundedJson } from "../supabase/functions/_shared/google-health-request.ts";
 import {
@@ -16,6 +17,7 @@ const [
   migration,
   arrayInitializerMigration,
   foodFamilyMutationMigration,
+  serverSnapshotMigration,
   endpoint,
   sync,
   api,
@@ -34,6 +36,7 @@ const [
   read("supabase/migrations/202608210001_google_health_web_sync.sql"),
   read("supabase/migrations/202608220001_google_health_array_initializers.sql"),
   read("supabase/migrations/202608220002_google_health_food_family_mutations.sql"),
+  read("supabase/migrations/202608220003_preserve_google_health_server_snapshot.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -74,6 +77,33 @@ assert.equal(
   [...arrayInitializerMigration.matchAll(/'public\.[^']+'::regprocedure/g)].length,
   arrayInitializerTargets.length,
   "the lint-only migration must target exactly the four audited functions",
+);
+
+assert.deepEqual(
+  googleHealthApiTestHooks.dailyRollUpRequestBody(
+    "2026-08-21",
+    "2026-08-23",
+  ),
+  {
+    range: {
+      start: {
+        date: { year: 2026, month: 8, day: 21 },
+        time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
+      },
+      end: {
+        date: { year: 2026, month: 8, day: 23 },
+        time: { hours: 0, minutes: 0, seconds: 0, nanos: 0 },
+      },
+    },
+    windowSizeDays: 1,
+    pageSize: 100,
+    dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
+  },
+  "daily rollups must send Google's complete midnight CivilDateTime shape",
+);
+assert.throws(
+  () => googleHealthApiTestHooks.dailyRollUpRequestBody("2026-8-21", "2026-08-23"),
+  /Invalid civil date/,
 );
 
 const sourceRecord = {
@@ -932,6 +962,38 @@ const sidecarPreferenceConflict = foodFamilyMutationBody.match(
 )?.[0] ?? "";
 assert.ok(!/\bvisibility\s*=\s*excluded\.visibility/.test(sidecarPreferenceConflict),
   "a parent Food time edit must not overwrite a nutrient visibility preference");
+assert.match(serverSnapshotMigration,
+  /create or replace function public\.merge_google_health_server_snapshot/);
+const serverSnapshotMergeBody = serverSnapshotMigration.match(
+  /create or replace function public\.merge_google_health_server_snapshot[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(serverSnapshotMergeBody, /security definer\s+set search_path = ''/);
+assert.match(serverSnapshotMergeBody, /from public\.google_health_import_records owned/);
+assert.match(serverSnapshotMergeBody, /from public\.google_health_entry_preferences preference/);
+assert.match(serverSnapshotMergeBody, /sourceProvider'[\s\S]*<> 'google_health'/);
+assert.match(serverSnapshotMergeBody, /not like 'google-health:%'/);
+assert.match(serverSnapshotMergeBody, /not like 'health:google_health:%'/);
+assert.match(serverSnapshotMergeBody, /googleHealthEntryOverrides/);
+assert.match(serverSnapshotMergeBody, /dailyMetricStatuses/);
+assert.match(serverSnapshotMergeBody,
+  /google_entry ->> 'metricId' = item\.status ->> 'metricId'/);
+assert.match(serverSnapshotMergeBody, /pendingDeletedEntryIds/);
+assert.match(serverSnapshotMergeBody, /dismissedHealthEntryIds/);
+assert.match(serverSnapshotMigration,
+  /revoke all on function public\.merge_google_health_server_snapshot\(uuid, jsonb\)[\s\S]*from public, anon, authenticated, service_role/);
+const hardenedSnapshotWriteBody = serverSnapshotMigration.match(
+  /create or replace function public\.sync_user_snapshot[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(hardenedSnapshotWriteBody, /assert_google_health_privacy_client/);
+assert.match(hardenedSnapshotWriteBody,
+  /from public\.user_snapshots snapshot[\s\S]*for update/);
+assert.match(hardenedSnapshotWriteBody,
+  /current_revision is distinct from expected_revision/);
+assert.match(hardenedSnapshotWriteBody,
+  /merge_google_health_server_snapshot\([\s\S]*caller_id/);
+assert.match(hardenedSnapshotWriteBody, /exception when unique_violation/);
+assert.match(serverSnapshotMigration,
+  /with repaired as materialized[\s\S]*merge_google_health_server_snapshot[\s\S]*device_id = 'google-health-server'/);
 assert.match(migration, /create or replace function public\.update_google_health_metric_visibility/);
 assert.match(migration, /create table if not exists public\.google_health_entry_preferences/);
 assert.match(migration, /create table if not exists public\.google_health_account_deletion_guards/);
