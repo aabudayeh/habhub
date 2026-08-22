@@ -67,6 +67,11 @@ assert.match(
   new RegExp(`:v${HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION}:account-a$`),
   "the Physical Activity migration marker must be versioned for future native changes",
 );
+assert.equal(
+  HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
+  3,
+  "the live Physical Activity rollout must give existing connected accounts one new permission opportunity",
+);
 
 const platformPriorityAggregate = [
   { localDate: "2026-08-13", count: 3_435, origin: "Health Connect" },
@@ -114,28 +119,38 @@ assert.deepEqual(
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(5_000, 5_140),
-  { count: 5_000, usedLocalPhone: false, usedAndroidDevice: false },
-  "a positive priority-aware Health Connect aggregate must not be overridden by a phone-only total",
+  { count: 5_140, usedLocalPhone: true, usedAndroidDevice: false },
+  "a valid Physical Activity total must own the still-open local day",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140),
-  { count: 6_200, usedLocalPhone: false, usedAndroidDevice: false },
-  "a larger priority-aware phone/watch/app aggregate must remain canonical",
+  { count: 5_140, usedLocalPhone: true, usedAndroidDevice: false },
+  "a complete phone total must not be replaced by an overlapping Health Connect total",
 );
 assert.equal(
   reconcileCurrentDayStepTotal(5_000, 5_140).count,
-  5_000,
+  5_140,
   "overlapping Health Connect and phone totals must never be summed",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
-  { count: 27, usedLocalPhone: false, usedAndroidDevice: false },
-  "a source-filtered Android-device aggregate must not bypass Health Connect Activity priority",
+  { count: 27, usedLocalPhone: true, usedAndroidDevice: false },
+  "a valid Local Recording total must outrank both overlapping Health Connect candidates",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_887, 3_072, 3_072),
-  { count: 2_887, usedLocalPhone: false, usedAndroidDevice: false },
-  "the authoritative 2,887 total must correct a larger 3,072 phone-local candidate",
+  reconcileCurrentDayStepTotal(2_167, 2_958, 2_167),
+  { count: 2_958, usedLocalPhone: true, usedAndroidDevice: false },
+  "the real-device Physical Activity total 2,958 must replace a lagging 2,167 Health Connect aggregate",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(2_887, 3_072, 2_887),
+  { count: 3_072, usedLocalPhone: true, usedAndroidDevice: false },
+  "the prior 3,072 Physical Activity fixture must no longer be rolled back to Health Connect's 2,887",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(2_167, null, 2_958),
+  { count: 2_167, usedLocalPhone: false, usedAndroidDevice: false },
+  "Health Connect remains authoritative when Physical Activity has no valid local coverage",
 );
 const scopedPhoneOrigin =
   "com.android.healthconnect.phone.a1b2c3d4e5f607182930";
@@ -1349,7 +1364,7 @@ assert.match(
 assert.match(
   androidHealthSource,
   /authoritativeHealthConnectStepGroups\(\s*unfilteredGroups,?\s*\)/,
-  "Steps must preserve Health Connect's Activity-priority aggregate",
+  "completed-day Steps must preserve Health Connect's Activity-priority aggregate",
 );
 assert.match(
   androidHealthSource,
@@ -1358,13 +1373,18 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /readLocalPhoneSteps\(currentStart!, currentEnd!\)[\s\S]{0,9000}coverageStartEpochMs[\s\S]{0,1600}combineDisjointStepWindows\([\s\S]{0,300}reconcileCurrentDayStepTotal\([\s\S]{0,300}disjointPhoneCandidate[\s\S]{0,200}androidDeviceAggregate/,
-  "today must retain empty-read fallbacks from Local Recording and the official Android-device aggregate",
+  /readLocalPhoneSteps\(currentStart!, currentEnd!\)[\s\S]{0,9000}coverageStartEpochMs[\s\S]{0,1600}endTime: new Date\(coverageStartMs\)\.toISOString\(\)[\s\S]{0,800}combineDisjointStepWindows\([\s\S]{0,300}reconcileCurrentDayStepTotal\([\s\S]{0,300}disjointPhoneCandidate[\s\S]{0,200}androidDeviceAggregate/,
+  "today must join Health Connect only before Local Recording's first covered instant and never overlap the two windows",
 );
 assert.match(
   androidHealthSource,
-  /authoritativeCurrentCount[\s\S]{0,240}needsPhoneFallback\s*=\s*[\s\S]{0,120}!\(authoritativeCurrentCount > 0\)[\s\S]{0,500}needsPhoneFallback\s*\?\s*await Promise\.all/,
-  "phone-local reads must run only when the unfiltered current-day aggregate is empty",
+  /Promise\.all\(\[[\s\S]{0,1800}aggregateRecord\(\{[\s\S]{0,500}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
+  "the current-day Health Connect and Physical Activity reads must run concurrently",
+);
+assert.match(
+  androidHealthSource,
+  /needsAndroidDeviceFallback\s*=\s*[\s\S]{0,160}!localPhoneSlice[\s\S]{0,100}!\(authoritativeCurrentCount > 0\)[\s\S]{0,600}currentDeviceStepOrigins/,
+  "the Health Connect on-device origin must remain a final fallback after Local Recording and the aggregate",
 );
 assert.match(
   androidHealthSource,
@@ -1395,6 +1415,11 @@ assert.doesNotMatch(
   androidHealthSource,
   /dataOriginFilter:\s*\[[\s\S]{0,120}(?:samsung|shealth|com\.sec)/i,
   "Steps must never replace the platform total with a hard-coded third-party writer",
+);
+assert.match(
+  androidHealthSource,
+  /LOCAL_PHONE_STEP_SOURCE = "Android phone \(Physical Activity\)"[\s\S]{0,50000}usedLocalPhone[\s\S]{0,300}LOCAL_PHONE_STEP_SOURCE/,
+  "a Physical Activity-owned current-day total must expose an explicit source label",
 );
 assert.match(
   androidHealthSource,
@@ -1661,6 +1686,11 @@ assert.match(
   /play-services-fitness:21\.3\.0/,
   "the config plugin must reproduce the official local Recording API dependency",
 );
+assert.match(
+  androidPluginSource,
+  /android\.permission\.ACTIVITY_RECOGNITION/,
+  "managed Android builds must preserve the Physical Activity manifest permission",
+);
 for (const [dataType, recordType, permission] of [
   ["body_water_mass", "BodyWaterMass", "READ_BODY_WATER_MASS"],
   ["bone_mass", "BoneMass", "READ_BONE_MASS"],
@@ -1898,5 +1928,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: calendar-aligned priority-aware platform Steps, manual daily overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: historical Health Connect aggregates, live Physical Activity hybrid Steps, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

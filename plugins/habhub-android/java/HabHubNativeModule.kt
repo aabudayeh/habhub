@@ -192,9 +192,9 @@ class HabHubNativeModule(
 
   /**
    * Reads the accountless Android Recording API. Its step deltas are a phone
-   * view that overlaps Health Connect, so JavaScript may use this only when
-   * the unfiltered current-day Health Connect aggregate is empty and must
-   * never add it to or override a positive Health Connect total.
+   * view for today's live Physical Activity total. JavaScript either uses the
+   * complete local window or joins Health Connect only before the first local
+   * point, so overlapping windows are never added together.
    */
   @ReactMethod
   fun readLocalPhoneSteps(from: Double, to: Double, promise: Promise) {

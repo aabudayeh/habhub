@@ -683,11 +683,11 @@ export function combineDisjointStepWindows(
 }
 
 /**
- * Reconciles overlapping current-day candidates without summing them. A
- * positive unfiltered Health Connect aggregate is the sole authority because
- * it applies the user's Activity source priority and deduplicates overlaps;
- * source-filtered SPN and Local Recording totals are fallbacks only when that
- * aggregate is empty.
+ * Selects the current-day authority without summing overlapping totals. The
+ * Local Recording candidate is either a complete midnight-to-now phone total
+ * or an already-joined Health Connect prefix plus non-overlapping local suffix.
+ * Health Connect remains the fallback when Physical Activity has no valid
+ * local coverage, followed by the Android on-device Health Connect origin.
  */
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
@@ -703,6 +703,13 @@ export function reconcileCurrentDayStepTotal(
   const androidDevice = Number.isFinite(androidDeviceCount)
     ? Math.max(0, Math.round(androidDeviceCount as number))
     : null;
+  if (localPhone !== null && localPhone > 0) {
+    return {
+      count: localPhone,
+      usedLocalPhone: true,
+      usedAndroidDevice: false,
+    };
+  }
   if (healthConnect > 0) {
     return {
       count: healthConnect,
@@ -710,16 +717,14 @@ export function reconcileCurrentDayStepTotal(
       usedAndroidDevice: false,
     };
   }
-  const count = Math.max(localPhone ?? 0, androidDevice ?? 0);
+  const count = androidDevice ?? 0;
   const usedAndroidDevice =
     androidDevice !== null &&
     androidDevice === count &&
     androidDevice > healthConnect;
-  const usedLocalPhone =
-    !usedAndroidDevice && localPhone !== null && localPhone > healthConnect;
   return {
     count,
-    usedLocalPhone,
+    usedLocalPhone: false,
     usedAndroidDevice,
   };
 }
