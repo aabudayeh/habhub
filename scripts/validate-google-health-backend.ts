@@ -14,6 +14,7 @@ import {
 const read = (path: string) => Deno.readTextFile(path);
 const [
   migration,
+  arrayInitializerMigration,
   endpoint,
   sync,
   api,
@@ -30,6 +31,7 @@ const [
   supabaseConfig,
 ] = await Promise.all([
   read("supabase/migrations/202608210001_google_health_web_sync.sql"),
+  read("supabase/migrations/202608220001_google_health_array_initializers.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -45,6 +47,32 @@ const [
   read("package.json"),
   read("supabase/config.toml"),
 ]);
+
+const arrayInitializerTargets = [
+  ["public.purge_google_health_group_projections(uuid,text[],bigint,boolean)", 1],
+  ["public.update_google_health_metric_visibility(uuid,text,text)", 1],
+  ["public.apply_google_health_import(uuid,jsonb,jsonb,jsonb,timestamptz,bigint,uuid)", 7],
+  ["public.delete_google_health_imports(uuid)", 1],
+] as const;
+assert.equal(
+  [...migration.matchAll(/\btext\[\] := '\{\}';/g)].length,
+  arrayInitializerTargets.reduce((total, [, count]) => total + count, 0),
+  "the applied Google Health migration must remain immutable while the follow-up owns the casts",
+);
+assert.match(arrayInitializerMigration, /v_source constant text := 'text\[\] := ''\{\}'';'/);
+assert.match(arrayInitializerMigration, /v_replacement constant text := 'text\[\] := array\[\]::text\[\];'/);
+assert.match(arrayInitializerMigration, /if v_replacement_count <> v_target\.expected_count then/);
+for (const [signature, expectedCount] of arrayInitializerTargets) {
+  assert.ok(
+    arrayInitializerMigration.includes(`('${signature}'::regprocedure, ${expectedCount})`),
+    `${signature} must be recreated with its audited initializer count`,
+  );
+}
+assert.equal(
+  [...arrayInitializerMigration.matchAll(/'public\.[^']+'::regprocedure/g)].length,
+  arrayInitializerTargets.length,
+  "the lint-only migration must target exactly the four audited functions",
+);
 
 const sourceRecord = {
   externalId: "nutrition-log:meal-a",
