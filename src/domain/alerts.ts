@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 
-import { dateKey, dateKeyWithOffset, friendlyDate } from "@/src/domain/date";
+import { dateKey, dateKeyWithOffset } from "@/src/domain/date";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import { palette } from "@/src/theme";
@@ -28,8 +28,19 @@ export function buildAlerts(
 ): PaceAlert[] {
   const today = dateKey();
   const yesterday = dateKeyWithOffset(-1);
+  const notifications = state.settings.notifications;
+  const groupPreferences =
+    notifications.groupPreferencesByGroup?.[state.group.id];
+  const leadAlertsEnabled =
+    groupPreferences?.enabled !== false &&
+    (groupPreferences?.leadChanges ?? notifications.leadChanges);
+  const allowedMetricIds =
+    groupPreferences?.metricIds ?? notifications.metricIds;
+  const allowedMemberIds = groupPreferences?.memberIds;
   const tracked = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
+      leadAlertsEnabled &&
+      allowedMetricIds.includes(metric.id) &&
       metric.scoreWeight > 0 &&
       metric.sections.group &&
       metric.dataType !== "text" &&
@@ -44,6 +55,11 @@ export function buildAlerts(
       false,
     )[0];
     if (!current) return [];
+    if (
+      Array.isArray(allowedMemberIds) &&
+      !allowedMemberIds.includes(current.member.id)
+    )
+      return [];
     const prior = leaderboardRows(
       state,
       [metric],
@@ -52,18 +68,15 @@ export function buildAlerts(
       false,
     )[0];
     const changed = prior && prior.member.id !== current.member.id;
+    if (!changed) return [];
     return [
       {
         id: `lead-${metric.id}-${today}`,
         category: "lead",
         icon: metric.icon as PaceAlert["icon"],
         color: metric.color,
-        title: changed
-          ? `${memberDisplayName(state, current.member)} passed ${memberDisplayName(state, prior.member)}`
-          : `${memberDisplayName(state, current.member)} leads ${metric.name}`,
-        detail: changed
-          ? `New #1 in ${metric.name} today.`
-          : `Current ${metric.name} leader for ${friendlyDate(today)}.`,
+        title: `${memberDisplayName(state, current.member)} passed ${memberDisplayName(state, prior.member)}`,
+        detail: `New #1 in ${metric.name} today.`,
         createdAt: `${today}T12:00:00`,
         memberId: current.member.id,
         scope: "group",
@@ -120,15 +133,42 @@ export function buildAlerts(
       (member) => member.id === event.actorId,
     );
     const invitation = event.kind === "challenge_invitation";
+    const accepted = event.kind === "challenge_accepted";
+    const result = event.kind === "challenge_result";
+    const reminder = event.kind === "challenge_reminder";
     return {
       id: `group-notification-${event.id}`,
       category: "challenge",
-      icon: invitation ? "flag-outline" : "trophy-outline",
-      color: invitation ? palette.primary : palette.lime,
-      title: invitation ? "Challenge started" : "Challenge accepted",
-      detail: invitation
-        ? "Open HabHub to accept or decline."
-        : "A friend accepted your challenge.",
+      icon: invitation
+        ? "flag-outline"
+        : result
+          ? "trophy-outline"
+          : reminder
+            ? "flame-outline"
+            : "swap-vertical-outline",
+      color: invitation
+        ? palette.primary
+        : result
+          ? palette.amber
+          : palette.lime,
+      title:
+        event.title ??
+        (invitation
+          ? "Challenge started"
+          : accepted
+            ? "Challenge accepted"
+            : reminder
+              ? "Keep pushing"
+              : result
+                ? "Challenge complete"
+                : "Challenge standings changed"),
+      detail:
+        event.detail ??
+        (invitation
+          ? "Open HabHub to accept or decline."
+          : accepted
+            ? "A friend accepted your challenge."
+            : "Open the Leaderboard for the latest challenge standings."),
       createdAt: event.createdAt,
       memberId: actor?.id,
       scope: "group",

@@ -9,6 +9,9 @@ type GroupNotificationEventRow = {
   actor_id: string;
   event_type: GroupNotificationEvent["kind"];
   challenge_id: string;
+  occurrence_date: string | null;
+  title: string | null;
+  detail: string | null;
   created_at: string;
   read_at: string | null;
 };
@@ -22,6 +25,9 @@ function fromRow(row: GroupNotificationEventRow): GroupNotificationEvent {
     actorId: row.actor_id,
     kind: row.event_type,
     challengeId: row.challenge_id,
+    occurrenceDate: row.occurrence_date ?? undefined,
+    title: row.title?.trim() || undefined,
+    detail: row.detail?.trim() || undefined,
     createdAt: row.created_at,
     readAt: row.read_at ?? undefined,
   };
@@ -46,11 +52,13 @@ export async function loadGroupNotificationEvents(groupId: string) {
   const { data, error } = await supabase
     .from("group_notification_events")
     .select(
-      "id, event_key, group_id, recipient_id, actor_id, event_type, challenge_id, created_at, read_at",
+      "id, event_key, group_id, recipient_id, actor_id, event_type, challenge_id, occurrence_date, title, detail, created_at, read_at",
     )
     .eq("group_id", groupId)
     .order("created_at", { ascending: false })
-    .limit(100);
+    // Match the bounded 30-day celebration scan so frequent reminder events
+    // cannot push an unseen canonical result out of the local settlement view.
+    .limit(500);
   if (error) throw notificationCloudError(error);
   return (data as GroupNotificationEventRow[] | null)?.map(fromRow) ?? [];
 }

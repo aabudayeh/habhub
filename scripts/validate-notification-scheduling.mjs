@@ -360,6 +360,19 @@ assert.deepEqual(
   { localDate: "2026-08-15", time: "08:00" },
   "an overnight quiet-hours reminder must roll into the following date",
 );
+const reopenedBeforeQuietHoursRollover = new Date("2026-08-15T07:30:00");
+const quietHoursRollover = quietHoursAdjustedDateTime({
+  enabled: true,
+  start: "22:00",
+  end: "08:00",
+  localDate: "2026-08-14",
+  time: "23:00",
+});
+assert.ok(
+  new Date(`${quietHoursRollover.localDate}T${quietHoursRollover.time}:00`) >
+    reopenedBeforeQuietHoursRollover,
+  "a reminder rolled from yesterday must remain pending when the PWA reopens before quiet hours end",
+);
 const recoveredTimerAlerts = activityTimerAlertCandidates({
   alertMinutes: [10, 30, 60],
   elapsedSeconds: 15 * 60,
@@ -439,6 +452,33 @@ const androidNotificationServiceSource = fs.readFileSync(
   "utf8",
 );
 const gymSource = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const webWorker = fs.readFileSync("public/habhub-sw.js", "utf8");
+const webScheduleSource = fs.readFileSync(
+  "src/notifications/webReminderSchedule.ts",
+  "utf8",
+);
+const webScheduleSyncSource = fs.readFileSync(
+  "src/notifications/webReminderSync.ts",
+  "utf8",
+);
+const webPushSource = fs.readFileSync("src/notifications/webPush.ts", "utf8");
+const webScheduleMigration = fs.readFileSync(
+  "supabase/migrations/202608220007_web_personal_reminder_delivery.sql",
+  "utf8",
+);
+const webScheduleWorker = fs.readFileSync(
+  "supabase/functions/web-personal-notifications/index.ts",
+  "utf8",
+);
+const groupSettingsSource = fs.readFileSync("app/group-settings.tsx", "utf8");
+const useGroupNotificationEventsSource = fs.readFileSync(
+  "src/cloud/useGroupNotificationEvents.ts",
+  "utf8",
+);
+const sendPushSource = fs.readFileSync(
+  "supabase/functions/send-push/index.ts",
+  "utf8",
+);
 assert.match(source, /createLatestAsyncDrain<AppState>/);
 assert.match(
   source,
@@ -510,10 +550,20 @@ assert.match(workoutTimerSource, /registration\.getNotifications\(\{[\s\S]{0,80}
 assert.match(workoutTimerSource, /registration\.showNotification/);
 assert.match(workoutTimerSource, /silent: true/);
 assert.match(workoutTimerSource, /route: "\/gym"/);
+assert.match(workoutTimerSource, /maxActions/);
+assert.match(workoutTimerSource, /timestamp: phaseOrigin/);
+assert.match(workoutTimerSource, /action: WORKOUT_TIMER_PAUSE/);
+assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
 assert.match(workoutTimerSource, /suspendWorkoutTimerNotificationPersistence/);
 assert.match(gymSource, /document\.visibilityState === "visible"/);
 assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
 assert.match(gymSource, /state\.settings\.notifications\.pushEnabled/);
+assert.match(gymSource, /useLocalSearchParams/);
+assert.match(gymSource, /handledWebTimerAction/);
+assert.match(gymSource, /router\.replace\("\/gym" as never\)/);
+assert.match(webWorker, /WORKOUT_ACTIONS/);
+assert.match(webWorker, /workoutActionAt/);
+assert.match(webWorker, /self\.clients\.openWindow\(target\.href\)/);
 assert.match(
   workoutTimerSource,
   /consumeWorkoutTimerActions\(ownerId: string\)[\s\S]{0,1800}item\.ownerId === ownerId && item\.generation === generation/,
@@ -625,5 +675,106 @@ assert.doesNotMatch(source, /notificationKind: 'goal-recovery'/);
 assert.doesNotMatch(settingsSource, /title="Goal recovery nudges"/);
 assert.match(settingsSource, /title="Logged tracker streaks"/);
 assert.match(settingsSource, /title="Leaderboard winners"/);
+assert.match(layoutSource, /syncWebReminderSchedule\(cycleStateRef\.current\)/);
+assert.match(layoutSource, /webReminderScheduleKey/);
+assert.match(layoutSource, /auth\.session\?\.user\.id !== auth\.user\.id/);
+assert.match(layoutSource, /Math\.min\(5 \* 60_000, 3_000 \* 2 \*\* attempt\)/);
+assert.match(layoutSource, /window\.addEventListener\("online", retryNow\)/);
+assert.match(
+  layoutSource,
+  /document\.addEventListener\("visibilitychange", retryNow\)/,
+);
+assert.match(layoutSource, /document\.hidden \|\| !navigator\.onLine/);
+assert.match(webScheduleSource, /planWebReminderSchedule/);
+for (const category of [
+  "tracker",
+  "todo",
+  "calendar",
+  "cycle",
+  "gym",
+  "timer",
+  "fasting",
+])
+  assert.match(webScheduleSource, new RegExp(`category: "${category}"`));
+assert.match(webScheduleSource, /quietHoursAdjustedDateTime/);
+assert.equal(
+  (webScheduleSource.match(/for \(let offset = -1; offset < 367; offset \+= 1\)/g) ?? [])
+    .length,
+  2,
+  "web tracker and productivity planning must retain yesterday's quiet-hours rollovers",
+);
+assert.match(webScheduleSource, /todoReminderAppliesOnDate/);
+assert.match(webScheduleSource, /activityTimerAlertCandidates/);
+assert.match(webScheduleSyncSource, /replace_own_web_notification_schedule/);
+assert.match(webScheduleSyncSource, /data\.session\?\.user\.id !== state\.currentUserId/);
+assert.match(webPushSource, /showImmediateWebNotification/);
+assert.match(source, /deliverImmediatePersonalNotification/);
+assert.doesNotMatch(
+  source.slice(
+    source.indexOf("export async function notifyProgressMilestones"),
+    source.indexOf("async function syncGoalNotificationsNow"),
+  ),
+  /Platform\.OS === 'web' \|\|/,
+  "PWA progress and streak updates must not be silently disabled",
+);
+assert.match(
+  webScheduleMigration,
+  /create table if not exists public\.web_personal_notification_schedule/,
+);
+assert.match(webScheduleMigration, /enable row level security/g);
+assert.match(
+  webScheduleMigration,
+  /revoke all on table public\.web_personal_notification_schedule[\s\S]{0,120}authenticated/,
+);
+assert.match(
+  webScheduleMigration,
+  /v_user_id is null or v_user_id <> p_expected_user_id/,
+);
+assert.match(webScheduleMigration, /jsonb_array_length[\s\S]{0,100}> 68/);
+assert.match(webScheduleMigration, /for update skip locked/);
+assert.match(webScheduleMigration, /web-personal-notifications-every-minute/);
+assert.match(webScheduleMigration, /web_personal_notification_worker_secret/);
+assert.match(webScheduleMigration, /delete from public\.web_personal_notification_schedule/);
+assert.match(webScheduleWorker, /PERSONAL_NOTIFICATION_WORKER_SECRET/);
+assert.match(webScheduleWorker, /constantTimeEqual/);
+assert.match(webScheduleWorker, /web_personal_notification_acceptances/);
+assert.match(webScheduleWorker, /status === 404 \|\| status === 410/);
+assert.match(webScheduleWorker, /preferenceAllowed/);
+assert.match(groupSettingsSource, /Personal alerts for this group/);
+assert.match(groupSettingsSource, /groupPreferencesByGroup/);
+assert.match(groupSettingsSource, /challengeCadence/);
+assert.match(groupSettingsSource, /notificationMemberIds/);
+assert.match(groupSettingsSource, /notificationMetricIds/);
+assert.match(
+  groupSettingsSource,
+  /availableNotificationMemberIds\.has\(memberId\)/,
+);
+assert.match(groupSettingsSource, /availableNotificationMetricIds\.has\(metricId\)/);
+assert.match(sendPushSource, /groupPreference\.trackerUpdates/);
+assert.match(sendPushSource, /groupPreference\.progressUpdates/);
+assert.match(
+  groupSettingsSource,
+  /trackerUpdates \?\?[\s\S]{0,100}progressUpdates \?\?/
+);
+assert.match(sendPushSource, /groupPreference\.leadChanges/);
+assert.match(
+  sendPushSource,
+  /"challenge_started",[\s\S]{0,120}"challenge_invitation",[\s\S]{0,120}"challenge_accepted"/,
+);
+assert.match(
+  useGroupNotificationEventsSource,
+  /event\.kind === "challenge_invitation"[\s\S]{0,120}event\.kind === "challenge_accepted"/,
+);
+assert.doesNotMatch(groupSettingsSource, /title="Progress updates"/);
+assert.match(groupSettingsSource, /title="Shared tracker progress"/);
+assert.match(groupSettingsSource, /title="Lead changes"/);
+assert.match(sendPushSource, /groupPreference\.memberIds/);
+assert.match(sendPushSource, /groupPreference\.metricIds/);
+assert.match(
+  sendPushSource,
+  /event\.category !== "metric" && event\.category !== "lead"/,
+);
 
-console.log("Goal reminder scheduling is serialized and idempotent.");
+console.log(
+  "Native and Web reminder scheduling are private, bounded, serialized and idempotent.",
+);

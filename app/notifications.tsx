@@ -292,7 +292,7 @@ export default function NotificationsScreen() {
             title="Push notifications"
             copy={
               Platform.OS === "web"
-                ? "Account-wide master switch. The installed web app receives cloud alerts; timed reminders remain native-app scheduled."
+                ? "Account-wide master switch. The installed web app receives cloud alerts and private server-scheduled reminders."
                 : "Account-wide master switch for all signed-in HabHub devices"
             }
             enabled={displayedPushEnabled}
@@ -513,7 +513,7 @@ export default function NotificationsScreen() {
         <ToggleRow
           icon="flag-outline"
           title="Challenges"
-          copy="Invitations and acceptance updates for shared challenges"
+          copy="Invitations, lead changes, progress nudges, and final winners"
           enabled={value.challenges !== false}
           onPress={() => patch({ challenges: value.challenges === false })}
         />
@@ -736,8 +736,8 @@ export default function NotificationsScreen() {
             translate={false}
           >
             Turning this off removes HabHub push registrations for this account.
-            Timed tracker and to-do reminders still require the installed phone
-            app.
+            Timed tracker, to-do, calendar, cycle, gym, fasting and activity-timer
+            reminders are also removed from the private Web Push schedule.
           </Text>
           <Text
             style={[styles.note, { color: colors.muted }]}

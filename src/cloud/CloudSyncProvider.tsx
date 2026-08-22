@@ -13,9 +13,11 @@ import React, {
   useState,
 } from "react";
 import {
+  ActivityIndicator,
   AppState as NativeAppState,
   InteractionManager,
   Platform,
+  View,
 } from "react-native";
 
 import { useAuth } from "@/src/auth/AuthProvider";
@@ -73,6 +75,7 @@ import {
 } from "@/src/domain/groupSetup";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { supabase } from "@/src/lib/supabase";
+import { translateUiText } from "@/src/i18n";
 import {
   getPrivacyAwareUserSnapshot,
   getPrivacyAwareUserSnapshotMetadata,
@@ -86,6 +89,7 @@ import {
   readPersistedAccountState,
   useApp,
 } from "@/src/state/AppProvider";
+import { AppStateStorageReadError } from "@/src/storage/appStateStorage";
 import {
   purgeLegacyGroupActivityCaches,
   readGroupActivityCache,
@@ -93,6 +97,11 @@ import {
   writeGroupActivityCache,
 } from "@/src/storage/groupActivityCache";
 import { onboardingCompletedLocally } from "@/src/storage/onboardingState";
+import {
+  getLargeStorageItem,
+  multiRemoveLargeStorage,
+  setLargeStorageItem,
+} from "@/src/storage/durableLargeStorage";
 import {
   AppState,
   ChatMessage,
@@ -384,10 +393,10 @@ async function writeAccountMetadataAck(userId: string, hash: string) {
 
 async function readCloudMergeBase(userId: string): Promise<CloudMergeBase | null> {
   try {
-    await AsyncStorage.multiRemove(
+    await multiRemoveLargeStorage(
       LEGACY_CLOUD_MERGE_BASE_KEY_PREFIXES.map((prefix) => `${prefix}${userId}`),
     ).catch(() => undefined);
-    const saved = await AsyncStorage.getItem(
+    const saved = await getLargeStorageItem(
       `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
     );
     if (!saved) return null;
@@ -466,9 +475,12 @@ async function writeCloudMergeBase(
   base: CloudMergeBase,
   acknowledgedState: AppState,
 ) {
-  await AsyncStorage.setItem(
+  await setLargeStorageItem(
     `${CLOUD_MERGE_BASE_KEY_PREFIX}${userId}`,
-    JSON.stringify(mergeBaseForLocalPersistence(base, acknowledgedState)),
+    JSON.stringify({
+      ...mergeBaseForLocalPersistence(base, acknowledgedState),
+      writtenAt: new Date().toISOString(),
+    }),
   );
 }
 
@@ -2563,6 +2575,11 @@ function friendlySyncError(error: unknown) {
   const message = errorText(error);
   if (isGoogleHealthPrivacyUpgradeError(error))
     return "This HabHub version cannot safely sync Google Health data. Update HabHub to continue.";
+  if (
+    Platform.OS === "web" &&
+    /quota has been exceeded|QuotaExceededError|storage quota/i.test(message)
+  )
+    return "This browser could not save another offline copy. Your cloud data is still protected; reopen HabHub after freeing browser storage so it can retry.";
   if (isTransientCloudError(message))
     return "Offline changes are safe on this device and will retry automatically.";
   if (/column.*revision|sync_user_snapshot|schema cache/i.test(message))
@@ -3457,6 +3474,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       return;
     }
     let cancelled = false;
+    let storageRetryTimer: ReturnType<typeof setTimeout> | undefined;
     const user = auth.user;
     const clean = createCleanAccountState(auth.user);
     stateRef.current = clean;
@@ -3482,15 +3500,31 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     // Clear the previous account from rendered memory immediately, but do not
     // persist the clean placeholder over this user's durable scoped cache.
     stageState(clean);
-    void readPersistedAccountState(user.id).then((cached) => {
-      if (cancelled || auth.user?.id !== user.id) return;
-      const recovered = cached ? bindStateToAccount(cached, user) : clean;
-      stateRef.current = recovered;
-      stageState(recovered);
-      setAccountBoundaryReadyUserId(user.id);
-    });
+    const recoverPersistedAccount = () => {
+      void readPersistedAccountState(user.id)
+        .then((cached) => {
+          if (cancelled || auth.user?.id !== user.id) return;
+          const recovered = cached ? bindStateToAccount(cached, user) : clean;
+          stateRef.current = recovered;
+          stageState(recovered);
+          setAccountBoundaryReadyUserId(user.id);
+        })
+        .catch((error) => {
+          if (cancelled || auth.user?.id !== user.id) return;
+          // Keep the persistence/cloud boundary closed until durable storage
+          // can prove whether this account has an offline snapshot. IndexedDB
+          // has a short reopen retry; unexpected provider failures back off a
+          // little longer without ever treating them as an empty account.
+          storageRetryTimer = setTimeout(
+            recoverPersistedAccount,
+            error instanceof AppStateStorageReadError ? 650 : 1_500,
+          );
+        });
+    };
+    recoverPersistedAccount();
     return () => {
       cancelled = true;
+      if (storageRetryTimer) clearTimeout(storageRetryTimer);
     };
   }, [auth.status, auth.user, hydrated, stageState]);
 
@@ -6991,12 +7025,38 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     }),
     [],
   );
+  const accountBoundaryPending =
+    hydrated &&
+    auth.status === "signedIn" &&
+    Boolean(auth.user?.id) &&
+    accountBoundaryReadyUserId !== auth.user?.id;
 
   return (
     <CloudSyncStatusContext.Provider value={status}>
       <CloudSyncActionsContext.Provider value={actions}>
         <CloudSyncContext.Provider value={value}>
-          {children}
+          {accountBoundaryPending ? (
+            <View
+              accessibilityLabel={translateUiText(
+                state.settings.language,
+                "Restoring offline account data",
+              )}
+              accessibilityRole="progressbar"
+              style={{
+                alignItems: "center",
+                backgroundColor: state.settings.darkMode ? "#0E1116" : "#F7F8FA",
+                flex: 1,
+                justifyContent: "center",
+              }}
+            >
+              <ActivityIndicator
+                color={state.group.themeColor ?? "#5B7CFA"}
+                size="large"
+              />
+            </View>
+          ) : (
+            children
+          )}
         </CloudSyncContext.Provider>
       </CloudSyncActionsContext.Provider>
     </CloudSyncStatusContext.Provider>

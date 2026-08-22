@@ -623,6 +623,102 @@ export function capturedFoodNutrients(nutrition: NutritionDetails | undefined) {
   });
 }
 
+const FOOD_NUTRIENT_DETAIL_ENTRY_PREFIX = "food-nutrient-detail:";
+
+/** True only for an in-memory nutrient row projected from its Food parent. */
+export function isFoodNutrientDetailEntry(entry: Pick<MetricEntry, "id">) {
+  return entry.id.startsWith(FOOD_NUTRIENT_DETAIL_ENTRY_PREFIX);
+}
+
+function foodSourceKey(entry: MetricEntry) {
+  return entry.sourceRecordId
+    ? `${entry.sourceProvider ?? ""}\u0000${entry.sourceRecordId}`
+    : undefined;
+}
+
+/**
+ * Builds the nutrient detail page's read-only view from canonical Food rows.
+ *
+ * Persisted sidecars remain useful for cloud sharing and explicitly configured
+ * trackers, but older snapshots can legitimately be missing them. The Food
+ * payload is the source of truth for a meal, so this view replaces any linked
+ * sidecar with one calculated projection and leaves standalone dietary records
+ * (for example Apple Health nutrient samples) untouched. Nothing returned by
+ * this function is written back to app state or made discoverable as a tracker.
+ */
+export function foodNutrientDetailEntries(
+  entries: readonly MetricEntry[],
+  userId: string,
+  nutrientId: FoodNutrientId,
+): readonly MetricEntry[] {
+  const nutrient = FOOD_NUTRIENTS.find((item) => item.id === nutrientId);
+  if (!nutrient) return entries;
+
+  const foodParents = entries.filter(
+    (entry) =>
+      entry.userId === userId &&
+      entry.metricId === "food" &&
+      Boolean(entry.nutrition),
+  );
+  if (!foodParents.length) return entries;
+
+  const parents = foodParents.flatMap((entry) => {
+    if (
+      !entry.nutrition
+    )
+      return [];
+    const value = Number(entry.nutrition[nutrient.nutritionKey]);
+    return Number.isFinite(value) && value > 0 ? [{ entry, value }] : [];
+  });
+  const linkedSidecarIds = new Set(
+    foodParents.flatMap((entry) => [
+      `${entry.id}:nutrient:${nutrientId}`,
+      `${FOOD_NUTRIENT_DETAIL_ENTRY_PREFIX}${entry.id}:${nutrientId}`,
+    ]),
+  );
+  const linkedSourceKeys = new Set(
+    foodParents.flatMap((entry) => {
+      const key = foodSourceKey(entry);
+      return key ? [key] : [];
+    }),
+  );
+  const linkedSidecarKeys = new Set<string>();
+  for (const candidate of entries) {
+    if (
+      candidate.userId === userId &&
+      candidate.metricId === nutrientId &&
+      (linkedSidecarIds.has(candidate.id) ||
+        linkedSourceKeys.has(foodSourceKey(candidate) ?? ""))
+    )
+      linkedSidecarKeys.add(`${candidate.userId}\u0000${candidate.id}`);
+  }
+
+  const projections: MetricEntry[] = parents.map(({ entry: parent, value }) => ({
+    id: `${FOOD_NUTRIENT_DETAIL_ENTRY_PREFIX}${parent.id}:${nutrientId}`,
+    metricId: nutrientId,
+    userId: parent.userId,
+    value,
+    localDate: parent.localDate,
+    recordedAt: parent.recordedAt,
+    recordedAtOverride: parent.recordedAtOverride,
+    visibility: parent.visibility,
+    source: "calculated",
+    label: parent.label,
+    sourceProvider: parent.sourceProvider,
+    sourceRecordId: parent.sourceRecordId,
+    sourceOrigin: parent.sourceOrigin,
+    sourceUpdatedAt: parent.sourceUpdatedAt,
+    sourceRevision: parent.sourceRevision,
+  }));
+
+  return [
+    ...entries.filter(
+      (entry) => !linkedSidecarKeys.has(`${entry.userId}\u0000${entry.id}`),
+    ),
+    ...projections,
+  ];
+}
+
 export function hasFoodNutrientTracker(
   metrics: readonly { id: string }[],
   id: FoodNutrientId,

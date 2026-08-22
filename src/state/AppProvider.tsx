@@ -102,6 +102,16 @@ import { palette } from "@/src/theme";
 import { isCloudSyncPaused } from "@/src/cloud/syncGate";
 import { HEALTH_STATUS_STORAGE_KEY } from "@/src/health/constants";
 import { PersistedHealthStatus } from "@/src/health/types";
+import {
+  AppStateStorageReadError,
+  getAllAppStateStorageKeys,
+  getAppStateStorageItem,
+  migrateLegacyLargeStorage,
+  multiRemoveAppStateStorage,
+  multiSetAppStateStorage,
+  setAppStateStorageItem,
+  setAppStateStorageItemStrict,
+} from "@/src/storage/appStateStorage";
 import { notifyProgressMilestones } from "@/src/notifications/push";
 import {
   ActivityTimer,
@@ -127,7 +137,7 @@ import {
 
 export const APP_STORAGE_KEY = "paceboard-state-v1";
 const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
-const GOOGLE_HEALTH_CACHE_SCRUB_KEY = "habhub-google-health-cache-scrub-v2";
+const GOOGLE_HEALTH_CACHE_SCRUB_KEY = "habhub-google-health-cache-scrub-v3";
 const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 
 /**
@@ -148,19 +158,20 @@ export function appAccountStorageKey(accountId: string) {
 }
 
 export async function readPersistedAccountState(accountId: string) {
+  const storageKey = appAccountStorageKey(accountId);
+  const saved = await getAppStateStorageItem(storageKey);
+  if (!saved) return null;
+  let parsed: AppState;
   try {
-    const storageKey = appAccountStorageKey(accountId);
-    const saved = await AsyncStorage.getItem(storageKey);
-    if (!saved) return null;
-    const parsed = JSON.parse(saved) as AppState;
-    if (parsed.currentUserId !== accountId) return null;
-    const sanitized = stateWithoutGoogleHealthLocalData(parsed);
-    if (sanitized !== parsed)
-      await AsyncStorage.setItem(storageKey, JSON.stringify(sanitized));
-    return sanitized;
+    parsed = JSON.parse(saved) as AppState;
   } catch {
     return null;
   }
+  if (parsed.currentUserId !== accountId) return null;
+  const sanitized = stateWithoutGoogleHealthLocalData(parsed);
+  if (sanitized !== parsed)
+    await setAppStateStorageItem(storageKey, JSON.stringify(sanitized));
+  return sanitized;
 }
 
 /** Remove plaintext Google Health rows left by a pre-privacy pilot build. */
@@ -169,7 +180,7 @@ async function scrubLegacyGoogleHealthAppSnapshots(
 ) {
   if ((await AsyncStorage.getItem(GOOGLE_HEALTH_CACHE_SCRUB_KEY)) === "done")
     return;
-  const allKeys = await AsyncStorage.getAllKeys();
+  const allKeys = await getAllAppStateStorageKeys();
   const keys = allKeys.filter(
     (key) => key === APP_STORAGE_KEY || key.startsWith(APP_ACCOUNT_STORAGE_KEY_PREFIX),
   );
@@ -180,7 +191,7 @@ async function scrubLegacyGoogleHealthAppSnapshots(
       key.startsWith("metric-rally-celebrations-v2:"),
   );
   if (derivedCacheKeys.length) {
-    await AsyncStorage.multiRemove(derivedCacheKeys);
+    await multiRemoveAppStateStorage(derivedCacheKeys);
   }
   // This is a migration-only sweep for pilot builds. Active snapshots are
   // sanitized on every read, so inspect dormant account snapshots one at a
@@ -195,7 +206,7 @@ async function scrubLegacyGoogleHealthAppSnapshots(
     });
     await turn.promise;
     if (!shouldContinue()) return;
-    const saved = await AsyncStorage.getItem(key);
+    const saved = await getAppStateStorageItem(key);
     if (
       !saved ||
       (!saved.includes('"google_health"') &&
@@ -203,17 +214,21 @@ async function scrubLegacyGoogleHealthAppSnapshots(
         !saved.includes('"googleHealthEntryOverrides"'))
     )
       continue;
+    let parsed: AppState;
     try {
-      const parsed = JSON.parse(saved) as AppState;
-      const sanitized = stateWithoutGoogleHealthLocalData(parsed);
-      if (sanitized !== parsed) {
-        const current = await AsyncStorage.getItem(key);
-        if (current === saved) {
-          await AsyncStorage.setItem(key, JSON.stringify(sanitized));
-        }
-      }
+      parsed = JSON.parse(saved) as AppState;
     } catch {
       // The ordinary hydration path already tolerates malformed local state.
+      continue;
+    }
+    const sanitized = stateWithoutGoogleHealthLocalData(parsed);
+    if (sanitized !== parsed) {
+      const current = await getAppStateStorageItem(key);
+      if (current === saved) {
+        // Storage failures must abort the migration. The completion marker is
+        // written only after every dormant account snapshot was scrubbed.
+        await setAppStateStorageItemStrict(key, JSON.stringify(sanitized));
+      }
     }
   }
   if (!shouldContinue()) return;
@@ -248,7 +263,7 @@ export function persistAppStateNow(state: AppState) {
   // The account-scoped copy is the recovery boundary that prevents signing
   // into another account (or a transient empty cloud read) from overwriting a
   // user's tracker/page/goal preferences with a clean starter shell.
-  return AsyncStorage.multiSet([
+  return multiSetAppStateStorage([
     [APP_STORAGE_KEY, serialized],
     [appAccountStorageKey(state.currentUserId), serialized],
   ]);
@@ -3346,8 +3361,14 @@ export function AppProvider({
 
   useEffect(() => {
     if (ephemeral) return;
-    AsyncStorage.getItem(APP_STORAGE_KEY)
-      .then(async (saved) => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const hydrate = () => {
+      // Reading the active snapshot migrates that key by itself. Do not sweep
+      // dormant accounts and group caches on the launch/splash critical path.
+      void getAppStateStorageItem(APP_STORAGE_KEY)
+        .then(async (saved) => {
+        if (cancelled) return;
         if (saved) {
           const parsed = JSON.parse(saved) as AppState;
           const restored = stateWithoutGoogleHealthLocalData(parsed);
@@ -3356,7 +3377,7 @@ export function AppProvider({
           // broader dormant-account sweep now waits for an interaction-safe
           // maintenance turn.
           if (restored !== parsed) {
-            await AsyncStorage.setItem(
+            await setAppStateStorageItem(
               APP_STORAGE_KEY,
               JSON.stringify(restored),
             );
@@ -3780,8 +3801,28 @@ export function AppProvider({
           });
         }
       })
-      .catch(() => undefined)
-      .finally(() => setHydrated(true));
+      .then(() => {
+        if (!cancelled) setHydrated(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (error instanceof AppStateStorageReadError) {
+          // A transient IndexedDB failure must never be interpreted as an
+          // empty account: that would let the starter state overwrite the
+          // still-valid offline snapshot. Reopen/retry behind the splash.
+          retryTimer = setTimeout(hydrate, 650);
+          return;
+        }
+        // Preserve the previous malformed-cache behavior. A signed-in account
+        // can still restore its authoritative cloud snapshot.
+        setHydrated(true);
+      });
+    };
+    hydrate();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [ephemeral]);
 
   useEffect(() => {
@@ -3791,9 +3832,9 @@ export function AppProvider({
     const run = () => {
       task = null;
       if (cancelled) return;
-      void scrubLegacyGoogleHealthAppSnapshots(() => !cancelled).catch(
-        () => undefined,
-      );
+      void migrateLegacyLargeStorage()
+        .then(() => scrubLegacyGoogleHealthAppSnapshots(() => !cancelled))
+        .catch(() => undefined);
     };
     task = scheduleResponsiveWork(run, {
       minimumDelayMs: 1_200,
@@ -3857,7 +3898,7 @@ export function AppProvider({
           await persistenceWriteRef.current?.catch(() => undefined);
           const currentUserId = persistenceStateRef.current.currentUserId;
           const [saved, savedHealthStatus] = await Promise.all([
-            AsyncStorage.getItem(APP_STORAGE_KEY).catch(() => null),
+            getAppStateStorageItem(APP_STORAGE_KEY).catch(() => null),
             AsyncStorage.getItem(
               `${HEALTH_STATUS_STORAGE_KEY}:${currentUserId}`,
             ).catch(() => null),

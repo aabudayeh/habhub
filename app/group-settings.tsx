@@ -39,6 +39,7 @@ import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
+import type { GroupNotificationPreferences } from "@/src/types";
 
 export default function GroupSettings() {
   const {
@@ -51,6 +52,7 @@ export default function GroupSettings() {
     setGroupRestDays,
     setGroupTheme,
     setGroupApprovalRequired,
+    updateSettings,
     flushLocalPersistence,
     approveMember,
     removeMember,
@@ -60,7 +62,7 @@ export default function GroupSettings() {
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const { language } = useLocalization();
+  const { language, t } = useLocalization();
   const me = state.group.members.find(
     (member) => member.id === state.currentUserId,
   )!;
@@ -89,6 +91,9 @@ export default function GroupSettings() {
   const [groupColorDraft, setGroupColorDraft] = useState(
     state.group.themeColor ?? palette.primary,
   );
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationMembersOpen, setNotificationMembersOpen] = useState(false);
+  const [notificationTrackersOpen, setNotificationTrackersOpen] = useState(false);
   const observedGroupId = useRef(state.group.id);
   const observedGroupName = useRef(state.group.name);
   const allowExit = useRef(false);
@@ -117,6 +122,24 @@ export default function GroupSettings() {
       (aliases[member.id] ?? "").trim(),
   );
   const canSaveGroupName = groupNameDirty && Boolean(normalizedGroupName);
+  const notifications = state.settings.notifications;
+  const groupNotificationPreferences =
+    notifications.groupPreferencesByGroup?.[state.group.id] ?? {};
+  const availableNotificationMemberIds = new Set(
+    state.group.members
+      .filter((member) => member.id !== state.currentUserId)
+      .map((member) => member.id),
+  );
+  const notificationMemberIds = (
+    groupNotificationPreferences.memberIds ??
+    [...availableNotificationMemberIds]
+  ).filter((memberId) => availableNotificationMemberIds.has(memberId));
+  const availableNotificationMetricIds = new Set(
+    visibleGroupMetrics.map((metric) => metric.id),
+  );
+  const notificationMetricIds = (
+    groupNotificationPreferences.metricIds ?? notifications.metricIds
+  ).filter((metricId) => availableNotificationMetricIds.has(metricId));
   useWebBeforeUnload(
     () =>
       !allowExit.current && (groupNameDirty || nicknameDraftsDirty),
@@ -142,6 +165,39 @@ export default function GroupSettings() {
       const next = (drafts[member.id] ?? "").trim();
       const current = (aliases[member.id] ?? "").trim();
       if (next !== current) updateNickname(member.id, next);
+    });
+  }
+
+  function patchGroupNotifications(
+    changes: Partial<GroupNotificationPreferences>,
+  ) {
+    updateSettings({
+      notifications: {
+        ...notifications,
+        groupPreferencesByGroup: {
+          ...(notifications.groupPreferencesByGroup ?? {}),
+          [state.group.id]: {
+            ...groupNotificationPreferences,
+            ...changes,
+          },
+        },
+      },
+    });
+  }
+
+  function toggleNotificationMember(memberId: string) {
+    patchGroupNotifications({
+      memberIds: notificationMemberIds.includes(memberId)
+        ? notificationMemberIds.filter((id) => id !== memberId)
+        : [...notificationMemberIds, memberId],
+    });
+  }
+
+  function toggleNotificationMetric(metricId: string) {
+    patchGroupNotifications({
+      metricIds: notificationMetricIds.includes(metricId)
+        ? notificationMetricIds.filter((id) => id !== metricId)
+        : [...notificationMetricIds, metricId],
     });
   }
 
@@ -312,6 +368,210 @@ export default function GroupSettings() {
             {memberRoleLabel(me)} · changes stay with this group
           </Text>
         </View>
+      </Card>
+
+      <SectionHeader title="Group notifications" />
+      <Card style={styles.notificationCard}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: notificationsOpen }}
+          onPress={() => setNotificationsOpen((open) => !open)}
+          style={styles.notificationDisclosure}
+        >
+          <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
+            <Ionicons name="notifications-outline" size={18} color={accent} />
+          </View>
+          <View style={styles.copy}>
+            <Text style={[styles.name, { color: colors.ink }]}>Personal alerts for this group</Text>
+            <Text translate={false} style={[styles.meta, { color: colors.muted }]}>{t("Choose updates, people, trackers and challenge pace without changing anyone else's settings.")}</Text>
+          </View>
+          <Ionicons name={notificationsOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.muted} />
+        </Pressable>
+        {notificationsOpen ? (
+          <View style={[styles.notificationBody, { borderTopColor: colors.border }]}>
+            <NotificationPreferenceRow
+              title="Group alerts"
+              detail="Master switch for activity and challenge updates from this group"
+              value={groupNotificationPreferences.enabled !== false}
+              onValueChange={(enabled) => patchGroupNotifications({ enabled })}
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Shared tracker progress"
+              detail="When selected members add a shared tracker entry"
+              value={
+                groupNotificationPreferences.trackerUpdates ??
+                groupNotificationPreferences.progressUpdates ??
+                notifications.groupMetricActivity
+              }
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(trackerUpdates) =>
+                patchGroupNotifications({
+                  trackerUpdates,
+                  progressUpdates: undefined,
+                })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Lead changes"
+              detail="First-place changes in selected leaderboard trackers"
+              value={
+                groupNotificationPreferences.leadChanges ??
+                notifications.leadChanges
+              }
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(leadChanges) =>
+                patchGroupNotifications({ leadChanges })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Challenge updates"
+              detail="Invitations and accepted challenge changes"
+              value={groupNotificationPreferences.challengeUpdates !== false}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(challengeUpdates) =>
+                patchGroupNotifications({ challengeUpdates })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Challenge standings"
+              detail="Lead gained or lost and the gap to the next person"
+              value={groupNotificationPreferences.challengeStandings !== false}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(challengeStandings) =>
+                patchGroupNotifications({ challengeStandings })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Challenge encouragement"
+              detail="Occasional reminders scaled to challenge duration"
+              value={groupNotificationPreferences.challengeReminders !== false}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(challengeReminders) =>
+                patchGroupNotifications({ challengeReminders })
+              }
+              colors={colors}
+              accent={accent}
+            />
+            <NotificationPreferenceRow
+              title="Challenge results"
+              detail="Completion and winner notification when the period ends"
+              value={groupNotificationPreferences.challengeResults !== false}
+              disabled={groupNotificationPreferences.enabled === false}
+              onValueChange={(challengeResults) =>
+                patchGroupNotifications({ challengeResults })
+              }
+              colors={colors}
+              accent={accent}
+            />
+
+            <View style={styles.preferenceBlock}>
+              <Text style={[styles.preferenceLabel, { color: colors.ink }]}>Challenge reminder pace</Text>
+              <View style={styles.segmentRow}>
+                {(["minimal", "balanced", "frequent"] as const).map((cadence) => {
+                  const selected =
+                    (groupNotificationPreferences.challengeCadence ?? "balanced") === cadence;
+                  return (
+                    <Pressable
+                      key={cadence}
+                      disabled={
+                        groupNotificationPreferences.enabled === false ||
+                        groupNotificationPreferences.challengeReminders === false
+                      }
+                      onPress={() =>
+                        patchGroupNotifications({ challengeCadence: cadence })
+                      }
+                      style={[
+                        styles.segment,
+                        {
+                          backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                          borderColor: selected ? accent : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.segmentText, { color: selected ? accent : colors.muted }]}>
+                        {cadence[0].toUpperCase() + cadence.slice(1)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <NotificationFilter
+              title="Members"
+              detail={`${notificationMemberIds.length} of ${Math.max(0, state.group.members.length - 1)} selected`}
+              open={notificationMembersOpen}
+              onToggle={() => setNotificationMembersOpen((open) => !open)}
+              colors={colors}
+            >
+              <View style={styles.chips}>
+                {state.group.members
+                  .filter((member) => member.id !== state.currentUserId)
+                  .map((member) => {
+                    const selected = notificationMemberIds.includes(member.id);
+                    return (
+                      <Pressable
+                        key={member.id}
+                        onPress={() => toggleNotificationMember(member.id)}
+                        style={[
+                          styles.chip,
+                          {
+                            backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                            borderColor: selected ? accent : colors.border,
+                          },
+                        ]}
+                      >
+                        <Text translate={false} style={[styles.chipText, { color: selected ? accent : colors.muted }]}>
+                          {memberDisplayName(state, member)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+              </View>
+            </NotificationFilter>
+            <NotificationFilter
+              title="Trackers"
+              detail={`${notificationMetricIds.length} of ${visibleGroupMetrics.length} selected`}
+              open={notificationTrackersOpen}
+              onToggle={() => setNotificationTrackersOpen((open) => !open)}
+              colors={colors}
+            >
+              <View style={styles.chips}>
+                {visibleGroupMetrics.map((metric) => {
+                  const selected = notificationMetricIds.includes(metric.id);
+                  return (
+                    <Pressable
+                      key={metric.id}
+                      onPress={() => toggleNotificationMetric(metric.id)}
+                      style={[
+                        styles.chip,
+                        {
+                          backgroundColor: selected ? `${metric.color}18` : colors.canvas,
+                          borderColor: selected ? metric.color : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text translate={false} style={[styles.chipText, { color: selected ? metric.color : colors.muted }]}>
+                        {localizeMetricName(language, metric)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </NotificationFilter>
+            <Text style={[styles.notificationHelp, { color: colors.muted }]}>System permission and quiet hours stay in global Notifications. These choices only refine this group.</Text>
+          </View>
+        ) : null}
       </Card>
 
       <SectionHeader title="Group name" />
@@ -773,10 +1033,98 @@ export default function GroupSettings() {
   );
 }
 
+function NotificationPreferenceRow({
+  title,
+  detail,
+  value,
+  disabled,
+  onValueChange,
+  colors,
+  accent,
+}: {
+  title: string;
+  detail: string;
+  value: boolean;
+  disabled?: boolean;
+  onValueChange: (value: boolean) => void;
+  colors: ReturnType<typeof useAppColors>;
+  accent: string;
+}) {
+  return (
+    <View
+      style={[
+        styles.preferenceRow,
+        { borderBottomColor: colors.border, opacity: disabled ? 0.5 : 1 },
+      ]}
+    >
+      <View style={styles.copy}>
+        <Text style={[styles.name, { color: colors.ink }]}>{title}</Text>
+        <Text style={[styles.meta, { color: colors.muted }]}>{detail}</Text>
+      </View>
+      <Switch
+        disabled={disabled}
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: colors.border, true: `${accent}88` }}
+        thumbColor={value ? accent : colors.faint}
+      />
+    </View>
+  );
+}
+
+function NotificationFilter({
+  title,
+  detail,
+  open,
+  onToggle,
+  colors,
+  children,
+}: {
+  title: string;
+  detail: string;
+  open: boolean;
+  onToggle: () => void;
+  colors: ReturnType<typeof useAppColors>;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.filterBlock, { borderTopColor: colors.border }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={onToggle}
+        style={styles.filterDisclosure}
+      >
+        <View style={styles.copy}>
+          <Text style={[styles.preferenceLabel, { color: colors.ink }]}>{title}</Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>{detail}</Text>
+        </View>
+        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.muted} />
+      </Pressable>
+      {open ? children : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   headerActions: { flexDirection: "row", alignItems: "center", gap: 9 },
   smallLink: { fontSize: 9, fontWeight: "900" },
   status: { flexDirection: "row", alignItems: "center", gap: 10 },
+  notificationCard: { padding: 0, overflow: "hidden" },
+  notificationDisclosure: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 11, paddingVertical: 9 },
+  notificationBody: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 11, paddingBottom: 11 },
+  preferenceRow: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  preferenceBlock: { gap: 7, paddingVertical: 10 },
+  preferenceLabel: { fontSize: 10, fontWeight: "900" },
+  segmentRow: { flexDirection: "row", gap: 6 },
+  segment: { flex: 1, minHeight: 32, borderWidth: 1, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  segmentText: { fontSize: 8, fontWeight: "900" },
+  filterBlock: { borderTopWidth: StyleSheet.hairlineWidth },
+  filterDisclosure: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 8 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, paddingBottom: 10 },
+  chip: { minHeight: 30, borderWidth: 1, borderRadius: 10, paddingHorizontal: 9, alignItems: "center", justifyContent: "center" },
+  chipText: { fontSize: 8, fontWeight: "900" },
+  notificationHelp: { fontSize: 8, lineHeight: 12, marginTop: 4 },
   groupNameCard: { gap: 5 },
   groupNameRow: { flexDirection: "row", alignItems: "center", gap: 7 },
   groupNameInput: {

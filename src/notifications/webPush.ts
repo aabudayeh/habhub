@@ -243,6 +243,33 @@ export async function registerHabHubServiceWorker() {
   return true;
 }
 
+/** Show a foreground PWA notification without requesting permission. */
+export async function showImmediateWebNotification({
+  title,
+  body,
+  data,
+  tag,
+}: {
+  title: string;
+  body: string;
+  data: Record<string, string | number | boolean>;
+  tag: string;
+}) {
+  if (!webPushSupported() || Notification.permission !== "granted")
+    return false;
+  const registration = await activeServiceWorkerRegistration();
+  const options: NotificationOptions & { renotify: boolean } = {
+    body: body.slice(0, 220),
+    icon: "/pwa-icon-192.png",
+    badge: "/pwa-icon-192.png",
+    tag: tag.slice(0, 120),
+    renotify: false,
+    data,
+  };
+  await registration.showNotification(title.slice(0, 120), options);
+  return true;
+}
+
 export async function enableWebPushNotifications(
   userId: string | undefined,
   preferences: NotificationSettings,

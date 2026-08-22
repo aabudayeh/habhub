@@ -16,6 +16,9 @@ import { Avatar } from "@/src/components/ui";
 import { SaveGroupChallengeInput } from "@/src/cloud/groupChallenges";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import {
+  type ChallengeDurationPreset,
+  challengePresetEndDate,
+  groupChallengeEndDate,
   isChallengeMetric,
   validChallengeDate,
   validateGroupChallenge,
@@ -81,6 +84,53 @@ const CHALLENGE_REPEAT_OPTIONS: {
   },
 ];
 
+const CHALLENGE_DURATION_OPTIONS: {
+  id: ChallengeDurationPreset;
+  label: string;
+  sublabel: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  {
+    id: "day",
+    label: "One day",
+    sublabel: "Score only the selected day",
+    icon: "today-outline",
+  },
+  {
+    id: "week",
+    label: "One week",
+    sublabel: "Seven days including the start date",
+    icon: "calendar-outline",
+  },
+  {
+    id: "month",
+    label: "One month",
+    sublabel: "One calendar month including the start date",
+    icon: "calendar-number-outline",
+  },
+  {
+    id: "year",
+    label: "One year",
+    sublabel: "One calendar year including the start date",
+    icon: "calendar-clear-outline",
+  },
+  {
+    id: "custom",
+    label: "Custom dates",
+    sublabel: "Choose an exact start and end date",
+    icon: "options-outline",
+  },
+];
+
+function challengeDurationPreset(challenge: GroupChallenge | undefined) {
+  if (!challenge) return "day" as ChallengeDurationPreset;
+  const endDate = groupChallengeEndDate(challenge);
+  for (const preset of ["day", "week", "month", "year"] as const)
+    if (challengePresetEndDate(challenge.localDate, preset) === endDate)
+      return preset;
+  return "custom" as ChallengeDurationPreset;
+}
+
 function challengeRepeatMode(
   recurrence: GoalSchedule | undefined,
 ): ChallengeRepeatMode {
@@ -90,6 +140,17 @@ function challengeRepeatMode(
   if (recurrence?.mode === "interval_days") return "interval_days";
   if (recurrence?.mode === "days_of_month") return "days_of_month";
   return "once";
+}
+
+function recurringScheduleKey(recurrence: GoalSchedule | undefined) {
+  if (!recurrence || recurrence.mode === "once") return "";
+  return JSON.stringify({
+    mode: recurrence.mode,
+    anchorDate: recurrence.anchorDate,
+    daysOfWeek: [...(recurrence.daysOfWeek ?? [])].sort((a, b) => a - b),
+    intervalDays: recurrence.intervalDays,
+    daysOfMonth: [...(recurrence.daysOfMonth ?? [])].sort((a, b) => a - b),
+  });
 }
 
 export function GroupChallengeEditor({
@@ -122,8 +183,12 @@ export function GroupChallengeEditor({
   );
   const [metricId, setMetricId] = useState(eligibleMetrics[0]?.id ?? "");
   const [target, setTarget] = useState("");
+  const [targetEnabled, setTargetEnabled] = useState(true);
   const [title, setTitle] = useState("");
   const [localDate, setLocalDate] = useState(initialDate ?? dateKey());
+  const [endDate, setEndDate] = useState(initialDate ?? dateKey());
+  const [durationPreset, setDurationPreset] =
+    useState<ChallengeDurationPreset>("day");
   const [repeatMode, setRepeatMode] =
     useState<ChallengeRepeatMode>("once");
   const [repeatUntil, setRepeatUntil] = useState(
@@ -135,6 +200,12 @@ export function GroupChallengeEditor({
   const [participants, setParticipants] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const recurringHistoryBoundary = dateWithOffsetFrom(dateKey(), -1);
+  const historicalRecurringRulesLocked = Boolean(
+    challenge?.recurrence &&
+      (challenge.recurrence.anchorDate ?? challenge.localDate) <
+        recurringHistoryBoundary,
+  );
 
   useEffect(() => {
     if (!visible) return;
@@ -143,14 +214,22 @@ export function GroupChallengeEditor({
       eligibleMetrics[0];
     setMetricId(metric?.id ?? "");
     setTarget(
-      challenge
+      challenge?.target !== undefined
         ? String(challenge.target)
         : metric?.goal.target
           ? String(metric.goal.target)
           : "",
     );
+    setTargetEnabled(!challenge || challenge.target !== undefined);
     setTitle(challenge?.title ?? "");
-    setLocalDate(challenge?.localDate ?? initialDate ?? dateKey());
+    const nextLocalDate =
+      challenge?.recurrence?.anchorDate ??
+      challenge?.localDate ??
+      initialDate ??
+      dateKey();
+    setLocalDate(nextLocalDate);
+    setEndDate(challenge ? groupChallengeEndDate(challenge) : nextLocalDate);
+    setDurationPreset(challengeDurationPreset(challenge));
     setRepeatMode(challengeRepeatMode(challenge?.recurrence));
     setRepeatUntil(
       challenge?.recurrence?.endDate ??
@@ -195,15 +274,25 @@ export function GroupChallengeEditor({
   }
 
   function shiftDay(days: number) {
-    setLocalDate((current) =>
-      validChallengeDate(current)
+    setLocalDate((current) => {
+      const next = validChallengeDate(current)
         ? dateWithOffsetFrom(current, days)
-        : dateKey(),
-    );
+        : dateKey();
+      setEndDate((currentEnd) =>
+        durationPreset === "custom" && validChallengeDate(currentEnd)
+          ? dateWithOffsetFrom(currentEnd, days)
+          : durationPreset === "custom"
+            ? next
+            : challengePresetEndDate(next, durationPreset),
+      );
+      return next;
+    });
   }
 
   async function submit() {
-    const numericTarget = Number(target.replace(",", "."));
+    const numericTarget = targetEnabled
+      ? Number(target.replace(",", "."))
+      : undefined;
     const monthDays = [
       ...new Set(
         repeatMonthDays
@@ -212,8 +301,12 @@ export function GroupChallengeEditor({
           .filter((day) => Number.isInteger(day) && day >= 1 && day <= 31),
       ),
     ];
+    const resolvedEndDate =
+      durationPreset === "custom"
+        ? endDate
+        : challengePresetEndDate(localDate, durationPreset);
     const recurrence: GoalSchedule | undefined =
-      repeatMode === "once"
+      durationPreset !== "day" || repeatMode === "once"
         ? undefined
         : {
             mode: repeatMode,
@@ -228,18 +321,37 @@ export function GroupChallengeEditor({
             daysOfMonth:
               repeatMode === "days_of_month" ? monthDays : undefined,
           };
+    if (
+      historicalRecurringRulesLocked &&
+      recurrence?.endDate &&
+      recurrence.endDate < recurringHistoryBoundary
+    ) {
+      setError(
+        "Past repeat results are locked. Choose yesterday or a future repeat end.",
+      );
+      return;
+    }
     const participantIds = [
       ...new Set([...participants, currentUserId, challengeCreatorId]),
     ];
+    const repeatingScheduleChanged = Boolean(
+      recurrence &&
+        recurringScheduleKey(recurrence) !==
+          recurringScheduleKey(challenge?.recurrence),
+    );
     const validation = validateGroupChallenge({
       title,
       target: numericTarget,
       localDate,
+      endDate: resolvedEndDate,
       metric: selectedMetric,
       participantIds,
       creatorId: challengeCreatorId,
       recurrence,
-      today: dateKey(),
+      // Active multi-day periods may retain a past start. Repeating series
+      // cannot be moved into history because that would create retroactive
+      // winner notifications for occurrences nobody actually joined live.
+      today: !challenge || repeatingScheduleChanged ? dateKey() : undefined,
     });
     if (validation) {
       setError(validation);
@@ -255,6 +367,7 @@ export function GroupChallengeEditor({
         title,
         target: numericTarget,
         localDate,
+        endDate: resolvedEndDate,
         participantIds,
         recurrence,
       });
@@ -283,7 +396,7 @@ export function GroupChallengeEditor({
                 {challenge ? "Edit challenge" : "Challenge your friends"}
               </Text>
               <Text style={[styles.subheading, { color: colors.muted }]}>
-                One target, one day, live group progress.
+                Choose a target or an open race across one day or a date range.
               </Text>
             </View>
             <Pressable accessibilityLabel="Close" onPress={onClose} style={styles.close}>
@@ -292,6 +405,9 @@ export function GroupChallengeEditor({
           </View>
 
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
+            {historicalRecurringRulesLocked ? (
+              <Text style={[styles.repeatSeriesHint, { color: colors.muted }]}>Past results are locked. You can edit the title or change only the future repeat end.</Text>
+            ) : null}
             <Text style={[styles.label, { color: colors.ink }]}>Tracker</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
               {eligibleMetrics.map((metric) => {
@@ -300,8 +416,12 @@ export function GroupChallengeEditor({
                   <Pressable
                     key={metric.id}
                     accessibilityRole="radio"
-                    accessibilityState={{ selected }}
+                    accessibilityState={{
+                      selected,
+                      disabled: historicalRecurringRulesLocked,
+                    }}
                     accessibilityLabel={metric.name}
+                    disabled={historicalRecurringRulesLocked}
                     onPress={() => {
                       setMetricId(metric.id);
                       if (!challenge) setTarget(String(metric.goal.target || ""));
@@ -321,13 +441,52 @@ export function GroupChallengeEditor({
               })}
             </ScrollView>
 
-            <View style={styles.fieldRow}>
-              <View style={styles.targetField}>
-                <Text style={[styles.label, { color: colors.ink }]}>Target</Text>
+            <View style={styles.ruleChoices}>
+              {([
+                { enabled: true, label: "Target", detail: "Reach a set value" },
+                { enabled: false, label: "Most wins", detail: "No target; highest total wins" },
+              ] as const).map((option) => {
+                const selected = targetEnabled === option.enabled;
+                return (
+                  <Pressable
+                    key={option.label}
+                    accessibilityRole="radio"
+                    accessibilityState={{
+                      selected,
+                      disabled: historicalRecurringRulesLocked,
+                    }}
+                    disabled={historicalRecurringRulesLocked}
+                    onPress={() => setTargetEnabled(option.enabled)}
+                    style={[
+                      styles.ruleChoice,
+                      {
+                        borderColor: selected ? accent : colors.border,
+                        backgroundColor: selected ? colors.primarySoft : colors.canvas,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={selected ? "radio-button-on" : "radio-button-off"}
+                      size={16}
+                      color={selected ? accent : colors.faint}
+                    />
+                    <View style={styles.ruleCopy}>
+                      <Text style={[styles.ruleTitle, { color: colors.ink }]}>{option.label}</Text>
+                      <Text style={[styles.ruleDetail, { color: colors.muted }]}>{option.detail}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {targetEnabled ? (
+              <View style={styles.targetOnlyField}>
+                <Text style={[styles.label, { color: colors.ink }]}>Challenge target</Text>
                 <View style={[styles.inputWrap, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
                   <TextInput
                     value={target}
                     onChangeText={setTarget}
+                    editable={!historicalRecurringRulesLocked}
                     keyboardType="decimal-pad"
                     placeholder="Challenge target"
                     style={[styles.input, { color: colors.ink }]}
@@ -335,33 +494,91 @@ export function GroupChallengeEditor({
                   <Text style={[styles.unit, { color: colors.muted }]}>{selectedMetric?.unit}</Text>
                 </View>
               </View>
+            ) : null}
+
+            <View style={styles.durationMenu}>
+              <SelectionMenu
+                title="Duration"
+                searchable={false}
+                multiple={false}
+                items={CHALLENGE_DURATION_OPTIONS}
+                selectedIds={[durationPreset]}
+                disabled={historicalRecurringRulesLocked}
+                onChange={(ids) => {
+                  const preset = ids[0] as ChallengeDurationPreset | undefined;
+                  if (!preset) return;
+                  setDurationPreset(preset);
+                  if (preset !== "custom")
+                    setEndDate(challengePresetEndDate(localDate, preset));
+                  if (preset !== "day") setRepeatMode("once");
+                }}
+              />
+            </View>
+
+            <View style={styles.fieldRow}>
               <View style={styles.dateField}>
-                <Text style={[styles.label, { color: colors.ink }]}>Challenge day</Text>
+                <Text style={[styles.label, { color: colors.ink }]}>{durationPreset === "day" ? "Challenge day" : "Starts"}</Text>
                 <View style={[styles.dateControls, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
-                  <Pressable onPress={() => shiftDay(-1)} style={styles.dateArrow}>
+                  <Pressable
+                    accessibilityState={{ disabled: historicalRecurringRulesLocked }}
+                    disabled={historicalRecurringRulesLocked}
+                    onPress={() => shiftDay(-1)}
+                    style={styles.dateArrow}
+                  >
                     <Ionicons name="chevron-back" size={16} color={colors.muted} />
                   </Pressable>
                   <TextInput
                     value={localDate}
-                    onChangeText={setLocalDate}
+                    editable={!historicalRecurringRulesLocked}
+                    onChangeText={(value) => {
+                      setLocalDate(value);
+                      if (
+                        durationPreset !== "custom" &&
+                        validChallengeDate(value)
+                      )
+                        setEndDate(
+                          challengePresetEndDate(value, durationPreset),
+                        );
+                    }}
                     maxLength={10}
                     placeholder="YYYY-MM-DD"
                     style={[styles.dateInput, { color: colors.ink }]}
                   />
-                  <Pressable onPress={() => shiftDay(1)} style={styles.dateArrow}>
+                  <Pressable
+                    accessibilityState={{ disabled: historicalRecurringRulesLocked }}
+                    disabled={historicalRecurringRulesLocked}
+                    onPress={() => shiftDay(1)}
+                    style={styles.dateArrow}
+                  >
                     <Ionicons name="chevron-forward" size={16} color={colors.muted} />
                   </Pressable>
                 </View>
               </View>
+              {durationPreset !== "day" ? (
+                <View style={styles.dateField}>
+                  <Text style={[styles.label, { color: colors.ink }]}>Ends · inclusive</Text>
+                  <View style={[styles.dateControls, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
+                    <TextInput
+                      value={endDate}
+                      onChangeText={setEndDate}
+                      editable={durationPreset === "custom"}
+                      maxLength={10}
+                      placeholder="YYYY-MM-DD"
+                      style={[styles.dateInput, { color: colors.ink }]}
+                    />
+                  </View>
+                </View>
+              ) : null}
             </View>
 
-            <View style={styles.repeatMenu}>
+            {durationPreset === "day" ? <View style={styles.repeatMenu}>
               <SelectionMenu
                 title="Frequency"
                 searchable={false}
                 multiple={false}
                 items={CHALLENGE_REPEAT_OPTIONS}
                 selectedIds={[repeatMode]}
+                disabled={historicalRecurringRulesLocked}
                 onChange={(ids) => {
                   const mode = ids[0] as ChallengeRepeatMode | undefined;
                   if (!mode) return;
@@ -373,8 +590,8 @@ export function GroupChallengeEditor({
               {repeatMode !== "once" ? (
                 <Text style={[styles.repeatSeriesHint, { color: colors.muted }]}>Responses apply to the whole series.</Text>
               ) : null}
-            </View>
-            {repeatMode === "selected_days" ? (
+            </View> : null}
+            {durationPreset === "day" && repeatMode === "selected_days" ? (
               <View style={styles.repeatDetail}>
                 <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>{t("Repeat on")}</Text>
                 <View style={styles.weekdayRow}>
@@ -384,7 +601,11 @@ export function GroupChallengeEditor({
                       <Pressable
                         key={`${label}-${day}`}
                         accessibilityRole="checkbox"
-                        accessibilityState={{ checked: selected }}
+                        accessibilityState={{
+                          checked: selected,
+                          disabled: historicalRecurringRulesLocked,
+                        }}
+                        disabled={historicalRecurringRulesLocked}
                         onPress={() =>
                           setRepeatDays((current) =>
                             selected
@@ -409,13 +630,14 @@ export function GroupChallengeEditor({
                 </View>
               </View>
             ) : null}
-            {repeatMode === "interval_days" ? (
+            {durationPreset === "day" && repeatMode === "interval_days" ? (
               <View style={styles.repeatDetail}>
                 <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>Repeat every</Text>
                 <View style={[styles.intervalInput, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
                   <TextInput
                     value={repeatInterval}
                     onChangeText={setRepeatInterval}
+                    editable={!historicalRecurringRulesLocked}
                     keyboardType="number-pad"
                     maxLength={2}
                     placeholder="3"
@@ -425,19 +647,20 @@ export function GroupChallengeEditor({
                 </View>
               </View>
             ) : null}
-            {repeatMode === "days_of_month" ? (
+            {durationPreset === "day" && repeatMode === "days_of_month" ? (
               <View style={styles.repeatDetail}>
                 <Text style={[styles.repeatDetailLabel, { color: colors.muted }]}>Dates each month</Text>
                 <TextInput
                   value={repeatMonthDays}
                   onChangeText={setRepeatMonthDays}
+                  editable={!historicalRecurringRulesLocked}
                   keyboardType="numbers-and-punctuation"
                   placeholder="1, 15"
                   style={[styles.monthDaysInput, { color: colors.ink, borderColor: colors.border, backgroundColor: colors.canvas }]}
                 />
               </View>
             ) : null}
-            {repeatMode !== "once" ? (
+            {durationPreset === "day" && repeatMode !== "once" ? (
               <View style={[styles.repeatUntil, { borderColor: colors.border, backgroundColor: colors.canvas }]}>
                 <Text style={[styles.repeatUntilLabel, { color: colors.muted }]}>{t("Repeat until")}</Text>
                 <TextInput
@@ -561,7 +784,13 @@ const styles = StyleSheet.create({
   metricChip: { minHeight: 36, borderRadius: 12, borderWidth: 1, flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10 },
   metricText: { fontSize: 10, fontWeight: "800" },
   fieldRow: { flexDirection: "row", gap: 9, marginBottom: 13 },
-  targetField: { flex: 0.9 },
+  ruleChoices: { flexDirection: "row", gap: 8, marginBottom: 13 },
+  ruleChoice: { flex: 1, minHeight: 50, borderRadius: 13, borderWidth: 1, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 7 },
+  ruleCopy: { flex: 1 },
+  ruleTitle: { fontSize: 10, fontWeight: "900" },
+  ruleDetail: { marginTop: 1, fontSize: 8, lineHeight: 11 },
+  targetOnlyField: { marginBottom: 13 },
+  durationMenu: { marginBottom: 10 },
   dateField: { flex: 1.25 },
   inputWrap: { height: 42, borderRadius: 13, borderWidth: 1, flexDirection: "row", alignItems: "center" },
   input: { flex: 1, paddingHorizontal: 11, fontSize: 13, fontWeight: "800" },

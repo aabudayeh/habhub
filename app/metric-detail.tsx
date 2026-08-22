@@ -111,11 +111,11 @@ import {
   FoodNutrientBucket,
   FoodNutrientId,
   FoodNutrientSummary,
+  foodNutrientDetailEntries,
   foodNutritionReport,
   editFoodEntryClockTime,
-  hasFoodNutrientTracker,
+  isFoodNutrientDetailEntry,
   isFoodNutrientTrackerId,
-  nextFoodNutrientTrackerOrder,
 } from "@/src/domain/food";
 import { trackerPresets } from "@/src/domain/trackerCatalog";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
@@ -152,7 +152,7 @@ export default function TrackerDetail() {
     period?: LeaderboardPeriod;
   }>();
   const {
-    state,
+    state: persistedState,
     deleteEntry,
     purgeGoogleHealthEntry,
     updateFoodEntryTime,
@@ -187,7 +187,53 @@ export default function TrackerDetail() {
   );
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
-  const tracker = state.metrics.find((item) => item.id === trackerId);
+  const persistedTracker = persistedState.metrics.find(
+    (item) => item.id === trackerId,
+  );
+  const virtualNutrientTracker = useMemo<MetricDefinition | undefined>(() => {
+    if (persistedTracker || !isFoodNutrientTrackerId(trackerId)) return undefined;
+    const nutrient = FOOD_NUTRIENTS.find((item) => item.id === trackerId);
+    if (!nutrient) return undefined;
+    const preset = trackerPresets(persistedState, true).find(
+      (item) => item.templateId === trackerId,
+    );
+    if (!preset) return undefined;
+    const firstFoodDate = persistedState.entries
+      .filter(
+        (entry) =>
+          entry.userId === persistedState.currentUserId &&
+          entry.metricId === "food" &&
+          Number(entry.nutrition?.[nutrient.nutritionKey]) > 0,
+      )
+      .map((entry) => entry.localDate)
+      .sort()[0];
+    return {
+      ...preset,
+      id: trackerId,
+      scoreWeight: 0,
+      sections: { today: false, group: false, insights: false },
+      order: persistedState.metrics.length,
+      activeFrom: firstFoodDate ?? dateKey(),
+    };
+  }, [persistedState, persistedTracker, trackerId]);
+  const tracker = persistedTracker ?? virtualNutrientTracker;
+  const state = useMemo(() => {
+    if (!isFoodNutrientTrackerId(trackerId)) return persistedState;
+    const entries = foodNutrientDetailEntries(
+      persistedState.entries,
+      persistedState.currentUserId,
+      trackerId,
+    );
+    if (entries === persistedState.entries && !virtualNutrientTracker)
+      return persistedState;
+    return {
+      ...persistedState,
+      metrics: virtualNutrientTracker
+        ? [...persistedState.metrics, virtualNutrientTracker]
+        : persistedState.metrics,
+      entries: [...entries],
+    };
+  }, [persistedState, trackerId, virtualNutrientTracker]);
   const historicalRecords = useMemo(
     () =>
       tracker && recordsOpen
@@ -798,7 +844,10 @@ export default function TrackerDetail() {
         : realityBand === "far"
           ? palette.red
           : colors.border;
-  const canSkipToday = day === dateKey() && tracker.goalEnabled !== false;
+  const canSkipToday =
+    Boolean(persistedTracker) &&
+    day === dateKey() &&
+    tracker.goalEnabled !== false;
   const isFasting = Boolean(tracker.fastingSettings);
   const automaticFasting =
     isFasting && tracker.fastingSettings?.automaticFoodBreak === true;
@@ -814,6 +863,7 @@ export default function TrackerDetail() {
   const canControlFast =
     isFasting && dates.length === 1 && day === dateKey();
   const canAddEntry =
+    Boolean(persistedTracker) &&
     tracker.id !== "todo_completion" &&
     tracker.id !== "steps" &&
     !isFasting &&
@@ -2098,6 +2148,8 @@ export default function TrackerDetail() {
                   ·{" "}
                   {fastDetails
                     ? t(fastDetails.endedAutomatically ? "Automatic" : "Manual")
+                    : isFoodNutrientDetailEntry(entry)
+                    ? entry.sourceOrigin || "Food log"
                     : entry.source === "imported"
                     ? entry.sourceOrigin || "Health import"
                     : "Manual entry"}
@@ -2368,7 +2420,7 @@ function FoodNutritionSection({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { t } = useLocalization();
-  const { addMetric, updateMetric, updateSettings } = useApp();
+  const { updateSettings } = useApp();
   const [open, setOpen] = useState(false);
   const nutrientIds = useMemo(
     () => FOOD_NUTRIENTS.map((nutrient) => nutrient.id),
@@ -2442,33 +2494,12 @@ function FoodNutritionSection({
   const rangeMode = state.settings.foodNutritionRangeMode ?? "average";
   const openNutrient = useCallback(
     (id: FoodNutrientId) => {
-      if (!hasFoodNutrientTracker(state.metrics, id)) {
-        const preset = trackerPresets(state, true).find(
-          (item) => item.templateId === id,
-        );
-        if (!preset) {
-          Alert.alert("Tracker not found");
-          return;
-        }
-        const activeFrom = dateKey();
-        addMetric({
-          ...preset,
-          activeFrom,
-          addToToday: false,
-          trackGoal: false,
-        });
-        updateMetric(id, {
-          activeFrom,
-          order: nextFoodNutrientTrackerOrder(state.metrics),
-          sections: { today: false, group: false, insights: false },
-        });
-      }
       router.push({
         pathname: "/metric-detail",
         params: { metric: id, date: anchorDate, period },
       });
     },
-    [addMetric, anchorDate, period, state, updateMetric],
+    [anchorDate, period],
   );
   return (
     <Card style={styles.foodMacroCard}>

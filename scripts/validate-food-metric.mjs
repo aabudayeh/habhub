@@ -7,8 +7,10 @@ import {
   editFoodEntryClockTime,
   FOOD_MACROS,
   FOOD_NUTRIENTS,
+  foodNutrientDetailEntries,
   foodNutritionReport,
   hasFoodNutrientTracker,
+  isFoodNutrientDetailEntry,
   isFoodNutrientTrackerId,
   nextFoodNutrientTrackerOrder,
   parsePositiveFoodNutrientAmount,
@@ -42,6 +44,85 @@ const importedMeal = {
   sourceOrigin: "Samsung Health",
   sourceUpdatedAt: "2026-01-12T13:00:00.000Z",
 };
+
+const staleLinkedProtein = {
+  ...importedMeal,
+  id: "health:meal-1:protein",
+  metricId: "protein",
+  value: 17,
+  label: undefined,
+  note: undefined,
+  nutrition: undefined,
+};
+const standaloneAppleProtein = {
+  ...staleLinkedProtein,
+  id: "healthkit:dietary-protein:standalone",
+  value: 9,
+  sourceProvider: "healthkit",
+  sourceRecordId: "dietary-protein:standalone",
+  sourceOrigin: "Apple Health",
+};
+const nutrientDetailEntries = foodNutrientDetailEntries(
+  [
+    importedMeal,
+    staleLinkedProtein,
+    standaloneAppleProtein,
+    { ...staleLinkedProtein, userId: "user-b", value: 99 },
+  ],
+  "user-a",
+  "protein",
+);
+const linkedProteinView = nutrientDetailEntries.find(
+  (entry) => isFoodNutrientDetailEntry(entry),
+);
+assert.ok(linkedProteinView, "Food nutrition must project into a nutrient detail view");
+assert.equal(linkedProteinView.value, 35, "the canonical Food payload replaces a stale sidecar");
+assert.equal(linkedProteinView.label, "Rice bowl", "the nutrient entry identifies its meal");
+assert.equal(linkedProteinView.source, "calculated", "a view projection must be read-only");
+assert.equal(linkedProteinView.visibility, importedMeal.visibility);
+assert.equal(linkedProteinView.note, undefined, "a projection must not copy a private meal note");
+assert.equal(linkedProteinView.nutrition, undefined, "a projection must not carry the full meal payload");
+assert.ok(
+  !nutrientDetailEntries.some(
+    (entry) => entry.id === staleLinkedProtein.id && entry.userId === "user-a",
+  ),
+  "a linked persisted sidecar must not double count its Food parent",
+);
+assert.ok(
+  nutrientDetailEntries.some((entry) => entry.id === standaloneAppleProtein.id),
+  "a standalone provider nutrient record must remain visible",
+);
+assert.ok(
+  nutrientDetailEntries.some(
+    (entry) => entry.id === staleLinkedProtein.id && entry.userId === "user-b",
+  ),
+  "projecting one account must not remove another account's same-id row",
+);
+assert.equal(staleLinkedProtein.value, 17, "the read-only projection must not mutate persisted rows");
+const zeroNutrientDetailEntries = foodNutrientDetailEntries(
+  [
+    { ...importedMeal, nutrition: { ...importedMeal.nutrition, proteinG: 0 } },
+    staleLinkedProtein,
+  ],
+  "user-a",
+  "protein",
+);
+assert.ok(
+  !zeroNutrientDetailEntries.some(
+    (entry) => entry.userId === "user-a" && entry.metricId === "protein",
+  ),
+  "a canonical zero or removed nutrient must clear its stale linked sidecar",
+);
+const fiberDetailEntries = foodNutrientDetailEntries(
+  [{ ...importedMeal, nutrition: { ...importedMeal.nutrition, fiberG: 8 } }],
+  "user-a",
+  "fiber",
+);
+assert.equal(
+  fiberDetailEntries.find((entry) => isFoodNutrientDetailEntry(entry))?.value,
+  8,
+  "a nutrient detail works even when no persisted tracker or sidecar exists",
+);
 
 const edited = editFoodEntryClockTime(
   importedMeal,
@@ -715,8 +796,23 @@ assert.match(logScreen, /nutritionText: \{[\s\S]{0,80}minWidth: 0/);
 assert.match(logScreen, /nutritionUnit: \{[\s\S]{0,80}flexShrink: 0/);
 assert.match(
   detail,
-  /if \(!hasFoodNutrientTracker\(state\.metrics, id\)\)[\s\S]{0,900}trackerPresets\(state, true\)[\s\S]{0,900}addMetric\([\s\S]{0,900}sections: \{ today: false, group: false, insights: false \}[\s\S]{0,900}pathname: "\/metric-detail"/,
-  "an explicit visual click restores a missing built-in nutrient before routing",
+  /const openNutrient = useCallback\([\s\S]{0,400}pathname: "\/metric-detail"[\s\S]{0,120}metric: id/,
+  "a nutrition visual click routes directly to its read-only detail",
+);
+assert.doesNotMatch(
+  detail,
+  /const openNutrient = useCallback\([\s\S]{0,900}(?:addMetric|updateMetric|hasFoodNutrientTracker)/,
+  "opening a nutrient detail must not create, restore, or configure a tracker",
+);
+assert.match(
+  detail,
+  /const virtualNutrientTracker = useMemo<[\s\S]{0,1700}foodNutrientDetailEntries\([\s\S]{0,500}metrics: virtualNutrientTracker/,
+  "a missing nutrient tracker must exist only inside the detail page's derived state",
+);
+assert.match(
+  detail,
+  /const canAddEntry =[\s\S]{0,100}Boolean\(persistedTracker\)/,
+  "a virtual nutrient page must not expose write actions until the tracker is explicitly added",
 );
 assert.match(detail, /strokeDasharray=/);
 assert.doesNotMatch(detail, /foodMacroBarGoalTick: \{[\s\S]{0,180}borderStyle: "dashed"/);

@@ -105,11 +105,20 @@ Deno.serve(async (request) => {
     const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     admin = createClient(url, service);
     const auth = request.headers.get("Authorization") ?? "";
-    const {
-      data: { user },
-      error: userError,
-    } = await admin.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
-    if (userError || !user) return json({ error: "Unauthorized" }, 401);
+    const bearer = auth.replace(/^Bearer\s+/i, "");
+    // Scheduled server workers may dispatch only an already-committed
+    // canonical outbox row. A service-role request can never synthesize chat
+    // or legacy copy, audiences, routes, or recipients from request payload.
+    const internalServiceRequest = Boolean(service) && bearer === service;
+    let requesterId: string | undefined;
+    if (!internalServiceRequest) {
+      const {
+        data: { user },
+        error: userError,
+      } = await admin.auth.getUser(bearer);
+      if (userError || !user) return json({ error: "Unauthorized" }, 401);
+      requesterId = user.id;
+    }
 
     // The acceptance ledger is only a short retry checkpoint. Opportunistic
     // indexed retention avoids an unbounded server-only table without cron.
@@ -132,6 +141,8 @@ Deno.serve(async (request) => {
       180,
     );
     if (eventKey.startsWith("message:") || clientMessageId) {
+      if (!requesterId)
+        return json({ error: "Server workers cannot dispatch chat payloads" }, 403);
       const groupId = normalizedUuid(requestPayload.groupId);
       if (!groupId || !clientMessageId)
         return json(
@@ -140,7 +151,7 @@ Deno.serve(async (request) => {
         );
       const messageResult = await canonicalChatEvent(
         admin,
-        user.id,
+        requesterId,
         groupId,
         clientMessageId,
         eventKey,
@@ -163,13 +174,19 @@ Deno.serve(async (request) => {
       let stored = exactStored;
       if (
         stored &&
-        !(await canDispatchStoredEvent(admin, stored as StoredPushEvent, user.id))
+        !internalServiceRequest &&
+        !(await canDispatchStoredEvent(admin, stored as StoredPushEvent, requesterId!))
       )
         return json({ error: "Push event dispatcher is not authorized" }, 403);
       if (!stored) {
+        if (internalServiceRequest)
+          return json(
+            { error: "Canonical push event is not committed yet", retryable: true },
+            409,
+          );
         const legacy = await legacyMembershipCanonicalEvent(
           admin,
-          user.id,
+          requesterId!,
           eventKey,
           requestPayload.groupId,
         );
@@ -181,7 +198,7 @@ Deno.serve(async (request) => {
         if (!legacy.recognized) {
           const committed = await legacyCommittedCanonicalEvent(
             admin,
-            user.id,
+            requesterId!,
             eventKey,
             requestPayload.groupId,
           );
@@ -191,7 +208,7 @@ Deno.serve(async (request) => {
           if (!committed.recognized) {
             const derived = await legacyCompetitionCanonicalEvent(
               admin,
-              user.id,
+              requesterId!,
               eventKey,
               requestPayload.groupId,
             );
@@ -224,7 +241,11 @@ Deno.serve(async (request) => {
           stored.event_key !== eventKey ? eventKey : undefined,
         expiresAt: stored.expires_at,
       };
-      if (canonical.category === "challenge") {
+      if (
+        canonical.category === "challenge" &&
+        (canonical.eventType === "challenge_accepted" ||
+          canonical.eventType === "challenge_invitation")
+      ) {
         const copy = challengePushCopy(
           canonical.eventType === "challenge_accepted"
             ? "accepted"
@@ -357,7 +378,10 @@ Deno.serve(async (request) => {
     const { data: claimed, error: claimError } = await admin
       .from("push_events")
       .upsert(
-        { event_key: canonical.eventKey, sender_id: user.id },
+        {
+          event_key: canonical.eventKey,
+          sender_id: canonical.dispatcherId ?? requesterId!,
+        },
         { onConflict: "event_key", ignoreDuplicates: true },
       )
       .select("event_key");
@@ -386,7 +410,11 @@ Deno.serve(async (request) => {
     }
     claimedEvent = canonical.eventKey;
 
-    const recipientIds = await canonicalRecipients(admin, canonical, user.id);
+    const recipientIds = await canonicalRecipients(
+      admin,
+      canonical,
+      canonical.dispatcherId ?? requesterId!,
+    );
     if (!recipientIds.length) {
       await markCanonicalEventAccepted(admin, canonical, "no_recipients");
       return json({ sent: 0, accepted: true });
@@ -1138,14 +1166,8 @@ async function legacyCompetitionCanonicalEvent(
         (left, right) =>
           String(right.client_generated_id).length -
           String(left.client_generated_id).length,
-      )[0];
+    )[0];
     if (!entry) return { recognized: true };
-    const { data: profile, error: profileError } = await admin
-      .from("profiles")
-      .select("display_name")
-      .eq("id", dispatcherId)
-      .maybeSingle();
-    if (profileError) throw profileError;
     const canonicalKey = `lead:${groupId}:${dispatcherId}:${entry.id}:${new Date(entry.updated_at).getTime()}`;
     return {
       recognized: true,
@@ -1158,8 +1180,8 @@ async function legacyCompetitionCanonicalEvent(
         audience: "group_including_sender",
         recipient_id: null,
         metric_slug: metricSlug,
-        title: "Leaderboard updated",
-        body: `${profile?.display_name?.trim() || "A member"} shared new ${metric.name} activity. Open the Leaderboard for the latest standings.`,
+        title: "Lead changed",
+        body: `New ${metric.name} activity changed first place. Open the Leaderboard for the latest standings.`,
         data: {
           route: "/group",
           groupId,
@@ -1529,9 +1551,29 @@ async function canonicalRecipients(
   event: CanonicalEvent,
   senderId: string,
 ) {
+  let challengeParticipantIds: Set<string> | undefined;
+  if (event.category === "challenge") {
+    const challengeId = normalizedUuid(event.data.challengeId);
+    if (!challengeId) return [];
+    const { data: challenge, error: challengeError } = await admin
+      .from("group_challenges")
+      .select("participant_ids")
+      .eq("id", challengeId)
+      .eq("group_id", event.groupId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (challengeError) throw challengeError;
+    if (!challenge) return [];
+    challengeParticipantIds = new Set(
+      Array.isArray(challenge.participant_ids)
+        ? challenge.participant_ids
+        : [],
+    );
+  }
   if (event.audience === "user") {
     if (!event.recipientId) return [];
     if (event.category !== "challenge") return [event.recipientId];
+    if (!challengeParticipantIds?.has(event.recipientId)) return [];
     const { data: membership, error } = await admin
       .from("group_members")
       .select("status")
@@ -1554,21 +1596,7 @@ async function canonicalRecipients(
   if (error) throw error;
   let ids = (members ?? []).map((member) => member.user_id as string);
   if (event.audience === "challenge_participants") {
-    const challengeId = event.data.challengeId;
-    const { data: challenge, error: challengeError } = await admin
-      .from("group_challenges")
-      .select("participant_ids")
-      .eq("id", challengeId)
-      .eq("group_id", event.groupId)
-      .is("deleted_at", null)
-      .maybeSingle();
-    if (challengeError) throw challengeError;
-    const invited = new Set(
-      Array.isArray(challenge?.participant_ids)
-        ? challenge.participant_ids
-        : [],
-    );
-    ids = ids.filter((id) => invited.has(id));
+    ids = ids.filter((id) => challengeParticipantIds?.has(id));
   }
   return [...new Set(ids)];
 }
@@ -1636,6 +1664,10 @@ function preferenceAllowed(
     ? settings.mutedGroupIds
     : [];
   if (mutedGroups.includes(event.groupId)) return false;
+  const groupPreferences = objectRecord(settings.groupPreferencesByGroup);
+  const groupPreference = objectRecord(groupPreferences[event.groupId]);
+  if (event.category !== "chat" && groupPreference.enabled === false)
+    return false;
   const conversationId = event.data.conversationId;
   const mutedChats = Array.isArray(settings.mutedConversationIds)
     ? settings.mutedConversationIds
@@ -1648,7 +1680,11 @@ function preferenceAllowed(
     return false;
   if (event.category === "membership" && settings.groupMembership === false)
     return false;
-  if (event.category === "lead" && settings.leadChanges === false) return false;
+  if (
+    event.category === "lead" &&
+    (groupPreference.leadChanges ?? settings.leadChanges ?? true) === false
+  )
+    return false;
   if (event.category === "winner" && settings.badgesAndWinners === false)
     return false;
   if (event.category === "challenge") {
@@ -1657,11 +1693,50 @@ function preferenceAllowed(
     const challengeEnabled =
       settings.challenges ?? settings.badgesAndWinners ?? true;
     if (challengeEnabled === false) return false;
+    if (
+      [
+        "challenge_started",
+        "challenge_invitation",
+        "challenge_accepted",
+      ].includes(event.eventType) &&
+      groupPreference.challengeUpdates === false
+    )
+      return false;
+    if (
+      event.eventType === "challenge_standing" &&
+      groupPreference.challengeStandings === false
+    )
+      return false;
+    if (
+      event.eventType === "challenge_reminder" &&
+      groupPreference.challengeReminders === false
+    )
+      return false;
+    if (
+      event.eventType === "challenge_result" &&
+      groupPreference.challengeResults === false
+    )
+      return false;
   }
-  if (event.category === "metric" && settings.groupMetricActivity === false)
+  if (
+    event.category === "metric" &&
+    (groupPreference.trackerUpdates ??
+      groupPreference.progressUpdates ??
+      settings.groupMetricActivity ??
+      true) === false
+  )
     return false;
+  if (
+    (event.category === "metric" || event.category === "lead") &&
+    Array.isArray(groupPreference.memberIds) &&
+    (!event.dispatcherId || !groupPreference.memberIds.includes(event.dispatcherId))
+  )
+    return false;
+  if (event.category !== "metric" && event.category !== "lead") return true;
   if (!event.metricId) return true;
-  const ids = settings.metricIds;
+  const ids = Array.isArray(groupPreference.metricIds)
+    ? groupPreference.metricIds
+    : settings.metricIds;
   // Absent is the legacy all-metrics default; an explicit empty array means
   // the current UI selection intentionally chose no tracker alerts.
   return !Array.isArray(ids) || ids.includes(event.metricId);

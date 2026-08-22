@@ -76,6 +76,7 @@ import { resumeManagedLocalNotifications } from "@/src/notifications/localSchedu
 import { resumeLiveActivityTimerNotifications } from "@/src/notifications/liveTimer";
 import { resumeWorkoutTimerNotifications } from "@/src/notifications/workoutTimer";
 import { syncActivityTimerAlerts } from "@/src/notifications/activityTimerAlerts";
+import { syncWebReminderSchedule } from "@/src/notifications/webReminderSync";
 import {
   registerHabHubServiceWorker,
   subscribeWebPushSubscriptionChanges,
@@ -124,7 +125,7 @@ function AppLocalizationBridge() {
   const tutorialActive = Boolean(tutorial.activeSession);
   return (
     <LocalizationProvider language={state.settings.language}>
-      <WebDocumentMetadata />
+      <WebDocumentMetadata darkMode={state.settings.darkMode} />
       {tutorialActive ? null : <ScreenTimeSyncBridge />}
       {tutorialActive ? null : <WidgetSnapshotBridge />}
       {tutorialActive ? (
@@ -518,6 +519,77 @@ function RootNavigator() {
     );
     return () => clearTimeout(timer);
   }, [productivityNotificationKey, localNotificationSchedulingEnabled, tutorialActive]);
+  const webReminderScheduleKey = useMemo(
+    () =>
+      JSON.stringify([
+        goalReminderKey,
+        cycleNotificationKey,
+        gymNotificationKey,
+        productivityNotificationKey,
+        activityTimerNotificationKey,
+      ]),
+    [
+      activityTimerNotificationKey,
+      cycleNotificationKey,
+      goalReminderKey,
+      gymNotificationKey,
+      productivityNotificationKey,
+    ],
+  );
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      !localNotificationSchedulingEnabled ||
+      tutorialActive ||
+      !auth.user?.id ||
+      auth.session?.user.id !== auth.user.id
+    )
+      return;
+    let active = true;
+    let attempt = 0;
+    let inFlight = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const sync = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        await syncWebReminderSchedule(cycleStateRef.current);
+        attempt = 0;
+      } catch {
+        if (!active || attempt >= 7) return;
+        const delayMs = Math.min(5 * 60_000, 3_000 * 2 ** attempt);
+        attempt += 1;
+        retryTimer = setTimeout(() => void sync(), delayMs);
+      } finally {
+        inFlight = false;
+      }
+    };
+    const retryNow = () => {
+      if (!active || document.hidden || !navigator.onLine) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = undefined;
+      attempt = 0;
+      void sync();
+    };
+    const initialTimer = setTimeout(() => void sync(), 2200);
+    window.addEventListener("online", retryNow);
+    document.addEventListener("visibilitychange", retryNow);
+    return () => {
+      active = false;
+      clearTimeout(initialTimer);
+      if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener("online", retryNow);
+      document.removeEventListener("visibilitychange", retryNow);
+    };
+  }, [
+    auth.session?.user.id,
+    auth.user?.id,
+    localNotificationSchedulingEnabled,
+    network.isConnected,
+    network.isInternetReachable,
+    tutorialActive,
+    webReminderScheduleKey,
+  ]);
   useEffect(() => {
     if (
       !localNotificationSchedulingEnabled ||
@@ -586,6 +658,8 @@ function RootNavigator() {
           quietHoursStart: state.settings.notifications.quietHoursStart,
           quietHoursEnd: state.settings.notifications.quietHoursEnd,
           mutedGroupIds: state.settings.notifications.mutedGroupIds,
+          groupPreferencesByGroup:
+            state.settings.notifications.groupPreferencesByGroup,
           mutedConversationIds:
             state.settings.notifications.mutedConversationIds,
         },
@@ -605,6 +679,7 @@ function RootNavigator() {
       state.settings.notifications.quietHoursStart,
       state.settings.notifications.quietHoursEnd,
       state.settings.notifications.mutedGroupIds,
+      state.settings.notifications.groupPreferencesByGroup,
       state.settings.notifications.mutedConversationIds,
     ],
   );

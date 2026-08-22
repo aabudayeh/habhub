@@ -508,8 +508,12 @@ export type GroupChallenge = {
   creatorId: string;
   metricId: string;
   title?: string;
-  target: number;
+  /** Omitted for an open competition where the highest period total wins. */
+  target?: number;
+  /** Inclusive first scoring date. */
   localDate: string;
+  /** Inclusive final scoring date; omitted legacy rows are one-day challenges. */
+  endDate?: string;
   /** Everyone invited to the challenge; this also remains the RLS audience. */
   participantIds: string[];
   /** The creator is accepted at creation; invitees opt in explicitly. */
@@ -530,8 +534,18 @@ export type GroupNotificationEvent = {
   groupId: string;
   recipientId: string;
   actorId: string;
-  kind: "challenge_invitation" | "challenge_accepted";
+  kind:
+    | "challenge_invitation"
+    | "challenge_accepted"
+    | "challenge_standing"
+    | "challenge_reminder"
+    | "challenge_result";
   challengeId: string;
+  /** Scored occurrence settled by the server, including recurring series. */
+  occurrenceDate?: string;
+  /** Server-authored copy for standings/results; legacy invitation rows omit it. */
+  title?: string;
+  detail?: string;
   createdAt: string;
   readAt?: string;
 };
@@ -814,6 +828,9 @@ export type AppLanguage =
 /** Code-native Status figure treatment; both modes share the same live body geometry. */
 export type StatusAvatarStyle = "silhouette" | "body_model";
 
+/** Personal card-flow choice; omitted remains the original vertical list. */
+export type DashboardLayoutMode = "scroll" | "pages";
+
 /** Personal choice of measurements used to select the Status body sprite. */
 export type StatusAvatarCalculationSource = "bmi" | "body_composition";
 
@@ -846,6 +863,10 @@ export type UserSettings = {
   showAllTodayTiles: boolean;
   /** Maximum main-screen tiles before More appears when showAllTodayTiles is off. */
   todayTileLimit: number;
+  /** Optional horizontal, screen-sized tracker pages on Today. */
+  todayLayoutMode?: DashboardLayoutMode;
+  /** Optional horizontal ranking-card pages on Leaderboard. */
+  leaderboardLayoutMode?: DashboardLayoutMode;
   darkMode: boolean;
   /** User-owned accent. It never mutates group configuration. */
   personalThemeColor?: string;
@@ -978,6 +999,8 @@ export type UserSettings = {
   leaderboardPinnedMetricIdsByGroup?: Record<string, string[]>;
   /** Unified metric/challenge card order. Unknown ids are ignored during rendering. */
   leaderboardCardOrderByGroup?: Record<string, string[]>;
+  /** Completed challenge celebrations already shown on this account/device. */
+  seenChallengeCelebrationIdsByGroup?: Record<string, string[]>;
   /** Personal calendar range shown inside expanded Leaderboard member rows. */
   leaderboardGridRangeByGroup?: Record<string, HistoryRange>;
   comparisonMetricIdsByGroup: Record<string, string[]>;
@@ -1029,6 +1052,8 @@ export type NotificationSettings = {
   quietHoursStart: string;
   quietHoursEnd: string;
   mutedGroupIds?: string[];
+  /** Personal delivery rules for one group; missing fields keep legacy globals. */
+  groupPreferencesByGroup?: Record<string, GroupNotificationPreferences>;
   mutedConversationIds?: string[];
   /** Private read cursors used for lightweight unread chat indicators. */
   chatReadAtByConversation?: Record<string, string>;
@@ -1044,6 +1069,26 @@ export type NotificationSettings = {
   gymAchievements?: boolean;
   /** Wait this many full days after the latest completed workout session. */
   gymReminderDays?: number;
+};
+
+export type GroupNotificationPreferences = {
+  /** Master switch for non-chat activity from this group. */
+  enabled?: boolean;
+  /** Fresh shared tracker logs. */
+  trackerUpdates?: boolean;
+  /** Legacy pre-release field retained while older local snapshots migrate. */
+  progressUpdates?: boolean;
+  /** Explicit overtakes and first-place changes. */
+  leadChanges?: boolean;
+  /** Undefined means all members; an explicit empty array means none. */
+  memberIds?: string[];
+  /** Undefined means the global tracker selection; empty means none. */
+  metricIds?: string[];
+  challengeUpdates?: boolean;
+  challengeStandings?: boolean;
+  challengeReminders?: boolean;
+  challengeResults?: boolean;
+  challengeCadence?: "minimal" | "balanced" | "frequent";
 };
 
 export type TrackedGoalPeriod = { from: string; to?: string };

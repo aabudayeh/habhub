@@ -5,14 +5,28 @@ const appOrigin =
   process.env.EXPO_PUBLIC_APP_URL?.trim().replace(/\/$/, '') ||
   'https://habhub.expo.app';
 
+const webShellStyles = `
+  :root {
+    --habhub-shell-background: #F4F7FB;
+    background-color: var(--habhub-shell-background);
+  }
+
+  html, body, #root {
+    background-color: var(--habhub-shell-background);
+  }
+`;
+
 export default function RootHtml({ children }: PropsWithChildren) {
   return (
     <html lang="en" dir="ltr">
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-        <meta name="theme-color" content="#081B49" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#F4F7FB" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="HabHub" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -36,6 +50,10 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <meta name="twitter:image" content={`${appOrigin}/habhub-icon.png`} />
         <title>HabHub · Track anything. Progress together.</title>
         <ScrollViewStyleReset />
+        <style
+          id="habhub-web-shell"
+          dangerouslySetInnerHTML={{ __html: webShellStyles }}
+        />
       </head>
       <body>{children}</body>
     </html>

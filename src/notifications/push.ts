@@ -77,6 +77,7 @@ import {
   updateWebPushPreferences,
   webPushPermissionGranted,
   webPushSetupComplete,
+  showImmediateWebNotification,
 } from '@/src/notifications/webPush';
 
 Notifications.setNotificationHandler({
@@ -784,6 +785,23 @@ const SCREEN_TIME_APP_MILESTONES = 'habhub-screen-time-app-milestones-v1';
 
 const legacyGoalCleanupByUser = new Map<string, Promise<void>>();
 
+async function deliverImmediatePersonalNotification(
+  state: AppState,
+  content: {
+    title: string;
+    body: string;
+    data: Record<string, string | number | boolean>;
+  },
+  tag: string,
+) {
+  if (Platform.OS === 'web')
+    return showImmediateWebNotification({ ...content, tag });
+  return scheduleImmediateManagedLocalNotification(
+    { ...content, sound: 'default' },
+    state.currentUserId,
+  );
+}
+
 async function cancelLegacyGoalReminderNotifications(state: AppState) {
   const cleanupKey = `${GOAL_LEGACY_CLEANUP}:${encodeURIComponent(state.currentUserId)}`;
   if (await AsyncStorage.getItem(cleanupKey)) return;
@@ -1077,16 +1095,20 @@ export async function notifyProgressMilestones(
 ) {
   previousState = stateWithoutGoogleHealthLocalData(previousState);
   nextState = stateWithoutGoogleHealthLocalData(nextState);
-  if (Platform.OS === 'web' || localDate !== dateKey()) return;
+  if (localDate !== dateKey()) return;
   const settings = nextState.settings.notifications;
   if (
     !settings.pushEnabled ||
     (!settings.reminders && settings.streakAlerts === false) ||
     isQuietNow(settings)
   ) return;
-  const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return;
-  await ensureLocalNotificationChannels(nextState.settings.language);
+  if (Platform.OS === 'web') {
+    if (!(await webPushPermissionGranted())) return;
+  } else {
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+    await ensureLocalNotificationChannels(nextState.settings.language);
+  }
   let fired: string[] = [];
   try {
     fired = JSON.parse(
@@ -1139,20 +1161,19 @@ export async function notifyProgressMilestones(
       ) {
         const streakKey = `${todayPrefix}streak:${metric.id}:${afterStreak}`;
         if (!firedSet.has(streakKey)) {
-          await scheduleImmediateManagedLocalNotification({
+          await deliverImmediatePersonalNotification(nextState, {
             ...localizedContent(
               nextState,
               `${metricName} streak`,
               `${afterStreak} days in a row. Keep the rhythm that works for you.`,
             ),
-            sound: 'default',
             data: {
               route: '/metric-detail',
               metric: metric.id,
               date: localDate,
               notificationKind: 'streak-milestone',
             },
-          }, nextState.currentUserId);
+          }, `progress:${streakKey}`);
           firedSet.add(streakKey);
         }
       }
@@ -1191,16 +1212,15 @@ export async function notifyProgressMilestones(
         `${metricName} progress`,
         milestoneBody,
       );
-      await scheduleImmediateManagedLocalNotification({
+      await deliverImmediatePersonalNotification(nextState, {
         ...content,
-        sound: 'default',
         data: {
           route: '/metric-detail',
           metric: metric.id,
           date: localDate,
           notificationKind: 'progress-milestone',
         },
-      }, nextState.currentUserId);
+      }, `progress:${key}`);
       firedSet.add(key);
     }
   }
@@ -1576,17 +1596,21 @@ async function syncProductivityNotificationsNow(state: AppState) {
  * regular shared tracker entries created from a completed session.
  */
 async function syncGymNotificationsNow(state: AppState) {
-  if (Platform.OS === 'web') return;
   const settings = state.settings.notifications;
   const idsKey = `${GYM_IDS}:${state.currentUserId}`;
   const achievementKey = `${GYM_ACHIEVEMENT}:${state.currentUserId}`;
   if (!settings.pushEnabled || state.settings.showGym === false) {
-    await reconcileLocalNotifications(idsKey, [], state.currentUserId);
+    if (Platform.OS !== 'web')
+      await reconcileLocalNotifications(idsKey, [], state.currentUserId);
     return;
   }
-  const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) return;
-  await ensureLocalNotificationChannels(state.settings.language);
+  if (Platform.OS === 'web') {
+    if (!(await webPushPermissionGranted())) return;
+  } else {
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+    await ensureLocalNotificationChannels(state.settings.language);
+  }
   const sessions = (state.gymSessions ?? [])
     .filter(
       (session) =>
@@ -1597,7 +1621,7 @@ async function syncGymNotificationsNow(state: AppState) {
   const latest = sessions[0];
   const plans: LocalNotificationPlan[] = [];
 
-  if (settings.gymReminders !== false) {
+  if (Platform.OS !== 'web' && settings.gymReminders !== false) {
     const waitDays = Math.max(1, Math.min(14, settings.gymReminderDays ?? 3));
     const baseDate = latest?.localDate ?? dateKey();
     let reminderDate = dateWithOffsetFrom(baseDate, waitDays);
@@ -1639,11 +1663,12 @@ async function syncGymNotificationsNow(state: AppState) {
       }),
     );
   }
-  await reconcileLocalNotifications(
-    idsKey,
-    earliestLocalNotificationSchedules(plans, LOCAL_NOTIFICATION_BUDGETS.gym),
-    state.currentUserId,
-  );
+  if (Platform.OS !== 'web')
+    await reconcileLocalNotifications(
+      idsKey,
+      earliestLocalNotificationSchedules(plans, LOCAL_NOTIFICATION_BUDGETS.gym),
+      state.currentUserId,
+    );
 
   if (
     settings.gymAchievements !== false &&
@@ -1689,7 +1714,7 @@ async function syncGymNotificationsNow(state: AppState) {
         latestRest > 0 && priorRest > 0
           ? ` Average rest was ${Math.abs(latestRest - priorRest)}s ${latestRest > priorRest ? 'longer' : 'shorter'} than ${previousComparable.name}.`
           : '';
-      await scheduleImmediateManagedLocalNotification({
+      await deliverImmediatePersonalNotification(state, {
         ...localizedContent(
           state,
           records.length ? 'New workout best' : 'Workout saved',
@@ -1705,9 +1730,8 @@ async function syncGymNotificationsNow(state: AppState) {
                 .join(' and ')} moved above your prior estimated best.${restCopy}`
             : `${completedGymSets(latest.exercises)} sets and ${Math.round(trainingVolumeKg(latest.exercises)).toLocaleString(localeForLanguage(state.settings.language))} kg of volume logged.${restCopy}`,
         ),
-        sound: 'default',
         data: { route: '/gym', notificationKind: 'gym-achievement' },
-      }, state.currentUserId);
+      }, `gym-achievement:${latest.id}`);
       await AsyncStorage.setItem(achievementKey, latest.id);
     }
   }
@@ -1734,7 +1758,6 @@ export function syncProductivityNotifications(state: AppState) {
 }
 
 export function syncGymNotifications(state: AppState) {
-  if (Platform.OS === 'web') return Promise.resolve();
   return drainGymNotifications(state);
 }
 

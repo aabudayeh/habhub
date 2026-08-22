@@ -1,11 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { useCameraPermissions } from "expo-camera";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,8 +25,11 @@ import {
   PageHeader,
   Screen,
 } from "@/src/components/ui";
+import { BarcodeCamera } from "@/src/components/BarcodeCamera";
+import type { BarcodeCameraStatus } from "@/src/components/BarcodeCamera.types";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { FOOD_NUTRIENTS } from "@/src/domain/food";
+import { normalizeFoodBarcodeInput } from "@/src/food/barcode";
 import {
   foodByBarcode,
   FoodProduct,
@@ -42,6 +46,12 @@ export default function FoodSearchScreen() {
 }
 
 function FoodSearchWithCamera() {
+  if (Platform.OS === "web")
+    return <FoodSearchContent tutorialSandbox={false} />;
+  return <FoodSearchWithNativeCameraPermission />;
+}
+
+function FoodSearchWithNativeCameraPermission() {
   const [permission, requestPermission] = useCameraPermissions();
   return (
     <FoodSearchContent
@@ -73,6 +83,12 @@ function FoodSearchContent({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState("");
+  const [cameraRetryToken, setCameraRetryToken] = useState(0);
+  const [cameraStatus, setCameraStatus] = useState<{
+    status: BarcodeCameraStatus;
+    message?: string;
+  }>({ status: "starting" });
   const [selected, setSelected] = useState<FoodProduct | null>(null);
   const [multiplier, setMultiplier] = useState("1");
   const scrollRef = useRef<ScrollView>(null);
@@ -183,6 +199,16 @@ function FoodSearchContent({
     } finally {
       setLoading(false);
     }
+  }
+
+  function lookupManualBarcode() {
+    const barcode = normalizeFoodBarcodeInput(manualBarcode);
+    if (!barcode) {
+      setError("Enter the 8, 12, 13, or 14 digit number printed under the barcode.");
+      return;
+    }
+    setManualBarcode(barcode);
+    void lookupBarcode(barcode);
   }
 
   function apply() {
@@ -329,7 +355,7 @@ function FoodSearchContent({
         </Card>
       ) : (
         <Card style={styles.cameraCard}>
-          {!permission?.granted ? (
+          {Platform.OS !== "web" && !permission?.granted ? (
             <View style={styles.permission}>
               <Ionicons name="camera-outline" size={31} color={accent} />
               <Text style={[styles.name, { color: colors.ink }]}>
@@ -344,22 +370,34 @@ function FoodSearchContent({
             </View>
           ) : (
             <>
-              <CameraView
+              <BarcodeCamera
                 style={styles.camera}
-                facing="back"
-                barcodeScannerSettings={{
-                  barcodeTypes: ["ean13", "ean8", "upc_a", "upc_e"],
-                }}
-                onBarcodeScanned={
-                  scanned ? undefined : ({ data }) => lookupBarcode(data)
+                active={!scanned}
+                retryToken={cameraRetryToken}
+                onBarcodeScanned={(data) => void lookupBarcode(data)}
+                onStatusChange={(status, message) =>
+                  setCameraStatus({ status, message })
                 }
               />
               <View style={styles.permission}>
                 <Text style={[styles.meta, { color: colors.muted }]}>
                   {loading
                     ? "Looking up product…"
-                    : "Place the barcode inside the frame"}
+                    : cameraStatus.status === "starting"
+                      ? "Starting camera…"
+                      : cameraStatus.message ??
+                        "Place the barcode inside the frame"}
                 </Text>
+                {cameraStatus.status === "error" ? (
+                  <Button
+                    label="Try camera again"
+                    variant="secondary"
+                    onPress={() => {
+                      setCameraStatus({ status: "starting" });
+                      setCameraRetryToken((value) => value + 1);
+                    }}
+                  />
+                ) : null}
                 {scanned && !loading ? (
                   <Button
                     label="Scan another"
@@ -373,6 +411,39 @@ function FoodSearchContent({
               </View>
             </>
           )}
+          <View
+            style={[
+              styles.manualBarcode,
+              { borderTopColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.meta, { color: colors.muted }]}>
+              Can’t scan? Enter the number printed under the barcode.
+            </Text>
+            <View style={styles.manualBarcodeRow}>
+              <TextInput
+                value={manualBarcode}
+                onChangeText={setManualBarcode}
+                onSubmitEditing={lookupManualBarcode}
+                keyboardType="number-pad"
+                enterKeyHint="go"
+                returnKeyType="go"
+                maxLength={20}
+                placeholder="Barcode number"
+                placeholderTextColor={colors.faint}
+                style={[
+                  styles.manualBarcodeInput,
+                  { color: colors.ink, borderColor: colors.border },
+                ]}
+              />
+              <Button
+                label="Look up"
+                size="small"
+                disabled={loading || !manualBarcode.trim()}
+                onPress={lookupManualBarcode}
+              />
+            </View>
+          </View>
         </Card>
       )}
       {loading ? (
@@ -546,6 +617,16 @@ const styles = StyleSheet.create({
   cameraCard: { padding: 0, overflow: "hidden" },
   camera: { width: "100%", aspectRatio: 1.3 },
   permission: { alignItems: "center", gap: 10, padding: 16 },
+  manualBarcode: { borderTopWidth: 1, gap: 7, padding: 12 },
+  manualBarcodeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  manualBarcodeInput: {
+    flex: 1,
+    height: 40,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 11,
+    fontSize: 11,
+  },
   loading: { marginVertical: 14 },
   notice: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
   results: { gap: 7, marginTop: 9 },

@@ -6,6 +6,9 @@ import {
   challengeCardId,
   challengeIdFromCard,
   acceptedChallengeParticipantIds,
+  challengePeriodDates,
+  challengePresetEndDate,
+  challengeReminderIntervalDays,
   groupChallengeResponseDeadline,
   groupChallengeParticipation,
   validChallengeRecurrence,
@@ -15,6 +18,7 @@ import {
   isChallengeMetric,
   mergedLeaderboardCardOrder,
   validChallengeDate,
+  validChallengePeriod,
   validateGroupChallenge,
 } from "../src/domain/groupChallengeRules.ts";
 
@@ -30,6 +34,13 @@ assert.equal(
 );
 assert.equal(validChallengeDate("2028-02-29"), true);
 assert.equal(validChallengeDate("2027-02-29"), false);
+assert.equal(challengePresetEndDate("2026-08-22", "week"), "2026-08-28");
+assert.equal(challengePresetEndDate("2028-02-29", "year"), "2029-02-28");
+assert.equal(challengePeriodDates("2026-08-22", "2026-08-24").length, 3);
+assert.equal(validChallengePeriod("2026-08-22", "2027-08-22"), true);
+assert.equal(validChallengePeriod("2026-08-22", "2027-08-24"), false);
+assert.equal(challengeReminderIntervalDays("2026-08-22", "2026-08-28"), 1);
+assert.equal(challengeReminderIntervalDays("2026-08-22", "2026-09-21"), 2);
 assert.equal(
   validChallengeRecurrence(
     {
@@ -139,6 +150,15 @@ assert.deepEqual(
   "one exact participant cannot win an uncontested challenge",
 );
 assert.deepEqual(
+  challengeWinnerIds(
+    [exactRow("a", 9_000, false), exactRow("b", 12_000, false)],
+    undefined,
+    "lower",
+  ),
+  ["b"],
+  "an open challenge ignores target completion and always awards the highest total",
+);
+assert.deepEqual(
   mergedLeaderboardCardOrder(
     ["steps", challengeCardId("old"), "removed"],
     ["steps", "water"],
@@ -157,6 +177,19 @@ const valid = {
   creatorId: "creator",
 };
 assert.equal(validateGroupChallenge(valid), undefined);
+assert.equal(
+  validateGroupChallenge({
+    ...valid,
+    target: undefined,
+    endDate: "2026-08-17",
+  }),
+  undefined,
+  "a bounded open date-range challenge is valid",
+);
+assert.match(
+  validateGroupChallenge({ ...valid, endDate: "2026-08-10" }),
+  /end date within one year/i,
+);
 assert.match(
   validateGroupChallenge({ ...valid, target: 0 }),
   /greater than zero/i,
@@ -229,6 +262,29 @@ const notificationActivation = fs.readFileSync(
   ),
   "utf8",
 );
+const periodMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608220006_group_challenge_periods_and_notifications.sql",
+  ),
+  "utf8",
+);
+const challengeWorker = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "functions",
+    "challenge-notifications",
+    "index.ts",
+  ),
+  "utf8",
+);
+const supabaseConfig = fs.readFileSync(
+  path.join(root, "supabase", "config.toml"),
+  "utf8",
+);
 const hook = fs.readFileSync(
   path.join(root, "src", "cloud", "useGroupChallenges.ts"),
   "utf8",
@@ -264,6 +320,10 @@ const groupScreen = fs.readFileSync(
 );
 const groupSettings = fs.readFileSync(
   path.join(root, "app", "group-settings.tsx"),
+  "utf8",
+);
+const groupNotificationEvents = fs.readFileSync(
+  path.join(root, "src", "cloud", "groupNotificationEvents.ts"),
   "utf8",
 );
 
@@ -316,6 +376,7 @@ assert.match(
 );
 assert.match(cloud, /\.limit\(200\)/, "challenge reads must stay bounded");
 assert.match(cloud, /p_recurrence: input\.recurrence \?\? null/);
+assert.match(cloud, /p_end_date: input\.endDate \?\? input\.localDate/);
 assert.match(cloud, /category: "challenge"/);
 assert.match(cloud, /eventKey: `challenge-started:\$\{challenge\.id\}`/);
 assert.doesNotMatch(
@@ -330,6 +391,9 @@ assert.match(sendPush, /canonical\.category === "challenge"/);
 assert.match(sendPush, /challengePushCopy/);
 assert.match(sendPush, /event\.audience === "challenge_participants"/);
 assert.match(sendPush, /settings\.challenges \?\? settings\.badgesAndWinners \?\? true/);
+assert.match(sendPush, /groupPreference\.challengeStandings === false/);
+assert.match(sendPush, /groupPreference\.challengeReminders === false/);
+assert.match(sendPush, /groupPreference\.challengeResults === false/);
 assert.match(notificationMigration, /create table if not exists public\.group_notification_events/);
 assert.match(notificationMigration, /create or replace function public\.emit_group_challenge_feed_events/);
 assert.match(
@@ -349,15 +413,15 @@ assert.match(notificationActivation, /drop trigger if exists group_challenges_em
 assert.match(notificationActivation, /execute function public\.emit_group_challenge_notification_events/);
 assert.match(
   progress,
-  /result\.mode === "exact" && hasData/,
+  /result\.mode === "exact" && result\.visibleDays > 0/,
   "custom-target progress must require an exact privacy-permitted value",
 );
 assert.match(
   progress,
-  /result\.mode === "private" \|\| result\.mode === "status"/,
+  /hasStatusOnlyPeriodData[\s\S]{0,500}mode: "private"/,
   "status-only data must not be reverse engineered for a custom target",
 );
-assert.match(progress, /challenge\.localDate >= today/);
+assert.match(progress, /groupChallengeEndDate\(challenge\) >= today/);
 assert.match(progress, /seen\.has\(challenge\.id\)/);
 assert.match(progress, /expandGroupChallengeOccurrences/);
 assert.match(progress, /limit = 200/);
@@ -428,12 +492,142 @@ assert.doesNotMatch(
 );
 assert.match(challengeEditor, /mode: repeatMode/);
 assert.match(challengeEditor, /endDate: repeatUntil/);
+assert.match(challengeEditor, /label: "Most wins"/);
+assert.match(challengeEditor, /items=\{CHALLENGE_DURATION_OPTIONS\}/);
+assert.match(challengeEditor, /endDate: resolvedEndDate/);
+assert.match(challengeEditor, /function recurringScheduleKey/);
+assert.match(challengeEditor, /challenge\?\.recurrence\?\.anchorDate/);
+assert.match(challengeEditor, /historicalRecurringRulesLocked/);
+assert.match(
+  challengeEditor,
+  /recurrence\.endDate < recurringHistoryBoundary/,
+);
+assert.match(challengeEditor, /today: !challenge \|\| repeatingScheduleChanged \? dateKey\(\) : undefined/);
 assert.match(
   groupScreen,
   /challengeCloud[\s\S]*\.respond\(groupChallengeSourceId\(challenge\), response\)/,
 );
 assert.match(groupScreen, /expandGroupChallengeOccurrences/);
 assert.match(groupScreen, /groupChallengeResponseDeadline\(challenge\) >= dateKey\(\)/);
+assert.match(groupScreen, /<ChallengeCompletionCelebration/);
+assert.match(groupScreen, /const CHALLENGE_CELEBRATION_SCAN_LIMIT = 500/);
+assert.match(
+  groupScreen,
+  /\.slice\(\s*-CHALLENGE_CELEBRATION_SCAN_LIMIT,\s*\)/,
+);
+assert.match(periodMigration, /alter column target_value drop not null/i);
+assert.match(periodMigration, /add column if not exists end_date date/i);
+assert.match(periodMigration, /create or replace function public\.group_challenge_exact_standings/i);
+assert.match(periodMigration, /create or replace function public\.stage_group_challenge_notifications/i);
+assert.match(periodMigration, /occurrence_date date not null/i);
+assert.match(
+  periodMigration,
+  /primary key \(challenge_id, occurrence_date, recipient_id\)/i,
+);
+assert.match(periodMigration, /create table if not exists public\.challenge_notification_runtime/i);
+assert.match(periodMigration, /create or replace function public\.group_challenge_occurs_on/i);
+assert.match(periodMigration, /cross join lateral generate_series/i);
+assert.match(periodMigration, /base\.recurrence ->> 'mode' = 'once'/i);
+assert.match(periodMigration, /challengeOccurrenceDate/);
+assert.match(periodMigration, /v_existing\.recurrence ->> 'endDate'/i);
+assert.match(periodMigration, /if v_mode is null or v_mode not in/i);
+assert.match(
+  periodMigration,
+  /p_local_date < current_date - 1[\s\S]{0,260}v_recurrence - 'endDate'/i,
+);
+assert.match(
+  periodMigration,
+  /v_existing\.recurrence is not null[\s\S]{0,140}v_recurrence is null[\s\S]{0,140}v_existing\.local_date < current_date - 1/i,
+  "old recurring series cannot be converted onto a stale notification-state key",
+);
+assert.match(
+  periodMigration,
+  /v_existing\.local_date < current_date - 1[\s\S]{0,220}p_metric_slug is distinct from v_existing\.metric_slug[\s\S]{0,180}p_target_value is distinct from v_existing\.target_value[\s\S]{0,360}v_recurrence_end < current_date - 1/i,
+  "settled recurring rules stay immutable while safe future end-date edits remain possible",
+);
+assert.match(
+  periodMigration,
+  /coalesce\(recurrence ->> 'mode', ''\) in/i,
+);
+assert.match(
+  periodMigration,
+  /create or replace function public\.save_group_challenge\([\s\S]{0,260}p_recurrence jsonb[\s\S]{0,360}select public\.save_group_challenge\(/i,
+);
+assert.match(
+  periodMigration,
+  /challenge\.end_date = challenge\.local_date[\s\S]{0,80}then p_local_date/i,
+  "the legacy overload must move one-day challenge end dates with their start date",
+);
+assert.match(
+  periodMigration,
+  /join public\.group_members member[\s\S]{0,180}member\.status = 'active'/i,
+);
+assert.match(periodMigration, /reset_group_challenge_notification_state/i);
+assert.match(periodMigration, /delete from public\.group_challenge_notification_state/i);
+assert.equal(
+  (periodMigration.match(/pg_catalog\.pg_advisory_xact_lock/g) ?? []).length >= 2,
+  true,
+);
+assert.match(
+  periodMigration,
+  /current_challenge\.updated_at = v_challenge\.updated_at/i,
+);
+assert.match(
+  periodMigration,
+  /if new\.deleted_at is not null then[\s\S]{0,500}delete from public\.push_dispatch_events/i,
+);
+assert.match(periodMigration, /recurrence, deleted_at[\s\S]{0,100}on public\.group_challenges/i);
+assert.match(
+  periodMigration,
+  /left join public\.group_challenge_notification_state state[\s\S]{0,240}state\.result_notified_at is null/i,
+);
+assert.match(periodMigration, /date_trunc\('hour', statement_timestamp\(\)\)/i);
+assert.match(periodMigration, /if v_leader\.user_id is not null/i);
+assert.match(periodMigration, /pg_catalog\.pg_timezone_names valid_timezone/i);
+assert.match(periodMigration, /coalesce\(valid_timezone\.name, 'UTC'\)/i);
+assert.match(
+  periodMigration,
+  /bool_and\([\s\S]{0,260}v_challenge\.occurrence_end_date[\s\S]{0,500}v_all_participants_finished/i,
+  "results must wait until every active accepted participant has finished in their own timezone",
+);
+assert.match(periodMigration, /'Lead changed'/);
+assert.match(periodMigration, /challenge_standing/);
+assert.match(periodMigration, /challenge_reminder/);
+assert.match(periodMigration, /challenge_result/);
+assert.match(groupNotificationEvents, /occurrence_date/);
+assert.match(groupNotificationEvents, /\.limit\(500\)/);
+assert.match(groupScreen, /allEvents: groupFeedEvents/);
+assert.match(groupScreen, /event\.kind === "challenge_result"/);
+assert.match(groupScreen, /event\.occurrenceDate === challenge\.localDate/);
+assert.match(
+  groupScreen,
+  /!cloudResultsRequireSettlement \|\| Boolean\(canonicalResult\)/,
+  "cloud winner celebrations must wait for the canonical settled result event",
+);
+assert.match(
+  periodMigration,
+  /when raw_totals\.metric_slug = 'weight'[\s\S]{0,900}raw_totals\.latest_value[\s\S]{0,300}raw_totals\.previous_value/,
+  "server standings must mirror the client weight baseline-to-latest period result",
+);
+assert.doesNotMatch(
+  periodMigration,
+  /if v_leader\.user_id is null then continue/,
+  "challenge completion must still notify participants when no exact-value winner can be resolved",
+);
+assert.match(
+  periodMigration,
+  /v_challenge\.label \|\| ' complete'/,
+  "a completed challenge without an eligible winner needs privacy-safe completion copy",
+);
+assert.match(periodMigration, /challengeCadence/);
+assert.match(periodMigration, /group-challenge-notifications-hourly/);
+assert.match(challengeWorker, /stage_group_challenge_notifications/);
+assert.match(challengeWorker, /\.is\("dispatched_at", null\)/);
+assert.match(challengeWorker, /\/functions\/v1/);
+assert.match(
+  supabaseConfig,
+  /\[functions\.challenge-notifications\][\s\S]{0,160}verify_jwt = false/,
+);
 assert.match(groupSettings, /accessibilityState=\{\{ expanded: groupColorOpen \}\}/);
 assert.match(groupSettings, /setGroupTheme\(groupColorDraft\)/);
 assert.doesNotMatch(

@@ -1,19 +1,18 @@
-import {
-  formatMetricValue,
-  hasMetricData,
-  sharedMetricResult,
-} from "@/src/domain/metrics";
+import { formatMetricValue } from "@/src/domain/metrics";
+import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { statusForDay } from "@/src/domain/dataIndex";
-import { dateWithOffsetFrom } from "@/src/domain/date";
 import {
   acceptedChallengeParticipantIds,
   challengeWinnerIds,
   challengeValueOutcome,
   compareChallengeValues,
   groupChallengeOccurrenceId,
+  groupChallengeEndDate,
+  challengePeriodDates,
   groupChallengeSourceId,
 } from "@/src/domain/groupChallengeRules";
 import { scheduleAppliesOnDate } from "@/src/domain/schedule";
+import { periodMetricResult } from "@/src/domain/leaderboard";
 import {
   AppState,
   GroupChallenge,
@@ -21,6 +20,7 @@ import {
   MetricDefinition,
 } from "@/src/types";
 export {
+  type ChallengeDurationPreset,
   acceptedChallengeParticipantIds,
   challengeCardId,
   challengeIdFromCard,
@@ -28,6 +28,8 @@ export {
   challengeValueOutcome,
   compareChallengeValues,
   declinedChallengeParticipantIds,
+  challengePeriodDates,
+  groupChallengeEndDate,
   groupChallengeOccurrenceId,
   groupChallengeResponseDeadline,
   groupChallengeParticipation,
@@ -35,7 +37,10 @@ export {
   isChallengeMetric,
   mergedLeaderboardCardOrder,
   validChallengeDate,
+  validChallengePeriod,
   validChallengeRecurrence,
+  challengePresetEndDate,
+  challengeReminderIntervalDays,
   validateGroupChallenge,
 } from "@/src/domain/groupChallengeRules";
 
@@ -55,8 +60,8 @@ export function expandGroupChallengeOccurrences(
   for (const challenge of challenges) {
     if (!challenge.recurrence || challenge.recurrence.mode === "once") {
       if (
-        challenge.localDate >= fromDate &&
-        challenge.localDate <= throughDate
+        challenge.localDate <= throughDate &&
+        groupChallengeEndDate(challenge) >= fromDate
       )
         expanded.push(challenge);
       continue;
@@ -86,6 +91,7 @@ export function expandGroupChallengeOccurrences(
               id: groupChallengeOccurrenceId(challenge.id, date),
               sourceChallengeId: groupChallengeSourceId(challenge),
               localDate: date,
+              endDate: date,
             },
       );
     }
@@ -136,39 +142,49 @@ export function groupChallengeProgress(
   metric: MetricDefinition,
 ): ChallengeMemberProgress[] {
   const invited = new Set(acceptedChallengeParticipantIds(challenge));
-  return state.group.members
+  const dates = challengePeriodDates(
+    challenge.localDate,
+    groupChallengeEndDate(challenge),
+  );
+  const target = challenge.target;
+  const rows = state.group.members
     .filter((member) => invited.has(member.id))
     .map((member): ChallengeMemberProgress => {
-      const result = sharedMetricResult(
+      const result = periodMetricResult(
         state,
         metric,
         member.id,
         state.currentUserId,
-        challenge.localDate,
+        dates,
       );
-      const sharedStatus = statusForDay(
-        state.dailyMetricStatuses,
-        state.group.id,
-        metric.id,
-        member.id,
-        challenge.localDate,
-      );
-      const hasData =
-        hasMetricData(
-          state,
-          metric,
-          member.id,
-          challenge.localDate,
-        ) ||
-        sharedStatus?.exactValue !== undefined ||
-        sharedStatus?.hasData === true;
-      if (result.mode === "exact" && hasData) {
-        const value = result.value;
-        const outcome = challengeValueOutcome(
-          value,
-          challenge.target,
-          metric.rankingDirection,
-        );
+      const hasStatusOnlyPeriodData =
+        member.id !== state.currentUserId &&
+        dates.some((date) => {
+          const status = statusForDay(
+            state.dailyMetricStatuses,
+            state.group.id,
+            metric.id,
+            member.id,
+            date,
+          );
+          return (
+            status?.hasData === true && status.visibility !== "group"
+          );
+        });
+      if (hasStatusOnlyPeriodData)
+        return {
+          member,
+          mode: "private",
+          value: 0,
+          progress: 0,
+          complete: false,
+          valueLabel: "Exact value not shared",
+        };
+      if (result.mode === "exact" && result.visibleDays > 0) {
+        const value = result.total;
+        const outcome = target === undefined
+          ? { progress: 0, complete: false }
+          : challengeValueOutcome(value, target, metric.rankingDirection);
         return {
           member,
           mode: "exact",
@@ -180,7 +196,7 @@ export function groupChallengeProgress(
       }
       const privateValue =
         member.id !== state.currentUserId &&
-        (result.mode === "private" || result.mode === "status");
+        result.label !== "No data";
       return {
         member,
         mode: privateValue ? "private" : "missing",
@@ -189,15 +205,24 @@ export function groupChallengeProgress(
         complete: false,
         valueLabel: privateValue ? "Exact value not shared" : "No data yet",
       };
-    })
-    .sort((left, right) => {
+    });
+  if (target === undefined) {
+    const exact = rows.filter((row) => row.mode === "exact");
+    const best = Math.max(0, ...exact.map((row) => row.value));
+    const final = groupChallengeEndDate(challenge) < dateKey();
+    for (const row of exact) {
+      row.progress = best > 0 ? Math.max(0, row.value / best) : 0;
+      row.complete = final && row.value === best;
+    }
+  }
+  return rows.sort((left, right) => {
       if (left.mode !== right.mode) return left.mode === "exact" ? -1 : 1;
       if (left.mode !== "exact") return 0;
       return compareChallengeValues(
         left.value,
         right.value,
-        challenge.target,
-        metric.rankingDirection,
+        target ?? 0,
+        target === undefined ? "higher" : metric.rankingDirection,
       );
     });
 }
@@ -224,8 +249,8 @@ export function resolvedGroupChallengeWins(
     if (
       seen.has(challenge.id) ||
       challenge.groupId !== state.group.id ||
-      challenge.localDate > throughDate ||
-      challenge.localDate >= today
+      groupChallengeEndDate(challenge) > throughDate ||
+      groupChallengeEndDate(challenge) >= today
     )
       continue;
     seen.add(challenge.id);
@@ -241,7 +266,7 @@ export function resolvedGroupChallengeWins(
     const winnerIds = challengeWinnerIds(
       rows,
       challenge.target,
-      metric.rankingDirection,
+      challenge.target === undefined ? "higher" : metric.rankingDirection,
     );
     if (winnerIds.length)
       resolved.push({

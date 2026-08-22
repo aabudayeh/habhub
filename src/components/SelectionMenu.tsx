@@ -27,6 +27,7 @@ export function SelectionMenu({
   searchable = true,
   compactIcon = false,
   icon = "options-outline",
+  disabled = false,
 }: {
   title: string;
   items: MetricSelectorItem[];
@@ -40,6 +41,7 @@ export function SelectionMenu({
   /** Render only the filter icon while retaining the same accessible modal. */
   compactIcon?: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
+  disabled?: boolean;
 }) {
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -95,11 +97,14 @@ export function SelectionMenu({
         accessibilityRole="button"
         accessibilityLabel={t(title)}
         accessibilityHint={t("Open selection")}
+        accessibilityState={{ disabled }}
+        disabled={disabled}
         hitSlop={compactIcon ? 6 : undefined}
         onPress={() => setOpen(true)}
         style={[
           compactIcon ? styles.compactTrigger : styles.trigger,
           { backgroundColor: colors.card, borderColor: colors.border },
+          disabled ? { opacity: 0.55 } : null,
         ]}
       >
         {compactIcon ? (

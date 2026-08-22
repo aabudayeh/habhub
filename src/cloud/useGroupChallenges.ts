@@ -129,6 +129,7 @@ export function useGroupChallenges(groupId: string) {
         title: input.title?.trim() || undefined,
         target: input.target,
         localDate: input.localDate,
+        endDate: input.endDate ?? input.localDate,
         participantIds: [...new Set(input.participantIds)],
         acceptedParticipantIds: [state.currentUserId],
         declinedParticipantIds: [],

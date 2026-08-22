@@ -6,10 +6,36 @@ import {
 } from "@/src/cloud/groupNotificationEvents";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { supabase } from "@/src/lib/supabase";
-import { GroupNotificationEvent } from "@/src/types";
+import {
+  GroupNotificationEvent,
+  type GroupNotificationPreferences,
+} from "@/src/types";
+
+function preferenceAllowsEvent(
+  event: GroupNotificationEvent,
+  preferences: GroupNotificationPreferences | undefined,
+) {
+  if (preferences?.enabled === false) return false;
+  if (
+    (event.kind === "challenge_invitation" ||
+      event.kind === "challenge_accepted") &&
+    preferences?.challengeUpdates === false
+  )
+    return false;
+  if (event.kind === "challenge_standing")
+    return preferences?.challengeStandings !== false;
+  if (event.kind === "challenge_reminder")
+    return preferences?.challengeReminders !== false;
+  if (event.kind === "challenge_result")
+    return preferences?.challengeResults !== false;
+  return true;
+}
 
 /** Recipient-scoped, RLS-protected read model for the Leaderboard bell. */
-export function useGroupNotificationEvents(groupId: string) {
+export function useGroupNotificationEvents(
+  groupId: string,
+  preferences?: GroupNotificationPreferences,
+) {
   const subscriberId = useId();
   const [events, setEvents] = useState<GroupNotificationEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,10 +120,23 @@ export function useGroupNotificationEvents(groupId: string) {
     [groupId],
   );
 
+  const visibleEvents = useMemo(
+    () => events.filter((event) => preferenceAllowsEvent(event, preferences)),
+    [events, preferences],
+  );
   const unreadCount = useMemo(
-    () => events.filter((event) => !event.readAt).length,
-    [events],
+    () => visibleEvents.filter((event) => !event.readAt).length,
+    [visibleEvents],
   );
 
-  return { events, unreadCount, loading, error, refresh, markRead };
+  return {
+    /** Recipient-scoped canonical rows, including locally muted categories. */
+    allEvents: events,
+    events: visibleEvents,
+    unreadCount,
+    loading,
+    error,
+    refresh,
+    markRead,
+  };
 }

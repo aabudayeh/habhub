@@ -205,18 +205,48 @@ async function presentWebWorkoutNotification({
     return;
   const phaseLabel =
     phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
-  await registration.showNotification(`${phaseLabel} · ${title}`, {
+  const phaseOrigin = Math.max(
+    0,
+    (phaseStartedAt ?? Date.now()) - Math.max(0, phaseElapsedSeconds) * 1000,
+  );
+  const maxActions = Math.max(
+    0,
+    Number(
+      (window.Notification as typeof window.Notification & {
+        maxActions?: number;
+      }).maxActions ?? 0,
+    ),
+  );
+  const actions = [
+    {
+      action: WORKOUT_TIMER_PAUSE,
+      title: phase === "paused" ? "Resume" : "Pause",
+    },
+    ...(phase === "paused"
+      ? []
+      : [{ action: WORKOUT_TIMER_NEXT, title: "Next" }]),
+  ].slice(0, maxActions);
+  // `timestamp` is part of the Notifications API standard and lets a browser
+  // keep showing the phase origin even after it throttles the hidden page.
+  // React Native's bundled DOM declaration currently omits that member.
+  const options: NotificationOptions & {
+    timestamp: number;
+    actions: { action: string; title: string }[];
+  } = {
     body: notificationBody,
     icon: "/pwa-icon-192.png",
     badge: "/pwa-icon-192.png",
     tag: WORKOUT_TIMER_NOTIFICATION,
+    timestamp: phaseOrigin,
+    actions,
     requireInteraction: true,
     silent: true,
     data: {
       route: "/gym",
       workoutTimer: true,
     },
-  });
+  };
+  await registration.showNotification(`${phaseLabel} · ${title}`, options);
 }
 
 async function consumeNativeActions(ownerId: string, generation: string) {

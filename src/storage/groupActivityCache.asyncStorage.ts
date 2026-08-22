@@ -1,4 +1,12 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  getAllLargeStorageKeys,
+  getLargeStorageItem,
+  multiGetLargeStorage,
+  multiRemoveLargeStorage,
+  multiSetLargeStorage,
+  removeLargeStorageItem,
+  setLargeStorageItem,
+} from "@/src/storage/durableLargeStorage";
 
 import {
   type GroupActivityCachePayload,
@@ -11,6 +19,19 @@ import {
   normalizeMaxGroups,
   parseStoredGroupActivityCache,
 } from "./groupActivityCache.shared";
+
+// This compatibility-shaped boundary remains AsyncStorage on the JS fallback
+// and resolves to IndexedDB on web, where full multi-group snapshots can exceed
+// localStorage's small per-origin quota.
+const AsyncStorage = {
+  getItem: getLargeStorageItem,
+  setItem: setLargeStorageItem,
+  removeItem: removeLargeStorageItem,
+  getAllKeys: getAllLargeStorageKeys,
+  multiGet: multiGetLargeStorage,
+  multiSet: multiSetLargeStorage,
+  multiRemove: multiRemoveLargeStorage,
+};
 
 const CACHE_KEY_PREFIX = "metric-rally:group-activity-cache:v1:";
 const CACHE_INDEX_KEY = "metric-rally:group-activity-cache-index:v1";

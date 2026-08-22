@@ -1888,6 +1888,8 @@ export function createInitialState(): AppState {
       fontScale: 1.12,
       showAllTodayTiles: true,
       todayTileLimit: 5,
+      todayLayoutMode: "scroll",
+      leaderboardLayoutMode: "scroll",
       darkMode: true,
       personalThemeColor: "#081B49",
       overrideGroupTheme: false,

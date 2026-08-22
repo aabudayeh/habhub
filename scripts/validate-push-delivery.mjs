@@ -28,6 +28,7 @@ const webPushMigration = read(
 );
 const alerts = read("app/alerts.tsx");
 const group = read("app/(tabs)/group.tsx");
+const alertDomain = read("src/domain/alerts.ts");
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
 assert.doesNotThrow(() =>
@@ -120,6 +121,12 @@ const remoteLifecycle = layout.slice(
 assert.doesNotMatch(remoteLifecycle, /tutorialActive/);
 assert.match(remoteLifecycle, /addNotificationResponseReceivedListener/);
 assert.match(remoteLifecycle, /NativeAppState\.addEventListener/);
+assert.match(alertDomain, /groupPreferencesByGroup\?\.\[state\.group\.id\]/);
+assert.match(alertDomain, /groupPreferences\?\.enabled !== false/);
+assert.match(alertDomain, /groupPreferences\?\.leadChanges/);
+assert.match(alertDomain, /allowedMetricIds\.includes\(metric\.id\)/);
+assert.match(alertDomain, /allowedMemberIds\.includes\(current\.member\.id\)/);
+assert.match(alertDomain, /if \(!changed\) return \[\]/);
 
 const transitionFenceStart = auth.indexOf(
   "const beginIdentityTransitionCleanup",
@@ -449,6 +456,13 @@ assert.match(edge, /WEB_PUSH_VAPID_PRIVATE_KEY/);
 assert.match(edge, /statusCode === 404 \|\| statusCode === 410/);
 assert.match(edge, /sendWebPushTarget/);
 assert.match(edge, /webPushTopic/);
+assert.match(edge, /title: "Lead changed"/);
+assert.match(edge, /changed first place/);
+assert.match(
+  edge,
+  /if \(event\.category === "challenge"\)[\s\S]{0,700}\.is\("deleted_at", null\)/,
+);
+assert.match(edge, /challengeParticipantIds\?\.has\(event\.recipientId\)/);
 assert.match(edge, /!hostname\.includes\("\."\)/);
 assert.match(
   edge,

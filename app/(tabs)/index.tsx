@@ -29,6 +29,7 @@ import Reanimated from "react-native-reanimated";
 import Svg, { Rect } from "react-native-svg";
 import { AppText as Text } from "@/src/components/AppText";
 import { GoogleHealthTodayDisclosure } from "@/src/components/GoogleHealthTodayDisclosure";
+import { HorizontalPager } from "@/src/components/HorizontalPager";
 import {
   LocalizedAlert as Alert,
   useLocale,
@@ -106,6 +107,10 @@ import {
 } from "@/src/types";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { orderTodayMetrics } from "@/src/domain/todayOrdering";
+import {
+  chunkIntoPages,
+  todayPageCapacity,
+} from "@/src/domain/pagedLayout";
 import { metricVisualization } from "@/src/domain/visualization";
 import { progressGridNavigationSettings } from "@/src/domain/progressGrid";
 import { fastingProgressForDate } from "@/src/domain/fasting";
@@ -176,6 +181,7 @@ function Today() {
   const locale = useLocale();
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
+  const todayUsesPages = state.settings.todayLayoutMode === "pages";
   const todaySummaryPinned =
     state.settings.pinTodayHeaderAndFeaturedCard === true;
   const stickyTodaySummary =
@@ -251,6 +257,7 @@ function Today() {
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !todayUsesPages &&
           !editing &&
           !showMore &&
           !showAddTiles &&
@@ -262,7 +269,14 @@ function Today() {
           if (gesture.dx <= -55) router.navigate("/menu");
         },
       }),
-    [editing, showAddTiles, showDayEnd, showHistoryOptions, showMore],
+    [
+      editing,
+      showAddTiles,
+      showDayEnd,
+      showHistoryOptions,
+      showMore,
+      todayUsesPages,
+    ],
   );
   useEffect(() => {
     if (!editing) {
@@ -413,7 +427,7 @@ function Today() {
     3,
     Math.min(8, state.settings.todayTileLimit ?? 5),
   );
-  const primary = editing || state.settings.showAllTodayTiles
+  const primary = editing || state.settings.showAllTodayTiles || todayUsesPages
     ? visible
     : visible.slice(0, tileLimit);
   useEffect(() => {
@@ -429,7 +443,7 @@ function Today() {
   const goldGoalOrder = primary
     .filter((item) => isMetricTrackedOnDate(state, item, today))
     .map((item) => item.id);
-  const extra = editing || state.settings.showAllTodayTiles
+  const extra = editing || state.settings.showAllTodayTiles || todayUsesPages
     ? []
     : visible.slice(tileLimit);
   // Food's linked nutrient definitions support deep-linked detail/history,
@@ -876,11 +890,18 @@ function Today() {
     },
     [celebration, celebrationStorageKey, tutorial, tutorialSandbox],
   );
+  const pageCapacity = todayPageCapacity(height, state.settings.compactMode);
   const tileHeight = Math.max(
     52,
     Math.min(
       88,
-      (height - 345) / Math.max(Math.min(primary.length, tileLimit), 1),
+      (height - 345) /
+        Math.max(
+          todayUsesPages && !editing
+            ? pageCapacity
+            : Math.min(primary.length, tileLimit),
+          1,
+        ),
     ),
   );
   useFocusEffect(
@@ -1373,8 +1394,11 @@ function Today() {
           </View>
         </View>
         <TutorialTarget id="today-tracker-list">
-        <View style={styles.list}>
-          {primary.map((item, index) => (
+        <TodayTrackerPageFlow
+          items={primary}
+          pageSize={pageCapacity}
+          paged={todayUsesPages && !editing}
+          renderItem={(item, index) => (
             <ReorderItem
               key={item.id}
               active={draggingMetricId === item.id}
@@ -1521,8 +1545,8 @@ function Today() {
                 tutorialReorder={index === 0}
               />
             </ReorderItem>
-          ))}
-        </View>
+          )}
+        />
         </TutorialTarget>
         {extra.length ? (
           <Pressable
@@ -1995,6 +2019,30 @@ function Today() {
         </Pressable>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function TodayTrackerPageFlow({
+  items,
+  pageSize,
+  paged,
+  renderItem,
+}: {
+  items: MetricDefinition[];
+  pageSize: number;
+  paged: boolean;
+  renderItem: (item: MetricDefinition, index: number) => React.ReactElement;
+}) {
+  const rows = items.map(renderItem);
+  if (!paged) return <View style={styles.list}>{rows}</View>;
+  return (
+    <HorizontalPager
+      accessibilityLabel="Today"
+      testID="today-tracker-pages"
+      pages={chunkIntoPages(rows, pageSize).map((page, index) => (
+        <View key={index} style={styles.list}>{page}</View>
+      ))}
+    />
   );
 }
 

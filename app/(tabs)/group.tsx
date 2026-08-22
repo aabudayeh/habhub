@@ -12,6 +12,7 @@ import React, {
 import {
   Animated,
   BackHandler,
+  Modal,
   PanResponder,
   Platform,
   Pressable,
@@ -25,6 +26,7 @@ import { AppText as Text } from "@/src/components/AppText";
 import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { shareText } from "@/src/lib/shareText";
 import { ReorderItem } from "@/src/components/ReorderItem";
+import { HorizontalPager } from "@/src/components/HorizontalPager";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
@@ -81,9 +83,11 @@ import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEven
 import {
   canManageGroupChallenge,
   acceptedChallengeParticipantIds,
+  challengeWinnerIds,
   challengeIdFromCard,
   declinedChallengeParticipantIds,
   expandGroupChallengeOccurrences,
+  groupChallengeEndDate,
   groupChallengeParticipation,
   groupChallengeProgress,
   groupChallengeResponseDeadline,
@@ -111,6 +115,7 @@ import {
 
 const SCORE_ID = "__score";
 const SHARED_LEADERBOARD_SUMMARY_START = "2000-01-01";
+const CHALLENGE_CELEBRATION_SCAN_LIMIT = 500;
 
 function sharedLeaderboardHeatmapModel(
   state: AppState,
@@ -287,16 +292,26 @@ function LeaderboardScreen() {
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const leaderboardUsesPages =
+    state.settings.leaderboardLayoutMode === "pages";
   const [showPicker, setShowPicker] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
   const [expandedGridRows, setExpandedGridRows] = useState<string[]>([]);
+  const [screenFocused, setScreenFocused] = useState(false);
+  const [challengeCelebration, setChallengeCelebration] = useState<{
+    id: string;
+    title: string;
+    detail: string;
+  }>();
+  const celebratingChallengeIds = useRef(new Set<string>());
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
   useFocusEffect(
     useCallback(() => {
+      setScreenFocused(true);
       // Relative sync labels only need a clock while this tab is visible. A
       // mounted-but-frozen leaderboard can otherwise wake every minute and
       // recompute year-scale rankings behind whichever page the user is using.
@@ -305,7 +320,10 @@ function LeaderboardScreen() {
         () => setClockTick((value) => value + 1),
         60_000,
       );
-      return () => clearInterval(timer);
+      return () => {
+        setScreenFocused(false);
+        clearInterval(timer);
+      };
     }, []),
   );
   useEffect(() => {
@@ -326,8 +344,13 @@ function LeaderboardScreen() {
   const challengesEnabled =
     tutorialSandbox || (!personalSetup && isCloudGroupId(state.group.id));
   const challengeCloud = useGroupChallenges(state.group.id);
-  const { unreadCount: groupFeedUnreadCount } =
-    useGroupNotificationEvents(state.group.id);
+  const {
+    allEvents: groupFeedEvents,
+    unreadCount: groupFeedUnreadCount,
+  } = useGroupNotificationEvents(
+    state.group.id,
+    state.settings.notifications.groupPreferencesByGroup?.[state.group.id],
+  );
   const notificationBadgeCount =
     groupFeedUnreadCount + (state.group.pendingMembers?.length ?? 0);
   const inviteReady = validGroupInviteCode(state.group.inviteCode);
@@ -341,6 +364,138 @@ function LeaderboardScreen() {
       ),
     [state.group.metricConfiguration],
   );
+  const completedChallengeResults = useMemo(() => {
+    if (!screenFocused) return [];
+    const today = dateKey();
+    const throughDate = dateKeyWithOffset(-1);
+    const celebrationCutoff = dateKeyWithOffset(-30);
+    const saved = new Set([
+      ...(state.settings.seenChallengeCelebrationIdsByGroup?.[
+        state.group.id
+      ] ?? []),
+      ...celebratingChallengeIds.current,
+    ]);
+    const cloudResultsRequireSettlement =
+      !tutorialSandbox && isCloudGroupId(state.group.id);
+    const next = expandGroupChallengeOccurrences(
+      challengeCloud.challenges,
+      dateKeyWithOffset(-367),
+      throughDate,
+      CHALLENGE_CELEBRATION_SCAN_LIMIT,
+    )
+      .filter((challenge) => {
+        const participation = groupChallengeParticipation(
+          challenge,
+          state.currentUserId,
+        );
+        const canonicalResult = groupFeedEvents.find(
+          (event) =>
+            event.kind === "challenge_result" &&
+            event.challengeId === groupChallengeSourceId(challenge) &&
+            event.occurrenceDate === challenge.localDate,
+        );
+        return (
+          !saved.has(challenge.id) &&
+          groupChallengeEndDate(challenge) >= celebrationCutoff &&
+          groupChallengeEndDate(challenge) < today &&
+          (participation === "creator" || participation === "accepted") &&
+          (!cloudResultsRequireSettlement || Boolean(canonicalResult))
+        );
+      })
+      .sort(
+        (left, right) =>
+          groupChallengeEndDate(right).localeCompare(
+            groupChallengeEndDate(left),
+          ) || right.id.localeCompare(left.id),
+      )
+      .find((challenge) =>
+        tracked.some((item) => item.id === challenge.metricId),
+      );
+    if (!next) return [];
+    const metric = tracked.find((item) => item.id === next.metricId)!;
+    const canonicalResult = groupFeedEvents.find(
+      (event) =>
+        event.kind === "challenge_result" &&
+        event.challengeId === groupChallengeSourceId(next) &&
+        event.occurrenceDate === next.localDate,
+    );
+    const rows = groupChallengeProgress(state, next, metric);
+    return [
+      {
+        challenge: next,
+        metric,
+        canonicalResult,
+        winnerIds: canonicalResult
+          ? []
+          : challengeWinnerIds(
+              rows,
+              next.target,
+              next.target === undefined ? "higher" : metric.rankingDirection,
+            ),
+      },
+    ];
+  }, [
+    challengeCloud.challenges,
+    groupFeedEvents,
+    screenFocused,
+    state,
+    tracked,
+    tutorialSandbox,
+  ]);
+  useEffect(() => {
+    if (!screenFocused || challengeCelebration) return;
+    const saved =
+      state.settings.seenChallengeCelebrationIdsByGroup?.[state.group.id] ?? [];
+    const seen = new Set([
+      ...saved,
+      ...celebratingChallengeIds.current,
+    ]);
+    const next = completedChallengeResults.find(
+      (result) => !seen.has(result.challenge.id),
+    );
+    if (!next) return;
+    celebratingChallengeIds.current.add(next.challenge.id);
+    const title =
+      next.challenge.title?.trim() || `${next.metric.name} challenge`;
+    if (next.canonicalResult) {
+      setChallengeCelebration({
+        id: next.challenge.id,
+        title: next.canonicalResult.title ?? `${title} complete`,
+        detail:
+          next.canonicalResult.detail ?? "The final standings are ready.",
+      });
+    } else {
+      const winnerNames = next.winnerIds
+        .map((id) => {
+          if (id === state.currentUserId) return "You";
+          const member = state.group.members.find((item) => item.id === id);
+          return member ? memberDisplayName(state, member) : undefined;
+        })
+        .filter(Boolean);
+      const userWon = next.winnerIds.includes(state.currentUserId);
+      setChallengeCelebration({
+        id: next.challenge.id,
+        title: userWon ? `You won ${title}` : `${title} complete`,
+        detail: winnerNames.length
+          ? `${winnerNames.join(" & ")} ${winnerNames.length === 1 ? "wins" : "tie for first"}.`
+          : "The final standings are ready.",
+      });
+    }
+    updateSettings({
+      seenChallengeCelebrationIdsByGroup: {
+        ...(state.settings.seenChallengeCelebrationIdsByGroup ?? {}),
+        [state.group.id]: [...saved, next.challenge.id].slice(
+          -CHALLENGE_CELEBRATION_SCAN_LIMIT,
+        ),
+      },
+    });
+  }, [
+    challengeCelebration,
+    completedChallengeResults,
+    screenFocused,
+    state,
+    updateSettings,
+  ]);
   const saved = state.settings.leaderboardMetricIdsByGroup?.[
     state.group.id
   ] ?? [state.selectedGroupMetricId || SCORE_ID];
@@ -664,6 +819,7 @@ function LeaderboardScreen() {
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          !leaderboardUsesPages &&
           !editing &&
           !calendarOpen &&
           Math.abs(gesture.dx) > 22 &&
@@ -675,7 +831,7 @@ function LeaderboardScreen() {
           if (next) choosePeriod(next);
         },
       }),
-    [calendarOpen, editing, period],
+    [calendarOpen, editing, leaderboardUsesPages, period],
   );
   async function invite() {
     if (tutorialSandbox) return;
@@ -1033,7 +1189,8 @@ function LeaderboardScreen() {
             <Text style={[styles.gridEditHint, { color: colors.muted }]}>{t("Calendar rows are collapsed by default. The selected range is saved for this group.")}</Text>
           </Card>
         ) : null}
-      {displayedSelected.map((id, cardIndex) => {
+      {(() => {
+        const rankingCards = displayedSelected.map((id, cardIndex) => {
         const challengeId = challengeIdFromCard(id);
         const challenge = challengeId
           ? visibleChallenges.find((item) => item.id === challengeId)
@@ -1382,7 +1539,16 @@ function LeaderboardScreen() {
             </EditableRankingCard>
           </ReorderItem>
         );
-      })}
+        });
+        if (!leaderboardUsesPages || editing) return rankingCards;
+        return (
+          <HorizontalPager
+            accessibilityLabel="Leaderboard"
+            testID="leaderboard-card-pages"
+            pages={rankingCards}
+          />
+        );
+      })()}
       {editing ? (
         <>
           <View style={styles.editActions}>
@@ -1496,8 +1662,110 @@ function LeaderboardScreen() {
           <Text numberOfLines={2} style={[styles.challengeRetryText, { color: colors.muted }]}>Challenges could not refresh. Tap to retry.</Text>
         </Pressable>
       ) : null}
+      {challengeCelebration ? (
+        <ChallengeCompletionCelebration
+          title={challengeCelebration.title}
+          detail={challengeCelebration.detail}
+          accent={accent}
+          colors={colors}
+          onClose={() => setChallengeCelebration(undefined)}
+        />
+      ) : null}
       </View>
     </Screen>
+  );
+}
+
+function ChallengeCompletionCelebration({
+  title,
+  detail,
+  accent,
+  colors,
+  onClose,
+}: {
+  title: string;
+  detail: string;
+  accent: string;
+  colors: ReturnType<typeof useAppColors>;
+  onClose: () => void;
+}) {
+  const burst = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(burst, {
+      toValue: 1,
+      duration: 950,
+      useNativeDriver: true,
+    }).start();
+    const timer = setTimeout(onClose, 4_800);
+    return () => clearTimeout(timer);
+  }, [burst, onClose]);
+  const confetti = Array.from({ length: 28 }, (_, index) => ({
+    key: index,
+    left: `${4 + ((index * 37) % 92)}%` as `${number}%`,
+    color: [accent, palette.amber, palette.lime, palette.red][index % 4],
+    delay: ((index % 7) + 1) * 0.06,
+  }));
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close challenge celebration"
+        onPress={onClose}
+        style={styles.challengeCelebrationBackdrop}
+      >
+        <View style={styles.challengeConfetti} pointerEvents="none">
+          {confetti.map((piece) => (
+            <Animated.View
+              key={piece.key}
+              style={[
+                styles.challengeConfettiPiece,
+                {
+                  left: piece.left,
+                  backgroundColor: piece.color,
+                  opacity: burst.interpolate({
+                    inputRange: [0, piece.delay, 1],
+                    outputRange: [0, 1, 0.72],
+                  }),
+                  transform: [
+                    {
+                      translateY: burst.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-80 - (piece.key % 5) * 16, 430],
+                      }),
+                    },
+                    {
+                      rotate: burst.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ["0deg", `${180 + piece.key * 29}deg`],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+          ))}
+        </View>
+        <View
+          style={[
+            styles.challengeCelebrationCard,
+            { backgroundColor: colors.card, borderColor: `${accent}70` },
+          ]}
+        >
+          <View
+            style={[
+              styles.challengeCelebrationIcon,
+              { backgroundColor: `${accent}20` },
+            ]}
+          >
+            <Ionicons name="trophy" size={30} color={accent} />
+          </View>
+          <Text style={[styles.challengeCelebrationEyebrow, { color: accent }]}>CHALLENGE COMPLETE</Text>
+          <Text style={[styles.challengeCelebrationTitle, { color: colors.ink }]}>{title}</Text>
+          <Text style={[styles.challengeCelebrationDetail, { color: colors.muted }]}>{detail}</Text>
+          <Text style={[styles.challengeCelebrationClose, { color: colors.faint }]}>Tap anywhere to close</Text>
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -1541,9 +1809,18 @@ function ChallengeRankingCard({
   const title =
     challenge.title?.trim() ||
     (metric ? `${metric.name} challenge` : "Group challenge");
-  const targetLabel = metric
-    ? formatMetricValue(metric, challenge.target)
-    : String(challenge.target);
+  const openCompetition = challenge.target === undefined;
+  const targetLabel = openCompetition
+    ? "Most wins"
+    : metric
+      ? formatMetricValue(metric, challenge.target!)
+      : String(challenge.target);
+  const endDate = groupChallengeEndDate(challenge);
+  const finalized = endDate < dateKey();
+  const periodLabel =
+    endDate === challenge.localDate
+      ? friendlyDate(challenge.localDate)
+      : `${friendlyDate(challenge.localDate)} – ${friendlyDate(endDate)}`;
   async function respond(response: "accepted" | "declined") {
     setResponding(response);
     try {
@@ -1570,14 +1847,14 @@ function ChallengeRankingCard({
           </View>
           <Text numberOfLines={1} style={[styles.title, { color: colors.ink }]}>{title}</Text>
           <Text style={[styles.challengeMeta, { color: colors.muted }]}>
-            {friendlyDate(challenge.localDate)} · {targetLabel} · {acceptedCount}/{challenge.participantIds.length} joined
+            {periodLabel} · {targetLabel} · {acceptedCount}/{challenge.participantIds.length} joined
             {challenge.recurrence ? " · repeats" : ""}
             {awaitingCount ? ` · ${awaitingCount} awaiting` : ""}
           </Text>
         </View>
-        <View style={[styles.completePill, { backgroundColor: complete === rows.length && rows.length >= 2 ? `${palette.lime}35` : colors.primarySoft }]}>
-          <Text style={[styles.completePillText, { color: complete === rows.length && rows.length >= 2 ? colors.ink : accent }]}>
-            {complete}/{rows.length}
+        <View style={[styles.completePill, { backgroundColor: finalized ? `${palette.lime}35` : colors.primarySoft }]}>
+          <Text style={[styles.completePillText, { color: finalized ? colors.ink : accent }]}>
+            {openCompetition ? (finalized ? "Final" : "#1 wins") : `${complete}/${rows.length}`}
           </Text>
         </View>
       </Pressable>
@@ -1593,7 +1870,9 @@ function ChallengeRankingCard({
             <Text style={[styles.detail, { color: colors.muted }]}>
               {challenge.recurrence
                 ? "Your answer applies to every repeat in this series."
-                : "Join to appear in this challenge ranking."}
+                : endDate !== challenge.localDate
+                  ? "Join to compete across the full date range."
+                  : "Join to appear in this challenge ranking."}
             </Text>
           </View>
           {participation === "invited" ? (
@@ -1644,7 +1923,7 @@ function ChallengeRankingCard({
                 {memberDisplayName(state, row.member)}{row.member.id === state.currentUserId ? " · You" : ""}
               </Text>
               <Text numberOfLines={1} style={[styles.challengeValue, { color: row.complete ? colors.ink : colors.muted }]}>
-                {row.complete ? "Target reached" : row.valueLabel}
+                {!openCompetition && row.complete ? "Target reached" : row.valueLabel}
               </Text>
             </View>
             <View style={styles.challengeProgress}>
@@ -1879,6 +2158,15 @@ const styles = StyleSheet.create({
   challengeUnavailable: { minHeight: 42, borderTopWidth: 1, alignItems: "center", justifyContent: "center" },
   challengeRetry: { minHeight: 42, marginVertical: 6, paddingHorizontal: 11, borderRadius: 13, flexDirection: "row", alignItems: "center", gap: 7 },
   challengeRetryText: { flex: 1, fontSize: 9, fontWeight: "800" },
+  challengeCelebrationBackdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 22, backgroundColor: "rgba(5,14,36,0.72)" },
+  challengeConfetti: { ...StyleSheet.absoluteFillObject, overflow: "hidden" },
+  challengeConfettiPiece: { position: "absolute", top: 0, width: 9, height: 16, borderRadius: 3 },
+  challengeCelebrationCard: { width: "100%", maxWidth: 390, minHeight: 245, borderRadius: 26, borderWidth: 1, padding: 24, alignItems: "center", justifyContent: "center" },
+  challengeCelebrationIcon: { width: 58, height: 58, borderRadius: 20, alignItems: "center", justifyContent: "center", marginBottom: 13 },
+  challengeCelebrationEyebrow: { fontSize: 9, fontWeight: "900", letterSpacing: 1.3 },
+  challengeCelebrationTitle: { marginTop: 7, fontSize: 20, lineHeight: 25, fontWeight: "900", textAlign: "center" },
+  challengeCelebrationDetail: { marginTop: 7, fontSize: 11, lineHeight: 17, fontWeight: "700", textAlign: "center" },
+  challengeCelebrationClose: { marginTop: 18, fontSize: 8, fontWeight: "800" },
   rankingHead: {
     flexDirection: "row",
     alignItems: "center",

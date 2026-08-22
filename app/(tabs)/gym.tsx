@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -468,6 +468,20 @@ function GymScreen() {
   const accent = useGroupAccent();
   const locale = useLocale();
   const { language, t } = useLocalization();
+  const webNotificationParams = useLocalSearchParams<{
+    workoutAction?: string | string[];
+    workoutActionAt?: string | string[];
+  }>();
+  const webNotificationAction = Array.isArray(
+    webNotificationParams.workoutAction,
+  )
+    ? webNotificationParams.workoutAction[0]
+    : webNotificationParams.workoutAction;
+  const webNotificationActionAt = Array.isArray(
+    webNotificationParams.workoutActionAt,
+  )
+    ? webNotificationParams.workoutActionAt[0]
+    : webNotificationParams.workoutActionAt;
   const scrollRef = useRef<ScrollView>(null);
   const targetOffsets = useRef<Record<string, number>>({});
   const [localDate, setLocalDate] = useState(dateKey());
@@ -520,6 +534,7 @@ function GymScreen() {
     NativeAppState.currentState,
   );
   const handledTimerResponse = useRef<string | null>(null);
+  const handledWebTimerAction = useRef<string | null>(null);
   const [queuedNativeTimerActions, setQueuedNativeTimerActions] = useState<
     QueuedWorkoutTimerAction[]
   >([]);
@@ -2128,6 +2143,38 @@ function GymScreen() {
     else if (action === WORKOUT_TIMER_FINISH)
       finishTimedWorkout(occurredAt ?? Date.now());
   };
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !webNotificationAction) return;
+    if (!workoutDraftReady) return;
+    const supported = [WORKOUT_TIMER_NEXT, WORKOUT_TIMER_PAUSE];
+    if (!supported.includes(webNotificationAction)) {
+      router.replace("/gym" as never);
+      return;
+    }
+    const actionKey = `${webNotificationAction}:${webNotificationActionAt ?? ""}`;
+    if (handledWebTimerAction.current === actionKey) return;
+    handledWebTimerAction.current = actionKey;
+    if (workoutTimer) {
+      const receivedAt = Number(webNotificationActionAt);
+      const now = Date.now();
+      const occurredAt =
+        Number.isFinite(receivedAt) &&
+        receivedAt >= now - 5 * 60_000 &&
+        receivedAt <= now + 60_000
+          ? receivedAt
+          : now;
+      timerActionRef.current(webNotificationAction, occurredAt);
+    }
+    // Remove the one-shot action so refresh/back cannot replay it. Replacing
+    // this same route preserves the hydrated workout draft and visible mode.
+    router.replace("/gym" as never);
+  }, [
+    webNotificationAction,
+    webNotificationActionAt,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
 
   useEffect(() => {
     const next = queuedNativeTimerActions[0];

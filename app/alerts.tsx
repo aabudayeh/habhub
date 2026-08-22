@@ -34,7 +34,10 @@ export default function Alerts() {
   const {
     events: groupFeedEvents,
     markRead: markGroupFeedRead,
-  } = useGroupNotificationEvents(state.group.id);
+  } = useGroupNotificationEvents(
+    state.group.id,
+    state.settings.notifications.groupPreferencesByGroup?.[state.group.id],
+  );
   const alerts = useMemo(
     () =>
       buildAlerts(state, groupFeedEvents).filter(

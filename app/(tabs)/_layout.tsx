@@ -51,6 +51,12 @@ export default function TabLayout() {
   const colors = useAppColors();
   const t = useTranslation();
   const insets = useSafeAreaInsets();
+  // Portrait iPhones report a bottom safe area but commonly zero side insets.
+  // Their rounded lower corners can still mask the first/last tab labels even
+  // though a screenshot contains every pixel, so reserve a small edge gutter
+  // only for web displays that actually report a home-indicator safe area.
+  const curvedWebEdgeGutter =
+    Platform.OS === "web" && insets.bottom > 0 ? 10 : 0;
   const softwareKeyboardVisible = useSoftwareKeyboardVisibility();
   const hasUnreadChat = useMemo(() => {
     const readAt =
@@ -193,6 +199,14 @@ export default function TabLayout() {
           height: 55 + insets.bottom,
           paddingTop: 2,
           paddingBottom: Math.max(1, insets.bottom),
+          paddingLeft:
+            Platform.OS === "web"
+              ? Math.max(insets.left, curvedWebEdgeGutter)
+              : undefined,
+          paddingRight:
+            Platform.OS === "web"
+              ? Math.max(insets.right, curvedWebEdgeGutter)
+              : undefined,
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },

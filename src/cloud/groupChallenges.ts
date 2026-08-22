@@ -11,8 +11,9 @@ type GroupChallengeRow = {
   creator_id: string;
   metric_slug: string;
   title: string | null;
-  target_value: number | string;
+  target_value: number | string | null;
   local_date: string;
+  end_date: string;
   participant_ids: string[];
   accepted_participant_ids: string[];
   declined_participant_ids: string[];
@@ -26,8 +27,9 @@ export type SaveGroupChallengeInput = {
   groupId: string;
   metricId: string;
   title?: string;
-  target: number;
+  target?: number;
   localDate: string;
+  endDate?: string;
   participantIds: string[];
   recurrence?: GoalSchedule;
 };
@@ -52,8 +54,12 @@ function fromRow(row: GroupChallengeRow): GroupChallenge {
     creatorId: row.creator_id,
     metricId: row.metric_slug,
     title: row.title?.trim() || undefined,
-    target: Number(row.target_value),
+    target:
+      row.target_value === null || row.target_value === undefined
+        ? undefined
+        : Number(row.target_value),
     localDate: row.local_date,
+    endDate: row.end_date || row.local_date,
     participantIds: [...new Set(row.participant_ids ?? [])],
     acceptedParticipantIds: [
       ...new Set(row.accepted_participant_ids ?? row.participant_ids ?? []),
@@ -72,7 +78,7 @@ export async function loadGroupChallenges(groupId: string) {
   const { data, error } = await supabase
     .from("group_challenges")
     .select(
-      "id, group_id, creator_id, metric_slug, title, target_value, local_date, participant_ids, accepted_participant_ids, declined_participant_ids, recurrence, created_at, updated_at",
+      "id, group_id, creator_id, metric_slug, title, target_value, local_date, end_date, participant_ids, accepted_participant_ids, declined_participant_ids, recurrence, created_at, updated_at",
     )
     .eq("group_id", groupId)
     .is("deleted_at", null)
@@ -90,8 +96,9 @@ export async function saveGroupChallenge(input: SaveGroupChallengeInput) {
     p_group_id: input.groupId,
     p_metric_slug: input.metricId,
     p_title: input.title?.trim() || null,
-    p_target_value: input.target,
+    p_target_value: input.target ?? null,
     p_local_date: input.localDate,
+    p_end_date: input.endDate ?? input.localDate,
     p_participant_ids: input.participantIds,
     p_recurrence: input.recurrence ?? null,
   });

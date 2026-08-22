@@ -71,3 +71,11 @@ verify_jwt = false
 [functions.google-health-worker]
 # The worker validates an independent high-entropy server secret.
 verify_jwt = false
+
+[functions.web-personal-notifications]
+# The cron worker validates an independent high-entropy server secret.
+verify_jwt = false
+
+[functions.challenge-notifications]
+# The hourly worker validates its independent high-entropy server secret.
+verify_jwt = false

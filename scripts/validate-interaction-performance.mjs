@@ -16,6 +16,14 @@ import "./validate-native-sync-performance.mjs";
 const ui = fs.readFileSync("src/components/ui.tsx", "utf8");
 const calendar = fs.readFileSync("src/domain/calendar.ts", "utf8");
 const appProvider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
+const webAppStateStorage = fs.readFileSync(
+  "src/storage/durableLargeStorage.web.ts",
+  "utf8",
+);
+const groupActivityStorage = fs.readFileSync(
+  "src/storage/groupActivityCache.asyncStorage.ts",
+  "utf8",
+);
 const healthProvider = fs.readFileSync(
   "src/health/HealthSyncProvider.tsx",
   "utf8",
@@ -72,13 +80,63 @@ assert.doesNotMatch(
 );
 assert.match(
   googleHealthLegacyScrub,
-  /for \(const key of keys\)[\s\S]*waitForResponsiveTurn\([\s\S]*minimumUserQuietMs: 1_800[\s\S]*AsyncStorage\.getItem\(key\)/,
+  /for \(const key of keys\)[\s\S]*waitForResponsiveTurn\([\s\S]*minimumUserQuietMs: 1_800[\s\S]*getAppStateStorageItem\(key\)/,
   "dormant account privacy scrubbing must be touch-aware and bounded to one snapshot per turn",
 );
 assert.match(
   appProvider,
-  /AsyncStorage\.getItem\(APP_STORAGE_KEY\)[\s\S]{0,900}stateWithoutGoogleHealthLocalData\(parsed\)/,
+  /getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,900}stateWithoutGoogleHealthLocalData\(parsed\)/,
   "the active snapshot must sanitize directly without waiting for the multi-account migration",
+);
+assert.match(
+  appProvider,
+  /multiSetAppStateStorage\(\[[\s\S]{0,200}\[APP_STORAGE_KEY, serialized\][\s\S]{0,200}appAccountStorageKey/,
+  "the active and account recovery snapshots must share the large-state storage boundary",
+);
+assert.match(webAppStateStorage, /indexedDB\.open\(DATABASE_NAME, DATABASE_VERSION\)/);
+assert.match(webAppStateStorage, /database\.transaction\(STORE_NAME, "readwrite"\)/);
+assert.match(
+  webAppStateStorage,
+  /if \(await indexedDbSet\(entries\)\) \{[\s\S]{0,180}removeLegacyCopies/,
+  "web snapshots must commit to IndexedDB before their small localStorage legacy copies are removed",
+);
+assert.match(webAppStateStorage, /MIGRATION_MARKER = "habhub-large-state-indexeddb-migration-v1"/);
+assert.match(webAppStateStorage, /legacyIsNewer\(key, indexed\.value, legacy\)/);
+assert.match(webAppStateStorage, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
+assert.match(
+  webAppStateStorage,
+  /async function indexedDbKeys\(\)[\s\S]{0,700}throw new LargeStorageReadError/,
+  "IndexedDB key-enumeration failures must retry and remain distinguishable from an empty database",
+);
+assert.match(
+  webAppStateStorage,
+  /return legacyAt >= indexedAt/,
+  "equal-timestamp privacy repairs in the legacy fallback must not be discarded",
+);
+assert.match(
+  cloudProvider,
+  /readPersistedAccountState\(user\.id\)[\s\S]{0,900}setTimeout\([\s\S]{0,180}AppStateStorageReadError/,
+  "account switching must keep the persistence boundary closed while durable storage retries",
+);
+assert.match(
+  cloudProvider,
+  /accountBoundaryPending[\s\S]{0,700}Restoring offline account data/,
+  "the signed-in UI must stay non-editable until its durable account snapshot is known",
+);
+assert.match(
+  appProvider,
+  /setAppStateStorageItemStrict\(key, JSON\.stringify\(sanitized\)\)/,
+  "privacy scrubbing must verify the durable IndexedDB copy before marking cleanup complete",
+);
+assert.match(
+  groupActivityStorage,
+  /getLargeStorageItem[\s\S]{0,900}const AsyncStorage =/,
+  "web group activity snapshots must share the IndexedDB large-state boundary",
+);
+assert.match(
+  cloudProvider,
+  /getLargeStorageItem\([\s\S]{0,100}CLOUD_MERGE_BASE_KEY_PREFIX/,
+  "the per-entry cloud merge base must not refill web localStorage",
 );
 assert.match(
   appProvider,

@@ -9,7 +9,7 @@ function setMetaContent(selector: string, content: string) {
 }
 
 /** Keeps browser and assistive-technology metadata aligned with the app language. */
-export function WebDocumentMetadata() {
+export function WebDocumentMetadata({ darkMode = false }: { darkMode?: boolean }) {
   const { language, locale, isRtl, t } = useLocalization();
 
   useEffect(() => {
@@ -23,11 +23,18 @@ export function WebDocumentMetadata() {
     const socialTitle = `${t("Join")} HabHub`;
     const tagline = t("Track anything. Progress together.");
     const logoDescription = t("HabHub logo");
+    const shellBackground = darkMode ? "#071127" : "#F4F7FB";
 
     document.documentElement.lang = language;
     document.documentElement.dir = direction;
+    document.documentElement.style.setProperty(
+      "--habhub-shell-background",
+      shellBackground,
+    );
+    document.documentElement.style.colorScheme = darkMode ? "dark" : "light";
     document.body?.setAttribute("dir", direction);
     document.title = title;
+    setMetaContent('meta[name="theme-color"]', shellBackground);
     setMetaContent('meta[name="description"]', description);
     setMetaContent('meta[property="og:title"]', socialTitle);
     setMetaContent('meta[property="og:description"]', tagline);
@@ -35,7 +42,7 @@ export function WebDocumentMetadata() {
     setMetaContent('meta[property="og:locale"]', locale.replaceAll("-", "_"));
     setMetaContent('meta[name="twitter:title"]', socialTitle);
     setMetaContent('meta[name="twitter:description"]', tagline);
-  }, [isRtl, language, locale, t]);
+  }, [darkMode, isRtl, language, locale, t]);
 
   return null;
 }

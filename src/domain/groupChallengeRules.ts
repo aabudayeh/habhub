@@ -1,5 +1,11 @@
 import type { GoalSchedule, GroupChallenge } from "@/src/types";
 
+function challengeDateWithOffset(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 export const CHALLENGE_CARD_PREFIX = "challenge:";
 
 export type GroupChallengeParticipation =
@@ -111,22 +117,38 @@ export function compareChallengeValues(
 /** Privacy-conservative first-place resolution for completed challenges. */
 export function challengeWinnerIds(
   rows: readonly ChallengeWinnerRow[],
-  target: number,
+  target: number | undefined,
   direction: ChallengeRankingDirection,
 ) {
   if (rows.some((row) => row.mode === "private")) return [];
   const exact = rows.filter((row) => row.mode === "exact");
   if (exact.length < 2) return [];
-  const completed = exact.filter((row) => row.complete);
+  // An open challenge has no completion threshold: once the period closes,
+  // every exact participant is eligible and the highest aggregate wins.
+  const resolvedDirection = target === undefined ? "higher" : direction;
+  const resolvedTarget = target ?? 0;
+  const completed = target === undefined
+    ? exact
+    : exact.filter((row) => row.complete);
   if (!completed.length) return [];
   const best = [...completed].sort((left, right) =>
-    compareChallengeValues(left.value, right.value, target, direction),
+    compareChallengeValues(
+      left.value,
+      right.value,
+      resolvedTarget,
+      resolvedDirection,
+    ),
   )[0];
   if (!best) return [];
   return completed
     .filter(
       (row) =>
-        compareChallengeValues(row.value, best.value, target, direction) === 0,
+        compareChallengeValues(
+          row.value,
+          best.value,
+          resolvedTarget,
+          resolvedDirection,
+        ) === 0,
     )
     .map((row) => row.member.id);
 }
@@ -152,6 +174,94 @@ export function validChallengeDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T12:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function groupChallengeEndDate(challenge: GroupChallenge) {
+  return challenge.endDate ?? challenge.localDate;
+}
+
+export function challengePeriodDates(
+  localDate: string,
+  endDate = localDate,
+) {
+  if (
+    !validChallengeDate(localDate) ||
+    !validChallengeDate(endDate) ||
+    endDate < localDate
+  )
+    return [];
+  const dates: string[] = [];
+  for (
+    let current = localDate, guard = 0;
+    current <= endDate && guard <= 366;
+    current = challengeDateWithOffset(current, 1), guard += 1
+  )
+    dates.push(current);
+  return dates;
+}
+
+export type ChallengeDurationPreset =
+  | "day"
+  | "week"
+  | "month"
+  | "year"
+  | "custom";
+
+function clampedAnniversary(startDate: string, months: number) {
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const first = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + months, 1, 12),
+  );
+  const lastDay = new Date(
+    Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0, 12),
+  ).getUTCDate();
+  first.setUTCDate(Math.min(start.getUTCDate(), lastDay));
+  return {
+    date: first.toISOString().slice(0, 10),
+    clipped: start.getUTCDate() > lastDay,
+  };
+}
+
+/** Inclusive preset range, e.g. Aug 22 through Aug 28 is one week. */
+export function challengePresetEndDate(
+  startDate: string,
+  preset: Exclude<ChallengeDurationPreset, "custom">,
+) {
+  if (!validChallengeDate(startDate) || preset === "day") return startDate;
+  if (preset === "week") return challengeDateWithOffset(startDate, 6);
+  const anniversary = clampedAnniversary(
+    startDate,
+    preset === "month" ? 1 : 12,
+  );
+  // A clipped month-end (Jan 31 -> Feb 28, leap day -> Feb 28) remains the
+  // inclusive end; otherwise end on the day before the next anniversary.
+  return anniversary.clipped
+    ? anniversary.date
+    : challengeDateWithOffset(anniversary.date, -1);
+}
+
+export function validChallengePeriod(localDate: string, endDate?: string) {
+  const resolvedEnd = endDate ?? localDate;
+  if (!validChallengeDate(localDate) || !validChallengeDate(resolvedEnd))
+    return false;
+  const duration = Math.round(
+    (new Date(`${resolvedEnd}T12:00:00Z`).getTime() -
+      new Date(`${localDate}T12:00:00Z`).getTime()) /
+      86_400_000,
+  );
+  return duration >= 0 && duration <= 366;
+}
+
+/** Cadence for supportive standings notifications, scaled to duration. */
+export function challengeReminderIntervalDays(
+  localDate: string,
+  endDate = localDate,
+) {
+  const duration = Math.max(1, challengePeriodDates(localDate, endDate).length);
+  if (duration <= 7) return 1;
+  if (duration <= 31) return 2;
+  if (duration <= 92) return 7;
+  return 14;
 }
 
 export function validChallengeRecurrence(
@@ -215,8 +325,9 @@ export function validChallengeRecurrence(
 
 export function validateGroupChallenge(input: {
   title?: string;
-  target: number;
+  target?: number;
   localDate: string;
+  endDate?: string;
   metric?: ChallengeMetricShape;
   participantIds: string[];
   creatorId: string;
@@ -225,11 +336,21 @@ export function validateGroupChallenge(input: {
 }) {
   if (!input.metric || !isChallengeMetric(input.metric))
     return "Choose a numerical group tracker.";
-  if (!Number.isFinite(input.target) || input.target <= 0 || input.target > 1e12)
+  if (
+    input.target !== undefined &&
+    (!Number.isFinite(input.target) || input.target <= 0 || input.target > 1e12)
+  )
     return "Enter a target greater than zero.";
   if (!validChallengeDate(input.localDate)) return "Choose a valid date.";
+  if (!validChallengePeriod(input.localDate, input.endDate))
+    return "Choose an end date within one year of the start date.";
   if (input.today && input.localDate < input.today)
     return "Choose today or a future date.";
+  if (
+    input.recurrence &&
+    (input.endDate ?? input.localDate) !== input.localDate
+  )
+    return "Repeating challenges must use a one-day scoring period.";
   if (!validChallengeRecurrence(input.recurrence, input.localDate)) {
     if (input.recurrence?.mode === "selected_days")
       return "Choose at least one weekday to repeat on.";

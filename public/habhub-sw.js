@@ -4,6 +4,7 @@
 
 const DEFAULT_ROUTE = "/";
 const ICON_PATH = "/pwa-icon-192.png";
+const WORKOUT_ACTIONS = new Set(["workout-next", "workout-pause"]);
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -76,20 +77,38 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const route = safeRoute(event.notification.data?.route);
   const target = new URL(route, self.location.origin);
+  if (
+    event.notification.data?.workoutTimer === true &&
+    WORKOUT_ACTIONS.has(event.action)
+  ) {
+    target.searchParams.set("workoutAction", event.action);
+    target.searchParams.set("workoutActionAt", String(Date.now()));
+  }
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then(async (windows) => {
-        const current = windows.find((client) => {
+        const sameOrigin = windows.filter((client) => {
           try {
             return new URL(client.url).origin === self.location.origin;
           } catch {
             return false;
           }
         });
-        if (current) {
-          if ("navigate" in current) await current.navigate(target.href);
-          return current.focus();
+        for (const current of sameOrigin) {
+          try {
+            const navigated =
+              "navigate" in current
+                ? await current.navigate(target.href)
+                : current;
+            if (navigated && "focus" in navigated)
+              return await navigated.focus();
+            if ("focus" in current) return await current.focus();
+          } catch {
+            // A suspended/stale PWA client can reject navigate/focus. Try the
+            // next client and finally open a fresh window instead of turning a
+            // notification tap into a no-op.
+          }
         }
         return self.clients.openWindow(target.href);
       }),

@@ -23,6 +23,7 @@ import { useTutorial } from "@/src/tutorial/TutorialContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import {
   AppLanguage,
+  DashboardLayoutMode,
   LandingPage,
   ProgressLayoutAvailability,
   StatusAvatarStyle,
@@ -83,6 +84,7 @@ export default function DisplaySettings() {
   const [generalOpen, setGeneralOpen] = React.useState(false);
   const [pagesOpen, setPagesOpen] = React.useState(false);
   const [todayOpen, setTodayOpen] = React.useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = React.useState(false);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [indicatorOpen, setIndicatorOpen] = React.useState(false);
   const [navigationOpen, setNavigationOpen] = React.useState(false);
@@ -395,6 +397,30 @@ export default function DisplaySettings() {
         onPress={() => setTodayOpen((open) => !open)}
       >
         <Card style={styles.list}>
+          <SelectionMenu
+            title="Today layout"
+            items={[
+              {
+                id: "scroll",
+                label: "Scrolling list",
+                icon: "list-outline",
+              },
+              {
+                id: "pages",
+                label: "Swipeable pages",
+                icon: "albums-outline",
+              },
+            ]}
+            selectedIds={[state.settings.todayLayoutMode ?? "scroll"]}
+            onChange={([value]) =>
+              value &&
+              updateSettings({
+                todayLayoutMode: value as DashboardLayoutMode,
+              })
+            }
+            multiple={false}
+            searchable={false}
+          />
           <Pressable onPress={() => setIndicatorOpen((open) => !open)} style={styles.row}>
             <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
               <Ionicons
@@ -472,14 +498,19 @@ export default function DisplaySettings() {
               onChange={(value) => toggle("showWeightManagementSummary", value)}
             />
           ) : null}
-          <ToggleRow
-            icon="list-outline"
-            title="Show every tile"
-            copy="Scroll through all Today tiles instead of using More"
-            enabled={Boolean(state.settings.showAllTodayTiles)}
-            onChange={(showAllTodayTiles) => updateSettings({ showAllTodayTiles })}
-          />
-          {!state.settings.showAllTodayTiles ? (
+          {(state.settings.todayLayoutMode ?? "scroll") === "scroll" ? (
+            <ToggleRow
+              icon="list-outline"
+              title="Show every tile"
+              copy="Scroll through all Today tiles instead of using More"
+              enabled={Boolean(state.settings.showAllTodayTiles)}
+              onChange={(showAllTodayTiles) =>
+                updateSettings({ showAllTodayTiles })
+              }
+            />
+          ) : null}
+          {(state.settings.todayLayoutMode ?? "scroll") === "scroll" &&
+          !state.settings.showAllTodayTiles ? (
             <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
               <Text style={[styles.title, { color: colors.ink }]}>Tiles before More</Text>
               <View style={styles.chips}>
@@ -541,6 +572,40 @@ export default function DisplaySettings() {
             copy="Show a Journal icon in the Today header"
             enabled={state.settings.showJournalShortcut !== false}
             onChange={(value) => toggle("showJournalShortcut", value)}
+          />
+        </Card>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Leaderboard"
+        copy="Group rankings and comparisons"
+        open={leaderboardOpen}
+        onPress={() => setLeaderboardOpen((open) => !open)}
+      >
+        <Card style={styles.list}>
+          <SelectionMenu
+            title="Leaderboard layout"
+            items={[
+              {
+                id: "scroll",
+                label: "Scrolling list",
+                icon: "list-outline",
+              },
+              {
+                id: "pages",
+                label: "Swipeable pages",
+                icon: "albums-outline",
+              },
+            ]}
+            selectedIds={[state.settings.leaderboardLayoutMode ?? "scroll"]}
+            onChange={([value]) =>
+              value &&
+              updateSettings({
+                leaderboardLayoutMode: value as DashboardLayoutMode,
+              })
+            }
+            multiple={false}
+            searchable={false}
           />
         </Card>
       </CollapsibleSection>
