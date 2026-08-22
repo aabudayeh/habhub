@@ -951,11 +951,11 @@ export const healthConnectAdapter: HealthAdapter = {
             };
             // Completed days use Health Connect's unfiltered aggregate so its
             // Activity priority and overlap removal remain authoritative.
-            // Today uses Android Local Recording when Physical Activity data
-            // is available. If that app-scoped recording began after midnight,
-            // join an unfiltered Health Connect prefix to the non-overlapping
-            // local delta suffix at the first local point's start timestamp.
-            // Never add two totals covering the same time window.
+            // For today, first aggregate only Android's official on-device
+            // origin (`android` or this app's discovered SPN). That aggregate
+            // totals the phone's smaller non-overlapping interval records while
+            // excluding lagging Samsung/watch mirrors. Local Recording remains
+            // an older-device fallback; never add overlapping full-day totals.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
@@ -964,7 +964,12 @@ export const healthConnectAdapter: HealthAdapter = {
               const currentStart = stepSlices.current?.from;
               const currentEnd = stepSlices.current?.to;
               const includesCurrentDay = Boolean(stepSlices.current);
-              const [unfilteredGroups, currentAggregate, localPhoneSlice] =
+              const [
+                unfilteredGroups,
+                currentAggregate,
+                localPhoneSlice,
+                discoveredDeviceOrigins,
+              ] =
                 await Promise.all([
                   stepSlices.historical
                     ? aggregateGroupByPeriod({
@@ -989,20 +994,17 @@ export const healthConnectAdapter: HealthAdapter = {
                   includesCurrentDay
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
                     : Promise.resolve(null),
+                  includesCurrentDay
+                    ? currentDeviceStepOrigins()
+                    : Promise.resolve([]),
                 ]);
               const authoritativeCurrentCount = Number(
                 currentAggregate?.COUNT_TOTAL ?? 0,
               );
-              const needsAndroidDeviceFallback =
-                includesCurrentDay &&
-                !localPhoneSlice &&
-                !(authoritativeCurrentCount > 0);
-              const discoveredDeviceOrigins = needsAndroidDeviceFallback
-                ? await currentDeviceStepOrigins()
-                : [];
-              // Android 14+ also exposes this phone's TYPE_STEP_COUNTER data
-              // under `android` or an SPN. It is a final fallback only when
-              // neither Local Recording nor the unfiltered aggregate has data.
+              // Android 14+ exposes this phone's TYPE_STEP_COUNTER data under
+              // `android` or an SPN. Query it for every open-day refresh so a
+              // positive but stale cross-writer aggregate can never hide the
+              // current phone total.
               let androidDeviceOrigins = rememberCurrentDeviceStepOrigins([
                 ...discoveredDeviceOrigins,
                 ...(currentAggregate?.dataOrigins ?? []),
@@ -1011,7 +1013,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 androidPhoneSteps?.healthConnectOnDeviceSteps ??
                 Number(Platform.Version) >= 34;
               if (
-                needsAndroidDeviceFallback &&
+                includesCurrentDay &&
                 onDeviceHealthConnectStepsAvailable &&
                 !hasCurrentDeviceStepSpn(androidDeviceOrigins) &&
                 Date.now() >= nextRawStepOriginDiscoveryAt
@@ -1020,9 +1022,9 @@ export const healthConnectAdapter: HealthAdapter = {
                   Date.now() + STEP_ORIGIN_DISCOVERY_RETRY_MS;
                 // A few framework-extension combinations omit the SPN from the
                 // manager method and from a priority-resolved aggregate. A
-                // bounded raw read is used only to discover that source name;
-                // its rows are never summed. The source-filtered aggregate
-                // below remains the sole device candidate.
+                // bounded raw read is used only to discover that source name.
+                // The source-filtered aggregate below performs the total in
+                // native Health Connect without moving every interval into JS.
                 const rawDeviceOrigins =
                   await discoverCurrentDeviceStepOriginsFromRaw(
                     currentStart!,
@@ -1033,7 +1035,9 @@ export const healthConnectAdapter: HealthAdapter = {
                 );
               }
               const androidDeviceAggregate =
-                needsAndroidDeviceFallback && androidDeviceOrigins.length
+                includesCurrentDay &&
+                onDeviceHealthConnectStepsAvailable &&
+                androidDeviceOrigins.length
                   ? await aggregateRecord({
                       recordType: "Steps",
                       timeRangeFilter: {

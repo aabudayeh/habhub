@@ -235,7 +235,7 @@ async function presentWebWorkoutNotification({
   } = {
     body: notificationBody,
     icon: "/pwa-icon-192.png",
-    badge: "/pwa-icon-192.png",
+    badge: "/habhub-notification-badge-96.png",
     tag: WORKOUT_TIMER_NOTIFICATION,
     timestamp: phaseOrigin,
     actions,

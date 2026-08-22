@@ -4,6 +4,9 @@
 
 const DEFAULT_ROUTE = "/";
 const ICON_PATH = "/pwa-icon-192.png";
+// Android renders a Web Push badge as a monochrome alpha mask. Reusing the
+// opaque app icon turns that mask into a featureless square.
+const BADGE_PATH = "/habhub-notification-badge-96.png";
 const WORKOUT_ACTIONS = new Set(["workout-next", "workout-pause"]);
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -65,7 +68,7 @@ self.addEventListener("push", (event) => {
     self.registration.showNotification(title, {
       body,
       icon: ICON_PATH,
-      badge: ICON_PATH,
+      badge: BADGE_PATH,
       tag,
       renotify: false,
       data: { ...data, route },

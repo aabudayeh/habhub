@@ -5,15 +5,16 @@ export const HEALTH_HISTORY_DAYS = 730;
 export const HEALTH_INITIAL_DAYS = 30;
 /**
  * Version 2 repairs completed-day rows from the short-lived Samsung override
- * into Health Connect's priority-aware historical aggregates. Today's live
- * Physical Activity authority does not require a history repair.
+ * into Health Connect's priority-aware historical aggregates. Today's
+ * phone-origin authority does not require a history repair.
  */
 export const HEALTH_STEPS_IMPORT_VERSION = 2;
 /**
  * One automatic, post-hydration request per native device/account/version.
  * Version 3 gives existing accounts one contextual opportunity to grant the
- * Physical Activity permission now that Local Recording owns today's live
- * total; explicit Settings > Sync now remains available after a denial.
+ * Physical Activity permission for the Local Recording fallback. Android 14+
+ * uses the Health Connect phone origin first; explicit Settings > Sync now
+ * remains available after a denial.
  */
 export const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION = 3;
 const HEALTH_PHYSICAL_ACTIVITY_MIGRATION_KEY =

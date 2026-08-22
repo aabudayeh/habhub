@@ -84,6 +84,10 @@ import {
 import { automaticFastProgress } from "@/src/domain/fasting";
 import { markUserInteraction } from "@/src/lib/userInteraction";
 import { captureGoogleHealthCompletionFromBrowserUrl } from "@/src/health/googleHealthCompletionBrowser";
+import {
+  GOOGLE_HEALTH_FOREGROUND_CHECK_INTERVAL_MS,
+  requestGoogleHealthForegroundRefresh,
+} from "@/src/health/googleHealthAutoSync";
 
 // This runs during root-module evaluation, before AuthProvider and every
 // loading/redirect guard. The completion credential remains in memory only.
@@ -194,6 +198,60 @@ function RootNavigator() {
     if (Platform.OS !== "web") return;
     void registerHabHubServiceWorker().catch(() => undefined);
   }, []);
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      !hydrated ||
+      tutorialActive ||
+      !auth.user?.id ||
+      auth.session?.user.id !== auth.user.id
+    )
+      return;
+    let active = true;
+    let running = false;
+    const accountId = auth.user.id;
+    const refresh = async () => {
+      if (
+        !active ||
+        running ||
+        document.visibilityState === "hidden" ||
+        !navigator.onLine
+      )
+        return;
+      running = true;
+      try {
+        await requestGoogleHealthForegroundRefresh(accountId);
+      } catch {
+        // Signed provider webhooks and the durable six-hour sweep remain the
+        // authority. A foreground network failure retries on the next online,
+        // visibility, or interval signal without delaying navigation.
+      } finally {
+        running = false;
+      }
+    };
+    const visible = () => {
+      if (document.visibilityState !== "hidden") void refresh();
+    };
+    const initialTimer = setTimeout(() => void refresh(), 12_000);
+    const interval = setInterval(
+      () => void refresh(),
+      GOOGLE_HEALTH_FOREGROUND_CHECK_INTERVAL_MS,
+    );
+    window.addEventListener("online", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      active = false;
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+      window.removeEventListener("online", visible);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [
+    auth.session?.user.id,
+    auth.user?.id,
+    hydrated,
+    tutorialActive,
+  ]);
   useEffect(() => {
     if (
       !localNotificationsReady ||
@@ -539,10 +597,12 @@ function RootNavigator() {
   useEffect(() => {
     if (
       Platform.OS !== "web" ||
-      !localNotificationSchedulingEnabled ||
+      !hydrated ||
+      !state.settings.notifications.pushEnabled ||
       tutorialActive ||
       !auth.user?.id ||
-      auth.session?.user.id !== auth.user.id
+      auth.session?.user.id !== auth.user.id ||
+      state.currentUserId !== auth.user.id
     )
       return;
     let active = true;
@@ -556,9 +616,9 @@ function RootNavigator() {
         await syncWebReminderSchedule(cycleStateRef.current);
         attempt = 0;
       } catch {
-        if (!active || attempt >= 7) return;
+        if (!active) return;
         const delayMs = Math.min(5 * 60_000, 3_000 * 2 ** attempt);
-        attempt += 1;
+        attempt = Math.min(attempt + 1, 20);
         retryTimer = setTimeout(() => void sync(), delayMs);
       } finally {
         inFlight = false;
@@ -572,11 +632,17 @@ function RootNavigator() {
       void sync();
     };
     const initialTimer = setTimeout(() => void sync(), 2200);
+    // The schedule is private server state, not a browser alarm. Periodically
+    // republish it so an interrupted deployment or backend cleanup cannot
+    // strand an otherwise healthy Web Push subscription. The publisher itself
+    // coalesces unchanged work for ten minutes.
+    const repairTimer = setInterval(retryNow, 12 * 60_000);
     window.addEventListener("online", retryNow);
     document.addEventListener("visibilitychange", retryNow);
     return () => {
       active = false;
       clearTimeout(initialTimer);
+      clearInterval(repairTimer);
       if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener("online", retryNow);
       document.removeEventListener("visibilitychange", retryNow);
@@ -584,9 +650,11 @@ function RootNavigator() {
   }, [
     auth.session?.user.id,
     auth.user?.id,
-    localNotificationSchedulingEnabled,
+    hydrated,
     network.isConnected,
     network.isInternetReachable,
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
     tutorialActive,
     webReminderScheduleKey,
   ]);

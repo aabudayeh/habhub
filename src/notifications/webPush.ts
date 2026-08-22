@@ -261,7 +261,7 @@ export async function showImmediateWebNotification({
   const options: NotificationOptions & { renotify: boolean } = {
     body: body.slice(0, 220),
     icon: "/pwa-icon-192.png",
-    badge: "/pwa-icon-192.png",
+    badge: "/habhub-notification-badge-96.png",
     tag: tag.slice(0, 120),
     renotify: false,
     data,

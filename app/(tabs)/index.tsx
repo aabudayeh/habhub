@@ -181,6 +181,7 @@ function Today() {
   const locale = useLocale();
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
+  const [todayPageIndex, setTodayPageIndex] = useState(0);
   const todayUsesPages = state.settings.todayLayoutMode === "pages";
   const todaySummaryPinned =
     state.settings.pinTodayHeaderAndFeaturedCard === true;
@@ -891,6 +892,9 @@ function Today() {
     [celebration, celebrationStorageKey, tutorial, tutorialSandbox],
   );
   const pageCapacity = todayPageCapacity(height, state.settings.compactMode);
+  const todayPageCount = todayUsesPages && !editing
+    ? Math.ceil(primary.length / pageCapacity)
+    : 0;
   const tileHeight = Math.max(
     52,
     Math.min(
@@ -1343,6 +1347,37 @@ function Today() {
             <Text style={[styles.section, { color: colors.ink }]}>Your day</Text>
           </Pressable>
           </TutorialTarget>
+          {todayPageCount > 1 ? (
+            <View
+              accessible
+              accessibilityLabel={t("Page {page} of {total}")
+                .replace(
+                  "{page}",
+                  String(Math.min(todayPageIndex + 1, todayPageCount)),
+                )
+                .replace("{total}", String(todayPageCount))}
+              pointerEvents="none"
+              style={styles.sectionPageIndicator}
+            >
+              {Array.from({ length: todayPageCount }, (_, index) => {
+                const selected = index === todayPageIndex;
+                return (
+                  <View
+                    key={index}
+                    style={[
+                      styles.sectionPageDot,
+                      {
+                        backgroundColor: selected
+                          ? colors.muted
+                          : colors.border,
+                        width: selected ? 12 : 5,
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
           <View style={styles.sectionActions}>
             {editing ? (
               <Pressable
@@ -1398,6 +1433,7 @@ function Today() {
           items={primary}
           pageSize={pageCapacity}
           paged={todayUsesPages && !editing}
+          onPageChange={setTodayPageIndex}
           renderItem={(item, index) => (
             <ReorderItem
               key={item.id}
@@ -2026,11 +2062,13 @@ function TodayTrackerPageFlow({
   items,
   pageSize,
   paged,
+  onPageChange,
   renderItem,
 }: {
   items: MetricDefinition[];
   pageSize: number;
   paged: boolean;
+  onPageChange?: (page: number) => void;
   renderItem: (item: MetricDefinition, index: number) => React.ReactElement;
 }) {
   const rows = items.map(renderItem);
@@ -2039,6 +2077,7 @@ function TodayTrackerPageFlow({
     <HorizontalPager
       accessibilityLabel="Today"
       testID="today-tracker-pages"
+      onPageChange={onPageChange}
       pages={chunkIntoPages(rows, pageSize).map((page, index) => (
         <View key={index} style={styles.list}>{page}</View>
       ))}
@@ -3754,6 +3793,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  sectionPageIndicator: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  sectionPageDot: { height: 5, borderRadius: 999 },
   sectionActions: {
     flex: 1,
     minWidth: 0,

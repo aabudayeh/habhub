@@ -18,6 +18,7 @@ import {
   Pressable,
   StyleSheet,
   UIManager,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
@@ -83,6 +84,7 @@ import { useGroupNotificationEvents } from "@/src/cloud/useGroupNotificationEven
 import {
   canManageGroupChallenge,
   acceptedChallengeParticipantIds,
+  challengeCardId,
   challengeWinnerIds,
   challengeIdFromCard,
   declinedChallengeParticipantIds,
@@ -95,6 +97,10 @@ import {
   isChallengeMetric,
   mergedLeaderboardCardOrder,
 } from "@/src/domain/groupChallenges";
+import {
+  chunkIntoPages,
+  leaderboardPageCapacity,
+} from "@/src/domain/pagedLayout";
 import {
   formatMetricValue,
   goalReached,
@@ -286,6 +292,7 @@ function LeaderboardScreen() {
   const cloud = useCloudSyncActions();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const { height: viewportHeight } = useWindowDimensions();
   const t = useTranslation();
   const [period, setPeriod] = useState<LeaderboardPeriod>("today");
   const [anchor, setAnchor] = useState(dateKey());
@@ -296,6 +303,7 @@ function LeaderboardScreen() {
     state.settings.leaderboardLayoutMode === "pages";
   const [showPicker, setShowPicker] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
+  const [pendingChallengeCardId, setPendingChallengeCardId] = useState<string>();
   const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
   const [expandedGridRows, setExpandedGridRows] = useState<string[]>([]);
   const [screenFocused, setScreenFocused] = useState(false);
@@ -663,6 +671,25 @@ function LeaderboardScreen() {
       return orderedCardIds.indexOf(left) - orderedCardIds.indexOf(right);
     });
   }, [editing, orderedCardIds, pinnedIds]);
+  const leaderboardPageSize = useMemo(() => {
+    return leaderboardPageCapacity(
+      viewportHeight,
+      state.group.members.length,
+      dateNavigatorOpen,
+      expandedGridRows.length > 0,
+    );
+  }, [
+    dateNavigatorOpen,
+    expandedGridRows.length,
+    state.group.members.length,
+    viewportHeight,
+  ]);
+  const requestedLeaderboardPage = pendingChallengeCardId
+    ? (() => {
+        const index = displayedSelected.indexOf(pendingChallengeCardId);
+        return index >= 0 ? Math.floor(index / leaderboardPageSize) : undefined;
+      })()
+    : undefined;
   const rankingInputs = useMemo(
     () => ({
       statuses: state.dailyMetricStatuses,
@@ -1541,11 +1568,24 @@ function LeaderboardScreen() {
         );
         });
         if (!leaderboardUsesPages || editing) return rankingCards;
+        const rankingPages = chunkIntoPages(
+          rankingCards,
+          leaderboardPageSize,
+        ).map((page, index) => (
+          <View key={index} style={styles.pagedCardStack}>
+            {page}
+          </View>
+        ));
         return (
           <HorizontalPager
             accessibilityLabel="Leaderboard"
             testID="leaderboard-card-pages"
-            pages={rankingCards}
+            pages={rankingPages}
+            requestedPage={requestedLeaderboardPage}
+            onPageChange={(page) => {
+              if (page === requestedLeaderboardPage)
+                setPendingChallengeCardId(undefined);
+            }}
           />
         );
       })()}
@@ -1650,7 +1690,13 @@ function LeaderboardScreen() {
           setEditingChallenge(undefined);
         }}
         onSave={async (input) => {
-          await challengeCloud.save(input);
+          const creating = !input.id;
+          const savedChallenge = await challengeCloud.save(input);
+          if (creating) {
+            setAnchor(savedChallenge.localDate);
+            setPeriod("custom");
+            setPendingChallengeCardId(challengeCardId(savedChallenge.id));
+          }
         }}
       />
       {challengeCloud.error && challengesEnabled ? (
@@ -2110,6 +2156,7 @@ const styles = StyleSheet.create({
   done: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12 },
   doneText: { color: palette.white, fontSize: 10, fontWeight: "900" },
   rankingWrap: { marginBottom: 6 },
+  pagedCardStack: { gap: 6 },
   editBar: { height: 38, borderWidth: 1, borderBottomWidth: 0, borderTopLeftRadius: 14, borderTopRightRadius: 14, flexDirection: "row", alignItems: "center", paddingHorizontal: 8 },
   drag: { width: 34, alignItems: "center", justifyContent: "center" },
   dragText: { flex: 1, fontSize: 9, fontWeight: "800" },

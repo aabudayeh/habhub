@@ -1,4 +1,8 @@
-export const WEB_WORKOUT_NOTIFICATION_REFRESH_MS = 15_000;
+// Hidden web pages are commonly timer-throttled, so five-second reposts are
+// both unreliable and unnecessarily battery-heavy. Ten seconds is the compact
+// refresh cadence browsers can usually sustain while the OS notification's
+// timestamp remains the authoritative phase clock between updates.
+export const WEB_WORKOUT_NOTIFICATION_REFRESH_MS = 10_000;
 
 export type WorkoutSystemNotificationPhase = "work" | "rest" | "paused";
 

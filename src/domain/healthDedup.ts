@@ -683,11 +683,13 @@ export function combineDisjointStepWindows(
 }
 
 /**
- * Selects the current-day authority without summing overlapping totals. The
- * Local Recording candidate is either a complete midnight-to-now phone total
- * or an already-joined Health Connect prefix plus non-overlapping local suffix.
- * Health Connect remains the fallback when Physical Activity has no valid
- * local coverage, followed by the Android on-device Health Connect origin.
+ * Selects the current-day authority without summing overlapping totals.
+ * Android's own Health Connect origin is the first choice when present: its
+ * source-filtered aggregate is the efficient equivalent of summing the
+ * non-overlapping `com.android.healthconnect.phone.*` interval records, and it
+ * matches the phone-owned live counter without mixing Samsung/watch writers.
+ * Local Recording remains the older-Android fallback, followed by Health
+ * Connect's cross-writer aggregate.
  */
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
@@ -703,6 +705,13 @@ export function reconcileCurrentDayStepTotal(
   const androidDevice = Number.isFinite(androidDeviceCount)
     ? Math.max(0, Math.round(androidDeviceCount as number))
     : null;
+  if (androidDevice !== null && androidDevice > 0) {
+    return {
+      count: androidDevice,
+      usedLocalPhone: false,
+      usedAndroidDevice: true,
+    };
+  }
   if (localPhone !== null && localPhone > 0) {
     return {
       count: localPhone,
@@ -710,22 +719,10 @@ export function reconcileCurrentDayStepTotal(
       usedAndroidDevice: false,
     };
   }
-  if (healthConnect > 0) {
-    return {
-      count: healthConnect,
-      usedLocalPhone: false,
-      usedAndroidDevice: false,
-    };
-  }
-  const count = androidDevice ?? 0;
-  const usedAndroidDevice =
-    androidDevice !== null &&
-    androidDevice === count &&
-    androidDevice > healthConnect;
   return {
-    count,
+    count: healthConnect,
     usedLocalPhone: false,
-    usedAndroidDevice,
+    usedAndroidDevice: false,
   };
 }
 

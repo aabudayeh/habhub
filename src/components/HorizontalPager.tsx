@@ -21,12 +21,18 @@ export function HorizontalPager({
   scrollEnabled = true,
   pageStyle,
   testID,
+  requestedPage,
+  onPageChange,
 }: {
   pages: ReactNode[];
   accessibilityLabel: string;
   scrollEnabled?: boolean;
   pageStyle?: StyleProp<ViewStyle>;
   testID?: string;
+  /** Imperatively select a page when an external action reveals new content. */
+  requestedPage?: number;
+  /** Mirrors swipe and dot navigation to compact indicators outside the pager. */
+  onPageChange?: (page: number) => void;
 }) {
   const colors = useAppColors();
   const { t } = useLocalization();
@@ -54,6 +60,21 @@ export function HorizontalPager({
     });
     return () => cancelAnimationFrame(frame);
   }, [activePage, pageWidth, pages.length]);
+
+  useEffect(() => {
+    onPageChange?.(clampPageIndex(activePage, pages.length));
+  }, [activePage, onPageChange, pages.length]);
+
+  useEffect(() => {
+    if (requestedPage === undefined) return;
+    const next = clampPageIndex(requestedPage, pages.length);
+    setActivePage(next);
+    if (pageWidth <= 0) return;
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ x: next * pageWidth, animated: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pageWidth, pages.length, requestedPage]);
 
   const updateActivePage = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {

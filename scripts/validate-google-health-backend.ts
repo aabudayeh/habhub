@@ -1201,6 +1201,10 @@ assert.match(endpoint, /update_google_health_metric_visibility/);
 assert.match(endpoint, /readBoundedJson/);
 assert.match(endpoint, /manual: true/);
 assert.match(endpoint, /function startGoogleHealthWorker/);
+assert.match(endpoint, /FOREGROUND_REFRESH_MIN_AGE_MS = 30 \* 60 \* 1000/);
+assert.match(endpoint, /async function queueForegroundRefresh/);
+assert.match(endpoint, /last_synced_at\.is\.null,last_synced_at\.lte/);
+assert.match(endpoint, /action === "refresh"/);
 const completeConnectionBody = endpoint.match(
   /async function completeConnection[\s\S]*?async function handleAction/,
 )?.[0] ?? "";

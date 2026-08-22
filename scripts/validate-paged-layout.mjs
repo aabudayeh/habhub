@@ -7,6 +7,7 @@ import {
   chunkIntoPages,
   clampPageIndex,
   pageIndexFromOffset,
+  leaderboardPageCapacity,
   todayPageCapacity,
 } from "../src/domain/pagedLayout.ts";
 
@@ -29,6 +30,10 @@ assert.equal(pageIndexFromOffset(100, 0, 4), 0);
 assert.equal(todayPageCapacity(568, false), 2);
 assert.equal(todayPageCapacity(667, false), 4);
 assert.equal(todayPageCapacity(900, false), 5);
+assert.equal(leaderboardPageCapacity(720, 2, true, false), 2);
+assert.equal(leaderboardPageCapacity(720, 4, true, false), 1);
+assert.equal(leaderboardPageCapacity(900, 4, true, false), 2);
+assert.equal(leaderboardPageCapacity(900, 2, false, true), 1);
 
 const types = source("src/types.ts");
 const seed = source("src/data/seed.ts");
@@ -54,6 +59,10 @@ assert.match(leaderboard, /state\.settings\.leaderboardLayoutMode === "pages"/);
 assert.match(leaderboard, /!leaderboardUsesPages &&\s*!editing/);
 assert.match(leaderboard, /!leaderboardUsesPages \|\| editing/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);
+assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
+assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
+assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
+assert.match(today, /onPageChange=\{setTodayPageIndex\}/);
 assert.match(pager, /pagingEnabled/);
 assert.match(pager, /accessibilityRole="tablist"/);
 assert.match(pager, /Page \{page\} of \{total\}/);

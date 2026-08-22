@@ -324,8 +324,15 @@ export function GoogleHealthWebCard() {
     return requestGenerationRef.current;
   }, [cancelSyncObserver]);
 
-  const refreshStatus = useCallback(async (quiet = false): Promise<GoogleHealthConnection | null> => {
-    const requestGeneration = beginRequest();
+  const refreshStatus = useCallback(async (
+    quiet = false,
+    preserveRunningObserver = false,
+  ): Promise<GoogleHealthConnection | null> => {
+    // Passive status refreshes must not abort the background observer that
+    // pulls newly imported health entries into the app after a slow sync.
+    const requestGeneration = preserveRunningObserver
+      ? requestGenerationRef.current
+      : beginRequest();
     if (!hasLiveSession || !accountId) {
       setConnection(null);
       setOperation(null);
@@ -527,6 +534,26 @@ export function GoogleHealthWebCard() {
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      connection?.state !== "connected" ||
+      operation !== null
+    )
+      return;
+    const refreshWhenVisible = () => {
+      if (typeof document === "undefined" || document.visibilityState === "hidden")
+        return;
+      void refreshStatus(true, true);
+    };
+    const interval = setInterval(refreshWhenVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [connection?.state, operation, refreshStatus]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;
@@ -1149,7 +1176,7 @@ export function GoogleHealthWebCard() {
                 />
               </View>
             </View>
-            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>Google Health syncs automatically after connection and when new phone data arrives. Sync now checks immediately.</Text>
+            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>HabHub processes signed Google Health updates every minute. While the app is open, it requests a refresh when the last sync is at least 30 minutes old; a six-hour safety sweep catches missed updates. Sync now checks immediately.</Text>
             <View style={styles.connectionLinks}>
               <Pressable
                 accessibilityRole="button"

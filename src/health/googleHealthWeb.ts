@@ -54,6 +54,7 @@ export type GoogleHealthAction =
   | "connect"
   | "complete"
   | "sync"
+  | "refresh"
   | "disconnect"
   | "delete"
   | "updateEntry"

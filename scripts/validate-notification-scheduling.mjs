@@ -453,6 +453,8 @@ const androidNotificationServiceSource = fs.readFileSync(
 );
 const gymSource = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
 const webWorker = fs.readFileSync("public/habhub-sw.js", "utf8");
+const webManifest = fs.readFileSync("public/manifest.webmanifest", "utf8");
+const webBadge = fs.readFileSync("public/habhub-notification-badge-96.png");
 const webScheduleSource = fs.readFileSync(
   "src/notifications/webReminderSchedule.ts",
   "utf8",
@@ -564,6 +566,15 @@ assert.match(gymSource, /router\.replace\("\/gym" as never\)/);
 assert.match(webWorker, /WORKOUT_ACTIONS/);
 assert.match(webWorker, /workoutActionAt/);
 assert.match(webWorker, /self\.clients\.openWindow\(target\.href\)/);
+assert.match(webWorker, /badge: BADGE_PATH/);
+assert.match(webWorker, /habhub-notification-badge-96\.png/);
+assert.match(webManifest, /habhub-notification-badge-96\.png/);
+assert.match(webManifest, /"purpose": "monochrome"/);
+assert.equal(webBadge.subarray(1, 4).toString("ascii"), "PNG");
+assert.equal(webBadge.readUInt32BE(16), 96);
+assert.equal(webBadge.readUInt32BE(20), 96);
+assert.match(workoutTimerSource, /badge: "\/habhub-notification-badge-96\.png"/);
+assert.match(webPushSource, /badge: "\/habhub-notification-badge-96\.png"/);
 assert.match(
   workoutTimerSource,
   /consumeWorkoutTimerActions\(ownerId: string\)[\s\S]{0,1800}item\.ownerId === ownerId && item\.generation === generation/,
@@ -679,6 +690,8 @@ assert.match(layoutSource, /syncWebReminderSchedule\(cycleStateRef\.current\)/);
 assert.match(layoutSource, /webReminderScheduleKey/);
 assert.match(layoutSource, /auth\.session\?\.user\.id !== auth\.user\.id/);
 assert.match(layoutSource, /Math\.min\(5 \* 60_000, 3_000 \* 2 \*\* attempt\)/);
+assert.match(layoutSource, /const repairTimer = setInterval\(retryNow, 12 \* 60_000\)/);
+assert.match(layoutSource, /clearInterval\(repairTimer\)/);
 assert.match(layoutSource, /window\.addEventListener\("online", retryNow\)/);
 assert.match(
   layoutSource,
@@ -707,6 +720,8 @@ assert.match(webScheduleSource, /todoReminderAppliesOnDate/);
 assert.match(webScheduleSource, /activityTimerAlertCandidates/);
 assert.match(webScheduleSyncSource, /replace_own_web_notification_schedule/);
 assert.match(webScheduleSyncSource, /data\.session\?\.user\.id !== state\.currentUserId/);
+assert.match(webScheduleSyncSource, /WEB_REMINDER_SCHEDULE_REPAIR_MS/);
+assert.match(webScheduleSyncSource, /acceptedAt: Date\.now\(\)/);
 assert.match(webPushSource, /showImmediateWebNotification/);
 assert.match(source, /deliverImmediatePersonalNotification/);
 assert.doesNotMatch(

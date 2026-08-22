@@ -478,8 +478,14 @@ assert.equal(webManifest.display, "standalone");
 assert.equal(webManifest.prefer_related_applications, false);
 assert.deepEqual(
   webManifest.icons.map((icon) => icon.sizes),
-  ["192x192", "512x512"],
+  ["192x192", "512x512", "96x96"],
 );
+assert.deepEqual(webManifest.icons.at(-1), {
+  src: "/habhub-notification-badge-96.png",
+  sizes: "96x96",
+  type: "image/png",
+  purpose: "monochrome",
+});
 
 // Executable ownership fixture for the SQL conflict policy: a current owner
 // may rotate keys, while an account transfer must prove possession of both

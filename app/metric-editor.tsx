@@ -1603,6 +1603,16 @@ export default function TrackerEditor() {
     );
   }
   let deferredSubmetrics: React.ReactNode = null;
+  const saveActionLabel = tracker
+    ? "Save"
+    : bulkPresetMode
+      ? groupScope
+        ? "Add selected to group"
+        : "Add selected trackers"
+      : groupScope
+        ? "Add to group"
+        : "Add tracker";
+  const headerSaveActionLabel = tracker ? "Save" : "Add";
   return (
     <Screen
       scrollRef={scrollRef}
@@ -1625,11 +1635,21 @@ export default function TrackerEditor() {
         }
         showMenu={false}
         action={
-          <IconButton
-            icon="close"
-            label="Close"
-            onPress={() => requestClose()}
-          />
+          <View style={styles.headerActions}>
+            <Button
+              label={headerSaveActionLabel}
+              icon="checkmark"
+              size="small"
+              loading={saving}
+              disabled={saving}
+              onPress={() => void save()}
+            />
+            <IconButton
+              icon="close"
+              label="Close"
+              onPress={() => requestClose()}
+            />
+          </View>
         }
       />
       {!tracker ? (
@@ -3697,17 +3717,7 @@ export default function TrackerEditor() {
         ) : null}
         <TutorialTarget id="metric-editor-save" style={styles.grow}>
           <Button
-            label={
-              tracker
-                ? "Save"
-                : bulkPresetMode
-                  ? groupScope
-                    ? "Add selected to group"
-                    : "Add selected trackers"
-                  : groupScope
-                    ? "Add to group"
-                    : "Add tracker"
-            }
+            label={saveActionLabel}
             icon="checkmark"
             loading={saving}
             disabled={saving}
@@ -4415,6 +4425,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 16,
   },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   delete: { width: 96 },
   visualChoices: { borderTopWidth: 1, borderTopColor: "transparent" },
 });

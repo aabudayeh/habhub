@@ -28,6 +28,7 @@ type Action =
   | "connect"
   | "complete"
   | "sync"
+  | "refresh"
   | "disconnect"
   | "delete"
   | "updateEntry"
@@ -35,6 +36,7 @@ type Action =
   | "updateMetricVisibility";
 
 const AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const FOREGROUND_REFRESH_MIN_AGE_MS = 30 * 60 * 1000;
 
 function adminClient() {
   const url = Deno.env.get("SUPABASE_URL");
@@ -374,6 +376,38 @@ async function completeConnection(admin: AdminClient, userId: string, completion
   startGoogleHealthWorker();
 }
 
+async function queueForegroundRefresh(admin: AdminClient, userId: string) {
+  const status = await connectionStatus(admin, userId);
+  const lastSyncedAt = status.lastSyncedAt
+    ? Date.parse(status.lastSyncedAt)
+    : Number.NaN;
+  if (
+    status.state !== "connected" ||
+    status.syncing ||
+    (Number.isFinite(lastSyncedAt) &&
+      Date.now() - lastSyncedAt < FOREGROUND_REFRESH_MIN_AGE_MS)
+  )
+    return status;
+
+  const staleBefore = new Date(
+    Date.now() - FOREGROUND_REFRESH_MIN_AGE_MS,
+  ).toISOString();
+  const queued = await admin
+    .from("google_health_connections")
+    .update({ next_catchup_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .eq("status", "connected")
+    .not("refresh_token_ciphertext", "is", null)
+    // Recheck freshness in the write so a webhook sync that won this race is
+    // never immediately followed by an unnecessary full-account catch-up.
+    .or(`last_synced_at.is.null,last_synced_at.lte.${staleBefore}`)
+    .select("user_id")
+    .maybeSingle();
+  if (queued.error) throw queued.error;
+  if (queued.data) startGoogleHealthWorker();
+  return connectionStatus(admin, userId);
+}
+
 async function handleAction(request: Request) {
   const user = await authenticatedUser(request);
   if (!user) return jsonResponse(request, { error: "unauthorized" }, 401);
@@ -401,7 +435,7 @@ async function handleAction(request: Request) {
   }
   const action = body.action;
   if (!action || ![
-    "status", "connect", "complete", "sync", "disconnect", "delete",
+    "status", "connect", "complete", "sync", "refresh", "disconnect", "delete",
     "updateEntry", "dismissEntry", "updateMetricVisibility",
   ].includes(action))
     return jsonResponse(request, { error: "invalid_action" }, 400);
@@ -427,6 +461,10 @@ async function handleAction(request: Request) {
         sync,
       });
     }
+    if (action === "refresh")
+      return jsonResponse(request, {
+        connection: await queueForegroundRefresh(admin, user.id),
+      });
 
     if (action === "updateEntry" || action === "dismissEntry") {
       if (typeof body.entryId !== "string" || !body.entryId || body.entryId.length > 360)

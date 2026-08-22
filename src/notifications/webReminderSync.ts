@@ -5,7 +5,14 @@ import { supabase } from "@/src/lib/supabase";
 import { planWebReminderSchedule } from "@/src/notifications/webReminderSchedule";
 import type { AppState } from "@/src/types";
 
-const lastAcceptedSignature = new Map<string, string>();
+const WEB_REMINDER_SCHEDULE_REPAIR_MS = 10 * 60 * 1000;
+
+type AcceptedSchedule = {
+  acceptedAt: number;
+  signature: string;
+};
+
+const lastAcceptedSchedule = new Map<string, AcceptedSchedule>();
 
 async function syncNow(state: AppState) {
   if (Platform.OS !== "web" || !supabase) return;
@@ -13,13 +20,25 @@ async function syncNow(state: AppState) {
   if (data.session?.user.id !== state.currentUserId) return;
   const events = planWebReminderSchedule(state);
   const signature = JSON.stringify(events);
-  if (lastAcceptedSignature.get(state.currentUserId) === signature) return;
+  const prior = lastAcceptedSchedule.get(state.currentUserId);
+  if (
+    prior?.signature === signature &&
+    Date.now() - prior.acceptedAt < WEB_REMINDER_SCHEDULE_REPAIR_MS
+  )
+    return;
   const { error } = await supabase.rpc("replace_own_web_notification_schedule", {
     p_expected_user_id: state.currentUserId,
     p_events: events,
   });
   if (error) throw error;
-  lastAcceptedSignature.set(state.currentUserId, signature);
+  // A periodically renewed acknowledgement repairs rows removed by a
+  // transient backend cleanup or an interrupted rollout even when the local
+  // reminder definitions did not change. It also avoids a foreground request
+  // storm while the user moves between routes.
+  lastAcceptedSchedule.set(state.currentUserId, {
+    acceptedAt: Date.now(),
+    signature,
+  });
 }
 
 const drain = createLatestAsyncDrain<AppState>(syncNow);
@@ -38,5 +57,5 @@ export async function clearWebReminderSchedule(userId: string) {
     p_events: [],
   });
   if (error) throw error;
-  lastAcceptedSignature.delete(userId);
+  lastAcceptedSchedule.delete(userId);
 }

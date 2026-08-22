@@ -134,23 +134,23 @@ assert.equal(
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
-  { count: 27, usedLocalPhone: true, usedAndroidDevice: false },
-  "a valid Local Recording total must outrank both overlapping Health Connect candidates",
+  { count: 54, usedLocalPhone: false, usedAndroidDevice: true },
+  "the Android phone-origin aggregate must sum the live interval records instead of exposing only one 27-step slice",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_167, 2_958, 2_167),
-  { count: 2_958, usedLocalPhone: true, usedAndroidDevice: false },
-  "the real-device Physical Activity total 2,958 must replace a lagging 2,167 Health Connect aggregate",
+  reconcileCurrentDayStepTotal(2_167, 2_167, 2_958),
+  { count: 2_958, usedLocalPhone: false, usedAndroidDevice: true },
+  "the real-device com.android total 2,958 must replace lagging cross-writer and Local Recording values",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(2_887, 3_072, 2_887),
-  { count: 3_072, usedLocalPhone: true, usedAndroidDevice: false },
-  "the prior 3,072 Physical Activity fixture must no longer be rolled back to Health Connect's 2,887",
+  { count: 2_887, usedLocalPhone: false, usedAndroidDevice: true },
+  "the phone-owned 2,887 total must not be inflated by an overlapping 3,072 Local Recording candidate",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(2_167, null, 2_958),
-  { count: 2_167, usedLocalPhone: false, usedAndroidDevice: false },
-  "Health Connect remains authoritative when Physical Activity has no valid local coverage",
+  { count: 2_958, usedLocalPhone: false, usedAndroidDevice: true },
+  "the current-device origin must remain authoritative even without Local Recording coverage",
 );
 const scopedPhoneOrigin =
   "com.android.healthconnect.phone.a1b2c3d4e5f607182930";
@@ -1383,8 +1383,13 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /needsAndroidDeviceFallback\s*=\s*[\s\S]{0,160}!localPhoneSlice[\s\S]{0,100}!\(authoritativeCurrentCount > 0\)[\s\S]{0,600}currentDeviceStepOrigins/,
-  "the Health Connect on-device origin must remain a final fallback after Local Recording and the aggregate",
+  /Promise\.all\(\[[\s\S]{0,2200}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,3200}dataOriginFilter: androidDeviceOrigins/,
+  "every current-day read must discover and aggregate only Android's phone-owned origin",
+);
+assert.doesNotMatch(
+  androidHealthSource,
+  /needsAndroidDeviceFallback/,
+  "a positive but stale cross-writer total must not suppress the phone-owned live read",
 );
 assert.match(
   androidHealthSource,
@@ -1928,5 +1933,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: historical Health Connect aggregates, live Physical Activity hybrid Steps, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: historical Health Connect aggregates, phone-origin live Steps with Physical Activity fallback, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

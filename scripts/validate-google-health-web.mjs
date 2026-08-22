@@ -706,6 +706,7 @@ for (const [rawUrl, hostname, requiredText] of allowedDestinations) {
 }
 
 const client = fs.readFileSync("src/health/googleHealthWeb.ts", "utf8");
+const autoSync = fs.readFileSync("src/health/googleHealthAutoSync.ts", "utf8");
 const card = fs.readFileSync("src/components/GoogleHealthWebCard.tsx", "utf8");
 const todayDisclosure = fs.readFileSync(
   "src/components/GoogleHealthTodayDisclosure.tsx",
@@ -759,6 +760,7 @@ for (const action of [
   "connect",
   "complete",
   "sync",
+  "refresh",
   "disconnect",
   "delete",
   "updateEntry",
@@ -780,6 +782,12 @@ assert.ok(client.includes("syncing: input.syncing === true"));
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(dataType)"));
 assert.ok(client.includes("!/^[a-z0-9_-]+$/i.test(code)"));
 assert.ok(!/CLIENT_SECRET|GOOGLE_HEALTH_SECRET|EXPO_PUBLIC_GOOGLE/i.test(client));
+assert.match(autoSync, /GOOGLE_HEALTH_FOREGROUND_CHECK_INTERVAL_MS = 15 \* 60 \* 1000/);
+assert.match(autoSync, /GOOGLE_HEALTH_FOREGROUND_REFRESH_MIN_AGE_MS = 30 \* 60 \* 1000/);
+assert.match(autoSync, /invokeGoogleHealth\("refresh"\)/);
+assert.match(layout, /requestGoogleHealthForegroundRefresh\(accountId\)/);
+assert.match(layout, /document\.addEventListener\("visibilitychange", visible\)/);
+assert.match(card, /six-hour safety sweep/);
 
 const stepOne = card.indexOf("Install or open Google Health");
 const stepTwo = card.indexOf("Connect your Google account");
@@ -804,7 +812,7 @@ assert.ok(card.includes("First sync imports up to 90 days"));
 assert.ok(card.includes("heart-rate averages up to 14 days"));
 assert.ok(!card.includes("allowlist"));
 assert.ok(!card.includes("7 days"));
-assert.ok(card.includes("syncs automatically after connection"));
+assert.ok(card.includes("processes signed Google Health updates every minute"));
 assert.ok(card.includes("Importing available data automatically"));
 assert.ok(card.includes("observeRunningSync"));
 assert.ok(card.includes('invokeGoogleHealth("status")'));
