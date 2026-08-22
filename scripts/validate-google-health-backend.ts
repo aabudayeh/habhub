@@ -23,6 +23,7 @@ const [
   foodFamilyMutationMigration,
   serverSnapshotMigration,
   serverSnapshotRepairMigration,
+  durableCatchupMigration,
   endpoint,
   sync,
   api,
@@ -43,6 +44,7 @@ const [
   read("supabase/migrations/202608220002_google_health_food_family_mutations.sql"),
   read("supabase/migrations/202608220003_preserve_google_health_server_snapshot.sql"),
   read("supabase/migrations/202608220004_harden_google_health_snapshot_repair.sql"),
+  read("supabase/migrations/202608220005_google_health_durable_catchups.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1179,6 +1181,17 @@ assert.match(migration, /refresh_replacement_nonce = p_replacement_nonce/);
 assert.match(migration, /connection_generation = connection\.connection_generation \+ 1/);
 assert.match(migration, /create or replace function public\.purge_expired_google_health_oauth_states/);
 assert.match(migration, /interval '1 hour'/);
+assert.match(durableCatchupMigration, /add column if not exists next_catchup_at/);
+assert.match(durableCatchupMigration, /job_kind in \('initial', 'catchup'\)/);
+assert.match(durableCatchupMigration, /create or replace function public\.queue_google_health_initial_sync/);
+assert.match(durableCatchupMigration, /after update of status on public\.google_health_connections/);
+assert.match(durableCatchupMigration, /old\.status is distinct from 'connected'/);
+assert.match(durableCatchupMigration, /create or replace function public\.stage_due_google_health_catchup/);
+assert.match(durableCatchupMigration, /google-health-catchup-stage/);
+assert.match(durableCatchupMigration, /created_at > now\(\) - interval '1 minute'/);
+assert.match(durableCatchupMigration, /order by connection\.next_catchup_at, connection\.user_id[\s\S]*?limit 1/);
+assert.match(durableCatchupMigration, /when 'webhook' then 0[\s\S]*?when 'initial' then 1/);
+assert.match(durableCatchupMigration, /for update skip locked/);
 assert.match(endpoint, /stage_google_health_pending_grant/);
 assert.match(endpoint, /delete_google_health_connection_data/);
 assert.match(endpoint, /mutate_google_health_food_family/);
@@ -1187,6 +1200,15 @@ assert.ok(!endpoint.includes('admin.rpc("mutate_google_health_entry"'),
 assert.match(endpoint, /update_google_health_metric_visibility/);
 assert.match(endpoint, /readBoundedJson/);
 assert.match(endpoint, /manual: true/);
+assert.match(endpoint, /function startGoogleHealthWorker/);
+const completeConnectionBody = endpoint.match(
+  /async function completeConnection[\s\S]*?async function handleAction/,
+)?.[0] ?? "";
+assert.match(completeConnectionBody, /startGoogleHealthWorker\(\)/);
+assert.ok(
+  !completeConnectionBody.includes("syncGoogleHealthUser"),
+  "OAuth completion must rely on its durable initial job instead of a fire-and-forget direct sync",
+);
 assert.match(endpoint, /include_granted_scopes: "false"/);
 assert.ok(!endpoint.includes('include_granted_scopes: "true"'));
 assert.match(endpoint, /google_health_feature_disabled\|feature_disabled/);
@@ -1260,7 +1282,20 @@ assert.match(worker, /from\("google_health_runtime_config"\)/);
 assert.match(worker, /runtime\.data\?\.enabled !== true/);
 assert.match(worker, /365 \* 24 \* 60 \* 60_000/);
 assert.match(worker, /release_google_health_privacy_markers_if_clean/);
+assert.match(worker, /stage_due_google_health_catchup/);
+assert.match(worker, /catchupsStaged/);
+assert.match(worker, /event\.job_kind === "webhook"/);
+assert.match(worker, /queuedRetryTypes/);
+assert.match(worker, /connection_generation/);
+assert.match(worker, /next_catchup_at/);
+assert.match(worker, /6 \* 60 \* 60_000/);
+assert.match(worker, /payload: \{ dataTypes: retryTypes\.get\(event\.id\) \}/);
 assert.match(endpoint, /sync,\s*\n\s*\}/);
+assert.ok(
+  !sync.includes("Every Google Health data request failed"),
+  "an all-category provider failure must preserve its per-type result",
+);
+assert.match(sync, /dataTypes: \[\],[\s\S]*?errors,/);
 assert.match(signature, /publicKeys\(true\)/);
 assert.match(signature, /base64UrlEncode\(coordinates\.x\)/);
 assert.match(subscriber, /awaitOperation/);

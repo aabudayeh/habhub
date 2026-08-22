@@ -16,6 +16,8 @@ type QueueRow = {
   id: string;
   health_user_id: string;
   data_type: string;
+  job_kind?: "webhook" | "initial" | "catchup";
+  connection_generation: number | null;
   attempt_count: number;
   payload: Record<string, unknown>;
   created_at: string;
@@ -86,6 +88,21 @@ function mergeRange(
     fromDate: current.fromDate < incoming.fromDate ? current.fromDate : incoming.fromDate,
     throughDate: current.throughDate > incoming.throughDate ? current.throughDate : incoming.throughDate,
   } : incoming);
+}
+
+function queuedRetryTypes(event: QueueRow) {
+  const values = Array.isArray(event.payload?.dataTypes)
+    ? event.payload.dataTypes
+    : [];
+  return values.filter((value): value is string =>
+    typeof value === "string" && /^[a-z0-9-]{1,80}$/.test(value)
+  );
+}
+
+function isProviderNotification(event: QueueRow) {
+  // Treat an omitted discriminator as webhook for a safe rolling deployment
+  // while PostgREST refreshes the follow-up migration's added columns.
+  return !event.job_kind || event.job_kind === "webhook";
 }
 
 Deno.serve(async (request) => {
@@ -171,12 +188,19 @@ Deno.serve(async (request) => {
       privacyMarkersReleased: Number(markerCleanup.data ?? 0),
       revoked,
       revocationRetried,
+      catchupsStaged: 0,
       claimed: 0,
       completed: 0,
       retried: 0,
       dead: 0,
     });
   }
+  // The RPC enforces a global one-account-per-minute staging limit even when
+  // cron and a low-latency webhook/connection nudge overlap. A staging fault
+  // must not delay already-durable provider notifications.
+  const catchup = await admin.rpc("stage_due_google_health_catchup");
+  const catchupsStaged = catchup.error ? 0 : Number(catchup.data ?? 0);
+  if (catchup.error) console.error("Google Health catch-up staging failed");
   const { data, error } = await admin.rpc("claim_google_health_webhook_events", { p_limit: limit });
   if (error) return json({ error: "queue_unavailable" }, 503);
   const rows = (data ?? []) as QueueRow[];
@@ -189,54 +213,100 @@ Deno.serve(async (request) => {
   let dead = 0;
   for (const [healthUserId, events] of byHealthUser) {
     const { data: connection, error: connectionError } = await admin.from("google_health_connections")
-      .select("user_id,status,refresh_token_ciphertext")
+      .select("user_id,status,refresh_token_ciphertext,connection_generation")
       .eq("health_user_id", healthUserId)
       .maybeSingle();
     const failures = new Map<string, string>();
+    const retryTypes = new Map<string, string[]>();
     if (connectionError) {
       for (const event of events) failures.set(event.id, "database_unavailable");
     } else if (!connection?.user_id || connection.status === "disconnected" || !connection.refresh_token_ciphertext) {
       for (const event of events) failures.set(event.id, "connection_missing");
     } else {
-      const profile = await admin.from("profiles")
-        .select("timezone")
-        .eq("id", connection.user_id)
-        .maybeSingle();
-      if (profile.error) {
-        for (const event of events) failures.set(event.id, "database_unavailable");
-      } else try {
-        const latestAllowedDate = currentDateForProfile(new Date(), profile.data?.timezone);
-        const notifiedTypes = new Set(events.map((event) => event.data_type));
-        const ranges = new Map<string, GoogleHealthDateRange>();
-        for (const event of events) mergeRange(
-          ranges,
-          event.data_type,
-          googleHealthWebhookEventRange(event, latestAllowedDate),
-        );
-        // Active energy has no webhook type. An activity signal is the closest
-        // official trigger, so reconcile it alongside steps/exercise.
-        if (notifiedTypes.has("steps") || notifiedTypes.has("exercise")) {
-          notifiedTypes.add("active-energy-burned");
-          mergeRange(
+      const generation = Number(connection.connection_generation);
+      const providerEvents = events.filter(isProviderNotification);
+      const serverJobs = events.filter((event) =>
+        !isProviderNotification(event) && Number(event.connection_generation) === generation
+      );
+      // A reconnect invalidates an old synthetic job. Provider notifications
+      // remain valid because health_user_id is stable for the Google account.
+      const work = [...providerEvents, ...serverJobs];
+      if (work.length) {
+        const profile = await admin.from("profiles")
+          .select("timezone")
+          .eq("id", connection.user_id)
+          .maybeSingle();
+        if (profile.error) {
+          for (const event of work) failures.set(event.id, "database_unavailable");
+        } else try {
+          const latestAllowedDate = currentDateForProfile(new Date(), profile.data?.timezone);
+          const fullAccountSync = serverJobs.some((event) => queuedRetryTypes(event).length === 0);
+          const notifiedTypes = fullAccountSync
+            ? undefined
+            : new Set([
+              ...providerEvents.map((event) => event.data_type),
+              ...serverJobs.flatMap(queuedRetryTypes),
+            ]);
+          const ranges = new Map<string, GoogleHealthDateRange>();
+          for (const event of providerEvents) mergeRange(
             ranges,
-            "active-energy-burned",
-            ranges.get("steps") ?? ranges.get("exercise"),
+            event.data_type,
+            googleHealthWebhookEventRange(event, latestAllowedDate),
           );
+          // Active energy has no webhook type. An activity signal is the
+          // closest official trigger, so reconcile it alongside that event.
+          const webhookHasActivity = providerEvents.some((event) =>
+            event.data_type === "steps" || event.data_type === "exercise"
+          );
+          if (webhookHasActivity) {
+            notifiedTypes?.add("active-energy-burned");
+            mergeRange(
+              ranges,
+              "active-energy-burned",
+              ranges.get("steps") ?? ranges.get("exercise"),
+            );
+          }
+          const result = await syncGoogleHealthUser(
+            admin,
+            connection.user_id,
+            notifiedTypes,
+            ranges.size ? { ranges } : undefined,
+          );
+          const errorsByType = new Map(result.errors.map((item) => [item.dataType, item.code]));
+          const activeEnergyError = errorsByType.get("active-energy-burned");
+          for (const event of providerEvents) {
+            const typeError = errorsByType.get(event.data_type) ??
+              ((event.data_type === "steps" || event.data_type === "exercise")
+                ? activeEnergyError
+                : undefined);
+            if (typeError) failures.set(event.id, typeError);
+          }
+          for (const event of serverJobs) {
+            if (!result.errors.length) continue;
+            failures.set(event.id, result.errors[0].code);
+            retryTypes.set(event.id, result.errors.map((item) => item.dataType));
+          }
+          if (serverJobs.length && serverJobs.every((event) => !failures.has(event.id))) {
+            const scheduled = await admin.from("google_health_connections").update({
+              next_catchup_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString(),
+            })
+              .eq("user_id", connection.user_id)
+              .eq("status", "connected")
+              .eq("connection_generation", generation)
+              .select("user_id")
+              .maybeSingle();
+            if (scheduled.error || !scheduled.data) {
+              for (const event of serverJobs)
+                failures.set(event.id, scheduled.error ? "database_unavailable" : "connection_missing");
+            }
+          }
+        } catch (error) {
+          const failure = safeWorkerError(error);
+          for (const event of work) failures.set(event.id, failure);
         }
-        const result = await syncGoogleHealthUser(admin, connection.user_id, notifiedTypes, { ranges });
-        const errorsByType = new Map(result.errors.map((item) => [item.dataType, item.code]));
-        const activeEnergyError = errorsByType.get("active-energy-burned");
-        for (const event of events) {
-          const typeError = errorsByType.get(event.data_type) ??
-            ((event.data_type === "steps" || event.data_type === "exercise")
-              ? activeEnergyError
-              : undefined);
-          if (typeError) failures.set(event.id, typeError);
-        }
-      } catch (error) {
-        const failure = safeWorkerError(error);
-        for (const event of events) failures.set(event.id, failure);
       }
+      // Synthetic jobs from an older connection generation are intentionally
+      // absent from `work`; they have no work and are acknowledged below.
     }
     const completedIds = events.filter((event) => !failures.has(event.id)).map((event) => event.id);
     if (completedIds.length) {
@@ -262,7 +332,13 @@ Deno.serve(async (request) => {
         available_at: new Date(Date.now() + delayMinutes * 60_000).toISOString(),
         completed_at: terminal ? new Date().toISOString() : null,
         last_error: failure,
-        ...(terminal ? { payload: {} } : {}),
+        ...(terminal
+          ? { payload: {} }
+          : isProviderNotification(event)
+            ? {}
+            : retryTypes.has(event.id)
+              ? { payload: { dataTypes: retryTypes.get(event.id) } }
+              : {}),
       }).eq("id", event.id);
       if (result.error) console.error("Google Health retry state failed");
       else if (terminal) dead += 1;
@@ -284,6 +360,7 @@ Deno.serve(async (request) => {
     privacyMarkersReleased: Number(markerCleanup.data ?? 0),
     revoked,
     revocationRetried,
+    catchupsStaged,
     claimed: rows.length,
     completed,
     retried,

@@ -238,7 +238,7 @@ order by start_time desc
 limit 10;
 ```
 
-The queue is not client-driven: cron reclaims stale leases, drains pending webhook events and token revocations, and removes consumed/expired OAuth state after its one-hour audit window every minute. Revocation retries continue indefinitely with a capped 24-hour backoff.
+The queue is not client-driven: cron reclaims stale leases, drains pending webhook events and token revocations, and removes consumed/expired OAuth state after its one-hour audit window every minute. OAuth completion atomically queues the first import before returning. Each worker tick may also stage at most one due connected account for a roughly six-hour safety sweep; webhook notifications always claim first. This catches missed notifications and provider-side grant changes without creating a polling burst for the 100-account pilot. Revocation retries continue indefinitely with a capped 24-hour backoff.
 
 An abandoned/denied OAuth attempt sets the compatibility marker before the
 browser redirect. The worker releases that marker only after the one-hour
@@ -291,7 +291,7 @@ weight
 
 Do not add `active-energy-burned`; it is not in the official webhook-supported list. Steps/exercise notifications also reconcile active energy, and a failure in that dependent fetch keeps the source event retryable.
 
-Manual sync is deployable before subscriber registration, but the AUTOMATIC subscriber is a release gate. After the first sync, ordinary manual/periodic reconciliation uses a two-day overlap; without signed notification intervals, older provider edits and deletions are not guaranteed to be observed.
+Manual sync is deployable before subscriber registration, but the AUTOMATIC subscriber is a release gate. After the first sync, ordinary manual/periodic reconciliation uses a two-day overlap; without signed notification intervals, older provider edits and deletions are not guaranteed to be observed. The periodic sweep is a recovery net, not a replacement for the signed webhook range.
 
 ## Acceptance tests
 

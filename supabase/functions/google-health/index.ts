@@ -45,6 +45,24 @@ function adminClient() {
   });
 }
 
+function startGoogleHealthWorker() {
+  const url = Deno.env.get("SUPABASE_URL")?.replace(/\/$/, "");
+  const secret = Deno.env.get("GOOGLE_HEALTH_WORKER_SECRET")?.trim();
+  if (!url || !secret) return;
+  const work = fetch(`${url}/functions/v1/google-health-worker`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ limit: 10 }),
+  }).then((response) => response.body?.cancel()).catch(() => undefined);
+  const edgeRuntime = (globalThis as unknown as {
+    EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void };
+  }).EdgeRuntime;
+  if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(work);
+}
+
 async function authenticatedUser(request: Request) {
   const url = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
@@ -350,13 +368,10 @@ async function completeConnection(admin: AdminClient, userId: string, completion
   });
   if (bound.error) throw bound.error;
   if (bound.data !== true) throw new Error("invalid_completion");
-  const background = syncGoogleHealthUser(admin, userId).catch((error) => {
-    console.error("Initial Google Health sync failed", safeFailureReason(error));
-  });
-  const edgeRuntime = (globalThis as unknown as {
-    EdgeRuntime?: { waitUntil: (promise: Promise<unknown>) => void };
-  }).EdgeRuntime;
-  if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(background);
+  // The pending -> connected transaction atomically inserted an initial job.
+  // This nudge keeps first import low latency, while pg_cron and the durable
+  // queue remain the retry authority if this request or worker is interrupted.
+  startGoogleHealthWorker();
 }
 
 async function handleAction(request: Request) {

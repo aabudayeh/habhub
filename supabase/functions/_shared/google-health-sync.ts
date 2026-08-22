@@ -1066,7 +1066,17 @@ async function performGoogleHealthSync(
     });
     if (finished.error || finished.data !== true)
       throw finished.error ?? new Error("google_health_sync_cancelled");
-    throw new Error("Every Google Health data request failed");
+    // A completed provider attempt with per-type failures is still a valid,
+    // actionable sync result. Returning the bounded error catalog lets manual
+    // clients explain which categories failed and lets durable background jobs
+    // retry only those categories instead of collapsing everything into a
+    // generic transport error.
+    return {
+      imported: 0,
+      deleted: 0,
+      dataTypes: [],
+      errors,
+    };
   }
 
   const replacements = successful.map((item) => ({
