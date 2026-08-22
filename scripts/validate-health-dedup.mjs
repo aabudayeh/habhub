@@ -993,6 +993,71 @@ assert.equal(
   27,
   "a positive native cloud correction must be accepted even when the local canonical total is higher",
 );
+const staleCloudCurrentDaySteps = mergeLocalCurrentDayDeviceStepEntries(
+  [
+    {
+      ...stableAggregate,
+      source: "imported",
+      sourceOrigin: "Health Connect",
+      sourceUpdatedAt: "2026-08-13T08:00:00.000Z",
+      value: 27,
+    },
+  ],
+  [
+    {
+      ...stableAggregate,
+      source: "imported",
+      sourceOrigin: "Health Connect",
+      sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+      value: 54,
+    },
+  ],
+  {
+    userId: "owner",
+    currentLocalDate: "2026-08-13",
+    stepMetricIds: new Set(["steps"]),
+  },
+);
+assert.equal(
+  staleCloudCurrentDaySteps[0]?.value,
+  54,
+  "reopening the app must not replace a newer phone aggregate with a stale positive cloud row",
+);
+assert.equal(
+  staleCloudCurrentDaySteps[0]?.sourceUpdatedAt,
+  "2026-08-13T08:05:00.000Z",
+  "retaining the phone aggregate must also retain its revision for the next cloud merge",
+);
+const newerCloudCurrentDayCorrection = mergeLocalCurrentDayDeviceStepEntries(
+  [
+    {
+      ...stableAggregate,
+      source: "imported",
+      sourceOrigin: "Health Connect",
+      sourceUpdatedAt: "2026-08-13T08:10:00.000Z",
+      value: 27,
+    },
+  ],
+  [
+    {
+      ...stableAggregate,
+      source: "imported",
+      sourceOrigin: "Health Connect",
+      sourceUpdatedAt: "2026-08-13T08:05:00.000Z",
+      value: 54,
+    },
+  ],
+  {
+    userId: "owner",
+    currentLocalDate: "2026-08-13",
+    stepMetricIds: new Set(["steps"]),
+  },
+);
+assert.equal(
+  newerCloudCurrentDayCorrection[0]?.value,
+  27,
+  "a newer positive cloud revision must still be allowed to correct today's total downward",
+);
 const nativeAndGoogleSameAccountSteps = mergeLocalCurrentDayDeviceStepEntries(
   [
     {
@@ -1783,7 +1848,7 @@ assert.match(
 assert.match(
   appProviderSource,
   /preserveDeviceHealthEntries[\s\S]{0,700}mergeLocalCurrentDayDeviceStepEntries\([\s\S]{0,500}metricIdsForHealthDataTypes\([\s\S]{0,100}\["steps"\]/,
-  "every cloud hydrate path must preserve native current-day Steps when no positive native cloud total exists",
+  "every cloud hydrate path must preserve newer native current-day Steps from stale cloud snapshots",
 );
 assert.match(
   appProviderSource,

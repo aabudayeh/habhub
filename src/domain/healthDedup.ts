@@ -415,11 +415,12 @@ export function resolveCurrentDeviceStepOrigins(
 }
 
 /**
- * A clean cloud snapshot that has no positive native canonical total must not
- * erase the locally confirmed current-day Health Connect total. Conversely, a
- * positive native canonical row from the server is allowed to replace a
- * higher local value: it may carry an authoritative source-priority or
- * deletion correction. Google web totals never displace the phone-native row.
+ * A clean cloud snapshot must not erase a newer locally confirmed current-day
+ * Health Connect total. A positive server row may still apply a source-priority
+ * or deletion correction when its Health Connect revision is at least as new
+ * as the phone row. Legacy local interval rows have no canonical revision and
+ * therefore still converge to any positive server canonical row. Google web
+ * totals never displace the phone-native row.
  */
 export function mergeLocalCurrentDayDeviceStepEntries<
   TEntry extends ImportedDailyAggregate & { id?: unknown },
@@ -460,6 +461,11 @@ export function mergeLocalCurrentDayDeviceStepEntries<
   for (const [metricId, localEntriesForMetric] of localByMetric) {
     const local = displayedImportedStepCandidate(localEntriesForMetric);
     if (!local?.total) continue;
+    const localCanonical = selectCanonicalHealthConnectStepAggregate(
+      localEntriesForMetric.filter(
+        (entry) => entry.sourceProvider === "health_connect",
+      ),
+    );
     const remoteEntriesForMetric = remoteEntries.filter(
       (entry) =>
         entry.userId === options.userId &&
@@ -478,7 +484,20 @@ export function mergeLocalCurrentDayDeviceStepEntries<
       Boolean(remoteCanonical) &&
       Number.isFinite(remoteCanonicalValue) &&
       remoteCanonicalValue > 0;
-    if (!hasPositiveRemoteNativeCanonical)
+    const localRevision = Date.parse(
+      String(localCanonical?.sourceUpdatedAt ?? localCanonical?.recordedAt ?? ""),
+    );
+    const remoteRevision = Date.parse(
+      String(remoteCanonical?.sourceUpdatedAt ?? remoteCanonical?.recordedAt ?? ""),
+    );
+    const remoteCanonicalIsStale =
+      hasPositiveRemoteNativeCanonical &&
+      Boolean(localCanonical) &&
+      Number(localCanonical?.value) > 0 &&
+      Number.isFinite(localRevision) &&
+      Number.isFinite(remoteRevision) &&
+      remoteRevision < localRevision;
+    if (!hasPositiveRemoteNativeCanonical || remoteCanonicalIsStale)
       preserved.set(metricId, { local, remote: remoteCanonical });
   }
   if (!preserved.size) return remoteEntries;

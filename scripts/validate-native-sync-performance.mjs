@@ -220,7 +220,7 @@ assert.equal(
 );
 assert.ok(
   (cloudProvider.match(/mergeLocalCurrentDayDeviceStepEntries\(/g)?.length ?? 0) >= 2,
-  "clean and dirty cloud snapshot merges must preserve the higher confirmed current-day Steps total",
+  "clean and dirty cloud snapshot merges must preserve a newer phone-confirmed current-day Steps revision",
 );
 assert.equal(
   advanceAuthoritativeStateFromRender(cloudB, renderedA, cloudB),
