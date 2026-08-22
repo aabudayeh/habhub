@@ -53,6 +53,7 @@ app-example
 /work/
 /tmp/
 /outputs/
+/.eas-inspect/
 
 # Local editor metadata
 /.idea/
