@@ -12,6 +12,9 @@
     },
     "preview": {
       "node": "22.13.0",
+      "android": {
+        "image": "latest"
+      },
       "autoIncrement": true,
       "distribution": "internal",
       "environment": "preview",
