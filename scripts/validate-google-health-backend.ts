@@ -912,6 +912,9 @@ assert.match(foodFamilyMutationBody, /v_family_count > 128/);
 assert.match(foodFamilyMutationBody, /case when owned\.entry ->> 'metricId' = 'food' then 1 else 0 end as parent_order/);
 assert.match(foodFamilyMutationBody, /v_parent_count <> 1/);
 assert.match(foodFamilyMutationBody, /coalesce\(owned\.entry ->> 'sourceProvider', ''\) <> 'google_health'/);
+assert.match(foodFamilyMutationBody, /google_health_food_sidecar_managed_by_parent/);
+assert.match(foodFamilyMutationBody,
+  /parent\.external_id = v_target\.external_id[\s\S]*parent\.entry ->> 'metricId' = 'food'/);
 assert.match(foodFamilyMutationBody, /foreach v_entry_id in array v_family_ids loop[\s\S]*'dismiss'/);
 assert.match(foodFamilyMutationBody, /public\.mutate_google_health_entry\([\s\S]*p_entry_id,[\s\S]*'update'/);
 assert.match(foodFamilyMutationBody, /if not \(coalesce\(p_patch, '\{\}'::jsonb\) \? 'recordedAtOverride'\)/);

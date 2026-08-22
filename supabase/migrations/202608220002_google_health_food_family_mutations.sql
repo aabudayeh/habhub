@@ -107,8 +107,21 @@ begin
     raise exception 'google_health_entry_not_found' using errcode = 'P0002';
   end if;
 
-  -- Non-Food entries retain the existing single-entry semantics.
+  -- Nutrient sidecars are projections of their Food parent and must never be
+  -- independently mutated, even by a forged or legacy client request.  The
+  -- UI routes those actions through Food; enforcing the same boundary here
+  -- prevents a single sidecar from being durably dismissed while its meal
+  -- remains visible.  Ordinary non-Food imports retain single-entry semantics.
   if coalesce(v_target.entry ->> 'metricId', '') <> 'food' then
+    if exists (
+      select 1
+        from public.google_health_import_records parent
+       where parent.user_id = p_user_id
+         and parent.external_id = v_target.external_id
+         and parent.entry ->> 'metricId' = 'food'
+    ) then
+      raise exception 'google_health_food_sidecar_managed_by_parent' using errcode = '55000';
+    end if;
     v_result := public.mutate_google_health_entry(
       p_user_id,
       p_entry_id,
