@@ -152,7 +152,14 @@ export type CivilTime = {
 function civilDate(date: string): CivilDate {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
   if (!match) throw new Error("Invalid civil date");
-  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  const value = { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+  const normalized = new Date(Date.UTC(value.year, value.month - 1, value.day));
+  if (
+    normalized.getUTCFullYear() !== value.year ||
+    normalized.getUTCMonth() + 1 !== value.month ||
+    normalized.getUTCDate() !== value.day
+  ) throw new Error("Invalid civil date");
+  return value;
 }
 
 function civilMidnight(date: string) {
@@ -169,16 +176,26 @@ function dailyRollUpRequestBody(
   fromDate: string,
   throughDateExclusive: string,
 ) {
+  const start = civilMidnight(fromDate);
+  const end = civilMidnight(throughDateExclusive);
+  const rangeDays = Math.round((
+    Date.UTC(end.date.year, end.date.month - 1, end.date.day) -
+    Date.UTC(start.date.year, start.date.month - 1, start.date.day)
+  ) / 86_400_000);
+  if (rangeDays < 1) throw new Error("Invalid civil date range");
   return {
     range: {
-      // Google Health's CivilDateTime schema requires a complete CivilTime.
-      // An empty object is not interpreted as midnight and makes every daily
-      // rollup request fail before Steps/energy/heart-rate can be returned.
-      start: civilMidnight(fromDate),
-      end: civilMidnight(throughDateExclusive),
+      // Keep midnight explicit even though Google's CivilTime is optional.
+      start,
+      end,
     },
     windowSizeDays: 1,
-    pageSize: 100,
+    // Google's API validates windowSizeDays * pageSize against the data type's
+    // maximum query duration (90 days normally, 14 for heart-rate). Requesting
+    // 100 pages made every HabHub daily rollup fail before data was returned.
+    // The caller already chunks each range to its provider maximum; asking for
+    // exactly one result per requested civil day is both sufficient and valid.
+    pageSize: rangeDays,
     dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
   };
 }

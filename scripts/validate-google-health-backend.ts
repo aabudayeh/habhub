@@ -5,6 +5,10 @@ import {
   encryptSecret,
 } from "../supabase/functions/_shared/google-health-crypto.ts";
 import { googleHealthApiTestHooks } from "../supabase/functions/_shared/google-health-api.ts";
+import {
+  googleError,
+  googleHealthProviderErrorCode,
+} from "../supabase/functions/_shared/google-health-http.ts";
 import { googleHealthSyncTestHooks } from "../supabase/functions/_shared/google-health-sync.ts";
 import { readBoundedJson } from "../supabase/functions/_shared/google-health-request.ts";
 import {
@@ -98,14 +102,58 @@ assert.deepEqual(
       },
     },
     windowSizeDays: 1,
-    pageSize: 100,
+    pageSize: 2,
     dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
   },
-  "daily rollups must send Google's complete midnight CivilDateTime shape",
+  "daily rollups must send explicit midnight and one page per requested civil day",
 );
 assert.throws(
   () => googleHealthApiTestHooks.dailyRollUpRequestBody("2026-8-21", "2026-08-23"),
   /Invalid civil date/,
+);
+assert.equal(
+  googleHealthApiTestHooks.dailyRollUpRequestBody("2026-05-24", "2026-08-22").pageSize,
+  90,
+  "a maximum steps range must not exceed Google's 90-day rollup page budget",
+);
+assert.equal(
+  googleHealthApiTestHooks.dailyRollUpRequestBody("2026-08-08", "2026-08-22").pageSize,
+  14,
+  "a maximum heart-rate range must not exceed Google's 14-day rollup page budget",
+);
+assert.throws(
+  () => googleHealthApiTestHooks.dailyRollUpRequestBody("2026-08-23", "2026-08-22"),
+  /Invalid civil date range/,
+);
+
+const catalogError = await googleError(new Response(JSON.stringify({
+  error: {
+    code: 400,
+    status: "INVALID_ARGUMENT",
+    message: "The duration covered by window_size_days * page_size must not exceed 90 days for steps.",
+    details: [{
+      "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+      reason: "INVALID_ROLLUP_QUERY_DURATION",
+      domain: "health.googleapis.com",
+    }],
+  },
+}), { status: 400 }));
+assert.equal(
+  googleHealthProviderErrorCode(catalogError),
+  "invalid_rollup_query_duration",
+  "the exact Google catalog reason must survive as a bounded diagnostic code",
+);
+const messageOnlyCatalogError = await googleError(new Response(JSON.stringify({
+  error: {
+    code: 400,
+    status: "INVALID_ARGUMENT",
+    message: "The duration covered by window_size_days * page_size must not exceed 14 days for heart-rate.",
+  },
+}), { status: 400 }));
+assert.equal(
+  googleHealthProviderErrorCode(messageOnlyCatalogError),
+  "invalid_rollup_query_duration",
+  "known catalog descriptions must remain diagnostic when ErrorInfo is omitted",
 );
 
 const sourceRecord = {

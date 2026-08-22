@@ -7,6 +7,7 @@ import {
 } from "./google-health-api.ts";
 import { googleHealthConfig } from "./google-health-config.ts";
 import { decryptSecret, encryptSecret, sha256Hex } from "./google-health-crypto.ts";
+import { googleHealthProviderErrorCode } from "./google-health-http.ts";
 
 type JsonObject = Record<string, unknown>;
 type Metric = JsonObject & {
@@ -686,9 +687,15 @@ function preferNativeStepOwner(
 function errorCode(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   if (/invalid_grant|revoked|expired/i.test(message)) return "reauthorization_required";
-  if (/403|permission|scope/i.test(message)) return "scope_denied";
+  const providerCode = googleHealthProviderErrorCode(error);
+  if (providerCode === "missing_oauth_scope" || /403|permission|scope/i.test(message))
+    return "scope_denied";
   if (/429|quota/i.test(message)) return "rate_limited";
   if (/abort|timeout/i.test(message)) return "timeout";
+  // Google catalog reasons are bounded identifiers. Persisting the reason (not
+  // the arbitrary provider message) makes service-only cursor state diagnostic
+  // while remaining safe to return through the existing status endpoint.
+  if (providerCode) return providerCode;
   return "provider_error";
 }
 
