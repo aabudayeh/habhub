@@ -2437,5 +2437,16 @@
   "Fats": "الدهون",
   "Other nutrients": "عناصر غذائية أخرى",
   "Minerals": "المعادن",
-  "Vitamins": "الفيتامينات"
+  "Vitamins": "الفيتامينات",
+  "Carbohydrates & sugars": "الكربوهيدرات والسكريات",
+  "Sugars, sugar alcohols and starch": "السكريات والكحولات السكرية والنشا",
+  "Fats & fatty acids": "الدهون والأحماض الدهنية",
+  "Saturated, trans, mono, poly and omegas": "الدهون المشبعة والمتحولة والأحادية والمتعددة وأوميغا",
+  "Minerals & electrolytes": "المعادن والشوارد",
+  "Sodium, potassium, calcium and trace minerals": "الصوديوم والبوتاسيوم والكالسيوم والمعادن النزرة",
+  "A, B, C, D, E, K and related forms": "A وB وC وD وE وK والأشكال المرتبطة بها",
+  "Cholesterol, alcohol and caffeine": "الكوليسترول والكحول والكافيين",
+  "Managed from Food": "تُدار من الطعام",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "تنتمي هذه المادة الغذائية إلى سجل طعام مرتبط. افتح الطعام لإدارة الوجبة أو حذفها دون جعل إجماليات العناصر الغذائية غير متزامنة.",
+  "Open Food": "فتح الطعام"
 }

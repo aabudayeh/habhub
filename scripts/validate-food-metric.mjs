@@ -3,11 +3,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  capturedFoodNutrients,
   editFoodEntryClockTime,
   FOOD_MACROS,
   FOOD_NUTRIENTS,
   foodNutritionReport,
   hasFoodNutrientTracker,
+  isFoodNutrientTrackerId,
   nextFoodNutrientTrackerOrder,
   parsePositiveFoodNutrientAmount,
   preserveFoodEntryClockOverride,
@@ -285,10 +287,25 @@ assert.equal(
   "mg",
 );
 assert.equal(FOOD_NUTRIENTS.length, 44, "every normalized food nutrient is registered");
+assert.equal(isFoodNutrientTrackerId("vitamin_k"), true);
+assert.equal(isFoodNutrientTrackerId("food"), false);
 assert.equal(FOOD_MACROS.length, 3);
 assert.equal(parsePositiveFoodNutrientAmount("1,5"), 1.5);
 assert.equal(parsePositiveFoodNutrientAmount("0"), undefined);
 assert.equal(parsePositiveFoodNutrientAmount("not-a-number"), undefined);
+assert.deepEqual(
+  capturedFoodNutrients({
+    proteinG: 30,
+    fiberG: 8,
+    sodiumMg: 0,
+    vitaminKMcg: 90,
+  }),
+  [
+    { metricId: "protein", value: 30 },
+    { metricId: "fiber", value: 8 },
+    { metricId: "vitamin_k", value: 90 },
+  ],
+);
 const germanCommaReport = foodNutritionReport({
   entries: [
     {
@@ -457,6 +474,26 @@ assert.equal(
 assert.equal(noFoodUnknownSidecar?.nutrition, undefined);
 assert.equal(noFoodUnknownSidecar?.label, undefined);
 assert.equal(noFoodUnknownSidecar?.note, undefined);
+const unconfiguredVitaminSidecar = mapHealthRecordsToEntries(
+  [privateNutritionRecord],
+  "user-a",
+  { food: "private" },
+  [
+    {
+      id: "food",
+      dataType: "number",
+      unit: "kcal",
+      healthMapping: { dataType: "nutrition", field: "value" },
+    },
+  ],
+).find((entry) => entry.metricId === "vitamin_k");
+assert.ok(
+  unconfiguredVitaminSidecar,
+  "provider nutrients must retain history before their tracker is explicitly added",
+);
+assert.equal(unconfiguredVitaminSidecar.visibility, "private");
+assert.equal(unconfiguredVitaminSidecar.nutrition, undefined);
+assert.equal(unconfiguredVitaminSidecar.label, undefined);
 
 const migrationSettings = { sentinel: "preserve-settings" };
 const existingFood = {
@@ -604,6 +641,7 @@ assert.equal(allTime.macroSlices.find((slice) => slice.id === "fat")?.value, 58)
 
 const detail = read("app/metric-detail.tsx");
 const logScreen = read("app/(tabs)/log.tsx");
+const todayScreen = read("app/(tabs)/index.tsx");
 const foodSearchSource = read("src/food/openFoodFacts.ts");
 const provider = read("src/state/AppProvider.tsx");
 const selectionMenu = read("src/components/SelectionMenu.tsx");
@@ -629,24 +667,17 @@ assert.match(detail, /onPress=\{\(\) => openNutrient\(nutrient\.id\)\}/);
 assert.match(detail, /accessibilityLabel=\{`\$\{bucket\.label\}, \$\{nutrient\.label\}/);
 assert.match(detail, /displayNutrientUnit[\s\S]{0,100}µg/);
 assert.match(detail, /Average on days each nutrient was recorded/);
-assert.match(detail, /const chartWidth = Math\.max/);
-assert.match(detail, /horizontal[\s\S]{0,180}contentContainerStyle=\{\{ width: chartWidth \}\}/);
-assert.match(
-  detail,
-  /const barTouchWidth = 24;[\s\S]{0,300}nutrients\.length \* barTouchWidth/,
-  "individual nutrient bars must have distinct non-overlapping touch lanes",
-);
-assert.match(
-  detail,
-  /style=\{\[[\s\S]{0,100}styles\.foodMacroBarTarget,[\s\S]{0,100}\{ width: barTouchWidth \}/,
-  "each nutrient action must own exactly one explicit-width lane",
-);
+assert.match(detail, /style=\{styles\.foodMacroChartViewport\}/);
+assert.match(detail, /foodMacroBarSlot: \{[\s\S]{0,80}flex: 1,[\s\S]{0,80}minWidth: 0/);
+assert.match(detail, /foodMacroBarTarget: \{[\s\S]{0,80}flex: 1,[\s\S]{0,80}minWidth: 0/);
 assert.doesNotMatch(
   detail,
-  /accessibilityLabel=\{`\$\{bucket\.label\}, \$\{nutrient\.label\}[\s\S]{0,300}hitSlop=/,
-  "adjacent chart bars must not use overlapping horizontal hit slop",
+  /<ScrollView\s+horizontal[\s\S]{0,200}accessibilityLabel="Nutrient history chart"/,
+  "the individual nutrition chart must fit the card without horizontal scrolling",
 );
 assert.match(detail, /foodMacroBarGoalTick/);
+assert.match(detail, /foodMacroGoalTick,[\s\S]{0,120}backgroundColor: palette\.amber/);
+assert.match(detail, /borderTopColor: palette\.amber/);
 assert.match(detail, /Goal bars show percent of goal; no-goal bars show percent of range maximum/);
 assert.doesNotMatch(detail, /styles\.foodMacroGoalLine/);
 assert.match(
@@ -655,21 +686,51 @@ assert.match(
 );
 assert.ok(
   [...logScreen.matchAll(/const amount = parsePositiveFoodNutrientAmount\(raw\)/g)]
-    .length >= 2,
-  "supplemental parent fields and linked sidecars must share comma-decimal parsing",
+    .length >= 1,
+  "supplemental parent fields must use locale-tolerant positive parsing",
 );
 assert.match(
-  logScreen,
-  /if \(!hasFoodNutrientTracker\(state\.metrics, metricId\)\) return;[\s\S]{0,220}logMetric\(metricId/,
-  "manual Food must not create sidecars for deleted nutrient trackers",
+  provider,
+  /const nutrientSidecars: MetricEntry\[\] = capturedFoodNutrients\([\s\S]{0,1600}primaryEntry,[\s\S]{0,120}\.\.\.nutrientSidecars/,
+  "manual Food must atomically emit every positive nutrient sidecar",
 );
+assert.match(
+  provider,
+  /const directEntriesToReplace[\s\S]{0,1000}action\.metricId === "food"[\s\S]{0,500}entriesShareSourceRecord\(foodEntry, entry\)/,
+  "replacing a Food row must also tombstone its source-linked nutrient sidecars",
+);
+assert.match(
+  provider,
+  /case "deleteEntry"[\s\S]{0,900}isFoodNutrientTrackerId\(target\.metricId\)[\s\S]{0,500}if \(linkedFoodParent\) return state/,
+  "a linked nutrient sidecar cannot be deleted independently of its Food parent",
+);
+assert.doesNotMatch(
+  logScreen,
+  /hasFoodNutrientTracker/,
+  "manual nutrient history must be emitted by the atomic Food reducer path",
+);
+assert.match(logScreen, /const EXTRA_NUTRITION_GROUPS = \[[\s\S]{0,1200}Minerals & electrolytes[\s\S]{0,500}Vitamins/);
+assert.match(logScreen, /openNutritionGroups\.includes\(group\.id\)/);
+assert.match(logScreen, /nutritionText: \{[\s\S]{0,80}minWidth: 0/);
+assert.match(logScreen, /nutritionUnit: \{[\s\S]{0,80}flexShrink: 0/);
 assert.match(
   detail,
-  /if \(!hasFoodNutrientTracker\(state\.metrics, id\)\)[\s\S]{0,900}trackerPresets\(state, true\)[\s\S]{0,900}addMetric\([\s\S]{0,900}nextFoodNutrientTrackerOrder\(state\.metrics\)[\s\S]{0,900}pathname: "\/metric-detail"/,
+  /if \(!hasFoodNutrientTracker\(state\.metrics, id\)\)[\s\S]{0,900}trackerPresets\(state, true\)[\s\S]{0,900}addMetric\([\s\S]{0,900}sections: \{ today: false, group: false, insights: false \}[\s\S]{0,900}pathname: "\/metric-detail"/,
   "an explicit visual click restores a missing built-in nutrient before routing",
 );
 assert.match(detail, /strokeDasharray=/);
-assert.match(detail, /borderStyle: "dashed"/);
+assert.doesNotMatch(detail, /foodMacroBarGoalTick: \{[\s\S]{0,180}borderStyle: "dashed"/);
+assert.match(
+  detail,
+  /\["week", "month", "year", "overall"\]\.includes\([\s\S]{0,120}setCollapsedEntryDates/,
+  "entry groups default collapsed only for the four date-range views",
+);
+assert.match(
+  detail,
+  /function promptEntryRemoval[\s\S]{0,1400}"Managed from Food"[\s\S]{0,800}metric: "food"/,
+  "linked nutrient deletion must route to the canonical Food entry",
+);
+assert.match(todayScreen, /!isFoodNutrientTrackerId\(metric\.id\)[\s\S]{0,120}!metric\.sections\.today/);
 const types = read("src/types.ts");
 const seed = read("src/data/seed.ts");
 assert.match(types, /foodNutrientIds\?: string\[\]/);
@@ -682,7 +743,7 @@ assert.match(selectionMenu, /accessibilityState=\{\{ checked \}\}/);
 assert.match(selectionMenu, /minimumSelected === 0 \? \(/);
 assert.match(selectionMenu, /accessibilityRole="button"[\s\S]{0,120}setOpen\(false\)/);
 assert.match(detail, /title="Shown nutrients"[\s\S]{0,1600}minimumSelected=\{1\}/);
-assert.match(provider, /case "updateFoodEntryTime"[\s\S]{0,1200}reconcileAutomaticFasting/);
+assert.match(provider, /case "updateFoodEntryTime"[\s\S]{0,2400}reconcileAutomaticFasting/);
 assert.match(provider, /preserveFoodEntryClockOverride/);
 
 console.log("Food metric validation passed.");

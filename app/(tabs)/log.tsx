@@ -28,7 +28,6 @@ import {
 import { dateKey } from "@/src/domain/date";
 import {
   FOOD_NUTRIENTS,
-  hasFoodNutrientTracker,
   parsePositiveFoodNutrientAmount,
 } from "@/src/domain/food";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
@@ -70,6 +69,36 @@ const EXISTING_FOOD_NUTRITION_KEYS = new Set<keyof NutritionDetails>([
 const SUPPLEMENTAL_FOOD_NUTRIENTS = FOOD_NUTRIENTS.filter(
   (nutrient) => !EXISTING_FOOD_NUTRITION_KEYS.has(nutrient.nutritionKey),
 );
+
+const EXTRA_NUTRITION_GROUPS = [
+  {
+    id: "Carbohydrates",
+    label: "Carbohydrates & sugars",
+    hint: "Sugars, sugar alcohols and starch",
+  },
+  {
+    id: "Fats",
+    label: "Fats & fatty acids",
+    hint: "Saturated, trans, mono, poly and omegas",
+  },
+  {
+    id: "Minerals",
+    label: "Minerals & electrolytes",
+    hint: "Sodium, potassium, calcium and trace minerals",
+  },
+  {
+    id: "Vitamins",
+    label: "Vitamins",
+    hint: "A, B, C, D, E, K and related forms",
+  },
+  {
+    id: "Other nutrients",
+    label: "Other nutrients",
+    hint: "Cholesterol, alcohol and caffeine",
+  },
+] as const;
+
+type ExtraNutritionGroupId = (typeof EXTRA_NUTRITION_GROUPS)[number]["id"];
 
 function parsedSupplementalNutrition(raw: string | undefined) {
   const values: Partial<Record<keyof NutritionDetails, string>> = {};
@@ -214,6 +243,9 @@ function LogScreen() {
   >({});
   const [nutritionOpen, setNutritionOpen] = useState(false);
   const [moreNutrition, setMoreNutrition] = useState(false);
+  const [openNutritionGroups, setOpenNutritionGroups] = useState<
+    ExtraNutritionGroupId[]
+  >([]);
   const [workoutDuration, setWorkoutDuration] = useState("");
   const [workoutCalories, setWorkoutCalories] = useState("");
   const [workoutDistance, setWorkoutDistance] = useState("");
@@ -232,6 +264,108 @@ function LogScreen() {
           ? "dinner"
           : "snack",
   );
+  const extraNutritionFields = [
+    {
+      id: "sugar",
+      label: "Sugar",
+      group: "Carbohydrates" as const,
+      value: sugar,
+      set: setSugar,
+      unit: "g",
+    },
+    {
+      id: "saturated_fat",
+      label: "Saturated fat",
+      group: "Fats" as const,
+      value: saturatedFat,
+      set: setSaturatedFat,
+      unit: "g",
+    },
+    {
+      id: "sodium",
+      label: "Sodium",
+      group: "Minerals" as const,
+      value: sodium,
+      set: setSodium,
+      unit: "mg",
+    },
+    {
+      id: "cholesterol",
+      label: "Cholesterol",
+      group: "Other nutrients" as const,
+      value: cholesterol,
+      set: setCholesterol,
+      unit: "mg",
+    },
+    {
+      id: "potassium",
+      label: "Potassium",
+      group: "Minerals" as const,
+      value: potassium,
+      set: setPotassium,
+      unit: "mg",
+    },
+    {
+      id: "calcium",
+      label: "Calcium",
+      group: "Minerals" as const,
+      value: calcium,
+      set: setCalcium,
+      unit: "mg",
+    },
+    {
+      id: "iron",
+      label: "Iron",
+      group: "Minerals" as const,
+      value: iron,
+      set: setIron,
+      unit: "mg",
+    },
+    {
+      id: "magnesium",
+      label: "Magnesium",
+      group: "Minerals" as const,
+      value: magnesium,
+      set: setMagnesium,
+      unit: "mg",
+    },
+    {
+      id: "vitamin_c",
+      label: "Vitamin C",
+      group: "Vitamins" as const,
+      value: vitaminC,
+      set: setVitaminC,
+      unit: "mg",
+    },
+    {
+      id: "vitamin_d",
+      label: "Vitamin D",
+      group: "Vitamins" as const,
+      value: vitaminD,
+      set: setVitaminD,
+      unit: "µg",
+    },
+    {
+      id: "vitamin_b12",
+      label: "Vitamin B12",
+      group: "Vitamins" as const,
+      value: vitaminB12,
+      set: setVitaminB12,
+      unit: "µg",
+    },
+    ...SUPPLEMENTAL_FOOD_NUTRIENTS.map((nutrient) => ({
+      id: nutrient.id,
+      label: nutrient.label,
+      group: nutrient.group as ExtraNutritionGroupId,
+      value: supplementalNutrition[nutrient.nutritionKey] ?? "",
+      set: (next: string) =>
+        setSupplementalNutrition((current) => ({
+          ...current,
+          [nutrient.nutritionKey]: next,
+        })),
+      unit: nutrient.unit === "mcg" ? "µg" : nutrient.unit,
+    })),
+  ];
   const hasDraft = Boolean(
     (value.trim() && (selected?.id !== "water" || waterTouched)) ||
       label.trim() ||
@@ -409,6 +543,7 @@ function LogScreen() {
     setSupplementalNutrition({});
     setNutritionOpen(false);
     setMoreNutrition(false);
+    setOpenNutritionGroups([]);
     setWorkoutDuration("");
     setWorkoutCalories("");
     setWorkoutDistance("");
@@ -651,44 +786,6 @@ function LogScreen() {
         logDate,
         recordedAt,
       );
-    if (selected.id === "food") {
-      (
-        [
-          ["protein", protein],
-          ["fat", fat],
-          ["carbs", carbs],
-          ["fiber", fiber],
-          ["sodium", sodium],
-          ["sugar", sugar],
-          ["saturated_fat", saturatedFat],
-          ["cholesterol", cholesterol],
-          ["potassium", potassium],
-          ["calcium", calcium],
-          ["iron", iron],
-          ["magnesium", magnesium],
-          ["vitamin_c", vitaminC],
-          ["vitamin_d", vitaminD],
-          ["vitamin_b12", vitaminB12],
-          ...SUPPLEMENTAL_FOOD_NUTRIENTS.map(
-            (nutrient) =>
-              [
-                nutrient.id,
-                supplementalNutrition[nutrient.nutritionKey] ?? "",
-              ] as const,
-          ),
-        ] as const
-      ).forEach(([metricId, raw]) => {
-        if (!hasFoodNutrientTracker(state.metrics, metricId)) return;
-        const amount = parsePositiveFoodNutrientAmount(raw);
-        if (amount !== undefined)
-          logMetric(metricId, amount, visibility, "add", {
-            label: label.trim() || selected.name,
-            note: note.trim() || undefined,
-            localDate: logDate,
-            recordedAt,
-          });
-      });
-    }
     clearEntry();
     Alert.alert(
       "Saved",
@@ -1460,9 +1557,7 @@ function LogScreen() {
                     style={styles.moreNutrition}
                   >
                     <Text style={[styles.moreNutritionText, { color: accent }]}>
-                      {moreNutrition
-                        ? "Hide extra nutrients"
-                        : "Add vitamins, minerals and more"}
+                      Add vitamins, minerals and more
                     </Text>
                     <Ionicons
                       name={moreNutrition ? "chevron-up" : "chevron-down"}
@@ -1471,91 +1566,101 @@ function LogScreen() {
                     />
                   </Pressable>
                   {moreNutrition ? (
-                    <View style={styles.nutritionGrid}>
-                      {[
-                        { label: "Sugar", value: sugar, set: setSugar, unit: "g" },
-                        {
-                          label: "Sat. fat",
-                          value: saturatedFat,
-                          set: setSaturatedFat,
-                          unit: "g",
-                        },
-                        {
-                          label: "Sodium",
-                          value: sodium,
-                          set: setSodium,
-                          unit: "mg",
-                        },
-                        {
-                          label: "Cholesterol",
-                          value: cholesterol,
-                          set: setCholesterol,
-                          unit: "mg",
-                        },
-                        {
-                          label: "Potassium",
-                          value: potassium,
-                          set: setPotassium,
-                          unit: "mg",
-                        },
-                        {
-                          label: "Calcium",
-                          value: calcium,
-                          set: setCalcium,
-                          unit: "mg",
-                        },
-                        { label: "Iron", value: iron, set: setIron, unit: "mg" },
-                        {
-                          label: "Magnesium",
-                          value: magnesium,
-                          set: setMagnesium,
-                          unit: "mg",
-                        },
-                        {
-                          label: "Vitamin C",
-                          value: vitaminC,
-                          set: setVitaminC,
-                          unit: "mg",
-                        },
-                        {
-                          label: "Vitamin D",
-                          value: vitaminD,
-                          set: setVitaminD,
-                          unit: "µg",
-                        },
-                        {
-                          label: "Vitamin B12",
-                          value: vitaminB12,
-                          set: setVitaminB12,
-                          unit: "µg",
-                        },
-                        ...SUPPLEMENTAL_FOOD_NUTRIENTS.map((nutrient) => ({
-                          label: nutrient.label,
-                          value:
-                            supplementalNutrition[nutrient.nutritionKey] ?? "",
-                          set: (next: string) =>
-                            setSupplementalNutrition((current) => ({
-                              ...current,
-                              [nutrient.nutritionKey]: next,
-                            })),
-                          unit: nutrient.unit === "mcg" ? "µg" : nutrient.unit,
-                        })),
-                      ].map((item) => (
-                        <View key={item.label} style={styles.nutritionField}>
-                          <Text style={styles.nutritionLabel}>{item.label}</Text>
-                          <View style={styles.nutritionInput}>
-                            <TextInput
-                              value={item.value}
-                              onChangeText={item.set}
-                              keyboardType="decimal-pad"
-                              placeholder="0"
-                              placeholderTextColor={palette.faint}
-                              style={styles.nutritionText}
-                            />
-                            <Text style={styles.nutritionUnit}>{item.unit}</Text>
+                    <View style={styles.nutritionGroups}>
+                      {EXTRA_NUTRITION_GROUPS.map((group) => {
+                        const fields = extraNutritionFields.filter(
+                          (field) => field.group === group.id,
+                        );
+                        if (!fields.length) return null;
+                        const expanded = openNutritionGroups.includes(group.id);
+                        const entered = fields.filter(
+                          (field) =>
+                            parsePositiveFoodNutrientAmount(field.value) !==
+                            undefined,
+                        ).length;
+                        return (
+                          <View
+                            key={group.id}
+                            style={[
+                              styles.nutritionGroup,
+                              { borderColor: colors.border },
+                            ]}
+                          >
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityState={{ expanded }}
+                              onPress={() =>
+                                setOpenNutritionGroups((current) =>
+                                  current.includes(group.id)
+                                    ? current.filter((id) => id !== group.id)
+                                    : [...current, group.id],
+                                )
+                              }
+                              style={styles.nutritionGroupHeader}
+                            >
+                              <View style={styles.grow}>
+                                <Text
+                                  style={[
+                                    styles.nutritionGroupTitle,
+                                    { color: colors.ink },
+                                  ]}
+                                >
+                                  {group.label}
+                                </Text>
+                                <Text
+                                  style={[
+                                    styles.nutritionGroupHint,
+                                    { color: colors.muted },
+                                  ]}
+                                >
+                                  {entered
+                                    ? `${entered} added · ${group.hint}`
+                                    : group.hint}
+                                </Text>
+                              </View>
+                              <Ionicons
+                                name={expanded ? "chevron-up" : "chevron-down"}
+                                size={16}
+                                color={accent}
+                              />
+                            </Pressable>
+                            {expanded ? (
+                              <View
+                                style={[
+                                  styles.nutritionGroupFields,
+                                  { borderTopColor: colors.border },
+                                ]}
+                              >
+                                <View style={styles.nutritionGrid}>
+                                  {fields.map((item) => (
+                                    <View
+                                      key={item.id}
+                                      style={styles.nutritionField}
+                                    >
+                                      <Text style={styles.nutritionLabel}>
+                                        {item.label}
+                                      </Text>
+                                      <View style={styles.nutritionInput}>
+                                        <TextInput
+                                          value={item.value}
+                                          onChangeText={item.set}
+                                          keyboardType="decimal-pad"
+                                          placeholder="0"
+                                          placeholderTextColor={palette.faint}
+                                          style={styles.nutritionText}
+                                        />
+                                        <Text style={styles.nutritionUnit}>
+                                          {item.unit}
+                                        </Text>
+                                      </View>
+                                    </View>
+                                  ))}
+                                </View>
+                              </View>
+                            ) : null}
                           </View>
-                        </View>
-                      ))}
+                        );
+                      })}
                     </View>
                   ) : null}
                 </View>
@@ -1933,7 +2038,24 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   moreNutritionText: { ...typography.body, fontWeight: "800" },
-  nutritionField: { width: "31%", minWidth: 90 },
+  nutritionGroups: { gap: 8, marginBottom: 12 },
+  nutritionGroup: { borderWidth: 1, borderRadius: 12, overflow: "hidden" },
+  nutritionGroupHeader: {
+    minHeight: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  nutritionGroupTitle: { ...typography.body, fontWeight: "900" },
+  nutritionGroupHint: { ...typography.supporting, marginTop: 1 },
+  nutritionGroupFields: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+  },
+  nutritionField: { flexBasis: "47%", flexGrow: 1, minWidth: 112 },
   nutritionLabel: {
     color: palette.muted,
     ...typography.supporting,
@@ -1950,12 +2072,19 @@ const styles = StyleSheet.create({
   },
   nutritionText: {
     flex: 1,
+    minWidth: 0,
     color: palette.ink,
     ...typography.cardTitle,
     fontWeight: "800",
     paddingVertical: 8,
+    paddingRight: 4,
   },
-  nutritionUnit: { color: palette.faint, ...typography.supporting },
+  nutritionUnit: {
+    flexShrink: 0,
+    marginLeft: 2,
+    color: palette.faint,
+    ...typography.supporting,
+  },
   completion: {
     flexDirection: "row",
     alignItems: "center",

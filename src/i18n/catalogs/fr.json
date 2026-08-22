@@ -2437,5 +2437,16 @@
   "Fats": "Lipides",
   "Other nutrients": "Autres nutriments",
   "Minerals": "Minéraux",
-  "Vitamins": "Vitamines"
+  "Vitamins": "Vitamines",
+  "Carbohydrates & sugars": "Glucides et sucres",
+  "Sugars, sugar alcohols and starch": "Sucres, polyols et amidon",
+  "Fats & fatty acids": "Lipides et acides gras",
+  "Saturated, trans, mono, poly and omegas": "Graisses saturées, trans, mono-insaturées, polyinsaturées et oméga",
+  "Minerals & electrolytes": "Minéraux et électrolytes",
+  "Sodium, potassium, calcium and trace minerals": "Sodium, potassium, calcium et oligo-éléments",
+  "A, B, C, D, E, K and related forms": "A, B, C, D, E, K et formes apparentées",
+  "Cholesterol, alcohol and caffeine": "Cholestérol, alcool et caféine",
+  "Managed from Food": "Géré depuis Alimentation",
+  "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Ce nutriment appartient à une entrée alimentaire liée. Ouvrez Alimentation pour gérer ou supprimer le repas sans désynchroniser les totaux nutritionnels.",
+  "Open Food": "Ouvrir Alimentation"
 }

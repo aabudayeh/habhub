@@ -66,6 +66,7 @@ import {
 } from "@/src/domain/date";
 import { memberDisplayName } from "@/src/domain/members";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
+import { isFoodNutrientTrackerId } from "@/src/domain/food";
 import {
   canBeTrackedGoal,
   effectiveGoalTarget,
@@ -447,10 +448,15 @@ function Today() {
   const extra = editing || state.settings.showAllTodayTiles
     ? []
     : visible.slice(tileLimit);
+  // Food's linked nutrient definitions support deep-linked detail/history,
+  // but they are not ordinary hidden Today cards. Keep them out of the
+  // restore sheet until a user explicitly enables a section from that
+  // nutrient's tracker settings.
   const hiddenTrackers = state.metrics
     .filter(
       (metric) =>
         !isInternalTracker(metric) &&
+        !isFoodNutrientTrackerId(metric.id) &&
         !metric.sections.today &&
         metric.activeFrom <= today,
     )

@@ -257,7 +257,12 @@ export function mapHealthRecordsToEntries(
         entry.submetricValues=submetricValues;
         entries.push(entry);entryById.set(entry.id,entry);
       }
-      continue;
+      // Nutrition is compound data. Even when a user has not added every
+      // linked nutrient tracker yet, retain a privacy-safe sidecar for every
+      // positive field that the provider actually supplied. A later explicit
+      // deep-link/add can then show the complete history instead of starting
+      // from the day the tracker definition was created.
+      if (record.type !== 'nutrition') continue;
     }
     if (record.type === 'steps' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'steps', Number(record.value), importedMetricVisibility(visibility,'steps')));
     if (record.type === 'active_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'exercise', Number(record.value), importedMetricVisibility(visibility,'exercise')));

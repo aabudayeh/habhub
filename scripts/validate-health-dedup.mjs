@@ -1376,7 +1376,7 @@ assert.match(
 );
 assert.match(
   appProviderSource,
-  /const entriesToReplace = authorizedManualSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
+  /const directEntriesToReplace = authorizedManualSteps[\s\S]{0,100}manualStepEntriesEligibleForReplacement\(replacementCandidates\)[\s\S]{0,100}: replacementCandidates/,
   "authorized manual Steps must replace only provenance-free manual candidates",
 );
 assert.match(
