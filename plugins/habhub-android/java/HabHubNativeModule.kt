@@ -617,6 +617,12 @@ class HabHubNativeModule(
   }
 
   @ReactMethod
+  fun suspendWorkoutTimerNotificationPersistence(promise: Promise) {
+    HabHubWorkoutNotificationStore.suspendPersistence(reactContext)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
   fun reconcileWorkoutTimerNotification(identifier: String, promise: Promise) {
     thread(name = "habhub-workout-notification") {
       try {

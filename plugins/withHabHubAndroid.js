@@ -129,12 +129,15 @@ function withNativeManifest(config, packageName) {
     });
 
     const notificationService = `${packageName}.HabHubNotificationsService`;
+    const workoutPersistenceReceiver =
+      `${packageName}.HabHubWorkoutNotificationPersistenceReceiver`;
     const providerNames = new Set(
       PROVIDERS.map(([className]) => `${packageName}.${className}`),
     );
     application.receiver = (application.receiver ?? []).filter(
       (receiver) =>
         receiver.$?.["android:name"] !== notificationService &&
+        receiver.$?.["android:name"] !== workoutPersistenceReceiver &&
         !providerNames.has(receiver.$?.["android:name"]),
     );
     // expo-notifications resolves one app-local receiver when it creates its
@@ -161,6 +164,13 @@ function withNativeManifest(config, packageName) {
           ],
         },
       ],
+    });
+    application.receiver.push({
+      $: {
+        "android:name": workoutPersistenceReceiver,
+        "android:enabled": "true",
+        "android:exported": "false",
+      },
     });
     PROVIDERS.forEach(([className, infoResource]) => {
       application.receiver.push(

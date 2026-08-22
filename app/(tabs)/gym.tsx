@@ -68,6 +68,7 @@ import {
   performancePeriod,
   type PerformanceRange,
 } from "@/src/domain/performance";
+import { WEB_WORKOUT_NOTIFICATION_REFRESH_MS } from "@/src/domain/workoutNotifications";
 import {
   configureWorkoutTimerNotification,
   consumeWorkoutTimerActions,
@@ -2211,6 +2212,47 @@ function GymScreen() {
     state.currentUserId,
     state.settings.notifications.pushEnabled,
     tutorialSandbox,
+  ]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || tutorialSandbox) return;
+    const syncWebWorkoutNotification = () => {
+      const payload = notificationPayloadRef.current;
+      if (
+        typeof document === "undefined" ||
+        document.visibilityState === "visible" ||
+        !payload ||
+        !state.settings.notifications.pushEnabled
+      ) {
+        void dismissWorkoutTimerNotification(state.currentUserId);
+        return;
+      }
+      void showWorkoutTimerNotification({
+        ...payload,
+        ownerId: state.currentUserId,
+      }).catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", syncWebWorkoutNotification);
+    const refresh = window.setInterval(
+      syncWebWorkoutNotification,
+      WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
+    );
+    syncWebWorkoutNotification();
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        syncWebWorkoutNotification,
+      );
+      window.clearInterval(refresh);
+    };
+  }, [
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
+    tutorialSandbox,
+    workoutTimer?.exerciseId,
+    workoutTimer?.phase,
+    workoutTimer?.phaseStartedAt,
+    workoutTimer?.setId,
   ]);
 
   useEffect(() => {

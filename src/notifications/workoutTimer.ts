@@ -4,6 +4,11 @@ import * as TaskManager from "expo-task-manager";
 import { NativeModules, Platform } from "react-native";
 
 import { createManagedLocalNotificationGate } from "@/src/domain/notificationScheduling";
+import {
+  workoutNotificationElapsedSeconds,
+  workoutWebNotificationBody,
+  workoutWebNotificationSignature,
+} from "@/src/domain/workoutNotifications";
 import { enhanceAndroidTimerNotification } from "@/src/notifications/liveTimer";
 
 export const WORKOUT_TIMER_CATEGORY = "metricrally-workout-timer";
@@ -46,6 +51,7 @@ type StoredWorkoutFlow = {
 type AndroidWorkoutNotificationBridge = {
   nativeWorkoutActions?: boolean;
   syncWorkoutTimerNotificationFlow?: (flow: string) => Promise<boolean>;
+  suspendWorkoutTimerNotificationPersistence?: () => Promise<boolean>;
   reconcileWorkoutTimerNotification?: (
     identifier: string,
   ) => Promise<boolean>;
@@ -62,6 +68,10 @@ let workoutNotificationRevision = 0;
 let workoutNotificationOwnerId: string | undefined;
 let workoutNotificationGeneration: string | undefined;
 let workoutNotificationGenerationCounter = 0;
+let webWorkoutNotificationOwnerId: string | undefined;
+let webWorkoutNotificationSignature: string | undefined;
+let webWorkoutNotificationRevision = 0;
+let webWorkoutNotificationQueue = Promise.resolve();
 const workoutNotificationGate = createManagedLocalNotificationGate();
 
 const androidWorkoutBridge = () =>
@@ -90,6 +100,123 @@ async function reconcileNativeNotification(identifier: string) {
       ?.reconcileWorkoutTimerNotification?.(identifier)
       .catch(() => false)) ?? false
   );
+}
+
+function webWorkoutNotificationsSupported() {
+  return (
+    typeof window !== "undefined" &&
+    typeof document !== "undefined" &&
+    window.isSecureContext &&
+    "serviceWorker" in navigator &&
+    "Notification" in window
+  );
+}
+
+function webWorkoutDocumentHidden() {
+  return (
+    typeof document !== "undefined" && document.visibilityState !== "visible"
+  );
+}
+
+async function webWorkoutServiceWorker() {
+  if (!webWorkoutNotificationsSupported()) return undefined;
+  const existing = await navigator.serviceWorker.getRegistration("/");
+  if (existing?.active) return existing;
+  const registration =
+    existing ??
+    (await navigator.serviceWorker.register("/habhub-sw.js", {
+      scope: "/",
+      updateViaCache: "none",
+    }));
+  return registration.active ? registration : navigator.serviceWorker.ready;
+}
+
+async function closeWebWorkoutNotification(ownerId?: string) {
+  if (
+    ownerId &&
+    webWorkoutNotificationOwnerId &&
+    ownerId !== webWorkoutNotificationOwnerId
+  )
+    return;
+  const revision = ++webWorkoutNotificationRevision;
+  webWorkoutNotificationOwnerId = undefined;
+  webWorkoutNotificationSignature = undefined;
+  if (!webWorkoutNotificationsSupported()) return;
+  const registration = await navigator.serviceWorker.getRegistration("/");
+  if (!registration || revision !== webWorkoutNotificationRevision) return;
+  const notifications = await registration.getNotifications({
+    tag: WORKOUT_TIMER_NOTIFICATION,
+  });
+  if (revision !== webWorkoutNotificationRevision) return;
+  notifications.forEach((notification) => notification.close());
+}
+
+async function presentWebWorkoutNotification({
+  title,
+  body,
+  phase,
+  phaseStartedAt,
+  phaseElapsedSeconds,
+  ownerId,
+}: {
+  title: string;
+  body: string;
+  phase: "work" | "rest" | "paused";
+  phaseStartedAt?: number;
+  phaseElapsedSeconds: number;
+  ownerId: string;
+}) {
+  if (
+    !webWorkoutNotificationsSupported() ||
+    window.Notification.permission !== "granted" ||
+    !webWorkoutDocumentHidden()
+  ) {
+    await closeWebWorkoutNotification(ownerId);
+    return;
+  }
+  const elapsedSeconds = workoutNotificationElapsedSeconds({
+    phase,
+    phaseStartedAt: phaseStartedAt ?? Date.now(),
+    phaseElapsedSeconds,
+  });
+  const notificationBody = workoutWebNotificationBody(body, elapsedSeconds);
+  const signature = workoutWebNotificationSignature({
+    ownerId,
+    title,
+    body: notificationBody,
+    phase,
+    elapsedSeconds,
+  });
+  if (
+    webWorkoutNotificationOwnerId === ownerId &&
+    webWorkoutNotificationSignature === signature
+  )
+    return;
+  const revision = ++webWorkoutNotificationRevision;
+  webWorkoutNotificationOwnerId = ownerId;
+  webWorkoutNotificationSignature = signature;
+  const registration = await webWorkoutServiceWorker();
+  if (
+    !registration ||
+    revision !== webWorkoutNotificationRevision ||
+    webWorkoutNotificationOwnerId !== ownerId ||
+    !webWorkoutDocumentHidden()
+  )
+    return;
+  const phaseLabel =
+    phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
+  await registration.showNotification(`${phaseLabel} · ${title}`, {
+    body: notificationBody,
+    icon: "/pwa-icon-192.png",
+    badge: "/pwa-icon-192.png",
+    tag: WORKOUT_TIMER_NOTIFICATION,
+    requireInteraction: true,
+    silent: true,
+    data: {
+      route: "/gym",
+      workoutTimer: true,
+    },
+  });
 }
 
 async function consumeNativeActions(ownerId: string, generation: string) {
@@ -383,7 +510,20 @@ export async function showWorkoutTimerNotification({
   phaseElapsedSeconds?: number;
   ownerId: string;
 }) {
-  if (Platform.OS === "web") return;
+  if (Platform.OS === "web") {
+    const operation = webWorkoutNotificationQueue.then(() =>
+      presentWebWorkoutNotification({
+        title,
+        body,
+        phase,
+        phaseStartedAt,
+        phaseElapsedSeconds,
+        ownerId,
+      }),
+    );
+    webWorkoutNotificationQueue = operation.catch(() => undefined);
+    return operation;
+  }
   const revision = ++workoutNotificationRevision;
   const generation = workoutNotificationGeneration;
   if (
@@ -521,9 +661,19 @@ export async function dismissWorkoutTimerNotification(
   ownerId: string,
   clearState = false,
 ) {
-  if (Platform.OS === "web") return;
+  if (Platform.OS === "web") {
+    const operation = webWorkoutNotificationQueue.then(() =>
+      closeWebWorkoutNotification(ownerId),
+    );
+    webWorkoutNotificationQueue = operation.catch(() => undefined);
+    return operation;
+  }
   ++workoutNotificationRevision;
   await workoutNotificationGate.run(ownerId, async () => {
+    if (Platform.OS === "android")
+      await androidWorkoutBridge()
+        ?.suspendWorkoutTimerNotificationPersistence?.()
+        .catch(() => false);
     await Notifications.dismissNotificationAsync(
       WORKOUT_TIMER_NOTIFICATION,
     ).catch(() => undefined);
@@ -565,6 +715,13 @@ export function resumeWorkoutTimerNotifications(ownerId: string) {
  * arrives one tick later cannot recreate the old account's live row.
  */
 export function clearWorkoutTimerNotifications() {
+  if (Platform.OS === "web") {
+    const operation = webWorkoutNotificationQueue.then(() =>
+      closeWebWorkoutNotification(),
+    );
+    webWorkoutNotificationQueue = operation.catch(() => undefined);
+    return operation;
+  }
   workoutNotificationOwnerId = undefined;
   workoutNotificationGeneration = undefined;
   ++workoutNotificationRevision;
