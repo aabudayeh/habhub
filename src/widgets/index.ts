@@ -2,6 +2,18 @@ import { NativeModules, Platform } from "react-native";
 
 import type { CompletionFillMode, StatusAvatarStyle } from "@/src/types";
 
+export type WidgetGoalSnapshot = {
+  id: string;
+  title: string;
+  value: string;
+  progress: number;
+  met: boolean;
+  unavailable: boolean;
+  color: string;
+  icon?: string;
+  deepLink: string;
+};
+
 export type WidgetTrackerSnapshot = {
   id: string;
   eyebrow?: string;
@@ -15,24 +27,40 @@ export type WidgetTrackerSnapshot = {
   progressColor?: string;
   allComplete?: boolean;
   fillMode?: Exclude<CompletionFillMode, "auto">;
+  showProgressOutline?: boolean;
+  completionIcon?: string;
   deepLink: string;
   /** Hero-style detail rows use current values only, keeping refreshes cheap. */
-  goals?: { title: string; value: string; progress: number; met?: boolean }[];
+  goals?: WidgetGoalSnapshot[];
 };
 
-export type WidgetAvatarSnapshot = WidgetTrackerSnapshot & {
+export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
+  id: "__featured__";
+  goals: WidgetGoalSnapshot[];
+  completionIcon: string;
+  showProgressOutline: boolean;
+};
+
+export type WidgetAvatarSnapshot = {
   id: "__avatar__";
+  progress: number;
+  color: string;
+  backgroundColor: string;
+  progressColor: string;
+  allComplete: boolean;
+  fillMode: Exclude<CompletionFillMode, "auto">;
+  deepLink: string;
   /** One resolved bundled/OTA asset. Native decodes only this visible sprite. */
   avatarUri?: string;
   avatarStyle: StatusAvatarStyle;
   heightScale: number;
-  weightLabel: string;
-  bodyCompositionLabel?: string;
+  /** Status-page tracker order; native partitions this into flank/bottom rings. */
+  goals: WidgetGoalSnapshot[];
 };
 
 export type WidgetSnapshot = {
   updatedAt: string;
-  featured?: WidgetTrackerSnapshot;
+  featured?: WidgetFeaturedSnapshot;
   avatar?: WidgetAvatarSnapshot;
   /** Cheap picker metadata; no historical metric payload is duplicated here. */
   catalog: { id: string; title: string }[];

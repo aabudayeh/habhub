@@ -6,22 +6,19 @@ import { stateWithoutGoogleHealthLocalData } from "@/src/domain/googleHealthLoca
 import { useLocalization } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import {
-  ALL_GOALS_COMPLETE_COLOR,
-  GOAL_COMPLETE_COLOR,
-} from "@/src/domain/colors";
-import {
   statusBodyAppearance,
   statusBodyCompositionForSource,
 } from "@/src/domain/statusAvatar";
 import { statusAvatarAtlasBlend } from "@/src/domain/statusAvatarAtlas";
-import {
-  statusAvatarBodyProgression,
-  statusRangeRollup,
-} from "@/src/domain/status";
+import { statusAvatarBodyProgression } from "@/src/domain/status";
 import { STATUS_AVATAR_SPRITES } from "@/src/generated/statusAvatarSprites";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { AppState } from "@/src/types";
+import type { AppLanguage, AppState } from "@/src/types";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
+import {
+  featuredWidgetSnapshot,
+  statusWidgetSnapshot,
+} from "@/src/widgets/snapshot";
 import {
   areHomeScreenWidgetsSupported,
   getHomeScreenWidgetConfigurations,
@@ -33,8 +30,7 @@ import {
 function avatarSnapshot(
   state: AppState,
   today: string,
-  locale: string,
-  t: (source: string) => string,
+  language: AppLanguage,
   backgroundColor: string,
   completedBackgroundColor: string,
 ): WidgetAvatarSnapshot {
@@ -47,10 +43,6 @@ function avatarSnapshot(
     state.currentUserId,
     today,
   );
-  const summary = statusRangeRollup(state, state.currentUserId, [today]);
-  const progress = Math.max(0, Math.min(1, summary.progress));
-  const allComplete =
-    summary.opportunities > 0 && summary.completed === summary.opportunities;
   const calculationSource =
     state.settings.statusAvatarCalculationSource ?? "bmi";
   const appearance = statusBodyAppearance(
@@ -73,49 +65,30 @@ function avatarSnapshot(
     selected.column
   ];
   const resolved = Image.resolveAssetSource(sprite);
-  const number = (value: number) =>
-    Number(value.toFixed(1)).toLocaleString(locale);
-  const bodyCompositionLabel =
-    typeof progression.currentBodyFatPercent === "number"
-      ? `${t("Body fat")} ${number(progression.currentBodyFatPercent)}%`
-      : typeof progression.currentLeanBodyMassKg === "number"
-        ? `${t("Lean body mass")} ${number(progression.currentLeanBodyMassKg)} kg`
-        : undefined;
-
-  return {
-    id: "__avatar__",
-    eyebrow: t("Status"),
-    title: t("Status"),
-    value: `${Math.round(progress * 100)}%`,
-    subtitle: t("Tracked goals"),
-    progress,
-    color: allComplete ? ALL_GOALS_COMPLETE_COLOR : GOAL_COMPLETE_COLOR,
-    backgroundColor: allComplete ? completedBackgroundColor : backgroundColor,
-    progressColor: allComplete
-      ? ALL_GOALS_COMPLETE_COLOR
-      : GOAL_COMPLETE_COLOR,
-    allComplete,
-    fillMode: "bottom_up",
-    deepLink: "paceboard://status",
-    avatarUri: resolved?.uri,
-    avatarStyle: state.settings.statusAvatarStyle ?? "silhouette",
-    heightScale: appearance.heightScale,
-    weightLabel: `${t("Weight")} ${number(progression.currentWeightKg)} kg`,
-    bodyCompositionLabel,
-  };
+  return statusWidgetSnapshot(
+    state,
+    today,
+    language,
+    { backgroundColor, completedBackgroundColor },
+    {
+      avatarUri: resolved?.uri,
+      avatarStyle: state.settings.statusAvatarStyle ?? "silhouette",
+      heightScale: appearance.heightScale,
+    },
+  );
 }
 
 /** Keeps Android widgets current without blocking navigation or app startup. */
 export function WidgetSnapshotBridge() {
   const { state, hydrated } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
-  const { locale, t } = useLocalization();
+  const { language, t } = useLocalization();
   const accent = useGroupAccent();
   const colors = useAppColors();
   const lastPayloadRef = useRef("");
   const stateRef = useRef(state);
   const hydratedRef = useRef(hydrated);
-  const localeRef = useRef(locale);
+  const languageRef = useRef(language);
   const translationRef = useRef(t);
   const accentRef = useRef(accent);
   const darkRef = useRef(colors.isDark);
@@ -128,7 +101,7 @@ export function WidgetSnapshotBridge() {
   const queueRef = useRef<(delay?: number) => void>(() => undefined);
   stateRef.current = state;
   hydratedRef.current = hydrated;
-  localeRef.current = locale;
+  languageRef.current = language;
   translationRef.current = t;
   accentRef.current = accent;
   darkRef.current = colors.isDark;
@@ -160,34 +133,47 @@ export function WidgetSnapshotBridge() {
       const configurations = await getHomeScreenWidgetConfigurations().catch(
         () => [],
       );
-      // Seed one Status snapshot per process so adding the first widget while
-      // HabHub is closed never produces an empty card. After that, no launcher
-      // widget means ordinary app updates skip all avatar/history work.
+      // Seed the bounded Featured and Status snapshots once per process so
+      // adding the first widget while HabHub is closed never produces an empty
+      // card. After that, no launcher widget means ordinary app updates skip
+      // all avatar/history work.
       if (configurations.length === 0 && seededRef.current) return;
       // Android stores widget JSON in plaintext SharedPreferences. Build only
       // from the cache-safe projection; Google values continue to render in
       // the open app but never influence a durable launcher snapshot.
       const currentState = stateWithoutGoogleHealthLocalData(stateRef.current);
-      const currentLocale = localeRef.current;
+      const currentLanguage = languageRef.current;
       const translate = translationRef.current;
       const currentAccent = accentRef.current;
+      const completedBackgroundColor = darkRef.current ? "#806018" : "#B98212";
+      const today = dateKey();
       const avatar = avatarSnapshot(
         currentState,
-        dateKey(),
-        currentLocale,
-        translate,
+        today,
+        currentLanguage,
         currentAccent,
-        darkRef.current ? "#806018" : "#B98212",
+        completedBackgroundColor,
+      );
+      const featured = featuredWidgetSnapshot(
+        currentState,
+        today,
+        currentLanguage,
+        translate,
+        {
+          backgroundColor: currentAccent,
+          completedBackgroundColor,
+        },
       );
       const snapshot: WidgetSnapshot = {
         updatedAt: new Date().toISOString(),
+        featured,
         avatar,
-        // Legacy fields remain empty for backwards-compatible native parsing;
-        // every existing configuration is migrated to the Status avatar.
+        // Legacy tracker fields remain empty; Featured and Status carry only
+        // their bounded current-day projections.
         catalog: [],
         trackers: [],
       };
-      const payload = JSON.stringify({ avatar });
+      const payload = JSON.stringify({ featured, avatar });
       if (payload === lastPayloadRef.current) {
         seededRef.current = true;
         return;
@@ -247,7 +233,7 @@ export function WidgetSnapshotBridge() {
     accent,
     colors.isDark,
     hydrated,
-    locale,
+    language,
     state.currentUserId,
     state.energyProfiles,
     state.entries,

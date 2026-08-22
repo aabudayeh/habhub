@@ -2448,5 +2448,11 @@
   "Cholesterol, alcohol and caffeine": "胆固醇、酒精和咖啡因",
   "Managed from Food": "在食物中管理",
   "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "此营养素属于关联的食物记录。请打开“食物”来管理或删除该餐，以免营养总量不同步。",
-  "Open Food": "打开食物"
+  "Open Food": "打开食物",
+  "Every to-do complete": "所有待办事项均已完成",
+  "No to-dos today": "今天没有待办事项",
+  "goal left": "个目标待完成",
+  "goals left": "个目标待完成",
+  "to-do left": "项待办事项待完成",
+  "to-dos left": "项待办事项待完成"
 }

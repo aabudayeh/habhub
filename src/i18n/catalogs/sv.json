@@ -2448,5 +2448,11 @@
   "Cholesterol, alcohol and caffeine": "Kolesterol, alkohol och koffein",
   "Managed from Food": "Hanteras från Mat",
   "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Det här näringsämnet hör till en länkad matpost. Öppna Mat för att hantera eller ta bort måltiden utan att näringssummorna hamnar ur synk.",
-  "Open Food": "Öppna Mat"
+  "Open Food": "Öppna Mat",
+  "Every to-do complete": "Alla uppgifter klara",
+  "No to-dos today": "Inga uppgifter idag",
+  "goal left": "mål kvar",
+  "goals left": "mål kvar",
+  "to-do left": "uppgift kvar",
+  "to-dos left": "uppgifter kvar"
 }

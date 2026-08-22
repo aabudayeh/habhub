@@ -25,7 +25,15 @@ const RESOURCE_FILES = [
   ["drawable", "habhub_widget_goal_complete.xml"],
   ["drawable", "habhub_widget_progress_lime.xml"],
   ["drawable", "habhub_widget_progress_gold.xml"],
+  ["drawable", "habhub_widget_preview_small.xml"],
+  ["drawable", "habhub_widget_preview_square.xml"],
+  ["drawable", "habhub_widget_preview_wide_compact.xml"],
+  ["drawable", "habhub_widget_preview_wide.xml"],
   ["layout", "habhub_widget.xml"],
+  ["layout", "habhub_widget_preview_small.xml"],
+  ["layout", "habhub_widget_preview_square.xml"],
+  ["layout", "habhub_widget_preview_wide_compact.xml"],
+  ["layout", "habhub_widget_preview_wide.xml"],
   ["values", "habhub_widgets.xml"],
   ["values-ar", "habhub_widgets.xml"],
   ["values-de", "habhub_widgets.xml"],
@@ -36,12 +44,14 @@ const RESOURCE_FILES = [
   ["values-zh-rCN", "habhub_widgets.xml"],
   ["xml", "habhub_widget_small_info.xml"],
   ["xml", "habhub_widget_square_info.xml"],
+  ["xml", "habhub_widget_wide_compact_info.xml"],
   ["xml", "habhub_widget_wide_info.xml"],
 ];
 
 const PROVIDERS = [
   ["HabHubSmallWidgetProvider", "@xml/habhub_widget_small_info"],
   ["HabHubSquareWidgetProvider", "@xml/habhub_widget_square_info"],
+  ["HabHubWideCompactWidgetProvider", "@xml/habhub_widget_wide_compact_info"],
   ["HabHubWideWidgetProvider", "@xml/habhub_widget_wide_info"],
 ];
 

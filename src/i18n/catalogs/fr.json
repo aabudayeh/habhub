@@ -2448,5 +2448,11 @@
   "Cholesterol, alcohol and caffeine": "Cholestérol, alcool et caféine",
   "Managed from Food": "Géré depuis Alimentation",
   "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Ce nutriment appartient à une entrée alimentaire liée. Ouvrez Alimentation pour gérer ou supprimer le repas sans désynchroniser les totaux nutritionnels.",
-  "Open Food": "Ouvrir Alimentation"
+  "Open Food": "Ouvrir Alimentation",
+  "Every to-do complete": "Toutes les tâches sont terminées",
+  "No to-dos today": "Aucune tâche aujourd’hui",
+  "goal left": "objectif restant",
+  "goals left": "objectifs restants",
+  "to-do left": "tâche restante",
+  "to-dos left": "tâches restantes"
 }

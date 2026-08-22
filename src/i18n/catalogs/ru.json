@@ -2448,5 +2448,11 @@
   "Cholesterol, alcohol and caffeine": "Холестерин, алкоголь и кофеин",
   "Managed from Food": "Управляется в разделе «Еда»",
   "This nutrient belongs to a linked food record. Open Food to manage or remove the meal without leaving its nutrition totals out of sync.": "Этот нутриент относится к связанной записи о еде. Откройте раздел «Еда», чтобы изменить или удалить прием пищи, не нарушая согласованность итогов по нутриентам.",
-  "Open Food": "Открыть раздел «Еда»"
+  "Open Food": "Открыть раздел «Еда»",
+  "Every to-do complete": "Все задачи выполнены",
+  "No to-dos today": "Сегодня нет задач",
+  "goal left": "цель осталась",
+  "goals left": "цели осталось",
+  "to-do left": "задача осталась",
+  "to-dos left": "задачи осталось"
 }

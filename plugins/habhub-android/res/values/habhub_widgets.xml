@@ -1,10 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="habhub_widget_description">Today goals and tracker progress</string>
+  <string name="habhub_widget_description_small">Featured card or minimalist Status - 2 x 1</string>
+  <string name="habhub_widget_description_square">Minimalist Status with all goal circles - 2 x 2</string>
+  <string name="habhub_widget_description_featured_wide_compact">Featured card and goal progress - 4 x 1</string>
+  <string name="habhub_widget_description_wide">Featured card or minimalist Status - 4 x 2</string>
   <string name="habhub_widget_open_to_update">Open HabHub to update</string>
   <string name="habhub_widget_featured_progress">Featured progress</string>
   <string name="habhub_widget_status_avatar">Status avatar</string>
   <string name="habhub_widget_choose">Choose what this widget shows</string>
+  <string name="habhub_widget_size_hint">%1$s home-screen widget</string>
+  <string name="habhub_widget_content">Content</string>
+  <string name="habhub_widget_appearance">Background</string>
+  <string name="habhub_widget_follow_theme">Follow app theme</string>
+  <string name="habhub_widget_transparent">Translucent</string>
+  <string name="habhub_widget_custom_color">Custom color</string>
+  <string name="habhub_widget_opacity_value">Background opacity: %1$d%%</string>
+  <string name="habhub_widget_blur_note">Android launchers do not provide true wallpaper blur to widgets. Translucent mode gives the closest smooth, readable effect.</string>
   <string name="habhub_widget_tracker">Tracker</string>
   <string name="habhub_widget_add">Add widget</string>
+  <string name="habhub_widget_save">Save widget</string>
 </resources>
