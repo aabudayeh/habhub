@@ -104,15 +104,81 @@ const mappedFood = googleHealthSyncTestHooks.mapRecordsToEntries(
   "owner",
   "2026-08-21T12:00:00.000Z",
 );
-assert.equal(mappedFood.length, 1, "direct food + nutrient mappings must merge into one stable row");
-assert.equal(mappedFood[0].entry.value, 550);
-assert.equal(mappedFood[0].entry.visibility, "group", "first import follows configured tracker visibility");
-assert.deepEqual(mappedFood[0].entry.submetricValues, { protein: 25 });
-assert.deepEqual(mappedFood[0].entry.nutrition, sourceRecord.nutrition);
-assert.equal(mappedFood[0].entry.sourceRecordedAt, sourceRecord.endTime);
-assert.match(String(mappedFood[0].entry.id), /^google-health:/);
-assert.equal(mappedFood[0].entry.sourceProvider, "google_health");
-const foodId = String(mappedFood[0].entry.id);
+const mappedFoodRow = mappedFood.find((row) => row.entry.metricId === "food")!;
+const mappedFoodParent = [mappedFoodRow];
+assert.equal(mappedFoodRow.entry.value, 550);
+assert.equal(mappedFoodRow.entry.visibility, "group", "first import follows configured tracker visibility");
+assert.deepEqual(mappedFoodRow.entry.submetricValues, { protein: 25 });
+assert.deepEqual(mappedFoodRow.entry.nutrition, sourceRecord.nutrition);
+assert.equal(mappedFoodRow.entry.sourceRecordedAt, sourceRecord.endTime);
+assert.match(String(mappedFoodRow.entry.id), /^google-health:/);
+assert.equal(mappedFoodRow.entry.sourceProvider, "google_health");
+const foodId = String(mappedFoodRow.entry.id);
+
+const absentDefinitionSidecars = mappedFood.filter(
+  (row) => row.entry.metricId !== "food",
+);
+assert.deepEqual(
+  absentDefinitionSidecars.map((row) => row.entry.metricId).sort(),
+  ["carbs", "fat", "protein"],
+  "every canonical positive Google nutrient must materialise even when its metric definition is absent",
+);
+for (const sidecar of absentDefinitionSidecars) {
+  assert.equal(sidecar.externalId, sourceRecord.externalId);
+  assert.equal(sidecar.localDate, sourceRecord.localDate);
+  assert.equal(sidecar.entry.localDate, sourceRecord.localDate);
+  assert.equal(sidecar.entry.sourceRecordId, mappedFoodRow.entry.sourceRecordId);
+  assert.equal(sidecar.entry.visibility, "group", "an absent nutrient definition inherits Food visibility");
+  assert.equal("label" in sidecar.entry, false, "a nutrient sidecar must not reveal the meal label");
+  assert.equal("note" in sidecar.entry, false, "a nutrient sidecar must not carry meal/provider notes");
+  assert.equal("nutrition" in sidecar.entry, false, "a nutrient sidecar must not carry the full meal payload");
+}
+
+const explicitProteinMetric = {
+  id: "protein",
+  unit: "g",
+  dataType: "number",
+  defaultVisibility: "private",
+  healthMapping: { dataType: "nutrition", field: "protein" },
+};
+const mappedWithExplicitProtein = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [sourceRecord],
+  { metrics: [foodMetric, explicitProteinMetric], entries: [], settings: {} },
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+const explicitProteinRows = mappedWithExplicitProtein.filter(
+  (row) => row.entry.metricId === "protein",
+);
+assert.equal(
+  explicitProteinRows.length,
+  1,
+  "an explicit nutrient mapping and the absent-definition fallback must never duplicate an entry",
+);
+assert.equal(
+  explicitProteinRows[0].entry.visibility,
+  "private",
+  "an explicit nutrient visibility must take precedence over Food visibility",
+);
+
+const privateFiberOnly = googleHealthSyncTestHooks.mapRecordsToEntries(
+  [{
+    ...sourceRecord,
+    externalId: "nutrition-log:fiber-without-definitions",
+    value: 0,
+    nutrition: { fiberG: 8 },
+  }],
+  { metrics: [], entries: [], settings: {} },
+  "owner",
+  "2026-08-21T12:00:00.000Z",
+);
+assert.equal(privateFiberOnly.length, 1);
+assert.equal(privateFiberOnly[0].entry.metricId, "fiber");
+assert.equal(
+  privateFiberOnly[0].entry.visibility,
+  "private",
+  "a nutrient without its own or a Food definition must fail closed",
+);
 
 const unsaturatedNutrition = googleHealthSyncTestHooks.nutritionFrom({
   nutrients: [{
@@ -133,6 +199,11 @@ const mappedUnsaturatedFood = googleHealthSyncTestHooks.mapRecordsToEntries(
 const unsaturatedCloudRoundtrip = JSON.parse(JSON.stringify({
   entries: mappedUnsaturatedFood.map((row) => row.entry),
 }));
+assert.deepEqual(
+  mappedUnsaturatedFood.map((row) => row.entry.metricId),
+  ["food"],
+  "a provider-only nutrition field must not create an unsupported ghost tracker",
+);
 assert.equal(
   unsaturatedCloudRoundtrip.entries[0]?.nutrition?.unsaturatedFatG,
   7.25,
@@ -146,8 +217,8 @@ const remappedPrivate = googleHealthSyncTestHooks.mapRecordsToEntries(
   "2026-08-21T12:01:00.000Z",
 );
 const defaultChanged = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(
-  remappedPrivate,
-  { entries: [mappedFood[0].entry], settings: {} },
+  remappedPrivate.filter((row) => row.entry.metricId === "food"),
+  { entries: [mappedFoodRow.entry], settings: {} },
 );
 assert.equal(
   defaultChanged[0].entry.visibility,
@@ -156,12 +227,12 @@ assert.equal(
 );
 
 const nativeMirroredFood = {
-  ...mappedFood[0].entry,
+  ...mappedFoodRow.entry,
   id: "health-connect:meal-a:food",
   sourceProvider: "health_connect",
   sourceRecordId: "health-connect:nutrition:meal-a",
 };
-const nativeFirstFood = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
+const nativeFirstFood = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
     entries: [nativeMirroredFood],
     settings: {},
   });
@@ -170,8 +241,8 @@ assert.equal(
   0,
   "a Google mirror of the same native food record must not double daily/group nutrition totals",
 );
-const googleFirstFood = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
-  entries: [mappedFood[0].entry, nativeMirroredFood],
+const googleFirstFood = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
+  entries: [mappedFoodRow.entry, nativeMirroredFood],
   settings: { googleHealthEntryOverrides: { [foodId]: { visibility: "group" } } },
 });
 assert.equal(
@@ -192,15 +263,15 @@ assert.equal(
   "coexisting providers contribute one nutrition total",
 );
 assert.equal(
-  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
-    entries: [mappedFood[0].entry],
+  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
+    entries: [mappedFoodRow.entry],
     settings: {},
   }).length,
   1,
   "Google remains materialized as the fallback when no native mirror exists",
 );
 assert.equal(
-  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
+  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
     entries: [{ ...nativeMirroredFood, recordedAt: "2026-08-20T13:15:00.000Z" }],
     settings: {},
   }).length,
@@ -209,7 +280,7 @@ assert.equal(
 );
 
 const overridden = googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(
-  mappedFood,
+  mappedFoodParent,
   {
     entries: [],
     settings: {
@@ -230,7 +301,7 @@ assert.equal(overridden[0].entry.localDate, "2026-08-21");
 assert.equal(overridden[0].entry.recordedAt, "2026-08-21T18:30:00.000Z");
 assert.equal(overridden[0].entry.visibility, "status");
 assert.equal(
-  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
+  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
     entries: [],
     settings: { dismissedHealthEntryIds: [foodId] },
   }).length,
@@ -238,7 +309,7 @@ assert.equal(
   "dismissed provider rows must not resurrect",
 );
 assert.equal(
-  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFood, {
+  googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(mappedFoodParent, {
     entries: [],
     settings: { googleHealthEntryOverrides: { [foodId]: { dismissed: true } } },
   }).length,
