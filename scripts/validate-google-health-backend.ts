@@ -18,6 +18,7 @@ const [
   arrayInitializerMigration,
   foodFamilyMutationMigration,
   serverSnapshotMigration,
+  serverSnapshotRepairMigration,
   endpoint,
   sync,
   api,
@@ -37,6 +38,7 @@ const [
   read("supabase/migrations/202608220001_google_health_array_initializers.sql"),
   read("supabase/migrations/202608220002_google_health_food_family_mutations.sql"),
   read("supabase/migrations/202608220003_preserve_google_health_server_snapshot.sql"),
+  read("supabase/migrations/202608220004_harden_google_health_snapshot_repair.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -994,6 +996,21 @@ assert.match(hardenedSnapshotWriteBody,
 assert.match(hardenedSnapshotWriteBody, /exception when unique_violation/);
 assert.match(serverSnapshotMigration,
   /with repaired as materialized[\s\S]*merge_google_health_server_snapshot[\s\S]*device_id = 'google-health-server'/);
+const repairedSnapshotMergeBody = serverSnapshotRepairMigration.match(
+  /create or replace function public\.merge_google_health_server_snapshot[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(repairedSnapshotMergeBody,
+  /from public\.google_health_entry_preferences preference[\s\S]*preference\.entry_id = owned\.entry_id[\s\S]*preference\.dismissed = true/);
+assert.match(serverSnapshotRepairMigration,
+  /lock table public\.user_snapshots in share row exclusive mode/);
+assert.ok(!/with repaired as materialized/i.test(serverSnapshotRepairMigration),
+  "the forward repair must not replay a materialized pre-lock payload");
+assert.match(serverSnapshotRepairMigration,
+  /update public\.user_snapshots snapshot[\s\S]*set payload = public\.merge_google_health_server_snapshot\([\s\S]*snapshot\.user_id,[\s\S]*snapshot\.payload[\s\S]*revision = snapshot\.revision \+ 1[\s\S]*device_id = 'google-health-server'/);
+assert.match(serverSnapshotRepairMigration,
+  /snapshot\.payload is distinct from[\s\S]*public\.merge_google_health_server_snapshot\([\s\S]*snapshot\.user_id,[\s\S]*snapshot\.payload/);
+assert.match(serverSnapshotRepairMigration,
+  /revoke all on function public\.merge_google_health_server_snapshot\(uuid, jsonb\)[\s\S]*from public, anon, authenticated, service_role/);
 assert.match(migration, /create or replace function public\.update_google_health_metric_visibility/);
 assert.match(migration, /create table if not exists public\.google_health_entry_preferences/);
 assert.match(migration, /create table if not exists public\.google_health_account_deletion_guards/);
