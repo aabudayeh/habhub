@@ -1,0 +1,9 @@
+name: Android preview retry
+
+jobs:
+  build_android:
+    name: Build Android preview
+    type: build
+    params:
+      platform: android
+      profile: preview-retry
