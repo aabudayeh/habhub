@@ -11,6 +11,7 @@ import {
   combineDisjointStepWindows,
   currentDayStepFloorsForEmptyReplacement,
   deduplicateHealthImportRecords,
+  finalImportedStepTotal,
   healthSourceId,
   historicalStepRepairStart,
   isCanonicalHealthConnectStepAggregate,
@@ -19,7 +20,6 @@ import {
   manualStepEntriesEligibleForReplacement,
   mergeLocalCurrentDayDeviceStepEntries,
   partitionStepAggregateRange,
-  preferAndroidDeviceHistoricalStepGroups,
   preserveCurrentDayStepFloor,
   preserveCurrentDayStepReplacementFloor,
   preserveUnchangedDailyAggregateRevision,
@@ -34,6 +34,7 @@ import {
 import { reconcileGoogleHealthNativeMirrors } from "../src/domain/health.ts";
 import {
   HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
+  HEALTH_STEPS_IMPORT_VERSION,
   healthPhysicalActivityMigrationKey,
 } from "../src/health/constants.ts";
 
@@ -73,6 +74,11 @@ assert.equal(
   3,
   "the live Physical Activity rollout must give existing connected accounts one new permission opportunity",
 );
+assert.equal(
+  HEALTH_STEPS_IMPORT_VERSION,
+  3,
+  "the restored historical aggregation must trigger a one-time repair for existing connected accounts",
+);
 
 const platformPriorityAggregate = [
   { localDate: "2026-08-13", count: 3_435, origin: "Health Connect" },
@@ -93,27 +99,10 @@ assert.equal(
   3_435,
   "the unfiltered platform aggregate must remain authoritative without vendor metadata",
 );
-const historicalPhoneAggregate = [
-  {
-    localDate: "2026-08-13",
-    count: 3_912,
-    origin: "com.android.healthconnect.phone.a1b2c3d4e5f607182930",
-  },
-];
-assert.deepEqual(
-  preferAndroidDeviceHistoricalStepGroups(
-    [
-      ...platformPriorityAggregate,
-      { localDate: "2026-08-14", count: 7_100, origin: "Health Connect" },
-    ],
-    historicalPhoneAggregate,
-  ).map(({ localDate, count }) => [localDate, count]),
-  [
-    ["2026-08-13", 3_912],
-    ["2026-08-14", 7_100],
-  ],
-  "completed days use the same phone-origin aggregate as today and fall back per day when it is absent",
-);
+assert.equal(finalImportedStepTotal(2_887), 2_888);
+assert.equal(finalImportedStepTotal(27), 28);
+assert.equal(finalImportedStepTotal(0), 0, "a real zero must not become one");
+assert.equal(finalImportedStepTotal(Number.NaN), 0);
 const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
   [
     record({ id: "yesterday", localDate: "2026-08-12", value: 8_000 }),
@@ -1410,13 +1399,28 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /stepSlices\.historical\s*\|\|\s*includesCurrentDay[\s\S]{0,120}currentDeviceStepOrigins\(\)/,
-  "a historical-only repair after restart must rediscover the phone SPN before filtering",
+  /includesCurrentDay\s*\?\s*currentDeviceStepOrigins\(\)/,
+  "phone-origin discovery must remain restricted to the live current-day path",
+);
+assert.doesNotMatch(
+  androidHealthSource,
+  /androidDeviceHistoricalGroups|preferAndroidDeviceHistoricalStepGroups/,
+  "completed days must not replace Health Connect's priority-aware aggregate with a phone-only source",
 );
 assert.match(
   androidHealthSource,
-  /androidDeviceHistoricalGroups[\s\S]{0,1800}aggregateGroupByPeriod\(\{[\s\S]{0,700}dataOriginFilter: androidDeviceOrigins[\s\S]{0,1600}preferAndroidDeviceHistoricalStepGroups/,
-  "completed days must use Android's source-filtered aggregate with a per-day Health Connect fallback",
+  /const count = finalImportedStepTotal\([\s\S]{0,120}COUNT_TOTAL[\s\S]{0,1800}value: count/,
+  "completed-day aggregates must receive the final one-step calibration exactly once",
+);
+assert.match(
+  androidHealthSource,
+  /const currentCount = finalImportedStepTotal\([\s\S]{0,100}reconciledCurrent\.count/,
+  "today's selected phone-origin aggregate must receive the final one-step calibration exactly once",
+);
+assert.equal(
+  (androidHealthSource.match(/finalImportedStepTotal\(/g) ?? []).length,
+  2,
+  "the adapter must calibrate only the completed-day and current-day canonical totals",
 );
 assert.doesNotMatch(
   androidHealthSource,
@@ -1965,5 +1969,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: phone-origin current and historical Steps with per-day Health Connect fallback, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: phone-origin live Steps, priority-aware historical Steps, final one-step calibration, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

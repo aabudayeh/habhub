@@ -65,6 +65,12 @@ const wideCompactInfo = read(
   "plugins/habhub-android/res/xml/habhub_widget_wide_compact_info.xml",
 );
 const wideInfo = read("plugins/habhub-android/res/xml/habhub_widget_wide_info.xml");
+const smallPreview = read(
+  "plugins/habhub-android/res/drawable/habhub_widget_preview_small.xml",
+);
+const wideCompactPreview = read(
+  "plugins/habhub-android/res/drawable/habhub_widget_preview_wide_compact.xml",
+);
 
 assert.match(pluginConfig, /\["layout", "habhub_widget\.xml"\]/);
 assert.match(pluginConfig, /habhub_widget_preview_small/);
@@ -78,8 +84,8 @@ assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_ba
 
 assert.match(
   widgetConfig,
-  /"square" -> listOf\("__avatar__"[\s\S]*"wide_compact" -> listOf\("__featured__"[\s\S]*else -> listOf\([\s\S]*"__featured__"[\s\S]*"__avatar__"/,
-  "2x2 is Status, 4x1 is Featured, and the shared 2x1/4x2 families offer both",
+  /"square", "wide" -> listOf\("__avatar__"[\s\S]*"wide_compact" -> listOf\("__featured__"[\s\S]*else -> listOf\([\s\S]*"__featured__"[\s\S]*"__avatar__"/,
+  "Featured is limited to horizontal 2x1/4x1 while 2x2/4x2 are Status families",
 );
 assert.match(widgetConfig, /"square" -> "2 x 2"/);
 assert.match(widgetConfig, /"wide_compact" -> "4 x 1"/);
@@ -94,8 +100,8 @@ assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
-  /private fun defaultTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*"__avatar__" else "__featured__"/,
-  "Optional widget configuration must respect each family default",
+  /private fun fixedTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
+  "Fixed widget families must redirect stale content choices to their intended layout",
 );
 assert.match(
   pluginSource,
@@ -106,16 +112,21 @@ assert.match(
   pluginSource,
   /configuration\.trackerId == "__avatar__"[\s\S]*snapshot\.optJSONObject\("avatar"\)[\s\S]*snapshot\.optJSONObject\("featured"\)/,
 );
-for (const [source, width, height, preview] of [
-  [smallInfo, 2, 1, "small"],
-  [squareInfo, 2, 2, "square"],
-  [wideCompactInfo, 4, 1, "wide_compact"],
-  [wideInfo, 4, 2, "wide"],
+for (const [source, width, height, preview, widthDp, heightDp] of [
+  [smallInfo, 2, 1, "small", 110, 48],
+  [squareInfo, 2, 2, "square", 110, 105],
+  [wideCompactInfo, 4, 1, "wide_compact", 250, 48],
+  [wideInfo, 4, 2, "wide", 250, 105],
 ]) {
   assert.match(source, new RegExp(`android:targetCellWidth="${width}"`));
   assert.match(source, new RegExp(`android:targetCellHeight="${height}"`));
   assert.match(source, new RegExp(`android:previewImage="@drawable/habhub_widget_preview_${preview}"`));
   assert.match(source, new RegExp(`android:previewLayout="@layout/habhub_widget_preview_${preview}"`));
+  assert.match(source, new RegExp(`android:minResizeWidth="${widthDp}dp"`));
+  assert.match(source, new RegExp(`android:maxResizeWidth="${widthDp}dp"`));
+  assert.match(source, new RegExp(`android:minResizeHeight="${heightDp}dp"`));
+  assert.match(source, new RegExp(`android:maxResizeHeight="${heightDp}dp"`));
+  assert.match(source, /android:resizeMode="none"/);
 }
 assert.match(pluginSource, /paceboard:\/\/status/);
 assert.match(pluginSource, /paceboard:\/\//);
@@ -128,10 +139,27 @@ assert.match(pluginSource, /drawFeaturedGoalDot/);
 assert.match(pluginSource, /drawAvatarCard/);
 assert.match(pluginSource, /drawStatusGoalGrid/);
 assert.match(pluginSource, /val rows = \(count \+ columns - 1\) \/ columns/);
+assert.match(pluginSource, /size\.wide -> 29f/);
+assert.match(pluginSource, /else -> 20f/);
 assert.match(pluginSource, /goal\.optString\("title", "Goal"\)/);
 assert.match(pluginSource, /item\.optJSONArray\("goals"\)/);
-assert.match(pluginSource, /item\.optString\("completionIcon"/);
 assert.match(pluginSource, /item\.optBoolean\("showProgressOutline", true\)/);
+const featuredBadge = pluginSource.slice(
+  pluginSource.indexOf("private fun drawProgressBadge"),
+  pluginSource.indexOf("private fun drawCompletionIcon"),
+);
+assert.match(featuredBadge, /Color\.argb\(215, 61, 69, 80\)/);
+assert.match(featuredBadge, /Color\.rgb\(184, 228, 92\)/);
+assert.match(featuredBadge, /progress \* 360f/);
+assert.match(featuredBadge, /"\$percent%"/);
+assert.match(featuredBadge, /diameter <= 25f && percent >= 100/);
+assert.doesNotMatch(
+  featuredBadge,
+  /drawCompletionIcon/,
+  "Featured completion must keep a neutral center with an arc and percentage",
+);
+assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
+assert.match(pluginSource, /contentWidth - dateWidth - headerGap/);
 assert.match(pluginSource, /PorterDuffColorFilter/);
 assert.match(pluginSource, /LruCache<String, Bitmap>/);
 assert.match(pluginSource, /MAX_RENDER_PIXELS/);
@@ -142,9 +170,16 @@ assert.match(pluginSource, /setContentDescription/);
 assert.match(pluginSource, /GOAL_LIME/);
 assert.match(pluginSource, /GOAL_GOLD/);
 assert.doesNotMatch(pluginSource, /ValueAnimator|ObjectAnimator|AnimationUtils/);
+for (const preview of [smallPreview, wideCompactPreview]) {
+  assert.match(preview, /android:fillColor="#3D4550"/);
+  assert.match(preview, /android:strokeColor="#A4AEBC"/);
+  assert.match(preview, /android:strokeColor="#B8E45C"/);
+  assert.match(preview, /android:fillColor="#DDE6F5"/);
+}
 
 assert.match(widgetTypes, /export type WidgetGoalSnapshot/);
 assert.match(widgetTypes, /export type WidgetFeaturedSnapshot/);
+assert.match(widgetTypes, /dateLabel: string/);
 assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);
 assert.match(widgetTypes, /avatarUri\?: string/);
 assert.match(widgetTypes, /goals: WidgetGoalSnapshot\[\]/);
@@ -162,6 +197,7 @@ assert.match(widgetBridge, /const payload = JSON\.stringify\(\{ featured, avatar
 assert.match(widgetSnapshots, /todayHeroSummary\(state, state\.currentUserId, today\)/);
 assert.match(widgetSnapshots, /statusRangeRollup\(state, state\.currentUserId, \[today\]\)/);
 assert.match(widgetSnapshots, /completionIndicatorOption/);
+assert.match(widgetSnapshots, /dateLabel: compactDayDate\(today, language\)/);
 assert.match(widgetSnapshots, /showProgressOutline:/);
 assert.match(widgetSnapshots, /goals: WidgetGoalSnapshot\[\]/);
 assert.doesNotMatch(widgetSnapshots, /weightLabel|bodyCompositionLabel/);

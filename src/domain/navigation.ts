@@ -18,6 +18,15 @@ export const DEFAULT_TAB_ORDER: readonly LandingPage[] = [
 ];
 
 const FIXED_TAB_IDS = new Set<LandingPage>(["index", "status", "chat"]);
+export const COMPACT_TAB_BAR_THRESHOLD = 7;
+
+/** Seven equal-width destinations need a denser label/icon treatment. */
+export function compactTabBarForCount(visibleCount: number) {
+  return (
+    Number.isFinite(visibleCount) &&
+    Math.max(0, Math.floor(visibleCount)) >= COMPACT_TAB_BAR_THRESHOLD
+  );
+}
 
 export function isFixedNavigationPage(page: LandingPage) {
   return FIXED_TAB_IDS.has(page);

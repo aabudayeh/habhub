@@ -41,7 +41,7 @@ class HabHubWidgetConfigActivity : Activity() {
     val alreadyConfigured = HabHubWidgetStore.hasConfiguration(this, widgetId)
     val family = widgetFamily(widgetId)
     val choices = when (family) {
-      "square" -> listOf("__avatar__" to getString(R.string.habhub_widget_status_avatar))
+      "square", "wide" -> listOf("__avatar__" to getString(R.string.habhub_widget_status_avatar))
       "wide_compact" -> listOf("__featured__" to getString(R.string.habhub_widget_featured_progress))
       else -> listOf(
         "__featured__" to getString(R.string.habhub_widget_featured_progress),

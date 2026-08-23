@@ -90,6 +90,7 @@ import {
   useApp,
 } from "@/src/state/AppProvider";
 import { AppStateStorageReadError } from "@/src/storage/appStateStorage";
+import { deleteGoogleHealthStepCheckpoint } from "@/src/storage/googleHealthStepCheckpoint";
 import {
   purgeLegacyGroupActivityCaches,
   readGroupActivityCache,
@@ -6662,8 +6663,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       },
       deleteAccount: async () => {
         if (!supabase) throw new Error("Cloud is not configured.");
+        const accountId = auth.user?.id ?? stateRef.current.currentUserId;
         const { error } = await supabase.functions.invoke("delete-account");
         if (error) throw error;
+        await deleteGoogleHealthStepCheckpoint(accountId).catch(
+          () => undefined,
+        );
         await supabase.auth.signOut({ scope: "global" });
       },
       createGroup: async (name, options) => {

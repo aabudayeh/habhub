@@ -6,6 +6,7 @@ import {
   completionIndicatorFillMode,
   completionIndicatorOption,
 } from "@/src/domain/completionIndicators";
+import { compactDayDate } from "@/src/domain/date";
 import { statusRangeRollup } from "@/src/domain/status";
 import { todayHeroSummary } from "@/src/domain/todayHero";
 import { localizeMetricName } from "@/src/i18n/domain";
@@ -115,6 +116,7 @@ export function featuredWidgetSnapshot(
   return {
     id: "__featured__",
     eyebrow: `${baseEyebrow}${todoSuffix}`,
+    dateLabel: compactDayDate(today, language),
     title: "HabHub",
     value: `${summary.met} ${translate("of")} ${summary.total}`,
     subtitle: featuredSubtitle(summary, translate),

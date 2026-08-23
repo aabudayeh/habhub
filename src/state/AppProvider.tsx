@@ -32,6 +32,7 @@ import {
   stateWithoutGoogleHealthLocalData,
   withoutGoogleHealthEntryOverrides,
 } from "@/src/domain/googleHealthLocalPrivacy";
+import { mergeGoogleHealthStepCheckpoint } from "@/src/domain/googleHealthStepCheckpoint";
 import { advanceAuthoritativeStateFromRender } from "@/src/domain/authoritativeState";
 import {
   scheduleResponsiveWork,
@@ -112,6 +113,11 @@ import {
   setAppStateStorageItem,
   setAppStateStorageItemStrict,
 } from "@/src/storage/appStateStorage";
+import {
+  deleteGoogleHealthStepCheckpoint,
+  readGoogleHealthStepCheckpoint,
+  writeGoogleHealthStepCheckpoint,
+} from "@/src/storage/googleHealthStepCheckpoint";
 import { notifyProgressMilestones } from "@/src/notifications/push";
 import {
   ActivityTimer,
@@ -171,7 +177,10 @@ export async function readPersistedAccountState(accountId: string) {
   const sanitized = stateWithoutGoogleHealthLocalData(parsed);
   if (sanitized !== parsed)
     await setAppStateStorageItem(storageKey, JSON.stringify(sanitized));
-  return sanitized;
+  const checkpoint = await readGoogleHealthStepCheckpoint(accountId).catch(
+    () => undefined,
+  );
+  return mergeGoogleHealthStepCheckpoint(sanitized, checkpoint);
 }
 
 /** Remove plaintext Google Health rows left by a pre-privacy pilot build. */
@@ -3172,6 +3181,14 @@ export function AppProvider({
   );
   const [hydrated, setHydrated] = useState(ephemeral);
   const [localMutationRevision, setLocalMutationRevision] = useState(0);
+  const googleHealthStepCheckpointSource = useMemo(
+    () => ({
+      currentUserId: state.currentUserId,
+      entries: state.entries,
+      metrics: state.metrics,
+    }),
+    [state.currentUserId, state.entries, state.metrics],
+  );
   const persistenceStateRef = useRef(state);
   const persistenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -3791,13 +3808,17 @@ export function AppProvider({
               // account from loading. HealthSyncProvider can repair it later.
             }
           }
+          const upgraded = upgradeStateV21(
+            stateWithDeviceHealth,
+            defaults,
+            restoredVersion,
+          );
+          const checkpoint = await readGoogleHealthStepCheckpoint(
+            upgraded.currentUserId,
+          ).catch(() => undefined);
           dispatch({
             type: "hydrate",
-            state: upgradeStateV21(
-              stateWithDeviceHealth,
-              defaults,
-              restoredVersion,
-            ),
+            state: mergeGoogleHealthStepCheckpoint(upgraded, checkpoint),
           });
         }
       })
@@ -3857,6 +3878,17 @@ export function AppProvider({
     if (NativeAppState.currentState !== "active") return;
     scheduleDeferredPersistence();
   }, [ephemeral, hydrated, scheduleDeferredPersistence, state]);
+
+  useEffect(() => {
+    if (!hydrated || ephemeral) return;
+    // Google imports stay out of the plaintext app snapshot. The Web-specific
+    // implementation writes only the recent daily Steps aggregate into an
+    // AES-GCM checkpoint, immediately after an authoritative cloud refresh,
+    // so a killed/reopened PWA never paints a fabricated zero first.
+    void writeGoogleHealthStepCheckpoint(googleHealthStepCheckpointSource).catch(
+      () => undefined,
+    );
+  }, [ephemeral, googleHealthStepCheckpointSource, hydrated]);
 
   useEffect(() => {
     if (!hydrated || ephemeral) return;
@@ -4155,20 +4187,29 @@ export function AppProvider({
     // result without generating a second local deletion outbox, and flush the
     // now-sanitized cache before reporting success to the user. This explicit
     // user action renders urgently even though its authority came from cloud.
-    return commitReducedState(next, true, "local");
+    return commitReducedState(next, true, "local").then(() =>
+      deleteGoogleHealthStepCheckpoint(previous.currentUserId),
+    );
   }, [commitReducedState]);
   const purgeGoogleHealthEntryAction = useCallback<
     AppContextValue["purgeGoogleHealthEntry"]
   >(
     (entryId) => {
+      const previous = persistenceStateRef.current;
       const next = purgeGoogleHealthEntryFromMemory(
-        persistenceStateRef.current,
+        previous,
         entryId,
       );
       // The Edge Function already committed the dismissal. Do not create a
       // plaintext id outbox; just remove the row from memory and flush the
-      // cache-safe projection before the UI reports success.
-      return commitReducedState(next, true, "local");
+      // cache-safe projection before the UI reports success. Rebase the small
+      // browser Steps checkpoint too: first clear anything containing the
+      // dismissed row, then rebuild from the post-dismissal state so another
+      // confirmed day's aggregate is not unnecessarily lost.
+      return commitReducedState(next, true, "local").then(async () => {
+        await deleteGoogleHealthStepCheckpoint(previous.currentUserId);
+        await writeGoogleHealthStepCheckpoint(next);
+      });
     },
     [commitReducedState],
   );

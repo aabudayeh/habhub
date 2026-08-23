@@ -2,9 +2,12 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="360dp" android:height="120dp" android:viewportWidth="360" android:viewportHeight="120">
   <path android:fillColor="#081B49" android:fillAlpha="0.55" android:pathData="M20,8 H340 Q352,8 352,20 V100 Q352,112 340,112 H20 Q8,112 8,100 V20 Q8,8 20,8 Z" />
   <path android:fillColor="#C3CFE5" android:fillAlpha="0.82" android:pathData="M28,22 H125 V28 H28 Z" />
+  <path android:fillColor="#DDE6F5" android:fillAlpha="0.86" android:pathData="M244,22 H278 V28 H244 Z" />
   <path android:fillColor="#FFFFFF" android:pathData="M28,36 H151 V57 H28 Z" />
-  <path android:fillColor="#00000000" android:strokeColor="#B8E45C" android:strokeWidth="4" android:pathData="M315,20 a23,23 0,1 0,0 46 a23,23 0,1 0,0 -46" />
-  <path android:fillColor="#FFFFFF" android:pathData="M305,42 L312,49 L326,34 L329,37 L312,55 L302,45 Z" />
+  <path android:fillColor="#3D4550" android:pathData="M315,20 a23,23 0,1 0,0 46 a23,23 0,1 0,0 -46" />
+  <path android:fillColor="#00000000" android:strokeColor="#A4AEBC" android:strokeWidth="4" android:pathData="M315,20 a23,23 0,1 0,0 46 a23,23 0,1 0,0 -46" />
+  <path android:fillColor="#00000000" android:strokeColor="#B8E45C" android:strokeWidth="4" android:pathData="M315,20 A23,23 0,0 1,338 43 A23,23 0,0 1,315 66 A23,23 0,0 1,297 57" />
+  <path android:fillColor="#FFFFFF" android:pathData="M303,37 H314 V41 H307 V44 H314 V54 H303 V50 H310 V47 H303 Z M318,38 H322 V53 H318 Z M324,38 H328 V42 H324 Z M324,49 H328 V53 H324 Z" />
   <path android:fillColor="#FFFFFF" android:fillAlpha="0.14" android:pathData="M28,65 H47 V84 H28 Z M53,65 H72 V84 H53 Z M78,65 H97 V84 H78 Z M103,65 H122 V84 H103 Z M128,65 H147 V84 H128 Z M153,65 H172 V84 H153 Z" />
   <path android:fillColor="#B8E45C" android:fillAlpha="0.82" android:pathData="M28,75 H47 V84 H28 Z M53,69 H72 V84 H53 Z M78,65 H97 V84 H78 Z M103,78 H122 V84 H103 Z M128,72 H147 V84 H128 Z" />
   <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeAlpha="0.36" android:strokeWidth="1.3" android:pathData="M28,65 H47 V84 H28 Z M53,65 H72 V84 H53 Z M78,65 H97 V84 H78 Z M103,65 H122 V84 H103 Z M128,65 H147 V84 H128 Z M153,65 H172 V84 H153 Z" />

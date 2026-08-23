@@ -527,6 +527,10 @@ const webScheduleMigration = fs.readFileSync(
   "supabase/migrations/202608220007_web_personal_reminder_delivery.sql",
   "utf8",
 );
+const webScheduleRepairMigration = fs.readFileSync(
+  "supabase/migrations/202608230002_web_personal_notification_worker_reliability.sql",
+  "utf8",
+);
 const webScheduleWorker = fs.readFileSync(
   "supabase/functions/web-personal-notifications/index.ts",
   "utf8",
@@ -609,12 +613,15 @@ assert.match(workoutTimerSource, /workoutGeneration: flow\.generation/);
 assert.match(workoutTimerSource, /window\.Notification\.permission !== "granted"/);
 assert.match(workoutTimerSource, /registration\.getNotifications\(\{[\s\S]{0,80}tag: WORKOUT_TIMER_NOTIFICATION/);
 assert.match(workoutTimerSource, /registration\.showNotification/);
-assert.match(workoutTimerSource, /silent: true/);
+assert.match(workoutTimerSource, /silent: !shouldAlert/);
+assert.match(workoutTimerSource, /renotify: shouldAlert && replacesLiveNotification/);
+assert.match(workoutTimerSource, /webWorkoutNotificationAlertSignature/);
 assert.match(workoutTimerSource, /route: "\/gym"/);
 assert.match(workoutTimerSource, /maxActions/);
 assert.match(workoutTimerSource, /timestamp: phaseOrigin/);
-assert.match(workoutTimerSource, /action: WORKOUT_TIMER_PAUSE/);
+assert.match(workoutTimerSource, /WORKOUT_TIMER_RESUME : WORKOUT_TIMER_PAUSE/);
 assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
+assert.match(workoutTimerSource, /export const WORKOUT_TIMER_RESUME = "workout-resume"/);
 assert.match(workoutTimerSource, /suspendWorkoutTimerNotificationPersistence/);
 assert.match(gymSource, /document\.visibilityState === "visible"/);
 assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
@@ -632,7 +639,10 @@ assert.match(webWorker, /WORKOUT_ACTION_MAX_AGE_MS = 24 \* 60 \* 60 \* 1000/);
 assert.match(webWorker, /self\.clients\.openWindow\(target\.href\)/);
 const workoutActionBranch = webWorker.slice(
   webWorker.indexOf('self.addEventListener("notificationclick"'),
-  webWorker.indexOf("// A notification-body click"),
+  webWorker.indexOf(
+    "  event.notification.close();",
+    webWorker.indexOf('self.addEventListener("notificationclick"'),
+  ),
 );
 assert.match(workoutActionBranch, /event\.waitUntil\([\s\S]*storeWorkoutAction\(queuedAction\)/);
 assert.match(workoutActionBranch, /return;\s*\}/);
@@ -640,6 +650,32 @@ assert.doesNotMatch(
   workoutActionBranch,
   /\.focus\(|\.navigate\(|openWindow\(/,
   "workout action buttons must never open, navigate, or focus the PWA",
+);
+assert.match(
+  webWorker,
+  /event\.notification\.close\(\);\s*\/\/ A notification-body click/,
+  "only a notification-body click should explicitly close the live row",
+);
+assert.doesNotMatch(
+  workoutActionBranch,
+  /notification\.close\(/,
+  "workout controls must not explicitly dismiss the live notification row",
+);
+const timerActionMapping = gymSource.slice(
+  gymSource.indexOf("timerActionRef.current ="),
+  gymSource.indexOf("useEffect(() => {", gymSource.indexOf("timerActionRef.current =")),
+);
+assert.match(timerActionMapping, /WORKOUT_TIMER_PAUSE[\s\S]{0,160}pauseWorkout/);
+assert.match(timerActionMapping, /WORKOUT_TIMER_RESUME[\s\S]{0,80}resumeWorkout/);
+assert.match(timerActionMapping, /WORKOUT_TIMER_NEXT[\s\S]{0,80}advanceWorkoutTimer/);
+const webPauseMapping = timerActionMapping.slice(
+  timerActionMapping.indexOf("action === WORKOUT_TIMER_PAUSE"),
+  timerActionMapping.indexOf("action === WORKOUT_TIMER_RESUME"),
+);
+assert.doesNotMatch(
+  webPauseMapping,
+  /advanceWorkoutTimer/,
+  "the Web Pause action must never share the Next transition",
 );
 function createFakeWorkoutActionIndexedDb() {
   const rows = new Map();
@@ -709,7 +745,13 @@ function createFakeWorkoutActionIndexedDb() {
   };
 }
 const workerHandlers = new Map();
-const workerEffects = { focused: 0, navigated: 0, opened: 0, messages: [] };
+const workerEffects = {
+  focused: 0,
+  navigated: 0,
+  opened: 0,
+  closed: 0,
+  messages: [],
+};
 const fakeWorkoutActionDb = createFakeWorkoutActionIndexedDb();
 let workerWindows = [];
 let randomId = 0;
@@ -767,7 +809,9 @@ async function clickWorkoutAction(action, actionToken = "opaque-session-token") 
   notificationClick({
     action,
     notification: {
-      close() {},
+      close() {
+        workerEffects.closed += 1;
+      },
       data: {
         route: "/gym",
         workoutTimer: true,
@@ -781,14 +825,16 @@ async function clickWorkoutAction(action, actionToken = "opaque-session-token") 
   await actionWork;
 }
 await clickWorkoutAction("workout-pause");
+await clickWorkoutAction("workout-resume");
 await clickWorkoutAction("workout-pause");
 await clickWorkoutAction("workout-next");
 await clickWorkoutAction("workout-pause", "second-opaque-session-token");
 assert.equal(workerEffects.messages.length, 0);
-assert.equal(fakeWorkoutActionDb.rows.size, 4);
+assert.equal(fakeWorkoutActionDb.rows.size, 5);
 assert.equal(workerEffects.focused, 0);
 assert.equal(workerEffects.navigated, 0);
 assert.equal(workerEffects.opened, 0);
+assert.equal(workerEffects.closed, 0);
 workerWindows = [workerClient];
 let drainWork;
 workerMessage({
@@ -808,11 +854,11 @@ assert.equal(workerEffects.messages.length, 1);
 const drained = workerEffects.messages[0];
 assert.deepEqual(
   Array.from(drained.actions, (item) => item.action),
-  ["workout-pause", "workout-pause", "workout-next"],
+  ["workout-pause", "workout-resume", "workout-pause", "workout-next"],
 );
 assert.equal(
   new Set(Array.from(drained.actions, (item) => item.id)).size,
-  3,
+  4,
   "durable IDs must distinguish same-action taps with identical occurredAt",
 );
 const storedOccurredAt = Array.from(fakeWorkoutActionDb.rows.values())
@@ -873,10 +919,16 @@ notificationClick({
 assert.equal(workerEffects.focused, 0);
 assert.equal(workerEffects.navigated, 0);
 assert.equal(workerEffects.opened, 0);
+assert.equal(workerEffects.closed, 0);
 let bodyWork;
 notificationClick({
   action: "",
-  notification: { close() {}, data: { route: "/gym", workoutTimer: true } },
+  notification: {
+    close() {
+      workerEffects.closed += 1;
+    },
+    data: { route: "/gym", workoutTimer: true },
+  },
   waitUntil(work) {
     bodyWork = work;
   },
@@ -885,6 +937,7 @@ await bodyWork;
 assert.equal(workerEffects.navigated, 1);
 assert.equal(workerEffects.focused, 1);
 assert.equal(workerEffects.opened, 0);
+assert.equal(workerEffects.closed, 1);
 assert.match(workoutTimerSource, /workoutActionToken: actionToken/);
 assert.match(workoutTimerSource, /message\.actionToken !== webWorkoutActionToken/);
 assert.match(workoutTimerSource, /WEB_WORKOUT_ACTION_IDENTITY_KEY/);
@@ -1108,9 +1161,41 @@ assert.match(webScheduleMigration, /for update skip locked/);
 assert.match(webScheduleMigration, /web-personal-notifications-every-minute/);
 assert.match(webScheduleMigration, /web_personal_notification_worker_secret/);
 assert.match(webScheduleMigration, /delete from public\.web_personal_notification_schedule/);
+assert.match(
+  webScheduleRepairMigration,
+  /configure_web_personal_notification_worker/,
+);
+assert.match(webScheduleRepairMigration, /grant execute[\s\S]{0,160}to service_role/);
+assert.match(
+  webScheduleRepairMigration,
+  /web_personal_notification_worker_url is not configured/,
+);
+assert.match(
+  webScheduleRepairMigration,
+  /web_personal_notification_worker_secret is not configured/,
+);
+assert.match(
+  webScheduleRepairMigration,
+  /web_personal_notification_reopen_retryable/,
+);
+assert.match(
+  webScheduleRepairMigration,
+  /old\.last_error = 'preference_suppressed'/,
+);
+assert.match(
+  webScheduleRepairMigration,
+  /web_push_subscription_wake_personal_notifications/,
+);
+assert.doesNotMatch(
+  webScheduleRepairMigration,
+  /nullif\([^;]{0,200}then return/,
+);
 assert.match(webScheduleWorker, /PERSONAL_NOTIFICATION_WORKER_SECRET/);
 assert.match(webScheduleWorker, /constantTimeEqual/);
 assert.match(webScheduleWorker, /web_personal_notification_acceptances/);
+assert.match(webScheduleWorker, /payload\.action === "configure"/);
+assert.match(webScheduleWorker, /No active Web Push subscription is registered/);
+assert.match(webScheduleWorker, /gatewayAccepted === 0/);
 assert.match(webScheduleWorker, /status === 404 \|\| status === 410/);
 assert.match(webScheduleWorker, /preferenceAllowed/);
 assert.match(groupSettingsSource, /Personal alerts for this group/);

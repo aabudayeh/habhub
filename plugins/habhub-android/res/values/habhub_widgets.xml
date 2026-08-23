@@ -4,7 +4,7 @@
   <string name="habhub_widget_description_small">Featured card or minimalist Status - 2 x 1</string>
   <string name="habhub_widget_description_square">Minimalist Status with all goal circles - 2 x 2</string>
   <string name="habhub_widget_description_featured_wide_compact">Featured card and goal progress - 4 x 1</string>
-  <string name="habhub_widget_description_wide">Featured card or minimalist Status - 4 x 2</string>
+  <string name="habhub_widget_description_wide">Minimalist Status with larger goal circles - 4 x 2</string>
   <string name="habhub_widget_open_to_update">Open HabHub to update</string>
   <string name="habhub_widget_featured_progress">Featured progress</string>
   <string name="habhub_widget_status_avatar">Status avatar</string>

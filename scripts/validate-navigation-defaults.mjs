@@ -3,6 +3,7 @@ import fs from "node:fs";
 
 import {
   DEFAULT_TAB_ORDER,
+  compactTabBarForCount,
   isFixedNavigationPage,
   navigationDefaultsForVersion,
   normalizeTabOrder,
@@ -72,6 +73,17 @@ assert.equal(isFixedNavigationPage("index"), true);
 assert.equal(isFixedNavigationPage("status"), true);
 assert.equal(isFixedNavigationPage("chat"), true);
 assert.equal(isFixedNavigationPage("group"), false);
+assert.equal(
+  compactTabBarForCount(6),
+  false,
+  "six visible tabs must retain the established spacing and typography",
+);
+assert.equal(
+  compactTabBarForCount(7),
+  true,
+  "seven visible tabs must switch to the full-label compact treatment",
+);
+assert.equal(compactTabBarForCount(10), true);
 
 const tabs = fs.readFileSync("app/(tabs)/_layout.tsx", "utf8");
 const display = fs.readFileSync("app/display-settings.tsx", "utf8");
@@ -82,6 +94,12 @@ const cloudProvider = fs.readFileSync("src/cloud/CloudSyncProvider.tsx", "utf8")
 
 assert.match(tabs, /const showStatus = state\.settings\.showStatus !== false/);
 assert.match(tabs, /normalizeTabOrder\(state\.settings\.tabOrder\)/);
+assert.match(tabs, /const visibleTabCount = orderedTabs\.filter\(isVisible\)\.length/);
+assert.match(tabs, /compactTabBarForCount\(visibleTabCount\)/);
+assert.match(tabs, /fontSize: 7\.2/);
+assert.match(tabs, /letterSpacing: -0\.25/);
+assert.match(tabs, /compactTabBar \? 20 : 22/);
+assert.match(tabs, /: \{ fontSize: 9, fontWeight: "700" \}/);
 assert.match(display, /page\.id !== "status" \|\| state\.settings\.showStatus !== false/);
 assert.match(display, /key === "showStatus"[\s\S]{0,100}state\.settings\.showStatus !== false/);
 assert.match(display, /isFixedNavigationPage\(id\)/);

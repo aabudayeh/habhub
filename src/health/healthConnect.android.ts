@@ -17,10 +17,10 @@ import {
 import {
   authoritativeHealthConnectStepGroups,
   combineDisjointStepWindows,
+  finalImportedStepTotal,
   healthSourceEnabled,
   localCalendarAggregateRange,
   partitionStepAggregateRange,
-  preferAndroidDeviceHistoricalStepGroups,
   reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
   resolveCurrentDeviceStepOrigins,
@@ -950,13 +950,13 @@ export const healthConnectAdapter: HealthAdapter = {
               startTime: stepRange.from.toISOString(),
               endTime: stepRange.to.toISOString(),
             };
-            // The unfiltered Health Connect aggregate is the per-day fallback.
-            // For both history and today, first aggregate only Android's
-            // official on-device origin (`android` or this app's discovered
-            // SPN). That totals the phone's smaller non-overlapping interval
-            // records while excluding lagging Samsung/watch mirrors. Local
-            // Recording remains an older-device live fallback; never add
-            // overlapping full-day totals.
+            // Completed days use Health Connect's unfiltered aggregate so its
+            // Activity priority and overlap removal remain authoritative.
+            // For today, first aggregate only Android's official on-device
+            // origin (`android` or this app's discovered SPN). That aggregate
+            // totals the phone's smaller non-overlapping interval records while
+            // excluding lagging Samsung/watch mirrors. Local Recording remains
+            // an older-device fallback; never add overlapping full-day totals.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
@@ -995,7 +995,7 @@ export const healthConnectAdapter: HealthAdapter = {
                   includesCurrentDay
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
                     : Promise.resolve(null),
-                  stepSlices.historical || includesCurrentDay
+                  includesCurrentDay
                     ? currentDeviceStepOrigins()
                     : Promise.resolve([]),
                 ]);
@@ -1035,35 +1035,20 @@ export const healthConnectAdapter: HealthAdapter = {
                   rawDeviceOrigins,
                 );
               }
-              const [androidDeviceAggregate, androidDeviceHistoricalGroups] =
-                await Promise.all([
-                  includesCurrentDay &&
-                    onDeviceHealthConnectStepsAvailable &&
-                    androidDeviceOrigins.length
-                    ? aggregateRecord({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          operator: "between",
-                          startTime: currentStart!.toISOString(),
-                          endTime: currentEnd!.toISOString(),
-                        },
-                        dataOriginFilter: androidDeviceOrigins,
-                      }).catch(() => null)
-                    : Promise.resolve(null),
-                  stepSlices.historical &&
-                    onDeviceHealthConnectStepsAvailable &&
-                    androidDeviceOrigins.length
-                    ? aggregateGroupByPeriod({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          ...stepTimeRangeFilter,
-                          endTime: stepSlices.historical.to.toISOString(),
-                        },
-                        timeRangeSlicer: { period: "DAYS", length: 1 },
-                        dataOriginFilter: androidDeviceOrigins,
-                      }).catch(() => [] as typeof unfilteredGroups)
-                    : Promise.resolve([] as typeof unfilteredGroups),
-                ]);
+              const androidDeviceAggregate =
+                includesCurrentDay &&
+                onDeviceHealthConnectStepsAvailable &&
+                androidDeviceOrigins.length
+                  ? await aggregateRecord({
+                      recordType: "Steps",
+                      timeRangeFilter: {
+                        operator: "between",
+                        startTime: currentStart!.toISOString(),
+                        endTime: currentEnd!.toISOString(),
+                      },
+                      dataOriginFilter: androidDeviceOrigins,
+                    }).catch(() => null)
+                  : null;
               const contributedOrigins = [
                 ...new Set(
                   [
@@ -1072,24 +1057,22 @@ export const healthConnectAdapter: HealthAdapter = {
                     ),
                     ...(currentAggregate?.dataOrigins ?? []),
                     ...(androidDeviceAggregate?.dataOrigins ?? []),
-                    ...androidDeviceHistoricalGroups.flatMap(
-                      (group) => group.result.dataOrigins ?? [],
-                    ),
                   ],
                 ),
               ];
               const observedOrigins = [
                 ...new Set(contributedOrigins.filter(Boolean)),
               ];
-              const groups = preferAndroidDeviceHistoricalStepGroups(
-                authoritativeHealthConnectStepGroups(unfilteredGroups),
-                androidDeviceHistoricalGroups,
+              const groups = authoritativeHealthConnectStepGroups(
+                unfilteredGroups,
               );
               successfulReads += 1;
               const historicalRecords = groups.flatMap(
                 (group): HealthImportRecord[] => {
                   const localDate = group.startTime.slice(0, 10);
-                  const count = Number(group.result.COUNT_TOTAL ?? 0);
+                  const count = finalImportedStepTotal(
+                    Number(group.result.COUNT_TOTAL ?? 0),
+                  );
                   if (!(count > 0)) return [];
                   const sources = [
                     ...new Set(
@@ -1111,7 +1094,7 @@ export const healthConnectAdapter: HealthAdapter = {
                       startTime: group.startTime,
                       endTime: recordedAt,
                       localDate,
-                      value: Math.round(count),
+                      value: count,
                       unit: "steps",
                       origin:
                         (sources.length === 1 ? sources[0] : "Health Connect"),
@@ -1158,7 +1141,9 @@ export const healthConnectAdapter: HealthAdapter = {
                 disjointPhoneCandidate,
                 Number(androidDeviceAggregate?.COUNT_TOTAL ?? 0),
               );
-              const currentCount = reconciledCurrent.count;
+              const currentCount = finalImportedStepTotal(
+                reconciledCurrent.count,
+              );
               const currentSources = [
                 ...new Set(
                   (currentAggregate?.dataOrigins?.length

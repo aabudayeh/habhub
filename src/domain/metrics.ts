@@ -2401,35 +2401,209 @@ export type WeeklyDeficitBalance = {
   startDate: string;
 };
 
+export type WeeklyBalanceViewPeriod =
+  | "today"
+  | "yesterday"
+  | "week"
+  | "month"
+  | "year"
+  | "overall"
+  | "custom";
+
+export type WeeklyBalanceBucket = WeeklyDeficitBalance & {
+  id: string;
+  endDate: string;
+};
+
+export type WeeklyBalancePeriodReport = WeeklyDeficitBalance & {
+  endDate: string;
+  bucketKind: "day" | "week" | "month" | "year";
+  buckets: WeeklyBalanceBucket[];
+  averageDailyBalance: number;
+  onPlanBuckets: number;
+  countedBuckets: number;
+  bestBucket?: WeeklyBalanceBucket;
+  worstBucket?: WeeklyBalanceBucket;
+};
+
+function energyBalanceAcrossDates(
+  state: AppState,
+  userId: string,
+  dates: string[],
+  foodDates: ReadonlySet<string>,
+): Omit<WeeklyDeficitBalance, "startDate"> {
+  const deficit = state.metrics.find((metric) => metric.id === "deficit");
+  if (!deficit) return { balance: 0, actual: 0, target: 0, days: 0 };
+  let actual = 0;
+  let target = 0;
+  let days = 0;
+  for (const day of dates) {
+    if (!foodDates.has(day)) continue;
+    days += 1;
+    actual += safeMetricValue(state, deficit, userId, day);
+    target += effectiveGoalTarget(state, deficit, userId, day);
+  }
+  return { balance: actual - target, actual, target, days };
+}
+
+function dateSpan(from: string, through: string): string[] {
+  if (from > through) return [];
+  const [fromYear, fromMonth, fromDay] = from.split("-").map(Number);
+  const [throughYear, throughMonth, throughDay] = through
+    .split("-")
+    .map(Number);
+  const length =
+    Math.floor(
+      (Date.UTC(throughYear, throughMonth - 1, throughDay) -
+        Date.UTC(fromYear, fromMonth - 1, fromDay)) /
+        86400000,
+    ) + 1;
+  return dateRangeEnding(through, Math.max(1, length));
+}
+
+function groupedBalanceBuckets(
+  state: AppState,
+  userId: string,
+  dates: string[],
+  group: "day" | "week" | "month" | "year",
+  weekStartsOn: 0 | 1 | 6,
+  foodDates: ReadonlySet<string>,
+): WeeklyBalanceBucket[] {
+  const groups = new Map<string, string[]>();
+  for (const date of dates) {
+    const id =
+      group === "day"
+        ? date
+        : group === "week"
+          ? calendarWeekRange(date, weekStartsOn)[0]
+          : group === "month"
+            ? date.slice(0, 7)
+            : date.slice(0, 4);
+    const bucketDates = groups.get(id);
+    if (bucketDates) bucketDates.push(date);
+    else groups.set(id, [date]);
+  }
+  return [...groups.entries()].map(([id, bucketDates]) => {
+    const result = energyBalanceAcrossDates(
+      state,
+      userId,
+      bucketDates,
+      foodDates,
+    );
+    return {
+      id,
+      ...result,
+      startDate: bucketDates[0],
+      endDate: bucketDates.at(-1) ?? bucketDates[0],
+    };
+  });
+}
+
+/**
+ * Builds the Weekly balance tracker view. A selected day intentionally shows
+ * its week-to-date result; wider ranges total only food-logged days inside the
+ * chosen calendar period and use coarser buckets so the chart stays legible.
+ */
+export function weeklyBalancePeriodReport(
+  state: AppState,
+  userId: string,
+  period: WeeklyBalanceViewPeriod,
+  anchorDate: string,
+  weekStartsOn: 0 | 1 | 6 = state.settings.weekStartsOn ?? 1,
+): WeeklyBalancePeriodReport {
+  const today = dateKey();
+  const through =
+    period === "overall" || anchorDate > today ? today : anchorDate;
+  let dates: string[];
+  let bucketKind: "day" | "week" | "month" | "year";
+  const foodDates = new Set(
+    state.entries
+      .filter(
+        (entry) =>
+          entry.userId === userId && entry.metricId === "food",
+      )
+      .map((entry) => entry.localDate),
+  );
+
+  if (["today", "yesterday", "custom"].includes(period)) {
+    dates = calendarWeekRange(through, weekStartsOn).filter(
+      (date) => date <= through,
+    );
+    bucketKind = "day";
+  } else if (period === "week") {
+    dates = calendarWeekRange(through, weekStartsOn).filter(
+      (date) => date <= today,
+    );
+    bucketKind = "day";
+  } else if (period === "month") {
+    dates = monthDateRange(through).filter((date) => date <= today);
+    bucketKind = "week";
+  } else if (period === "year") {
+    dates = yearDateRange(through).filter((date) => date <= today);
+    bucketKind = "month";
+  } else {
+    const firstFoodDate = [...foodDates]
+      .filter((date) => date <= through)
+      .sort()[0];
+    dates = dateSpan(firstFoodDate ?? through, through);
+    bucketKind = dates.length > 730 ? "year" : "month";
+  }
+
+  const buckets = groupedBalanceBuckets(
+    state,
+    userId,
+    dates,
+    bucketKind,
+    weekStartsOn,
+    foodDates,
+  );
+  const bucketTotals = buckets.reduce(
+    (sum, bucket) => ({
+      actual: sum.actual + bucket.actual,
+      target: sum.target + bucket.target,
+      days: sum.days + bucket.days,
+    }),
+    { actual: 0, target: 0, days: 0 },
+  );
+  const totals = {
+    ...bucketTotals,
+    balance: bucketTotals.actual - bucketTotals.target,
+  };
+  const counted = buckets.filter((bucket) => bucket.days > 0);
+  const sorted = [...counted].sort((a, b) => a.balance - b.balance);
+  return {
+    ...totals,
+    startDate: dates[0] ?? through,
+    endDate: dates.at(-1) ?? through,
+    bucketKind,
+    buckets,
+    averageDailyBalance: totals.days ? totals.balance / totals.days : 0,
+    onPlanBuckets: counted.filter((bucket) => bucket.balance >= 0).length,
+    countedBuckets: counted.length,
+    bestBucket: sorted.at(-1),
+    worstBucket: sorted[0],
+  };
+}
+
 /** Positive means ahead of the cumulative deficit target; negative means there is a weekly shortfall. */
 export function weeklyDeficitBalance(
   state: AppState,
   userId: string,
   localDate: string,
 ): WeeklyDeficitBalance {
-  const deficit = state.metrics.find((metric) => metric.id === "deficit");
-  const weekday = new Date(`${localDate}T12:00:00`).getDay();
-  const mondayOffset = -((weekday + 6) % 7);
-  const startDate = dateWithOffsetFrom(localDate, mondayOffset);
-  const calendarDays = Math.abs(mondayOffset) + 1;
-  if (!deficit) return { balance: 0, actual: 0, target: 0, days: 0, startDate };
-  let actual = 0;
-  let target = 0;
-  let days = 0;
-  for (let index = 0; index < calendarDays; index += 1) {
-    const day = dateWithOffsetFrom(startDate, index);
-    const hasFood = state.entries.some(
-      (entry) =>
-        entry.userId === userId &&
-        entry.metricId === "food" &&
-        entry.localDate === day,
-    );
-    if (!hasFood) continue;
-    days += 1;
-    actual += safeMetricValue(state, deficit, userId, day);
-    target += effectiveGoalTarget(state, deficit, userId, day);
-  }
-  return { balance: actual - target, actual, target, days, startDate };
+  const report = weeklyBalancePeriodReport(
+    state,
+    userId,
+    "custom",
+    localDate,
+  );
+  return {
+    balance: report.balance,
+    actual: report.actual,
+    target: report.target,
+    days: report.days,
+    startDate: report.startDate,
+  };
 }
 
 export function formatMetricValue(

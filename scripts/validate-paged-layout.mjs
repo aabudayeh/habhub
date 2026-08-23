@@ -69,5 +69,20 @@ assert.match(today, /onPageChange=\{setTodayPageIndex\}/);
 assert.match(pager, /pagingEnabled/);
 assert.match(pager, /accessibilityRole="tablist"/);
 assert.match(pager, /Page \{page\} of \{total\}/);
+assert.match(pager, /const activePageRef = useRef\(0\)/);
+assert.match(
+  pager,
+  /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,
+  "Web pager content must stay mounted throughout a swipe to avoid compositor ghosts",
+);
+const viewportCorrection = pager.slice(
+  pager.indexOf("Realign only when the viewport width"),
+  pager.indexOf("useEffect(() => {\n    onPageChange"),
+);
+assert.doesNotMatch(
+  viewportCorrection,
+  /\[activePage,\s*pageWidth/,
+  "Changing the active page must not trigger a competing non-animated scrollTo",
+);
 
 console.log("Paged Today and Leaderboard layout validation passed.");

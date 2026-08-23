@@ -38,29 +38,38 @@ export function HorizontalPager({
   const colors = useAppColors();
   const { t } = useLocalization();
   const scrollRef = useRef<ScrollView>(null);
+  const activePageRef = useRef(0);
   const [pageWidth, setPageWidth] = useState(0);
   const [activePage, setActivePage] = useState(0);
+
+  const commitActivePage = useCallback((page: number) => {
+    activePageRef.current = page;
+    setActivePage((current) => (current === page ? current : page));
+  }, []);
 
   const moveToPage = useCallback(
     (requestedPage: number, animated = true) => {
       const page = clampPageIndex(requestedPage, pages.length);
-      setActivePage(page);
+      commitActivePage(page);
       if (pageWidth > 0) {
         scrollRef.current?.scrollTo({ x: page * pageWidth, animated });
       }
     },
-    [pageWidth, pages.length],
+    [commitActivePage, pageWidth, pages.length],
   );
 
   useEffect(() => {
-    const next = clampPageIndex(activePage, pages.length);
-    if (next !== activePage) setActivePage(next);
+    const next = clampPageIndex(activePageRef.current, pages.length);
+    commitActivePage(next);
     if (pageWidth <= 0) return;
+    // Realign only when the viewport width or page count changes. Tying this
+    // correction to `activePage` interrupts an in-progress Web scroll with a
+    // second, non-animated scrollTo and creates a one-frame duplicate/snap.
     const frame = requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ x: next * pageWidth, animated: false });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activePage, pageWidth, pages.length]);
+  }, [commitActivePage, pageWidth, pages.length]);
 
   useEffect(() => {
     onPageChange?.(clampPageIndex(activePage, pages.length));
@@ -69,25 +78,21 @@ export function HorizontalPager({
   useEffect(() => {
     if (requestedPage === undefined) return;
     const next = clampPageIndex(requestedPage, pages.length);
-    setActivePage(next);
+    commitActivePage(next);
     if (pageWidth <= 0) return;
     const frame = requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ x: next * pageWidth, animated: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [pageWidth, pages.length, requestedPage]);
+  }, [commitActivePage, pageWidth, pages.length, requestedPage]);
 
   const updateActivePage = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      setActivePage(
-        pageIndexFromOffset(
-          event.nativeEvent.contentOffset.x,
-          pageWidth,
-          pages.length,
-        ),
+      commitActivePage(
+        pageIndexFromOffset(event.nativeEvent.contentOffset.x, pageWidth, pages.length),
       );
     },
-    [pageWidth, pages.length],
+    [commitActivePage, pageWidth, pages.length],
   );
 
   const measure = useCallback((event: LayoutChangeEvent) => {
@@ -131,7 +136,13 @@ export function HorizontalPager({
               pageStyle,
             ]}
           >
-            {Math.abs(index - activePage) <= 1 ? page : null}
+            {/* Web browsers can briefly composite an unmounted/remounted page
+                at its old scroll position. Keep Web page contents stable for
+                the whole gesture; native retains the bounded adjacent-page
+                rendering optimization. */}
+            {Platform.OS === "web" || Math.abs(index - activePage) <= 1
+              ? page
+              : null}
           </View>
         ))}
       </ScrollView>

@@ -21,6 +21,7 @@ import {
   unregisterCurrentDevicePushToken,
   unregisterOrphanedDevicePushToken,
 } from '@/src/notifications/push';
+import { deleteGoogleHealthStepCheckpoint } from '@/src/storage/googleHealthStepCheckpoint';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
 const CACHED_AUTH_IDENTITY_KEY = 'habhub-cached-auth-identity-v1';
@@ -520,6 +521,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
         const { error } = await client.auth.signOut();
         if (error) throw error;
+        if (userId)
+          await deleteGoogleHealthStepCheckpoint(userId).catch(() => undefined);
         setSession(null);
         setStatus('signedOut');
       } finally {

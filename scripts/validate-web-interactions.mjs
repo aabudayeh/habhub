@@ -36,6 +36,11 @@ assert.match(
 );
 assert.match(pager, /onMomentumScrollEnd=\{updateActivePage\}/);
 assert.match(pager, /onScrollEndDrag=\{updateActivePage\}/);
+assert.match(pager, /const activePageRef = useRef\(0\)/);
+assert.match(
+  pager,
+  /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,
+);
 
 assert.match(fastingClock, /addEventListener\("pointerup", finishDrag, true\)/);
 assert.match(fastingClock, /addEventListener\("pointercancel", finishDrag, true\)/);

@@ -105,7 +105,10 @@ object HabHubWidgetStore {
     backgroundOpacity: Int = 55,
   ) {
     preferences(context).edit()
-      .putString("$TRACKER_PREFIX$widgetId", normalizedTracker(trackerId))
+      .putString(
+        "$TRACKER_PREFIX$widgetId",
+        fixedTracker(context, widgetId) ?: normalizedTracker(trackerId),
+      )
       .putString("$RANGE_PREFIX$widgetId", normalizedRange(range))
       .putString("$BACKGROUND_MODE_PREFIX$widgetId", normalizedBackgroundMode(backgroundMode))
       .putString("$BACKGROUND_COLOR_PREFIX$widgetId", normalizedColor(backgroundColor))
@@ -116,9 +119,10 @@ object HabHubWidgetStore {
   fun configuration(context: Context, widgetId: Int): HabHubWidgetConfiguration {
     val prefs = preferences(context)
     val defaultTracker = defaultTracker(context, widgetId)
+    val storedTracker = prefs.getString("$TRACKER_PREFIX$widgetId", defaultTracker) ?: defaultTracker
     return HabHubWidgetConfiguration(
       widgetId,
-      normalizedTracker(prefs.getString("$TRACKER_PREFIX$widgetId", defaultTracker) ?: defaultTracker),
+      fixedTracker(context, widgetId) ?: normalizedTracker(storedTracker),
       normalizedRange(prefs.getString("$RANGE_PREFIX$widgetId", "week") ?: "week"),
       normalizedBackgroundMode(prefs.getString("$BACKGROUND_MODE_PREFIX$widgetId", "transparent") ?: "transparent"),
       normalizedColor(prefs.getString("$BACKGROUND_COLOR_PREFIX$widgetId", DEFAULT_BACKGROUND) ?: DEFAULT_BACKGROUND),
@@ -156,13 +160,24 @@ object HabHubWidgetStore {
     if (trackerId == "__avatar__") "__avatar__" else "__featured__"
 
   /** Matches each optional-config widget's advertised/default content. */
-  private fun defaultTracker(context: Context, widgetId: Int): String {
+  private fun defaultTracker(context: Context, widgetId: Int) =
+    fixedTracker(context, widgetId) ?: "__featured__"
+
+  /** Fixed-size families redirect stale configurations to their intended UI. */
+  private fun fixedTracker(context: Context, widgetId: Int): String? {
     val manager = AppWidgetManager.getInstance(context)
-    return if (
+    return when {
       widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubSquareWidgetProvider::class.java),
-      )
-    ) "__avatar__" else "__featured__"
+      ) -> "__avatar__"
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubWideWidgetProvider::class.java),
+      ) -> "__avatar__"
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubWideCompactWidgetProvider::class.java),
+      ) -> "__featured__"
+      else -> null
+    }
   }
 
   private fun normalizedBackgroundMode(mode: String) =
@@ -508,14 +523,27 @@ object HabHubWidgetRenderer {
     val contentWidth = max(24f, badgeCenterX - badgeDiameter / 2f - pad - 5f)
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
+    val dateLabel = item.optString("dateLabel")
+    val dateWidth = if (dateLabel.isBlank()) 0f else if (size.compact) 31f else 38f
+    val headerGap = if (dateWidth > 0f) 3f else 0f
     drawText(
       canvas,
       eyebrow,
       pad,
       if (size.compact) 10.5f else 17f,
-      contentWidth,
+      max(10f, contentWidth - dateWidth - headerGap),
       textPaint(if (size.compact) 6.5f else 7.5f, Color.argb(205, 255, 255, 255), true, 0.12f),
     )
+    if (dateWidth > 0f) {
+      drawCenteredEllipsizedText(
+        canvas,
+        dateLabel,
+        pad + contentWidth - dateWidth / 2f,
+        if (size.compact) 10.5f else 17f,
+        dateWidth,
+        textPaint(if (size.compact) 6.5f else 7.3f, Color.argb(225, 222, 230, 242), true),
+      )
+    }
     drawText(
       canvas,
       item.optString("value", "\u2014"),
@@ -540,8 +568,6 @@ object HabHubWidgetRenderer {
       badgeCenterY,
       badgeDiameter,
       progress,
-      accent,
-      item.optString("completionIcon", "ellipse-outline"),
     )
 
     val barLeft = pad
@@ -617,21 +643,42 @@ object HabHubWidgetRenderer {
     centerY: Float,
     diameter: Float,
     progress: Float,
-    accent: Int,
-    completionIcon: String,
   ) {
     val radius = diameter / 2f
-    canvas.drawCircle(centerX, centerY, radius, fillPaint(Color.argb(31, 255, 255, 255)))
-    canvas.drawCircle(centerX, centerY, radius - 1f, strokePaint(Color.argb(72, 255, 255, 255), 1f))
-    val arc = RectF(centerX - radius + 1f, centerY - radius + 1f, centerX + radius - 1f, centerY + radius - 1f)
-    canvas.drawArc(arc, -90f, progress * 360f, false, strokePaint(accent, 2.3f))
-    drawCompletionIcon(
+    val strokeWidth = if (diameter <= 25f) 3.1f else 4.2f
+    val ringRadius = radius - strokeWidth / 2f - 0.8f
+    val arc = RectF(
+      centerX - ringRadius,
+      centerY - ringRadius,
+      centerX + ringRadius,
+      centerY + ringRadius,
+    )
+    // The interior remains neutral at every value, including 100%; completion
+    // is represented only by the proportional lime arc and centered percent.
+    canvas.drawCircle(centerX, centerY, ringRadius, fillPaint(Color.argb(215, 61, 69, 80)))
+    canvas.drawArc(arc, -90f, 360f, false, strokePaint(Color.argb(205, 164, 174, 188), strokeWidth))
+    if (progress > 0f) {
+      canvas.drawArc(
+        arc,
+        -90f,
+        progress * 360f,
+        false,
+        strokePaint(Color.rgb(184, 228, 92), strokeWidth),
+      )
+    }
+    val percent = (progress * 100f).roundToInt().coerceIn(0, 100)
+    val labelSize = when {
+      diameter <= 25f && percent >= 100 -> 6.1f
+      diameter <= 25f -> 7.0f
+      percent >= 100 -> 8.8f
+      else -> 10f
+    }
+    drawCenteredText(
       canvas,
+      "$percent%",
       centerX,
       centerY,
-      diameter * 0.43f,
-      completionIcon,
-      if (progress > 0f) accent else Color.argb(215, 255, 255, 255),
+      textPaint(labelSize, Color.WHITE, true),
     )
   }
 
@@ -969,8 +1016,8 @@ object HabHubWidgetRenderer {
     val cellHeight = gridHeight / rows
     val preferredDiameter = when {
       size.compact -> 15f
-      size.wide -> 22f
-      else -> 17f
+      size.wide -> 29f
+      else -> 20f
     }
     val diameter = min(
       preferredDiameter,

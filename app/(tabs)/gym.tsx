@@ -84,6 +84,7 @@ import {
   WORKOUT_TIMER_FINISH,
   WORKOUT_TIMER_NEXT,
   WORKOUT_TIMER_PAUSE,
+  WORKOUT_TIMER_RESUME,
   type QueuedWorkoutTimerAction,
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
@@ -1493,32 +1494,44 @@ function GymScreen() {
   }
 
   function pauseOrResumeWorkout(occurredAt = Date.now()) {
-    if (!workoutTimer) return;
+    if (workoutTimer?.phase === "paused") resumeWorkout(occurredAt);
+    else pauseWorkout(occurredAt);
+  }
+
+  function pauseWorkout(occurredAt = Date.now()) {
     const now = occurredAt;
     setTimerNow(now);
-    if (workoutTimer.phase === "paused") {
-      setWorkoutTimer({
-        ...workoutTimer,
-        phase: workoutTimer.resumePhase ?? "work",
+    setWorkoutTimer((current) => {
+      if (!current || current.phase === "paused") return current;
+      return {
+        ...current,
+        phase: "paused",
+        resumePhase: current.phase,
+        phaseElapsedSeconds: timerPhaseElapsed(current, now),
+        phaseStartedAt: now,
+        pauseStartedAt: now,
+      };
+    });
+  }
+
+  function resumeWorkout(occurredAt = Date.now()) {
+    const now = occurredAt;
+    setTimerNow(now);
+    setWorkoutTimer((current) => {
+      if (!current || current.phase !== "paused") return current;
+      return {
+        ...current,
+        phase: current.resumePhase ?? "work",
         resumePhase: undefined,
         phaseStartedAt: now,
         pausedSeconds:
-          workoutTimer.pausedSeconds +
+          current.pausedSeconds +
           Math.max(
             0,
-            Math.floor((now - (workoutTimer.pauseStartedAt ?? now)) / 1000),
+            Math.floor((now - (current.pauseStartedAt ?? now)) / 1000),
           ),
         pauseStartedAt: undefined,
-      });
-      return;
-    }
-    setWorkoutTimer({
-      ...workoutTimer,
-      phase: "paused",
-      resumePhase: workoutTimer.phase,
-      phaseElapsedSeconds: timerPhaseElapsed(workoutTimer, now),
-      phaseStartedAt: now,
-      pauseStartedAt: now,
+      };
     });
   }
 
@@ -2206,8 +2219,11 @@ function GymScreen() {
     [exercises, language, t, workoutTimer],
   );
   timerActionRef.current = (action, occurredAt) => {
-    if (action === WORKOUT_TIMER_PAUSE)
-      pauseOrResumeWorkout(occurredAt ?? Date.now());
+    if (action === WORKOUT_TIMER_PAUSE) {
+      if (Platform.OS === "web") pauseWorkout(occurredAt ?? Date.now());
+      else pauseOrResumeWorkout(occurredAt ?? Date.now());
+    } else if (action === WORKOUT_TIMER_RESUME)
+      resumeWorkout(occurredAt ?? Date.now());
     else if (action === WORKOUT_TIMER_NEXT)
       advanceWorkoutTimer(occurredAt ?? Date.now());
     else if (action === WORKOUT_TIMER_FINISH)
@@ -2217,7 +2233,11 @@ function GymScreen() {
   useEffect(() => {
     if (Platform.OS !== "web" || !webNotificationAction) return;
     if (!workoutDraftReady) return;
-    const supported = [WORKOUT_TIMER_NEXT, WORKOUT_TIMER_PAUSE];
+    const supported = [
+      WORKOUT_TIMER_NEXT,
+      WORKOUT_TIMER_PAUSE,
+      WORKOUT_TIMER_RESUME,
+    ];
     if (!supported.includes(webNotificationAction)) {
       router.replace("/gym" as never);
       return;

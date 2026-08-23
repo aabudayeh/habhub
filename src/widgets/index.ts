@@ -36,6 +36,8 @@ export type WidgetTrackerSnapshot = {
 
 export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
   id: "__featured__";
+  /** Compact local date rendered in the existing Featured header line. */
+  dateLabel: string;
   goals: WidgetGoalSnapshot[];
   completionIcon: string;
   showProgressOutline: boolean;

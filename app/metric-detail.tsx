@@ -61,7 +61,7 @@ import {
   metricVisualProgress,
   safeMetricValue,
   scheduledGoalReached,
-  weeklyDeficitBalance,
+  weeklyBalancePeriodReport,
   weightDailyGoalStatus,
   weightProgressStats,
 } from "@/src/domain/metrics";
@@ -307,6 +307,15 @@ export default function TrackerDetail() {
         state={state}
         day={day}
         setDay={setDay}
+        period={period}
+        setPeriod={setPeriod}
+        choosePeriod={chooseDetailPeriod}
+        dateNavigatorOpen={dateNavigatorOpen}
+        toggleDateNavigator={toggleDateNavigator}
+        calendarOpen={calendarOpen}
+        setCalendarOpen={setCalendarOpen}
+        shiftRange={shiftRange}
+        swipeHandlers={pageSwipeResponder.panHandlers}
         colors={colors}
         accent={accent}
       />
@@ -3177,104 +3186,541 @@ function TodoTrackerEntries({
   );
 }
 
+function formatLocalizedTemplate(
+  t: (source: string) => string,
+  source: string,
+  values: Record<string, string>,
+) {
+  return Object.entries(values).reduce(
+    (copy, [name, value]) => copy.replaceAll(`{${name}}`, value),
+    t(source),
+  );
+}
+
 function WeeklyDetail({
   state,
   day,
   setDay,
+  period,
+  setPeriod,
+  choosePeriod,
+  dateNavigatorOpen,
+  toggleDateNavigator,
+  calendarOpen,
+  setCalendarOpen,
+  shiftRange,
+  swipeHandlers,
   colors,
   accent,
 }: {
   state: ReturnType<typeof useApp>["state"];
   day: string;
   setDay: (day: string) => void;
+  period: LeaderboardPeriod;
+  setPeriod: React.Dispatch<React.SetStateAction<LeaderboardPeriod>>;
+  choosePeriod: (period: Exclude<LeaderboardPeriod, "custom">) => void;
+  dateNavigatorOpen: boolean;
+  toggleDateNavigator: () => void;
+  calendarOpen: boolean;
+  setCalendarOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  shiftRange: (direction: number) => void;
+  swipeHandlers: React.ComponentProps<typeof View>;
   colors: ReturnType<typeof useAppColors>;
   accent: string;
 }) {
   const locale = useLocale();
-  const balance = weeklyDeficitBalance(state, state.currentUserId, day);
-  const days = Array.from({ length: 7 }, (_, i) =>
-    dateWithOffsetFrom(balance.startDate, i),
+  const { t } = useLocalization();
+  const tracker = state.metrics.find(
+    (metric) => metric.id === "weekly_deficit_balance",
   );
+  const trackerColor = tracker?.color ?? accent;
+  const report = useMemo(
+    () =>
+      weeklyBalancePeriodReport(
+        state,
+        state.currentUserId,
+        period,
+        day,
+        state.settings.weekStartsOn ?? 1,
+      ),
+    [day, period, state],
+  );
+  const foodEntryDates = useMemo(
+    () =>
+      new Set(
+        state.entries
+          .filter(
+            (entry) =>
+              entry.userId === state.currentUserId &&
+              entry.metricId === "food",
+          )
+          .map((entry) => entry.localDate),
+      ),
+    [state.currentUserId, state.entries],
+  );
+  const hasFood = useCallback(
+    (localDate: string) => foodEntryDates.has(localDate),
+    [foodEntryDates],
+  );
+  const resultLabel = (
+    period === "today" || period === "yesterday" || period === "custom"
+      ? t("Week-to-date result")
+      : formatLocalizedTemplate(t, "{period} result", {
+          period: t(periodTitle(period, day, locale)),
+        })
+  ).toLocaleUpperCase(locale);
+  const bucketName = (bucket: (typeof report.buckets)[number]) => {
+    if (report.bucketKind === "year") return bucket.startDate.slice(0, 4);
+    if (report.bucketKind === "month")
+      return new Intl.DateTimeFormat(locale, { month: "short" }).format(
+        new Date(`${bucket.startDate}T12:00:00`),
+      );
+    if (report.bucketKind === "week")
+      return friendlyDate(bucket.startDate, locale);
+    return new Intl.DateTimeFormat(locale, {
+      weekday: "short",
+      day: "numeric",
+    }).format(new Date(`${bucket.startDate}T12:00:00`));
+  };
+  const bucketBalanceLabel = (balance: number) =>
+    formatLocalizedTemplate(
+      t,
+      balance >= 0 ? "{balance} kcal ahead" : "{balance} kcal behind",
+      {
+        balance: Math.abs(Math.round(balance)).toLocaleString(locale),
+      },
+    );
+  const bestLabel = report.bestBucket
+    ? `${bucketName(report.bestBucket)} · ${bucketBalanceLabel(report.bestBucket.balance)}`
+    : "—";
+  const worstLabel = report.worstBucket
+    ? `${bucketName(report.worstBucket)} · ${bucketBalanceLabel(report.worstBucket.balance)}`
+    : "—";
+  const loggedSummary = formatLocalizedTemplate(
+    t,
+    report.days === 1
+      ? "{days} logged day · {actual} actual / {target} target"
+      : "{days} logged days · {actual} actual / {target} target",
+    {
+      days: report.days.toLocaleString(locale),
+      actual: Math.round(report.actual).toLocaleString(locale),
+      target: Math.round(report.target).toLocaleString(locale),
+    },
+  );
+  const reportNarrative =
+    report.days === 0
+      ? t("There is not enough food data in this period yet.")
+      : formatLocalizedTemplate(
+          t,
+          report.balance >= 0
+            ? report.days === 1
+              ? "You are {balance} kcal ahead of the cumulative plan across {days} logged day."
+              : "You are {balance} kcal ahead of the cumulative plan across {days} logged days."
+            : report.days === 1
+              ? "You are {balance} kcal behind the cumulative plan across {days} logged day."
+              : "You are {balance} kcal behind the cumulative plan across {days} logged days.",
+          {
+            balance: Math.abs(Math.round(report.balance)).toLocaleString(locale),
+            days: report.days.toLocaleString(locale),
+          },
+        );
   return (
     <Screen>
       <PageHeader
-        eyebrow="ENERGY PLAN"
         title="Weekly balance"
         subtitle="Only days with food recorded count. A non-negative balance means the weekly target is on plan."
         showMenu={false}
         action={
-          <IconButton
-            icon="close"
-            label="Close"
-            onPress={() => router.back()}
-          />
+          <View style={styles.headerActions}>
+            <IconButton
+              icon="book-outline"
+              label="Open Weekly balance journal notes"
+              onPress={() =>
+                router.navigate({
+                  pathname: "/journal",
+                  params: { metric: "weekly_deficit_balance" },
+                } as never)
+              }
+            />
+            <IconButton
+              icon="calendar-outline"
+              label="Open schedule"
+              onPress={() => router.navigate("/calendar" as never)}
+            />
+            <IconButton
+              icon="close"
+              label="Close"
+              onPress={() => router.back()}
+            />
+          </View>
         }
       />
-      <Card style={styles.navigator}>
-        <IconButton
-          icon="chevron-back"
-          label="Previous week"
-          onPress={() => setDay(dateWithOffsetFrom(day, -7))}
-        />
-        <Text style={[styles.navTitle, { color: colors.ink }]}>
-          Week of {balance.startDate}
-        </Text>
-        <IconButton
-          icon="chevron-forward"
-          label="Next week"
-          onPress={() => setDay(dateWithOffsetFrom(day, 7))}
-        />
-      </Card>
+      <View {...swipeHandlers}>
+        <View style={styles.controls}>
+          <Card style={styles.periodCard}>
+            <View style={styles.periodBar}>
+              {DETAIL_PERIODS.map((item) => {
+                const selectedPeriod = period === item.id;
+                const showDateToggle = selectedPeriod && item.id !== "overall";
+                const selectedOverall = selectedPeriod && item.id === "overall";
+                return (
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      showDateToggle
+                        ? formatLocalizedTemplate(
+                            t,
+                            "{period}, {action} date view",
+                            {
+                              period: t(item.label),
+                              action: t(
+                                dateNavigatorOpen ? "collapse" : "expand",
+                              ),
+                            },
+                          )
+                        : t(item.label)
+                    }
+                    accessibilityState={{
+                      selected: selectedPeriod,
+                      disabled: selectedOverall,
+                      expanded: showDateToggle ? dateNavigatorOpen : undefined,
+                    }}
+                    disabled={selectedOverall}
+                    onPress={() => {
+                      if (showDateToggle) toggleDateNavigator();
+                      else choosePeriod(item.id);
+                    }}
+                    style={[
+                      styles.periodChoice,
+                      item.id === "yesterday"
+                        ? styles.periodChoiceYesterday
+                        : item.id === "overall"
+                          ? styles.periodChoiceOverall
+                          : null,
+                      {
+                        backgroundColor: selectedPeriod
+                          ? colors.primarySoft
+                          : "transparent",
+                        borderColor: selectedPeriod
+                          ? trackerColor
+                          : "transparent",
+                      },
+                    ]}
+                  >
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.68}
+                      style={[
+                        styles.periodText,
+                        {
+                          color: selectedPeriod ? trackerColor : colors.muted,
+                        },
+                      ]}
+                    >
+                      {item.label}
+                    </Text>
+                    {showDateToggle ? (
+                      <Ionicons
+                        name={dateNavigatorOpen ? "chevron-up" : "chevron-down"}
+                        size={7}
+                        color={trackerColor}
+                        style={styles.periodChevron}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+          {period !== "overall" && dateNavigatorOpen ? (
+            <Card style={styles.navigator}>
+              <View style={styles.dateNav}>
+                <IconButton
+                  icon="chevron-back"
+                  label="Previous"
+                  onPress={() => shiftRange(-1)}
+                />
+                <Pressable
+                  onPress={() => setCalendarOpen((open) => !open)}
+                  style={styles.navCopy}
+                >
+                  <Text style={[styles.navTitle, { color: colors.ink }]}>
+                    {periodTitle(period, day, locale)}
+                  </Text>
+                  <View style={styles.navDate}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={13}
+                      color={trackerColor}
+                    />
+                    <Text style={[styles.navSub, { color: colors.muted }]}>
+                      {period === "today" ||
+                      period === "yesterday" ||
+                      period === "custom"
+                        ? formatLocalizedTemplate(t, "Week through {value}", {
+                            value: friendlyDate(day, locale),
+                          })
+                        : `${friendlyDate(report.startDate, locale)} – ${friendlyDate(report.endDate, locale)}`}
+                    </Text>
+                    <Ionicons
+                      name={calendarOpen ? "chevron-up" : "chevron-down"}
+                      size={13}
+                      color={colors.muted}
+                    />
+                  </View>
+                </Pressable>
+                <IconButton
+                  icon="chevron-forward"
+                  label="Next"
+                  onPress={() => shiftRange(1)}
+                />
+              </View>
+              {calendarOpen ? (
+                <View
+                  style={[styles.calendar, { borderTopColor: colors.border }]}
+                >
+                  <MonthCalendar
+                    monthDate={day}
+                    selectedDate={day}
+                    onSelect={(selectedDay) => {
+                      setDay(selectedDay);
+                      setPeriod("custom");
+                      setCalendarOpen(false);
+                    }}
+                    hasActivity={hasFood}
+                  />
+                </View>
+              ) : null}
+            </Card>
+          ) : null}
+        </View>
+      </View>
       <Card style={styles.summary}>
-        <Text style={[styles.label, { color: colors.faint }]}>
-          WEEKLY RESULT
+        <View style={styles.summaryTop}>
+          <View style={styles.grow}>
+            <Text style={[styles.label, { color: colors.faint }]}>
+              {resultLabel}
+            </Text>
+            <Text
+              style={[
+                styles.value,
+                {
+                  color:
+                    report.days === 0
+                      ? colors.faint
+                      : report.balance >= 0
+                        ? trackerColor
+                        : palette.red,
+                },
+              ]}
+            >
+              {report.days
+                ? bucketBalanceLabel(report.balance)
+                : t("Not available")}
+            </Text>
+            <Text style={[styles.sub, { color: colors.muted }]}>
+              {report.days
+                ? loggedSummary
+                : "Log food to calculate the balance for this period."}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.largeIcon,
+              { backgroundColor: `${trackerColor}18` },
+            ]}
+          >
+            <Ionicons
+              name="calendar-number-outline"
+              size={23}
+              color={trackerColor}
+            />
+          </View>
+        </View>
+        <WeeklyBalanceChart
+          report={report}
+          colors={colors}
+          positiveColor={trackerColor}
+          labelForBucket={bucketName}
+        />
+        <View style={[styles.stats, { borderTopColor: colors.border }]}>
+          <Stat
+            label="Logged days"
+            value={String(report.days)}
+            colors={colors}
+          />
+          <Stat
+            label="Average per day"
+            value={
+              report.days
+                ? formatLocalizedTemplate(t, "{value} kcal", {
+                    value: Math.round(
+                      report.averageDailyBalance,
+                    ).toLocaleString(locale),
+                  })
+                : "—"
+            }
+            colors={colors}
+          />
+          <Stat
+            label="Periods on plan"
+            value={
+              report.countedBuckets
+                ? `${report.onPlanBuckets}/${report.countedBuckets}`
+                : "—"
+            }
+            colors={colors}
+          />
+        </View>
+      </Card>
+      <Card style={styles.weeklyReportCard}>
+        <View style={styles.weeklyReportHeading}>
+          <View
+            style={[
+              styles.weeklyReportIcon,
+              { backgroundColor: `${trackerColor}18` },
+            ]}
+          >
+            <Ionicons name="analytics-outline" size={18} color={trackerColor} />
+          </View>
+          <View style={styles.grow}>
+            <Text style={[styles.entryTitle, { color: colors.ink }]}>
+              Balance report
+            </Text>
+            <Text style={[styles.time, { color: colors.muted }]}>
+              Meaningful comparisons from food-logged days only
+            </Text>
+          </View>
+        </View>
+        <Text style={[styles.note, { color: colors.muted }]}>
+          {reportNarrative}
         </Text>
-        <Text
+        <View style={[styles.weeklyReportGrid, { borderTopColor: colors.border }]}>
+          <Stat label="Best period" value={bestLabel} colors={colors} />
+          <Stat label="Lowest period" value={worstLabel} colors={colors} />
+          <Stat
+            label="Plan consistency"
+            value={
+              report.countedBuckets
+                ? `${Math.round((report.onPlanBuckets / report.countedBuckets) * 100)}%`
+                : "—"
+            }
+            colors={colors}
+          />
+        </View>
+      </Card>
+    </Screen>
+  );
+}
+
+function WeeklyBalanceChart({
+  report,
+  colors,
+  positiveColor,
+  labelForBucket,
+}: {
+  report: ReturnType<typeof weeklyBalancePeriodReport>;
+  colors: ReturnType<typeof useAppColors>;
+  positiveColor: string;
+  labelForBucket: (
+    bucket: ReturnType<typeof weeklyBalancePeriodReport>["buckets"][number],
+  ) => string;
+}) {
+  const locale = useLocale();
+  const { t } = useLocalization();
+  const hasChartData = report.countedBuckets > 0;
+  const maxAbsolute = Math.max(
+    1,
+    ...report.buckets
+      .filter((bucket) => bucket.days > 0)
+      .map((bucket) => Math.abs(bucket.balance)),
+  );
+  return (
+    <View
+      accessibilityLabel={t("Energy balance chart")}
+      style={styles.weeklyBalanceChartWrap}
+    >
+      <View style={styles.weeklyBalanceChart}>
+        <View
           style={[
-            styles.value,
-            { color: balance.balance >= 0 ? accent : palette.red },
+            styles.weeklyBalanceZeroLine,
+            { borderTopColor: palette.amber },
           ]}
         >
-          {Math.abs(Math.round(balance.balance)).toLocaleString(locale)} kcal{" "}
-          {balance.balance >= 0 ? "ahead" : "behind"}
-        </Text>
-        <Text style={[styles.sub, { color: colors.muted }]}>
-          {balance.days} valid day{balance.days === 1 ? "" : "s"} ·{" "}
-          {Math.round(balance.actual)} actual / {Math.round(balance.target)}{" "}
-          target
-        </Text>
-      </Card>
-      <View style={styles.entries}>
-        {days.map((date) => {
-          const valid = state.entries.some(
-            (entry) =>
-              entry.userId === state.currentUserId &&
-              entry.metricId === "food" &&
-              entry.localDate === date,
-          );
-          const deficit = state.metrics.find((item) => item.id === "deficit");
-          const value =
-            valid && deficit
-              ? safeMetricValue(state, deficit, state.currentUserId, date)
-              : 0;
-          return (
-            <Card key={date} style={styles.weekRow}>
-              <Text style={[styles.entryTitle, { color: colors.ink }]}>
-                {date}
-              </Text>
-              <Text
-                style={[
-                  styles.entryValue,
-                  { color: valid ? colors.ink : colors.faint },
-                ]}
-              >
-                {valid ? `${Math.round(value)} kcal` : "Not counted"}
-              </Text>
-            </Card>
-          );
-        })}
+          <Text style={[styles.weeklyBalanceGoalLabel, { color: palette.amber }]}>plan</Text>
+        </View>
+        <View style={styles.weeklyBalanceBars}>
+          {report.buckets.map((bucket) => {
+            const magnitude = Math.max(
+              3,
+              (Math.abs(bucket.balance) / maxAbsolute) * 100,
+            );
+            const positive = bucket.balance >= 0;
+            return (
+              <View key={bucket.id} style={styles.weeklyBalanceSlot}>
+                <View style={styles.weeklyBalanceHalfTop}>
+                  {bucket.days > 0 && positive ? (
+                    <View
+                      style={[
+                        styles.weeklyBalanceBar,
+                        {
+                          height: `${magnitude}%`,
+                          backgroundColor: positiveColor,
+                        },
+                      ]}
+                    />
+                  ) : null}
+                </View>
+                <View style={styles.weeklyBalanceHalfBottom}>
+                  {bucket.days > 0 && !positive ? (
+                    <View
+                      style={[
+                        styles.weeklyBalanceBar,
+                        {
+                          height: `${magnitude}%`,
+                          backgroundColor: palette.red,
+                        },
+                      ]}
+                    />
+                  ) : bucket.days === 0 ? (
+                    <View
+                      style={[
+                        styles.weeklyBalanceMissing,
+                        { backgroundColor: colors.border },
+                      ]}
+                    />
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
+        </View>
       </View>
-    </Screen>
+      <View style={styles.weeklyBalanceLabels}>
+        {report.buckets.map((bucket) => (
+          <Text
+            key={bucket.id}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.58}
+            style={[styles.weeklyBalanceLabel, { color: colors.muted }]}
+          >
+            {labelForBucket(bucket)}
+          </Text>
+        ))}
+      </View>
+      <Text style={[styles.weeklyBalanceScale, { color: colors.faint }]}>
+        {hasChartData
+          ? formatLocalizedTemplate(
+              t,
+              "±{value} kcal · above line = ahead · below = behind",
+              { value: Math.round(maxAbsolute).toLocaleString(locale) },
+            )
+          : t("No food-logged days in this period")}
+      </Text>
+    </View>
   );
 }
 function RangeGoalProgressBar({
@@ -4728,6 +5174,71 @@ const styles = StyleSheet.create({
   },
   compareText: { fontSize: 9, fontWeight: "900" },
   empty: { fontSize: 10, textAlign: "center" },
+  weeklyBalanceChartWrap: { marginTop: 14, gap: 4 },
+  weeklyBalanceChart: { height: 126, position: "relative" },
+  weeklyBalanceZeroLine: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: "50%",
+    borderTopWidth: 2,
+    zIndex: 2,
+  },
+  weeklyBalanceGoalLabel: {
+    position: "absolute",
+    right: 0,
+    top: -12,
+    fontSize: 7,
+    fontWeight: "900",
+  },
+  weeklyBalanceBars: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: "row",
+    gap: 3,
+  },
+  weeklyBalanceSlot: { flex: 1, minWidth: 0 },
+  weeklyBalanceHalfTop: {
+    height: "50%",
+    justifyContent: "flex-end",
+    paddingHorizontal: 1,
+  },
+  weeklyBalanceHalfBottom: {
+    height: "50%",
+    justifyContent: "flex-start",
+    paddingHorizontal: 1,
+  },
+  weeklyBalanceBar: { width: "100%", borderRadius: 3, opacity: 0.9 },
+  weeklyBalanceMissing: {
+    width: "100%",
+    height: 2,
+    borderRadius: 1,
+    opacity: 0.65,
+  },
+  weeklyBalanceLabels: { flexDirection: "row", gap: 3 },
+  weeklyBalanceLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 6.5,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  weeklyBalanceScale: { fontSize: 7, fontWeight: "700", textAlign: "center" },
+  weeklyReportCard: { gap: 8 },
+  weeklyReportHeading: { flexDirection: "row", alignItems: "center", gap: 9 },
+  weeklyReportIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  weeklyReportGrid: {
+    borderTopWidth: 1,
+    paddingTop: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    rowGap: 10,
+  },
   weekRow: {
     minHeight: 48,
     flexDirection: "row",

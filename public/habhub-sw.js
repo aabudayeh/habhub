@@ -7,7 +7,11 @@ const ICON_PATH = "/pwa-icon-192.png";
 // Android renders a Web Push badge as a monochrome alpha mask. Reusing the
 // opaque app icon turns that mask into a featureless square.
 const BADGE_PATH = "/habhub-notification-badge-96.png";
-const WORKOUT_ACTIONS = new Set(["workout-next", "workout-pause"]);
+const WORKOUT_ACTIONS = new Set([
+  "workout-next",
+  "workout-pause",
+  "workout-resume",
+]);
 const WORKOUT_ACTION_MESSAGE = "habhub:web-workout-notification-action";
 const WORKOUT_ACTION_AVAILABLE_MESSAGE =
   "habhub:web-workout-notification-action-available";
@@ -295,7 +299,6 @@ self.addEventListener("push", (event) => {
 });
 
 self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
   if (event.notification.data?.workoutTimer === true && event.action) {
     // A stale/unknown action is still an action-button click, so it must stay
     // silent too. Only the notification body (empty action) may navigate.
@@ -319,6 +322,7 @@ self.addEventListener("notificationclick", (event) => {
     );
     return;
   }
+  event.notification.close();
   // A notification-body click is navigation: open/focus the workout (or the
   // route supplied by another notification type) exactly as before.
   const route = safeRoute(event.notification.data?.route);

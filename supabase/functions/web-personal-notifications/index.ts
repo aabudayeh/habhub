@@ -223,6 +223,17 @@ Deno.serve(async (request) => {
   } catch {
     payload = {};
   }
+  if (payload.action === "configure") {
+    const workerSecret = Deno.env.get("PERSONAL_NOTIFICATION_WORKER_SECRET")?.trim();
+    const workerUrl = `${url.replace(/\/+$/, "")}/functions/v1/web-personal-notifications`;
+    if (!workerSecret) return json({ error: "Worker is not configured" }, 503);
+    const { error } = await admin.rpc(
+      "configure_web_personal_notification_worker",
+      { p_url: workerUrl, p_secret: workerSecret },
+    );
+    if (error) return json({ error: "Could not configure reminder cron" }, 500);
+    return json({ configured: true });
+  }
   const leaseOwner = crypto.randomUUID();
   const { data, error } = await admin.rpc(
     "claim_due_web_personal_notifications",
@@ -234,7 +245,6 @@ Deno.serve(async (request) => {
 
   let accepted = 0;
   let retried = 0;
-  const details = vapidDetails();
   for (const event of events) {
     try {
       const [{ data: subscriptions, error: subscriptionError }, { data: prior, error: priorError }] =
@@ -263,13 +273,35 @@ Deno.serve(async (request) => {
           : null,
         preferences: objectRecord(item.preferences),
       }));
-      const eligible = targets.filter(
+      if (!targets.length)
+        throw new Error("No active Web Push subscription is registered");
+      const permitted = targets.filter(
         (target) =>
-          !alreadyAccepted.has(target.endpoint) &&
           preferenceAllowed(target.preferences, event.category),
+      );
+      if (!permitted.length) {
+        const completed = await admin
+          .from("web_personal_notification_schedule")
+          .update({
+            dispatched_at: new Date().toISOString(),
+            lease_owner: null,
+            lease_until: null,
+            last_error: "preference_suppressed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", event.user_id)
+          .eq("schedule_key", event.schedule_key)
+          .eq("lease_owner", leaseOwner);
+        if (completed.error) throw completed.error;
+        continue;
+      }
+      const eligible = permitted.filter(
+        (target) => !alreadyAccepted.has(target.endpoint),
       );
       const topic = await topicFor(event.user_id, event.schedule_key);
       let transient: unknown;
+      let gatewayAccepted = 0;
+      const details = vapidDetails();
       for (let offset = 0; offset < eligible.length; offset += 20) {
         const batch = eligible.slice(offset, offset + 20);
         const outcomes = await Promise.allSettled(
@@ -278,6 +310,10 @@ Deno.serve(async (request) => {
         const terminal = outcomes.flatMap((outcome, index) =>
           outcome.status === "fulfilled" ? [batch[index].endpoint] : [],
         );
+        gatewayAccepted += outcomes.filter(
+          (outcome) =>
+            outcome.status === "fulfilled" && outcome.value === "accepted",
+        ).length;
         if (terminal.length) {
           const acceptance = await admin
             .from("web_personal_notification_acceptances")
@@ -313,20 +349,26 @@ Deno.serve(async (request) => {
         if (failed) transient = failed.reason;
       }
       if (transient) throw transient;
+      if (
+        eligible.length &&
+        gatewayAccepted === 0 &&
+        alreadyAccepted.size === 0
+      )
+        throw new Error("No active Web Push subscription accepted the reminder");
       const completed = await admin
         .from("web_personal_notification_schedule")
         .update({
           dispatched_at: new Date().toISOString(),
           lease_owner: null,
           lease_until: null,
-          last_error: eligible.length ? "gateway_accepted" : "preference_suppressed",
+          last_error: eligible.length ? "gateway_accepted" : "already_accepted",
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", event.user_id)
         .eq("schedule_key", event.schedule_key)
         .eq("lease_owner", leaseOwner);
       if (completed.error) throw completed.error;
-      accepted += eligible.length;
+      accepted += gatewayAccepted;
     } catch (reason) {
       retried += 1;
       const delaySeconds = Math.min(

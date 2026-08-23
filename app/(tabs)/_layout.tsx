@@ -15,7 +15,10 @@ import { useTranslation } from "@/src/i18n";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
-import { normalizeTabOrder } from "@/src/domain/navigation";
+import {
+  compactTabBarForCount,
+  normalizeTabOrder,
+} from "@/src/domain/navigation";
 import {
   resolveTabBarBottomInset,
   WebDisplayEnvironment,
@@ -167,6 +170,8 @@ export default function TabLayout() {
   };
   const isVisible = (name: LandingPage) => tabOptions[name].href !== null;
   const orderedTabs = tabOrder;
+  const visibleTabCount = orderedTabs.filter(isVisible).length;
+  const compactTabBar = compactTabBarForCount(visibleTabCount);
   const requestedDefault = state.settings.defaultLandingPage ?? "index";
   const defaultTab: LandingPage = isVisible(requestedDefault)
     ? requestedDefault
@@ -239,11 +244,24 @@ export default function TabLayout() {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },
-        tabBarLabelStyle: { fontSize: 9, fontWeight: "700" },
+        tabBarItemStyle: compactTabBar
+          ? { minWidth: 0, paddingHorizontal: 0 }
+          : undefined,
+        tabBarLabelStyle: compactTabBar
+          ? {
+              fontSize: 7.2,
+              lineHeight: 8,
+              letterSpacing: -0.25,
+              fontWeight: "700",
+              marginHorizontal: -3,
+            }
+          : { fontSize: 9, fontWeight: "700" },
         tabBarIcon: ({ color, focused }) => {
           const icon = icons[route.name];
           return (
-            <View style={styles.tabIcon}>
+            <View
+              style={[styles.tabIcon, compactTabBar && styles.compactTabIcon]}
+            >
               <Ionicons
                 name={
                   focused
@@ -253,7 +271,7 @@ export default function TabLayout() {
                       ) as keyof typeof Ionicons.glyphMap)
                     : icon
                 }
-                size={22}
+                size={compactTabBar ? 20 : 22}
                 color={color}
               />
               {route.name === "chat" && hasUnreadChat ? (
@@ -283,6 +301,10 @@ const styles = StyleSheet.create({
     height: 23,
     alignItems: "center",
     justifyContent: "center",
+  },
+  compactTabIcon: {
+    width: 26,
+    height: 21,
   },
   unreadDot: {
     position: "absolute",

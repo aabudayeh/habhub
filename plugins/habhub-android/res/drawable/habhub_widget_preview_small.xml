@@ -2,9 +2,12 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="300dp" android:height="120dp" android:viewportWidth="300" android:viewportHeight="120">
   <path android:fillColor="#081B49" android:fillAlpha="0.55" android:pathData="M20,8 H280 Q292,8 292,20 V100 Q292,112 280,112 H20 Q8,112 8,100 V20 Q8,8 20,8 Z" />
   <path android:fillColor="#C3CFE5" android:fillAlpha="0.82" android:pathData="M24,24 H102 V30 H24 Z" />
+  <path android:fillColor="#DDE6F5" android:fillAlpha="0.86" android:pathData="M194,24 H226 V29 H194 Z" />
   <path android:fillColor="#FFFFFF" android:pathData="M24,37 H92 V57 H24 Z" />
-  <path android:fillColor="#00000000" android:strokeColor="#B8E45C" android:strokeWidth="4" android:pathData="M261,23 a22,22 0,1 0,0 44 a22,22 0,1 0,0 -44" />
-  <path android:fillColor="#FFFFFF" android:pathData="M252,45 L258,51 L271,37 L274,40 L258,57 L249,48 Z" />
+  <path android:fillColor="#3D4550" android:pathData="M261,23 a22,22 0,1 0,0 44 a22,22 0,1 0,0 -44" />
+  <path android:fillColor="#00000000" android:strokeColor="#A4AEBC" android:strokeWidth="4" android:pathData="M261,23 a22,22 0,1 0,0 44 a22,22 0,1 0,0 -44" />
+  <path android:fillColor="#00000000" android:strokeColor="#B8E45C" android:strokeWidth="4" android:pathData="M261,23 A22,22 0,0 1,283 45 A22,22 0,0 1,261 67 A22,22 0,0 1,244 58" />
+  <path android:fillColor="#FFFFFF" android:pathData="M249,39 H259 V43 H253 V46 H259 V55 H249 V51 H255 V49 H249 Z M263,40 H267 V54 H263 Z M269,40 H273 V44 H269 Z M269,50 H273 V54 H269 Z" />
   <path android:fillColor="#FFFFFF" android:fillAlpha="0.14" android:pathData="M24,65 H43 V84 H24 Z M49,65 H68 V84 H49 Z M74,65 H93 V84 H74 Z M99,65 H118 V84 H99 Z M124,65 H143 V84 H124 Z" />
   <path android:fillColor="#B8E45C" android:fillAlpha="0.82" android:pathData="M24,75 H43 V84 H24 Z M49,69 H68 V84 H49 Z M74,65 H93 V84 H74 Z M99,78 H118 V84 H99 Z" />
   <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeAlpha="0.36" android:strokeWidth="1.3" android:pathData="M24,65 H43 V84 H24 Z M49,65 H68 V84 H49 Z M74,65 H93 V84 H74 Z M99,65 H118 V84 H99 Z M124,65 H143 V84 H124 Z" />

@@ -363,72 +363,17 @@ export function aggregateRangeThroughLocalDate(to: Date) {
 }
 
 /**
- * Health Connect's unfiltered Activity aggregate establishes the daily Steps
- * baseline. Source preferences are not record-type-specific, so applying them
+ * Health Connect's unfiltered Activity aggregate always owns completed-day
+ * Steps. Source preferences are not record-type-specific, so applying them
  * here can accidentally exclude a Steps writer when the user disabled an
- * unrelated nutrition or workout source. The separate Android-device helper
- * may replace this baseline only with the same phone-owned source used live.
+ * unrelated nutrition or workout source. A vendor-filtered historical total is
+ * never authoritative.
  */
 export function authoritativeHealthConnectStepGroups<TGroup>(
   unfiltered: readonly TGroup[],
   _originFiltered?: readonly TGroup[],
 ): readonly TGroup[] {
   return unfiltered;
-}
-
-function historicalStepGroupDate(group: unknown) {
-  if (!group || typeof group !== "object" || Array.isArray(group)) return "";
-  const candidate = group as Record<string, unknown>;
-  const localDate = String(candidate.localDate ?? "");
-  if (/^\d{4}-\d{2}-\d{2}$/.test(localDate)) return localDate;
-  const startTime = String(candidate.startTime ?? "");
-  const startDate = startTime.slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "";
-}
-
-function historicalStepGroupTotal(group: unknown) {
-  if (!group || typeof group !== "object" || Array.isArray(group)) return 0;
-  const candidate = group as Record<string, unknown>;
-  const result = candidate.result &&
-      typeof candidate.result === "object" &&
-      !Array.isArray(candidate.result)
-    ? candidate.result as Record<string, unknown>
-    : {};
-  const value = Number(result.COUNT_TOTAL ?? candidate.count ?? 0);
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
-}
-
-/**
- * Applies the accurate live phone-origin rule to completed days. Health
- * Connect can retain the phone's non-overlapping `android`/SPN intervals after
- * midnight, so their source-filtered daily aggregate owns each day where it is
- * present. A day with no phone-owned history falls back independently to the
- * unfiltered Activity-priority aggregate (for example, a watch-only day).
- */
-export function preferAndroidDeviceHistoricalStepGroups<TGroup>(
-  unfiltered: readonly TGroup[],
-  androidDevice: readonly TGroup[],
-): readonly TGroup[] {
-  const androidByDate = new Map<string, TGroup>();
-  for (const group of androidDevice) {
-    const localDate = historicalStepGroupDate(group);
-    if (localDate && historicalStepGroupTotal(group) > 0)
-      androidByDate.set(localDate, group);
-  }
-  if (!androidByDate.size) return unfiltered;
-
-  const representedDates = new Set<string>();
-  const selected = unfiltered.map((group) => {
-    const localDate = historicalStepGroupDate(group);
-    if (localDate) representedDates.add(localDate);
-    return androidByDate.get(localDate) ?? group;
-  });
-  for (const [localDate, group] of [...androidByDate].sort(([left], [right]) =>
-    left.localeCompare(right)
-  )) {
-    if (!representedDates.has(localDate)) selected.push(group);
-  }
-  return selected;
 }
 
 /** True only for the canonical daily total emitted by our aggregate adapter. */
@@ -736,6 +681,16 @@ export function combineDisjointStepWindows(
     ? Math.max(0, Math.round(localPhoneSuffixCount))
     : 0;
   return prefix + suffix;
+}
+
+/**
+ * Applies the one-step display calibration at the canonical-record boundary.
+ * Candidate aggregates must remain unmodified so this adjustment is applied
+ * exactly once on every refresh. A genuine zero remains zero.
+ */
+export function finalImportedStepTotal(count: number) {
+  const rounded = Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
+  return rounded > 0 ? rounded + 1 : 0;
 }
 
 /**

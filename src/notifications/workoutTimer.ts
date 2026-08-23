@@ -16,6 +16,7 @@ const WORKOUT_TIMER_LAST_CATEGORY = "metricrally-workout-timer-last";
 export const WORKOUT_TIMER_NOTIFICATION = "metricrally-workout-timer-live";
 export const WORKOUT_TIMER_NEXT = "workout-next";
 export const WORKOUT_TIMER_PAUSE = "workout-pause";
+export const WORKOUT_TIMER_RESUME = "workout-resume";
 export const WORKOUT_TIMER_FINISH = "workout-finish";
 const WEB_WORKOUT_ACTION_MESSAGE = "habhub:web-workout-notification-action";
 const WEB_WORKOUT_ACTION_AVAILABLE_MESSAGE =
@@ -41,6 +42,7 @@ export type QueuedWorkoutTimerAction = {
   action:
     | typeof WORKOUT_TIMER_NEXT
     | typeof WORKOUT_TIMER_PAUSE
+    | typeof WORKOUT_TIMER_RESUME
     | typeof WORKOUT_TIMER_FINISH;
   occurredAt: number;
   ownerId: string;
@@ -90,6 +92,7 @@ let workoutNotificationGeneration: string | undefined;
 let workoutNotificationGenerationCounter = 0;
 let webWorkoutNotificationOwnerId: string | undefined;
 let webWorkoutNotificationSignature: string | undefined;
+let webWorkoutNotificationAlertSignature: string | undefined;
 let webWorkoutNotificationRevision = 0;
 let webWorkoutNotificationQueue = Promise.resolve();
 let webWorkoutActionOwnerId: string | undefined;
@@ -361,7 +364,8 @@ function ensureWebWorkoutActionListener() {
         !validWebWorkoutActionId(item.id) ||
         known.has(item.id) ||
         (item.action !== WORKOUT_TIMER_NEXT &&
-          item.action !== WORKOUT_TIMER_PAUSE) ||
+          item.action !== WORKOUT_TIMER_PAUSE &&
+          item.action !== WORKOUT_TIMER_RESUME) ||
         typeof item.occurredAt !== "number" ||
         !Number.isFinite(item.occurredAt) ||
         item.occurredAt < now - WEB_WORKOUT_ACTION_MAX_AGE_MS ||
@@ -556,6 +560,7 @@ async function closeWebWorkoutNotification(ownerId?: string) {
   const revision = ++webWorkoutNotificationRevision;
   webWorkoutNotificationOwnerId = undefined;
   webWorkoutNotificationSignature = undefined;
+  webWorkoutNotificationAlertSignature = undefined;
   if (!webWorkoutNotificationsSupported()) return;
   const registration = await navigator.serviceWorker.getRegistration("/");
   if (!registration || revision !== webWorkoutNotificationRevision) return;
@@ -607,6 +612,16 @@ async function presentWebWorkoutNotification({
     webWorkoutNotificationSignature === signature
   )
     return;
+  const alertSignature = JSON.stringify([
+    ownerId,
+    title,
+    phase,
+    phaseStartedAt ?? 0,
+  ]);
+  const shouldAlert = webWorkoutNotificationAlertSignature !== alertSignature;
+  const replacesLiveNotification =
+    webWorkoutNotificationOwnerId === ownerId &&
+    webWorkoutNotificationSignature !== undefined;
   const revision = ++webWorkoutNotificationRevision;
   webWorkoutNotificationOwnerId = ownerId;
   webWorkoutNotificationSignature = signature;
@@ -642,7 +657,8 @@ async function presentWebWorkoutNotification({
   const actions = actionToken
     ? [
         {
-          action: WORKOUT_TIMER_PAUSE,
+          action:
+            phase === "paused" ? WORKOUT_TIMER_RESUME : WORKOUT_TIMER_PAUSE,
           title: phase === "paused" ? "Resume" : "Pause",
         },
         ...(phase === "paused"
@@ -656,6 +672,7 @@ async function presentWebWorkoutNotification({
   const options: NotificationOptions & {
     timestamp: number;
     actions: { action: string; title: string }[];
+    renotify: boolean;
   } = {
     body: notificationBody,
     icon: "/pwa-icon-192.png",
@@ -664,7 +681,11 @@ async function presentWebWorkoutNotification({
     timestamp: phaseOrigin,
     actions,
     requireInteraction: true,
-    silent: true,
+    // Alert once when the timer first appears and on a real phase transition.
+    // Ten-second elapsed-time replacements keep the same alert signature and
+    // stay silent, avoiding a sound/vibration loop.
+    silent: !shouldAlert,
+    renotify: shouldAlert && replacesLiveNotification,
     data: {
       route: "/gym",
       workoutTimer: true,
@@ -672,6 +693,11 @@ async function presentWebWorkoutNotification({
     },
   };
   await registration.showNotification(`${phaseLabel} · ${title}`, options);
+  if (
+    revision === webWorkoutNotificationRevision &&
+    webWorkoutNotificationOwnerId === ownerId
+  )
+    webWorkoutNotificationAlertSignature = alertSignature;
 }
 
 async function consumeNativeActions(ownerId: string, generation: string) {
@@ -848,6 +874,14 @@ async function applyFlowAction(action: QueuedWorkoutTimerAction["action"]) {
     } else {
       flow.phaseElapsedMs += Math.max(0, occurredAt - flow.phaseStartedAt);
       flow.paused = true;
+      flow.phaseStartedAt = occurredAt;
+    }
+  } else if (action === WORKOUT_TIMER_RESUME) {
+    // Web notifications use an explicit Resume action so a duplicated/stale
+    // Pause tap can never toggle forward unexpectedly. Native still uses its
+    // established Pause/resume toggle category above.
+    if (flow.paused) {
+      flow.paused = false;
       flow.phaseStartedAt = occurredAt;
     }
   } else if (!flow.paused && flow.index < flow.steps.length - 1) {

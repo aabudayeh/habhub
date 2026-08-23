@@ -4,11 +4,12 @@ export const HEALTH_HISTORY_DAYS = 730;
 /** Keep first-run onboarding responsive; deeper history is an explicit repair. */
 export const HEALTH_INITIAL_DAYS = 30;
 /**
- * Version 2 repairs completed-day rows from the short-lived Samsung override
- * into Health Connect's priority-aware historical aggregates. Today's
- * phone-origin authority does not require a history repair.
+ * Version 3 repairs completed-day rows from the short-lived phone-only history
+ * override back into Health Connect's priority-aware historical aggregates and
+ * applies the final one-step calibration. Today's phone-origin authority does
+ * not replace completed-day history.
  */
-export const HEALTH_STEPS_IMPORT_VERSION = 2;
+export const HEALTH_STEPS_IMPORT_VERSION = 3;
 /**
  * One automatic, post-hydration request per native device/account/version.
  * Version 3 gives existing accounts one contextual opportunity to grant the
