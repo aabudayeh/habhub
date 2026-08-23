@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 
 import {
   activityTimerAlertCandidates,
@@ -14,12 +15,17 @@ import {
   notificationFallsAfterFastingTarget,
   planLocalNotificationReconciliation,
   quietHoursAdjustedDateTime,
+  WEB_REMINDER_LATE_GRACE_MS,
+  webReminderTriggerCanStillPublish,
   workoutActionMatchesActiveGeneration,
 } from "../src/domain/notificationScheduling.ts";
 import { createLatestAsyncDrain } from "../src/domain/latestAsyncDrain.ts";
 import {
+  acknowledgeWorkoutActionsAfterPersistence,
   formatWorkoutNotificationElapsed,
+  WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS,
   WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
+  webWorkoutActionAckRetryDelay,
   workoutNotificationElapsedSeconds,
   workoutWebNotificationBody,
   workoutWebNotificationSignature,
@@ -218,6 +224,20 @@ const workoutSignatureInput = {
   body: "1:00 elapsed · Finish set",
   phase: "work",
 };
+
+assert.equal(
+  webReminderTriggerCanStillPublish(1_000_000 - WEB_REMINDER_LATE_GRACE_MS, 1_000_000),
+  true,
+  "a just-due Web reminder must survive client publication delay",
+);
+assert.equal(
+  webReminderTriggerCanStillPublish(
+    1_000_000 - WEB_REMINDER_LATE_GRACE_MS - 1,
+    1_000_000,
+  ),
+  false,
+  "the late-publication grace must remain bounded",
+);
 assert.equal(
   workoutWebNotificationSignature({
     ...workoutSignatureInput,
@@ -240,6 +260,45 @@ assert.notEqual(
   }),
   "the next refresh window must update the live elapsed display",
 );
+assert.equal(webWorkoutActionAckRetryDelay(0), 500);
+assert.equal(webWorkoutActionAckRetryDelay(99), WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS);
+let retryPersistenceAttempts = 0;
+let retryAcknowledgements = 0;
+const retryPersistence = () => {
+  retryPersistenceAttempts += 1;
+  return retryPersistenceAttempts === 1
+    ? Promise.reject(new Error("first persistence failed"))
+    : Promise.resolve();
+};
+const retryAcknowledge = async () => {
+  retryAcknowledgements += 1;
+};
+await assert.rejects(
+  acknowledgeWorkoutActionsAfterPersistence(
+    retryPersistence(),
+    retryAcknowledge,
+  ),
+);
+assert.equal(retryAcknowledgements, 0);
+await acknowledgeWorkoutActionsAfterPersistence(
+  retryPersistence(),
+  retryAcknowledge,
+);
+assert.equal(retryPersistenceAttempts, 2);
+assert.equal(retryAcknowledgements, 1);
+let retryAckPostAttempts = 0;
+const retryAckPost = async () => {
+  retryAckPostAttempts += 1;
+  if (retryAckPostAttempts === 1) throw new Error("first ACK post failed");
+};
+await assert.rejects(
+  acknowledgeWorkoutActionsAfterPersistence(Promise.resolve(), retryAckPost),
+);
+await acknowledgeWorkoutActionsAfterPersistence(
+  Promise.resolve(),
+  retryAckPost,
+);
+assert.equal(retryAckPostAttempts, 2);
 const queuedAccountAActions = [
   {
     action: "workout-next",
@@ -563,9 +622,303 @@ assert.match(gymSource, /state\.settings\.notifications\.pushEnabled/);
 assert.match(gymSource, /useLocalSearchParams/);
 assert.match(gymSource, /handledWebTimerAction/);
 assert.match(gymSource, /router\.replace\("\/gym" as never\)/);
+assert.match(gymSource, /subscribeWebWorkoutTimerActions/);
 assert.match(webWorker, /WORKOUT_ACTIONS/);
-assert.match(webWorker, /workoutActionAt/);
+assert.match(webWorker, /WORKOUT_ACTION_MESSAGE/);
+assert.match(webWorker, /client\.postMessage\(\{/);
+assert.match(webWorker, /self\.indexedDB\.open\(WORKOUT_ACTION_DATABASE, 1\)/);
+assert.match(webWorker, /WORKOUT_ACTION_MAX_ITEMS = 30/);
+assert.match(webWorker, /WORKOUT_ACTION_MAX_AGE_MS = 24 \* 60 \* 60 \* 1000/);
 assert.match(webWorker, /self\.clients\.openWindow\(target\.href\)/);
+const workoutActionBranch = webWorker.slice(
+  webWorker.indexOf('self.addEventListener("notificationclick"'),
+  webWorker.indexOf("// A notification-body click"),
+);
+assert.match(workoutActionBranch, /event\.waitUntil\([\s\S]*storeWorkoutAction\(queuedAction\)/);
+assert.match(workoutActionBranch, /return;\s*\}/);
+assert.doesNotMatch(
+  workoutActionBranch,
+  /\.focus\(|\.navigate\(|openWindow\(/,
+  "workout action buttons must never open, navigate, or focus the PWA",
+);
+function createFakeWorkoutActionIndexedDb() {
+  const rows = new Map();
+  let storeCreated = false;
+  const database = {
+    objectStoreNames: { contains: () => storeCreated },
+    createObjectStore() {
+      storeCreated = true;
+    },
+    close() {},
+    transaction() {
+      let aborted = false;
+      const transaction = {
+        error: null,
+        oncomplete: null,
+        onabort: null,
+        onerror: null,
+        abort() {
+          aborted = true;
+          queueMicrotask(() => transaction.onabort?.());
+        },
+        objectStore() {
+          return {
+            getAll() {
+              const request = { result: [], error: null, onsuccess: null, onerror: null };
+              queueMicrotask(() => {
+                if (aborted) return;
+                request.result = Array.from(rows.values(), (item) => ({ ...item }));
+                request.onsuccess?.();
+                queueMicrotask(() => {
+                  if (!aborted) transaction.oncomplete?.();
+                });
+              });
+              return request;
+            },
+            clear() {
+              rows.clear();
+            },
+            put(item) {
+              rows.set(item.id, { ...item });
+            },
+          };
+        },
+      };
+      return transaction;
+    },
+  };
+  return {
+    rows,
+    indexedDB: {
+      open() {
+        const request = {
+          result: database,
+          error: null,
+          onupgradeneeded: null,
+          onerror: null,
+          onblocked: null,
+          onsuccess: null,
+        };
+        queueMicrotask(() => {
+          if (!storeCreated) request.onupgradeneeded?.();
+          request.onsuccess?.();
+        });
+        return request;
+      },
+    },
+  };
+}
+const workerHandlers = new Map();
+const workerEffects = { focused: 0, navigated: 0, opened: 0, messages: [] };
+const fakeWorkoutActionDb = createFakeWorkoutActionIndexedDb();
+let workerWindows = [];
+let randomId = 0;
+const fixedWorkoutActionTime = 1_800_000_000_000;
+class FixedWorkoutActionDate extends Date {
+  static now() {
+    return fixedWorkoutActionTime;
+  }
+}
+const workerClient = {
+  url: "https://habhub.example/today",
+  postMessage(message) {
+    workerEffects.messages.push(message);
+  },
+  async navigate() {
+    workerEffects.navigated += 1;
+    return workerClient;
+  },
+  async focus() {
+    workerEffects.focused += 1;
+    return workerClient;
+  },
+};
+vm.runInNewContext(webWorker, {
+  Date: FixedWorkoutActionDate,
+  URL,
+  self: {
+    location: { origin: "https://habhub.example" },
+    indexedDB: fakeWorkoutActionDb.indexedDB,
+    crypto: {
+      randomUUID() {
+        randomId += 1;
+        return `00000000-0000-4000-8000-${String(randomId).padStart(12, "0")}`;
+      },
+    },
+    registration: { showNotification: async () => undefined },
+    clients: {
+      claim: async () => undefined,
+      matchAll: async () => workerWindows,
+      openWindow: async () => {
+        workerEffects.opened += 1;
+        return workerClient;
+      },
+    },
+    skipWaiting: async () => undefined,
+    addEventListener(type, handler) {
+      workerHandlers.set(type, handler);
+    },
+  },
+});
+const notificationClick = workerHandlers.get("notificationclick");
+const workerMessage = workerHandlers.get("message");
+async function clickWorkoutAction(action, actionToken = "opaque-session-token") {
+  let actionWork;
+  notificationClick({
+    action,
+    notification: {
+      close() {},
+      data: {
+        route: "/gym",
+        workoutTimer: true,
+        workoutActionToken: actionToken,
+      },
+    },
+    waitUntil(work) {
+      actionWork = work;
+    },
+  });
+  await actionWork;
+}
+await clickWorkoutAction("workout-pause");
+await clickWorkoutAction("workout-pause");
+await clickWorkoutAction("workout-next");
+await clickWorkoutAction("workout-pause", "second-opaque-session-token");
+assert.equal(workerEffects.messages.length, 0);
+assert.equal(fakeWorkoutActionDb.rows.size, 4);
+assert.equal(workerEffects.focused, 0);
+assert.equal(workerEffects.navigated, 0);
+assert.equal(workerEffects.opened, 0);
+workerWindows = [workerClient];
+let drainWork;
+workerMessage({
+  data: {
+    type: "habhub:web-workout-notification-action-control",
+    operation: "drain",
+    actionToken: "opaque-session-token",
+    requestId: "drain-request-0001",
+  },
+  source: workerClient,
+  waitUntil(work) {
+    drainWork = work;
+  },
+});
+await drainWork;
+assert.equal(workerEffects.messages.length, 1);
+const drained = workerEffects.messages[0];
+assert.deepEqual(
+  Array.from(drained.actions, (item) => item.action),
+  ["workout-pause", "workout-pause", "workout-next"],
+);
+assert.equal(
+  new Set(Array.from(drained.actions, (item) => item.id)).size,
+  3,
+  "durable IDs must distinguish same-action taps with identical occurredAt",
+);
+const storedOccurredAt = Array.from(fakeWorkoutActionDb.rows.values())
+  .filter((item) => item.actionToken === "opaque-session-token")
+  .map((item) => item.occurredAt)
+  .sort((left, right) => left - right);
+assert.deepEqual(
+  Array.from(drained.actions, (item) => item.occurredAt),
+  storedOccurredAt,
+  "drain must preserve each notification click's exact occurredAt",
+);
+let ackWork;
+workerMessage({
+  data: {
+    type: "habhub:web-workout-notification-action-control",
+    operation: "ack",
+    actionToken: "opaque-session-token",
+    actionIds: Array.from(drained.actions, (item) => item.id),
+  },
+  source: workerClient,
+  waitUntil(work) {
+    ackWork = work;
+  },
+});
+await ackWork;
+assert.equal(
+  fakeWorkoutActionDb.rows.size,
+  1,
+  "ACK must not remove another account token's queued action",
+);
+let clearWork;
+workerMessage({
+  data: {
+    type: "habhub:web-workout-notification-action-control",
+    operation: "clear",
+    actionToken: "second-opaque-session-token",
+  },
+  source: workerClient,
+  waitUntil(work) {
+    clearWork = work;
+  },
+});
+await clearWork;
+assert.equal(fakeWorkoutActionDb.rows.size, 0);
+assert.equal(workerEffects.focused, 0);
+assert.equal(workerEffects.navigated, 0);
+assert.equal(workerEffects.opened, 0);
+notificationClick({
+  action: "stale-workout-action",
+  notification: {
+    close() {},
+    data: { route: "/gym", workoutTimer: true },
+  },
+  waitUntil() {
+    throw new Error("an unknown workout action must remain silent");
+  },
+});
+assert.equal(workerEffects.focused, 0);
+assert.equal(workerEffects.navigated, 0);
+assert.equal(workerEffects.opened, 0);
+let bodyWork;
+notificationClick({
+  action: "",
+  notification: { close() {}, data: { route: "/gym", workoutTimer: true } },
+  waitUntil(work) {
+    bodyWork = work;
+  },
+});
+await bodyWork;
+assert.equal(workerEffects.navigated, 1);
+assert.equal(workerEffects.focused, 1);
+assert.equal(workerEffects.opened, 0);
+assert.match(workoutTimerSource, /workoutActionToken: actionToken/);
+assert.match(workoutTimerSource, /message\.actionToken !== webWorkoutActionToken/);
+assert.match(workoutTimerSource, /WEB_WORKOUT_ACTION_IDENTITY_KEY/);
+assert.match(workoutTimerSource, /stored\?\.ownerId === ownerId/);
+assert.match(workoutTimerSource, /operation: "ack"/);
+assert.match(workoutTimerSource, /operation: "clear"/);
+const webActionFlush = workoutTimerSource.slice(
+  workoutTimerSource.indexOf("function flushQueuedWebWorkoutActions"),
+  workoutTimerSource.indexOf("function scheduleWebWorkoutActionDrain"),
+);
+assert.doesNotMatch(
+  webActionFlush,
+  /acknowledgeWebWorkoutActions/,
+  "delivering into React state must not ACK before Gym processes the action",
+);
+assert.match(gymSource, /queuedWorkoutTimerActionId[\s\S]{0,120}webActionId/);
+assert.match(gymSource, /processedWebWorkoutActionIds/);
+assert.match(
+  gymSource,
+  /acknowledgeWorkoutActionsAfterPersistence\(\s*workoutDraftPersistenceRef\.current[\s\S]{0,300}acknowledgeWebWorkoutTimerActions/,
+  "Web action ACK must wait for the processed workout draft write",
+);
+assert.match(
+  gymSource,
+  /workoutDraftPersistenceRef\.current = persistence[\s\S]{0,600}webTimerActionAckRetry/,
+  "a retry trigger must rerun failed workout draft persistence",
+);
+assert.match(gymSource, /window\.addEventListener\("online", retryNow\)/);
+assert.match(
+  gymSource,
+  /document\.addEventListener\("visibilitychange", retryWhenVisible\)/,
+);
+assert.match(gymSource, /retryTimer = window\.setTimeout\(retryNow, delay\)/);
+assert.match(gymSource, /tutorialSandbox \|\| !workoutDraftReady/);
 assert.match(webWorker, /badge: BADGE_PATH/);
 assert.match(webWorker, /habhub-notification-badge-96\.png/);
 assert.match(webManifest, /habhub-notification-badge-96\.png/);
@@ -690,6 +1043,8 @@ assert.match(layoutSource, /syncWebReminderSchedule\(cycleStateRef\.current\)/);
 assert.match(layoutSource, /webReminderScheduleKey/);
 assert.match(layoutSource, /auth\.session\?\.user\.id !== auth\.user\.id/);
 assert.match(layoutSource, /Math\.min\(5 \* 60_000, 3_000 \* 2 \*\* attempt\)/);
+assert.match(layoutSource, /Publish immediately after a reminder\/to-do state commit/);
+assert.doesNotMatch(layoutSource, /setTimeout\(\(\) => void sync\(\), 2200\)/);
 assert.match(layoutSource, /const repairTimer = setInterval\(retryNow, 12 \* 60_000\)/);
 assert.match(layoutSource, /clearInterval\(repairTimer\)/);
 assert.match(layoutSource, /window\.addEventListener\("online", retryNow\)/);
@@ -710,6 +1065,8 @@ for (const category of [
 ])
   assert.match(webScheduleSource, new RegExp(`category: "${category}"`));
 assert.match(webScheduleSource, /quietHoursAdjustedDateTime/);
+assert.equal(WEB_REMINDER_LATE_GRACE_MS, 4 * 60 * 1000);
+assert.match(webScheduleSource, /triggerCanStillPublish/);
 assert.equal(
   (webScheduleSource.match(/for \(let offset = -1; offset < 367; offset \+= 1\)/g) ?? [])
     .length,
@@ -720,6 +1077,7 @@ assert.match(webScheduleSource, /todoReminderAppliesOnDate/);
 assert.match(webScheduleSource, /activityTimerAlertCandidates/);
 assert.match(webScheduleSyncSource, /replace_own_web_notification_schedule/);
 assert.match(webScheduleSyncSource, /data\.session\?\.user\.id !== state\.currentUserId/);
+assert.match(webScheduleSyncSource, /Number\(acceptedCount\) !== events\.length/);
 assert.match(webScheduleSyncSource, /WEB_REMINDER_SCHEDULE_REPAIR_MS/);
 assert.match(webScheduleSyncSource, /acceptedAt: Date\.now\(\)/);
 assert.match(webPushSource, /showImmediateWebNotification/);

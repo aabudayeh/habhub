@@ -27,6 +27,8 @@ export {
   challengeWinnerIds,
   challengeValueOutcome,
   compareChallengeValues,
+  groupChallengeAvailability,
+  groupChallengeJoinDeadline,
   declinedChallengeParticipantIds,
   challengePeriodDates,
   groupChallengeEndDate,

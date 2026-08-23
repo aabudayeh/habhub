@@ -19,6 +19,7 @@ import {
   manualStepEntriesEligibleForReplacement,
   mergeLocalCurrentDayDeviceStepEntries,
   partitionStepAggregateRange,
+  preferAndroidDeviceHistoricalStepGroups,
   preserveCurrentDayStepFloor,
   preserveCurrentDayStepReplacementFloor,
   preserveUnchangedDailyAggregateRevision,
@@ -91,6 +92,27 @@ assert.equal(
   authoritativeHealthConnectStepGroups(platformPriorityAggregate)[0].count,
   3_435,
   "the unfiltered platform aggregate must remain authoritative without vendor metadata",
+);
+const historicalPhoneAggregate = [
+  {
+    localDate: "2026-08-13",
+    count: 3_912,
+    origin: "com.android.healthconnect.phone.a1b2c3d4e5f607182930",
+  },
+];
+assert.deepEqual(
+  preferAndroidDeviceHistoricalStepGroups(
+    [
+      ...platformPriorityAggregate,
+      { localDate: "2026-08-14", count: 7_100, origin: "Health Connect" },
+    ],
+    historicalPhoneAggregate,
+  ).map(({ localDate, count }) => [localDate, count]),
+  [
+    ["2026-08-13", 3_912],
+    ["2026-08-14", 7_100],
+  ],
+  "completed days use the same phone-origin aggregate as today and fall back per day when it is absent",
 );
 const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
   [
@@ -1386,6 +1408,16 @@ assert.match(
   /Promise\.all\(\[[\s\S]{0,2200}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,3200}dataOriginFilter: androidDeviceOrigins/,
   "every current-day read must discover and aggregate only Android's phone-owned origin",
 );
+assert.match(
+  androidHealthSource,
+  /stepSlices\.historical\s*\|\|\s*includesCurrentDay[\s\S]{0,120}currentDeviceStepOrigins\(\)/,
+  "a historical-only repair after restart must rediscover the phone SPN before filtering",
+);
+assert.match(
+  androidHealthSource,
+  /androidDeviceHistoricalGroups[\s\S]{0,1800}aggregateGroupByPeriod\(\{[\s\S]{0,700}dataOriginFilter: androidDeviceOrigins[\s\S]{0,1600}preferAndroidDeviceHistoricalStepGroups/,
+  "completed days must use Android's source-filtered aggregate with a per-day Health Connect fallback",
+);
 assert.doesNotMatch(
   androidHealthSource,
   /needsAndroidDeviceFallback/,
@@ -1933,5 +1965,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: historical Health Connect aggregates, phone-origin live Steps with Physical Activity fallback, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: phone-origin current and historical Steps with per-day Health Connect fallback, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

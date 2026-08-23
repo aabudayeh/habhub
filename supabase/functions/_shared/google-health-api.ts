@@ -175,6 +175,7 @@ function civilMidnight(date: string) {
 function dailyRollUpRequestBody(
   fromDate: string,
   throughDateExclusive: string,
+  pageToken = "",
 ) {
   const start = civilMidnight(fromDate);
   const end = civilMidnight(throughDateExclusive);
@@ -183,7 +184,7 @@ function dailyRollUpRequestBody(
     Date.UTC(start.date.year, start.date.month - 1, start.date.day)
   ) / 86_400_000);
   if (rangeDays < 1) throw new Error("Invalid civil date range");
-  return {
+  const body = {
     range: {
       // Keep midnight explicit even though Google's CivilTime is optional.
       start,
@@ -198,6 +199,7 @@ function dailyRollUpRequestBody(
     pageSize: rangeDays,
     dataSourceFamily: "users/me/dataSourceFamilies/all-sources",
   };
+  return pageToken ? { ...body, pageToken } : body;
 }
 
 export async function dailyRollUp(
@@ -206,20 +208,29 @@ export async function dailyRollUp(
   fromDate: string,
   throughDateExclusive: string,
 ) {
-  return authorizedJson<{
-    rollupDataPoints?: GoogleHealthDataPoint[];
-    nextPageToken?: string;
-  }>(
-    accessToken,
-    `${API_ROOT}/users/me/dataTypes/${encodeURIComponent(dataType)}/dataPoints:dailyRollUp`,
-    {
-      method: "POST",
-      body: JSON.stringify(dailyRollUpRequestBody(
-        fromDate,
-        throughDateExclusive,
-      )),
-    },
-  );
+  const rollupDataPoints: GoogleHealthDataPoint[] = [];
+  let pageToken = "";
+  for (let page = 0; page < 100; page += 1) {
+    const response = await authorizedJson<{
+      rollupDataPoints?: GoogleHealthDataPoint[];
+      nextPageToken?: string;
+    }>(
+      accessToken,
+      `${API_ROOT}/users/me/dataTypes/${encodeURIComponent(dataType)}/dataPoints:dailyRollUp`,
+      {
+        method: "POST",
+        body: JSON.stringify(dailyRollUpRequestBody(
+          fromDate,
+          throughDateExclusive,
+          pageToken,
+        )),
+      },
+    );
+    rollupDataPoints.push(...(response.rollupDataPoints ?? []));
+    pageToken = response.nextPageToken ?? "";
+    if (!pageToken) return { rollupDataPoints };
+  }
+  throw new Error(`Google Health pagination limit exceeded for ${dataType}`);
 }
 
 // Pure request fixtures exercise the exact production JSON without making a

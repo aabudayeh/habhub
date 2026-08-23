@@ -26,11 +26,16 @@ async function syncNow(state: AppState) {
     Date.now() - prior.acceptedAt < WEB_REMINDER_SCHEDULE_REPAIR_MS
   )
     return;
-  const { error } = await supabase.rpc("replace_own_web_notification_schedule", {
-    p_expected_user_id: state.currentUserId,
-    p_events: events,
-  });
+  const { data: acceptedCount, error } = await supabase.rpc(
+    "replace_own_web_notification_schedule",
+    {
+      p_expected_user_id: state.currentUserId,
+      p_events: events,
+    },
+  );
   if (error) throw error;
+  if (Number(acceptedCount) !== events.length)
+    throw new Error("The Web reminder schedule was not fully accepted.");
   // A periodically renewed acknowledgement repairs rows removed by a
   // transient backend cleanup or an interrupted rollout even when the local
   // reminder definitions did not change. It also avoids a foreground request

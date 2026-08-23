@@ -182,7 +182,8 @@ function Today() {
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
   const [todayPageIndex, setTodayPageIndex] = useState(0);
-  const todayUsesPages = state.settings.todayLayoutMode === "pages";
+  const todayUsesPages =
+    (state.settings.todayLayoutMode ?? "pages") === "pages";
   const todaySummaryPinned =
     state.settings.pinTodayHeaderAndFeaturedCard === true;
   const stickyTodaySummary =

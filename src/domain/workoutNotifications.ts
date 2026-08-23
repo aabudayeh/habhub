@@ -3,6 +3,7 @@
 // refresh cadence browsers can usually sustain while the OS notification's
 // timestamp remains the authoritative phase clock between updates.
 export const WEB_WORKOUT_NOTIFICATION_REFRESH_MS = 10_000;
+export const WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS = 30_000;
 
 export type WorkoutSystemNotificationPhase = "work" | "rest" | "paused";
 
@@ -55,4 +56,20 @@ export function workoutWebNotificationSignature({
     phase,
     Math.floor(elapsedSeconds / (WEB_WORKOUT_NOTIFICATION_REFRESH_MS / 1000)),
   ]);
+}
+
+export function webWorkoutActionAckRetryDelay(attempt: number) {
+  const boundedAttempt = Math.max(0, Math.min(8, Math.floor(attempt)));
+  return Math.min(
+    WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS,
+    500 * 2 ** boundedAttempt,
+  );
+}
+
+export async function acknowledgeWorkoutActionsAfterPersistence(
+  persistence: Promise<void>,
+  acknowledge: () => Promise<void>,
+) {
+  await persistence;
+  await acknowledge();
 }

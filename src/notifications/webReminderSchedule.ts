@@ -6,6 +6,8 @@ import {
   activityTimerAlertCandidates,
   notificationFallsAfterFastingTarget,
   quietHoursAdjustedDateTime,
+  WEB_REMINDER_LATE_GRACE_MS,
+  webReminderTriggerCanStillPublish,
 } from "@/src/domain/notificationScheduling";
 import {
   isMetricTrackedOnDate,
@@ -47,6 +49,13 @@ const CATEGORY_LIMITS = {
   fasting: 4,
 } as const;
 const MAX_WEB_REMINDERS = 68;
+// A browser can suspend immediately after save and a transient network retry
+// can cross the requested minute. Keep a short, server-matched grace window so
+// a just-due reminder is published for the next minute worker run instead of
+// disappearing from the plan. Stable schedule keys keep this idempotent.
+function triggerCanStillPublish(trigger: Date, now: Date) {
+  return webReminderTriggerCanStillPublish(trigger.getTime(), now.getTime());
+}
 
 function localized(state: AppState, value: string) {
   return translateUiText(state.settings.language ?? "en", value);
@@ -165,7 +174,7 @@ function trackerPlans(state: AppState, now: Date) {
         )
           continue;
         const trigger = triggerFor(state, localDate, reminder.time);
-        if (!trigger || trigger.date <= now) continue;
+        if (!trigger || !triggerCanStillPublish(trigger.date, now)) continue;
         const fast = fastingByMetric.get(metric.id);
         if (
           fast?.active &&
@@ -246,7 +255,7 @@ function productivityPlans(state: AppState, now: Date) {
     sourceId: string;
   }) => {
     const trigger = triggerFor(state, localDate, time);
-    if (!trigger || trigger.date <= now) return;
+    if (!trigger || !triggerCanStillPublish(trigger.date, now)) return;
     plans.push(
       plan(state, {
         scheduleKey: scheduleKey([
@@ -416,7 +425,7 @@ function cyclePlans(state: AppState, now: Date) {
   return nearestUnique(
     candidates.flatMap((candidate) => {
       const trigger = triggerFor(state, candidate.date, "09:00");
-      return !trigger || trigger.date <= now
+      return !trigger || !triggerCanStillPublish(trigger.date, now)
         ? []
         : [
             plan(state, {
@@ -458,7 +467,7 @@ function gymPlans(state: AppState, now: Date) {
   const waitDays = Math.max(1, Math.min(14, settings.gymReminderDays ?? 3));
   let reminderDate = dateWithOffsetFrom(latest?.localDate ?? dateKey(now), waitDays);
   let trigger = triggerFor(state, reminderDate, "18:00");
-  if (!trigger || trigger.date <= now) {
+  if (!trigger || !triggerCanStillPublish(trigger.date, now)) {
     reminderDate = dateWithOffsetFrom(dateKey(now), 1);
     trigger = triggerFor(state, reminderDate, "18:00");
   }
@@ -543,7 +552,11 @@ function fastingPlans(state: AppState, now: Date) {
         ? new Date(fast.startedAt).getTime()
         : Number.NaN;
       const completion = startedAt + fast.targetMinutes * 60_000;
-      if (!fast.active || !Number.isFinite(completion) || completion <= now.getTime())
+      if (
+        !fast.active ||
+        !Number.isFinite(completion) ||
+        completion < now.getTime() - WEB_REMINDER_LATE_GRACE_MS
+      )
         return [];
       const metricName = localizeMetricName(state.settings.language, metric);
       return [

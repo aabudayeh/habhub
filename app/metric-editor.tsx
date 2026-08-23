@@ -29,7 +29,10 @@ import {
 import { MetricSelector } from "@/src/components/MetricSelector";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { InfoPopover } from "@/src/components/InfoPopover";
-import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import {
+  useWebBackNavigationGuard,
+  useWebBeforeUnload,
+} from "@/src/components/useWebBeforeUnload";
 import {
   isAllowedTrackerColor,
   TRACKER_COLOR_CHOICES,
@@ -1465,6 +1468,11 @@ export default function TrackerEditor() {
         requestCloseRef.current(() => navigation.dispatch(event.data.action));
       }),
     [navigation, tutorialSandbox],
+  );
+  useWebBackNavigationGuard(
+    () =>
+      !tutorialSandbox && dirtyRef.current && !allowExit.current,
+    (continueBack) => requestCloseRef.current(continueBack),
   );
   useEffect(() => {
     if (groupScope || focus !== "notifications") return;

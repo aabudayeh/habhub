@@ -68,13 +68,19 @@ import {
   performancePeriod,
   type PerformanceRange,
 } from "@/src/domain/performance";
-import { WEB_WORKOUT_NOTIFICATION_REFRESH_MS } from "@/src/domain/workoutNotifications";
 import {
+  acknowledgeWorkoutActionsAfterPersistence,
+  WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
+  webWorkoutActionAckRetryDelay,
+} from "@/src/domain/workoutNotifications";
+import {
+  acknowledgeWebWorkoutTimerActions,
   configureWorkoutTimerNotification,
   consumeWorkoutTimerActions,
   dismissWorkoutTimerNotification,
   nativeWorkoutActionsEnabled,
   showWorkoutTimerNotification,
+  subscribeWebWorkoutTimerActions,
   WORKOUT_TIMER_FINISH,
   WORKOUT_TIMER_NEXT,
   WORKOUT_TIMER_PAUSE,
@@ -163,9 +169,16 @@ type StoredWorkoutDraft = {
   setStartDelaySeconds: number;
   exercises: GymExercise[];
   timer: WorkoutTimer;
+  processedWebWorkoutActionIds?: string[];
 };
 
 const workoutDraftKey = (userId: string) => `habhub-active-gym-workout-v2:${userId}`;
+
+function queuedWorkoutTimerActionId(action: QueuedWorkoutTimerAction) {
+  return action.webActionId
+    ? `web:${action.webActionId}`
+    : `${action.ownerId}:${action.generation}:${action.action}:${action.occurredAt}`;
+}
 
 function timerPhaseElapsed(timer: WorkoutTimer, now: number) {
   return (
@@ -538,8 +551,14 @@ function GymScreen() {
   const [queuedNativeTimerActions, setQueuedNativeTimerActions] = useState<
     QueuedWorkoutTimerAction[]
   >([]);
+  const [pendingWebTimerActionAcks, setPendingWebTimerActionAcks] = useState<
+    QueuedWorkoutTimerAction[]
+  >([]);
+  const [webTimerActionAckRetry, setWebTimerActionAckRetry] = useState(0);
   const processedNativeTimerActionIds = useRef(new Set<string>());
   const processedNativeTimerActionOrder = useRef<string[]>([]);
+  const webTimerActionAckAttempt = useRef(0);
+  const workoutDraftPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const timerActionRef = useRef<
     (action: string, occurredAt?: number) => void
   >(() => undefined);
@@ -558,13 +577,10 @@ function GymScreen() {
       if (!actions.length) return;
       setQueuedNativeTimerActions((current) => {
         const known = new Set(
-          current.map(
-            (item) =>
-              `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}`,
-          ),
+          current.map(queuedWorkoutTimerActionId),
         );
         const additions = actions.filter((item) => {
-          const id = `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}`;
+          const id = queuedWorkoutTimerActionId(item);
           if (known.has(id) || processedNativeTimerActionIds.current.has(id))
             return false;
           known.add(id);
@@ -575,6 +591,29 @@ function GymScreen() {
     },
     [],
   );
+  const queueWebTimerActionAck = useCallback(
+    (action: QueuedWorkoutTimerAction) => {
+      if (!action.webActionId) return;
+      setPendingWebTimerActionAcks((current) =>
+        current.some((item) => item.webActionId === action.webActionId)
+          ? current
+          : [...current, action].slice(-30),
+      );
+    },
+    [],
+  );
+  useEffect(() => {
+    if (Platform.OS !== "web" || tutorialSandbox || !workoutDraftReady) return;
+    return subscribeWebWorkoutTimerActions(
+      state.currentUserId,
+      enqueueNativeTimerActions,
+    );
+  }, [
+    enqueueNativeTimerActions,
+    state.currentUserId,
+    tutorialSandbox,
+    workoutDraftReady,
+  ]);
   const [performanceRange, setPerformanceRange] =
     useState<PerformanceRange>("week");
   const defaultPerformancePeriod = useMemo(
@@ -1237,6 +1276,24 @@ function GymScreen() {
           Date.now() - draft.savedAt > 72 * 60 * 60 * 1000
         )
           return;
+        const processedWebActionIds = Array.isArray(
+          draft.processedWebWorkoutActionIds,
+        )
+          ? draft.processedWebWorkoutActionIds
+              .filter(
+                (id): id is string =>
+                  typeof id === "string" &&
+                  id.length >= 8 &&
+                  id.length <= 160 &&
+                  /^[A-Za-z0-9_-]+$/.test(id),
+              )
+              .slice(-60)
+          : [];
+        for (const webActionId of processedWebActionIds) {
+          const id = `web:${webActionId}`;
+          processedNativeTimerActionIds.current.add(id);
+          processedNativeTimerActionOrder.current.push(id);
+        }
         initializedDate.current = draft.localDate;
         setLocalDate(draft.localDate);
         setSessionId(draft.sessionId);
@@ -1265,27 +1322,38 @@ function GymScreen() {
   useEffect(() => {
     if (tutorialSandbox || !workoutDraftReady) return;
     const key = workoutDraftKey(state.currentUserId);
-    if (!workoutTimer) {
-      void AsyncStorage.removeItem(key).catch(() => undefined);
-      return;
-    }
-    const draft: StoredWorkoutDraft = {
-      savedAt: Date.now(),
-      localDate,
-      sessionId,
-      sessionName,
-      duration,
-      calories,
-      calorieCalculationMode,
-      intensity,
-      sessionNotes,
-      visibility,
-      selectedPlanId,
-      setStartDelaySeconds,
-      exercises,
-      timer: workoutTimer,
+    const persist = () => {
+      if (!workoutTimer) return AsyncStorage.removeItem(key);
+      const processedWebWorkoutActionIds =
+        processedNativeTimerActionOrder.current
+          .filter((id) => id.startsWith("web:"))
+          .map((id) => id.slice(4))
+          .slice(-60);
+      const draft: StoredWorkoutDraft = {
+        savedAt: Date.now(),
+        localDate,
+        sessionId,
+        sessionName,
+        duration,
+        calories,
+        calorieCalculationMode,
+        intensity,
+        sessionNotes,
+        visibility,
+        selectedPlanId,
+        setStartDelaySeconds,
+        exercises,
+        timer: workoutTimer,
+        processedWebWorkoutActionIds,
+      };
+      return AsyncStorage.setItem(key, JSON.stringify(draft));
     };
-    void AsyncStorage.setItem(key, JSON.stringify(draft)).catch(() => undefined);
+    const persistence = workoutDraftPersistenceRef.current.then(
+      persist,
+      persist,
+    );
+    workoutDraftPersistenceRef.current = persistence;
+    void persistence.catch(() => undefined);
   }, [
     calorieCalculationMode,
     calories,
@@ -1293,6 +1361,7 @@ function GymScreen() {
     exercises,
     intensity,
     localDate,
+    pendingWebTimerActionAcks,
     selectedPlanId,
     sessionId,
     sessionName,
@@ -1301,6 +1370,7 @@ function GymScreen() {
     state.currentUserId,
     tutorialSandbox,
     visibility,
+    webTimerActionAckRetry,
     workoutDraftReady,
     workoutTimer,
   ]);
@@ -2179,17 +2249,16 @@ function GymScreen() {
   useEffect(() => {
     const next = queuedNativeTimerActions[0];
     if (!next || !workoutDraftReady) return;
-    const id = `${next.ownerId}:${next.generation}:${next.action}:${next.occurredAt}`;
+    const id = queuedWorkoutTimerActionId(next);
     if (!workoutTimer || processedNativeTimerActionIds.current.has(id)) {
       setQueuedNativeTimerActions((current) =>
-        current[0] &&
-        `${current[0].ownerId}:${current[0].generation}:${current[0].action}:${current[0].occurredAt}` === id
+        current[0] && queuedWorkoutTimerActionId(current[0]) === id
           ? current.slice(1)
           : current.filter(
-              (item) =>
-                `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}` !== id,
+              (item) => queuedWorkoutTimerActionId(item) !== id,
             ),
       );
+      queueWebTimerActionAck(next);
       return;
     }
 
@@ -2199,21 +2268,78 @@ function GymScreen() {
       const expired = processedNativeTimerActionOrder.current.shift();
       if (expired) processedNativeTimerActionIds.current.delete(expired);
     }
-    // Apply exactly one native transition in this committed render. Removing
+    // Apply exactly one notification transition in this committed render. Removing
     // it from the queue is batched with the timer/exercise state updates, so
     // the next effect observes the newly committed workout phase rather than
     // relying on a timing delay that can fail on a large account.
     timerActionRef.current(next.action, next.occurredAt);
     setQueuedNativeTimerActions((current) =>
-      current[0] &&
-      `${current[0].ownerId}:${current[0].generation}:${current[0].action}:${current[0].occurredAt}` === id
+      current[0] && queuedWorkoutTimerActionId(current[0]) === id
         ? current.slice(1)
         : current.filter(
-            (item) =>
-              `${item.ownerId}:${item.generation}:${item.action}:${item.occurredAt}` !== id,
+            (item) => queuedWorkoutTimerActionId(item) !== id,
           ),
     );
-  }, [queuedNativeTimerActions, workoutDraftReady, workoutTimer]);
+    queueWebTimerActionAck(next);
+  }, [
+    queueWebTimerActionAck,
+    queuedNativeTimerActions,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !pendingWebTimerActionAcks.length) return;
+    let active = true;
+    const pending = pendingWebTimerActionAcks;
+    const pendingIds = new Set(
+      pending
+        .map((action) => action.webActionId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    let retryTimer: number | undefined;
+    const retryNow = () => setWebTimerActionAckRetry((value) => value + 1);
+    const retryWhenVisible = () => {
+      if (document.visibilityState === "visible") retryNow();
+    };
+    window.addEventListener("online", retryNow);
+    document.addEventListener("visibilitychange", retryWhenVisible);
+    void acknowledgeWorkoutActionsAfterPersistence(
+      workoutDraftPersistenceRef.current,
+      () =>
+        active
+          ? acknowledgeWebWorkoutTimerActions(state.currentUserId, pending)
+          : Promise.resolve(),
+    )
+      .then(() => {
+        if (!active) return;
+        webTimerActionAckAttempt.current = 0;
+        setPendingWebTimerActionAcks((current) =>
+          current.filter(
+            (action) =>
+              !action.webActionId || !pendingIds.has(action.webActionId),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!active) return;
+        const delay = webWorkoutActionAckRetryDelay(
+          webTimerActionAckAttempt.current,
+        );
+        webTimerActionAckAttempt.current += 1;
+        retryTimer = window.setTimeout(retryNow, delay);
+      });
+    return () => {
+      active = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      window.removeEventListener("online", retryNow);
+      document.removeEventListener("visibilitychange", retryWhenVisible);
+    };
+  }, [
+    pendingWebTimerActionAcks,
+    state.currentUserId,
+    webTimerActionAckRetry,
+  ]);
 
   notificationPayloadRef.current = workoutTimer
     ? {
@@ -2323,7 +2449,7 @@ function GymScreen() {
   ]);
 
   useEffect(() => {
-    if (tutorialSandbox) return;
+    if (tutorialSandbox || !workoutDraftReady) return;
     if (!workoutTimer) {
       void dismissWorkoutTimerNotification(state.currentUserId, true);
       return;
@@ -2362,6 +2488,7 @@ function GymScreen() {
     workoutTimer?.phase,
     workoutTimer?.setId,
     workoutTimer,
+    workoutDraftReady,
     tutorialSandbox,
   ]);
   const workoutTimerBar = workoutTimer ? (

@@ -300,7 +300,7 @@ function LeaderboardScreen() {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const leaderboardUsesPages =
-    state.settings.leaderboardLayoutMode === "pages";
+    (state.settings.leaderboardLayoutMode ?? "pages") === "pages";
   const [showPicker, setShowPicker] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [pendingChallengeCardId, setPendingChallengeCardId] = useState<string>();

@@ -631,7 +631,10 @@ function RootNavigator() {
       attempt = 0;
       void sync();
     };
-    const initialTimer = setTimeout(() => void sync(), 2200);
+    // Publish immediately after a reminder/to-do state commit. Waiting for a
+    // generic debounce can consume most of a near-term reminder's lead time,
+    // especially when a mobile browser suspends as soon as the user exits.
+    void sync();
     // The schedule is private server state, not a browser alarm. Periodically
     // republish it so an interrupted deployment or backend cleanup cannot
     // strand an otherwise healthy Web Push subscription. The publisher itself
@@ -641,7 +644,6 @@ function RootNavigator() {
     document.addEventListener("visibilitychange", retryNow);
     return () => {
       active = false;
-      clearTimeout(initialTimer);
       clearInterval(repairTimer);
       if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener("online", retryNow);

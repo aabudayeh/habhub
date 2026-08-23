@@ -14,9 +14,14 @@ type GroupChallengeRow = {
   target_value: number | string | null;
   local_date: string;
   end_date: string;
-  participant_ids: string[];
-  accepted_participant_ids: string[];
-  declined_participant_ids: string[];
+  participant_ids?: string[];
+  accepted_participant_ids?: string[];
+  declined_participant_ids?: string[];
+  participant_count?: number;
+  accepted_count?: number;
+  viewer_participation?: GroupChallenge["viewerParticipation"];
+  eligible_to_join?: boolean;
+  is_full?: boolean;
   recurrence: GoalSchedule | null;
   created_at: string;
   updated_at: string;
@@ -67,6 +72,11 @@ function fromRow(row: GroupChallengeRow): GroupChallenge {
     declinedParticipantIds: [
       ...new Set(row.declined_participant_ids ?? []),
     ],
+    participantCount: row.participant_count,
+    acceptedParticipantCount: row.accepted_count,
+    viewerParticipation: row.viewer_participation,
+    eligibleToJoin: row.eligible_to_join,
+    isFull: row.is_full,
     recurrence: row.recurrence ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -85,6 +95,20 @@ export async function loadGroupChallenges(groupId: string) {
     .order("local_date", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(200);
+  if (error) throw challengeCloudError(error);
+  return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
+}
+
+/**
+ * A bounded discovery read for Group settings. The RPC verifies active group
+ * membership server-side and returns only challenges that have not finished;
+ * the normal participant-scoped Leaderboard query above remains unchanged.
+ */
+export async function loadActiveGroupChallenges(groupId: string) {
+  if (!supabase) return [];
+  const { data, error } = await supabase.rpc("list_active_group_challenges", {
+    p_group_id: groupId,
+  });
   if (error) throw challengeCloudError(error);
   return (data as GroupChallengeRow[] | null)?.map(fromRow) ?? [];
 }

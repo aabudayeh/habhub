@@ -15,6 +15,11 @@ export type GroupChallengeParticipation =
   | "declined"
   | "not_invited";
 
+export type GroupChallengeAvailability =
+  | "upcoming"
+  | "active"
+  | "finished";
+
 /** Old rows predate invitations and therefore remain accepted for compatibility. */
 export function acceptedChallengeParticipantIds(challenge: GroupChallenge) {
   return [
@@ -53,6 +58,25 @@ export function groupChallengeOccurrenceId(id: string, localDate: string) {
 
 export function groupChallengeResponseDeadline(challenge: GroupChallenge) {
   return challenge.recurrence?.anchorDate ?? challenge.localDate;
+}
+
+/**
+ * The final day on which a group member may opt into the persisted challenge.
+ * Recurring challenges stay open for the series, while date-range challenges
+ * use their inclusive scoring end. This stays independent from Leaderboard
+ * occurrence expansion and pagination.
+ */
+export function groupChallengeJoinDeadline(challenge: GroupChallenge) {
+  return challenge.recurrence?.endDate ?? groupChallengeEndDate(challenge);
+}
+
+export function groupChallengeAvailability(
+  challenge: GroupChallenge,
+  today: string,
+): GroupChallengeAvailability {
+  if (groupChallengeJoinDeadline(challenge) < today) return "finished";
+  if (challenge.localDate > today) return "upcoming";
+  return "active";
 }
 
 type ChallengeMetricShape = {

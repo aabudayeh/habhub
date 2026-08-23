@@ -16,6 +16,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { normalizeTabOrder } from "@/src/domain/navigation";
+import {
+  resolveTabBarBottomInset,
+  WebDisplayEnvironment,
+} from "@/src/domain/webSafeArea";
 
 const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: "today-outline",
@@ -51,6 +55,31 @@ export default function TabLayout() {
   const colors = useAppColors();
   const t = useTranslation();
   const insets = useSafeAreaInsets();
+  const webDisplayEnvironment = useMemo<WebDisplayEnvironment | undefined>(() => {
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      typeof navigator === "undefined"
+    ) {
+      return undefined;
+    }
+
+    const browserNavigator = navigator as Navigator & {
+      standalone?: boolean;
+    };
+    return {
+      userAgent: browserNavigator.userAgent,
+      platform: browserNavigator.platform,
+      maxTouchPoints: browserNavigator.maxTouchPoints,
+      displayModeStandalone:
+        window.matchMedia?.("(display-mode: standalone)").matches === true,
+      navigatorStandalone: browserNavigator.standalone === true,
+    };
+  }, []);
+  const tabBarBottomInset = resolveTabBarBottomInset(
+    insets.bottom,
+    webDisplayEnvironment,
+  );
   // Portrait iPhones report a bottom safe area but commonly zero side insets.
   // Their rounded lower corners can still mask the first/last tab labels even
   // though a screenshot contains every pixel, so reserve a small edge gutter
@@ -196,9 +225,9 @@ export default function TabLayout() {
             route.name === "chat" && Platform.OS !== "android"
               ? "absolute"
               : undefined,
-          height: 55 + insets.bottom,
+          height: 55 + tabBarBottomInset,
           paddingTop: 2,
-          paddingBottom: Math.max(1, insets.bottom),
+          paddingBottom: Math.max(1, tabBarBottomInset),
           paddingLeft:
             Platform.OS === "web"
               ? Math.max(insets.left, curvedWebEdgeGutter)

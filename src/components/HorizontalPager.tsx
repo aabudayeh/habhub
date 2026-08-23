@@ -3,6 +3,7 @@ import {
   LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Platform,
   Pressable,
   ScrollView,
   StyleProp,
@@ -116,6 +117,7 @@ export function HorizontalPager({
         snapToInterval={pageWidth > 0 ? pageWidth : undefined}
         snapToAlignment="start"
         scrollEventThrottle={16}
+        onScroll={Platform.OS === "web" ? updateActivePage : undefined}
         onMomentumScrollEnd={updateActivePage}
         onScrollEndDrag={updateActivePage}
         style={styles.viewport}

@@ -44,9 +44,9 @@ data class HabHubWidgetConfiguration(
   val widgetId: Int,
   val trackerId: String,
   val range: String,
-  val backgroundMode: String = "theme",
+  val backgroundMode: String = "transparent",
   val backgroundColor: String = "#081B49",
-  val backgroundOpacity: Int = 100,
+  val backgroundOpacity: Int = 55,
 )
 
 object HabHubWidgetStore {
@@ -100,9 +100,9 @@ object HabHubWidgetStore {
     widgetId: Int,
     trackerId: String,
     range: String,
-    backgroundMode: String = "theme",
+    backgroundMode: String = "transparent",
     backgroundColor: String = "#081B49",
-    backgroundOpacity: Int = 100,
+    backgroundOpacity: Int = 55,
   ) {
     preferences(context).edit()
       .putString("$TRACKER_PREFIX$widgetId", normalizedTracker(trackerId))
@@ -115,13 +115,14 @@ object HabHubWidgetStore {
 
   fun configuration(context: Context, widgetId: Int): HabHubWidgetConfiguration {
     val prefs = preferences(context)
+    val defaultTracker = defaultTracker(context, widgetId)
     return HabHubWidgetConfiguration(
       widgetId,
-      normalizedTracker(prefs.getString("$TRACKER_PREFIX$widgetId", "__avatar__") ?: "__avatar__"),
+      normalizedTracker(prefs.getString("$TRACKER_PREFIX$widgetId", defaultTracker) ?: defaultTracker),
       normalizedRange(prefs.getString("$RANGE_PREFIX$widgetId", "week") ?: "week"),
-      normalizedBackgroundMode(prefs.getString("$BACKGROUND_MODE_PREFIX$widgetId", "theme") ?: "theme"),
+      normalizedBackgroundMode(prefs.getString("$BACKGROUND_MODE_PREFIX$widgetId", "transparent") ?: "transparent"),
       normalizedColor(prefs.getString("$BACKGROUND_COLOR_PREFIX$widgetId", DEFAULT_BACKGROUND) ?: DEFAULT_BACKGROUND),
-      prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 100).coerceIn(0, 100),
+      prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 55).coerceIn(0, 100),
     )
   }
 
@@ -154,8 +155,18 @@ object HabHubWidgetStore {
   private fun normalizedTracker(trackerId: String) =
     if (trackerId == "__avatar__") "__avatar__" else "__featured__"
 
+  /** Matches each optional-config widget's advertised/default content. */
+  private fun defaultTracker(context: Context, widgetId: Int): String {
+    val manager = AppWidgetManager.getInstance(context)
+    return if (
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubSquareWidgetProvider::class.java),
+      )
+    ) "__avatar__" else "__featured__"
+  }
+
   private fun normalizedBackgroundMode(mode: String) =
-    if (mode in setOf("theme", "transparent", "custom")) mode else "theme"
+    if (mode in setOf("theme", "transparent", "custom")) mode else "transparent"
 
   private fun normalizedColor(value: String) = try {
     Color.parseColor(value)
@@ -491,9 +502,9 @@ object HabHubWidgetRenderer {
     accent: Int,
   ) {
     val pad = if (size.compact) 9f else 11f
-    val badgeDiameter = if (size.compact) 27f else 35f
+    val badgeDiameter = if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
-    val badgeCenterY = if (size.compact) size.heightDp / 2f - 1f else 30f
+    val badgeCenterY = if (size.compact) min(19f, size.heightDp * 0.42f) else 30f
     val contentWidth = max(24f, badgeCenterX - badgeDiameter / 2f - pad - 5f)
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
@@ -501,7 +512,7 @@ object HabHubWidgetRenderer {
       canvas,
       eyebrow,
       pad,
-      if (size.compact) 12f else 17f,
+      if (size.compact) 10.5f else 17f,
       contentWidth,
       textPaint(if (size.compact) 6.5f else 7.5f, Color.argb(205, 255, 255, 255), true, 0.12f),
     )
@@ -509,9 +520,9 @@ object HabHubWidgetRenderer {
       canvas,
       item.optString("value", "\u2014"),
       pad,
-      if (size.compact) 29.5f else 42f,
+      if (size.compact) 25.5f else 42f,
       contentWidth,
-      textPaint(if (size.compact) 16f else 24f, Color.WHITE, true),
+      textPaint(if (size.compact) 14f else 24f, Color.WHITE, true),
     )
     if (!size.compact) {
       drawText(
@@ -538,7 +549,7 @@ object HabHubWidgetRenderer {
     val barHeight = if (size.compact) 3.2f else 5.2f
     val goals = item.optJSONArray("goals") ?: JSONArray()
     val barTop = if (size.compact) {
-      if (goals.length() > 0) size.heightDp - 14f else size.heightDp - pad + 1f
+      size.heightDp - 5.5f
     } else if (goals.length() > 0) {
       61f
     } else {
@@ -556,8 +567,8 @@ object HabHubWidgetRenderer {
         canvas,
         size,
         goals,
-        barTop + barHeight + 2.5f,
-        size.heightDp - 4f,
+        max(29.5f, barTop - 13.5f),
+        barTop - 2.5f,
         accent,
       )
     } else if (!size.compact) {
@@ -580,27 +591,23 @@ object HabHubWidgetRenderer {
     bottom: Float,
     accent: Int,
   ) {
-    val count = min(goals.length(), if (size.wide) 6 else 4)
+    val count = min(goals.length(), if (size.wide) 8 else 5)
     if (count <= 0 || bottom <= top) return
     val gap = 3f
-    val tileSize = min(bottom - top, (size.widthDp - 18f - gap * (count - 1)) / count)
+    val badgeReserve = if (size.wide) 46f else 35f
+    val availableWidth = size.widthDp - 18f - badgeReserve
+    val tileSize = min(
+      if (size.wide) 12f else 10.5f,
+      min(bottom - top, (availableWidth - gap * (count - 1)) / count),
+    )
+    if (tileSize < 6f) return
     val totalWidth = tileSize * count + gap * (count - 1)
-    val startX = (size.widthDp - totalWidth) / 2f
+    val startX = 9f
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
       val left = startX + index * (tileSize + gap)
       val rect = RectF(left, top, left + tileSize, top + tileSize)
-      val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
-      canvas.drawRoundRect(rect, 1.8f, 1.8f, fillPaint(Color.argb(35, 255, 255, 255)))
-      if (goalProgress > 0f) {
-        canvas.drawRoundRect(
-          RectF(rect.left, rect.bottom - rect.height() * goalProgress, rect.right, rect.bottom),
-          1.8f,
-          1.8f,
-          fillPaint(withAlpha(accent, if (goal.optBoolean("met", false)) 205 else 130)),
-        )
-      }
-      canvas.drawRoundRect(rect, 1.8f, 1.8f, strokePaint(withAlpha(accent, 175), 0.65f))
+      drawFeaturedGoalDot(canvas, rect, goal, accent)
     }
   }
 
@@ -638,6 +645,17 @@ object HabHubWidgetRenderer {
   ) {
     val stroke = strokePaint(color, max(1.15f, radius * 0.13f))
     when {
+      icon.startsWith("checkmark") -> {
+        canvas.drawLine(centerX - radius * 0.72f, centerY, centerX - radius * 0.18f, centerY + radius * 0.55f, stroke)
+        canvas.drawLine(centerX - radius * 0.18f, centerY + radius * 0.55f, centerX + radius * 0.78f, centerY - radius * 0.55f, stroke)
+      }
+      icon.startsWith("remove") -> canvas.drawLine(
+        centerX - radius * 0.72f,
+        centerY,
+        centerX + radius * 0.72f,
+        centerY,
+        stroke,
+      )
       icon.startsWith("square") -> canvas.drawRoundRect(
         RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
         radius * 0.18f,
@@ -690,10 +708,54 @@ object HabHubWidgetRenderer {
         cubicTo(centerX - radius * 0.70f, centerY + radius, centerX - radius * 0.82f, centerY - radius * 0.10f, centerX, centerY - radius)
         close()
       }, stroke)
-      icon.startsWith("fitness") -> {
+      icon.startsWith("fitness") || icon.startsWith("barbell") -> {
         canvas.drawLine(centerX - radius * 0.62f, centerY, centerX + radius * 0.62f, centerY, stroke)
         canvas.drawLine(centerX - radius * 0.72f, centerY - radius * 0.46f, centerX - radius * 0.72f, centerY + radius * 0.46f, stroke)
         canvas.drawLine(centerX + radius * 0.72f, centerY - radius * 0.46f, centerX + radius * 0.72f, centerY + radius * 0.46f, stroke)
+      }
+      icon.startsWith("walk") || icon.startsWith("accessibility") || icon.startsWith("body") -> {
+        canvas.drawCircle(centerX, centerY - radius * 0.58f, radius * 0.20f, fillPaint(color))
+        canvas.drawLine(centerX, centerY - radius * 0.30f, centerX - radius * 0.08f, centerY + radius * 0.18f, stroke)
+        canvas.drawLine(centerX - radius * 0.08f, centerY - radius * 0.06f, centerX - radius * 0.58f, centerY + radius * 0.12f, stroke)
+        canvas.drawLine(centerX - radius * 0.08f, centerY + radius * 0.18f, centerX - radius * 0.52f, centerY + radius * 0.82f, stroke)
+        canvas.drawLine(centerX - radius * 0.08f, centerY + radius * 0.18f, centerX + radius * 0.55f, centerY + radius * 0.65f, stroke)
+      }
+      icon.startsWith("restaurant") || icon.startsWith("nutrition") -> {
+        canvas.drawLine(centerX - radius * 0.48f, centerY - radius * 0.82f, centerX - radius * 0.48f, centerY + radius * 0.82f, stroke)
+        canvas.drawLine(centerX - radius * 0.72f, centerY - radius * 0.82f, centerX - radius * 0.72f, centerY - radius * 0.18f, stroke)
+        canvas.drawLine(centerX - radius * 0.24f, centerY - radius * 0.82f, centerX - radius * 0.24f, centerY - radius * 0.18f, stroke)
+        canvas.drawLine(centerX + radius * 0.45f, centerY - radius * 0.82f, centerX + radius * 0.45f, centerY + radius * 0.82f, stroke)
+        canvas.drawArc(RectF(centerX + radius * 0.12f, centerY - radius * 0.82f, centerX + radius * 0.78f, centerY - radius * 0.05f), 90f, 180f, false, stroke)
+      }
+      icon.startsWith("medical") || icon.startsWith("medkit") -> {
+        canvas.drawLine(centerX - radius * 0.62f, centerY, centerX + radius * 0.62f, centerY, stroke)
+        canvas.drawLine(centerX, centerY - radius * 0.62f, centerX, centerY + radius * 0.62f, stroke)
+      }
+      icon.startsWith("moon") -> canvas.drawPath(Path().apply {
+        addCircle(centerX, centerY, radius * 0.82f, Path.Direction.CW)
+        addCircle(centerX + radius * 0.37f, centerY - radius * 0.23f, radius * 0.72f, Path.Direction.CCW)
+      }, fillPaint(color))
+      icon.startsWith("sunny") -> {
+        canvas.drawCircle(centerX, centerY, radius * 0.42f, stroke)
+        repeat(8) { index ->
+          val angle = index * PI / 4.0
+          canvas.drawLine(
+            centerX + (cos(angle) * radius * 0.62f).toFloat(),
+            centerY + (sin(angle) * radius * 0.62f).toFloat(),
+            centerX + (cos(angle) * radius).toFloat(),
+            centerY + (sin(angle) * radius).toFloat(),
+            stroke,
+          )
+        }
+      }
+      icon.startsWith("camera") -> {
+        canvas.drawRoundRect(RectF(centerX - radius, centerY - radius * 0.63f, centerX + radius, centerY + radius * 0.72f), radius * 0.16f, radius * 0.16f, stroke)
+        canvas.drawCircle(centerX, centerY + radius * 0.05f, radius * 0.37f, stroke)
+      }
+      icon.startsWith("timer") || icon.startsWith("time") -> {
+        canvas.drawCircle(centerX, centerY + radius * 0.08f, radius * 0.76f, stroke)
+        canvas.drawLine(centerX, centerY - radius * 0.68f, centerX, centerY - radius, stroke)
+        canvas.drawLine(centerX, centerY + radius * 0.08f, centerX + radius * 0.38f, centerY - radius * 0.22f, stroke)
       }
       icon.startsWith("cafe") || icon.startsWith("beer") -> {
         canvas.drawRoundRect(
@@ -751,51 +813,60 @@ object HabHubWidgetRenderer {
     bottom: Float,
     accent: Int,
   ) {
-    val count = min(goals.length(), if (size.wide) 3 else if (size.widthDp >= 165f) 2 else 1)
-    if (count <= 0 || bottom - top < 17f) return
+    if (goals.length() <= 0 || bottom - top < 14f) return
     val pad = 11f
     val gap = 4f
-    val tileWidth = (size.widthDp - pad * 2f - gap * (count - 1)) / count
+    val preferredSize = min(23f, bottom - top)
+    val capacity = max(1, ((size.widthDp - pad * 2f + gap) / (preferredSize + gap)).toInt())
+    val count = min(goals.length(), capacity)
+    val tileSize = min(preferredSize, (size.widthDp - pad * 2f - gap * (count - 1)) / count)
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
-      val left = pad + index * (tileWidth + gap)
-      val rect = RectF(left, top, left + tileWidth, bottom)
-      val radius = min(7f, rect.height() / 3f)
-      val path = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }
-      canvas.drawPath(path, fillPaint(Color.argb(29, 255, 255, 255)))
-      val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
-      if (goalProgress > 0f) {
-        canvas.save()
-        canvas.clipPath(path)
-        canvas.drawRect(
-          rect.left,
-          rect.bottom - rect.height() * goalProgress,
-          rect.right,
-          rect.bottom,
-          fillPaint(withAlpha(accent, if (goal.optBoolean("met", false)) 105 else 72)),
-        )
-        canvas.restore()
-      }
-      canvas.drawPath(path, strokePaint(Color.argb(48, 255, 255, 255), 0.8f))
-      val textLeft = rect.left + 4f
-      val textWidth = rect.width() - 8f
-      drawText(
+      val left = pad + index * (tileSize + gap)
+      drawFeaturedGoalDot(
         canvas,
-        goal.optString("value"),
-        textLeft,
-        rect.top + min(9f, rect.height() * 0.42f),
-        textWidth,
-        textPaint(6.7f, Color.WHITE, true),
-      )
-      drawText(
-        canvas,
-        goal.optString("title"),
-        textLeft,
-        rect.bottom - 4f,
-        textWidth,
-        textPaint(5.8f, Color.argb(220, 235, 241, 252), false),
+        RectF(left, top, left + tileSize, top + tileSize),
+        goal,
+        accent,
       )
     }
+  }
+
+  /** Mirrors Today's liquid-fill GoalCompletionDot in the home-screen bitmap. */
+  private fun drawFeaturedGoalDot(
+    canvas: Canvas,
+    rect: RectF,
+    goal: JSONObject,
+    accent: Int,
+  ) {
+    val radius = min(8f, rect.height() * 0.34f)
+    val path = Path().apply { addRoundRect(rect, radius, radius, Path.Direction.CW) }
+    val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val unavailable = goal.optBoolean("unavailable", false)
+    val met = goal.optBoolean("met", goalProgress >= 1f)
+    val goalAccent = parseColor(goal.optString("color"), accent)
+    canvas.drawPath(path, fillPaint(Color.argb(36, 255, 255, 255)))
+    if (!unavailable && goalProgress > 0f) {
+      canvas.save()
+      canvas.clipPath(path)
+      canvas.drawRect(
+        rect.left - 1f,
+        rect.bottom - (rect.height() + 2f) * goalProgress,
+        rect.right + 1f,
+        rect.bottom + 1f,
+        fillPaint(withAlpha(goalAccent, if (met) 238 else 205)),
+      )
+      canvas.restore()
+    }
+    canvas.drawPath(path, strokePaint(Color.argb(70, 255, 255, 255), if (rect.height() < 14f) 0.65f else 0.9f))
+    drawCompletionIcon(
+      canvas,
+      rect.centerX(),
+      rect.centerY(),
+      rect.height() * 0.22f,
+      if (unavailable) "remove" else if (met) "checkmark" else goal.optString("icon", "ellipse-outline"),
+      Color.WHITE,
+    )
   }
 
   private fun drawAvatarCard(
@@ -809,13 +880,20 @@ object HabHubWidgetRenderer {
     val avatarBitmap = avatarBitmap(context, item.optString("avatarUri"))
     val heightScale = item.optDouble("heightScale", 1.0).toFloat().coerceIn(0.9f, 1.1f)
     val goals = item.optJSONArray("goals") ?: JSONArray()
-    val hasBottomGoals = !size.compact && goals.length() > 4
-    val availableHeight = if (hasBottomGoals) size.heightDp * 0.70f else size.heightDp - 8f
-    val avatarHeight = availableHeight * heightScale
-    val resolvedHeight = min(avatarHeight, availableHeight + 2f)
+    val outerPad = if (size.compact) 5f else 7f
+    val avatarAreaWidth = when {
+      size.compact -> min(37f, size.widthDp * 0.34f)
+      size.wide -> min(70f, size.widthDp * 0.29f)
+      else -> min(42f, size.widthDp * 0.38f)
+    }
+    val availableHeight = size.heightDp - outerPad * 2f
+    val resolvedHeight = min(
+      availableHeight * heightScale,
+      avatarAreaWidth * 512f / 328f,
+    )
     val avatarWidth = resolvedHeight * 328f / 512f
-    val centerX = size.widthDp / 2f
-    val top = if (hasBottomGoals) 4f else (size.heightDp - resolvedHeight) / 2f
+    val centerX = outerPad + avatarAreaWidth / 2f
+    val top = (size.heightDp - resolvedHeight) / 2f
     val destination = RectF(
       centerX - avatarWidth / 2f,
       top,
@@ -850,44 +928,72 @@ object HabHubWidgetRenderer {
       textPaint(if (size.compact) 6.2f else 7.5f, Color.WHITE, true),
     )
 
-    drawStatusGoalCircles(canvas, size, goals, destination, accent)
+    drawStatusGoalGrid(
+      canvas,
+      size,
+      goals,
+      outerPad + avatarAreaWidth + if (size.compact) 2f else 5f,
+      size.widthDp - outerPad,
+      accent,
+    )
   }
 
-  private fun drawStatusGoalCircles(
+  /** Adapts Status rings to the widget's aspect ratio instead of fixed flanks. */
+  private fun drawStatusGoalGrid(
     canvas: Canvas,
     size: HabHubWidgetSize,
     goals: JSONArray,
-    avatar: RectF,
+    left: Float,
+    right: Float,
     accent: Int,
   ) {
-    if (goals.length() <= 0) return
-    val diameter = when {
-      size.compact -> min(15f, size.heightDp * 0.31f)
-      size.wide -> min(22f, size.heightDp * 0.22f)
-      else -> min(19f, size.widthDp * 0.18f)
+    val capacity = when {
+      size.compact && size.wide -> 6
+      size.compact -> 3
+      size.wide -> 8
+      else -> 6
     }
+    val count = min(goals.length(), capacity)
+    if (count <= 0 || right - left < 18f) return
+    val columns = when {
+      size.compact -> count
+      size.wide -> min(4, count)
+      else -> min(2, count)
+    }
+    val rows = (count + columns - 1) / columns
+    val verticalPad = if (size.compact) 4f else 6f
+    val labelHeight = if (size.compact) 8f else 9f
+    val gridWidth = right - left
+    val gridHeight = size.heightDp - verticalPad * 2f
+    val cellWidth = gridWidth / columns
+    val cellHeight = gridHeight / rows
+    val preferredDiameter = when {
+      size.compact -> 15f
+      size.wide -> 22f
+      else -> 17f
+    }
+    val diameter = min(
+      preferredDiameter,
+      min(cellWidth - 5f, cellHeight - labelHeight - 4f),
+    )
+    if (diameter < 8f) return
     val radius = diameter / 2f
-    val sideGap = max(3f, radius * 0.42f)
-    val leftX = max(radius + 5f, avatar.left - sideGap - radius)
-    val rightX = min(size.widthDp - radius - 5f, avatar.right + sideGap + radius)
-    val flankY = avatar.top + avatar.height() * 0.48f
-    val flankPositions = listOf(leftX to flankY, rightX to flankY)
-    val flankCount = min(2, goals.length())
-    repeat(flankCount) { index ->
-      goals.optJSONObject(index)?.let { goal ->
-        drawStatusGoalCircle(canvas, flankPositions[index].first, flankPositions[index].second, radius, goal, accent)
-      }
-    }
-    if (size.compact || goals.length() <= flankCount) return
-    val bottomCount = min(goals.length() - flankCount, if (size.wide) 6 else 3)
-    val gap = min(7f, diameter * 0.35f)
-    val totalWidth = bottomCount * diameter + max(0, bottomCount - 1) * gap
-    val startX = (size.widthDp - totalWidth) / 2f + radius
-    val y = size.heightDp - radius - 5f
-    repeat(bottomCount) { offset ->
-      goals.optJSONObject(flankCount + offset)?.let { goal ->
-        drawStatusGoalCircle(canvas, startX + offset * (diameter + gap), y, radius, goal, accent)
-      }
+    repeat(count) { index ->
+      val goal = goals.optJSONObject(index) ?: return@repeat
+      val row = index / columns
+      val column = index % columns
+      val cellLeft = left + column * cellWidth
+      val cellTop = verticalPad + row * cellHeight
+      drawStatusGoalCircle(
+        canvas,
+        cellLeft + cellWidth / 2f,
+        cellTop + (cellHeight - labelHeight) / 2f,
+        radius,
+        goal,
+        accent,
+        cellTop + cellHeight - 2f,
+        max(10f, cellWidth - 2f),
+      )
     }
   }
 
@@ -898,8 +1004,11 @@ object HabHubWidgetRenderer {
     radius: Float,
     goal: JSONObject,
     accent: Int,
+    labelBaseline: Float,
+    labelWidth: Float,
   ) {
     val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
+    val unavailable = goal.optBoolean("unavailable", false)
     val met = goal.optBoolean("met", goalProgress >= 1f)
     val goalAccent = parseColor(
       goal.optString("color"),
@@ -911,8 +1020,22 @@ object HabHubWidgetRenderer {
       val arc = RectF(centerX - radius + 1f, centerY - radius + 1f, centerX + radius - 1f, centerY + radius - 1f)
       canvas.drawArc(arc, -90f, goalProgress * 360f, false, strokePaint(goalAccent, if (radius < 9f) 1.25f else 1.7f))
     }
-    val mark = if (met) "\u2713" else "${(goalProgress * 100f).roundToInt()}"
-    drawCenteredText(canvas, mark, centerX, centerY, textPaint(if (radius < 9f) 5.2f else 6.4f, Color.WHITE, true))
+    drawCompletionIcon(
+      canvas,
+      centerX,
+      centerY,
+      radius * 0.43f,
+      if (unavailable) "remove" else if (met) "checkmark" else goal.optString("icon", "ellipse-outline"),
+      Color.WHITE,
+    )
+    drawCenteredEllipsizedText(
+      canvas,
+      goal.optString("title", "Goal"),
+      centerX,
+      labelBaseline,
+      labelWidth,
+      textPaint(if (radius < 9f) 5.8f else 6.2f, Color.argb(225, 240, 245, 255), true),
+    )
   }
 
   private fun drawAvatarLayers(

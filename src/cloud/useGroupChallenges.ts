@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   deleteGroupChallenge,
+  loadActiveGroupChallenges,
   loadGroupChallenges,
   respondToGroupChallenge,
   saveGroupChallenge,
@@ -17,10 +18,19 @@ import { useApp } from "@/src/state/AppProvider";
 import { GroupChallenge } from "@/src/types";
 import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 
+type UseGroupChallengesOptions = {
+  /** Group-settings discovery only; never use this for Leaderboard history. */
+  discoverActive?: boolean;
+};
+
 /** A small, screen-scoped read model; realtime bursts coalesce into one request. */
-export function useGroupChallenges(groupId: string) {
+export function useGroupChallenges(
+  groupId: string,
+  options: UseGroupChallengesOptions = {},
+) {
   const tutorial = useTutorialSandbox();
   const { state } = useApp();
+  const discoverActive = options.discoverActive === true;
   // Leaderboard stays mounted underneath the member comparison route. Give
   // every mounted hook its own Realtime topic so Supabase never reuses an
   // already-subscribed channel and rejects a second `.on(...)` callback.
@@ -54,7 +64,9 @@ export function useGroupChallenges(groupId: string) {
     if (requestRef.current) return requestRef.current;
     let request: Promise<void>;
     setLoading(true);
-    request = loadGroupChallenges(groupId)
+    request = (
+      discoverActive ? loadActiveGroupChallenges : loadGroupChallenges
+    )(groupId)
       .then((rows) => {
         if (groupIdRef.current !== groupId) return;
         setChallenges(rows);
@@ -74,7 +86,7 @@ export function useGroupChallenges(groupId: string) {
       });
     requestRef.current = request;
     return request;
-  }, [groupId, tutorial.active, tutorial.bundle]);
+  }, [discoverActive, groupId, tutorial.active, tutorial.bundle]);
   refreshRunnerRef.current = () => void refresh();
 
   useEffect(() => {
@@ -85,6 +97,21 @@ export function useGroupChallenges(groupId: string) {
     setChallenges([]);
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (
+      !discoverActive ||
+      tutorial.active ||
+      !supabase ||
+      !isCloudGroupId(groupId)
+    )
+      return;
+    // Non-participants cannot subscribe directly to participant-scoped table
+    // changes. Keep the small discovery list fresh without widening RLS or
+    // changing the Leaderboard's normal realtime/read path.
+    const timer = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(timer);
+  }, [discoverActive, groupId, refresh, tutorial.active]);
 
   useEffect(() => {
     if (tutorial.active || !supabase || !isCloudGroupId(groupId)) return;
@@ -178,6 +205,13 @@ export function useGroupChallenges(groupId: string) {
           }
           saved = {
             ...challenge,
+            participantIds:
+              response === "accepted"
+                ? [...new Set([
+                    ...challenge.participantIds,
+                    state.currentUserId,
+                  ])]
+                : challenge.participantIds,
             acceptedParticipantIds: [...accepted],
             declinedParticipantIds: [...declined],
             updatedAt: new Date().toISOString(),

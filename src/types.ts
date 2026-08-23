@@ -499,7 +499,10 @@ export type TodoReminder = {
   schedule?: GoalSchedule;
 };
 
-/** A dated, exact-value competition shared only with explicitly invited members. */
+/**
+ * A dated group competition. Direct table history remains participant-scoped;
+ * active group members may discover non-finished rows through a bounded RPC.
+ */
 export type GroupChallenge = {
   id: string;
   /** The persisted series row when `id` identifies a generated occurrence. */
@@ -514,12 +517,27 @@ export type GroupChallenge = {
   localDate: string;
   /** Inclusive final scoring date; omitted legacy rows are one-day challenges. */
   endDate?: string;
-  /** Everyone invited to the challenge; this also remains the RLS audience. */
+  /** Invited members plus active group members who later opted themselves in. */
   participantIds: string[];
-  /** The creator is accepted at creation; invitees opt in explicitly. */
+  /** The creator is accepted at creation; other members opt in explicitly. */
   acceptedParticipantIds?: string[];
   /** Declined invitees stay in the RLS audience so clients can invalidate safely. */
   declinedParticipantIds?: string[];
+  /** Discovery-only aggregate; the RPC does not reveal another member's UUID. */
+  participantCount?: number;
+  /** Discovery-only aggregate; participant history continues to use UUID arrays. */
+  acceptedParticipantCount?: number;
+  /** Discovery-only state calculated for the authenticated caller. */
+  viewerParticipation?:
+    | "creator"
+    | "accepted"
+    | "invited"
+    | "declined"
+    | "not_invited";
+  /** Server-calculated one-tap eligibility for the authenticated caller. */
+  eligibleToJoin?: boolean;
+  /** Discovery-only capacity state under the existing 50-person roster cap. */
+  isFull?: boolean;
   /** A bounded recurring series; generated occurrences are never persisted. */
   recurrence?: GoalSchedule;
   createdAt: string;

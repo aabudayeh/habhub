@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useNavigation } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Pressable,
   StyleSheet,
@@ -15,6 +15,7 @@ import { LocalizedAlert as Alert, useLocalization } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
 import {
   isCloudGroupId,
 } from "@/src/cloud/groupCloud";
@@ -38,8 +39,20 @@ import { useApp } from "@/src/state/AppProvider";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { formulaIdentifiers } from "@/src/domain/formula";
+import {
+  acceptedChallengeParticipantIds,
+  groupChallengeAvailability,
+  groupChallengeJoinDeadline,
+  groupChallengeParticipation,
+  groupChallengeSourceId,
+} from "@/src/domain/groupChallenges";
+import { dateKey, friendlyDate } from "@/src/domain/date";
 import { isPersonalSetupGroup } from "@/src/domain/groupSetup";
-import type { GroupNotificationPreferences } from "@/src/types";
+import { formatMetricValue } from "@/src/domain/metrics";
+import type {
+  GroupChallenge,
+  GroupNotificationPreferences,
+} from "@/src/types";
 
 export default function GroupSettings() {
   const {
@@ -59,10 +72,20 @@ export default function GroupSettings() {
   } = useApp();
   const auth = useAuth();
   const cloud = useCloudSyncActions();
+  const challengeCloud = useGroupChallenges(state.group.id, {
+    discoverActive: true,
+  });
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const { language, t } = useLocalization();
+  const { language, locale, t } = useLocalization();
+  const format = (source: string, values: Record<string, string | number>) => {
+    let output = t(source);
+    Object.entries(values).forEach(([key, value]) => {
+      output = output.replaceAll(`{${key}}`, String(value));
+    });
+    return output;
+  };
   const me = state.group.members.find(
     (member) => member.id === state.currentUserId,
   )!;
@@ -94,6 +117,8 @@ export default function GroupSettings() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationMembersOpen, setNotificationMembersOpen] = useState(false);
   const [notificationTrackersOpen, setNotificationTrackersOpen] = useState(false);
+  const [joiningChallengeId, setJoiningChallengeId] = useState<string>();
+  const [challengeJoinError, setChallengeJoinError] = useState<string>();
   const observedGroupId = useRef(state.group.id);
   const observedGroupName = useRef(state.group.name);
   const allowExit = useRef(false);
@@ -140,6 +165,26 @@ export default function GroupSettings() {
   const notificationMetricIds = (
     groupNotificationPreferences.metricIds ?? notifications.metricIds
   ).filter((metricId) => availableNotificationMetricIds.has(metricId));
+  const today = dateKey();
+  const activeChallenges = useMemo(() => {
+    const bySource = new Map<string, GroupChallenge>();
+    for (const challenge of challengeCloud.challenges) {
+      if (groupChallengeAvailability(challenge, today) === "finished")
+        continue;
+      const sourceId = groupChallengeSourceId(challenge);
+      if (!bySource.has(sourceId)) bySource.set(sourceId, challenge);
+    }
+    return [...bySource.values()].sort((left, right) => {
+      const leftAvailability = groupChallengeAvailability(left, today);
+      const rightAvailability = groupChallengeAvailability(right, today);
+      if (leftAvailability !== rightAvailability)
+        return leftAvailability === "active" ? -1 : 1;
+      return (
+        left.localDate.localeCompare(right.localDate) ||
+        left.id.localeCompare(right.id)
+      );
+    });
+  }, [challengeCloud.challenges, today]);
   useWebBeforeUnload(
     () =>
       !allowExit.current && (groupNameDirty || nicknameDraftsDirty),
@@ -159,6 +204,11 @@ export default function GroupSettings() {
     setGroupColorDraft(state.group.themeColor ?? palette.primary);
     setGroupColorOpen(false);
   }, [state.group.id, state.group.themeColor]);
+
+  useEffect(() => {
+    setJoiningChallengeId(undefined);
+    setChallengeJoinError(undefined);
+  }, [state.group.id]);
 
   function persistNicknameDrafts() {
     state.group.members.forEach((member) => {
@@ -199,6 +249,27 @@ export default function GroupSettings() {
         ? notificationMetricIds.filter((id) => id !== metricId)
         : [...notificationMetricIds, metricId],
     });
+  }
+
+  async function joinChallenge(challenge: GroupChallenge) {
+    const sourceId = groupChallengeSourceId(challenge);
+    if (joiningChallengeId) return;
+    setJoiningChallengeId(sourceId);
+    setChallengeJoinError(undefined);
+    try {
+      // The server atomically verifies active group membership, capacity, and
+      // the challenge deadline before adding only this authenticated user.
+      await challengeCloud.respond(sourceId, "accepted");
+      await challengeCloud.refresh();
+    } catch (reason) {
+      const message =
+        reason instanceof Error ? reason.message : "Could not join this challenge.";
+      setChallengeJoinError(message);
+      await challengeCloud.refresh();
+      Alert.alert("Could not join challenge", message);
+    } finally {
+      setJoiningChallengeId(undefined);
+    }
   }
 
   async function flushAndExit(exit: () => void) {
@@ -473,6 +544,178 @@ export default function GroupSettings() {
               colors={colors}
               accent={accent}
             />
+
+            <View
+              style={[
+                styles.activeChallengesBlock,
+                { borderBottomColor: colors.border },
+              ]}
+            >
+              <View style={styles.activeChallengesHeader}>
+                <View style={styles.copy}>
+                  <Text style={[styles.preferenceLabel, { color: colors.ink }]}>Active challenges</Text>
+                  <Text style={[styles.meta, { color: colors.muted }]}>Live and upcoming challenges in this group</Text>
+                </View>
+                {activeChallenges.length ? (
+                  <Text style={[styles.activeChallengeCount, { color: accent }]}>{activeChallenges.length}</Text>
+                ) : null}
+              </View>
+
+              {challengeCloud.loading && !activeChallenges.length ? (
+                <Text style={[styles.activeChallengeEmpty, { color: colors.muted }]}>Checking active challenges…</Text>
+              ) : null}
+              {!challengeCloud.loading &&
+              !challengeCloud.error &&
+              !activeChallenges.length ? (
+                <Text style={[styles.activeChallengeEmpty, { color: colors.muted }]}>No live or upcoming challenges.</Text>
+              ) : null}
+              {challengeCloud.error ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setChallengeJoinError(undefined);
+                    void challengeCloud.refresh();
+                  }}
+                  style={styles.activeChallengeError}
+                >
+                  <Text style={[styles.activeChallengeErrorText, { color: palette.red }]}>{challengeCloud.error}</Text>
+                  <Text style={[styles.activeChallengeRetry, { color: accent }]}>Retry</Text>
+                </Pressable>
+              ) : null}
+              {challengeJoinError ? (
+                <Text style={[styles.activeChallengeErrorText, { color: palette.red }]}>{challengeJoinError}</Text>
+              ) : null}
+
+              {activeChallenges.map((challenge) => {
+                const availability = groupChallengeAvailability(challenge, today);
+                const participation =
+                  challenge.viewerParticipation ??
+                  groupChallengeParticipation(challenge, state.currentUserId);
+                const joined =
+                  participation === "creator" || participation === "accepted";
+                const alreadyParticipant = participation !== "not_invited";
+                const participantCount =
+                  challenge.participantCount ?? challenge.participantIds.length;
+                const full = challenge.isFull ?? participantCount >= 50;
+                const canJoin =
+                  challenge.eligibleToJoin ??
+                  (!joined && (alreadyParticipant || !full));
+                const sourceId = groupChallengeSourceId(challenge);
+                const joining = joiningChallengeId === sourceId;
+                const metric = groupMetrics.find(
+                  (candidate) => candidate.id === challenge.metricId,
+                );
+                const metricName = metric
+                  ? localizeMetricName(language, metric)
+                  : challenge.metricId;
+                const title = challenge.title?.trim() || metricName;
+                const goalLabel =
+                  challenge.target === undefined
+                    ? "Highest total"
+                    : `Target ${
+                        metric
+                          ? formatMetricValue(metric, challenge.target)
+                          : challenge.target
+                      }`;
+                const joinDeadline = groupChallengeJoinDeadline(challenge);
+                const timing = challenge.recurrence
+                  ? `Repeats until ${friendlyDate(joinDeadline, locale)}`
+                  : challenge.localDate === joinDeadline
+                    ? friendlyDate(challenge.localDate, locale)
+                    : `${friendlyDate(challenge.localDate, locale)}–${friendlyDate(joinDeadline, locale)}`;
+                const joinedCount =
+                  challenge.acceptedParticipantCount ??
+                  acceptedChallengeParticipantIds(challenge).length;
+                return (
+                  <View
+                    key={sourceId}
+                    style={[
+                      styles.activeChallengeRow,
+                      { borderTopColor: colors.border },
+                    ]}
+                  >
+                    <View style={[styles.activeChallengeIcon, { backgroundColor: colors.primarySoft }]}>
+                      <Ionicons name="flag-outline" size={15} color={accent} />
+                    </View>
+                    <View style={styles.copy}>
+                      <View style={styles.activeChallengeTitleRow}>
+                        <Text
+                          translate={false}
+                          numberOfLines={1}
+                          style={[styles.activeChallengeTitle, { color: colors.ink }]}
+                        >
+                          {title}
+                        </Text>
+                        <View
+                          style={[
+                            styles.activeChallengeState,
+                            {
+                              backgroundColor:
+                                availability === "active"
+                                  ? `${accent}18`
+                                  : colors.canvas,
+                              borderColor:
+                                availability === "active" ? accent : colors.border,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.activeChallengeStateText,
+                              {
+                                color:
+                                  availability === "active" ? accent : colors.muted,
+                              },
+                            ]}
+                          >
+                            {availability === "active" ? "LIVE" : "UPCOMING"}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text
+                        translate={false}
+                        numberOfLines={2}
+                        style={[styles.activeChallengeMeta, { color: colors.muted }]}
+                      >
+                        {metricName} · {goalLabel} · {timing} · {joinedCount} joined
+                      </Text>
+                    </View>
+                    {joined ? (
+                      <View style={[styles.challengeJoined, { backgroundColor: colors.primarySoft }]}>
+                        <Ionicons name="checkmark-circle" size={13} color={accent} />
+                        <Text style={[styles.challengeJoinedText, { color: accent }]}>Joined</Text>
+                      </View>
+                    ) : !canJoin ? (
+                      <View style={[styles.challengeJoined, { backgroundColor: colors.canvas }]}>
+                        <Text style={[styles.challengeJoinedText, { color: colors.muted }]}>{full ? "Full" : "Unavailable"}</Text>
+                      </View>
+                    ) : (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={format("Join {value}", { value: title })}
+                        disabled={Boolean(joiningChallengeId)}
+                        onPress={() => void joinChallenge(challenge)}
+                        style={[
+                          styles.challengeJoin,
+                          {
+                            backgroundColor: colors.primarySoft,
+                            borderColor: accent,
+                            opacity: joiningChallengeId && !joining ? 0.5 : 1,
+                          },
+                        ]}
+                      >
+                        {joining ? (
+                          <Ionicons name="sync" size={13} color={accent} />
+                        ) : (
+                          <Ionicons name="add" size={13} color={accent} />
+                        )}
+                        <Text style={[styles.challengeJoinText, { color: accent }]}>{joining ? "Joining…" : "Join"}</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
 
             <View style={styles.preferenceBlock}>
               <Text style={[styles.preferenceLabel, { color: colors.ink }]}>Challenge reminder pace</Text>
@@ -1114,6 +1357,24 @@ const styles = StyleSheet.create({
   notificationDisclosure: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 11, paddingVertical: 9 },
   notificationBody: { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 11, paddingBottom: 11 },
   preferenceRow: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  activeChallengesBlock: { borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 10 },
+  activeChallengesHeader: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingBottom: 5 },
+  activeChallengeCount: { minWidth: 24, textAlign: "center", fontSize: 9, fontWeight: "900" },
+  activeChallengeEmpty: { fontSize: 8, lineHeight: 12, paddingVertical: 7 },
+  activeChallengeError: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 5 },
+  activeChallengeErrorText: { flex: 1, fontSize: 8, lineHeight: 12 },
+  activeChallengeRetry: { fontSize: 8, fontWeight: "900" },
+  activeChallengeRow: { minHeight: 50, flexDirection: "row", alignItems: "center", gap: 7, borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 6 },
+  activeChallengeIcon: { width: 29, height: 29, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  activeChallengeTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  activeChallengeTitle: { flexShrink: 1, minWidth: 0, fontSize: 9, fontWeight: "900" },
+  activeChallengeState: { borderWidth: 1, borderRadius: 7, paddingHorizontal: 5, paddingVertical: 2 },
+  activeChallengeStateText: { fontSize: 6, fontWeight: "900" },
+  activeChallengeMeta: { fontSize: 7, lineHeight: 10, marginTop: 2 },
+  challengeJoined: { minHeight: 28, borderRadius: 9, paddingHorizontal: 7, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
+  challengeJoinedText: { fontSize: 7, fontWeight: "900" },
+  challengeJoin: { minHeight: 30, borderWidth: 1, borderRadius: 9, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 },
+  challengeJoinText: { fontSize: 8, fontWeight: "900" },
   preferenceBlock: { gap: 7, paddingVertical: 10 },
   preferenceLabel: { fontSize: 10, fontWeight: "900" },
   segmentRow: { flexDirection: "row", gap: 6 },

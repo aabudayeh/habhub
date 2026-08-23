@@ -17,6 +17,15 @@ export const WORKOUT_TIMER_NOTIFICATION = "metricrally-workout-timer-live";
 export const WORKOUT_TIMER_NEXT = "workout-next";
 export const WORKOUT_TIMER_PAUSE = "workout-pause";
 export const WORKOUT_TIMER_FINISH = "workout-finish";
+const WEB_WORKOUT_ACTION_MESSAGE = "habhub:web-workout-notification-action";
+const WEB_WORKOUT_ACTION_AVAILABLE_MESSAGE =
+  "habhub:web-workout-notification-action-available";
+const WEB_WORKOUT_ACTION_CONTROL_MESSAGE =
+  "habhub:web-workout-notification-action-control";
+const WEB_WORKOUT_ACTION_IDENTITY_KEY =
+  "metricrally-web-workout-action-identity-v1";
+const WEB_WORKOUT_ACTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const WEB_WORKOUT_ACTION_MAX_BATCH = 30;
 
 const WORKOUT_TIMER_TASK = "metricrally-workout-notification-actions";
 const WORKOUT_TIMER_FLOW_KEY = "metricrally-workout-notification-flow-v1";
@@ -36,6 +45,17 @@ export type QueuedWorkoutTimerAction = {
   occurredAt: number;
   ownerId: string;
   generation: string;
+  /** Durable Web queue identity; absent for native notification actions. */
+  webActionId?: string;
+};
+
+type QueuedWebWorkoutTimerAction = QueuedWorkoutTimerAction & {
+  webActionId: string;
+};
+
+type StoredWebWorkoutActionIdentity = {
+  ownerId: string;
+  actionToken: string;
 };
 
 type StoredWorkoutFlow = {
@@ -72,6 +92,18 @@ let webWorkoutNotificationOwnerId: string | undefined;
 let webWorkoutNotificationSignature: string | undefined;
 let webWorkoutNotificationRevision = 0;
 let webWorkoutNotificationQueue = Promise.resolve();
+let webWorkoutActionOwnerId: string | undefined;
+let webWorkoutActionToken: string | undefined;
+let webWorkoutActionListenerInstalled = false;
+let webWorkoutActionIdentityQueue = Promise.resolve();
+let webWorkoutActionDrainRetry: number | undefined;
+let queuedWebWorkoutActions: QueuedWebWorkoutTimerAction[] = [];
+const webWorkoutActionDrainRequests = new Map<string, string>();
+const webWorkoutActionDrainTimeouts = new Map<string, number>();
+const webWorkoutActionSubscribers = new Set<{
+  ownerId: string;
+  listener: (actions: QueuedWorkoutTimerAction[]) => void;
+}>();
 const workoutNotificationGate = createManagedLocalNotificationGate();
 
 const androidWorkoutBridge = () =>
@@ -116,6 +148,389 @@ function webWorkoutDocumentHidden() {
   return (
     typeof document !== "undefined" && document.visibilityState !== "visible"
   );
+}
+
+function newWebWorkoutActionToken() {
+  const bytes = new Uint32Array(4);
+  window.crypto.getRandomValues(bytes);
+  return [...bytes]
+    .map((value) => value.toString(16).padStart(8, "0"))
+    .join("-");
+}
+
+function validWebWorkoutActionToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 20 &&
+    value.length <= 160 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+function validWebWorkoutActionId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 8 &&
+    value.length <= 160 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+function newWebWorkoutRequestId() {
+  const bytes = new Uint32Array(3);
+  window.crypto.getRandomValues(bytes);
+  return [
+    "drain",
+    ...[...bytes].map((value) => value.toString(16).padStart(8, "0")),
+  ].join("-");
+}
+
+function storedWebWorkoutActionIdentity(
+  raw: string | null,
+): StoredWebWorkoutActionIdentity | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredWebWorkoutActionIdentity>;
+    return typeof parsed.ownerId === "string" &&
+      parsed.ownerId.length > 0 &&
+      parsed.ownerId.length <= 256 &&
+      validWebWorkoutActionToken(parsed.actionToken)
+      ? { ownerId: parsed.ownerId, actionToken: parsed.actionToken }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeWebWorkoutActionIdentity<T>(operation: () => Promise<T>) {
+  const result = webWorkoutActionIdentityQueue.then(operation, operation);
+  webWorkoutActionIdentityQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+async function postWebWorkoutActionControl(
+  message: Record<string, unknown>,
+) {
+  const registration = await webWorkoutServiceWorker();
+  const worker =
+    navigator.serviceWorker.controller ??
+    registration?.active ??
+    registration?.waiting ??
+    registration?.installing;
+  if (!worker) throw new Error("The workout service worker is not active.");
+  worker.postMessage({ type: WEB_WORKOUT_ACTION_CONTROL_MESSAGE, ...message });
+}
+
+function acknowledgeWebWorkoutActions(actionToken: string, actionIds: string[]) {
+  if (!actionIds.length) return Promise.resolve();
+  return postWebWorkoutActionControl({
+    operation: "ack",
+    actionToken,
+    actionIds: actionIds.slice(0, WEB_WORKOUT_ACTION_MAX_BATCH),
+  });
+}
+
+function flushQueuedWebWorkoutActions() {
+  if (!queuedWebWorkoutActions.length || !webWorkoutActionOwnerId) return;
+  const subscriber = [...webWorkoutActionSubscribers].find(
+    (candidate) => candidate.ownerId === webWorkoutActionOwnerId,
+  );
+  if (!subscriber) return;
+  const actions = queuedWebWorkoutActions;
+  try {
+    subscriber.listener(actions);
+  } catch {
+    return;
+  }
+  const deliveredIds = new Set(actions.map((action) => action.webActionId));
+  queuedWebWorkoutActions = queuedWebWorkoutActions.filter(
+    (action) => !deliveredIds.has(action.webActionId),
+  );
+}
+
+function scheduleWebWorkoutActionDrain(actionToken: string, delayMs: number) {
+  if (webWorkoutActionDrainRetry !== undefined)
+    window.clearTimeout(webWorkoutActionDrainRetry);
+  webWorkoutActionDrainRetry = window.setTimeout(() => {
+    webWorkoutActionDrainRetry = undefined;
+    if (
+      actionToken === webWorkoutActionToken &&
+      webWorkoutActionOwnerId &&
+      webWorkoutActionSubscribers.size
+    )
+      requestWebWorkoutActionDrain(actionToken);
+  }, Math.max(250, Math.min(delayMs, 20_000)));
+}
+
+function requestWebWorkoutActionDrain(actionToken: string) {
+  if (
+    actionToken !== webWorkoutActionToken ||
+    !webWorkoutActionOwnerId ||
+    !webWorkoutActionSubscribers.size ||
+    [...webWorkoutActionDrainRequests.values()].includes(actionToken)
+  )
+    return;
+  const requestId = newWebWorkoutRequestId();
+  webWorkoutActionDrainRequests.set(requestId, actionToken);
+  webWorkoutActionDrainTimeouts.set(
+    requestId,
+    window.setTimeout(() => {
+      webWorkoutActionDrainTimeouts.delete(requestId);
+      if (webWorkoutActionDrainRequests.delete(requestId))
+        scheduleWebWorkoutActionDrain(actionToken, 250);
+    }, 5_000),
+  );
+  while (webWorkoutActionDrainRequests.size > 8) {
+    const oldest = webWorkoutActionDrainRequests.keys().next().value;
+    if (typeof oldest !== "string") break;
+    webWorkoutActionDrainRequests.delete(oldest);
+    const timeout = webWorkoutActionDrainTimeouts.get(oldest);
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    webWorkoutActionDrainTimeouts.delete(oldest);
+  }
+  void postWebWorkoutActionControl({
+    operation: "drain",
+    actionToken,
+    requestId,
+  }).catch(() => {
+    webWorkoutActionDrainRequests.delete(requestId);
+    const timeout = webWorkoutActionDrainTimeouts.get(requestId);
+    if (timeout !== undefined) window.clearTimeout(timeout);
+    webWorkoutActionDrainTimeouts.delete(requestId);
+  });
+}
+
+function ensureWebWorkoutActionListener() {
+  if (
+    webWorkoutActionListenerInstalled ||
+    !webWorkoutNotificationsSupported()
+  )
+    return;
+  navigator.serviceWorker.addEventListener("message", (event: MessageEvent) => {
+    const message = event.data as
+      | {
+          type?: unknown;
+          actionToken?: unknown;
+          requestId?: unknown;
+          actions?: unknown;
+          retryAfterMs?: unknown;
+        }
+      | undefined;
+    if (
+      message?.type === WEB_WORKOUT_ACTION_AVAILABLE_MESSAGE &&
+      message.actionToken === webWorkoutActionToken &&
+      typeof webWorkoutActionToken === "string" &&
+      webWorkoutActionOwnerId &&
+      webWorkoutActionSubscribers.size
+    ) {
+      requestWebWorkoutActionDrain(webWorkoutActionToken);
+      return;
+    }
+    const now = Date.now();
+    if (
+      message?.type !== WEB_WORKOUT_ACTION_MESSAGE ||
+      !validWebWorkoutActionToken(message.actionToken) ||
+      message.actionToken !== webWorkoutActionToken ||
+      !webWorkoutActionOwnerId ||
+      !validWebWorkoutActionId(message.requestId) ||
+      webWorkoutActionDrainRequests.get(message.requestId) !==
+        message.actionToken
+    )
+      return;
+    webWorkoutActionDrainRequests.delete(message.requestId);
+    const drainTimeout = webWorkoutActionDrainTimeouts.get(message.requestId);
+    if (drainTimeout !== undefined) window.clearTimeout(drainTimeout);
+    webWorkoutActionDrainTimeouts.delete(message.requestId);
+    const known = new Set(
+      queuedWebWorkoutActions.map((action) => action.webActionId),
+    );
+    const received = Array.isArray(message.actions)
+      ? message.actions.slice(0, WEB_WORKOUT_ACTION_MAX_BATCH)
+      : [];
+    for (const candidate of received) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const item = candidate as {
+        id?: unknown;
+        action?: unknown;
+        occurredAt?: unknown;
+      };
+      if (
+        !validWebWorkoutActionId(item.id) ||
+        known.has(item.id) ||
+        (item.action !== WORKOUT_TIMER_NEXT &&
+          item.action !== WORKOUT_TIMER_PAUSE) ||
+        typeof item.occurredAt !== "number" ||
+        !Number.isFinite(item.occurredAt) ||
+        item.occurredAt < now - WEB_WORKOUT_ACTION_MAX_AGE_MS ||
+        item.occurredAt > now + 60_000
+      )
+        continue;
+      known.add(item.id);
+      queuedWebWorkoutActions.push({
+        action: item.action,
+        occurredAt: item.occurredAt,
+        ownerId: webWorkoutActionOwnerId,
+        generation: message.actionToken,
+        webActionId: item.id,
+      });
+    }
+    queuedWebWorkoutActions = queuedWebWorkoutActions.slice(
+      -WEB_WORKOUT_ACTION_MAX_BATCH,
+    );
+    flushQueuedWebWorkoutActions();
+    if (
+      typeof message.retryAfterMs === "number" &&
+      Number.isFinite(message.retryAfterMs)
+    )
+      scheduleWebWorkoutActionDrain(
+        message.actionToken,
+        message.retryAfterMs,
+      );
+  });
+  webWorkoutActionListenerInstalled = true;
+}
+
+function webWorkoutActionIdentity(ownerId: string) {
+  ensureWebWorkoutActionListener();
+  return serializeWebWorkoutActionIdentity(async () => {
+    if (webWorkoutActionOwnerId === ownerId && webWorkoutActionToken)
+      return webWorkoutActionToken;
+    const obsoleteTokens = new Set<string>();
+    if (webWorkoutActionToken) obsoleteTokens.add(webWorkoutActionToken);
+    const raw = await AsyncStorage.getItem(
+      WEB_WORKOUT_ACTION_IDENTITY_KEY,
+    ).catch(() => null);
+    const stored = storedWebWorkoutActionIdentity(raw);
+    if (stored?.ownerId === ownerId) {
+      webWorkoutActionOwnerId = ownerId;
+      webWorkoutActionToken = stored.actionToken;
+      queuedWebWorkoutActions = [];
+      return stored.actionToken;
+    }
+    if (stored) obsoleteTokens.add(stored.actionToken);
+    const actionToken = newWebWorkoutActionToken();
+    const identity: StoredWebWorkoutActionIdentity = { ownerId, actionToken };
+    try {
+      await AsyncStorage.setItem(
+        WEB_WORKOUT_ACTION_IDENTITY_KEY,
+        JSON.stringify(identity),
+      );
+    } catch {
+      webWorkoutActionOwnerId = undefined;
+      webWorkoutActionToken = undefined;
+      queuedWebWorkoutActions = [];
+      return undefined;
+    }
+    webWorkoutActionOwnerId = ownerId;
+    webWorkoutActionToken = actionToken;
+    queuedWebWorkoutActions = [];
+    for (const obsoleteToken of obsoleteTokens)
+      if (obsoleteToken !== actionToken)
+        void postWebWorkoutActionControl({
+          operation: "clear",
+          actionToken: obsoleteToken,
+        }).catch(() => undefined);
+    return actionToken;
+  });
+}
+
+function clearWebWorkoutActionIdentity(ownerId?: string) {
+  const memoryMatches =
+    !ownerId || !webWorkoutActionOwnerId || webWorkoutActionOwnerId === ownerId;
+  const memoryActionToken = memoryMatches ? webWorkoutActionToken : undefined;
+  if (memoryMatches) {
+    webWorkoutActionOwnerId = undefined;
+    webWorkoutActionToken = undefined;
+    queuedWebWorkoutActions = [];
+    webWorkoutActionDrainRequests.clear();
+    for (const timeout of webWorkoutActionDrainTimeouts.values())
+      window.clearTimeout(timeout);
+    webWorkoutActionDrainTimeouts.clear();
+    if (webWorkoutActionDrainRetry !== undefined) {
+      window.clearTimeout(webWorkoutActionDrainRetry);
+      webWorkoutActionDrainRetry = undefined;
+    }
+  }
+  return serializeWebWorkoutActionIdentity(async () => {
+    const raw = await AsyncStorage.getItem(
+      WEB_WORKOUT_ACTION_IDENTITY_KEY,
+    ).catch(() => null);
+    const stored = storedWebWorkoutActionIdentity(raw);
+    const storedMatches = !ownerId || !stored || stored.ownerId === ownerId;
+    if (storedMatches)
+      await AsyncStorage.removeItem(WEB_WORKOUT_ACTION_IDENTITY_KEY).catch(
+        () => undefined,
+      );
+    if (memoryMatches) {
+      webWorkoutActionOwnerId = undefined;
+      webWorkoutActionToken = undefined;
+      queuedWebWorkoutActions = [];
+    }
+    const actionTokens = new Set(
+      [memoryActionToken, storedMatches ? stored?.actionToken : undefined].filter(
+        (value): value is string => Boolean(value),
+      ),
+    );
+    for (const actionToken of actionTokens)
+      await postWebWorkoutActionControl({
+        operation: "clear",
+        actionToken,
+      }).catch(() => undefined);
+  });
+}
+
+/**
+ * Delivers privacy-scoped Web notification controls to the live workout.
+ * The service worker never navigates or focuses the PWA for an action button.
+ */
+export function subscribeWebWorkoutTimerActions(
+  ownerId: string,
+  listener: (actions: QueuedWorkoutTimerAction[]) => void,
+) {
+  if (Platform.OS !== "web" || !webWorkoutNotificationsSupported())
+    return () => undefined;
+  ensureWebWorkoutActionListener();
+  const subscriber = { ownerId, listener };
+  webWorkoutActionSubscribers.add(subscriber);
+  let active = true;
+  void webWorkoutActionIdentity(ownerId).then((actionToken) => {
+    if (!active || !actionToken) return;
+    flushQueuedWebWorkoutActions();
+    requestWebWorkoutActionDrain(actionToken);
+  });
+  return () => {
+    active = false;
+    webWorkoutActionSubscribers.delete(subscriber);
+  };
+}
+
+/** ACK only after the gym has committed and durably saved these transitions. */
+export async function acknowledgeWebWorkoutTimerActions(
+  ownerId: string,
+  actions: readonly QueuedWorkoutTimerAction[],
+) {
+  if (
+    Platform.OS !== "web" ||
+    webWorkoutActionOwnerId !== ownerId ||
+    !webWorkoutActionToken
+  )
+    return;
+  const actionIds = [
+    ...new Set(
+      actions
+        .filter(
+          (action) =>
+            action.ownerId === ownerId &&
+            action.generation === webWorkoutActionToken &&
+            validWebWorkoutActionId(action.webActionId),
+        )
+        .map((action) => action.webActionId as string),
+    ),
+  ];
+  await acknowledgeWebWorkoutActions(webWorkoutActionToken, actionIds);
 }
 
 async function webWorkoutServiceWorker() {
@@ -217,15 +632,24 @@ async function presentWebWorkoutNotification({
       }).maxActions ?? 0,
     ),
   );
-  const actions = [
-    {
-      action: WORKOUT_TIMER_PAUSE,
-      title: phase === "paused" ? "Resume" : "Pause",
-    },
-    ...(phase === "paused"
-      ? []
-      : [{ action: WORKOUT_TIMER_NEXT, title: "Next" }]),
-  ].slice(0, maxActions);
+  const actionToken = await webWorkoutActionIdentity(ownerId);
+  if (
+    revision !== webWorkoutNotificationRevision ||
+    webWorkoutNotificationOwnerId !== ownerId ||
+    !webWorkoutDocumentHidden()
+  )
+    return;
+  const actions = actionToken
+    ? [
+        {
+          action: WORKOUT_TIMER_PAUSE,
+          title: phase === "paused" ? "Resume" : "Pause",
+        },
+        ...(phase === "paused"
+          ? []
+          : [{ action: WORKOUT_TIMER_NEXT, title: "Next" }]),
+      ].slice(0, maxActions)
+    : [];
   // `timestamp` is part of the Notifications API standard and lets a browser
   // keep showing the phase origin even after it throttles the hidden page.
   // React Native's bundled DOM declaration currently omits that member.
@@ -244,6 +668,7 @@ async function presentWebWorkoutNotification({
     data: {
       route: "/gym",
       workoutTimer: true,
+      ...(actionToken ? { workoutActionToken: actionToken } : {}),
     },
   };
   await registration.showNotification(`${phaseLabel} · ${title}`, options);
@@ -692,8 +1117,15 @@ export async function dismissWorkoutTimerNotification(
   clearState = false,
 ) {
   if (Platform.OS === "web") {
+    // Ending a workout invalidates every control still present in a browser's
+    // notification tray before the asynchronous close completes.
+    const identityClear = clearState
+      ? clearWebWorkoutActionIdentity(ownerId)
+      : Promise.resolve();
     const operation = webWorkoutNotificationQueue.then(() =>
-      closeWebWorkoutNotification(ownerId),
+      Promise.all([identityClear, closeWebWorkoutNotification(ownerId)]).then(
+        () => undefined,
+      ),
     );
     webWorkoutNotificationQueue = operation.catch(() => undefined);
     return operation;
@@ -746,8 +1178,11 @@ export function resumeWorkoutTimerNotifications(ownerId: string) {
  */
 export function clearWorkoutTimerNotifications() {
   if (Platform.OS === "web") {
+    const identityClear = clearWebWorkoutActionIdentity();
     const operation = webWorkoutNotificationQueue.then(() =>
-      closeWebWorkoutNotification(),
+      Promise.all([identityClear, closeWebWorkoutNotification()]).then(
+        () => undefined,
+      ),
     );
     webWorkoutNotificationQueue = operation.catch(() => undefined);
     return operation;

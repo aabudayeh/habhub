@@ -411,7 +411,7 @@ export default function DisplaySettings() {
                 icon: "albums-outline",
               },
             ]}
-            selectedIds={[state.settings.todayLayoutMode ?? "scroll"]}
+            selectedIds={[state.settings.todayLayoutMode ?? "pages"]}
             onChange={([value]) =>
               value &&
               updateSettings({
@@ -498,7 +498,7 @@ export default function DisplaySettings() {
               onChange={(value) => toggle("showWeightManagementSummary", value)}
             />
           ) : null}
-          {(state.settings.todayLayoutMode ?? "scroll") === "scroll" ? (
+          {(state.settings.todayLayoutMode ?? "pages") === "scroll" ? (
             <ToggleRow
               icon="list-outline"
               title="Show every tile"
@@ -509,7 +509,7 @@ export default function DisplaySettings() {
               }
             />
           ) : null}
-          {(state.settings.todayLayoutMode ?? "scroll") === "scroll" &&
+          {(state.settings.todayLayoutMode ?? "pages") === "scroll" &&
           !state.settings.showAllTodayTiles ? (
             <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
               <Text style={[styles.title, { color: colors.ink }]}>Tiles before More</Text>
@@ -597,7 +597,7 @@ export default function DisplaySettings() {
                 icon: "albums-outline",
               },
             ]}
-            selectedIds={[state.settings.leaderboardLayoutMode ?? "scroll"]}
+            selectedIds={[state.settings.leaderboardLayoutMode ?? "pages"]}
             onChange={([value]) =>
               value &&
               updateSettings({

@@ -9,6 +9,8 @@ import {
   challengePeriodDates,
   challengePresetEndDate,
   challengeReminderIntervalDays,
+  groupChallengeAvailability,
+  groupChallengeJoinDeadline,
   groupChallengeResponseDeadline,
   groupChallengeParticipation,
   validChallengeRecurrence,
@@ -216,6 +218,22 @@ assert.deepEqual(acceptedChallengeParticipantIds(invitationChallenge), ["creator
 assert.equal(groupChallengeParticipation(invitationChallenge, "friend"), "invited");
 assert.equal(groupChallengeParticipation(invitationChallenge, "declined"), "declined");
 assert.equal(groupChallengeResponseDeadline(invitationChallenge), "2026-08-13");
+assert.equal(groupChallengeJoinDeadline(invitationChallenge), "2026-08-15");
+assert.equal(
+  groupChallengeAvailability(invitationChallenge, "2026-08-14"),
+  "active",
+);
+assert.equal(
+  groupChallengeAvailability(invitationChallenge, "2026-08-16"),
+  "finished",
+);
+assert.equal(
+  groupChallengeAvailability(
+    { ...invitationChallenge, localDate: "2026-08-20" },
+    "2026-08-14",
+  ),
+  "upcoming",
+);
 assert.match(
   validateGroupChallenge({ ...valid, today: "2026-08-12", localDate: "2026-08-11" }),
   /today or a future date/i,
@@ -277,6 +295,15 @@ const notificationUuidHotfix = fs.readFileSync(
     "supabase",
     "migrations",
     "202608220008_challenge_notification_uuid_aggregate_fix.sql",
+  ),
+  "utf8",
+);
+const discoveryMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608230001_group_challenge_discovery_and_self_join.sql",
   ),
   "utf8",
 );
@@ -371,6 +398,17 @@ assert.match(responseMigration, /grant execute on function public\.respond_group
 assert.match(hook, /trailingRefreshRef\.current = true/);
 assert.match(hook, /\}, 180\)/);
 assert.match(hook, /respondToGroupChallenge\(sourceId, response\)/);
+assert.match(hook, /discoverActive \? loadActiveGroupChallenges : loadGroupChallenges/);
+assert.match(
+  hook,
+  /!discoverActive[\s\S]{0,700}setInterval\(\(\) => void refresh\(\), 30_000\)/,
+  "active discovery must refresh without widening participant Realtime RLS",
+);
+assert.match(
+  hook,
+  /participantIds:[\s\S]{0,180}challenge\.participantIds,[\s\S]{0,100}state\.currentUserId/,
+  "tutorial self-join must keep participant and accepted membership consistent",
+);
 assert.match(hook, /sendGroupChallengeStartedPush\(saved\)/);
 assert.match(hook, /sendGroupChallengeAcceptedPush/);
 assert.match(
@@ -384,6 +422,10 @@ assert.match(
   "leaderboard and friend comparison must not reuse one subscribed Realtime channel",
 );
 assert.match(cloud, /\.limit\(200\)/, "challenge reads must stay bounded");
+assert.match(cloud, /rpc\("list_active_group_challenges"/);
+assert.match(cloud, /participantCount: row\.participant_count/);
+assert.match(cloud, /viewerParticipation: row\.viewer_participation/);
+assert.match(cloud, /eligibleToJoin: row\.eligible_to_join/);
 assert.match(cloud, /p_recurrence: input\.recurrence \?\? null/);
 assert.match(cloud, /p_end_date: input\.endDate \?\? input\.localDate/);
 assert.match(cloud, /category: "challenge"/);
@@ -611,6 +653,77 @@ assert.match(
 assert.match(notificationUuidHotfix, /pg_get_functiondef/);
 assert.match(notificationUuidHotfix, /min\(standing\.user_id\)/);
 assert.match(notificationUuidHotfix, /array_agg\(standing\.user_id/);
+assert.match(discoveryMigration, /create function public\.list_active_group_challenges/i);
+assert.match(
+  discoveryMigration,
+  /not public\.is_group_member\(p_group_id\)[\s\S]{0,180}Active group membership required/i,
+  "challenge discovery must be authorized by active group membership",
+);
+assert.match(
+  discoveryMigration,
+  /challenge\.deleted_at is null[\s\S]{0,500}>= v_local_today[\s\S]{0,220}limit 100/i,
+  "discovery must exclude finished rows and remain bounded",
+);
+assert.equal(
+  (discoveryMigration.match(/pg_catalog\.pg_timezone_names valid_timezone/g) ?? [])
+    .length,
+  2,
+  "discovery and self-join must evaluate deadlines in the member profile timezone",
+);
+assert.doesNotMatch(
+  discoveryMigration,
+  /create policy|drop policy/i,
+  "discovery must not widen participant-scoped Leaderboard RLS",
+);
+const discoveryFunction = discoveryMigration.slice(
+  discoveryMigration.indexOf("create function public.list_active_group_challenges"),
+  discoveryMigration.indexOf(
+    "comment on function public.list_active_group_challenges",
+  ),
+);
+assert.match(
+  discoveryFunction,
+  /returns table \([\s\S]*participant_count integer,[\s\S]*accepted_count integer,[\s\S]*viewer_participation text,[\s\S]*eligible_to_join boolean,[\s\S]*is_full boolean/i,
+  "active discovery must return only counts and caller-specific membership state",
+);
+assert.doesNotMatch(
+  discoveryFunction.slice(
+    discoveryFunction.indexOf("returns table"),
+    discoveryFunction.indexOf("language plpgsql"),
+  ),
+  /participant_ids|accepted_participant_ids|declined_participant_ids/i,
+  "the discovery DTO must not expose another member's challenge roster UUIDs",
+);
+assert.doesNotMatch(
+  discoveryFunction,
+  /select challenge\.\*/i,
+  "active discovery must never bypass participant RLS with the full challenge row",
+);
+assert.match(
+  discoveryMigration,
+  /from public\.group_members member[\s\S]{0,180}member\.status = 'active'[\s\S]{0,80}for update;[\s\S]{0,80}if not found then/i,
+  "self-join must lock and recheck active membership through the update",
+);
+assert.match(
+  discoveryMigration,
+  /create or replace function public\.group_challenge_join_deadline[\s\S]{0,750}datetime_field_overflow or invalid_datetime_format/i,
+  "corrupt recurrence dates must fail closed per row instead of aborting discovery",
+);
+assert.match(
+  discoveryMigration,
+  /cardinality\(v_challenge\.participant_ids\) >= 50/i,
+  "self-join must retain the challenge participant cap",
+);
+assert.match(
+  discoveryMigration,
+  /set participant_ids = v_participants,[\s\S]{0,120}accepted_participant_ids = v_accepted/i,
+  "self-join must atomically add the caller to both participant sets",
+);
+assert.match(
+  discoveryMigration,
+  /if not v_was_participant then[\s\S]{0,140}active invitation is required to decline/i,
+  "non-invited members may self-join but may not synthesize declines",
+);
 assert.match(groupNotificationEvents, /occurrence_date/);
 assert.match(groupNotificationEvents, /\.limit\(500\)/);
 assert.match(groupScreen, /allEvents: groupFeedEvents/);
@@ -647,6 +760,12 @@ assert.match(
 );
 assert.match(groupSettings, /accessibilityState=\{\{ expanded: groupColorOpen \}\}/);
 assert.match(groupSettings, /setGroupTheme\(groupColorDraft\)/);
+assert.match(groupSettings, /discoverActive: true/);
+assert.match(groupSettings, /availability === "active" \? "LIVE" : "UPCOMING"/);
+assert.match(groupSettings, /await challengeCloud\.respond\(sourceId, "accepted"\)/);
+assert.match(groupSettings, />Joined<\/Text>/);
+assert.match(groupSettings, /challenge\.viewerParticipation \?\?/);
+assert.match(groupSettings, /challenge\.eligibleToJoin \?\?/);
 assert.doesNotMatch(
   groupSettings,
   /<ColorSpectrumPicker[\s\S]{0,180}onChange=\{setGroupTheme\}/,
@@ -659,5 +778,5 @@ assert.match(
 );
 
 console.log(
-  "Group challenge validation passed: domain rules, friend entry point, tie-safe win badges, exact-value privacy, bounded realtime, RPC permissions, and RLS.",
+  "Group challenge validation passed: domain rules, private active discovery, atomic self-join, tie-safe win badges, bounded realtime, RPC permissions, and RLS.",
 );

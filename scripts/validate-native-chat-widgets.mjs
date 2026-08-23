@@ -94,6 +94,16 @@ assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
+  /private fun defaultTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*"__avatar__" else "__featured__"/,
+  "Optional widget configuration must respect each family default",
+);
+assert.match(
+  pluginSource,
+  /backgroundMode: String = "transparent"[\s\S]*backgroundOpacity: Int = 55/,
+  "New widgets must default to the readable translucent presentation",
+);
+assert.match(
+  pluginSource,
   /configuration\.trackerId == "__avatar__"[\s\S]*snapshot\.optJSONObject\("avatar"\)[\s\S]*snapshot\.optJSONObject\("featured"\)/,
 );
 for (const [source, width, height, preview] of [
@@ -114,8 +124,11 @@ assert.match(pluginSource, /LinearGradient/);
 assert.match(pluginSource, /RadialGradient/);
 assert.match(pluginSource, /drawProgressOutline/);
 assert.match(pluginSource, /drawGoalTiles/);
+assert.match(pluginSource, /drawFeaturedGoalDot/);
 assert.match(pluginSource, /drawAvatarCard/);
-assert.match(pluginSource, /drawStatusGoalCircles/);
+assert.match(pluginSource, /drawStatusGoalGrid/);
+assert.match(pluginSource, /val rows = \(count \+ columns - 1\) \/ columns/);
+assert.match(pluginSource, /goal\.optString\("title", "Goal"\)/);
 assert.match(pluginSource, /item\.optJSONArray\("goals"\)/);
 assert.match(pluginSource, /item\.optString\("completionIcon"/);
 assert.match(pluginSource, /item\.optBoolean\("showProgressOutline", true\)/);

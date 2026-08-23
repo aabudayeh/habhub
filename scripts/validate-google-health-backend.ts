@@ -127,6 +127,67 @@ assert.throws(
   () => googleHealthApiTestHooks.dailyRollUpRequestBody("2026-08-23", "2026-08-22"),
   /Invalid civil date range/,
 );
+assert.equal(
+  googleHealthApiTestHooks.dailyRollUpRequestBody(
+    "2026-08-21",
+    "2026-08-23",
+    "next-page",
+  ).pageToken,
+  "next-page",
+  "daily rollup pagination must replay the same query with Google's continuation token",
+);
+
+const stepsDefinition = {
+  googleType: "steps",
+  internalType: "steps",
+  mode: "daily" as const,
+  maxInitialDays: 90,
+  requiredScope: "activity",
+};
+const explicitStepDates = googleHealthSyncTestHooks.dailyValueDates(
+  stepsDefinition,
+  [
+    {
+      civilStartTime: { date: { year: 2026, month: 8, day: 22 } },
+      steps: { countSum: 1200 },
+    },
+    {
+      civilStartTime: { date: { year: 2026, month: 8, day: 23 } },
+      steps: { countSum: 0 },
+    },
+    {
+      civilStartTime: { date: { year: 2026, month: 8, day: 24 } },
+    },
+  ],
+);
+assert.deepEqual(
+  [...explicitStepDates].sort(),
+  ["2026-08-22", "2026-08-23"],
+  "an explicit zero is authoritative but a missing daily value union is not",
+);
+assert.deepEqual(
+  googleHealthSyncTestHooks.replacementRangesForFetch(
+    stepsDefinition,
+    { fromDate: "2026-08-21", throughDate: "2026-08-24" },
+    "2026-08-23",
+    explicitStepDates,
+  ),
+  [
+    { dataType: "steps", fromDate: "2026-08-21", throughDate: "2026-08-22" },
+    { dataType: "steps", fromDate: "2026-08-23", throughDate: "2026-08-23" },
+  ],
+  "completed days reconcile fully while an absent live/future day preserves its last confirmed import",
+);
+assert.deepEqual(
+  googleHealthSyncTestHooks.replacementRangesForFetch(
+    stepsDefinition,
+    { fromDate: "2026-08-23", throughDate: "2026-08-23" },
+    "2026-08-23",
+    new Set(),
+  ),
+  [],
+  "a successful but value-less current-day response must not delete a prior positive rollup",
+);
 
 const catalogError = await googleError(new Response(JSON.stringify({
   error: {
@@ -167,8 +228,26 @@ const sourceRecord = {
   value: 550,
   unit: "kcal",
   label: "Lunch",
+  sourceOrigin: "com.myfitnesspal.android",
   nutrition: { proteinG: 25, carbsG: 65, fatG: 18 },
 };
+assert.equal(
+  googleHealthSyncTestHooks.googleHealthSourceOrigin({
+    dataSource: {
+      platform: "HEALTH_CONNECT",
+      application: { packageName: "com.myfitnesspal.android" },
+    },
+  }),
+  "com.myfitnesspal.android",
+  "Google's source package must survive so MyFitnessPal imports remain traceable",
+);
+assert.equal(
+  googleHealthSyncTestHooks.googleHealthSourceOrigin({
+    dataSource: { platform: "GOOGLE_PARTNER_INTEGRATION" },
+  }),
+  "Google Health (google partner integration)",
+  "direct partner records retain their provider platform when no package is exposed",
+);
 const foodMetric = {
   id: "food",
   unit: "kcal",
@@ -197,6 +276,11 @@ assert.deepEqual(mappedFoodRow.entry.nutrition, sourceRecord.nutrition);
 assert.equal(mappedFoodRow.entry.sourceRecordedAt, sourceRecord.endTime);
 assert.match(String(mappedFoodRow.entry.id), /^google-health:/);
 assert.equal(mappedFoodRow.entry.sourceProvider, "google_health");
+assert.equal(
+  mappedFoodRow.entry.sourceOrigin,
+  "com.myfitnesspal.android",
+  "provider package provenance survives normalization and entry materialization",
+);
 const foodId = String(mappedFoodRow.entry.id);
 
 const absentDefinitionSidecars = mappedFood.filter(
@@ -331,8 +415,8 @@ const googleFirstFood = googleHealthSyncTestHooks.preserveUserIntentAndDeduplica
 });
 assert.equal(
   googleFirstFood.length,
-  0,
-  "native ownership must win when the Google mirror arrived first and has an explicit preference",
+  1,
+  "a previously owned Google mirror remains a durable fallback when native arrives later",
 );
 assert.equal(
   Number(nativeMirroredFood.value) + nativeFirstFood.reduce((sum, row) => sum + Number(row.entry.value), 0),
@@ -537,6 +621,13 @@ assert.equal(
   "native 54 must win over a later Google 27 without a duplicate",
 );
 assert.equal(
+  googleHealthSyncTestHooks.preferNativeStepOwner(googleStep, {
+    entries: [nativeStep, googleStep[0].entry],
+  }).length,
+  1,
+  "an existing Google step row must remain server-owned behind the native-first client view",
+);
+assert.equal(
   googleHealthSyncTestHooks.preferNativeStepOwner(googleStep, { entries: [] }).length,
   1,
   "web-only accounts still materialize Google steps",
@@ -578,8 +669,8 @@ assert.equal(
     entries: [mirroredGoogleWorkout[0].entry, nativeWorkout],
     settings: {},
   }).length,
-  0,
-  "Google-first mirrored workouts collapse to the native owner",
+  1,
+  "Google-first mirrored workouts retain server fallback ownership",
 );
 assert.equal(
   googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate([{
@@ -617,8 +708,8 @@ assert.equal(
   googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate(googleWeight, {
     entries: [googleWeight[0].entry, nativeWeight], settings: {},
   }).length,
-  0,
-  "Google-first mirrored weight contributes only the native value",
+  1,
+  "Google-first mirrored weight retains server fallback ownership",
 );
 assert.equal(
   googleHealthSyncTestHooks.preserveUserIntentAndDeduplicate([{

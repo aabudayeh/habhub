@@ -44,6 +44,7 @@ type InternalRecord = {
   label?: string;
   note?: string;
   activityKey?: string;
+  sourceOrigin?: string;
   measurements?: Record<string, number>;
   nutrition?: Record<string, string | number>;
 };
@@ -208,6 +209,80 @@ function civilDateKey(value: unknown) {
   return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+function googleHealthSourceOrigin(point: GoogleHealthDataPoint) {
+  const dataSource = asObject(point.dataSource);
+  const application = asObject(dataSource.application);
+  const packageName = String(application.packageName ?? "").trim();
+  if (packageName) return packageName;
+  const platform = String(dataSource.platform ?? "").trim();
+  return platform && platform !== "PLATFORM_UNSPECIFIED"
+    ? `Google Health (${platform.toLowerCase().replace(/_/g, " ")})`
+    : "Google Health API";
+}
+
+function dailyValueDates(
+  definition: DataTypeDefinition,
+  points: GoogleHealthDataPoint[],
+) {
+  const valueField = definition.internalType === "steps"
+    ? "steps"
+    : definition.internalType === "active_energy"
+      ? "activeEnergyBurned"
+      : definition.internalType === "heart_rate"
+        ? "heartRate"
+        : "";
+  const dates = new Set<string>();
+  if (!valueField) return dates;
+  for (const point of points) {
+    const localDate = civilDateKey(point.civilStartTime);
+    // Google distinguishes a missing rollup union from an explicitly set
+    // zero. Only the latter is an authoritative current-day observation.
+    if (localDate && point[valueField] !== undefined && point[valueField] !== null)
+      dates.add(localDate);
+  }
+  return dates;
+}
+
+function replacementRangesForFetch(
+  definition: DataTypeDefinition,
+  range: GoogleHealthDateRange,
+  today: string,
+  authoritativeDailyDates: ReadonlySet<string> = new Set(),
+) {
+  const full = {
+    dataType: definition.internalType,
+    fromDate: range.fromDate,
+    throughDate: range.throughDate,
+  };
+  if (definition.mode !== "daily") return [full];
+
+  const replacements: typeof full[] = [];
+  const lastCompletedDate = addDays(today, -1);
+  const completedThrough = range.throughDate < lastCompletedDate
+    ? range.throughDate
+    : lastCompletedDate;
+  if (range.fromDate <= completedThrough) {
+    replacements.push({
+      ...full,
+      throughDate: completedThrough,
+    });
+  }
+  for (const localDate of [...authoritativeDailyDates].sort()) {
+    if (
+      localDate >= today &&
+      localDate >= range.fromDate &&
+      localDate <= range.throughDate
+    ) {
+      replacements.push({
+        dataType: definition.internalType,
+        fromDate: localDate,
+        throughDate: localDate,
+      });
+    }
+  }
+  return replacements;
+}
+
 function timeInfo(payload: JsonObject, useEndDate = false) {
   const interval = asObject(payload.interval);
   const sample = asObject(payload.sampleTime);
@@ -327,6 +402,7 @@ async function normalizeReconciled(
 ) {
   const records: InternalRecord[] = [];
   for (const point of points) {
+    const sourceOrigin = googleHealthSourceOrigin(point);
     let payload: JsonObject;
     if (definition.internalType === "weight") payload = asObject(point.weight);
     else if (definition.internalType === "body_fat") payload = asObject(point.bodyFat);
@@ -341,17 +417,17 @@ async function normalizeReconciled(
     const id = await externalId(definition, point, time.startTime, time.endTime);
     if (definition.internalType === "weight") {
       const value = positive(payload.weightGrams);
-      if (value) records.push({ externalId: id, dataType: "weight", ...time, value: value / 1_000, unit: "kg", note: String(payload.notes ?? "") || undefined });
+      if (value) records.push({ externalId: id, dataType: "weight", ...time, value: value / 1_000, unit: "kg", sourceOrigin, note: String(payload.notes ?? "") || undefined });
     } else if (definition.internalType === "body_fat") {
       const value = positive(payload.percentage);
-      if (value) records.push({ externalId: id, dataType: "body_fat", ...time, value, unit: "%" });
+      if (value) records.push({ externalId: id, dataType: "body_fat", ...time, value, unit: "%", sourceOrigin });
     } else if (definition.internalType === "blood_glucose") {
       const value = positive(payload.bloodGlucoseMilligramsPerDeciliter);
-      if (value) records.push({ externalId: id, dataType: "blood_glucose", ...time, value, unit: "mg/dL", note: String(payload.notes ?? "") || undefined });
+      if (value) records.push({ externalId: id, dataType: "blood_glucose", ...time, value, unit: "mg/dL", sourceOrigin, note: String(payload.notes ?? "") || undefined });
     } else if (definition.internalType === "sleep") {
       const summary = asObject(payload.summary);
       const minutes = positive(summary.minutesAsleep) ?? durationMinutes(time.startTime, time.endTime);
-      if (minutes > 0) records.push({ externalId: id, dataType: "sleep", ...time, value: minutes / 60, unit: "hr", measurements: { durationMinutes: minutes }, label: "Sleep" });
+      if (minutes > 0) records.push({ externalId: id, dataType: "sleep", ...time, value: minutes / 60, unit: "hr", sourceOrigin, measurements: { durationMinutes: minutes }, label: "Sleep" });
     } else if (definition.internalType === "workouts") {
       const summary = asObject(payload.metricsSummary);
       const minutes = durationStringMinutes(payload.activeDuration) ?? durationMinutes(time.startTime, time.endTime);
@@ -365,6 +441,7 @@ async function normalizeReconciled(
         ...time,
         value: minutes,
         unit: "min",
+        sourceOrigin,
         label: String(payload.displayName ?? exerciseType.replace(/_/g, " ")),
         activityKey: exerciseType.toLowerCase().replace(/_/g, "-"),
         note: String(payload.notes ?? "") || undefined,
@@ -376,7 +453,7 @@ async function normalizeReconciled(
       });
     } else if (definition.internalType === "water") {
       const milliliters = positive(asObject(payload.amountConsumed).milliliters);
-      if (milliliters) records.push({ externalId: id, dataType: "water", ...time, value: milliliters / 250, unit: "cups", label: "Water" });
+      if (milliliters) records.push({ externalId: id, dataType: "water", ...time, value: milliliters / 250, unit: "cups", sourceOrigin, label: "Water" });
     } else if (definition.internalType === "nutrition") {
       const calories = positive(asObject(payload.energy).kcal) ?? 0;
       const nutrition = nutritionFrom(payload);
@@ -387,6 +464,7 @@ async function normalizeReconciled(
           ...time,
           value: calories,
           unit: "kcal",
+          sourceOrigin,
           label: String(payload.foodDisplayName ?? "Food"),
           nutrition,
         });
@@ -451,7 +529,7 @@ function baseEntry(record: InternalRecord, userId: string, metric: Metric, value
     ...(mayCarryMealDetails && record.nutrition ? { nutrition: record.nutrition } : {}),
     sourceProvider: "google_health",
     sourceRecordId,
-    sourceOrigin: "Google Health API",
+    sourceOrigin: record.sourceOrigin ?? "Google Health API",
     sourceUpdatedAt: syncedAt,
   };
 }
@@ -512,11 +590,14 @@ function preserveUserIntentAndDeduplicate(
     const previous = existingById.get(id);
     const savedOverride = asObject(savedOverrides[id]);
     if (savedOverride.dismissed === true) return [];
-    // Native device ownership is order-independent. If a Health Connect or
-    // HealthKit mirror is present, suppress the Google materialization even
-    // when an older Google row/override already exists. The server preference
-    // remains available so Google can become the fallback if native vanishes.
-    if (entries.some((candidate) => semanticallyMatchesNative(generated, candidate)))
+    // Do not create a new Google mirror when a native copy arrived first. Once
+    // a Google row is already server-owned, however, retain it behind the
+    // client's native-first presentation. Deleting that ownership here made a
+    // later native-cache gap erase the last Google fallback and show zero.
+    if (
+      !previous &&
+      entries.some((candidate) => semanticallyMatchesNative(generated, candidate))
+    )
       return [];
     let entry = generated;
     if (previous || Object.keys(savedOverride).length) {
@@ -667,6 +748,14 @@ function preferNativeStepOwner(
   snapshot: Snapshot,
 ) {
   const existing = Array.isArray(snapshot.entries) ? snapshot.entries : [];
+  const existingGoogleIds = new Set(
+    existing
+      .filter((entry) =>
+        entry.sourceProvider === "google_health" ||
+        String(entry.id ?? "").startsWith("google-health:")
+      )
+      .map((entry) => String(entry.id ?? "")),
+  );
   return mapped.flatMap((record) => {
     if (record.dataType !== "steps") return [record];
     const hasNativeCanonical = existing.some((entry) =>
@@ -677,10 +766,14 @@ function preferNativeStepOwner(
       String(entry.sourceRecordId ?? "").startsWith("aggregate:steps:") &&
       positive(entry.value) !== undefined
     );
-    // A device-native aggregate is authoritative for its civil day. Skipping
-    // the Google materialization also makes reconciliation remove an older
-    // Google-owned duplicate; web-only users still receive the Google total.
-    return hasNativeCanonical ? [] : [record];
+    // Native owns presentation, but an already-owned Google total remains a
+    // durable fallback. The shared client reconciliation hides it while the
+    // native row exists; retaining ownership prevents a later cache-only
+    // native gap from turning a confirmed account total into zero.
+    return hasNativeCanonical &&
+        !existingGoogleIds.has(String(record.entry.id ?? ""))
+      ? []
+      : [record];
   });
 }
 
@@ -859,6 +952,7 @@ async function fetchDefinition(
     // limited to 14. Historical webhook spans are therefore split rather
     // than truncated, so both old deletes and newer events are reconciled.
     const records: InternalRecord[] = [];
+    const authoritativeDailyDates = new Set<string>();
     let fromDate = range.fromDate;
     while (fromDate <= range.throughDate) {
       const throughDate = [addDays(fromDate, definition.maxInitialDays - 1), range.throughDate]
@@ -869,6 +963,10 @@ async function fetchDefinition(
         fromDate,
         addDays(throughDate, 1),
       );
+      for (const localDate of dailyValueDates(
+        definition,
+        response.rollupDataPoints ?? [],
+      )) authoritativeDailyDates.add(localDate);
       records.push(...await normalizeDaily(
         definition,
         response.rollupDataPoints ?? [],
@@ -877,7 +975,7 @@ async function fetchDefinition(
       ));
       fromDate = addDays(throughDate, 1);
     }
-    return records;
+    return { records, authoritativeDailyDates };
   }
   const usesCivilTime = definition.filterField?.includes("civil_");
   const lower = usesCivilTime ? range.fromDate : `${range.fromDate}T00:00:00Z`;
@@ -890,7 +988,7 @@ async function fetchDefinition(
     `${field} >= "${lower}" AND ${field} < "${upper}"`,
     definition.pageSize ?? 10_000,
   );
-  return normalizeReconciled(definition, points);
+  return { records: await normalizeReconciled(definition, points) };
 }
 
 async function performGoogleHealthSync(
@@ -1038,14 +1136,15 @@ async function performGoogleHealthSync(
     definition: DataTypeDefinition;
     range: GoogleHealthDateRange;
     records: InternalRecord[];
+    authoritativeDailyDates?: ReadonlySet<string>;
     error?: unknown;
   }> = [];
   for (const definition of definitions) {
     const range = options?.ranges?.get(definition.googleType) ??
       await definitionRange(admin, userId, definition, today);
     try {
-      const records = await fetchDefinition(accessToken, definition, range, now, today);
-      fetched.push({ definition, range, records });
+      const result = await fetchDefinition(accessToken, definition, range, now, today);
+      fetched.push({ definition, range, ...result });
     } catch (error) {
       fetched.push({ definition, range, error, records: [] });
     }
@@ -1079,11 +1178,14 @@ async function performGoogleHealthSync(
     };
   }
 
-  const replacements = successful.map((item) => ({
-    dataType: item.definition.internalType,
-    fromDate: item.range.fromDate,
-    throughDate: item.range.throughDate,
-  }));
+  const replacements = successful.flatMap((item) =>
+    replacementRangesForFetch(
+      item.definition,
+      item.range,
+      today,
+      item.authoritativeDailyDates,
+    )
+  );
   const fetchedRecords = successful.flatMap((item) => item.records);
   let currentSnapshot = snapshot;
   let currentRevision = Number(snapshotRow.revision);
@@ -1229,6 +1331,9 @@ export const googleHealthWebhookDataTypes = DATA_TYPES
 // This is not an Edge endpoint and exports no credentials or account state.
 export const googleHealthSyncTestHooks = {
   nutritionFrom,
+  googleHealthSourceOrigin,
+  dailyValueDates,
+  replacementRangesForFetch,
   mapRecordsToEntries,
   preserveUserIntentAndDeduplicate,
   preferNativeStepOwner,

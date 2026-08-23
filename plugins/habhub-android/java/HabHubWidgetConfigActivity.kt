@@ -38,6 +38,7 @@ class HabHubWidgetConfigActivity : Activity() {
     }
 
     val existing = HabHubWidgetStore.configuration(this, widgetId)
+    val alreadyConfigured = HabHubWidgetStore.hasConfiguration(this, widgetId)
     val family = widgetFamily(widgetId)
     val choices = when (family) {
       "square" -> listOf("__avatar__" to getString(R.string.habhub_widget_status_avatar))
@@ -61,7 +62,7 @@ class HabHubWidgetConfigActivity : Activity() {
 
     root.addView(sectionLabel(getString(R.string.habhub_widget_content)))
     val contentGroup = radioGroup()
-    val selectedContent = existing.trackerId.takeIf { candidate -> choices.any { it.first == candidate } }
+    val selectedContent = existing.trackerId.takeIf { candidate -> alreadyConfigured && choices.any { it.first == candidate } }
       ?: choices.first().first
     choices.forEach { choice -> contentGroup.addView(option(choice.second, choice.first, choice.first == selectedContent)) }
     root.addView(card(contentGroup))
@@ -91,7 +92,7 @@ class HabHubWidgetConfigActivity : Activity() {
     val opacityLabel = label("", 13f, true)
     val opacitySlider = SeekBar(this).apply {
       max = 100
-      progress = if (existing.backgroundMode == "transparent" && existing.backgroundOpacity == 100) 55 else existing.backgroundOpacity
+      progress = existing.backgroundOpacity
       progressTintList = ColorStateList.valueOf(lime)
       thumbTintList = ColorStateList.valueOf(lime)
     }
@@ -117,13 +118,12 @@ class HabHubWidgetConfigActivity : Activity() {
     })
 
     appearanceGroup.setOnCheckedChangeListener { group, checkedId ->
-      val mode = group.findViewById<RadioButton>(checkedId)?.tag?.toString() ?: "theme"
+      val mode = group.findViewById<RadioButton>(checkedId)?.tag?.toString() ?: "transparent"
       colorCard.visibility = if (mode == "custom") View.VISIBLE else View.GONE
       opacityPanel.visibility = if (mode == "theme") View.GONE else View.VISIBLE
       if (mode == "transparent" && opacitySlider.progress == 100) opacitySlider.progress = 55
     }
 
-    val alreadyConfigured = HabHubWidgetStore.hasConfiguration(this, widgetId)
     root.addView(Button(this).apply {
       text = getString(if (alreadyConfigured) R.string.habhub_widget_save else R.string.habhub_widget_add)
       isAllCaps = false
@@ -135,7 +135,7 @@ class HabHubWidgetConfigActivity : Activity() {
         val content = contentGroup.findViewById<RadioButton>(contentGroup.checkedRadioButtonId)
           ?.tag?.toString() ?: choices.first().first
         val mode = appearanceGroup.findViewById<RadioButton>(appearanceGroup.checkedRadioButtonId)
-          ?.tag?.toString() ?: "theme"
+          ?.tag?.toString() ?: "transparent"
         HabHubWidgetStore.saveConfiguration(
           this@HabHubWidgetConfigActivity,
           widgetId,

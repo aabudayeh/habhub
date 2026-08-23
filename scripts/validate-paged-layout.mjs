@@ -44,18 +44,21 @@ const pager = source("src/components/HorizontalPager.tsx");
 
 for (const setting of ["todayLayoutMode", "leaderboardLayoutMode"]) {
   assert.match(types, new RegExp(`${setting}\\?: DashboardLayoutMode`));
-  assert.match(seed, new RegExp(`${setting}: "scroll"`));
+  assert.match(seed, new RegExp(`${setting}: "pages"`));
 }
 assert.match(settings, /title="Today layout"/);
 assert.match(settings, /title="Leaderboard layout"/);
 assert.match(settings, /label: "Scrolling list"/);
 assert.match(settings, /label: "Swipeable pages"/);
-assert.match(today, /state\.settings\.todayLayoutMode === "pages"/);
+assert.match(today, /\(state\.settings\.todayLayoutMode \?\? "pages"\) === "pages"/);
 assert.match(today, /todayUsesPages && !editing/);
 assert.match(today, /!todayUsesPages &&\s*!editing/);
 assert.match(today, /todayUsesPages\s*\? \[\]/);
 assert.match(today, /testID="today-tracker-pages"/);
-assert.match(leaderboard, /state\.settings\.leaderboardLayoutMode === "pages"/);
+assert.match(
+  leaderboard,
+  /\(state\.settings\.leaderboardLayoutMode \?\? "pages"\) === "pages"/,
+);
 assert.match(leaderboard, /!leaderboardUsesPages &&\s*!editing/);
 assert.match(leaderboard, /!leaderboardUsesPages \|\| editing/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);

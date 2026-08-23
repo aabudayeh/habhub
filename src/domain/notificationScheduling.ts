@@ -44,6 +44,20 @@ export const LOCAL_NOTIFICATION_BUDGETS = {
 
 export const MAX_PENDING_LOCAL_NOTIFICATIONS = 64;
 
+export const WEB_REMINDER_LATE_GRACE_MS = 4 * 60 * 1000;
+
+/** Keep just-due PWA reminders publishable across a short suspend/retry. */
+export function webReminderTriggerCanStillPublish(
+  triggerAt: number,
+  nowAt: number,
+) {
+  return (
+    Number.isFinite(triggerAt) &&
+    Number.isFinite(nowAt) &&
+    triggerAt >= nowAt - WEB_REMINDER_LATE_GRACE_MS
+  );
+}
+
 export type ActivityTimerAlertCandidate = {
   completion: boolean;
   identifier: string;

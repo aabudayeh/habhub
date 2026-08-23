@@ -1,6 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, View } from "react-native";
+import {
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
@@ -113,6 +119,7 @@ export function FastingClockEditor({
     absoluteMinutes: (draftStart + draftDuration) % DAY_MINUTES,
   });
   const onChangeRef = useRef(onChange);
+  const draggingRef = useRef(false);
   draftRef.current = { start: draftStart, duration: draftDuration };
   onChangeRef.current = onChange;
 
@@ -169,12 +176,33 @@ export function FastingClockEditor({
     onChangeRef.current(clockValue(next.start), next.duration);
   }, []);
 
+  const finishDrag = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    commitDraft();
+  }, [commitDraft]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    // A dragged handle rerenders at a new DOM position. Browsers can then lose
+    // the responder's release event, so commit from the window as a fallback.
+    window.addEventListener("pointerup", finishDrag, true);
+    window.addEventListener("pointercancel", finishDrag, true);
+    window.addEventListener("blur", finishDrag);
+    return () => {
+      window.removeEventListener("pointerup", finishDrag, true);
+      window.removeEventListener("pointercancel", finishDrag, true);
+      window.removeEventListener("blur", finishDrag);
+    };
+  }, [finishDrag]);
+
   const startDrag = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
+          draggingRef.current = true;
           measureCenter();
           const current = draftRef.current;
           fixedEndRef.current = (current.start + current.duration) % DAY_MINUTES;
@@ -211,11 +239,11 @@ export function FastingClockEditor({
           fixedEndRef.current = range.endMinutes;
           applyRange(range);
         },
-        onPanResponderRelease: commitDraft,
-        onPanResponderTerminate: commitDraft,
+        onPanResponderRelease: finishDrag,
+        onPanResponderTerminate: finishDrag,
         onPanResponderTerminationRequest: () => false,
       }),
-    [applyRange, commitDraft, measureCenter, minutesAt],
+    [applyRange, finishDrag, measureCenter, minutesAt],
   );
 
   const endDrag = useMemo(
@@ -224,6 +252,7 @@ export function FastingClockEditor({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
+          draggingRef.current = true;
           measureCenter();
           const current = draftRef.current;
           const endMinutes = (current.start + current.duration) % DAY_MINUTES;
@@ -258,11 +287,11 @@ export function FastingClockEditor({
           fixedStartRef.current = range.startMinutes;
           applyRange(range);
         },
-        onPanResponderRelease: commitDraft,
-        onPanResponderTerminate: commitDraft,
+        onPanResponderRelease: finishDrag,
+        onPanResponderTerminate: finishDrag,
         onPanResponderTerminationRequest: () => false,
       }),
-    [applyRange, commitDraft, measureCenter, minutesAt],
+    [applyRange, finishDrag, measureCenter, minutesAt],
   );
 
   const adjustHandle = useCallback(
