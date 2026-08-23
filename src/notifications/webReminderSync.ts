@@ -17,7 +17,10 @@ const lastAcceptedSchedule = new Map<string, AcceptedSchedule>();
 async function syncNow(state: AppState) {
   if (Platform.OS !== "web" || !supabase) return;
   const { data } = await supabase.auth.getSession();
-  if (data.session?.user.id !== state.currentUserId) return;
+  if (!data.session)
+    throw new Error("The signed-in Web session is not ready for reminder sync.");
+  if (data.session.user.id !== state.currentUserId)
+    throw new Error("The signed-in account changed during reminder sync.");
   const events = planWebReminderSchedule(state);
   const signature = JSON.stringify(events);
   const prior = lastAcceptedSchedule.get(state.currentUserId);

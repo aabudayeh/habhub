@@ -629,7 +629,7 @@ export default function DisplaySettings() {
             <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
               <Text style={[styles.title, { color: colors.ink }]}>Maximum cards per page</Text>
               <View style={styles.chips}>
-                {[1, 2].map((count) => (
+                {[1, 2, 3, 4].map((count) => (
                   <Chip
                     key={count}
                     label={String(count)}

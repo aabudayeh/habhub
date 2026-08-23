@@ -1146,7 +1146,17 @@ assert.equal(
 assert.match(webScheduleSource, /todoReminderAppliesOnDate/);
 assert.match(webScheduleSource, /activityTimerAlertCandidates/);
 assert.match(webScheduleSyncSource, /replace_own_web_notification_schedule/);
-assert.match(webScheduleSyncSource, /data\.session\?\.user\.id !== state\.currentUserId/);
+assert.match(
+  webScheduleSyncSource,
+  /if \(!data\.session\)[\s\S]{0,120}throw new Error/,
+  "a cached Web identity without a live session must retry instead of silently accepting an empty sync",
+);
+assert.doesNotMatch(
+  layoutSource,
+  /auth\.session\?\.user\.id !== auth\.user\.id \|\|[\s\S]{0,120}state\.currentUserId/,
+  "the Web reminder effect must run and let the authoritative Supabase session check retry",
+);
+assert.match(webScheduleSyncSource, /data\.session\.user\.id !== state\.currentUserId/);
 assert.match(webScheduleSyncSource, /Number\(acceptedCount\) !== events\.length/);
 assert.match(webScheduleSyncSource, /WEB_REMINDER_SCHEDULE_REPAIR_MS/);
 assert.match(webScheduleSyncSource, /acceptedAt: Date\.now\(\)/);

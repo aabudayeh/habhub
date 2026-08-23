@@ -8,7 +8,7 @@ export type WebDisplayEnvironment = {
 
 export const STANDALONE_IOS_TAB_BOTTOM_INSET = 10;
 
-export function isStandaloneIosWebApp(
+export function isIosWebDevice(
   environment: WebDisplayEnvironment,
 ): boolean {
   const userAgent = environment.userAgent?.toLowerCase() ?? "";
@@ -16,14 +16,20 @@ export function isStandaloneIosWebApp(
   const maxTouchPoints = Number.isFinite(environment.maxTouchPoints)
     ? Math.max(0, environment.maxTouchPoints ?? 0)
     : 0;
-  const iosDevice =
+  return (
     /iphone|ipad|ipod/.test(userAgent) ||
-    (platform === "macintel" && maxTouchPoints > 1);
+    (platform === "macintel" && maxTouchPoints > 1)
+  );
+}
+
+export function isStandaloneIosWebApp(
+  environment: WebDisplayEnvironment,
+): boolean {
   const standalone =
     environment.displayModeStandalone === true ||
     environment.navigatorStandalone === true;
 
-  return iosDevice && standalone;
+  return isIosWebDevice(environment) && standalone;
 }
 
 /**
@@ -48,30 +54,30 @@ export function resolveTabBarBottomInset(
 }
 
 /**
- * Screen's large default bottom padding predates the navigator-owned tab-bar
- * space. Remove that duplicate clearance only inside standalone iOS tab scenes.
- * Explicit page padding remains honored, and non-tab routes keep full safety.
+ * Screen's bottom padding predates the navigator-owned tab-bar space. iOS Web
+ * tab scenes must not reserve another content gutter above that navigator,
+ * regardless of whether Safari reports its standalone flag reliably. Non-tab
+ * routes and every other platform keep their existing safety clearance.
  */
 export function resolveScreenBottomPadding(
   defaultMinimum: number,
   explicitMinimum: number | undefined,
-  userPadding: number,
+  userPadding: number | undefined,
   safeAreaBottom: number,
   isTabScene: boolean,
   environment?: WebDisplayEnvironment,
 ) {
-  const standaloneIosTab =
-    isTabScene && Boolean(environment && isStandaloneIosWebApp(environment));
-  const minimum =
+  const iosWebTab =
+    isTabScene && Boolean(environment && isIosWebDevice(environment));
+  if (iosWebTab) return 0;
+  const requestedMinimum =
     typeof explicitMinimum === "number"
       ? Math.max(0, explicitMinimum)
-      : standaloneIosTab
-        ? 0
-        : Math.max(0, defaultMinimum);
-  const safeInset = standaloneIosTab
-    ? 0
-    : Number.isFinite(safeAreaBottom)
-      ? Math.max(0, safeAreaBottom)
-      : 0;
-  return Math.max(minimum, Math.max(0, userPadding)) + safeInset;
+      : Math.max(0, defaultMinimum);
+  const requestedPadding =
+    typeof userPadding === "number" ? Math.max(0, userPadding) : 0;
+  const safeInset = Number.isFinite(safeAreaBottom)
+    ? Math.max(0, safeAreaBottom)
+    : 0;
+  return Math.max(requestedMinimum, requestedPadding) + safeInset;
 }

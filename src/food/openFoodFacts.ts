@@ -8,6 +8,11 @@ import {
   usdaTotalSugarsG,
   type UsdaNutrientRow,
 } from "@/src/domain/usdaNutrition";
+import { normalizeFoodBarcodeInput } from "@/src/food/barcode";
+import {
+  requestFoodDatabase,
+  requestOpenFoodFactsBarcode,
+} from "@/src/food/foodDatabaseRequest";
 import { supabase } from "@/src/lib/supabase";
 import type { NutritionDetails } from "@/src/types";
 
@@ -284,54 +289,23 @@ async function rememberProducts(key: string, products: FoodProduct[]) {
   await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(trimmed));
 }
 
-function retryAfterMs(value: string | null) {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
-}
-
 async function request(url: string, attempts = 3) {
-  let last: Error | undefined;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
-    let serverDelay: number | undefined;
-    let retryable = true;
-    try {
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-        "Accept-Language": [languageCode, "en"].filter(Boolean).join(","),
-      };
-      // Browsers control User-Agent themselves; native fetch permits the
-      // identifying header requested by Open Food Facts.
-      if (Platform.OS !== "web")
-        headers["User-Agent"] = "HabHub/1.0 (https://habhub.expo.app)";
-      const response = await fetch(url, { headers, signal: controller.signal });
-      if (response.ok) return response.json() as Promise<Record<string, unknown>>;
-      last = new Error(`Food database request failed (${response.status}).`);
-      retryable = [429, 500, 502, 503, 504].includes(response.status);
-      if (!retryable) throw last;
-      serverDelay = retryAfterMs(response.headers.get("retry-after"));
-    } catch (error) {
-      last = error instanceof Error ? error : new Error("Food database request failed.");
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!retryable) throw last;
-    if (attempt < attempts - 1)
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(5000, serverDelay ?? 450 * 2 ** attempt)),
-      );
-  }
-  throw last ?? new Error("Food database request failed.");
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Accept-Language": [languageCode, "en"].filter(Boolean).join(","),
+  };
+  // Browsers control User-Agent themselves; native fetch permits the
+  // identifying header requested by Open Food Facts.
+  if (Platform.OS !== "web")
+    headers["User-Agent"] = "HabHub/1.0 (https://habhub.expo.app)";
+  return requestFoodDatabase(url, { attempts, headers });
 }
 
 export async function foodByBarcode(barcode: string) {
-  const code = barcode.replace(/\D/g, "");
+  const code = normalizeFoodBarcodeInput(barcode);
   if (!code) return null;
-  const data = await request(`${API}/api/v3/product/${encodeURIComponent(code)}.json?fields=${FIELDS}`);
+  const data = await requestOpenFoodFactsBarcode(API, code, FIELDS, request);
+  if (!data) return null;
   return data.product ? parseProduct(data.product as RawProduct) : null;
 }
 

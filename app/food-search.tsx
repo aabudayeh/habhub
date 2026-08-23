@@ -94,6 +94,8 @@ function FoodSearchContent({
   const scrollRef = useRef<ScrollView>(null);
   const searchedInitially = useRef(false);
   const searchSequence = useRef(0);
+  const barcodeLookupSequence = useRef(0);
+  const barcodeScanLocked = useRef(false);
   const recentFoodLabels = useMemo(() => {
     const seen = new Set<string>();
     return state.entries
@@ -182,23 +184,41 @@ function FoodSearchContent({
   }
 
   async function lookupBarcode(code: string) {
+    const normalized = normalizeFoodBarcodeInput(code);
+    if (!normalized) {
+      setError("Enter the 8, 12, 13, or 14 digit number printed under the barcode.");
+      return;
+    }
+    const sequence = ++barcodeLookupSequence.current;
     setScanned(true);
     setLoading(true);
     setError(null);
     try {
-      const product = tutorialSandbox ? null : await foodByBarcode(code);
+      const product = tutorialSandbox ? null : await foodByBarcode(normalized);
+      if (sequence !== barcodeLookupSequence.current) return;
       if (product) choose(product);
       else
         setError(
-          "That barcode is not in Open Food Facts. You can enter it manually.",
+          "No usable nutrition was found for that barcode. You can enter it manually.",
         );
     } catch (reason) {
+      if (sequence !== barcodeLookupSequence.current) return;
       setError(
         reason instanceof Error ? reason.message : "Food lookup failed.",
       );
     } finally {
-      setLoading(false);
+      if (sequence === barcodeLookupSequence.current) setLoading(false);
     }
+  }
+
+  function handleScannedBarcode(value: string) {
+    if (barcodeScanLocked.current) return;
+    const barcode = normalizeFoodBarcodeInput(value);
+    if (!barcode) return;
+    // Camera callbacks can fire again before React commits setScanned(true).
+    // Lock synchronously so a later decode cannot overwrite a valid result.
+    barcodeScanLocked.current = true;
+    void lookupBarcode(barcode);
   }
 
   function lookupManualBarcode() {
@@ -208,6 +228,7 @@ function FoodSearchContent({
       return;
     }
     setManualBarcode(barcode);
+    barcodeScanLocked.current = true;
     void lookupBarcode(barcode);
   }
 
@@ -374,7 +395,7 @@ function FoodSearchContent({
                 style={styles.camera}
                 active={!scanned}
                 retryToken={cameraRetryToken}
-                onBarcodeScanned={(data) => void lookupBarcode(data)}
+                onBarcodeScanned={handleScannedBarcode}
                 onStatusChange={(status, message) =>
                   setCameraStatus({ status, message })
                 }
@@ -403,6 +424,8 @@ function FoodSearchContent({
                     label="Scan another"
                     variant="secondary"
                     onPress={() => {
+                      barcodeLookupSequence.current += 1;
+                      barcodeScanLocked.current = false;
                       setScanned(false);
                       setError(null);
                     }}

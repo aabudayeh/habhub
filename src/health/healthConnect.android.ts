@@ -48,8 +48,6 @@ const androidPhoneSteps = NativeModules.HabHubAndroid as
 const LOCAL_PHONE_STEP_READ_TIMEOUT_MS = 1_500;
 const CURRENT_DEVICE_ORIGIN_TIMEOUT_MS = 1_500;
 const STEP_ORIGIN_DISCOVERY_RETRY_MS = 10 * 60_000;
-const SAMSUNG_HEALTH_STEP_ORIGIN = "com.sec.android.app.shealth";
-const SAMSUNG_HEALTH_STEP_SOURCE = "Samsung Health";
 const LOCAL_PHONE_STEP_SOURCE = "Android phone (Physical Activity)";
 const HEALTH_CONNECT_PHONE_STEP_SOURCE = "Android phone (Health Connect)";
 let rememberedCurrentDeviceStepOrigins = ["android"];
@@ -952,13 +950,12 @@ export const healthConnectAdapter: HealthAdapter = {
               startTime: stepRange.from.toISOString(),
               endTime: stepRange.to.toISOString(),
             };
-            // Completed days use Health Connect's unfiltered aggregate so its
-            // Activity priority and overlap removal remain authoritative.
-            // For today, Samsung Health's own origin is read as one aggregate:
-            // that is its exported, already-reconciled phone-and-watch total,
-            // not a sum with the phone sensor. If Samsung has no current data,
-            // use the unfiltered priority-aware aggregate. Android on-device
-            // and Local Recording totals are zero-read fallbacks only.
+            // Completed days and today use Health Connect's unfiltered
+            // aggregate so its Activity priority and overlap removal remain
+            // authoritative across phone, watch, and app writers. Filtering
+            // to Samsung's package returns only records written by that app;
+            // it is not Samsung Health's reconciled UI total. Android
+            // on-device and Local Recording totals are zero-read fallbacks.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
@@ -970,7 +967,6 @@ export const healthConnectAdapter: HealthAdapter = {
               const [
                 unfilteredGroups,
                 currentAggregate,
-                samsungCurrentAggregate,
                 localPhoneSlice,
                 discoveredDeviceOrigins,
               ] =
@@ -994,17 +990,6 @@ export const healthConnectAdapter: HealthAdapter = {
                           endTime: currentEnd!.toISOString(),
                         },
                       })
-                    : Promise.resolve(null),
-                  includesCurrentDay
-                    ? aggregateRecord({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          operator: "between",
-                          startTime: currentStart!.toISOString(),
-                          endTime: currentEnd!.toISOString(),
-                        },
-                        dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
-                      }).catch(() => null)
                     : Promise.resolve(null),
                   includesCurrentDay
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
@@ -1070,7 +1055,6 @@ export const healthConnectAdapter: HealthAdapter = {
                       (group) => group.result.dataOrigins ?? [],
                     ),
                     ...(currentAggregate?.dataOrigins ?? []),
-                    ...(samsungCurrentAggregate?.dataOrigins ?? []),
                     ...(androidDeviceAggregate?.dataOrigins ?? []),
                   ],
                 ),
@@ -1155,7 +1139,6 @@ export const healthConnectAdapter: HealthAdapter = {
                 authoritativeCurrentCount,
                 disjointPhoneCandidate,
                 Number(androidDeviceAggregate?.COUNT_TOTAL ?? 0),
-                Number(samsungCurrentAggregate?.COUNT_TOTAL ?? 0),
               );
               const currentCount = finalImportedStepTotal(
                 reconciledCurrent.count,
@@ -1168,13 +1151,11 @@ export const healthConnectAdapter: HealthAdapter = {
                   ).filter(Boolean),
                 ),
               ].sort((a, b) => a.localeCompare(b));
-              const liveCurrentSource = reconciledCurrent.usedSamsungHealth
-                ? SAMSUNG_HEALTH_STEP_SOURCE
-                : reconciledCurrent.usedLocalPhone
-                  ? LOCAL_PHONE_STEP_SOURCE
-                  : reconciledCurrent.usedAndroidDevice
-                    ? HEALTH_CONNECT_PHONE_STEP_SOURCE
-                    : undefined;
+              const liveCurrentSource = reconciledCurrent.usedLocalPhone
+                ? LOCAL_PHONE_STEP_SOURCE
+                : reconciledCurrent.usedAndroidDevice
+                  ? HEALTH_CONNECT_PHONE_STEP_SOURCE
+                  : undefined;
               const currentRecord =
                 currentCount > 0
                   ? ({

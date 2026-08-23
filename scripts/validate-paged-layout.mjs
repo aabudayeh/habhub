@@ -31,13 +31,14 @@ assert.equal(pageIndexFromOffset(100, 0, 4), 0);
 assert.equal(configuredPageCapacity(undefined, 4, 2, 6), 4);
 assert.equal(configuredPageCapacity(8, 4, 2, 6), 6);
 assert.equal(configuredPageCapacity(0, 4, 2, 6), 2);
-assert.equal(configuredPageCapacity(2.9, 1, 1, 2), 2);
+assert.equal(configuredPageCapacity(4.9, 1, 1, 4), 4);
 assert.equal(todayPageCapacity(568, false), 2);
 assert.equal(todayPageCapacity(667, false), 4);
 assert.equal(todayPageCapacity(900, false), 6);
 assert.equal(leaderboardPageCapacity(720, 2, true, false), 2);
 assert.equal(leaderboardPageCapacity(720, 4, true, false), 1);
 assert.equal(leaderboardPageCapacity(900, 4, true, false), 2);
+assert.equal(leaderboardPageCapacity(1200, 1, false, false), 4);
 assert.equal(leaderboardPageCapacity(900, 2, false, true), 1);
 
 const types = source("src/types.ts");
@@ -46,6 +47,17 @@ const settings = source("app/display-settings.tsx");
 const today = source("app/(tabs)/index.tsx");
 const leaderboard = source("app/(tabs)/group.tsx");
 const pager = source("src/components/HorizontalPager.tsx");
+
+assert.match(
+  today,
+  /onMove=\{\(target\)[\s\S]{0,300}setDraggingMetricId\(null\)[\s\S]{0,300}reorderMetric/,
+  "Today must release the pager before a cross-page reorder reparents its card",
+);
+assert.equal(
+  (leaderboard.match(/onMove=\{\(target\)[\s\S]{0,300}setDraggingCardId\(null\)[\s\S]{0,220}move\(id, target\)/g) ?? []).length,
+  2,
+  "Leaderboard must release the pager for challenge and tracker cross-page moves",
+);
 
 for (const setting of ["todayLayoutMode", "leaderboardLayoutMode"]) {
   assert.match(types, new RegExp(`${setting}\\?: DashboardLayoutMode`));
@@ -63,7 +75,9 @@ assert.match(settings, /state\.settings\.leaderboardCardsPerPage \?\? 2/);
 assert.match(settings, /label: "Scrolling list"/);
 assert.match(settings, /label: "Swipeable pages"/);
 assert.match(today, /\(state\.settings\.todayLayoutMode \?\? "pages"\) === "pages"/);
-assert.match(today, /todayUsesPages && !editing/);
+assert.doesNotMatch(today, /paged=\{todayUsesPages && !editing\}/);
+assert.match(today, /paged=\{todayUsesPages\}/);
+assert.match(today, /scrollEnabled=\{!draggingMetricId\}/);
 assert.match(today, /configuredPageCapacity\(\s*state\.settings\.todayTilesPerPage/);
 assert.match(today, /Math\.min\(fittingPageCapacity, preferredPageCapacity\)/);
 assert.match(today, /state\.settings\.todosBelowGoals === false/);
@@ -76,7 +90,9 @@ assert.match(
   /\(state\.settings\.leaderboardLayoutMode \?\? "pages"\) === "pages"/,
 );
 assert.match(leaderboard, /!leaderboardUsesPages &&\s*!editing/);
-assert.match(leaderboard, /!leaderboardUsesPages \|\| editing/);
+assert.match(leaderboard, /if \(!leaderboardUsesPages\) return rankingCards/);
+assert.match(leaderboard, /scrollEnabled=\{!draggingCardId\}/);
+assert.match(settings, /\[1, 2, 3, 4\]\.map/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);
 assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
 assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);

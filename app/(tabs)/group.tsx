@@ -684,7 +684,7 @@ function LeaderboardScreen() {
       state.settings.leaderboardCardsPerPage,
       2,
       1,
-      2,
+      4,
     );
     return Math.min(fittingCapacity, preferredCapacity);
   }, [
@@ -1247,7 +1247,12 @@ function LeaderboardScreen() {
                 index={cardIndex}
                 count={displayedSelected.length}
                 colors={colors}
-                onMove={(target) => move(id, target)}
+                onMove={(target) => {
+                  // Cross-page moves can reparent this card before the drag
+                  // spring completes, so never leave the pager disabled.
+                  setDraggingCardId(null);
+                  move(id, target);
+                }}
                 onSendBelow={() => move(id, displayedSelected.length - 1)}
                 onRemove={manageable ? () => confirmDeleteChallenge(challenge) : undefined}
                 onEdit={editable ? () => openChallengeEditor(challenge) : undefined}
@@ -1290,7 +1295,12 @@ function LeaderboardScreen() {
               index={cardIndex}
               count={displayedSelected.length}
               colors={colors}
-              onMove={(target) => move(id, target)}
+              onMove={(target) => {
+                // Cross-page moves can reparent this card before the drag
+                // spring completes, so never leave the pager disabled.
+                setDraggingCardId(null);
+                move(id, target);
+              }}
               onSendBelow={() => move(id, displayedSelected.length - 1)}
               onRemove={() => saveSelection(selected.filter((item) => item !== id))}
               pinned={pinnedIds.includes(id)}
@@ -1577,7 +1587,7 @@ function LeaderboardScreen() {
           </ReorderItem>
         );
         });
-        if (!leaderboardUsesPages || editing) return rankingCards;
+        if (!leaderboardUsesPages) return rankingCards;
         const rankingPages = chunkIntoPages(
           rankingCards,
           leaderboardPageSize,
@@ -1591,6 +1601,7 @@ function LeaderboardScreen() {
             accessibilityLabel="Leaderboard"
             testID="leaderboard-card-pages"
             pages={rankingPages}
+            scrollEnabled={!draggingCardId}
             requestedPage={requestedLeaderboardPage}
             onPageChange={(page) => {
               if (page === requestedLeaderboardPage)

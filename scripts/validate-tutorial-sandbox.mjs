@@ -202,7 +202,7 @@ requireTokens("src/food/openFoodFacts.ts", [
   "if (options.offlineOnly) return rankFoods(OFFLINE, term, options)",
 ]);
 requireTokens("app/food-search.tsx", [
-  "tutorialSandbox ? null : await foodByBarcode(code)",
+  "tutorialSandbox ? null : await foodByBarcode(normalized)",
   'if (!tutorialSandbox) setMode("scan")',
 ]);
 

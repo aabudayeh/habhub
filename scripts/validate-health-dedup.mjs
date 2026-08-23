@@ -31,7 +31,10 @@ import {
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
-import { reconcileGoogleHealthNativeMirrors } from "../src/domain/health.ts";
+import {
+  mapHealthRecordsToEntries,
+  reconcileGoogleHealthNativeMirrors,
+} from "../src/domain/health.ts";
 import {
   HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
   HEALTH_STEPS_IMPORT_VERSION,
@@ -132,7 +135,6 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(5_000, 5_140),
   {
     count: 5_000,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -142,31 +144,28 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140),
   {
     count: 6_200,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
   "the cross-device Health Connect total must retain watch-contributed steps",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(6_200, 5_140, 5_140, 0),
+  reconcileCurrentDayStepTotal(6_200, 5_140, 5_140),
   {
     count: 6_200,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
-  "an empty Samsung export must fall back to the priority-aware Health Connect total",
+  "a positive priority-aware aggregate must outrank a smaller phone-only source",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(6_200, 5_140, 5_140, null),
+  reconcileCurrentDayStepTotal(6_000, 3_421, 3_421),
   {
-    count: 6_200,
-    usedSamsungHealth: false,
+    count: 6_000,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
-  "a failed Samsung-origin query must fall back without replacing the cross-device total",
+  "the cross-device total must retain watch steps instead of falling to the phone's 3,421 steps",
 );
 assert.equal(
   reconcileCurrentDayStepTotal(5_000, 5_140).count,
@@ -177,37 +176,24 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
   {
     count: 27,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
   "a positive priority-aware aggregate must not be replaced by a phone-only origin",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_167, 2_167, 2_167, 2_958),
+  reconcileCurrentDayStepTotal(3_072, 2_887, 2_887),
   {
-    count: 2_958,
-    usedSamsungHealth: true,
+    count: 3_072,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
-  "Samsung's exported combined phone-and-watch total must own the current day when available",
-);
-assert.deepEqual(
-  reconcileCurrentDayStepTotal(3_072, 3_072, 3_072, 2_887),
-  {
-    count: 2_887,
-    usedSamsungHealth: true,
-    usedLocalPhone: false,
-    usedAndroidDevice: false,
-  },
-  "Samsung's reconciled total may legitimately correct a larger raw phone count",
+  "a source-specific candidate must not override Health Connect's deduplicated result",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(0, null, 2_958),
   {
     count: 2_958,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: true,
   },
@@ -227,7 +213,6 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(0, null, 54),
   {
     count: 54,
-    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: true,
   },
@@ -237,11 +222,104 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(0, 54, null),
   {
     count: 54,
-    usedSamsungHealth: false,
     usedLocalPhone: true,
     usedAndroidDevice: false,
   },
   "Local Recording may recover an empty unfiltered read",
+);
+const workoutFallbackMetrics = [
+  {
+    id: "steps",
+    name: "Steps",
+    dataType: "number",
+    unit: "steps",
+    aggregation: "latest",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "steps", field: "value" },
+  },
+  {
+    id: "exercise",
+    name: "Active energy",
+    dataType: "number",
+    unit: "kcal",
+    aggregation: "sum",
+    defaultVisibility: "group",
+    stepFallback: true,
+    healthMapping: { dataType: "active_energy", field: "value" },
+  },
+  {
+    id: "workout",
+    name: "Workout",
+    dataType: "boolean",
+    unit: "",
+    aggregation: "sum",
+    defaultVisibility: "group",
+    healthMapping: { dataType: "workouts", field: "value" },
+  },
+  {
+    id: "workout_duration",
+    name: "Workout duration",
+    dataType: "number",
+    unit: "min",
+    aggregation: "sum",
+    defaultVisibility: "group",
+    stepFallback: true,
+    healthMapping: { dataType: "workouts", field: "duration_minutes" },
+  },
+  {
+    id: "workout_distance",
+    name: "Workout distance",
+    dataType: "number",
+    unit: "km",
+    aggregation: "sum",
+    defaultVisibility: "group",
+    stepFallback: true,
+    healthMapping: { dataType: "workouts", field: "distance_km" },
+  },
+];
+const currentDayWithWalkingWorkout = mapHealthRecordsToEntries(
+  [
+    record({
+      id: "aggregate:steps:2026-08-13",
+      localDate: "2026-08-13",
+      value: 6_000,
+    }),
+    {
+      id: "walking-session",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-13T08:00:00.000Z",
+      endTime: "2026-08-13T08:30:00.000Z",
+      localDate: "2026-08-13",
+      value: 30,
+      unit: "minutes",
+      origin: "com.sec.android.app.shealth",
+      label: "Walking",
+      measurements: { durationMinutes: 30, distanceKm: 2 },
+    },
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+);
+assert.equal(
+  currentDayWithWalkingWorkout.find((entry) => entry.metricId === "steps")
+    ?.value,
+  6_000,
+  "walking/running workout coverage must never be subtracted from the displayed Steps total",
+);
+const derivedWalkingFallbacks = currentDayWithWalkingWorkout.filter((entry) =>
+  entry.sourceRecordId?.startsWith("step-fallback:"),
+);
+assert.deepEqual(
+  derivedWalkingFallbacks.map((entry) => entry.metricId).sort(),
+  ["exercise", "workout_distance", "workout_duration"],
+  "only active energy, duration, and distance may use workout-uncovered Steps",
+);
+assert.ok(
+  derivedWalkingFallbacks.every((entry) => Number(entry.value) > 0),
+  "the workout-uncovered fixture must exercise every derived fallback branch",
 );
 const authoritativeAggregateWithDisabledContributor =
   deduplicateHealthImportRecords(
@@ -1450,7 +1528,7 @@ assert.match(
 assert.match(
   androidHealthSource,
   /Promise\.all\(\[[\s\S]{0,3000}aggregateRecord\(\{[\s\S]{0,1200}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
-  "the current-day cross-device, Samsung, and Physical Activity reads must run concurrently",
+  "the current-day cross-device and Physical Activity reads must run concurrently",
 );
 assert.match(
   androidHealthSource,
@@ -1512,20 +1590,15 @@ assert.match(
   /!hasCurrentDeviceStepSpn\(androidDeviceOrigins\)[\s\S]{0,900}discoverCurrentDeviceStepOriginsFromRaw/,
   "raw SPN discovery must run only when cheaper framework and aggregate discovery found no scoped phone origin",
 );
-assert.match(
-  androidHealthSource,
-  /SAMSUNG_HEALTH_STEP_ORIGIN = "com\.sec\.android\.app\.shealth"[\s\S]{0,50000}samsungCurrentAggregate[\s\S]{0,1800}dataOriginFilter: \[SAMSUNG_HEALTH_STEP_ORIGIN\][\s\S]{0,8000}reconcileCurrentDayStepTotal\([\s\S]{0,300}samsungCurrentAggregate/,
-  "today must read Samsung's exported phone-and-watch aggregate as one non-additive candidate",
-);
 assert.doesNotMatch(
   androidHealthSource,
-  /stepSlices\.historical[\s\S]{0,900}dataOriginFilter:\s*\[SAMSUNG_HEALTH_STEP_ORIGIN\]/,
-  "completed days must retain the established unfiltered Health Connect history",
+  /SAMSUNG_HEALTH_STEP_ORIGIN|samsungCurrentAggregate|usedSamsungHealth/,
+  "a Samsung-package-only aggregate must never be mistaken for Samsung Health's reconciled phone-and-watch UI total",
 );
 assert.match(
   androidHealthSource,
-  /usedSamsungHealth[\s\S]{0,160}SAMSUNG_HEALTH_STEP_SOURCE/,
-  "a Samsung-owned current-day total must expose truthful source attribution",
+  /const authoritativeCurrentCount = Number\([\s\S]{0,120}currentAggregate\?\.COUNT_TOTAL[\s\S]{0,9000}reconcileCurrentDayStepTotal\(\s*authoritativeCurrentCount,[\s\S]{0,180}disjointPhoneCandidate,[\s\S]{0,180}androidDeviceAggregate/,
+  "today must pass the unfiltered priority-aware aggregate as the authoritative candidate",
 );
 assert.match(
   androidHealthSource,
@@ -2039,5 +2112,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: Samsung-aware live Steps, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: unfiltered live Steps, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

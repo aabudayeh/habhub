@@ -601,7 +601,6 @@ function RootNavigator() {
       !state.settings.notifications.pushEnabled ||
       tutorialActive ||
       !auth.user?.id ||
-      auth.session?.user.id !== auth.user.id ||
       state.currentUserId !== auth.user.id
     )
       return;
@@ -650,7 +649,6 @@ function RootNavigator() {
       document.removeEventListener("visibilitychange", retryNow);
     };
   }, [
-    auth.session?.user.id,
     auth.user?.id,
     hydrated,
     network.isConnected,

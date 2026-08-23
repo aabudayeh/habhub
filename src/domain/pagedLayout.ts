@@ -53,9 +53,9 @@ export function todayPageCapacity(viewportHeight: number, compact: boolean) {
 }
 
 /**
- * Packs two Leaderboard cards only when their estimated collapsed height fits
- * the useful viewport. Expanded member calendars deliberately use one card so
- * the page never hides a second card below the fold.
+ * Packs up to four Leaderboard cards when their estimated collapsed heights
+ * fit the useful viewport. Expanded member calendars deliberately use one card
+ * so the page never hides another card below the fold.
  */
 export function leaderboardPageCapacity(
   viewportHeight: number,
@@ -69,5 +69,8 @@ export function leaderboardPageCapacity(
   const reservedHeight = dateNavigatorExpanded ? 285 : 220;
   const availableHeight = Math.max(180, height - reservedHeight);
   const estimatedCardHeight = 55 + members * 48;
-  return availableHeight >= estimatedCardHeight * 2 + 8 ? 2 : 1;
+  return Math.max(
+    1,
+    Math.min(4, Math.floor((availableHeight + 8) / (estimatedCardHeight + 8))),
+  );
 }

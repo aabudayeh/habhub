@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  isIosWebDevice,
   isStandaloneIosWebApp,
   resolveScreenBottomPadding,
   resolveTabBarBottomInset,
@@ -49,6 +50,14 @@ assert.match(
 
 assert.match(fastingClock, /addEventListener\("pointerup", finishDrag, true\)/);
 assert.match(fastingClock, /addEventListener\("pointercancel", finishDrag, true\)/);
+assert.equal(
+  isIosWebDevice({
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+    platform: "iPhone",
+    maxTouchPoints: 5,
+  }),
+  true,
+);
 assert.equal(
   (fastingClock.match(/onPanResponderRelease: finishDrag/g) ?? []).length,
   2,
@@ -112,22 +121,30 @@ const standaloneIos = {
   displayModeStandalone: true,
 };
 assert.equal(
-  resolveScreenBottomPadding(120, undefined, 0, 34, true, standaloneIos),
+  resolveScreenBottomPadding(120, undefined, undefined, 34, true, standaloneIos),
   0,
   "standalone iOS tab scenes must not repeat navigator/tab safe-area clearance",
 );
 assert.equal(
-  resolveScreenBottomPadding(120, 16, 0, 34, true, standaloneIos),
-  16,
-  "explicit tab-page padding remains intentional",
+  resolveScreenBottomPadding(120, 16, undefined, 34, true, standaloneIos),
+  0,
+  "iOS Web tab scenes must not leave an explicit gutter above navigation",
 );
 assert.equal(
-  resolveScreenBottomPadding(120, undefined, 0, 34, false, standaloneIos),
+  resolveScreenBottomPadding(120, 16, 14, 34, true, {
+    ...standaloneIos,
+    displayModeStandalone: false,
+  }),
+  0,
+  "iOS Web tab clearance must not depend on unreliable standalone reporting",
+);
+assert.equal(
+  resolveScreenBottomPadding(120, undefined, undefined, 34, false, standaloneIos),
   154,
   "standalone non-tab screens retain full bottom clearance",
 );
 assert.equal(
-  resolveScreenBottomPadding(120, undefined, 0, 34, true, {
+  resolveScreenBottomPadding(120, undefined, undefined, 34, true, {
     ...standaloneIos,
     userAgent: "Mozilla/5.0 (Linux; Android 15)",
     platform: "Linux armv8l",
@@ -135,11 +152,25 @@ assert.equal(
   154,
   "other standalone platforms remain unchanged",
 );
+assert.equal(
+  resolveScreenBottomPadding(120, undefined, 14, 0, true, {
+    ...standaloneIos,
+    userAgent: "Mozilla/5.0 (Linux; Android 15)",
+    platform: "Linux armv8l",
+  }),
+  120,
+  "non-iOS pages retain the navigator-safe minimum when their gutter is smaller",
+);
 assert.match(tabs, /height: 55 \+ tabBarBottomInset/);
 assert.match(tabs, /paddingBottom: Math\.max\(1, tabBarBottomInset\)/);
 assert.match(screen, /resolveScreenBottomPadding\(/);
+assert.match(
+  screen,
+  /contentContainerStyle,[\s\S]{0,500}removeIosWebTabGutter && \{ paddingBottom: 0 \}/,
+  "iOS Web tab padding removal must be the final style override",
+);
 assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
-assert.match(today, /standaloneIosWebApp && styles\.standaloneIosPage/);
+assert.match(today, /iosWebDevice && styles\.standaloneIosPage/);
 assert.match(today, /standaloneIosPage: \{ paddingBottom: 0 \}/);
 
 assert.match(metricEditor, /fixedBottom=\{/);

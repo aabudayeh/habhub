@@ -113,7 +113,7 @@ import {
   todayPageCapacity,
 } from "@/src/domain/pagedLayout";
 import {
-  isStandaloneIosWebApp,
+  isIosWebDevice,
   WebDisplayEnvironment,
 } from "@/src/domain/webSafeArea";
 import { metricVisualization } from "@/src/domain/visualization";
@@ -184,7 +184,7 @@ function Today() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
-  const standaloneIosWebApp = useMemo(() => {
+  const iosWebDevice = useMemo(() => {
     if (
       Platform.OS !== "web" ||
       typeof window === "undefined" ||
@@ -201,7 +201,7 @@ function Today() {
         window.matchMedia?.("(display-mode: standalone)").matches === true,
       navigatorStandalone: browserNavigator.standalone === true,
     };
-    return isStandaloneIosWebApp(environment);
+    return isIosWebDevice(environment);
   }, []);
   const locale = useLocale();
   const { t } = useLocalization();
@@ -928,7 +928,7 @@ function Today() {
     6,
   );
   const pageCapacity = Math.min(fittingPageCapacity, preferredPageCapacity);
-  const todayPageCount = todayUsesPages && !editing
+  const todayPageCount = todayUsesPages
     ? Math.ceil(primary.length / pageCapacity)
     : 0;
   const tileHeight = Math.max(
@@ -937,7 +937,7 @@ function Today() {
       88,
       (height - 345) /
         Math.max(
-          todayUsesPages && !editing
+          todayUsesPages
             ? pageCapacity
             : Math.min(primary.length, tileLimit),
           1,
@@ -1028,7 +1028,7 @@ function Today() {
         }
         contentContainerStyle={[
           styles.page,
-          standaloneIosWebApp && styles.standaloneIosPage,
+          iosWebDevice && styles.standaloneIosPage,
         ]}
         showsVerticalScrollIndicator={false}
         onScroll={(event) => {
@@ -1471,7 +1471,8 @@ function Today() {
         <TodayTrackerPageFlow
           items={primary}
           pageSize={pageCapacity}
-          paged={todayUsesPages && !editing}
+          paged={todayUsesPages}
+          scrollEnabled={!draggingMetricId}
           onPageChange={setTodayPageIndex}
           renderItem={(item, index) => (
             <ReorderItem
@@ -1505,6 +1506,9 @@ function Today() {
                 onEdit={beginEditing}
                 onMove={(target) =>
                   {
+                    // A cross-page reorder can unmount this row before its
+                    // release spring finishes, so release the pager here too.
+                    setDraggingMetricId(null);
                     if (target === index) return;
                     reorderMetric(item.id, visible[target]?.order ?? target);
                     if (tutorialSandbox)
@@ -2101,12 +2105,14 @@ function TodayTrackerPageFlow({
   items,
   pageSize,
   paged,
+  scrollEnabled,
   onPageChange,
   renderItem,
 }: {
   items: MetricDefinition[];
   pageSize: number;
   paged: boolean;
+  scrollEnabled: boolean;
   onPageChange?: (page: number) => void;
   renderItem: (item: MetricDefinition, index: number) => React.ReactElement;
 }) {
@@ -2117,6 +2123,7 @@ function TodayTrackerPageFlow({
       accessibilityLabel="Today"
       testID="today-tracker-pages"
       onPageChange={onPageChange}
+      scrollEnabled={scrollEnabled}
       showPageDots={false}
       pages={chunkIntoPages(rows, pageSize).map((page, index) => (
         <View key={index} style={styles.list}>{page}</View>
