@@ -4,12 +4,11 @@ export const HEALTH_HISTORY_DAYS = 730;
 /** Keep first-run onboarding responsive; deeper history is an explicit repair. */
 export const HEALTH_INITIAL_DAYS = 30;
 /**
- * Version 3 repairs completed-day rows from the short-lived phone-only history
- * override back into Health Connect's priority-aware historical aggregates and
- * applies the final one-step calibration. Today's phone-origin authority does
- * not replace completed-day history.
+ * Version 4 removes the short-lived one-step display calibration and repairs
+ * every imported day to the exact Health Connect aggregate. Completed-day
+ * history otherwise retains the priority-aware version 3 behavior.
  */
-export const HEALTH_STEPS_IMPORT_VERSION = 3;
+export const HEALTH_STEPS_IMPORT_VERSION = 4;
 /**
  * One automatic, post-hydration request per native device/account/version.
  * Version 3 gives existing accounts one contextual opportunity to grant the

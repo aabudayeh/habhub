@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import React, {
   useCallback,
   useDeferredValue,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -57,6 +58,7 @@ import { palette, useAppColors } from "@/src/theme";
 const SEGMENTS = 32;
 const FLANK_RING_SIZE = 68;
 const RING_SIZE = FLANK_RING_SIZE;
+const TRACKER_DOUBLE_TAP_MS = 210;
 
 function ProgressRing({
   progress,
@@ -108,11 +110,13 @@ function ProgressRing({
 
 function GoalOrbit({
   anchor,
+  bloodPressureComposite,
   flank = false,
   period,
   rollup,
 }: {
   anchor: string;
+  bloodPressureComposite: boolean;
   flank?: boolean;
   period: LeaderboardPeriod;
   rollup: StatusMetricRollup;
@@ -121,15 +125,74 @@ function GoalOrbit({
   const { language } = useLocalization();
   const { metric, opportunities, completed, progress } = rollup;
   const met = opportunities > 0 && completed === opportunities;
+  const lastTapRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canLog =
+    metric.dataType !== "calculated" &&
+    !metric.fastingSettings &&
+    metric.id !== "screen_time" &&
+    metric.id !== "blood_pressure_diastolic" &&
+    !(metric.id === "pulse" && bloodPressureComposite) &&
+    (metric.manualEntry !== false || metric.id === "steps");
+  const openDetails = useCallback(() => {
+    router.navigate({
+      pathname: "/metric-detail",
+      params: { metric: metric.id, date: anchor, period },
+    } as never);
+  }, [anchor, metric.id, period]);
+  const openLog = useCallback(() => {
+    if (!canLog) {
+      openDetails();
+      return;
+    }
+    router.navigate({
+      pathname: "/log",
+      params: { metric: metric.id, date: anchor },
+    } as never);
+  }, [anchor, canLog, metric.id, openDetails]);
+  const handlePress = useCallback(() => {
+    if (!canLog) {
+      openDetails();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastTapRef.current <= TRACKER_DOUBLE_TAP_MS) {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = null;
+      lastTapRef.current = 0;
+      openLog();
+      return;
+    }
+    lastTapRef.current = now;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => {
+      tapTimerRef.current = null;
+      lastTapRef.current = 0;
+      openDetails();
+    }, TRACKER_DOUBLE_TAP_MS);
+  }, [canLog, openDetails, openLog]);
+  useEffect(
+    () => () => {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    },
+    [],
+  );
   return (
     <Pressable
       accessibilityRole="button"
-      onPress={() =>
-        router.navigate({
-          pathname: "/metric-detail",
-          params: { metric: metric.id, date: anchor, period },
-        } as never)
+      accessibilityLabel={localizeMetricName(language, metric)}
+      accessibilityHint={
+        canLog
+          ? "Tap once for details. Double tap to open this tracker's Log page."
+          : "Tap to open tracker details."
       }
+      accessibilityActions={
+        canLog ? [{ name: "log", label: "Open Log page" }] : undefined
+      }
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "log") openLog();
+      }}
+      onPress={handlePress}
       style={({ pressed }) => [
         styles.goal,
         flank && { width: FLANK_RING_SIZE },
@@ -258,6 +321,9 @@ export default function StatusPage() {
   );
   const member = state.group.members.find(
     (item) => item.id === state.currentUserId,
+  );
+  const bloodPressureComposite = state.metrics.some(
+    (metric) => metric.id === "blood_pressure_systolic",
   );
   const navigationDates = useMemo(
     () => periodDates(period, anchor, state.settings.weekStartsOn ?? 1),
@@ -470,6 +536,7 @@ export default function StatusPage() {
                     key={rollup.metric.id}
                     rollup={rollup}
                     anchor={anchor}
+                    bloodPressureComposite={bloodPressureComposite}
                     period={period}
                     flank
                   />
@@ -573,6 +640,7 @@ export default function StatusPage() {
                     key={rollup.metric.id}
                     rollup={rollup}
                     anchor={anchor}
+                    bloodPressureComposite={bloodPressureComposite}
                     period={period}
                     flank
                   />
@@ -712,6 +780,7 @@ export default function StatusPage() {
                   key={rollup.metric.id}
                   rollup={rollup}
                   anchor={anchor}
+                  bloodPressureComposite={bloodPressureComposite}
                   period={period}
                 />
               ))}

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   chunkIntoPages,
   clampPageIndex,
+  configuredPageCapacity,
   pageIndexFromOffset,
   leaderboardPageCapacity,
   todayPageCapacity,
@@ -27,9 +28,13 @@ assert.equal(clampPageIndex(7, 3), 2);
 assert.equal(pageIndexFromOffset(640, 320, 4), 2);
 assert.equal(pageIndexFromOffset(470, 320, 4), 1);
 assert.equal(pageIndexFromOffset(100, 0, 4), 0);
+assert.equal(configuredPageCapacity(undefined, 4, 2, 6), 4);
+assert.equal(configuredPageCapacity(8, 4, 2, 6), 6);
+assert.equal(configuredPageCapacity(0, 4, 2, 6), 2);
+assert.equal(configuredPageCapacity(2.9, 1, 1, 2), 2);
 assert.equal(todayPageCapacity(568, false), 2);
 assert.equal(todayPageCapacity(667, false), 4);
-assert.equal(todayPageCapacity(900, false), 5);
+assert.equal(todayPageCapacity(900, false), 6);
 assert.equal(leaderboardPageCapacity(720, 2, true, false), 2);
 assert.equal(leaderboardPageCapacity(720, 4, true, false), 1);
 assert.equal(leaderboardPageCapacity(900, 4, true, false), 2);
@@ -46,12 +51,23 @@ for (const setting of ["todayLayoutMode", "leaderboardLayoutMode"]) {
   assert.match(types, new RegExp(`${setting}\\?: DashboardLayoutMode`));
   assert.match(seed, new RegExp(`${setting}: "pages"`));
 }
+assert.match(types, /todayTilesPerPage\?: number/);
+assert.match(types, /leaderboardCardsPerPage\?: number/);
+assert.match(seed, /todayTilesPerPage: 4/);
+assert.match(seed, /leaderboardCardsPerPage: 2/);
+assert.match(seed, /todosBelowGoals: true/);
 assert.match(settings, /title="Today layout"/);
 assert.match(settings, /title="Leaderboard layout"/);
+assert.match(settings, /state\.settings\.todayTilesPerPage \?\? 4/);
+assert.match(settings, /state\.settings\.leaderboardCardsPerPage \?\? 2/);
 assert.match(settings, /label: "Scrolling list"/);
 assert.match(settings, /label: "Swipeable pages"/);
 assert.match(today, /\(state\.settings\.todayLayoutMode \?\? "pages"\) === "pages"/);
 assert.match(today, /todayUsesPages && !editing/);
+assert.match(today, /configuredPageCapacity\(\s*state\.settings\.todayTilesPerPage/);
+assert.match(today, /Math\.min\(fittingPageCapacity, preferredPageCapacity\)/);
+assert.match(today, /state\.settings\.todosBelowGoals === false/);
+assert.match(today, /state\.settings\.todosBelowGoals !== false/);
 assert.match(today, /!todayUsesPages &&\s*!editing/);
 assert.match(today, /todayUsesPages\s*\? \[\]/);
 assert.match(today, /testID="today-tracker-pages"/);
@@ -63,10 +79,13 @@ assert.match(leaderboard, /!leaderboardUsesPages &&\s*!editing/);
 assert.match(leaderboard, /!leaderboardUsesPages \|\| editing/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);
 assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
+assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);
 assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
 assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
 assert.match(today, /onPageChange=\{setTodayPageIndex\}/);
+assert.match(today, /showPageDots=\{false\}/);
 assert.match(pager, /pagingEnabled/);
+assert.match(pager, /showPageDots && pages\.length > 1/);
 assert.match(pager, /accessibilityRole="tablist"/);
 assert.match(pager, /Page \{page\} of \{total\}/);
 assert.match(pager, /const activePageRef = useRef\(0\)/);

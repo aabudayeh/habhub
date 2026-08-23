@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   isStandaloneIosWebApp,
+  resolveScreenBottomPadding,
   resolveTabBarBottomInset,
 } from "../src/domain/webSafeArea.ts";
 
@@ -17,6 +18,10 @@ const metricEditor = source("app/metric-editor.tsx");
 const pager = source("src/components/HorizontalPager.tsx");
 const fastingClock = source("src/components/FastingClockEditor.tsx");
 const tabs = source("app/(tabs)/_layout.tsx");
+const screen = source("src/components/ui.tsx");
+const today = source("app/(tabs)/index.tsx");
+const status = source("app/(tabs)/status.tsx");
+const log = source("app/(tabs)/log.tsx");
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /navigationApi\.addEventListener\("navigate", navigate\)/);
@@ -100,9 +105,69 @@ assert.equal(
   34,
 );
 assert.equal(resolveTabBarBottomInset(34), 34);
+const standaloneIos = {
+  userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+  platform: "iPhone",
+  maxTouchPoints: 5,
+  displayModeStandalone: true,
+};
+assert.equal(
+  resolveScreenBottomPadding(120, undefined, 0, 34, true, standaloneIos),
+  0,
+  "standalone iOS tab scenes must not repeat navigator/tab safe-area clearance",
+);
+assert.equal(
+  resolveScreenBottomPadding(120, 16, 0, 34, true, standaloneIos),
+  16,
+  "explicit tab-page padding remains intentional",
+);
+assert.equal(
+  resolveScreenBottomPadding(120, undefined, 0, 34, false, standaloneIos),
+  154,
+  "standalone non-tab screens retain full bottom clearance",
+);
+assert.equal(
+  resolveScreenBottomPadding(120, undefined, 0, 34, true, {
+    ...standaloneIos,
+    userAgent: "Mozilla/5.0 (Linux; Android 15)",
+    platform: "Linux armv8l",
+  }),
+  154,
+  "other standalone platforms remain unchanged",
+);
 assert.match(tabs, /height: 55 \+ tabBarBottomInset/);
 assert.match(tabs, /paddingBottom: Math\.max\(1, tabBarBottomInset\)/);
+assert.match(screen, /resolveScreenBottomPadding\(/);
+assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
+assert.match(today, /standaloneIosWebApp && styles\.standaloneIosPage/);
+assert.match(today, /standaloneIosPage: \{ paddingBottom: 0 \}/);
+
+assert.match(metricEditor, /fixedBottom=\{/);
+assert.match(metricEditor, /label=\{saveActionLabel\}/);
+assert.match(screen, /fixedBottom\?: ReactNode/);
+assert.match(screen, /styles\.fixedBottom/);
+
+for (const trackerScreen of [today, status]) {
+  assert.match(trackerScreen, /const TRACKER_DOUBLE_TAP_MS = 210/);
+  assert.match(trackerScreen, /pathname: "\/log"/);
+  assert.match(trackerScreen, /params: \{ metric: .*\.id, date:/);
+  assert.match(trackerScreen, /name: "log", label: "Open Log page"/);
+  assert.match(trackerScreen, /actionName === "log"/);
+  assert.match(
+    trackerScreen,
+    /if \(!canLog\) \{\s*openDetails\(\);\s*return;/,
+    "non-loggable tracker cards must retain immediate detail navigation",
+  );
+}
+assert.match(today, /onLongPress=\{\(\) => \{/);
+assert.match(today, /opacity: tapPressed \? 0\.78 : 1/);
+assert.match(status, /pressed && styles\.pressed/);
+assert.match(
+  log,
+  /params\.metric && metrics\.some\(\(metric\) => metric\.id === params\.metric\)[\s\S]{0,80}setSelectedId\(params\.metric\)/,
+  "Log deep links must focus the tracker requested by a double tap",
+);
 
 console.log(
-  "Web editor, pager, time-drag, and standalone iOS safe-area validation passed.",
+  "Web editor, pager, tracker gestures, and standalone iOS safe-area validation passed.",
 );

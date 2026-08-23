@@ -10,6 +10,7 @@ import {
 import { reconcileAutomaticFasting } from "../src/domain/fasting.ts";
 import { networkReachability } from "../src/domain/network.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
+import { wheelIndexFromOffset } from "../src/domain/timeWheel.ts";
 import "./validate-responsive-work.mjs";
 import "./validate-native-sync-performance.mjs";
 
@@ -33,6 +34,113 @@ const cloudProvider = fs.readFileSync(
   "utf8",
 );
 const fasting = fs.readFileSync("src/domain/fasting.ts", "utf8");
+const realtimeCpuMigration = fs.readFileSync(
+  "supabase/migrations/202608230003_reduce_unused_realtime_cpu.sql",
+  "utf8",
+);
+const timeInput = fs.readFileSync("src/components/TimeInput.tsx", "utf8");
+const appText = fs.readFileSync("src/components/AppText.tsx", "utf8");
+const richNoteText = fs.readFileSync(
+  "src/components/RichNoteText.tsx",
+  "utf8",
+);
+const chatScreen = fs.readFileSync("app/(tabs)/chat.tsx", "utf8");
+const webHtml = fs.readFileSync("app/+html.tsx", "utf8");
+
+const realtimeSources = fs
+  .readdirSync("src", { recursive: true })
+  .filter(
+    (path) =>
+      typeof path === "string" &&
+      (path.endsWith(".ts") || path.endsWith(".tsx")),
+  )
+  .map((path) => fs.readFileSync(`src/${path}`, "utf8"));
+const postgresChangesTables = realtimeSources.flatMap((source) =>
+  [...source.matchAll(
+    /\.on\(\s*"postgres_changes",\s*\{[\s\S]{0,350}?table:\s*"([^"]+)"/g,
+  )].map((match) => match[1]),
+);
+for (const obsoleteRealtimeTable of [
+  "user_snapshots",
+  "metric_entries",
+  "daily_metric_status",
+]) {
+  assert.ok(
+    !postgresChangesTables.includes(obsoleteRealtimeTable),
+    `${obsoleteRealtimeTable} must not be removed from the publication while a client listener still depends on it`,
+  );
+  assert.match(
+    realtimeCpuMigration,
+    new RegExp(`'${obsoleteRealtimeTable}'`),
+    `${obsoleteRealtimeTable} must remain in the guarded Realtime cleanup list`,
+  );
+}
+assert.match(
+  realtimeCpuMigration,
+  /alter publication supabase_realtime drop table public\.%I/i,
+);
+assert.match(realtimeCpuMigration, /pg_catalog\.pg_publication_tables/);
+assert.match(realtimeCpuMigration, /pubname = 'supabase_realtime'/);
+
+assert.equal(wheelIndexFromOffset(0, 38, 60), 0);
+assert.equal(wheelIndexFromOffset(37, 38, 60), 1);
+assert.equal(wheelIndexFromOffset(38 * 90, 38, 60), 59);
+assert.equal(wheelIndexFromOffset(Number.NaN, 38, 60), 0);
+assert.match(
+  timeInput,
+  /onScroll=\{Platform\.OS === "web" \? scheduleWebSettle : undefined\}/,
+  "the Web wheel must observe mouse-wheel and trackpad scrolling",
+);
+assert.match(
+  timeInput,
+  /setTimeout\(\(\) => \{[\s\S]{0,160}commitOffset\(offset\);[\s\S]{0,80}\}, 100\)/,
+  "the centred Web wheel row must commit after scrolling settles",
+);
+assert.match(
+  cloudProvider,
+  /pendingGroupRef\.current = request;[\s\S]{0,100}pendingGroupActivationRef\.current\(request\.groupId\)/,
+  "a newly submitted pending membership must wake the mounted approval watcher immediately",
+);
+assert.match(
+  cloudProvider,
+  /NativeAppState\.addEventListener\([\s\S]{0,180}nextState === "active"[\s\S]{0,120}activateIfApproved/,
+  "pending membership approval must retry immediately when the app returns to foreground",
+);
+assert.match(
+  cloudProvider,
+  /if \(approvalCheckInFlight\) \{[\s\S]{0,100}queuedApprovalGroupId = groupId/,
+  "Realtime and polling approval signals must coalesce rather than be dropped",
+);
+assert.match(
+  appText,
+  /userSelect: selectable === true \? "text" : "none"/,
+  "ordinary Web interface labels must not steal long presses through text selection",
+);
+assert.match(
+  appText,
+  /Platform\.OS === "web"/,
+  "the selection policy must not change native text behavior",
+);
+assert.match(
+  webHtml,
+  /#root \{[\s\S]{0,180}-webkit-user-select: none;[\s\S]{0,80}-webkit-touch-callout: none;/,
+  "font icons and other non-AppText Web descendants must inherit the long-press selection guard",
+);
+assert.match(
+  webHtml,
+  /#root input,[\s\S]{0,120}#root textarea,[\s\S]{0,180}user-select: text;/,
+  "editable Web controls must remain selectable",
+);
+assert.match(
+  richNoteText,
+  /translate=\{false\}[\s\S]{0,80}selectable/,
+  "journal note text must remain intentionally copyable",
+);
+assert.match(
+  chatScreen,
+  /\{message\.text \? \([\s\S]{0,180}translate=\{false\}[\s\S]{0,80}selectable[\s\S]{0,500}\{message\.text\}/,
+  "chat message copy must remain intentionally available",
+);
 
 assert.match(
   ui,

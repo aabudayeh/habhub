@@ -109,8 +109,13 @@ import { isInternalTracker } from "@/src/domain/trackerCatalog";
 import { orderTodayMetrics } from "@/src/domain/todayOrdering";
 import {
   chunkIntoPages,
+  configuredPageCapacity,
   todayPageCapacity,
 } from "@/src/domain/pagedLayout";
+import {
+  isStandaloneIosWebApp,
+  WebDisplayEnvironment,
+} from "@/src/domain/webSafeArea";
 import { metricVisualization } from "@/src/domain/visualization";
 import { progressGridNavigationSettings } from "@/src/domain/progressGrid";
 import { fastingProgressForDate } from "@/src/domain/fasting";
@@ -135,6 +140,7 @@ const GOLD_TILE_STAGGER_MS = 1050;
 const COMPLETION_INDICATOR_SIZE = 60;
 const GOAL_DOT_SIZE = 23;
 const GOAL_LIQUID_REVEAL_MS = 2200;
+const TRACKER_DOUBLE_TAP_MS = 210;
 
 type GoalLiquidSnapshot = Record<
   string,
@@ -178,6 +184,25 @@ function Today() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
+  const standaloneIosWebApp = useMemo(() => {
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      typeof navigator === "undefined"
+    ) {
+      return false;
+    }
+    const browserNavigator = navigator as Navigator & { standalone?: boolean };
+    const environment: WebDisplayEnvironment = {
+      userAgent: browserNavigator.userAgent,
+      platform: browserNavigator.platform,
+      maxTouchPoints: browserNavigator.maxTouchPoints,
+      displayModeStandalone:
+        window.matchMedia?.("(display-mode: standalone)").matches === true,
+      navigatorStandalone: browserNavigator.standalone === true,
+    };
+    return isStandaloneIosWebApp(environment);
+  }, []);
   const locale = useLocale();
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
@@ -892,7 +917,17 @@ function Today() {
     },
     [celebration, celebrationStorageKey, tutorial, tutorialSandbox],
   );
-  const pageCapacity = todayPageCapacity(height, state.settings.compactMode);
+  const fittingPageCapacity = todayPageCapacity(
+    height,
+    state.settings.compactMode,
+  );
+  const preferredPageCapacity = configuredPageCapacity(
+    state.settings.todayTilesPerPage,
+    4,
+    2,
+    6,
+  );
+  const pageCapacity = Math.min(fittingPageCapacity, preferredPageCapacity);
   const todayPageCount = todayUsesPages && !editing
     ? Math.ceil(primary.length / pageCapacity)
     : 0;
@@ -991,7 +1026,10 @@ function Today() {
             tintColor={accent}
           />
         }
-        contentContainerStyle={styles.page}
+        contentContainerStyle={[
+          styles.page,
+          standaloneIosWebApp && styles.standaloneIosPage,
+        ]}
         showsVerticalScrollIndicator={false}
         onScroll={(event) => {
           todayScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
@@ -1321,7 +1359,7 @@ function Today() {
           />
           </TutorialTarget>
         ) : null}
-        {state.settings.todosBelowGoals !== true ? (
+        {state.settings.todosBelowGoals === false ? (
           <TutorialTarget id="today-todo-list">
           <TodoTodayList
             localDate={today}
@@ -1602,7 +1640,7 @@ function Today() {
             </View>
           </Pressable>
         ) : null}
-        {state.settings.todosBelowGoals === true ? (
+        {state.settings.todosBelowGoals !== false ? (
           <TutorialTarget id="today-todo-list">
           <TodoTodayList
             localDate={today}
@@ -2079,6 +2117,7 @@ function TodayTrackerPageFlow({
       accessibilityLabel="Today"
       testID="today-tracker-pages"
       onPageChange={onPageChange}
+      showPageDots={false}
       pages={chunkIntoPages(rows, pageSize).map((page, index) => (
         <View key={index} style={styles.list}>{page}</View>
       ))}
@@ -2359,6 +2398,10 @@ function TrackerRow({
 }) {
   const locale = useLocale();
   const { t } = useLocalization();
+  const lastTapRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressHandledRef = useRef(false);
+  const [tapPressed, setTapPressed] = useState(false);
   const arrival = useRef(new Animated.Value(1)).current;
   const dragStep = height + 6;
   const smoothDrag = useSmoothReorderGesture({
@@ -2606,6 +2649,74 @@ function TrackerRow({
       />
     </Pressable>
   ) : null;
+  const canLog =
+    item.dataType !== "calculated" &&
+    !item.fastingSettings &&
+    item.id !== "screen_time" &&
+    item.id !== "blood_pressure_diastolic" &&
+    !(
+      item.id === "pulse" &&
+      state.metrics.some((metric) => metric.id === "blood_pressure_systolic")
+    ) &&
+    (item.manualEntry !== false || item.id === "steps");
+  const openDetails = useCallback(() => {
+    if (item.id === "overall_score") {
+      router.navigate("/group" as never);
+      return;
+    }
+    router.navigate({
+      pathname: "/metric-detail",
+      params: { metric: item.id, date: day },
+    } as never);
+  }, [day, item.id]);
+  const openLog = useCallback(() => {
+    if (!canLog) {
+      openDetails();
+      return;
+    }
+    router.navigate({
+      pathname: "/log",
+      params: { metric: item.id, date: day },
+    } as never);
+  }, [canLog, day, item.id, openDetails]);
+  const handlePress = useCallback(() => {
+    if (editing) return;
+    if (longPressHandledRef.current) {
+      longPressHandledRef.current = false;
+      return;
+    }
+    if (!canLog) {
+      openDetails();
+      return;
+    }
+    const now = Date.now();
+    if (now - lastTapRef.current <= TRACKER_DOUBLE_TAP_MS) {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      tapTimerRef.current = null;
+      lastTapRef.current = 0;
+      openLog();
+      return;
+    }
+    lastTapRef.current = now;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => {
+      tapTimerRef.current = null;
+      lastTapRef.current = 0;
+      openDetails();
+    }, TRACKER_DOUBLE_TAP_MS);
+  }, [canLog, editing, openDetails, openLog]);
+  useEffect(() => {
+    if (!editing) return;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = null;
+    lastTapRef.current = 0;
+  }, [editing]);
+  useEffect(
+    () => () => {
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    },
+    [],
+  );
   return (
     <Reanimated.View
       style={[
@@ -2634,17 +2745,33 @@ function TrackerRow({
       ],
     }}>
     <AnimatedPressable
-      onLongPress={onEdit}
-      onPress={() =>
-        editing
-          ? undefined
-          : item.id === "overall_score"
-            ? router.navigate("/group" as never)
-            : router.navigate({
-                pathname: "/metric-detail",
-                params: { metric: item.id },
-              })
+      accessibilityRole="button"
+      accessibilityLabel={item.name}
+      accessibilityHint={
+        canLog
+          ? "Tap once for details. Double tap to open this tracker's Log page. Hold to customize."
+          : "Tap for details. Hold to customize."
       }
+      accessibilityActions={
+        canLog ? [{ name: "log", label: "Open Log page" }] : undefined
+      }
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "log") openLog();
+      }}
+      delayLongPress={420}
+      onPressIn={() => {
+        longPressHandledRef.current = false;
+        setTapPressed(true);
+      }}
+      onPressOut={() => setTapPressed(false)}
+      onLongPress={() => {
+        longPressHandledRef.current = true;
+        lastTapRef.current = 0;
+        if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+        tapTimerRef.current = null;
+        onEdit();
+      }}
+      onPress={handlePress}
       style={[
         styles.row,
         !editing && historyRange !== "off" && historyExpanded
@@ -2652,6 +2779,7 @@ function TrackerRow({
           : null,
         {
           height,
+          opacity: tapPressed ? 0.78 : 1,
           backgroundColor: cardComplete
             ? completedBackground
             : colors.card,
@@ -3578,6 +3706,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   todayGoldTint: { ...StyleSheet.absoluteFillObject },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
+  standaloneIosPage: { paddingBottom: 0 },
   pinnedTodaySummary: {
     marginHorizontal: -14,
     paddingHorizontal: 14,

@@ -99,6 +99,7 @@ import {
 } from "@/src/domain/groupChallenges";
 import {
   chunkIntoPages,
+  configuredPageCapacity,
   leaderboardPageCapacity,
 } from "@/src/domain/pagedLayout";
 import {
@@ -672,16 +673,25 @@ function LeaderboardScreen() {
     });
   }, [editing, orderedCardIds, pinnedIds]);
   const leaderboardPageSize = useMemo(() => {
-    return leaderboardPageCapacity(
+    if (expandedGridRows.length > 0) return 1;
+    const fittingCapacity = leaderboardPageCapacity(
       viewportHeight,
       state.group.members.length,
       dateNavigatorOpen,
-      expandedGridRows.length > 0,
+      false,
     );
+    const preferredCapacity = configuredPageCapacity(
+      state.settings.leaderboardCardsPerPage,
+      2,
+      1,
+      2,
+    );
+    return Math.min(fittingCapacity, preferredCapacity);
   }, [
     dateNavigatorOpen,
     expandedGridRows.length,
     state.group.members.length,
+    state.settings.leaderboardCardsPerPage,
     viewportHeight,
   ]);
   const requestedLeaderboardPage = pendingChallengeCardId

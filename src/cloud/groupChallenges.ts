@@ -1,4 +1,5 @@
 import { supabase } from "@/src/lib/supabase";
+import { flushPendingGroupPushEvents } from "@/src/cloud/groupCloud";
 import { GoalSchedule, GroupChallenge } from "@/src/types";
 import {
   assertPushDeliveryComplete,
@@ -202,6 +203,10 @@ export async function sendGroupChallengeAcceptedPush(
     title: "Challenge accepted",
     body: "A friend accepted your challenge.",
   });
+  // The acceptance transaction may also have staged the one-time
+  // all-participants notification. Drain it immediately; the scheduled worker
+  // remains the durable fallback when this device disappears or is offline.
+  await flushPendingGroupPushEvents();
 }
 
 export async function deleteGroupChallenge(id: string) {

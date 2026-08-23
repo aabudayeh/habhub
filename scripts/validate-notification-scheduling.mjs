@@ -13,6 +13,7 @@ import {
   LOCAL_NOTIFICATION_BUDGETS,
   MAX_PENDING_LOCAL_NOTIFICATIONS,
   notificationFallsAfterFastingTarget,
+  notificationTitle,
   planLocalNotificationReconciliation,
   quietHoursAdjustedDateTime,
   WEB_REMINDER_LATE_GRACE_MS,
@@ -237,6 +238,16 @@ assert.equal(
   ),
   false,
   "the late-publication grace must remain bounded",
+);
+assert.equal(
+  notificationTitle("", "Steps reminder"),
+  "Steps reminder",
+  "an optional blank label must not invalidate the account's atomic Web schedule",
+);
+assert.equal(
+  notificationTitle("  Custom nudge  ", "Steps reminder"),
+  "Custom nudge",
+  "a configured title remains supported and is normalized before publication",
 );
 assert.equal(
   workoutWebNotificationSignature({
@@ -1107,6 +1118,12 @@ assert.match(
 );
 assert.match(layoutSource, /document\.hidden \|\| !navigator\.onLine/);
 assert.match(webScheduleSource, /planWebReminderSchedule/);
+assert.match(webScheduleSource, /notificationTitle\(\s*reminder\.label/);
+assert.doesNotMatch(
+  webScheduleSource,
+  /const title = reminder\.label \?\? /,
+  "blank optional tracker labels must fall back before the atomic Web schedule RPC",
+);
 for (const category of [
   "tracker",
   "todo",

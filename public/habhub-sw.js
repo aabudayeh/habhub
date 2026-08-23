@@ -52,7 +52,8 @@ function safeRoute(value) {
 function routeWithParameters(data) {
   const route = safeRoute(data?.route);
   const target = new URL(route, self.location.origin);
-  if (!target.search) {
+  const routeHadParameters = Boolean(target.search);
+  if (!routeHadParameters) {
     for (const [key, value] of Object.entries(data ?? {})) {
       if (
         key === "route" ||
@@ -63,6 +64,17 @@ function routeWithParameters(data) {
       target.searchParams.set(key, String(value).slice(0, 500));
     }
   }
+  // Chat reads `recipient`, while canonical push payloads historically carried
+  // the authenticated sender identity. Map only direct messages so a group
+  // notification continues to open the shared group conversation.
+  if (
+    target.pathname === "/chat" &&
+    data?.conversationType === "direct" &&
+    typeof data?.senderId === "string" &&
+    data.senderId.length > 0 &&
+    !target.searchParams.has("recipient")
+  )
+    target.searchParams.set("recipient", data.senderId.slice(0, 500));
   return `${target.pathname}${target.search}${target.hash}`;
 }
 

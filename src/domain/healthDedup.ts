@@ -683,29 +683,24 @@ export function combineDisjointStepWindows(
   return prefix + suffix;
 }
 
-/**
- * Applies the one-step display calibration at the canonical-record boundary.
- * Candidate aggregates must remain unmodified so this adjustment is applied
- * exactly once on every refresh. A genuine zero remains zero.
- */
+/** Normalizes the platform total once at the canonical-record boundary. */
 export function finalImportedStepTotal(count: number) {
-  const rounded = Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
-  return rounded > 0 ? rounded + 1 : 0;
+  return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
 }
 
 /**
  * Selects the current-day authority without summing overlapping totals.
- * Android's own Health Connect origin is the first choice when present: its
- * source-filtered aggregate is the efficient equivalent of summing the
- * non-overlapping `com.android.healthconnect.phone.*` interval records, and it
- * matches the phone-owned live counter without mixing Samsung/watch writers.
- * Local Recording remains the older-Android fallback, followed by Health
- * Connect's cross-writer aggregate.
+ * A Samsung-origin aggregate is the closest Health Connect representation of
+ * Samsung Health's reconciled phone-and-watch total. Otherwise the unfiltered
+ * Health Connect aggregate owns the result because it applies Activity source
+ * priority and overlap removal. Phone-only sources are zero-read fallbacks;
+ * they must never replace a positive cross-device aggregate.
  */
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
   disjointPhoneCandidate: number | null | undefined,
   androidDeviceCount?: number | null,
+  samsungHealthCount?: number | null,
 ) {
   const healthConnect = Number.isFinite(healthConnectCount)
     ? Math.max(0, Math.round(healthConnectCount))
@@ -716,9 +711,29 @@ export function reconcileCurrentDayStepTotal(
   const androidDevice = Number.isFinite(androidDeviceCount)
     ? Math.max(0, Math.round(androidDeviceCount as number))
     : null;
+  const samsungHealth = Number.isFinite(samsungHealthCount)
+    ? Math.max(0, Math.round(samsungHealthCount as number))
+    : null;
+  if (samsungHealth !== null && samsungHealth > 0) {
+    return {
+      count: samsungHealth,
+      usedSamsungHealth: true,
+      usedLocalPhone: false,
+      usedAndroidDevice: false,
+    };
+  }
+  if (healthConnect > 0) {
+    return {
+      count: healthConnect,
+      usedSamsungHealth: false,
+      usedLocalPhone: false,
+      usedAndroidDevice: false,
+    };
+  }
   if (androidDevice !== null && androidDevice > 0) {
     return {
       count: androidDevice,
+      usedSamsungHealth: false,
       usedLocalPhone: false,
       usedAndroidDevice: true,
     };
@@ -726,12 +741,14 @@ export function reconcileCurrentDayStepTotal(
   if (localPhone !== null && localPhone > 0) {
     return {
       count: localPhone,
+      usedSamsungHealth: false,
       usedLocalPhone: true,
       usedAndroidDevice: false,
     };
   }
   return {
     count: healthConnect,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   };

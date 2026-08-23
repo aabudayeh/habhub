@@ -1,4 +1,11 @@
 {
+  "Cards per page": "Cartes par page",
+  "Maximum cards per page": "Nombre maximal de cartes par page",
+  "Open Log page": "Ouvrir la page de saisie",
+  "Tap for details. Hold to customize.": "Touchez pour afficher les détails. Maintenez pour personnaliser.",
+  "Tap once for details. Double tap to open this tracker's Log page.": "Touchez une fois pour les détails. Touchez deux fois pour ouvrir la page de saisie de ce suivi.",
+  "Tap once for details. Double tap to open this tracker's Log page. Hold to customize.": "Touchez une fois pour les détails. Touchez deux fois pour ouvrir la page de saisie de ce suivi. Maintenez pour personnaliser.",
+  "Tap to open tracker details.": "Touchez pour ouvrir les détails du suivi.",
   "Connect Apple Health or Health Connect in the installed HabHub phone app. When both devices use the same signed-in account, those imported entries appear on web with their original source identity instead of being added twice.": "Connectez Apple Health ou Health Connect dans l’application HabHub installée sur votre téléphone. Lorsque les deux appareils utilisent le même compte connecté, ces entrées importées apparaissent sur le Web avec l’identité de leur source d’origine au lieu d’être additionnées deux fois.",
   "Avatar simulator": "Simulateur d’avatar",
   "Preview a change without saving it.": "Prévisualisez un changement sans l’enregistrer.",

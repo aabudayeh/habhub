@@ -14,6 +14,21 @@ const webShellStyles = `
   html, body, #root {
     background-color: var(--habhub-shell-background);
   }
+
+  #root {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  #root input,
+  #root textarea,
+  #root [contenteditable="true"],
+  #root [role="textbox"] {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
 `;
 
 export default function RootHtml({ children }: PropsWithChildren) {

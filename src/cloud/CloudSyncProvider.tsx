@@ -2651,6 +2651,16 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const [initializationAttempt, setInitializationAttempt] = useState(0);
   const [pendingGroup, setPendingGroup] =
     useState<PendingGroupRequest | null>(null);
+  // Membership approval can arrive before the join RPC has returned, and the
+  // approval watcher itself deliberately stays mounted while pending state
+  // changes. Keep the latest request and an immediate activation hook outside
+  // that effect's closure so a missed Realtime frame never leaves polling
+  // watching the initial null value.
+  const pendingGroupRef = useRef<PendingGroupRequest | null>(pendingGroup);
+  pendingGroupRef.current = pendingGroup;
+  const pendingGroupActivationRef = useRef<(groupId: string) => void>(() =>
+    undefined,
+  );
   const [devices, setDevices] = useState<AccountDevice[]>([]);
   const [accountBoundaryReadyUserId, setAccountBoundaryReadyUserId] =
     useState<string | null>(null);
@@ -5485,10 +5495,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     )
       return;
     let cancelled = false;
-    let requestToWatch: PendingGroupRequest | null = null;
     let approvalCheckInFlight = false;
+    let queuedApprovalGroupId: string | null = null;
     const activateIfApproved = async (groupId: string) => {
-      if (approvalCheckInFlight) return;
+      if (pendingGroupRef.current?.groupId !== groupId) return;
+      if (approvalCheckInFlight) {
+        queuedApprovalGroupId = groupId;
+        return;
+      }
       approvalCheckInFlight = true;
       try {
         const shells = await readCloudResponsively((signal) =>
@@ -5514,7 +5528,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           groupConfigurationAckHashesRef.current.get(groupId) ?? null;
         replaceState(optimistic, { source: "local" });
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
-        requestToWatch = null;
+        pendingGroupRef.current = null;
         setPendingGroup(null);
         readCloudResponsively((signal) =>
           loadCloudWorkspace(
@@ -5546,23 +5560,43 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           });
       } finally {
         approvalCheckInFlight = false;
+        const queuedGroupId = queuedApprovalGroupId;
+        queuedApprovalGroupId = null;
+        if (queuedGroupId && !cancelled)
+          void activateIfApproved(queuedGroupId).catch(() => undefined);
       }
     };
-    AsyncStorage.getItem(PENDING_GROUP_KEY)
-      .then((stored) => {
-        const request = parsePendingGroup(stored);
-        requestToWatch = request;
-        setPendingGroup(request);
-        if (request) return activateIfApproved(request.groupId);
-      })
-      .catch(() => undefined);
+    pendingGroupActivationRef.current = (groupId) => {
+      void activateIfApproved(groupId).catch(() => undefined);
+    };
+    const currentRequest = pendingGroupRef.current;
+    if (currentRequest) {
+      void activateIfApproved(currentRequest.groupId).catch(() => undefined);
+    } else {
+      AsyncStorage.getItem(PENDING_GROUP_KEY)
+        .then((stored) => {
+          if (cancelled || pendingGroupRef.current) return;
+          const request = parsePendingGroup(stored);
+          if (!request) return;
+          pendingGroupRef.current = request;
+          setPendingGroup(request);
+          return activateIfApproved(request.groupId);
+        })
+        .catch(() => undefined);
+    }
     const approvalPoll = setInterval(() => {
-      if (
-        requestToWatch &&
-        NativeAppState.currentState === "active"
-      )
-        activateIfApproved(requestToWatch.groupId).catch(() => undefined);
+      const request = pendingGroupRef.current;
+      if (request && NativeAppState.currentState === "active")
+        activateIfApproved(request.groupId).catch(() => undefined);
     }, 15000);
+    const appStateSubscription = NativeAppState.addEventListener(
+      "change",
+      (nextState) => {
+        const request = pendingGroupRef.current;
+        if (nextState === "active" && request)
+          activateIfApproved(request.groupId).catch(() => undefined);
+      },
+    );
     const channel = supabase
       .channel(`membership-approval:${auth.user.id}`)
       .on(
@@ -5578,11 +5612,11 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             group_id?: string;
             status?: string;
           };
-          if (membership.group_id && membership.status === "active") {
-            requestToWatch = {
-              groupId: membership.group_id,
-              groupName: requestToWatch?.groupName,
-            };
+          if (
+            membership.group_id &&
+            membership.status === "active" &&
+            pendingGroupRef.current?.groupId === membership.group_id
+          ) {
             activateIfApproved(membership.group_id).catch(() => undefined);
           }
         },
@@ -5596,12 +5630,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           filter: `user_id=eq.${auth.user.id}`,
         },
         (event) => {
-          AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
-          setPendingGroup(null);
           const removed = event.old as {
             group_id?: string;
             user_id?: string;
           };
+          if (
+            removed.group_id &&
+            pendingGroupRef.current?.groupId === removed.group_id
+          ) {
+            AsyncStorage.removeItem(PENDING_GROUP_KEY).catch(() => undefined);
+            pendingGroupRef.current = null;
+            setPendingGroup(null);
+          }
           if (
             removed.user_id === auth.user?.id &&
             removed.group_id &&
@@ -5616,6 +5656,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     return () => {
       cancelled = true;
       clearInterval(approvalPoll);
+      appStateSubscription.remove();
+      pendingGroupActivationRef.current = () => undefined;
       supabase?.removeChannel(channel).catch(() => undefined);
     };
   }, [
@@ -6754,7 +6796,9 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             PENDING_GROUP_KEY,
             JSON.stringify(request),
           );
+          pendingGroupRef.current = request;
           setPendingGroup(request);
+          pendingGroupActivationRef.current(request.groupId);
           // The membership transaction created a canonical durable event.
           // Dispatch is best-effort here and is retried on reconnect/startup.
           flushPendingGroupPushEvents().catch(() => undefined);
@@ -6807,6 +6851,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         replaceState(next, { source: "local" });
         setPendingChanges(true);
         await AsyncStorage.removeItem(PENDING_GROUP_KEY);
+        pendingGroupRef.current = null;
         setPendingGroup(null);
         hydrateGroupInBackground(groupId);
         flushPendingGroupPushEvents().catch(() => undefined);

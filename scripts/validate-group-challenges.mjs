@@ -307,6 +307,15 @@ const discoveryMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const allAcceptedMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608230004_challenge_all_accepted_notification.sql",
+  ),
+  "utf8",
+);
 const challengeWorker = fs.readFileSync(
   path.join(
     root,
@@ -723,6 +732,68 @@ assert.match(
   discoveryMigration,
   /if not v_was_participant then[\s\S]{0,140}active invitation is required to decline/i,
   "non-invited members may self-join but may not synthesize declines",
+);
+assert.match(
+  allAcceptedMigration,
+  /not \(v_participants <@ v_accepted\)[\s\S]{0,220}v_old_participants <@ v_old_accepted/i,
+  "the all-accepted event must be emitted only on the false-to-true transition",
+);
+assert.match(
+  allAcceptedMigration,
+  /join public\.group_members member[\s\S]{0,180}member\.status = 'active'/i,
+  "the private feed must only materialize rows for active challenge members",
+);
+assert.match(
+  allAcceptedMigration,
+  /'challenge-all-accepted:' \|\| new\.id::text[\s\S]{0,500}on conflict \(recipient_id, event_key\) do nothing/i,
+  "each participant feed event must have a stable idempotency key",
+);
+assert.match(
+  allAcceptedMigration,
+  /insert into public\.push_dispatch_events[\s\S]{0,650}'challenge_all_accepted'[\s\S]{0,100}'challenge_participants'/i,
+  "the database transition must stage one canonical participant-scoped push",
+);
+assert.match(
+  allAcceptedMigration,
+  /pg_catalog\.to_char\(new\.local_date, 'FMMon FMDD, YYYY'\)/i,
+  "all-accepted copy and route data must include the challenge start date",
+);
+assert.match(allAcceptedMigration, /'startDate', new\.local_date/i);
+assert.match(
+  allAcceptedMigration,
+  /create trigger group_challenges_emit_all_accepted_notification[\s\S]{0,120}after update of accepted_participant_ids/i,
+);
+assert.match(
+  cloud,
+  /sendGroupChallengeAcceptedPush[\s\S]{0,700}flushPendingGroupPushEvents\(\)/,
+  "the accepting client should drain the trigger-owned event immediately while the worker remains its fallback",
+);
+
+const transitionedToAllAccepted = (
+  oldParticipants,
+  oldAccepted,
+  participants,
+  accepted,
+) =>
+  participants.length > 0 &&
+  participants.every((id) => accepted.includes(id)) &&
+  !(
+    oldParticipants.length > 0 &&
+    oldParticipants.every((id) => oldAccepted.includes(id))
+  );
+assert.equal(
+  transitionedToAllAccepted(["a", "b"], ["a"], ["a", "b"], ["a", "b"]),
+  true,
+);
+assert.equal(
+  transitionedToAllAccepted(
+    ["a", "b"],
+    ["a", "b"],
+    ["a", "b"],
+    ["a", "b"],
+  ),
+  false,
+  "a repeated update must not emit the one-time event again",
 );
 assert.match(groupNotificationEvents, /occurrence_date/);
 assert.match(groupNotificationEvents, /\.limit\(500\)/);

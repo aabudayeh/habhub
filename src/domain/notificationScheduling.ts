@@ -58,6 +58,19 @@ export function webReminderTriggerCanStillPublish(
   );
 }
 
+/**
+ * A reminder label is optional in the editor and persisted as an empty string.
+ * Web schedules are accepted atomically by the server, where an empty title is
+ * invalid, so one blank optional label must fall back instead of rejecting the
+ * account's entire reminder queue.
+ */
+export function notificationTitle(
+  configured: string | null | undefined,
+  fallback: string,
+) {
+  return configured?.trim() || fallback.trim() || "HabHub reminder";
+}
+
 export type ActivityTimerAlertCandidate = {
   completion: boolean;
   identifier: string;

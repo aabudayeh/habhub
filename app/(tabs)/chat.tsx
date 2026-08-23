@@ -813,6 +813,7 @@ function ChatScreen() {
                           {message.text ? (
                             <Text
                               translate={false}
+                              selectable
                               preserveColor={mine}
                               style={[
                                 styles.messageText,

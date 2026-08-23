@@ -5,6 +5,7 @@ import { automaticFastProgress } from "@/src/domain/fasting";
 import {
   activityTimerAlertCandidates,
   notificationFallsAfterFastingTarget,
+  notificationTitle,
   quietHoursAdjustedDateTime,
   WEB_REMINDER_LATE_GRACE_MS,
   webReminderTriggerCanStillPublish,
@@ -92,7 +93,10 @@ function plan(
     scheduleKey: input.scheduleKey,
     category: input.category,
     scheduledAt: input.at.toISOString(),
-    title: localized(state, input.title).slice(0, 120),
+    title: notificationTitle(
+      localized(state, input.title),
+      localized(state, "HabHub reminder"),
+    ).slice(0, 120),
     body: localized(state, input.body).slice(0, 500),
     data: input.data,
   } satisfies WebReminderPlan;
@@ -190,7 +194,10 @@ function trackerPlans(state: AppState, now: Date) {
           reminder.durationMinutes && metric.timerEnabled
             ? `/timer?metric=${encodeURIComponent(metric.id)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`
             : `/metric-detail?metric=${encodeURIComponent(metric.id)}&date=${localDate}`;
-        const title = reminder.label ?? `${metricName} reminder`;
+        const title = notificationTitle(
+          reminder.label,
+          `${metricName} reminder`,
+        );
         const body = metric.fastingSettings
           ? "Your fasting reminder is ready."
           : `Open HabHub to update today's ${metricName.toLowerCase()}.`;

@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  Platform,
   StyleSheet,
   Text as NativeText,
   TextProps,
@@ -58,6 +59,7 @@ export function AppText({
   children,
   accessibilityLabel,
   accessibilityHint,
+  selectable,
   ...props
 }: AppTextProps) {
   const scale = useFontScale();
@@ -84,6 +86,7 @@ export function AppText({
           ? locale.t(accessibilityHint)
           : accessibilityHint
       }
+      selectable={selectable}
       allowFontScaling={false}
       style={[
         style,
@@ -105,6 +108,14 @@ export function AppText({
               writingDirection: "rtl",
               textAlign: flattened?.textAlign ?? "right",
             }
+          : undefined,
+        Platform.OS === "web"
+          ? ({
+              userSelect: selectable === true ? "text" : "none",
+              WebkitUserSelect: selectable === true ? "text" : "none",
+              WebkitTouchCallout:
+                selectable === true ? "default" : "none",
+            } as TextStyle)
           : undefined,
       ]}
     >

@@ -60,7 +60,7 @@ export function RichNoteText({
         if (bullet || numbered)
           return (
             <View key={index} style={styles.listRow}>
-              <Text style={[styles.marker, { color: accent }]}>
+              <Text selectable style={[styles.marker, { color: accent }]}>
                 {numbered ? `${numbered[1]}.` : "•"}
               </Text>
               <Inline
@@ -121,6 +121,7 @@ function Inline({
   return (
     <Text
       translate={false}
+      selectable
       numberOfLines={numberOfLines}
       style={[styles.text, { color }, style]}
     >
@@ -139,25 +140,31 @@ function renderInlineParts(value: string): React.ReactNode[] {
     );
     if (colored)
       return (
-        <Text key={index} translate={false} preserveColor style={{ color: colored[1] }}>
+        <Text
+          key={index}
+          translate={false}
+          selectable
+          preserveColor
+          style={{ color: colored[1] }}
+        >
           {renderInlineParts(colored[2])}
         </Text>
       );
     if (/^\*\*.*\*\*$|^__.*__$/.test(part))
       return (
-        <Text key={index} translate={false} style={styles.bold}>
+        <Text key={index} translate={false} selectable style={styles.bold}>
           {renderInlineParts(part.slice(2, -2))}
         </Text>
       );
     if (/^~~.*~~$/.test(part))
       return (
-        <Text key={index} translate={false} style={styles.strike}>
+        <Text key={index} translate={false} selectable style={styles.strike}>
           {renderInlineParts(part.slice(2, -2))}
         </Text>
       );
     if (/^\*.*\*$|^_.*_$/.test(part))
       return (
-        <Text key={index} translate={false} style={styles.italic}>
+        <Text key={index} translate={false} selectable style={styles.italic}>
           {renderInlineParts(part.slice(1, -1))}
         </Text>
       );
@@ -167,6 +174,7 @@ function renderInlineParts(value: string): React.ReactNode[] {
         <Text
           key={index}
           translate={false}
+          selectable
           accessibilityRole="link"
           onPress={() => void Linking.openURL(link[2])}
           style={styles.link}

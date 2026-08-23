@@ -76,8 +76,8 @@ assert.equal(
 );
 assert.equal(
   HEALTH_STEPS_IMPORT_VERSION,
-  3,
-  "the restored historical aggregation must trigger a one-time repair for existing connected accounts",
+  4,
+  "removing the one-step calibration must trigger a one-time repair for existing connected accounts",
 );
 
 const platformPriorityAggregate = [
@@ -99,9 +99,9 @@ assert.equal(
   3_435,
   "the unfiltered platform aggregate must remain authoritative without vendor metadata",
 );
-assert.equal(finalImportedStepTotal(2_887), 2_888);
-assert.equal(finalImportedStepTotal(27), 28);
-assert.equal(finalImportedStepTotal(0), 0, "a real zero must not become one");
+assert.equal(finalImportedStepTotal(2_887), 2_887);
+assert.equal(finalImportedStepTotal(27), 27);
+assert.equal(finalImportedStepTotal(0), 0, "a real zero must remain zero");
 assert.equal(finalImportedStepTotal(Number.NaN), 0);
 const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
   [
@@ -130,38 +130,88 @@ assert.deepEqual(
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(5_000, 5_140),
-  { count: 5_140, usedLocalPhone: true, usedAndroidDevice: false },
-  "a valid Physical Activity total must own the still-open local day",
+  {
+    count: 5_000,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "the overlap-safe Health Connect aggregate must outrank a phone-only total",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140),
-  { count: 5_140, usedLocalPhone: true, usedAndroidDevice: false },
-  "a complete phone total must not be replaced by an overlapping Health Connect total",
+  {
+    count: 6_200,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "the cross-device Health Connect total must retain watch-contributed steps",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(6_200, 5_140, 5_140, 0),
+  {
+    count: 6_200,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "an empty Samsung export must fall back to the priority-aware Health Connect total",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(6_200, 5_140, 5_140, null),
+  {
+    count: 6_200,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "a failed Samsung-origin query must fall back without replacing the cross-device total",
 );
 assert.equal(
   reconcileCurrentDayStepTotal(5_000, 5_140).count,
-  5_140,
+  5_000,
   "overlapping Health Connect and phone totals must never be summed",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
-  { count: 54, usedLocalPhone: false, usedAndroidDevice: true },
-  "the Android phone-origin aggregate must sum the live interval records instead of exposing only one 27-step slice",
+  {
+    count: 27,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "a positive priority-aware aggregate must not be replaced by a phone-only origin",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_167, 2_167, 2_958),
-  { count: 2_958, usedLocalPhone: false, usedAndroidDevice: true },
-  "the real-device com.android total 2,958 must replace lagging cross-writer and Local Recording values",
+  reconcileCurrentDayStepTotal(2_167, 2_167, 2_167, 2_958),
+  {
+    count: 2_958,
+    usedSamsungHealth: true,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "Samsung's exported combined phone-and-watch total must own the current day when available",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_887, 3_072, 2_887),
-  { count: 2_887, usedLocalPhone: false, usedAndroidDevice: true },
-  "the phone-owned 2,887 total must not be inflated by an overlapping 3,072 Local Recording candidate",
+  reconcileCurrentDayStepTotal(3_072, 3_072, 3_072, 2_887),
+  {
+    count: 2_887,
+    usedSamsungHealth: true,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "Samsung's reconciled total may legitimately correct a larger raw phone count",
 );
 assert.deepEqual(
-  reconcileCurrentDayStepTotal(2_167, null, 2_958),
-  { count: 2_958, usedLocalPhone: false, usedAndroidDevice: true },
-  "the current-device origin must remain authoritative even without Local Recording coverage",
+  reconcileCurrentDayStepTotal(0, null, 2_958),
+  {
+    count: 2_958,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: true,
+  },
+  "the current-device origin remains the first fallback for an empty cross-device aggregate",
 );
 const scopedPhoneOrigin =
   "com.android.healthconnect.phone.a1b2c3d4e5f607182930";
@@ -175,12 +225,22 @@ assert.deepEqual(
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(0, null, 54),
-  { count: 54, usedLocalPhone: false, usedAndroidDevice: true },
+  {
+    count: 54,
+    usedSamsungHealth: false,
+    usedLocalPhone: false,
+    usedAndroidDevice: true,
+  },
   "the aggregate-discovered SPN candidate may recover an empty unfiltered read",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(0, 54, null),
-  { count: 54, usedLocalPhone: true, usedAndroidDevice: false },
+  {
+    count: 54,
+    usedSamsungHealth: false,
+    usedLocalPhone: true,
+    usedAndroidDevice: false,
+  },
   "Local Recording may recover an empty unfiltered read",
 );
 const authoritativeAggregateWithDisabledContributor =
@@ -1389,12 +1449,12 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /Promise\.all\(\[[\s\S]{0,1800}aggregateRecord\(\{[\s\S]{0,500}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
-  "the current-day Health Connect and Physical Activity reads must run concurrently",
+  /Promise\.all\(\[[\s\S]{0,3000}aggregateRecord\(\{[\s\S]{0,1200}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
+  "the current-day cross-device, Samsung, and Physical Activity reads must run concurrently",
 );
 assert.match(
   androidHealthSource,
-  /Promise\.all\(\[[\s\S]{0,2200}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,3200}dataOriginFilter: androidDeviceOrigins/,
+  /Promise\.all\(\[[\s\S]{0,3200}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,3200}dataOriginFilter: androidDeviceOrigins/,
   "every current-day read must discover and aggregate only Android's phone-owned origin",
 );
 assert.match(
@@ -1410,17 +1470,17 @@ assert.doesNotMatch(
 assert.match(
   androidHealthSource,
   /const count = finalImportedStepTotal\([\s\S]{0,120}COUNT_TOTAL[\s\S]{0,1800}value: count/,
-  "completed-day aggregates must receive the final one-step calibration exactly once",
+  "completed-day aggregates must be normalized exactly once without calibration",
 );
 assert.match(
   androidHealthSource,
   /const currentCount = finalImportedStepTotal\([\s\S]{0,100}reconciledCurrent\.count/,
-  "today's selected phone-origin aggregate must receive the final one-step calibration exactly once",
+  "today's selected aggregate must be normalized exactly once without calibration",
 );
 assert.equal(
   (androidHealthSource.match(/finalImportedStepTotal\(/g) ?? []).length,
   2,
-  "the adapter must calibrate only the completed-day and current-day canonical totals",
+  "the adapter must normalize only the completed-day and current-day canonical totals",
 );
 assert.doesNotMatch(
   androidHealthSource,
@@ -1440,7 +1500,7 @@ assert.match(
 assert.match(
   androidHealthSource,
   /currentDeviceStepOrigins\(\)[\s\S]{0,2200}currentAggregate\?\.dataOrigins[\s\S]{0,2200}dataOriginFilter: androidDeviceOrigins/,
-  "today must query Android's discovered phone-step origins rather than a hard-coded vendor",
+  "today must retain the discovered Android phone-step aggregate as a zero-read fallback",
 );
 assert.match(
   androidHealthSource,
@@ -1452,10 +1512,20 @@ assert.match(
   /!hasCurrentDeviceStepSpn\(androidDeviceOrigins\)[\s\S]{0,900}discoverCurrentDeviceStepOriginsFromRaw/,
   "raw SPN discovery must run only when cheaper framework and aggregate discovery found no scoped phone origin",
 );
+assert.match(
+  androidHealthSource,
+  /SAMSUNG_HEALTH_STEP_ORIGIN = "com\.sec\.android\.app\.shealth"[\s\S]{0,50000}samsungCurrentAggregate[\s\S]{0,1800}dataOriginFilter: \[SAMSUNG_HEALTH_STEP_ORIGIN\][\s\S]{0,8000}reconcileCurrentDayStepTotal\([\s\S]{0,300}samsungCurrentAggregate/,
+  "today must read Samsung's exported phone-and-watch aggregate as one non-additive candidate",
+);
 assert.doesNotMatch(
   androidHealthSource,
-  /dataOriginFilter:\s*\[[\s\S]{0,120}(?:samsung|shealth|com\.sec)/i,
-  "Steps must never replace the platform total with a hard-coded third-party writer",
+  /stepSlices\.historical[\s\S]{0,900}dataOriginFilter:\s*\[SAMSUNG_HEALTH_STEP_ORIGIN\]/,
+  "completed days must retain the established unfiltered Health Connect history",
+);
+assert.match(
+  androidHealthSource,
+  /usedSamsungHealth[\s\S]{0,160}SAMSUNG_HEALTH_STEP_SOURCE/,
+  "a Samsung-owned current-day total must expose truthful source attribution",
 );
 assert.match(
   androidHealthSource,
@@ -1969,5 +2039,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: phone-origin live Steps, priority-aware historical Steps, final one-step calibration, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: Samsung-aware live Steps, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

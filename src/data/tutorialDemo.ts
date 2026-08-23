@@ -1036,7 +1036,7 @@ export function createTutorialDemoState(anchorDate: string): TutorialDemoBundle 
       todayTileLimit: 6,
       showUntrackedToday: true,
       showUntrackedProgress: true,
-      todosBelowGoals: false,
+      todosBelowGoals: true,
       todayHistoryByMetric: { steps: "week", water: "week", weight: "month" },
       todayHistoryRange: "week",
       todayHistoryCollapsed: false,

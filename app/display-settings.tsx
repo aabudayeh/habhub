@@ -421,7 +421,25 @@ export default function DisplaySettings() {
             multiple={false}
             searchable={false}
           />
-          <Pressable onPress={() => setIndicatorOpen((open) => !open)} style={styles.row}>
+          {(state.settings.todayLayoutMode ?? "pages") === "pages" ? (
+            <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
+              <Text style={[styles.title, { color: colors.ink }]}>Maximum cards per page</Text>
+              <View style={styles.chips}>
+                {[2, 3, 4, 5, 6].map((count) => (
+                  <Chip
+                    key={count}
+                    label={String(count)}
+                    selected={(state.settings.todayTilesPerPage ?? 4) === count}
+                    onPress={() => updateSettings({ todayTilesPerPage: count })}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : null}
+          <Pressable
+            onPress={() => setIndicatorOpen((open) => !open)}
+            style={[styles.row, styles.borderlessRow]}
+          >
             <View style={[styles.icon, { backgroundColor: colors.primarySoft }]}>
               <Ionicons
                 name={(state.settings.completionIndicatorIcon ?? "ellipse-outline") as keyof typeof Ionicons.glyphMap}
@@ -436,7 +454,7 @@ export default function DisplaySettings() {
             <Ionicons name={indicatorOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.faint} />
           </Pressable>
           {indicatorOpen ? (
-            <View style={[styles.symbolBody, { borderTopColor: colors.border }]}>
+            <View style={styles.symbolBody}>
               <View style={styles.symbolGrid}>
                 {COMPLETION_INDICATOR_OPTIONS.map(({ icon, label }) => {
                   const selected =
@@ -540,7 +558,7 @@ export default function DisplaySettings() {
               { id: "above", label: "Above goals", icon: "arrow-up-outline" },
               { id: "below", label: "Below goals", icon: "arrow-down-outline" },
             ]}
-            selectedIds={[state.settings.todosBelowGoals ? "below" : "above"]}
+            selectedIds={[state.settings.todosBelowGoals === false ? "above" : "below"]}
             onChange={([value]) => value && updateSettings({ todosBelowGoals: value === "below" })}
             multiple={false}
             searchable={false}
@@ -607,6 +625,21 @@ export default function DisplaySettings() {
             multiple={false}
             searchable={false}
           />
+          {(state.settings.leaderboardLayoutMode ?? "pages") === "pages" ? (
+            <View style={[styles.optionBlock, { borderTopColor: colors.border }]}>
+              <Text style={[styles.title, { color: colors.ink }]}>Maximum cards per page</Text>
+              <View style={styles.chips}>
+                {[1, 2].map((count) => (
+                  <Chip
+                    key={count}
+                    label={String(count)}
+                    selected={(state.settings.leaderboardCardsPerPage ?? 2) === count}
+                    onPress={() => updateSettings({ leaderboardCardsPerPage: count })}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : null}
         </Card>
       </CollapsibleSection>
 
@@ -808,7 +841,8 @@ const styles = StyleSheet.create({
   defaultTheme: { minHeight: 39, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 8 },
   defaultThemeDot: { width: 18, height: 18, borderRadius: 6 },
   defaultThemeText: { fontSize: 9, fontWeight: "900" },
-  symbolBody: { borderTopWidth: 1, paddingTop: 8, gap: 8 },
+  borderlessRow: { borderBottomWidth: 0 },
+  symbolBody: { paddingTop: 8, gap: 8 },
   symbolGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7 },
   symbol: { width: 40, height: 40, borderWidth: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   optionBlock: { borderTopWidth: 1, paddingVertical: 8, gap: 7 },

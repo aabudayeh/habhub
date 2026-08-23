@@ -1,4 +1,11 @@
 {
+  "Cards per page": "Karten pro Seite",
+  "Maximum cards per page": "Maximale Karten pro Seite",
+  "Open Log page": "Protokollseite öffnen",
+  "Tap for details. Hold to customize.": "Tippe für Details. Halte gedrückt, um anzupassen.",
+  "Tap once for details. Double tap to open this tracker's Log page.": "Tippe einmal für Details. Doppeltippe, um die Protokollseite dieses Trackers zu öffnen.",
+  "Tap once for details. Double tap to open this tracker's Log page. Hold to customize.": "Tippe einmal für Details. Doppeltippe, um die Protokollseite dieses Trackers zu öffnen. Halte gedrückt, um anzupassen.",
+  "Tap to open tracker details.": "Tippe, um die Tracker-Details zu öffnen.",
   "Connect Apple Health or Health Connect in the installed HabHub phone app. When both devices use the same signed-in account, those imported entries appear on web with their original source identity instead of being added twice.": "Verbinde Apple Health oder Health Connect in der installierten HabHub-App auf deinem Smartphone. Wenn beide Geräte dasselbe angemeldete Konto verwenden, erscheinen diese importierten Einträge im Web mit ihrer ursprünglichen Quellenidentität, statt doppelt addiert zu werden.",
   "Avatar simulator": "Avatar-Simulator",
   "Preview a change without saving it.": "Vorschau einer Änderung ohne Speichern.",

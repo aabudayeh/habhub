@@ -2154,6 +2154,7 @@ function chatPushPayload(
       senderId: state.currentUserId,
       senderName: sender.name,
       conversationType: message.recipientId ? "direct" : "group",
+      ...(message.recipientId ? { recipient: state.currentUserId } : {}),
       conversationId:
         message.conversationId ?? `group:${state.group.id}`,
     },

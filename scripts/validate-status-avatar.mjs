@@ -50,6 +50,10 @@ const uiSource = fs.readFileSync(
   path.join(root, "src", "components", "ui.tsx"),
   "utf8",
 );
+const webSafeAreaSource = fs.readFileSync(
+  path.join(root, "src", "domain", "webSafeArea.ts"),
+  "utf8",
+);
 const seedSource = fs.readFileSync(
   path.join(root, "src", "data", "seed.ts"),
   "utf8",
@@ -188,8 +192,13 @@ assert.match(
 );
 assert.match(
   uiSource,
-  /minimumBottomPadding\?: number[\s\S]{0,900}typeof minimumBottomPadding === "number"/,
-  "Screen must expose a bounded per-page bottom-padding override",
+  /minimumBottomPadding\?: number[\s\S]{0,1800}resolveScreenBottomPadding\(/,
+  "Screen must pass its per-page bottom-padding override through the shared resolver",
+);
+assert.match(
+  webSafeAreaSource,
+  /typeof explicitMinimum === "number"[\s\S]{0,120}Math\.max\(0, explicitMinimum\)/,
+  "the shared resolver must bound explicit per-page bottom padding",
 );
 assert.match(
   statusPageSource,

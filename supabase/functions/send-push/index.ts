@@ -754,6 +754,7 @@ async function canonicalChatEvent(
         senderId,
         senderName,
         conversationType: direct ? "direct" : "group",
+        ...(direct ? { recipient: senderId } : {}),
         conversationId:
           stored.conversation_id || (direct ? `direct:${senderId}` : `group:${groupId}`),
       },
@@ -1698,6 +1699,7 @@ function preferenceAllowed(
         "challenge_started",
         "challenge_invitation",
         "challenge_accepted",
+        "challenge_all_accepted",
       ].includes(event.eventType) &&
       groupPreference.challengeUpdates === false
     )

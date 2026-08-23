@@ -24,6 +24,7 @@ export function HorizontalPager({
   testID,
   requestedPage,
   onPageChange,
+  showPageDots = true,
 }: {
   pages: ReactNode[];
   accessibilityLabel: string;
@@ -34,6 +35,8 @@ export function HorizontalPager({
   requestedPage?: number;
   /** Mirrors swipe and dot navigation to compact indicators outside the pager. */
   onPageChange?: (page: number) => void;
+  /** Hide built-in dots when the surrounding screen already renders them. */
+  showPageDots?: boolean;
 }) {
   const colors = useAppColors();
   const { t } = useLocalization();
@@ -146,7 +149,7 @@ export function HorizontalPager({
           </View>
         ))}
       </ScrollView>
-      {pages.length > 1 ? (
+      {showPageDots && pages.length > 1 ? (
         <View style={styles.dots} accessibilityRole="tablist">
           {pages.map((_page, index) => {
             const selected = activePage === index;

@@ -134,6 +134,7 @@ export function buildAlerts(
     );
     const invitation = event.kind === "challenge_invitation";
     const accepted = event.kind === "challenge_accepted";
+    const allAccepted = event.kind === "challenge_all_accepted";
     const result = event.kind === "challenge_result";
     const reminder = event.kind === "challenge_reminder";
     return {
@@ -141,11 +142,13 @@ export function buildAlerts(
       category: "challenge",
       icon: invitation
         ? "flag-outline"
-        : result
-          ? "trophy-outline"
-          : reminder
-            ? "flame-outline"
-            : "swap-vertical-outline",
+        : allAccepted
+          ? "checkmark-circle-outline"
+          : result
+            ? "trophy-outline"
+            : reminder
+              ? "flame-outline"
+              : "swap-vertical-outline",
       color: invitation
         ? palette.primary
         : result
@@ -155,20 +158,24 @@ export function buildAlerts(
         event.title ??
         (invitation
           ? "Challenge started"
-          : accepted
-            ? "Challenge accepted"
-            : reminder
-              ? "Keep pushing"
-              : result
-                ? "Challenge complete"
-                : "Challenge standings changed"),
+          : allAccepted
+            ? "Everyone is in"
+            : accepted
+              ? "Challenge accepted"
+              : reminder
+                ? "Keep pushing"
+                : result
+                  ? "Challenge complete"
+                  : "Challenge standings changed"),
       detail:
         event.detail ??
         (invitation
           ? "Open HabHub to accept or decline."
-          : accepted
-            ? "A friend accepted your challenge."
-            : "Open the Leaderboard for the latest challenge standings."),
+          : allAccepted
+            ? "Everyone accepted the challenge."
+            : accepted
+              ? "A friend accepted your challenge."
+              : "Open the Leaderboard for the latest challenge standings."),
       createdAt: event.createdAt,
       memberId: actor?.id,
       scope: "group",

@@ -1,11 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import { router } from "expo-router";
+import { router, useSegments } from "expo-router";
 import React, {
   PropsWithChildren,
   ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
 } from "react";
 import {
@@ -45,12 +46,17 @@ import {
   TutorialTarget,
   useOptionalTutorial,
 } from "@/src/components/TutorialSpotlight";
+import {
+  resolveScreenBottomPadding,
+  WebDisplayEnvironment,
+} from "@/src/domain/webSafeArea";
 
 export function Screen({
   children,
   contentContainerStyle,
   scrollRef,
   fixedTop,
+  fixedBottom,
   refreshControl,
   refreshEnabled = true,
   onScroll,
@@ -62,6 +68,8 @@ export function Screen({
 }: ScrollViewProps & {
   scrollRef?: React.RefObject<ScrollView | null>;
   fixedTop?: ReactNode;
+  /** Persistent action bar below the scroll viewport. */
+  fixedBottom?: ReactNode;
   refreshEnabled?: boolean;
   /** Override the page default when a compact screen does not need tab-clearance space. */
   minimumBottomPadding?: number;
@@ -77,18 +85,38 @@ export function Screen({
   const tutorialTargetMeasurersRef = useRef(new Map<number, () => void>());
   const tutorialMeasureFrameRef = useRef<number | null>(null);
   const insets = useSafeAreaInsets();
-  const basePaddingBottom =
-    typeof minimumBottomPadding === "number"
-      ? Math.max(0, minimumBottomPadding)
-      : compact
-        ? 90
-        : 120;
+  const segments = useSegments();
+  const isTabScene = segments.join("/").includes("(tabs)");
+  const webDisplayEnvironment = useMemo<WebDisplayEnvironment | undefined>(() => {
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      typeof navigator === "undefined"
+    ) {
+      return undefined;
+    }
+    const browserNavigator = navigator as Navigator & { standalone?: boolean };
+    return {
+      userAgent: browserNavigator.userAgent,
+      platform: browserNavigator.platform,
+      maxTouchPoints: browserNavigator.maxTouchPoints,
+      displayModeStandalone:
+        window.matchMedia?.("(display-mode: standalone)").matches === true,
+      navigatorStandalone: browserNavigator.standalone === true,
+    };
+  }, []);
+  const defaultBottomPadding = compact ? 90 : 120;
   const userPaddingBottomRaw = StyleSheet.flatten(contentContainerStyle)?.paddingBottom;
   const userPaddingBottom =
     typeof userPaddingBottomRaw === "number" ? userPaddingBottomRaw : 0;
-  const paddingBottom =
-    Math.max(basePaddingBottom, userPaddingBottom ?? basePaddingBottom) +
-    insets.bottom;
+  const paddingBottom = resolveScreenBottomPadding(
+    defaultBottomPadding,
+    minimumBottomPadding,
+    userPaddingBottom,
+    insets.bottom,
+    isTabScene,
+    webDisplayEnvironment,
+  );
   useKeyboardReveal(activeRef);
   const revealTutorialTarget = useCallback(
     (targetWindowY: number) => {
@@ -228,6 +256,21 @@ export function Screen({
             </TutorialScrollProvider>
           </ScrollView>
         </View>
+        {fixedBottom ? (
+          <View
+            style={[
+              styles.fixedBottom,
+              compact && styles.fixedBottomCompact,
+              {
+                backgroundColor: colors.canvas,
+                borderTopColor: colors.border,
+                paddingBottom: Math.max(compact ? 8 : 10, insets.bottom),
+              },
+            ]}
+          >
+            <View style={styles.content}>{fixedBottom}</View>
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -727,6 +770,12 @@ const styles = StyleSheet.create({
   content: { width: "100%", maxWidth: 760, alignSelf: "center" },
   fixedTop: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 6 },
   fixedTopCompact: { paddingHorizontal: 12, paddingVertical: 4 },
+  fixedBottom: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+  },
+  fixedBottomCompact: { paddingHorizontal: 12, paddingTop: 8 },
   header: {
     flexDirection: "row",
     alignItems: "center",

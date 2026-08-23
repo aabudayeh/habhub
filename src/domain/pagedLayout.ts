@@ -22,6 +22,21 @@ export function pageIndexFromOffset(
   return clampPageIndex(offset / pageWidth, pageCount);
 }
 
+/** Uses a saved page size when present and safely supports older snapshots. */
+export function configuredPageCapacity(
+  configured: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const normalizedFallback = Math.max(
+    minimum,
+    Math.min(maximum, Math.floor(fallback)),
+  );
+  if (!Number.isFinite(configured)) return normalizedFallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(configured!)));
+}
+
 /**
  * Keeps a normal Today page within the useful phone viewport while avoiding
  * one-card pages on smaller devices. Expanded history remains reachable via
@@ -33,7 +48,7 @@ export function todayPageCapacity(viewportHeight: number, compact: boolean) {
   const estimatedRowHeight = compact ? 58 : 68;
   return Math.max(
     2,
-    Math.min(5, Math.floor((height - reservedHeight) / estimatedRowHeight)),
+    Math.min(6, Math.floor((height - reservedHeight) / estimatedRowHeight)),
   );
 }
 

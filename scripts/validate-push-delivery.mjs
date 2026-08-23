@@ -29,6 +29,11 @@ const webPushMigration = read(
 const alerts = read("app/alerts.tsx");
 const group = read("app/(tabs)/group.tsx");
 const alertDomain = read("src/domain/alerts.ts");
+const chatScreen = read("app/(tabs)/chat.tsx");
+const groupNotificationHook = read("src/cloud/useGroupNotificationEvents.ts");
+const allAcceptedMigration = read(
+  "supabase/migrations/202608230004_challenge_all_accepted_notification.sql",
+);
 
 assert.doesNotThrow(() => assertPushDeliveryComplete({ sent: 2 }));
 assert.doesNotThrow(() =>
@@ -219,6 +224,22 @@ assert.match(
 assert.match(edge, /canonicalChatEvent/);
 assert.match(edge, /const expectedEventKey = `message:\$\{groupId\}:\$\{clientMessageId\}`/);
 assert.match(edge, /pushPreview\(direct \? text :/);
+assert.match(
+  edge,
+  /\.\.\.\(direct \? \{ recipient: senderId \} : \{\}\)/,
+  "canonical direct-message Web pushes must name the sender as the DM route recipient",
+);
+assert.match(
+  cloud,
+  /message\.recipientId[\s\S]{0,80}\{ recipient: state\.currentUserId \}/,
+  "legacy direct-message payloads must use the sender identity for the receiver's route",
+);
+assert.match(
+  webWorker,
+  /data\?\.conversationType === "direct"[\s\S]{0,180}target\.searchParams\.set\("recipient", data\.senderId/,
+  "the service worker must upgrade older direct payloads from senderId to recipient",
+);
+assert.match(chatScreen, /useLocalSearchParams<\{ recipient\?/);
 assert.match(edge, /legacyMembershipCanonicalEvent/);
 assert.match(edge, /legacyCommittedCanonicalEvent/);
 assert.match(edge, /legacyCompetitionCanonicalEvent/);
@@ -241,6 +262,21 @@ assert.match(edge, /canDispatchStoredEvent/);
 assert.match(edge, /event\.category !== "winner"/);
 assert.match(edge, /sourceAndTimeSuffix\.startsWith/);
 assert.match(edge, /settings\.challenges \?\? settings\.badgesAndWinners \?\? true/);
+assert.match(
+  edge,
+  /"challenge_accepted",[\s\S]{0,80}"challenge_all_accepted"[\s\S]{0,120}groupPreference\.challengeUpdates === false/,
+  "all-accepted pushes must respect each recipient's challenge-update preference",
+);
+assert.match(
+  groupNotificationHook,
+  /event\.kind === "challenge_all_accepted"[\s\S]{0,100}preferences\?\.challengeUpdates === false/,
+  "the private in-app feed must respect the same challenge-update preference",
+);
+assert.match(
+  allAcceptedMigration,
+  /on conflict \(event_key\) do nothing/i,
+  "the trigger-owned all-accepted push must be idempotent",
+);
 assert.match(edge, /return !Array\.isArray\(ids\) \|\| ids\.includes\(event\.metricId\)/);
 assert.match(edge, /!inQuietHours\(item\.preferences \?\? \{\}\)/);
 assert.doesNotMatch(edge, /deferred\s*:/);

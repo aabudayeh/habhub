@@ -4,6 +4,7 @@ import {
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Platform,
   Pressable,
   ScrollView,
   StyleProp,
@@ -18,6 +19,7 @@ import {
 } from "@/src/components/AppText";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
+import { wheelIndexFromOffset } from "@/src/domain/timeWheel";
 
 function parts(value: string) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value);
@@ -176,6 +178,7 @@ function WheelColumn({
 }) {
   const colors = useAppColors();
   const ref = useRef<ScrollView>(null);
+  const webSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       ref.current?.scrollTo({
@@ -185,15 +188,38 @@ function WheelColumn({
     });
     return () => cancelAnimationFrame(frame);
   }, [selectedIndex]);
-  const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const index = Math.max(
-      0,
-      Math.min(
-        items.length - 1,
-        Math.round(event.nativeEvent.contentOffset.y / WHEEL_ROW_HEIGHT),
-      ),
+  useEffect(
+    () => () => {
+      if (webSettleTimerRef.current)
+        clearTimeout(webSettleTimerRef.current);
+    },
+    [],
+  );
+  const commitOffset = (offset: number) => {
+    onSelect(
+      wheelIndexFromOffset(offset, WHEEL_ROW_HEIGHT, items.length),
     );
-    onSelect(index);
+  };
+  const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (webSettleTimerRef.current) {
+      clearTimeout(webSettleTimerRef.current);
+      webSettleTimerRef.current = null;
+    }
+    commitOffset(event.nativeEvent.contentOffset.y);
+  };
+  const scheduleWebSettle = (
+    event: NativeSyntheticEvent<NativeScrollEvent>,
+  ) => {
+    if (Platform.OS !== "web") return;
+    const offset = event.nativeEvent.contentOffset.y;
+    if (webSettleTimerRef.current)
+      clearTimeout(webSettleTimerRef.current);
+    // React Native Web does not consistently emit momentum/end-drag for a
+    // mouse wheel or trackpad. Commit the centred row after scrolling rests.
+    webSettleTimerRef.current = setTimeout(() => {
+      webSettleTimerRef.current = null;
+      commitOffset(offset);
+    }, 100);
   };
   return (
     <View style={styles.wheelColumn}>
@@ -206,6 +232,8 @@ function WheelColumn({
         contentContainerStyle={styles.wheelContent}
         onMomentumScrollEnd={settle}
         onScrollEndDrag={settle}
+        onScroll={Platform.OS === "web" ? scheduleWebSettle : undefined}
+        scrollEventThrottle={16}
       >
         {items.map((item, index) => (
           <Pressable

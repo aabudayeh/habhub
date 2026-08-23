@@ -555,6 +555,7 @@ export type GroupNotificationEvent = {
   kind:
     | "challenge_invitation"
     | "challenge_accepted"
+    | "challenge_all_accepted"
     | "challenge_standing"
     | "challenge_reminder"
     | "challenge_result";
@@ -883,8 +884,12 @@ export type UserSettings = {
   todayTileLimit: number;
   /** Optional horizontal, screen-sized tracker pages on Today. */
   todayLayoutMode?: DashboardLayoutMode;
+  /** Number of tracker cards shown on each swipeable Today page. */
+  todayTilesPerPage?: number;
   /** Optional horizontal ranking-card pages on Leaderboard. */
   leaderboardLayoutMode?: DashboardLayoutMode;
+  /** Number of ranking cards shown on each swipeable Leaderboard page. */
+  leaderboardCardsPerPage?: number;
   darkMode: boolean;
   /** User-owned accent. It never mutates group configuration. */
   personalThemeColor?: string;
@@ -935,7 +940,7 @@ export type UserSettings = {
   statusAvatarCalculationSource?: StatusAvatarCalculationSource;
   /** Remember whether the Status range/date controls were collapsed. */
   statusDateNavigatorCollapsed?: boolean;
-  /** Put the to-do block below goal trackers instead of above them. */
+  /** Put the to-do block below goal trackers instead of above them (default). */
   todosBelowGoals?: boolean;
   /** Personal ordering for mixed Schedule-page events. */
   calendarEventOrder?: string[];

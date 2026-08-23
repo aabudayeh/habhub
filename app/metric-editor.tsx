@@ -1625,6 +1625,17 @@ export default function TrackerEditor() {
     <Screen
       scrollRef={scrollRef}
       keyboardShouldPersistTaps="handled"
+      fixedBottom={
+        <View style={styles.stickySave}>
+          <Button
+            label={saveActionLabel}
+            icon="checkmark"
+            loading={saving}
+            disabled={saving}
+            onPress={() => void save()}
+          />
+        </View>
+      }
     >
       <PageHeader
         eyebrow={groupScope ? state.group.name : "Personal setup"}
@@ -4434,6 +4445,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   headerActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  stickySave: { width: "100%" },
   delete: { width: 96 },
   visualChoices: { borderTopWidth: 1, borderTopColor: "transparent" },
 });
