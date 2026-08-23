@@ -630,10 +630,52 @@ assert.match(workoutTimerSource, /webWorkoutNotificationAlertSignature/);
 assert.match(workoutTimerSource, /route: "\/gym"/);
 assert.match(workoutTimerSource, /maxActions/);
 assert.match(workoutTimerSource, /timestamp: phaseOrigin/);
-assert.match(workoutTimerSource, /WORKOUT_TIMER_RESUME : WORKOUT_TIMER_PAUSE/);
 assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
+assert.match(
+  workoutTimerSource,
+  /categoryIdentifier: flow\.paused \|\| hasNext[\s\S]{0,100}WORKOUT_TIMER_CATEGORY/,
+);
 assert.match(workoutTimerSource, /export const WORKOUT_TIMER_RESUME = "workout-resume"/);
 assert.match(workoutTimerSource, /suspendWorkoutTimerNotificationPersistence/);
+const webWorkoutTimestampComment = workoutTimerSource.indexOf("// `timestamp`");
+const visibleWebWorkoutActions = workoutTimerSource.slice(
+  workoutTimerSource.lastIndexOf("const actions =", webWorkoutTimestampComment),
+  webWorkoutTimestampComment,
+);
+assert.match(visibleWebWorkoutActions, /WORKOUT_TIMER_NEXT/);
+assert.match(
+  visibleWebWorkoutActions,
+  /phase === "paused" \? "Resume" : "Next"/,
+);
+assert.doesNotMatch(
+  visibleWebWorkoutActions,
+  /WORKOUT_TIMER_PAUSE|WORKOUT_TIMER_RESUME/,
+  "the Web live notification must expose only Next",
+);
+const workoutFlowAction = workoutTimerSource.slice(
+  workoutTimerSource.indexOf("async function applyFlowAction"),
+  workoutTimerSource.indexOf("if (\n  Platform.OS === \"android\""),
+);
+assert.match(
+  workoutFlowAction,
+  /action === WORKOUT_TIMER_NEXT[\s\S]{0,120}if \(flow\.paused\)[\s\S]{0,140}flow\.paused = false/,
+  "the one remaining Web notification action must resume a paused flow",
+);
+const nativeWorkoutCategories = workoutTimerSource.slice(
+  workoutTimerSource.indexOf("setNotificationCategoryAsync(WORKOUT_TIMER_CATEGORY"),
+  workoutTimerSource.indexOf("configured = true"),
+);
+assert.match(nativeWorkoutCategories, /identifier: WORKOUT_TIMER_NEXT/);
+assert.match(
+  nativeWorkoutCategories,
+  /identifier: WORKOUT_TIMER_FINISH[\s\S]{0,140}opensAppToForeground: false/,
+  "the final notification action must finish in the background; only the notification body opens the app",
+);
+assert.doesNotMatch(
+  nativeWorkoutCategories,
+  /identifier: WORKOUT_TIMER_PAUSE/,
+  "native live-notification categories must not expose Pause",
+);
 assert.match(gymSource, /document\.visibilityState === "visible"/);
 assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
 assert.match(gymSource, /state\.settings\.notifications\.pushEnabled/);
@@ -1008,6 +1050,25 @@ assert.match(androidNotificationServiceSource, /flow\.finished/);
 assert.match(androidNotificationServiceSource, /setDeleteIntent\(dismissedPendingIntent/);
 assert.match(androidNotificationServiceSource, /manager\.activeNotifications\.any \{ it\.tag == NOTIFICATION_ID \}/);
 assert.match(androidNotificationServiceSource, /setOngoing\(false\)/);
+const persistentWorkoutBuilder = androidNotificationServiceSource.slice(
+  androidNotificationServiceSource.indexOf("private fun buildPersistentNotification"),
+  androidNotificationServiceSource.indexOf("private fun dismissedPendingIntent"),
+);
+assert.match(persistentWorkoutBuilder, /NotificationAction\(NEXT_ACTION/);
+assert.match(
+  persistentWorkoutBuilder,
+  /NotificationAction\(FINISH_ACTION, "Finish workout", false\)/,
+  "the restored final action must not open the app",
+);
+assert.match(
+  persistentWorkoutBuilder,
+  /if \(flow\.paused\)[\s\S]{0,120}NotificationAction\(NEXT_ACTION, "Resume"/,
+);
+assert.doesNotMatch(
+  persistentWorkoutBuilder,
+  /NotificationAction\(\s*PAUSE_ACTION/,
+  "a restored persistent workout notification must not recreate Pause",
+);
 assert.doesNotMatch(androidNotificationServiceSource, /startForegroundService/);
 assert.match(androidPluginSource, /HabHubWorkoutNotificationPersistenceReceiver/);
 assert.match(

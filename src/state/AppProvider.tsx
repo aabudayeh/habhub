@@ -490,6 +490,8 @@ type Action =
         metricIds: string[];
         throughDate: string;
         removeStepFallbacks?: boolean;
+        /** User-selected source diagnostics may intentionally confirm zero. */
+        acceptCurrentDayZero?: boolean;
       };
     }
   | { type: "reset" };
@@ -2852,7 +2854,12 @@ function reducer(state: AppState, action: Action): AppState {
       for (const entry of action.entries) {
         if (dismissed.has(entry.id)) continue;
         const key = metricEntryKey(entry.userId, entry.id);
-        const sourceReconciledEntry = replacementMetricIds.has(entry.metricId)
+        const acceptSelectedCurrentDayValue =
+          action.aggregateReplacement?.acceptCurrentDayZero === true &&
+          entry.localDate === currentLocalDate;
+        const sourceReconciledEntry =
+          replacementMetricIds.has(entry.metricId) &&
+          !acceptSelectedCurrentDayValue
           ? preserveCurrentDayStepReplacementFloor(
               existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [],
               preserveCurrentDayStepFloor(
@@ -2871,6 +2878,7 @@ function reducer(state: AppState, action: Action): AppState {
       }
       if (
         replacementMetricIds.size &&
+        action.aggregateReplacement?.acceptCurrentDayZero !== true &&
         action.fromDate <= currentLocalDate &&
         (action.aggregateReplacement?.throughDate ?? "") >= currentLocalDate
       ) {
@@ -3142,6 +3150,8 @@ type AppContextValue = {
       metricIds: string[];
       throughDate: string;
       removeStepFallbacks?: boolean;
+      /** User-selected source diagnostics may intentionally confirm zero. */
+      acceptCurrentDayZero?: boolean;
     },
     /** Device-owned imports can be re-read; keep their JSON save off tap frames. */
     deferPersistence?: boolean,

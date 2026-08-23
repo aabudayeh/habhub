@@ -3,15 +3,17 @@ import React, { createContext, PropsWithChildren, useCallback, useContext, useEf
 import { AppState as NativeAppState, InteractionManager, Platform } from 'react-native';
 
 import { useAuth } from '@/src/auth/AuthProvider';
+import { entriesForUserDay } from '@/src/domain/dataIndex';
 import { dateKey } from '@/src/domain/date';
 import { setCloudSyncPaused } from '@/src/cloud/syncGate';
-import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import { enabledHealthDataTypes, healthFallbackContextForRead, healthVisibilityByMetric, mapHealthRecordsToEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
   aggregateRangeThroughLocalDate,
   hasHealthImportIdentity,
   healthSourceId,
   historicalStepRepairStart,
   mergeHealthSourcePreferences,
+  normalizeLiveStepSources,
   stepRepairRangeCovered,
 } from '@/src/domain/healthDedup';
 import { nativeHealthAdapter } from '@/src/health/adapter';
@@ -30,9 +32,9 @@ import {
   healthSyncSchedule,
   normalizeHealthSyncMode,
 } from '@/src/health/schedule';
-import { HealthAdapterAvailability, PersistedHealthStatus } from '@/src/health/types';
+import { HealthAdapterAvailability, LiveStepDiagnostics, PersistedHealthStatus } from '@/src/health/types';
 import { useApp } from '@/src/state/AppProvider';
-import { SyncMode } from '@/src/types';
+import { LiveStepCombination, LiveStepSource, SyncMode } from '@/src/types';
 
 export type HealthSyncStatus = 'checking' | 'unavailable' | 'idle' | 'requesting' | 'syncing' | 'ready' | 'error';
 
@@ -70,6 +72,7 @@ type HealthSyncContextValue = {
     origin: string;
     enabled: boolean;
   }[];
+  liveStepDiagnostics: LiveStepDiagnostics | null;
   connect: (options?: {
     historyDays?: 30 | 90 | 365 | 730;
     startTrackedGoalsAtFirstData?: boolean;
@@ -78,6 +81,10 @@ type HealthSyncContextValue = {
   syncHistory: () => Promise<void>;
   setSyncMode: (mode: SyncMode) => Promise<void>;
   setSourceEnabled: (sourceId: string, enabled: boolean) => Promise<void>;
+  setLiveStepConfiguration: (
+    sources: LiveStepSource[],
+    combination: LiveStepCombination,
+  ) => Promise<void>;
   disconnect: () => Promise<void>;
   openSettings: () => Promise<void>;
 };
@@ -102,11 +109,13 @@ const disabledHealthContext: HealthSyncContextValue = {
   backgroundRegistration: 'disabled',
   sourceOrigins: [],
   sourceOptions: [],
+  liveStepDiagnostics: null,
   connect: disabledHealthAction,
   syncNow: disabledHealthAction,
   syncHistory: disabledHealthAction,
   setSyncMode: disabledHealthAction,
   setSourceEnabled: disabledHealthAction,
+  setLiveStepConfiguration: disabledHealthAction,
   disconnect: disabledHealthAction,
   openSettings: disabledHealthAction,
 };
@@ -155,6 +164,8 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   const [backgroundRegistration, setBackgroundRegistration] = useState<
     HealthSyncContextValue['backgroundRegistration']
   >('disabled');
+  const [liveStepDiagnostics, setLiveStepDiagnostics] =
+    useState<LiveStepDiagnostics | null>(null);
   const persistedRef = useRef(persisted);
   const syncingRef = useRef<Promise<void> | null>(null);
   const activeHealthOperationRef = useRef<ActiveHealthOperation | null>(null);
@@ -176,7 +187,9 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       forceEnabled?: boolean,
     ) => Promise<void>) | null
   >(null);
-  const refreshTodayStepsRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+  const refreshTodayStepsRef = useRef<
+    ((force?: boolean, acceptCurrentDayZero?: boolean) => Promise<void>) | null
+  >(null);
   const runStepsRepairRef = useRef<(() => Promise<void>) | null>(null);
   const stateRef = useRef(state);
   const updateSettingsRef = useRef(updateSettings);
@@ -267,6 +280,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     let cancelled = false;
     const empty: PersistedHealthStatus = { lastSyncedAt:null,importedCount:0,error:null,backfill:null,stepsRepair:null };
+    setLiveStepDiagnostics(null);
     persistedRef.current = empty;
     setPersisted(empty);
     const statusKey = `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`;
@@ -569,16 +583,33 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     return sourcePreferences;
   }, []);
 
-  const refreshTodaySteps = useCallback(async (force = false) => {
+  const rememberLiveStepDiagnostics = useCallback(
+    (records: import('@/src/health/types').HealthImportRecord[]) => {
+      const diagnostics = records.find(
+        (record) => record.type === 'steps' && record.liveStepDiagnostics,
+      )?.liveStepDiagnostics;
+      if (diagnostics) setLiveStepDiagnostics(diagnostics);
+    },
+    [],
+  );
+
+  const refreshTodaySteps = useCallback(async (
+    force = false,
+    acceptCurrentDayZero = false,
+  ) => {
     const pending = syncingRef.current;
     if (pending) {
       const activeOperation = activeHealthOperationRef.current;
-      if (activeOperation === 'steps-refresh') return pending;
+      if (activeOperation === 'steps-refresh') {
+        if (!force) return pending;
+        await pending.catch(() => undefined);
+        return refreshTodayStepsRef.current?.(true, acceptCurrentDayZero);
+      }
       await pending.catch(() => undefined);
       // A full read may have started before Samsung finished exporting its
       // latest bucket. Keep the queued, cheap current-day read instead of
       // silently treating the unrelated lock holder as this refresh.
-      return refreshTodayStepsRef.current?.(true);
+      return refreshTodayStepsRef.current?.(true, acceptCurrentDayZero);
     }
     const current = stateRef.current;
     if (
@@ -605,12 +636,21 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         ['steps'],
         current.metrics,
       );
+      const currentLocalDate = dateKey(from);
+      const currentDayEntries = entriesForUserDay(
+        current.entries,
+        current.currentUserId,
+        currentLocalDate,
+      );
       const records = await nativeHealthAdapter.read({
         from,
         to,
         dataTypes: ['steps'],
         sourcePreferences: current.settings.healthSync.sourcePreferences,
+        liveStepSources: current.settings.healthSync.liveStepSources,
+        liveStepCombination: current.settings.healthSync.liveStepCombination,
       });
+      rememberLiveStepDiagnostics(records);
       const sourcePreferences = rememberHealthSources(records);
       const entries = mapHealthRecordsToEntries(
         records,
@@ -619,18 +659,20 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
         current.metrics,
         current.settings.energyProfile,
         sourcePreferences,
+        healthFallbackContextForRead(currentDayEntries, current.metrics, ['steps']),
       );
       await importHealthEntries(
         entries,
         nativeHealthAdapter.provider!,
         stepMetricIds,
-        dateKey(from),
+        currentLocalDate,
         false,
         true,
         {
           metricIds: stepMetricIds,
           throughDate: dateKey(to),
           removeStepFallbacks: true,
+          acceptCurrentDayZero,
         },
         true,
       );
@@ -647,7 +689,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     });
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, rememberHealthSources, saveStatus]);
+  }, [importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus]);
   refreshTodayStepsRef.current = refreshTodaySteps;
 
   const runStepsRepair = useCallback(async () => {
@@ -726,7 +768,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             to: chunkEnd,
             dataTypes: ['steps'],
             sourcePreferences: current.settings.healthSync.sourcePreferences,
+            liveStepSources: current.settings.healthSync.liveStepSources,
+            liveStepCombination:
+              current.settings.healthSync.liveStepCombination,
           });
+          rememberLiveStepDiagnostics(records);
           batchRecords.push(...records);
           batchFrom = chunkStart;
           batchThrough ??= aggregateRangeThroughLocalDate(chunkEnd);
@@ -746,6 +792,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
           current.metrics,
           current.settings.energyProfile,
           sourcePreferences,
+          healthFallbackContextForRead(current.entries, current.metrics, ['steps']),
         );
         // Four native slices become one reducer update, one React render, and
         // one deferred/coalesced snapshot write. Keep the cloud gate open while
@@ -803,7 +850,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     });
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, rememberHealthSources, saveStatus, scheduleStepsRepair]);
+  }, [importHealthEntries, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus, scheduleStepsRepair]);
   runStepsRepairRef.current = runStepsRepair;
 
   const runSync = useCallback(async (reason: 'connect' | 'open' | 'pull' | 'manual' | 'history' | 'backfill', forceEnabled = false) => {
@@ -906,7 +953,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             to: now,
             dataTypes,
             sourcePreferences: current.settings.healthSync.sourcePreferences,
+            liveStepSources: current.settings.healthSync.liveStepSources,
+            liveStepCombination:
+              current.settings.healthSync.liveStepCombination,
           });
+          rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
@@ -915,6 +966,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,
+            healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
@@ -943,7 +995,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             to: chunkEnd,
             dataTypes,
             sourcePreferences: current.settings.healthSync.sourcePreferences,
+            liveStepSources: current.settings.healthSync.liveStepSources,
+            liveStepCombination:
+              current.settings.healthSync.liveStepCombination,
           });
+          rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
@@ -952,6 +1008,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,
+            healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
           );
           importedCount = entries.length;
           cumulativeImportedCount =
@@ -986,7 +1043,11 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             to,
             dataTypes,
             sourcePreferences: current.settings.healthSync.sourcePreferences,
+            liveStepSources: current.settings.healthSync.liveStepSources,
+            liveStepCombination:
+              current.settings.healthSync.liveStepCombination,
           });
+          rememberLiveStepDiagnostics(records);
           const sourcePreferences = rememberHealthSources(records);
           const entries = mapHealthRecordsToEntries(
             records,
@@ -995,6 +1056,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
             current.metrics,
             current.settings.energyProfile,
             sourcePreferences,
+            healthFallbackContextForRead(current.entries, current.metrics, dataTypes),
           );
           importedCount = entries.length;
           cumulativeImportedCount = importedCount;
@@ -1086,7 +1148,7 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     })();
     syncingRef.current = operation;
     return operation;
-  }, [importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, saveStatus, scheduleBackfill, signedInNativeAccountId]);
+  }, [importHealthEntries, markPhysicalActivityMigrationAttempt, rememberHealthSources, rememberLiveStepDiagnostics, saveStatus, scheduleBackfill, signedInNativeAccountId]);
   runSyncRef.current = runSync;
 
   const connect = useCallback(async (options?: {
@@ -1286,6 +1348,51 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
       stepsRepairTimerRef.current = null;
     }
   }, []);
+
+  const setLiveStepConfiguration = useCallback(
+    async (sources: LiveStepSource[], combination: LiveStepCombination) => {
+      const currentState = stateRef.current;
+      const currentHealth = currentState.settings.healthSync;
+      const liveStepSources = normalizeLiveStepSources(sources);
+      if (!liveStepSources.length)
+        throw new Error("Choose at least one live Step source.");
+      const healthSync = {
+        ...currentHealth,
+        liveStepSources,
+        liveStepCombination: combination,
+      };
+      stateRef.current = {
+        ...currentState,
+        settings: { ...currentState.settings, healthSync },
+      };
+      // Do not leave the previous configuration's candidate totals on screen
+      // while the newly selected source read is pending or if it fails.
+      setLiveStepDiagnostics(null);
+      updateSettingsRef.current({ healthSync });
+      if (
+        liveStepSources.includes('physical_activity') &&
+        currentHealth.enabled
+      )
+        await nativeHealthAdapter.prepareCurrentDaySteps?.().catch(
+          () => undefined,
+        );
+      try {
+        if (currentHealth.enabled && currentHealth.dataTypes.steps)
+          await refreshTodayStepsRef.current?.(true, true);
+      } catch (error) {
+        // A source that cannot be read should not remain selected while Today
+        // still shows the prior source's last confirmed total.
+        const latestState = stateRef.current;
+        stateRef.current = {
+          ...latestState,
+          settings: { ...latestState.settings, healthSync: currentHealth },
+        };
+        updateSettingsRef.current({ healthSync: currentHealth });
+        throw error;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     // Cloud merges often recreate the settings object even when the actual
@@ -1681,14 +1788,16 @@ export function HealthSyncProvider({ children }: PropsWithChildren) {
     backgroundRegistration,
     sourceOrigins,
     sourceOptions,
+    liveStepDiagnostics,
     connect,
     syncNow,
     syncHistory: () => runSync('history'),
     setSyncMode,
     setSourceEnabled,
+    setLiveStepConfiguration,
     disconnect,
     openSettings: nativeHealthAdapter.openSettings,
-  }), [availability, backgroundRegistration, connect, disconnect, persisted, runSync, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
+  }), [availability, backgroundRegistration, connect, disconnect, liveStepDiagnostics, persisted, runSync, setLiveStepConfiguration, setSourceEnabled, setSyncMode, sourceOptions, sourceOrigins, status, syncNow]);
 
   return <HealthSyncContext.Provider value={value}>{children}</HealthSyncContext.Provider>;
 }

@@ -16,9 +16,11 @@ import {
   historicalStepRepairStart,
   isCanonicalHealthConnectStepAggregate,
   isDailyStepReplacementCandidate,
+  LIVE_STEP_SOURCES,
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
   mergeLocalCurrentDayDeviceStepEntries,
+  normalizeLiveStepSources,
   partitionStepAggregateRange,
   preserveCurrentDayStepFloor,
   preserveCurrentDayStepReplacementFloor,
@@ -32,6 +34,7 @@ import {
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
 import {
+  healthFallbackContextForRead,
   mapHealthRecordsToEntries,
   reconcileGoogleHealthNativeMirrors,
 } from "../src/domain/health.ts";
@@ -79,8 +82,8 @@ assert.equal(
 );
 assert.equal(
   HEALTH_STEPS_IMPORT_VERSION,
-  4,
-  "removing the one-step calibration must trigger a one-time repair for existing connected accounts",
+  5,
+  "workout-uncovered Step fallbacks must trigger a one-time historical repair for existing connected accounts",
 );
 
 const platformPriorityAggregate = [
@@ -266,6 +269,140 @@ assert.deepEqual(
   },
   "Samsung's All steps origin remains authoritative regardless of magnitude",
 );
+
+assert.deepEqual(
+  normalizeLiveStepSources(undefined),
+  LIVE_STEP_SOURCES,
+  "upgraded devices must safely enable every independent live Step candidate",
+);
+assert.deepEqual(
+  normalizeLiveStepSources([
+    "physical_activity",
+    "invalid",
+    "samsung_health",
+    "physical_activity",
+  ]),
+  ["samsung_health", "physical_activity"],
+  "persisted source choices must be validated, deduplicated, and ordered",
+);
+const liveStepCandidates = [4_495, 6_000, 4_000, 4_000];
+assert.equal(
+  reconcileCurrentDayStepTotal(...liveStepCandidates, {
+    selectedSources: ["samsung_health"],
+    combination: "highest",
+  }).count,
+  4_000,
+  "a single Samsung selection must return exactly Samsung's exported total",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(null, null, null, 4_000, {
+    selectedSources: ["samsung_health"],
+    combination: "highest",
+  }).liveStepDiagnostics?.candidates,
+  { samsung_health: 4_000 },
+  "a source that was deliberately not queried must be absent rather than misreported as zero",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(...liveStepCandidates, {
+    selectedSources: ["health_connect"],
+    combination: "priority",
+  }).count,
+  4_495,
+  "a single unfiltered selection must return exactly Health Connect's aggregate",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(...liveStepCandidates, {
+    selectedSources: ["android_device"],
+    combination: "highest",
+  }).count,
+  4_000,
+  "a single Android selection must return exactly its com.android/SPN aggregate",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(...liveStepCandidates, {
+    selectedSources: ["physical_activity"],
+    combination: "highest",
+  }).count,
+  6_000,
+  "a single Physical Activity selection must return exactly the local candidate",
+);
+const highestLiveSteps = reconcileCurrentDayStepTotal(...liveStepCandidates, {
+  selectedSources: [...LIVE_STEP_SOURCES],
+  combination: "highest",
+});
+assert.equal(
+  highestLiveSteps.count,
+  6_000,
+  "the default non-additive heuristic must recover the highest complete selected total",
+);
+assert.deepEqual(
+  highestLiveSteps.liveStepDiagnostics?.candidates,
+  {
+    samsung_health: 4_000,
+    health_connect: 4_495,
+    android_device: 4_000,
+    physical_activity: 6_000,
+  },
+  "advanced settings must receive each independent candidate for diagnosis",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(...liveStepCandidates, {
+    selectedSources: [...LIVE_STEP_SOURCES],
+    combination: "priority",
+  }).count,
+  4_000,
+  "priority mode must use the explicit Samsung-first order rather than magnitude",
+);
+const summedLiveSteps = reconcileCurrentDayStepTotal(...liveStepCandidates, {
+  selectedSources: ["samsung_health", "health_connect"],
+  combination: "sum",
+});
+assert.equal(
+  summedLiveSteps.count,
+  8_495,
+  "diagnostic Sum mode must add only the explicitly selected candidates",
+);
+assert.equal(
+  summedLiveSteps.combinedSources,
+  true,
+  "a multi-source sum must carry explicit combined provenance",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(4_495, 6_000, 4_000, null, {
+    selectedSources: ["samsung_health"],
+    combination: "highest",
+  }).selectedSourcesUnavailable,
+  true,
+  "an unavailable exact source must remain distinct from a successful zero",
+);
+assert.equal(
+  reconcileCurrentDayStepTotal(4_495, 6_000, 4_000, 0, {
+    selectedSources: ["samsung_health"],
+    combination: "highest",
+  }).selectedSourcesUnavailable,
+  false,
+  "a successful zero from an exact source must not be reported as unavailable",
+);
+const zeroSamsungPriority = reconcileCurrentDayStepTotal(
+  4_495,
+  6_000,
+  4_000,
+  0,
+  {
+    selectedSources: ["samsung_health", "health_connect"],
+    combination: "priority",
+  },
+);
+assert.equal(
+  zeroSamsungPriority.count,
+  4_495,
+  "priority mode must skip an empty filtered source that can represent an app with no Step records",
+);
+assert.deepEqual(
+  zeroSamsungPriority.liveStepDiagnostics?.resultSources,
+  ["health_connect"],
+  "priority diagnostics must identify the first positive authority",
+);
 const workoutFallbackMetrics = [
   {
     id: "steps",
@@ -359,6 +496,185 @@ assert.deepEqual(
 assert.ok(
   derivedWalkingFallbacks.every((entry) => Number(entry.value) > 0),
   "the workout-uncovered fixture must exercise every derived fallback branch",
+);
+const persistedWalkingWorkouts = mapHealthRecordsToEntries(
+  [
+    {
+      id: "morning-walk",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-13T08:00:00.000Z",
+      endTime: "2026-08-13T08:20:00.000Z",
+      localDate: "2026-08-13",
+      value: 20,
+      unit: "minutes",
+      origin: "com.sec.android.app.shealth",
+      label: "Walking",
+      measurements: { durationMinutes: 20, distanceKm: 1 },
+    },
+    {
+      id: "lunch-walk",
+      provider: "health_connect",
+      type: "workouts",
+      startTime: "2026-08-13T12:00:00.000Z",
+      endTime: "2026-08-13T12:15:00.000Z",
+      localDate: "2026-08-13",
+      value: 15,
+      unit: "minutes",
+      origin: "com.sec.android.app.shealth",
+      label: "Walking",
+      measurements: { durationMinutes: 15, distanceKm: 1 },
+    },
+    record({
+      id: "morning-walk-energy",
+      type: "active_energy",
+      startTime: "2026-08-13T08:00:00.000Z",
+      endTime: "2026-08-13T08:20:00.000Z",
+      localDate: "2026-08-13",
+      value: 100,
+      unit: "kcal",
+      label: "Walking",
+    }),
+    record({
+      id: "lunch-walk-energy",
+      type: "active_energy",
+      startTime: "2026-08-13T12:00:00.000Z",
+      endTime: "2026-08-13T12:15:00.000Z",
+      localDate: "2026-08-13",
+      value: 80,
+      unit: "kcal",
+      label: "Walking",
+    }),
+  ],
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+);
+const stepOnlyRefreshRecords = [
+  record({
+    id: "aggregate:steps:2026-08-13",
+    localDate: "2026-08-13",
+    value: 6_000,
+  }),
+];
+const stepOnlyRefreshWithWorkoutContext = mapHealthRecordsToEntries(
+  stepOnlyRefreshRecords,
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+  undefined,
+  healthFallbackContextForRead(
+    persistedWalkingWorkouts,
+    workoutFallbackMetrics,
+    ["steps"],
+  ),
+);
+assert.equal(
+  stepOnlyRefreshWithWorkoutContext.find((entry) => entry.metricId === "steps")
+    ?.value,
+  6_000,
+  "subtracting workout coverage from synthetic activity must never alter displayed Steps",
+);
+const contextualFallbacks = stepOnlyRefreshWithWorkoutContext.filter((entry) =>
+  entry.sourceRecordId?.startsWith("step-fallback:"),
+);
+const contextualFallbackValue = (metricId) =>
+  contextualFallbacks.find((entry) => entry.metricId === metricId)?.value;
+assert.equal(
+  contextualFallbackValue("workout_distance"),
+  2.6,
+  "a Steps-only refresh must estimate distance from only the 3,375 steps left after two measured 1 km walks",
+);
+assert.equal(
+  contextualFallbackValue("workout_duration"),
+  32,
+  "a Steps-only refresh must estimate duration from only workout-uncovered steps",
+);
+assert.equal(
+  contextualFallbackValue("exercise"),
+  95.4,
+  "existing workout active energy plus the synthetic row must not count the two workouts twice",
+);
+assert.match(
+  String(contextualFallbacks[0]?.note),
+  /3.375 steps not already explained/,
+  "the user-facing estimate must describe the uncovered remainder rather than all 6,000 Steps",
+);
+assert.equal(
+  2 + Number(contextualFallbackValue("workout_distance")),
+  4.6,
+  "measured workout distance and uncovered-step distance must compose into the daily tracker total",
+);
+assert.equal(
+  35 + Number(contextualFallbackValue("workout_duration")),
+  67,
+  "measured workout duration and uncovered-step duration must compose into the daily tracker total",
+);
+assert.equal(
+  180 + Number(contextualFallbackValue("exercise")),
+  275.4,
+  "measured workout energy and uncovered-step energy must compose without dropping either component",
+);
+const repeatedStepOnlyRefresh = mapHealthRecordsToEntries(
+  stepOnlyRefreshRecords,
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+  undefined,
+  healthFallbackContextForRead(
+    [...persistedWalkingWorkouts, ...stepOnlyRefreshWithWorkoutContext],
+    workoutFallbackMetrics,
+    ["steps"],
+  ),
+);
+assert.deepEqual(
+  repeatedStepOnlyRefresh
+    .filter((entry) => entry.sourceRecordId?.startsWith("step-fallback:"))
+    .map((entry) => [entry.metricId, entry.value])
+    .sort(),
+  contextualFallbacks.map((entry) => [entry.metricId, entry.value]).sort(),
+  "a previous synthetic fallback must not recursively explain and shrink the next refresh",
+);
+const deletedWorkoutFullSync = mapHealthRecordsToEntries(
+  stepOnlyRefreshRecords,
+  "owner",
+  "group",
+  workoutFallbackMetrics,
+  70,
+  undefined,
+  healthFallbackContextForRead(
+    persistedWalkingWorkouts,
+    workoutFallbackMetrics,
+    ["steps", "workouts", "active_energy"],
+  ),
+);
+const deletedWorkoutFallbacks = deletedWorkoutFullSync.filter((entry) =>
+  entry.sourceRecordId?.startsWith("step-fallback:"),
+);
+const deletedWorkoutFallbackValue = (metricId) =>
+  deletedWorkoutFallbacks.find((entry) => entry.metricId === metricId)?.value;
+assert.equal(
+  deletedWorkoutFallbackValue("workout_distance"),
+  4.6,
+  "an authoritative full read with no workouts must not let a deleted persisted workout keep covering Steps",
+);
+assert.equal(
+  deletedWorkoutFallbackValue("workout_duration"),
+  56.9,
+  "deleted persisted workout duration must not survive as full-sync fallback context",
+);
+assert.equal(
+  deletedWorkoutFallbackValue("exercise"),
+  169.6,
+  "deleted persisted workout energy must not survive as full-sync fallback context",
+);
+assert.match(
+  String(deletedWorkoutFallbacks[0]?.note),
+  /6.000 steps not already explained/,
+  "a full workout read that returns no sessions must mark all Steps as uncovered",
 );
 const authoritativeAggregateWithDisabledContributor =
   deduplicateHealthImportRecords(
@@ -1576,8 +1892,8 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /includesCurrentDay\s*\?\s*currentDeviceStepOrigins\(\)/,
-  "phone-origin discovery must remain restricted to the live current-day path",
+  /includesCurrentDay && needsAndroidDeviceCurrent[\s\S]{0,120}\? currentDeviceStepOrigins\(\)/,
+  "phone-origin discovery must remain restricted to a selected live current-day Android source",
 );
 assert.doesNotMatch(
   androidHealthSource,
@@ -1636,7 +1952,7 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /const authoritativeCurrentCount = Number\([\s\S]{0,120}currentAggregate\?\.COUNT_TOTAL[\s\S]{0,9000}reconcileCurrentDayStepTotal\(\s*authoritativeCurrentCount,[\s\S]{0,180}disjointPhoneCandidate,[\s\S]{0,180}androidDeviceAggregate[\s\S]{0,180}samsungCurrentAggregate/,
+  /const authoritativeCurrentCount = currentAggregate[\s\S]{0,120}currentAggregate\.COUNT_TOTAL[\s\S]{0,9000}reconcileCurrentDayStepTotal\(\s*authoritativeCurrentCount,[\s\S]{0,180}disjointPhoneCandidate,[\s\S]{0,180}androidDeviceAggregate[\s\S]{0,180}samsungCurrentAggregate/,
   "today must reconcile the unfiltered, Physical Activity, Android-device, and Samsung candidates without summing them",
 );
 assert.match(
@@ -1778,6 +2094,10 @@ const backgroundHealthSource = fs.readFileSync(
   path.join(root, "src", "health", "background.native.ts"),
   "utf8",
 );
+const stateMigrationSource = fs.readFileSync(
+  path.join(root, "src", "domain", "stateMigration.ts"),
+  "utf8",
+);
 const appConfig = fs.readFileSync(path.join(root, "app.json"), "utf8");
 const androidNativeSource = fs.readFileSync(
   path.join(
@@ -1883,6 +2203,93 @@ assert.match(
   healthProviderSource,
   /reason === 'manual'[\s\S]{0,300}currentHealth\.dataTypes\.steps[\s\S]{0,700}nativeHealthAdapter\.prepareCurrentDaySteps\?\.\(\)/,
   "an existing connected user must get Physical Activity access from the deliberate manual health-sync action",
+);
+assert.equal(
+  (healthProviderSource.match(/liveStepSources: current\.settings\.healthSync\.liveStepSources/g) ?? [])
+    .length,
+  5,
+  "every foreground, repair, and backfill read must honor the persisted live Step candidates",
+);
+assert.equal(
+  (healthProviderSource.match(/liveStepCombination:[\s\S]{0,80}current\.settings\.healthSync\.liveStepCombination/g) ?? [])
+    .length,
+  5,
+  "every native read must honor the selected non-additive, priority, or Sum strategy",
+);
+assert.match(
+  healthProviderSource,
+  /const setLiveStepConfiguration[\s\S]{0,2200}updateSettingsRef\.current\(\{ healthSync \}\)[\s\S]{0,1000}refreshTodayStepsRef\.current\?\.\(true, true\)/,
+  "changing the advanced Step calculation must persist and immediately refresh today",
+);
+assert.match(
+  healthProviderSource,
+  /activeOperation === 'steps-refresh'[\s\S]{0,180}!force[\s\S]{0,180}await pending\.catch[\s\S]{0,180}refreshTodayStepsRef\.current\?\.\(true, acceptCurrentDayZero\)/,
+  "a forced source change must queue a fresh read after an already-running Step read instead of accepting stale candidates",
+);
+assert.match(
+  appProviderSource,
+  /acceptSelectedCurrentDayValue[\s\S]{0,180}acceptCurrentDayZero === true[\s\S]{0,220}!acceptSelectedCurrentDayValue[\s\S]{0,100}preserveCurrentDayStepReplacementFloor/,
+  "an explicit source selection must be able to replace a prior higher current-day total as well as clear it to zero",
+);
+assert.match(
+  appProviderSource,
+  /acceptCurrentDayZero !== true[\s\S]{0,220}currentDayStepFloorsForEmptyReplacement/,
+  "a successful zero from an explicitly selected source must clear the stale current-day floor",
+);
+assert.match(
+  backgroundHealthSource,
+  /liveStepSources: state\.settings\.healthSync\.liveStepSources[\s\S]{0,160}liveStepCombination: state\.settings\.healthSync\.liveStepCombination/,
+  "background reads must use the same device-local live Step calculation",
+);
+assert.match(
+  stateMigrationSource,
+  /normalizeLiveStepSources[\s\S]{0,900}liveStepCombination[\s\S]{0,300}"highest"/,
+  "older snapshots must migrate to all candidates with the non-additive Highest default",
+);
+assert.match(
+  settingsSource,
+  /Samsung Health \(All steps proxy\)[\s\S]*Health Connect total[\s\S]*Android on-device[\s\S]*Physical Activity live/,
+  "Android health settings must expose every meaningful current-day candidate",
+);
+assert.match(
+  settingsSource,
+  /Platform\.OS === "android"[\s\S]*Live Step calculation/,
+  "advanced Step controls must be restricted to Android Health Connect settings",
+);
+assert.match(
+  settingsSource,
+  /Highest selected total[\s\S]*First positive by priority[\s\S]*Add selected totals/,
+  "advanced Step controls must expose all combination strategies",
+);
+assert.match(
+  settingsSource,
+  /Keep one Step source[\s\S]{0,180}Choose at least one source/,
+  "advanced Step controls must prevent an empty selection",
+);
+assert.match(
+  settingsSource,
+  /Add overlapping Step totals\?[\s\S]{0,700}double- or triple-count Steps/,
+  "Sum mode must require explicit confirmation with a concrete overlap warning",
+);
+assert.match(
+  settingsSource,
+  /Last live read[\s\S]*liveStepDiagnostics\?\.candidates/,
+  "the advanced panel must show candidate totals so source experiments are observable",
+);
+assert.match(
+  androidHealthSource,
+  /Preserve a successful zero as a diagnostic record[\s\S]{0,250}const currentRecord = \{[\s\S]{0,1500}liveStepDiagnostics/,
+  "a successful zero must reach diagnostics instead of looking like an unavailable source",
+);
+assert.match(
+  androidHealthSource,
+  /needsHealthConnectCurrent[\s\S]{0,300}needsSamsungCurrent[\s\S]{0,250}needsAndroidDeviceCurrent[\s\S]{0,250}needsPhysicalActivityCurrent[\s\S]{0,1800}includesCurrentDay && needsHealthConnectCurrent[\s\S]{0,900}includesCurrentDay && needsSamsungCurrent[\s\S]{0,900}includesCurrentDay && needsPhysicalActivityCurrent[\s\S]{0,700}includesCurrentDay && needsAndroidDeviceCurrent/,
+  "single-source diagnostics must avoid unrelated live-source native queries",
+);
+assert.match(
+  androidHealthSource,
+  /reconciledCurrent\.combinedSources[\s\S]{0,120}"HabHub diagnostic Step sum"/,
+  "an explicitly summed result must not be mislabelled as a Health Connect aggregate",
 );
 assert.match(
   healthProviderSource,
@@ -2028,7 +2435,7 @@ const todayRefreshSource = healthProviderSource.slice(
 const fullSyncSource = healthProviderSource.slice(fullSyncStart);
 assert.match(
   todayRefreshSource,
-  /activeOperation === 'steps-refresh'[\s\S]{0,300}await pending[\s\S]{0,300}refreshTodayStepsRef\.current\?\.\(true\)/,
+  /activeOperation === 'steps-refresh'[\s\S]{0,300}await pending[\s\S]{0,300}refreshTodayStepsRef\.current\?\.\(true, acceptCurrentDayZero\)/,
   "a today-only refresh must queue behind a full sync instead of being silently consumed",
 );
 assert.match(
@@ -2151,5 +2558,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: Samsung-authored live Steps, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: configurable live Step candidates, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

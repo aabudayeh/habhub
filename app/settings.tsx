@@ -24,6 +24,10 @@ import {
   SectionHeader,
 } from "@/src/components/ui";
 import { friendlyHealthOrigin } from "@/src/domain/health";
+import {
+  LIVE_STEP_SOURCES,
+  normalizeLiveStepSources,
+} from "@/src/domain/healthDedup";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   healthSyncSchedule,
@@ -32,7 +36,12 @@ import {
 import { useApp } from "@/src/state/AppProvider";
 import { ScreenTimeAccessCard } from "@/src/screenTime/ScreenTimeAccessCard";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
-import { HealthDataType, SyncMode } from "@/src/types";
+import {
+  HealthDataType,
+  LiveStepCombination,
+  LiveStepSource,
+  SyncMode,
+} from "@/src/types";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { GoogleHealthWebCard } from "@/src/components/GoogleHealthWebCard";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
@@ -182,6 +191,71 @@ const supportedHealthDataTypes = healthDataTypes.filter(
       item.platforms.includes(Platform.OS)),
 );
 
+const liveStepSourceChoices: {
+  id: LiveStepSource;
+  title: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  {
+    id: "samsung_health",
+    title: "Samsung Health (All steps proxy)",
+    subtitle:
+      "Best watch-inclusive proxy, but watch-to-phone-to-Health Connect updates can lag.",
+    icon: "watch-outline",
+  },
+  {
+    id: "health_connect",
+    title: "Health Connect total",
+    subtitle:
+      "Unfiltered system aggregate using your Activity source priority and overlap handling.",
+    icon: "heart-circle-outline",
+  },
+  {
+    id: "android_device",
+    title: "Android on-device",
+    subtitle:
+      "Phone-only com.android or private SPN counter on supported Android 14+ phones.",
+    icon: "phone-portrait-outline",
+  },
+  {
+    id: "physical_activity",
+    title: "Physical Activity live",
+    subtitle:
+      "Local phone counter for its recorded window, joined to the earlier non-overlapping Health Connect window.",
+    icon: "walk-outline",
+  },
+];
+
+const liveStepCombinationChoices: {
+  id: LiveStepCombination;
+  title: string;
+  subtitle: string;
+}[] = [
+  {
+    id: "highest",
+    title: "Highest selected total",
+    subtitle:
+      "Overlap protection on. Uses the largest complete total without adding sources.",
+  },
+  {
+    id: "priority",
+    title: "First positive by priority",
+    subtitle:
+      "Overlap protection on. Samsung → Health Connect → Android on-device → Physical Activity.",
+  },
+  {
+    id: "sum",
+    title: "Add selected totals",
+    subtitle:
+      "Overlap protection off. Diagnostic only; totals can double- or triple-count steps.",
+  },
+];
+
+const liveStepSourceChoiceById = new Map(
+  liveStepSourceChoices.map((choice) => [choice.id, choice]),
+);
+
 const statusCopy = {
   disabled: ["Device only", "cloud-offline-outline"],
   initializing: ["Connecting…", "cloud-outline"],
@@ -207,7 +281,9 @@ export default function SettingsScreen() {
   const [showDevices, setShowDevices] = useState(false);
   const [showHealthTypes, setShowHealthTypes] = useState(false);
   const [showHealthSources, setShowHealthSources] = useState(false);
+  const [showLiveStepSetup, setShowLiveStepSetup] = useState(false);
   const [sourceBusy, setSourceBusy] = useState<string | null>(null);
+  const [stepConfigBusy, setStepConfigBusy] = useState<string | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const isWebHealthBridge = Platform.OS === "web";
   const hasSyncedPhoneHealth = React.useMemo(
@@ -220,6 +296,14 @@ export default function SettingsScreen() {
   );
   const selectedSyncMode = normalizeHealthSyncMode(state.settings.syncMode);
   const selectedHealthSchedule = healthSyncSchedule(selectedSyncMode);
+  const selectedLiveStepSources = React.useMemo(() => {
+    const normalized = normalizeLiveStepSources(
+      state.settings.healthSync.liveStepSources,
+    );
+    return normalized.length ? normalized : [...LIVE_STEP_SOURCES];
+  }, [state.settings.healthSync.liveStepSources]);
+  const selectedLiveStepCombination =
+    state.settings.healthSync.liveStepCombination ?? "highest";
 
   async function run(
     kind: typeof busy,
@@ -237,6 +321,44 @@ export default function SettingsScreen() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function requestLiveStepConfiguration(
+    sources: LiveStepSource[],
+    combination: LiveStepCombination,
+    busyKey: string,
+  ) {
+    if (!sources.length) {
+      Alert.alert(
+        "Keep one Step source",
+        "Choose at least one source so HabHub can refresh today's Steps.",
+      );
+      return;
+    }
+    const apply = () => {
+      setStepConfigBusy(busyKey);
+      void health
+        .setLiveStepConfiguration(sources, combination)
+        .catch((error) =>
+          Alert.alert(
+            "Could not update live Steps",
+            error instanceof Error ? error.message : "Please try again.",
+          ),
+        )
+        .finally(() => setStepConfigBusy(null));
+    };
+    if (combination === "sum" && sources.length > 1) {
+      Alert.alert(
+        "Add overlapping Step totals?",
+        "Health Connect can already include Samsung and Android steps, while Android on-device and Physical Activity can describe the same phone movement. Adding selected whole-day totals can double- or triple-count Steps. Use this only to diagnose sources.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Add anyway", style: "destructive", onPress: apply },
+        ],
+      );
+      return;
+    }
+    apply();
   }
   const syncLabel = statusCopy[cloud.status];
   const lastSync = cloud.lastSyncedAt
@@ -684,6 +806,224 @@ export default function SettingsScreen() {
               ))}
             </View>
           </>
+        ) : null}
+        {Platform.OS === "android" &&
+        state.settings.healthSync.enabled &&
+        state.settings.healthSync.dataTypes.steps ? (
+          <View style={styles.origins}>
+            <Pressable
+              onPress={() => setShowLiveStepSetup((value) => !value)}
+              style={styles.collapseRow}
+            >
+              <View style={styles.modeIcon}>
+                <Ionicons name="footsteps-outline" size={19} color={accent} />
+              </View>
+              <View style={styles.copy}>
+                <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                  Live Step calculation
+                </Text>
+                <Text style={[styles.meta, { color: colors.muted }]}>
+                  {
+                    liveStepCombinationChoices.find(
+                      (choice) => choice.id === selectedLiveStepCombination,
+                    )?.title
+                  }{" "}
+                  · {selectedLiveStepSources.length} source
+                  {selectedLiveStepSources.length === 1 ? "" : "s"}
+                </Text>
+              </View>
+              <Ionicons
+                name={showLiveStepSetup ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={accent}
+              />
+            </Pressable>
+            {showLiveStepSetup ? (
+              <>
+                <Text style={[styles.originLabel, styles.stepGroupLabel]}>
+                  {"TODAY'S SOURCES · SELECT ONE OR MORE"}
+                </Text>
+                {liveStepSourceChoices.map((choice) => {
+                  const selected = selectedLiveStepSources.includes(choice.id);
+                  return (
+                    <Pressable
+                      key={choice.id}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected }}
+                      disabled={Boolean(stepConfigBusy) || health.status === "syncing"}
+                      onPress={() => {
+                        const nextSources = selected
+                          ? selectedLiveStepSources.filter(
+                              (source) => source !== choice.id,
+                            )
+                          : normalizeLiveStepSources([
+                              ...selectedLiveStepSources,
+                              choice.id,
+                            ]);
+                        requestLiveStepConfiguration(
+                          nextSources,
+                          selectedLiveStepCombination,
+                          choice.id,
+                        );
+                      }}
+                      style={[
+                        styles.stepChoice,
+                        {
+                          borderColor: selected ? accent : colors.border,
+                          backgroundColor: selected
+                            ? `${accent}12`
+                            : colors.canvas,
+                        },
+                      ]}
+                    >
+                      <View style={styles.modeIcon}>
+                        <Ionicons name={choice.icon} size={18} color={accent} />
+                      </View>
+                      <View style={styles.copy}>
+                        <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                          {choice.title}
+                        </Text>
+                        <Text style={[styles.meta, { color: colors.muted }]}>
+                          {choice.subtitle}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={selected ? "checkmark-circle" : "ellipse-outline"}
+                        size={21}
+                        color={selected ? accent : colors.faint}
+                      />
+                    </Pressable>
+                  );
+                })}
+
+                <Text style={[styles.originLabel, styles.stepGroupLabel]}>
+                  WHEN MULTIPLE SOURCES ARE SELECTED
+                </Text>
+                {liveStepCombinationChoices.map((choice) => {
+                  const selected = selectedLiveStepCombination === choice.id;
+                  return (
+                    <Pressable
+                      key={choice.id}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      disabled={Boolean(stepConfigBusy) || health.status === "syncing"}
+                      onPress={() =>
+                        requestLiveStepConfiguration(
+                          selectedLiveStepSources,
+                          choice.id,
+                          `mode:${choice.id}`,
+                        )
+                      }
+                      style={[
+                        styles.stepChoice,
+                        {
+                          borderColor: selected ? accent : colors.border,
+                          backgroundColor: selected
+                            ? `${accent}12`
+                            : colors.canvas,
+                        },
+                      ]}
+                    >
+                      <View style={styles.copy}>
+                        <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                          {choice.title}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.meta,
+                            {
+                              color:
+                                choice.id === "sum"
+                                  ? palette.red
+                                  : colors.muted,
+                            },
+                          ]}
+                        >
+                          {choice.subtitle}
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={selected ? "radio-button-on" : "radio-button-off"}
+                        size={20}
+                        color={selected ? accent : colors.faint}
+                      />
+                    </Pressable>
+                  );
+                })}
+
+                {health.liveStepDiagnostics ? (
+                  <View
+                    style={[
+                      styles.stepDiagnostics,
+                      {
+                        borderColor: colors.border,
+                        backgroundColor: colors.canvas,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.modeTitle, { color: colors.ink }]}>
+                      Last live read ·{" "}
+                      {Math.round(
+                        health.liveStepDiagnostics.result,
+                      ).toLocaleString(locale)}{" "}
+                      steps
+                    </Text>
+                    <Text style={[styles.meta, { color: colors.muted }]}>
+                      Used{" "}
+                      {health.liveStepDiagnostics.resultSources.length
+                        ? health.liveStepDiagnostics.resultSources
+                            .map(
+                              (source) =>
+                                liveStepSourceChoiceById.get(source)?.title ??
+                                source,
+                            )
+                            .join(" + ")
+                        : "no positive candidate"}
+                    </Text>
+                    <View style={styles.originChips}>
+                      {liveStepSourceChoices.flatMap((choice) => {
+                        const count =
+                          health.liveStepDiagnostics?.candidates[choice.id];
+                        return count === undefined
+                          ? []
+                          : [
+                              <Chip
+                                key={choice.id}
+                                label={`${choice.title}: ${Math.round(count).toLocaleString(locale)}`}
+                                selected={
+                                  health.liveStepDiagnostics?.resultSources.includes(
+                                    choice.id,
+                                  ) ?? false
+                                }
+                              />,
+                            ];
+                      })}
+                    </View>
+                  </View>
+                ) : (
+                  <Text
+                    style={[
+                      styles.meta,
+                      styles.sourceNote,
+                      { color: colors.muted },
+                    ]}
+                  >
+                    Changing a choice saves it on this phone and immediately
+                    refreshes today. Candidate totals appear here after the read.
+                  </Text>
+                )}
+                <Text
+                  style={[
+                    styles.meta,
+                    styles.sourceNote,
+                    { color: colors.muted },
+                  ]}
+                >
+                  {"This affects today only. Completed days keep Health Connect's historical aggregate."}
+                </Text>
+              </>
+            ) : null}
+          </View>
         ) : null}
         {!isWebHealthBridge && health.sourceOptions.length ? (
           <View style={styles.origins}>
@@ -1170,4 +1510,22 @@ const styles = StyleSheet.create({
   },
   originChips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   sourceNote: { marginTop: 8, lineHeight: 16 },
+  stepGroupLabel: { marginTop: 14, marginBottom: 7 },
+  stepChoice: {
+    minHeight: 62,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  stepDiagnostics: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 11,
+    marginTop: 9,
+  },
 });

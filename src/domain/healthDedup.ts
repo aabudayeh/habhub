@@ -1,8 +1,13 @@
-import type { HealthImportRecord } from "../health/types";
+import type {
+  HealthImportRecord,
+  LiveStepDiagnostics,
+} from "../health/types";
 import { FOOD_NUTRIENTS } from "./food";
 import type {
   HealthDataType,
   HealthSourcePreference,
+  LiveStepCombination,
+  LiveStepSource,
   NutritionDetails,
 } from "../types";
 
@@ -688,25 +693,51 @@ export function finalImportedStepTotal(count: number) {
   return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
 }
 
+export const LIVE_STEP_SOURCES: readonly LiveStepSource[] = [
+  "samsung_health",
+  "health_connect",
+  "android_device",
+  "physical_activity",
+] as const;
+
+/** Repairs persisted/remote arrays while retaining a deterministic UI order. */
+export function normalizeLiveStepSources(value: unknown): LiveStepSource[] {
+  if (!Array.isArray(value)) return [...LIVE_STEP_SOURCES];
+  const selected = new Set(value);
+  return LIVE_STEP_SOURCES.filter((source) => selected.has(source));
+}
+
+type LiveStepReconciliationOptions = {
+  selectedSources: readonly LiveStepSource[];
+  combination: LiveStepCombination;
+};
+
+type LiveStepReconciliation = {
+  count: number;
+  usedSamsungHealth: boolean;
+  usedLocalPhone: boolean;
+  usedAndroidDevice: boolean;
+  combinedSources?: boolean;
+  selectedSourcesUnavailable?: boolean;
+  liveStepDiagnostics?: LiveStepDiagnostics;
+};
+
 /**
- * Selects the current-day authority without summing overlapping sources.
- *
- * Samsung Health exports its reconciled "All steps" (phone plus watch) as one
- * Steps origin, so that source owns today whenever it is available. Magnitude
- * is not freshness: choosing the largest writer would prevent legitimate
- * downward corrections and can disagree with the Samsung Health total. The
- * priority-aware Health Connect aggregate, Android on-device aggregate, and
- * local Physical Activity recorder are fallbacks in that order.
+ * Reconciles complete current-day candidates according to an explicit device
+ * preference. With no options it retains the legacy Samsung-first behavior for
+ * old callers. Configured reads can choose one source exactly, take a fixed
+ * priority, use the highest non-additive total, or explicitly sum overlaps.
  */
 export function reconcileCurrentDayStepTotal(
-  healthConnectCount: number,
+  healthConnectCount: number | null | undefined,
   disjointPhoneCandidate: number | null | undefined,
   androidDeviceCount?: number | null,
   samsungHealthCount?: number | null,
-) {
+  options?: LiveStepReconciliationOptions,
+): LiveStepReconciliation {
   const healthConnect = Number.isFinite(healthConnectCount)
-    ? Math.max(0, Math.round(healthConnectCount))
-    : 0;
+    ? Math.max(0, Math.round(healthConnectCount as number))
+    : null;
   const localPhone = Number.isFinite(disjointPhoneCandidate)
     ? Math.max(0, Math.round(disjointPhoneCandidate as number))
     : null;
@@ -716,6 +747,98 @@ export function reconcileCurrentDayStepTotal(
   const samsungHealth = Number.isFinite(samsungHealthCount)
     ? Math.max(0, Math.round(samsungHealthCount as number))
     : null;
+
+  const resultFor = (source: LiveStepSource, count: number) => ({
+    count,
+    usedSamsungHealth: source === "samsung_health",
+    usedLocalPhone: source === "physical_activity",
+    usedAndroidDevice: source === "android_device",
+  });
+
+  if (options) {
+    const normalizedSources = normalizeLiveStepSources(options.selectedSources);
+    const selectedSources = normalizedSources.length
+      ? normalizedSources
+      : [...LIVE_STEP_SOURCES];
+    const candidates = {
+      samsung_health: samsungHealth,
+      health_connect: healthConnect,
+      android_device: androidDevice,
+      physical_activity: localPhone,
+    } satisfies Record<LiveStepSource, number | null>;
+    const availableSelected = selectedSources.filter(
+      (source) => candidates[source] !== null,
+    );
+    const positiveSelected = availableSelected.filter(
+      (source) => Number(candidates[source]) > 0,
+    );
+    const candidateDiagnostics = Object.fromEntries(
+      LIVE_STEP_SOURCES.flatMap((source) =>
+        candidates[source] === null ? [] : [[source, candidates[source]]],
+      ),
+    ) as Partial<Record<LiveStepSource, number>>;
+
+    if (!positiveSelected.length) {
+      const fallback = availableSelected[0] ?? selectedSources[0];
+      const result = resultFor(fallback, 0);
+      return {
+        ...result,
+        selectedSourcesUnavailable: !availableSelected.length,
+        liveStepDiagnostics: {
+          candidates: candidateDiagnostics,
+          selectedSources,
+          combination: options.combination,
+          result: 0,
+          resultSources: [],
+        },
+      };
+    }
+
+    if (options.combination === "sum" && positiveSelected.length > 1) {
+      const count = positiveSelected.reduce(
+        (sum, source) => sum + Number(candidates[source]),
+        0,
+      );
+      return {
+        count,
+        usedSamsungHealth: false,
+        usedLocalPhone: false,
+        usedAndroidDevice: false,
+        combinedSources: true,
+        liveStepDiagnostics: {
+          candidates: candidateDiagnostics,
+          selectedSources,
+          combination: "sum",
+          result: count,
+          resultSources: positiveSelected,
+        },
+      };
+    }
+
+    // Every candidate covers the same local-midnight-to-now window. Highest
+    // is a non-additive heuristic, not record-level deduplication or proof of
+    // freshness.
+    const selectedSource =
+      options.combination === "priority"
+        ? positiveSelected[0]
+        : positiveSelected.reduce((best, source) =>
+            Number(candidates[source]) > Number(candidates[best])
+              ? source
+              : best,
+          );
+    const count = Number(candidates[selectedSource]);
+    return {
+      ...resultFor(selectedSource, count),
+      liveStepDiagnostics: {
+        candidates: candidateDiagnostics,
+        selectedSources,
+        combination: options.combination,
+        result: count,
+        resultSources: [selectedSource],
+      },
+    };
+  }
+
   if (samsungHealth !== null && samsungHealth > 0)
     return {
       count: samsungHealth,
@@ -723,7 +846,7 @@ export function reconcileCurrentDayStepTotal(
       usedLocalPhone: false,
       usedAndroidDevice: false,
     };
-  if (healthConnect > 0)
+  if (healthConnect !== null && healthConnect > 0)
     return {
       count: healthConnect,
       usedSamsungHealth: false,
@@ -745,7 +868,7 @@ export function reconcileCurrentDayStepTotal(
       usedAndroidDevice: false,
     };
   return {
-    count: healthConnect,
+    count: healthConnect ?? 0,
     usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,

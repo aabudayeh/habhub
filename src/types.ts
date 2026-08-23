@@ -768,6 +768,10 @@ export type HealthSyncSettings = {
   dataTypes: Record<HealthDataType, boolean>;
   /** Observed native writers and their device-local import preference. */
   sourcePreferences?: Record<string, HealthSourcePreference>;
+  /** Device-local current-day Step candidates selected for Android reads. */
+  liveStepSources?: LiveStepSource[];
+  /** How multiple selected whole-day candidates become today's displayed total. */
+  liveStepCombination?: LiveStepCombination;
   /** Requested separately because both mobile operating systems may decline it. */
   backgroundAccess: boolean;
   /**
@@ -788,6 +792,15 @@ export type HealthSourcePreference = {
   /** Unknown/new writers default to enabled until the user turns one off. */
   enabled: boolean;
 };
+
+/** Independent Android candidates for today's live Step total. */
+export type LiveStepSource =
+  | "samsung_health"
+  | "health_connect"
+  | "android_device"
+  | "physical_activity";
+
+export type LiveStepCombination = "highest" | "priority" | "sum";
 
 export type EnergyProfile = {
   age: number;

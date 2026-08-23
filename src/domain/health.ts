@@ -155,6 +155,37 @@ export function healthVisibilityByMetric(metrics: readonly MetricDefinition[]) {
   ) as Record<string, Visibility>;
 }
 
+/**
+ * Retain persisted rows only for health categories that the current native
+ * read did not authoritatively refresh. This lets a cheap Steps-only read use
+ * already-imported workout coverage without allowing a deleted native workout
+ * to survive as stale calculation context during a full workout read.
+ */
+export function healthFallbackContextForRead(
+  existingEntries: readonly MetricEntry[],
+  metrics: readonly MetricDefinition[],
+  authoritativeDataTypes: readonly HealthDataType[],
+) {
+  const authoritative = new Set(authoritativeDataTypes);
+  if (!authoritative.size) return existingEntries;
+  const mappingsByMetric = new Map(
+    metrics.map((metric) => [
+      metric.id,
+      new Set([
+        ...(metric.healthMapping ? [metric.healthMapping.dataType] : []),
+        ...(metric.submetrics ?? []).flatMap((field) =>
+          field.healthMapping ? [field.healthMapping.dataType] : [],
+        ),
+      ]),
+    ]),
+  );
+  return existingEntries.filter((entry) => {
+    if (entry.source !== "imported") return true;
+    const mappedTypes = mappingsByMetric.get(entry.metricId);
+    return !mappedTypes || ![...mappedTypes].some((type) => authoritative.has(type));
+  });
+}
+
 export function mapHealthRecordsToEntries(
   records: HealthImportRecord[],
   userId: string,
@@ -162,6 +193,7 @@ export function mapHealthRecordsToEntries(
   metrics?:MetricDefinition[],
   profileOrWeight: StepActivityProfile | number = 70,
   sourcePreferences?: Record<string, HealthSourcePreference>,
+  existingEntries: readonly MetricEntry[] = [],
 ) {
   const entries: MetricEntry[] = [];
   const entryById = new Map<string, MetricEntry>();
@@ -326,7 +358,14 @@ export function mapHealthRecordsToEntries(
         pushNutritionEntry(metricId, value);
     }
   }
-  return appendStepFallbackEntries(entries,userId,visibility,metrics,profileOrWeight);
+  return appendStepFallbackEntries(
+    entries,
+    userId,
+    visibility,
+    metrics,
+    profileOrWeight,
+    existingEntries,
+  );
 }
 
 export type UnrecordedStepActivity = {
@@ -433,6 +472,14 @@ export function estimateLevelWalkingFromSteps(
 const MOVEMENT_WORKOUT = /(walk|run|hike|treadmill)/i;
 const RUNNING_WORKOUT = /(run|treadmill)/i;
 
+function isCalculatedStepFallback(entry: MetricEntry) {
+  return (
+    entry.source === "calculated" &&
+    (entry.sourceRecordId?.startsWith("step-fallback:") ||
+      entry.label === "Estimated unrecorded walking from steps")
+  );
+}
+
 /**
  * Estimate the walking that remains after Health Connect workout sessions have
  * explained their share of the daily step total.
@@ -487,6 +534,7 @@ export function unrecordedStepActivity(
     (entry) =>
       workoutMetricIds.has(entry.metricId) &&
       Boolean(entry.sourceRecordId) &&
+      !isCalculatedStepFallback(entry) &&
       MOVEMENT_WORKOUT.test(entry.label ?? ""),
   );
   const sessionKeys = new Map<
@@ -535,7 +583,9 @@ export function unrecordedStepActivity(
   // subtract steps. Count each native workout once even when custom trackers
   // map the same calorie field.
   const knownCaloriesBySource = new Map<string, number>();
-  for (const entry of dayEntries.filter((item) => calorieIds.has(item.metricId))) {
+  for (const entry of dayEntries.filter(
+    (item) => calorieIds.has(item.metricId) && !isCalculatedStepFallback(item),
+  )) {
     const key = entry.sourceRecordId
       ? `${entry.sourceProvider ?? "health"}\u0000${entry.sourceRecordId}`
       : entry.id;
@@ -563,7 +613,7 @@ export function unrecordedStepActivity(
   };
 }
 
-function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:HealthImportVisibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number){
+function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibility:HealthImportVisibility,metrics:MetricDefinition[]|undefined,profileOrWeight:StepActivityProfile|number,existingEntries:readonly MetricEntry[]=[]){
   if(!metrics)return entries;
   const stepIds=metrics.filter((metric)=>metric.healthMapping?.dataType==='steps'&&metric.healthMapping.field==='value').map((metric)=>metric.id);
   const fallback=metrics.filter((metric)=>metric.stepFallback);
@@ -571,14 +621,29 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
   const stepIdSet=new Set(stepIds);
   const entriesByDay=new Map<string,MetricEntry[]>();
   for(const entry of entries){const dayEntries=entriesByDay.get(entry.localDate);if(dayEntries)dayEntries.push(entry);else entriesByDay.set(entry.localDate,[entry]);}
+  const existingByDay=new Map<string,MetricEntry[]>();
+  for(const entry of existingEntries){
+    if(entry.userId!==userId||!entriesByDay.has(entry.localDate)||isCalculatedStepFallback(entry))continue;
+    const dayEntries=existingByDay.get(entry.localDate);
+    if(dayEntries)dayEntries.push(entry);else existingByDay.set(entry.localDate,[entry]);
+  }
   const days=[...entriesByDay].filter(([,dayEntries])=>dayEntries.some((entry)=>stepIdSet.has(entry.metricId))).map(([day])=>day);
   const derived:MetricEntry[]=[];
   for(const day of days){
-    const dayEntries=entriesByDay.get(day)??[];
-    const steps=Math.max(0,...dayEntries.filter((entry)=>stepIdSet.has(entry.metricId)).map((entry)=>Number(entry.value||0)));
+    const importedDayEntries=entriesByDay.get(day)??[];
+    // A fast current-day Steps refresh intentionally reads no workout records.
+    // Reuse the persisted same-day workout measurements as calculation
+    // context, while allowing newly read rows to replace matching identities.
+    // Context rows are never returned or re-imported by this mapper.
+    const contextualById=new Map(
+      (existingByDay.get(day)??[]).map((entry)=>[entry.id,entry]),
+    );
+    for(const entry of importedDayEntries)contextualById.set(entry.id,entry);
+    const dayEntries=[...contextualById.values()];
+    const steps=Math.max(0,...importedDayEntries.filter((entry)=>stepIdSet.has(entry.metricId)).map((entry)=>Number(entry.value||0)));
     if(steps<=0)continue;
     const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
-    const stepEntry=dayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
+    const stepEntry=importedDayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
     const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;

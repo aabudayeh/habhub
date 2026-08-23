@@ -12,6 +12,10 @@ import {
   normalizeTabOrder,
 } from "@/src/domain/navigation";
 import { upgradeNutritionStateV26 } from "@/src/domain/nutritionMigration";
+import {
+  LIVE_STEP_SOURCES,
+  normalizeLiveStepSources,
+} from "@/src/domain/healthDedup";
 
 function upgradeMetric(
   metric: MetricDefinition,
@@ -149,8 +153,23 @@ function repairOrphanedGroupMetrics(state: AppState): AppState {
   });
   const groups = state.groups.map(repairGroup);
   const group = repairGroup(state.group);
+  const normalizedLiveStepSources = normalizeLiveStepSources(
+    state.settings.healthSync.liveStepSources,
+  );
+  const liveStepCombination =
+    state.settings.healthSync.liveStepCombination === "priority" ||
+    state.settings.healthSync.liveStepCombination === "sum"
+      ? state.settings.healthSync.liveStepCombination
+      : "highest";
   const repairedSettings: AppState["settings"] = {
     ...state.settings,
+    healthSync: {
+      ...state.settings.healthSync,
+      liveStepSources: normalizedLiveStepSources.length
+        ? normalizedLiveStepSources
+        : [...LIVE_STEP_SOURCES],
+      liveStepCombination,
+    },
     language: state.settings.language ?? "en",
     scheduleStartHour: state.settings.scheduleStartHour ?? 7,
     timeFormat: state.settings.timeFormat ?? "24h",

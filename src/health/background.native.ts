@@ -5,7 +5,7 @@ import * as TaskManager from 'expo-task-manager';
 import { isCloudGroupId, pushCloudRecentActivity } from '@/src/cloud/groupCloud';
 import { dateKey } from '@/src/domain/date';
 import { applyImportedFoodFastBreaks } from '@/src/domain/fasting';
-import { enabledHealthDataTypes, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
+import { enabledHealthDataTypes, healthFallbackContextForRead, healthVisibilityByMetric, mapHealthRecordsToEntries, mergeHealthEntries, metricIdsForHealthDataTypes } from '@/src/domain/health';
 import {
   aggregateRangeThroughLocalDate,
   currentDayStepFloorsForEmptyReplacement,
@@ -84,6 +84,8 @@ TaskManager.defineTask(TASK_NAME, async () => {
       to,
       dataTypes,
       sourcePreferences: state.settings.healthSync.sourcePreferences,
+      liveStepSources: state.settings.healthSync.liveStepSources,
+      liveStepCombination: state.settings.healthSync.liveStepCombination,
     });
     const sourcePreferences = mergeHealthSourcePreferences(
       state.settings.healthSync.sourcePreferences,
@@ -96,6 +98,7 @@ TaskManager.defineTask(TASK_NAME, async () => {
       state.metrics,
       state.settings.energyProfile,
       sourcePreferences,
+      healthFallbackContextForRead(state.entries, state.metrics, dataTypes),
     );
     const stepMetricIds = dataTypes.includes('steps')
       ? metricIdsForHealthDataTypes(['steps'], state.metrics)

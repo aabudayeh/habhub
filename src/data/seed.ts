@@ -1843,6 +1843,13 @@ export function createInitialState(): AppState {
       healthSync: {
         enabled: false,
         backgroundAccess: false,
+        liveStepSources: [
+          "samsung_health",
+          "health_connect",
+          "android_device",
+          "physical_activity",
+        ],
+        liveStepCombination: "highest",
         dataTypes: {
           steps: true,
           active_energy: true,

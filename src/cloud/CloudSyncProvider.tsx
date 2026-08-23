@@ -1005,9 +1005,11 @@ function snapshotPayload(state: AppState): AppState {
         ...state.settings.healthSync,
         enabled: false,
         backgroundAccess: false,
-        // Installed writer packages and enable/disable choices differ per
-        // phone. Keep them in the offline device snapshot, not the account.
+        // Installed writers and live Step candidates differ per phone. Keep
+        // them in the offline device snapshot, not the account.
         sourcePreferences: undefined,
+        liveStepSources: undefined,
+        liveStepCombination: undefined,
         initialHistoryImportPending: undefined,
         backfillTrackedGoalsOnFirstImport: undefined,
         backfillTrackedGoalsEmptyReadCount: undefined,

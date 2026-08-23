@@ -506,24 +506,21 @@ internal object HabHubWorkoutNotificationStore {
     }
 
     val previousActions = active.notification.actions?.toList().orEmpty()
-    val visibleActions = when {
-      flow.finished -> emptyList()
-      // Keep both PendingIntents while paused. Removing Next would mean the
-      // resumed row only has the Pause PendingIntent left to relabel, so its
-      // apparent Next action would pause again. Next resumes the current phase
-      // without skipping it; the second action is explicitly labeled Resume.
-      flow.paused -> previousActions.mapIndexed { index, action ->
-        if (index == 1) relabel(action, "Resume") else action
-      }
-      else -> previousActions.mapIndexed { index, action ->
-        when (index) {
-          0 -> relabel(
-            action,
-            if (flow.index == flow.steps.lastIndex) "Finish workout" else "Next",
-          )
-          1 -> relabel(action, "Pause")
-          else -> action
-        }
+    // Notification controls stay single-purpose: Next resumes a paused phase,
+    // advances an active phase, and becomes Finish on the final phase. The
+    // in-app workout screen remains the only pause/resume surface.
+    val visibleActions = if (flow.finished) {
+      emptyList()
+    } else {
+      previousActions.take(1).map { action ->
+        relabel(
+          action,
+          when {
+            flow.paused -> "Resume"
+            flow.index == flow.steps.lastIndex -> "Finish workout"
+            else -> "Next"
+          },
+        )
       }
     }
     builder.setActions(*visibleActions.toTypedArray())
@@ -598,16 +595,13 @@ internal object HabHubWorkoutNotificationStore {
       .takeIf { it != 0 }
       ?: context.applicationInfo.icon
     if (icon == 0) return null
-    val firstAction = if (flow.index < flow.steps.lastIndex) {
+    val firstAction = if (flow.paused) {
+      NotificationAction(NEXT_ACTION, "Resume", false)
+    } else if (flow.index < flow.steps.lastIndex) {
       NotificationAction(NEXT_ACTION, "Next", false)
     } else {
-      NotificationAction(FINISH_ACTION, "Finish workout", true)
+      NotificationAction(FINISH_ACTION, "Finish workout", false)
     }
-    val pauseAction = NotificationAction(
-      PAUSE_ACTION,
-      if (flow.paused) "Resume" else "Pause",
-      false,
-    )
     val defaultAction = NotificationAction(
       NotificationResponse.DEFAULT_ACTION_IDENTIFIER,
       "Open workout",
@@ -646,17 +640,6 @@ internal object HabHubWorkoutNotificationStore {
             context,
             expoNotification,
             firstAction,
-          ),
-        ).build(),
-      )
-      .addAction(
-        Notification.Action.Builder(
-          icon,
-          pauseAction.title,
-          NotificationsService.createNotificationResponseIntent(
-            context,
-            expoNotification,
-            pauseAction,
           ),
         ).build(),
       )

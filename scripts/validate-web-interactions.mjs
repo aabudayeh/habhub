@@ -15,6 +15,10 @@ const source = (relativePath) =>
   fs.readFileSync(path.join(root, relativePath), "utf8");
 
 const guards = source("src/components/useWebBeforeUnload.ts");
+const dismissGuard = guards.slice(
+  guards.indexOf("export function useWebBackDismiss"),
+  guards.indexOf("export function useWebBackNavigationGuard"),
+);
 const metricEditor = source("app/metric-editor.tsx");
 const pager = source("src/components/HorizontalPager.tsx");
 const fastingClock = source("src/components/FastingClockEditor.tsx");
@@ -29,6 +33,12 @@ assert.match(guards, /export function useWebBackDismiss/);
 assert.match(guards, /__habhubDismissBackGuard/);
 assert.match(guards, /typeof existingGuardId !== "string"/);
 assert.match(guards, /queueMicrotask\(\(\) => onDismissRef\.current\(\)\)/);
+assert.match(dismissGuard, /window\.history\.pushState\(/);
+assert.doesNotMatch(
+  dismissGuard,
+  /window[^;]*\.navigation|navigationApi/,
+  "transient Web edit modes must always install a history sentinel, even when the Navigation API exists",
+);
 assert.match(guards, /navigationApi\.addEventListener\("navigate", navigate\)/);
 assert.match(guards, /event\.navigationType !== "traverse"/);
 assert.match(guards, /event\.preventDefault\(\)/);

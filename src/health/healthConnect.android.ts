@@ -19,6 +19,7 @@ import {
   combineDisjointStepWindows,
   finalImportedStepTotal,
   healthSourceEnabled,
+  LIVE_STEP_SOURCES,
   localCalendarAggregateRange,
   partitionStepAggregateRange,
   reconcileCurrentDayStepTotal,
@@ -746,7 +747,14 @@ export const healthConnectAdapter: HealthAdapter = {
   disconnect: async () => {
     await androidPhoneSteps?.stopLocalPhoneStepRecording?.().catch(() => false);
   },
-  read: async ({ from, to, dataTypes, sourcePreferences }) => {
+  read: async ({
+    from,
+    to,
+    dataTypes,
+    sourcePreferences,
+    liveStepSources,
+    liveStepCombination,
+  }) => {
     const options = {
       timeRangeFilter: {
         operator: "between",
@@ -953,17 +961,29 @@ export const healthConnectAdapter: HealthAdapter = {
               endTime: stepRange.to.toISOString(),
             };
             // Completed days keep Health Connect's unfiltered, priority-aware
-            // aggregate. Today also reads Samsung Health, Android on-device,
-            // and Local Recording as independent midnight-to-now totals.
-            // Samsung's exported "All steps" owns today when present because
-            // it is already Samsung's reconciled phone-and-watch total. Other
-            // candidates are ordered fallbacks; overlapping totals are never
-            // added together.
+            // aggregate. Today reads Samsung Health, unfiltered Health Connect,
+            // Android on-device, and Local Recording as independent complete
+            // midnight-to-now candidates. The user's device-local combination
+            // setting chooses one, takes the highest, or explicitly adds them.
             // Source preferences currently apply across record types, so they
             // cannot safely filter Steps: disabling a nutrition-only writer
             // could otherwise exclude the on-device Steps writer or change the
             // platform's priority result.
             try {
+              const requestedLiveStepSources = new Set(
+                liveStepSources?.length
+                  ? liveStepSources
+                  : LIVE_STEP_SOURCES,
+              );
+              const needsHealthConnectCurrent =
+                requestedLiveStepSources.has("health_connect") ||
+                requestedLiveStepSources.has("physical_activity");
+              const needsSamsungCurrent =
+                requestedLiveStepSources.has("samsung_health");
+              const needsAndroidDeviceCurrent =
+                requestedLiveStepSources.has("android_device");
+              const needsPhysicalActivityCurrent =
+                requestedLiveStepSources.has("physical_activity");
               const currentStart = stepSlices.current?.from;
               const currentEnd = stepSlices.current?.to;
               const includesCurrentDay = Boolean(stepSlices.current);
@@ -985,7 +1005,7 @@ export const healthConnectAdapter: HealthAdapter = {
                         timeRangeSlicer: { period: "DAYS", length: 1 },
                       })
                     : Promise.resolve([]),
-                  includesCurrentDay
+                  includesCurrentDay && needsHealthConnectCurrent
                     ? aggregateRecord({
                         recordType: "Steps",
                         timeRangeFilter: {
@@ -995,7 +1015,7 @@ export const healthConnectAdapter: HealthAdapter = {
                         },
                       })
                     : Promise.resolve(null),
-                  includesCurrentDay
+                  includesCurrentDay && needsSamsungCurrent
                     ? aggregateRecord({
                         recordType: "Steps",
                         timeRangeFilter: {
@@ -1006,16 +1026,16 @@ export const healthConnectAdapter: HealthAdapter = {
                         dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
                       }).catch(() => null)
                     : Promise.resolve(null),
-                  includesCurrentDay
+                  includesCurrentDay && needsPhysicalActivityCurrent
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
                     : Promise.resolve(null),
-                  includesCurrentDay
+                  includesCurrentDay && needsAndroidDeviceCurrent
                     ? currentDeviceStepOrigins()
                     : Promise.resolve([]),
                 ]);
-              const authoritativeCurrentCount = Number(
-                currentAggregate?.COUNT_TOTAL ?? 0,
-              );
+              const authoritativeCurrentCount = currentAggregate
+                ? Number(currentAggregate.COUNT_TOTAL ?? 0)
+                : null;
               // Android 14+ exposes this phone's TYPE_STEP_COUNTER data under
               // `android` or an SPN. Query it for every open-day refresh so a
               // positive but stale cross-writer aggregate can never hide the
@@ -1029,6 +1049,7 @@ export const healthConnectAdapter: HealthAdapter = {
                 Number(Platform.Version) >= 34;
               if (
                 includesCurrentDay &&
+                needsAndroidDeviceCurrent &&
                 onDeviceHealthConnectStepsAvailable &&
                 !hasCurrentDeviceStepSpn(androidDeviceOrigins) &&
                 Date.now() >= nextRawStepOriginDiscoveryAt
@@ -1051,6 +1072,7 @@ export const healthConnectAdapter: HealthAdapter = {
               }
               const androidDeviceAggregate =
                 includesCurrentDay &&
+                needsAndroidDeviceCurrent &&
                 onDeviceHealthConnectStepsAvailable &&
                 androidDeviceOrigins.length
                   ? await aggregateRecord({
@@ -1154,9 +1176,21 @@ export const healthConnectAdapter: HealthAdapter = {
               const reconciledCurrent = reconcileCurrentDayStepTotal(
                 authoritativeCurrentCount,
                 disjointPhoneCandidate,
-                Number(androidDeviceAggregate?.COUNT_TOTAL ?? 0),
-                Number(samsungCurrentAggregate?.COUNT_TOTAL ?? 0),
+                androidDeviceAggregate
+                  ? Number(androidDeviceAggregate.COUNT_TOTAL ?? 0)
+                  : null,
+                samsungCurrentAggregate
+                  ? Number(samsungCurrentAggregate.COUNT_TOTAL ?? 0)
+                  : null,
+                {
+                  selectedSources: liveStepSources ?? LIVE_STEP_SOURCES,
+                  combination: liveStepCombination ?? "highest",
+                },
               );
+              if (reconciledCurrent.selectedSourcesUnavailable)
+                throw new Error(
+                  "The selected live Step sources returned no current value. Choose another source in Cloud & health sync.",
+                );
               const currentCount = finalImportedStepTotal(
                 reconciledCurrent.count,
               );
@@ -1168,46 +1202,48 @@ export const healthConnectAdapter: HealthAdapter = {
                   ).filter(Boolean),
                 ),
               ].sort((a, b) => a.localeCompare(b));
-              const liveCurrentSource = reconciledCurrent.usedSamsungHealth
-                ? SAMSUNG_HEALTH_STEP_SOURCE
-                : reconciledCurrent.usedLocalPhone
-                  ? LOCAL_PHONE_STEP_SOURCE
-                  : reconciledCurrent.usedAndroidDevice
-                    ? HEALTH_CONNECT_PHONE_STEP_SOURCE
-                    : undefined;
-              const currentRecord =
-                currentCount > 0
-                  ? ({
-                      id: `aggregate:steps:${currentLocalDate}`,
-                      provider: "health_connect",
-                      type: "steps",
-                      startTime: currentSlice.from.toISOString(),
-                      endTime: new Date(
-                        Math.max(
-                          currentSlice.from.getTime(),
-                          currentSlice.to.getTime() - 1,
-                        ),
-                      ).toISOString(),
-                      localDate: currentLocalDate,
-                      value: Math.round(currentCount),
-                      unit: "steps",
-                      origin:
-                        liveCurrentSource ??
-                        (currentSources.length === 1
-                          ? currentSources[0]
-                          : "Health Connect"),
-                      sourceOrigins:
-                        liveCurrentSource
-                        ? [
-                            ...new Set([
-                              ...observedOrigins,
-                              liveCurrentSource,
-                            ]),
-                          ]
-                        : observedOrigins,
-                      updatedAt: syncRevision,
-                    } satisfies HealthImportRecord)
-                  : undefined;
+              const liveCurrentSource = reconciledCurrent.combinedSources
+                ? "HabHub diagnostic Step sum"
+                : reconciledCurrent.usedSamsungHealth
+                  ? SAMSUNG_HEALTH_STEP_SOURCE
+                  : reconciledCurrent.usedLocalPhone
+                    ? LOCAL_PHONE_STEP_SOURCE
+                    : reconciledCurrent.usedAndroidDevice
+                      ? HEALTH_CONNECT_PHONE_STEP_SOURCE
+                      : undefined;
+              // Preserve a successful zero as a diagnostic record. Entry
+              // mapping still omits non-positive logs, while Settings can
+              // distinguish a real zero from an unavailable/failed source.
+              const currentRecord = {
+                id: `aggregate:steps:${currentLocalDate}`,
+                provider: "health_connect",
+                type: "steps",
+                startTime: currentSlice.from.toISOString(),
+                endTime: new Date(
+                  Math.max(
+                    currentSlice.from.getTime(),
+                    currentSlice.to.getTime() - 1,
+                  ),
+                ).toISOString(),
+                localDate: currentLocalDate,
+                value: Math.round(currentCount),
+                unit: "steps",
+                origin:
+                  liveCurrentSource ??
+                  (currentSources.length === 1
+                    ? currentSources[0]
+                    : "Health Connect"),
+                sourceOrigins: liveCurrentSource
+                  ? [
+                      ...new Set([
+                        ...observedOrigins,
+                        liveCurrentSource,
+                      ]),
+                    ]
+                  : observedOrigins,
+                liveStepDiagnostics: reconciledCurrent.liveStepDiagnostics,
+                updatedAt: syncRevision,
+              } satisfies HealthImportRecord;
               return replaceCanonicalStepAggregateForDay(
                 historicalRecords,
                 currentLocalDate,
@@ -1216,8 +1252,9 @@ export const healthConnectAdapter: HealthAdapter = {
             } catch (error) {
               // Raw Steps records can overlap across phone, watch, Samsung,
               // Google Fit, and Health Connect's on-device writer. Returning a
-              // guessed sum would be worse than retaining the last confirmed
-              // aggregate, so make this type fail atomically instead.
+              // implicit guessed sum would be worse than retaining the last
+              // confirmed aggregate. Explicit diagnostic Sum is handled only
+              // after successful candidates are read above.
               throw new Error(
                 `Steps aggregate: ${error instanceof Error ? error.message : "Health Connect aggregation failed"}`,
               );

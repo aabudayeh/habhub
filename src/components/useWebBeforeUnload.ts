@@ -24,9 +24,13 @@ export function useWebBeforeUnload(shouldBlock: DirtyCheck) {
 }
 
 /**
- * Makes the first browser Back action dismiss a transient in-page mode. The
- * Navigation API can cancel traversal directly; Safari needs a same-URL
- * sentinel so Back remains on the current Expo Router route.
+ * Makes the first browser Back action dismiss a transient in-page mode.
+ *
+ * Always create a same-URL history entry, including in browsers that expose
+ * the Navigation API. An installed PWA can otherwise have no earlier in-app
+ * history entry at all, so the OS closes the app without giving a cancellable
+ * traversal to a Navigation API listener. The sentinel gives browser Back a
+ * real, same-document destination and keeps Expo Router on the current route.
  */
 export function useWebBackDismiss(active: boolean, onDismiss: () => void) {
   const activeRef = useRef(active);
@@ -41,34 +45,6 @@ export function useWebBackDismiss(active: boolean, onDismiss: () => void) {
       !active
     )
       return;
-
-    type NavigationApiEvent = Event & {
-      destination?: { sameDocument?: boolean };
-      navigationType?: string;
-    };
-    const navigationApi = (
-      window as typeof window & { navigation?: EventTarget }
-    ).navigation;
-    if (navigationApi) {
-      let consumed = false;
-      const navigate = (rawEvent: Event) => {
-        const event = rawEvent as NavigationApiEvent;
-        if (
-          consumed ||
-          !activeRef.current ||
-          event.navigationType !== "traverse" ||
-          event.destination?.sameDocument === false ||
-          !event.cancelable
-        )
-          return;
-        event.preventDefault();
-        consumed = true;
-        activeRef.current = false;
-        queueMicrotask(() => onDismissRef.current());
-      };
-      navigationApi.addEventListener("navigate", navigate);
-      return () => navigationApi.removeEventListener("navigate", navigate);
-    }
 
     const guardStateKey = "__habhubDismissBackGuard";
     const entryUrl = window.location.href;

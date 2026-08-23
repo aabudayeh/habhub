@@ -1,4 +1,13 @@
-import { HealthDataType, HealthProvider, HealthSourcePreference, NutritionDetails } from '@/src/types';
+import { HealthDataType, HealthProvider, HealthSourcePreference, LiveStepCombination, LiveStepSource, NutritionDetails } from '@/src/types';
+
+export type LiveStepDiagnostics = {
+  /** Candidates are complete midnight-to-now totals, not additive intervals. */
+  candidates: Partial<Record<LiveStepSource, number>>;
+  selectedSources: LiveStepSource[];
+  combination: LiveStepCombination;
+  result: number;
+  resultSources: LiveStepSource[];
+};
 
 export type HealthImportRecord = {
   id: string;
@@ -24,6 +33,8 @@ export type HealthImportRecord = {
   workoutRecordKind?: "session" | "segment";
   nutrition?: NutritionDetails;
   note?: string;
+  /** Device-only diagnostic surfaced in health settings; never mapped to logs. */
+  liveStepDiagnostics?: LiveStepDiagnostics;
   measurements?: { durationMinutes?: number; activeCalories?: number; distanceKm?: number; speedKmh?: number; systolic?: number; diastolic?: number };
   updatedAt?: string;
 };
@@ -33,6 +44,8 @@ export type HealthReadRequest = {
   to: Date;
   dataTypes: HealthDataType[];
   sourcePreferences?: Record<string, HealthSourcePreference>;
+  liveStepSources?: LiveStepSource[];
+  liveStepCombination?: LiveStepCombination;
 };
 
 export type HealthAdapterAvailability = {
