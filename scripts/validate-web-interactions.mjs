@@ -25,6 +25,10 @@ const status = source("app/(tabs)/status.tsx");
 const log = source("app/(tabs)/log.tsx");
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
+assert.match(guards, /export function useWebBackDismiss/);
+assert.match(guards, /__habhubDismissBackGuard/);
+assert.match(guards, /typeof existingGuardId !== "string"/);
+assert.match(guards, /queueMicrotask\(\(\) => onDismissRef\.current\(\)\)/);
 assert.match(guards, /navigationApi\.addEventListener\("navigate", navigate\)/);
 assert.match(guards, /event\.navigationType !== "traverse"/);
 assert.match(guards, /event\.preventDefault\(\)/);
@@ -172,6 +176,15 @@ assert.match(
 assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
 assert.match(today, /iosWebDevice && styles\.standaloneIosPage/);
 assert.match(today, /standaloneIosPage: \{ paddingBottom: 0 \}/);
+assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);
+assert.match(
+  today,
+  /useWebBackDismiss\(screenIsFocused && editing, finishEditing\)/,
+);
+assert.match(
+  source("app/(tabs)/group.tsx"),
+  /useWebBackDismiss\(\s*screenIsFocused && editing,\s*finishLeaderboardEditing,\s*\)/,
+);
 
 assert.match(metricEditor, /fixedBottom=\{/);
 assert.match(metricEditor, /label=\{saveActionLabel\}/);

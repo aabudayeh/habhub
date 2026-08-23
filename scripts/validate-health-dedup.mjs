@@ -135,15 +135,17 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(5_000, 5_140),
   {
     count: 5_000,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
-  "the overlap-safe Health Connect aggregate must outrank a phone-only total",
+  "the priority-aware aggregate must outrank a phone-only total when Samsung is absent",
 );
 assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140),
   {
     count: 6_200,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -153,6 +155,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(6_200, 5_140, 5_140),
   {
     count: 6_200,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -162,6 +165,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(6_000, 3_421, 3_421),
   {
     count: 6_000,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -176,6 +180,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(27, 27, 54),
   {
     count: 27,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -185,6 +190,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(3_072, 2_887, 2_887),
   {
     count: 3_072,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   },
@@ -194,6 +200,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(0, null, 2_958),
   {
     count: 2_958,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: true,
   },
@@ -213,6 +220,7 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(0, null, 54),
   {
     count: 54,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: true,
   },
@@ -222,10 +230,41 @@ assert.deepEqual(
   reconcileCurrentDayStepTotal(0, 54, null),
   {
     count: 54,
+    usedSamsungHealth: false,
     usedLocalPhone: true,
     usedAndroidDevice: false,
   },
   "Local Recording may recover an empty unfiltered read",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(4_495, 3_421, 3_421, 6_000),
+  {
+    count: 6_000,
+    usedSamsungHealth: true,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "Samsung's phone-and-watch export must recover a lower priority-aware total",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(3_072, 3_072, 3_072, 2_887),
+  {
+    count: 2_887,
+    usedSamsungHealth: true,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "Samsung's reconciled total may legitimately correct a larger raw total",
+);
+assert.deepEqual(
+  reconcileCurrentDayStepTotal(4_495, 3_421, 3_421, 3_421),
+  {
+    count: 3_421,
+    usedSamsungHealth: true,
+    usedLocalPhone: false,
+    usedAndroidDevice: false,
+  },
+  "Samsung's All steps origin remains authoritative regardless of magnitude",
 );
 const workoutFallbackMetrics = [
   {
@@ -1590,15 +1629,15 @@ assert.match(
   /!hasCurrentDeviceStepSpn\(androidDeviceOrigins\)[\s\S]{0,900}discoverCurrentDeviceStepOriginsFromRaw/,
   "raw SPN discovery must run only when cheaper framework and aggregate discovery found no scoped phone origin",
 );
-assert.doesNotMatch(
+assert.match(
   androidHealthSource,
-  /SAMSUNG_HEALTH_STEP_ORIGIN|samsungCurrentAggregate|usedSamsungHealth/,
-  "a Samsung-package-only aggregate must never be mistaken for Samsung Health's reconciled phone-and-watch UI total",
+  /SAMSUNG_HEALTH_STEP_ORIGIN = "com\.sec\.android\.app\.shealth"[\s\S]{0,50000}dataOriginFilter: \[SAMSUNG_HEALTH_STEP_ORIGIN\]/,
+  "today must independently aggregate Samsung Health's exported All steps records",
 );
 assert.match(
   androidHealthSource,
-  /const authoritativeCurrentCount = Number\([\s\S]{0,120}currentAggregate\?\.COUNT_TOTAL[\s\S]{0,9000}reconcileCurrentDayStepTotal\(\s*authoritativeCurrentCount,[\s\S]{0,180}disjointPhoneCandidate,[\s\S]{0,180}androidDeviceAggregate/,
-  "today must pass the unfiltered priority-aware aggregate as the authoritative candidate",
+  /const authoritativeCurrentCount = Number\([\s\S]{0,120}currentAggregate\?\.COUNT_TOTAL[\s\S]{0,9000}reconcileCurrentDayStepTotal\(\s*authoritativeCurrentCount,[\s\S]{0,180}disjointPhoneCandidate,[\s\S]{0,180}androidDeviceAggregate[\s\S]{0,180}samsungCurrentAggregate/,
+  "today must reconcile the unfiltered, Physical Activity, Android-device, and Samsung candidates without summing them",
 );
 assert.match(
   androidHealthSource,
@@ -2112,5 +2151,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: unfiltered live Steps, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: Samsung-authored live Steps, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

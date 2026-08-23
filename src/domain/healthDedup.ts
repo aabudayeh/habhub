@@ -689,16 +689,20 @@ export function finalImportedStepTotal(count: number) {
 }
 
 /**
- * Selects the current-day authority without summing overlapping totals.
- * Health Connect's unfiltered aggregate owns the result because it applies the
- * user's Activity source priority and overlap removal across phone, watch, and
- * app writers. Source-filtered and locally recorded phone totals are zero-read
- * fallbacks only; they must never replace a positive cross-device aggregate.
+ * Selects the current-day authority without summing overlapping sources.
+ *
+ * Samsung Health exports its reconciled "All steps" (phone plus watch) as one
+ * Steps origin, so that source owns today whenever it is available. Magnitude
+ * is not freshness: choosing the largest writer would prevent legitimate
+ * downward corrections and can disagree with the Samsung Health total. The
+ * priority-aware Health Connect aggregate, Android on-device aggregate, and
+ * local Physical Activity recorder are fallbacks in that order.
  */
 export function reconcileCurrentDayStepTotal(
   healthConnectCount: number,
   disjointPhoneCandidate: number | null | undefined,
   androidDeviceCount?: number | null,
+  samsungHealthCount?: number | null,
 ) {
   const healthConnect = Number.isFinite(healthConnectCount)
     ? Math.max(0, Math.round(healthConnectCount))
@@ -709,29 +713,40 @@ export function reconcileCurrentDayStepTotal(
   const androidDevice = Number.isFinite(androidDeviceCount)
     ? Math.max(0, Math.round(androidDeviceCount as number))
     : null;
-  if (healthConnect > 0) {
+  const samsungHealth = Number.isFinite(samsungHealthCount)
+    ? Math.max(0, Math.round(samsungHealthCount as number))
+    : null;
+  if (samsungHealth !== null && samsungHealth > 0)
     return {
-      count: healthConnect,
+      count: samsungHealth,
+      usedSamsungHealth: true,
       usedLocalPhone: false,
       usedAndroidDevice: false,
     };
-  }
-  if (androidDevice !== null && androidDevice > 0) {
+  if (healthConnect > 0)
+    return {
+      count: healthConnect,
+      usedSamsungHealth: false,
+      usedLocalPhone: false,
+      usedAndroidDevice: false,
+    };
+  if (androidDevice !== null && androidDevice > 0)
     return {
       count: androidDevice,
+      usedSamsungHealth: false,
       usedLocalPhone: false,
       usedAndroidDevice: true,
     };
-  }
-  if (localPhone !== null && localPhone > 0) {
+  if (localPhone !== null && localPhone > 0)
     return {
       count: localPhone,
+      usedSamsungHealth: false,
       usedLocalPhone: true,
       usedAndroidDevice: false,
     };
-  }
   return {
     count: healthConnect,
+    usedSamsungHealth: false,
     usedLocalPhone: false,
     usedAndroidDevice: false,
   };

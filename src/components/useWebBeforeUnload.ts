@@ -24,6 +24,103 @@ export function useWebBeforeUnload(shouldBlock: DirtyCheck) {
 }
 
 /**
+ * Makes the first browser Back action dismiss a transient in-page mode. The
+ * Navigation API can cancel traversal directly; Safari needs a same-URL
+ * sentinel so Back remains on the current Expo Router route.
+ */
+export function useWebBackDismiss(active: boolean, onDismiss: () => void) {
+  const activeRef = useRef(active);
+  const onDismissRef = useRef(onDismiss);
+  activeRef.current = active;
+  onDismissRef.current = onDismiss;
+
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      !active
+    )
+      return;
+
+    type NavigationApiEvent = Event & {
+      destination?: { sameDocument?: boolean };
+      navigationType?: string;
+    };
+    const navigationApi = (
+      window as typeof window & { navigation?: EventTarget }
+    ).navigation;
+    if (navigationApi) {
+      let consumed = false;
+      const navigate = (rawEvent: Event) => {
+        const event = rawEvent as NavigationApiEvent;
+        if (
+          consumed ||
+          !activeRef.current ||
+          event.navigationType !== "traverse" ||
+          event.destination?.sameDocument === false ||
+          !event.cancelable
+        )
+          return;
+        event.preventDefault();
+        consumed = true;
+        activeRef.current = false;
+        queueMicrotask(() => onDismissRef.current());
+      };
+      navigationApi.addEventListener("navigate", navigate);
+      return () => navigationApi.removeEventListener("navigate", navigate);
+    }
+
+    const guardStateKey = "__habhubDismissBackGuard";
+    const entryUrl = window.location.href;
+    const currentState = window.history.state as
+      | Record<string, unknown>
+      | null;
+    const existingGuardId = currentState?.[guardStateKey];
+    const guardId =
+      typeof existingGuardId === "string"
+        ? existingGuardId
+        : `habhub-dismiss-${Date.now().toString(36)}-` +
+          Math.random().toString(36).slice(2);
+    // Returning from a child route can restore this tab's existing sentinel.
+    // Reuse it so dismissing edit mode does not leave a second same-URL entry
+    // that would make the user's following Back action appear to do nothing.
+    if (typeof existingGuardId !== "string")
+      window.history.pushState(
+        { ...(currentState ?? {}), [guardStateKey]: guardId },
+        "",
+        entryUrl,
+      );
+
+    let consumed = false;
+    const popstate = () => {
+      if (consumed || !activeRef.current) return;
+      // Back has already landed on the same-URL entry beneath the sentinel.
+      // Consume it by closing the mode without asking Expo Router to navigate.
+      consumed = true;
+      activeRef.current = false;
+      queueMicrotask(() => onDismissRef.current());
+    };
+    window.addEventListener("popstate", popstate);
+    return () => {
+      window.removeEventListener("popstate", popstate);
+      if (consumed) return;
+      // Done/Cancel can dismiss the mode without consuming browser Back. Drop
+      // the still-current sentinel so the user's next Back is not a no-op.
+      queueMicrotask(() => {
+        const latestState = window.history.state as
+          | Record<string, unknown>
+          | null;
+        if (
+          window.location.href === entryUrl &&
+          latestState?.[guardStateKey] === guardId
+        )
+          window.history.back();
+      });
+    };
+  }, [active]);
+}
+
+/**
  * Keeps same-document browser Back navigation inside a dirty editor until the
  * editor has asked whether to save or discard. Expo Router restores recorded
  * browser history with resetRoot on web, which can bypass beforeRemove.

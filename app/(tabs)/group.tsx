@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 import React, {
   ReactNode,
   useCallback,
@@ -30,6 +31,7 @@ import { ReorderItem } from "@/src/components/ReorderItem";
 import { HorizontalPager } from "@/src/components/HorizontalPager";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
+import { useWebBackDismiss } from "@/src/components/useWebBeforeUnload";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 
 import { AddTrackerModal } from "@/src/components/AddTrackerModal";
@@ -287,6 +289,7 @@ if (
 }
 
 function LeaderboardScreen() {
+  const screenIsFocused = useIsFocused();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
   const { state, updateMetric, updateSettings } = useApp();
@@ -1061,18 +1064,25 @@ function LeaderboardScreen() {
       ],
     );
   }
+  const finishLeaderboardEditing = useCallback(() => {
+    setEditing(false);
+    setShowPicker(false);
+  }, []);
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
         if (!editing) return false;
-        setEditing(false);
-        setShowPicker(false);
+        finishLeaderboardEditing();
         return true;
       });
       return () => {
         subscription.remove();
       };
-    }, [editing]),
+    }, [editing, finishLeaderboardEditing]),
+  );
+  useWebBackDismiss(
+    screenIsFocused && editing,
+    finishLeaderboardEditing,
   );
   return (
     <Screen
@@ -1093,10 +1103,7 @@ function LeaderboardScreen() {
               />
             ) : null}
             <Pressable
-              onPress={() => {
-                setEditing(false);
-                setShowPicker(false);
-              }}
+              onPress={finishLeaderboardEditing}
               style={[styles.done, { backgroundColor: accent }]}
             >
               <Text style={styles.doneText}>Done</Text>

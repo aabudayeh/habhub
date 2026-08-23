@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 import React, {
   useCallback,
   useEffect,
@@ -52,6 +53,7 @@ import {
 import { ReorderItem } from "@/src/components/ReorderItem";
 import { useEditWiggle } from "@/src/components/useEditWiggle";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
+import { useWebBackDismiss } from "@/src/components/useWebBeforeUnload";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ProgressBar } from "@/src/components/ui";
@@ -166,6 +168,7 @@ if (
 }
 
 function Today() {
+  const screenIsFocused = useIsFocused();
   const {
     state,
     reorderMetric,
@@ -931,10 +934,11 @@ function Today() {
   const todayPageCount = todayUsesPages
     ? Math.ceil(primary.length / pageCapacity)
     : 0;
+  const todayTileMaxHeight = iosWebDevice && todayUsesPages ? 96 : 88;
   const tileHeight = Math.max(
     52,
     Math.min(
-      88,
+      todayTileMaxHeight,
       (height - 345) /
         Math.max(
           todayUsesPages
@@ -957,6 +961,7 @@ function Today() {
       return () => subscription.remove();
     }, [editing, finishEditing]),
   );
+  useWebBackDismiss(screenIsFocused && editing, finishEditing);
   function remove(item: MetricDefinition) {
     Alert.alert(
       `Remove ${item.name}?`,
