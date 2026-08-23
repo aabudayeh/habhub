@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -62,30 +63,11 @@ object HabHubWidgetStore {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   fun saveSnapshot(context: Context, snapshot: String) {
-    // Validate before replacing the last known-good widget payload. Tracker
-    // rows are calculated only when a configured widget needs them, so merge
-    // those rows and the last avatar instead of erasing useful snapshots.
+    // Validate before replacing the last known-good widget payload. Never
+    // merge an older payload: it may belong to a previous account or retain
+    // legacy tracker rows that current Featured/Status widgets do not use.
     val incoming = JSONObject(snapshot)
-    val previous = snapshot(context)
-    val mergedTrackers = linkedMapOf<String, JSONObject>()
-    previous.optJSONArray("trackers")?.let { trackers ->
-      for (index in 0 until trackers.length()) {
-        trackers.optJSONObject(index)?.let { tracker ->
-          mergedTrackers[tracker.optString("id")] = tracker
-        }
-      }
-    }
-    incoming.optJSONArray("trackers")?.let { trackers ->
-      for (index in 0 until trackers.length()) {
-        trackers.optJSONObject(index)?.let { tracker ->
-          mergedTrackers[tracker.optString("id")] = tracker
-        }
-      }
-    }
-    incoming.put("trackers", JSONArray(mergedTrackers.values))
-    if (!incoming.has("avatar") && previous.has("avatar")) {
-      incoming.put("avatar", previous.optJSONObject("avatar"))
-    }
+    incoming.put("trackers", incoming.optJSONArray("trackers") ?: JSONArray())
     preferences(context).edit().putString(SNAPSHOT, incoming.toString()).apply()
   }
 
@@ -93,6 +75,10 @@ object HabHubWidgetStore {
     JSONObject(preferences(context).getString(SNAPSHOT, null) ?: "{}")
   } catch (_: Exception) {
     JSONObject()
+  }
+
+  fun clearSnapshot(context: Context) {
+    preferences(context).edit().remove(SNAPSHOT).apply()
   }
 
   fun saveConfiguration(
@@ -131,12 +117,7 @@ object HabHubWidgetStore {
   }
 
   fun configurations(context: Context): List<HabHubWidgetConfiguration> =
-    preferences(context).all.keys
-      .asSequence()
-      .filter { it.startsWith(TRACKER_PREFIX) }
-      .mapNotNull { it.removePrefix(TRACKER_PREFIX).toIntOrNull() }
-      .map { configuration(context, it) }
-      .toList()
+    activeWidgetIds(context).map { configuration(context, it) }
 
   fun hasConfiguration(context: Context, widgetId: Int) =
     preferences(context).contains("$TRACKER_PREFIX$widgetId")
@@ -151,6 +132,23 @@ object HabHubWidgetStore {
         remove("$BACKGROUND_OPACITY_PREFIX$widgetId")
       }
     }.apply()
+    // Some launchers still report deleted IDs while onDeleted is running, so
+    // explicitly subtract this callback's IDs before deciding whether the
+    // last durable health snapshot can be discarded.
+    val deleted = widgetIds.toSet()
+    if (activeWidgetIds(context).none { it !in deleted }) clearSnapshot(context)
+  }
+
+  private fun activeWidgetIds(context: Context): List<Int> {
+    val manager = AppWidgetManager.getInstance(context)
+    return listOf(
+      HabHubSmallWidgetProvider::class.java,
+      HabHubSquareWidgetProvider::class.java,
+      HabHubWideCompactWidgetProvider::class.java,
+      HabHubWideWidgetProvider::class.java,
+    ).flatMap { provider ->
+      manager.getAppWidgetIds(ComponentName(context, provider)).asList()
+    }.distinct()
   }
 
   private fun normalizedRange(range: String) =
@@ -167,6 +165,9 @@ object HabHubWidgetStore {
   private fun fixedTracker(context: Context, widgetId: Int): String? {
     val manager = AppWidgetManager.getInstance(context)
     return when {
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubSmallWidgetProvider::class.java),
+      ) -> "__featured__"
       widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubSquareWidgetProvider::class.java),
       ) -> "__avatar__"
@@ -227,6 +228,8 @@ private data class HabHubWidgetSize(
 ) {
   val compact = heightDp < 90f
   val wide = widthDp >= 220f
+  val roomy = widthDp >= 165f
+  val tall = heightDp >= 150f
 }
 
 object HabHubWidgetRenderer {
@@ -306,14 +309,26 @@ object HabHubWidgetRenderer {
     val smallWidgetIds = manager.getAppWidgetIds(
       ComponentName(context, HabHubSmallWidgetProvider::class.java),
     )
-    val fallbackWidth = if (widgetId in wideWidgetIds || widgetId in wideCompactWidgetIds) 250 else 110
-    val fallbackHeight = if (widgetId in smallWidgetIds || widgetId in wideCompactWidgetIds) 48 else 105
-    val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, fallbackWidth)
-      .takeIf { it > 0 } ?: fallbackWidth
-    val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, fallbackHeight)
-      .takeIf { it > 0 } ?: fallbackHeight
+    val fallbackWidth = when {
+      widgetId in wideWidgetIds -> 203
+      widgetId in wideCompactWidgetIds -> 250
+      else -> 110
+    }
+    val fallbackHeight = if (widgetId in smallWidgetIds || widgetId in wideCompactWidgetIds) 50 else 105
+    fun option(key: String, fallback: Int) = options.getInt(key, fallback)
+      .takeIf { it > 0 } ?: fallback
+    val minWidth = option(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, fallbackWidth)
+    val maxWidth = option(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, minWidth)
+    val minHeight = option(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, fallbackHeight)
+    val maxHeight = option(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, minHeight)
+    // MIN_WIDTH and MIN_HEIGHT can describe different rotations. Render one
+    // coherent current-orientation pair instead of a distorted hybrid bitmap;
+    // one bitmap also stays safely below RemoteViews/Binder limits.
+    val portrait = context.resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE
+    val width = if (portrait) minWidth else maxWidth
+    val height = if (portrait) maxHeight else minHeight
     return HabHubWidgetSize(
-      heightDp = height.coerceIn(42, 220).toFloat(),
+      heightDp = height.coerceIn(42, 420).toFloat(),
       widthDp = width.coerceIn(90, 420).toFloat(),
     )
   }
@@ -526,24 +541,25 @@ object HabHubWidgetRenderer {
     val dateLabel = item.optString("dateLabel")
     val dateWidth = if (dateLabel.isBlank()) 0f else if (size.compact) 31f else 38f
     val headerGap = if (dateWidth > 0f) 3f else 0f
-    drawText(
-      canvas,
-      eyebrow,
-      pad,
-      if (size.compact) 10.5f else 17f,
-      max(10f, contentWidth - dateWidth - headerGap),
-      textPaint(if (size.compact) 6.5f else 7.5f, Color.argb(205, 255, 255, 255), true, 0.12f),
-    )
     if (dateWidth > 0f) {
       drawCenteredEllipsizedText(
         canvas,
         dateLabel,
-        pad + contentWidth - dateWidth / 2f,
+        pad + dateWidth / 2f,
         if (size.compact) 10.5f else 17f,
         dateWidth,
         textPaint(if (size.compact) 6.5f else 7.3f, Color.argb(225, 222, 230, 242), true),
       )
     }
+    val eyebrowLeft = pad + dateWidth + headerGap
+    drawText(
+      canvas,
+      eyebrow,
+      eyebrowLeft,
+      if (size.compact) 10.5f else 17f,
+      max(10f, contentWidth - dateWidth - headerGap),
+      textPaint(if (size.compact) 6.5f else 7.5f, Color.argb(205, 255, 255, 255), true, 0.12f),
+    )
     drawText(
       canvas,
       item.optString("value", "\u2014"),
@@ -927,16 +943,28 @@ object HabHubWidgetRenderer {
     val avatarBitmap = avatarBitmap(context, item.optString("avatarUri"))
     val heightScale = item.optDouble("heightScale", 1.0).toFloat().coerceIn(0.9f, 1.1f)
     val goals = item.optJSONArray("goals") ?: JSONArray()
+    if (size.tall && size.heightDp > size.widthDp * 1.28f) {
+      drawPortraitAvatarCard(
+        canvas,
+        size,
+        item,
+        avatarBitmap,
+        heightScale,
+        goals,
+        progress,
+        accent,
+      )
+      return
+    }
     val outerPad = if (size.compact) 5f else 7f
     val avatarAreaWidth = when {
       size.compact -> min(37f, size.widthDp * 0.34f)
-      size.wide -> min(70f, size.widthDp * 0.29f)
-      else -> min(42f, size.widthDp * 0.38f)
+      else -> min(72f, max(42f, size.widthDp * 0.32f))
     }
     val availableHeight = size.heightDp - outerPad * 2f
     val resolvedHeight = min(
-      availableHeight * heightScale,
-      avatarAreaWidth * 512f / 328f,
+      availableHeight,
+      avatarAreaWidth * 512f / 328f * heightScale,
     )
     val avatarWidth = resolvedHeight * 328f / 512f
     val centerX = outerPad + avatarAreaWidth / 2f
@@ -947,32 +975,14 @@ object HabHubWidgetRenderer {
       centerX + avatarWidth / 2f,
       top + resolvedHeight,
     )
-    drawAvatarLayers(
+    drawAvatarWithProgress(
       canvas,
       avatarBitmap,
       destination,
+      item,
       progress,
       accent,
-      item.optString("avatarStyle", "silhouette") == "body_model",
-    )
-
-    val pillWidth = if (size.compact) 23f else 28f
-    val pillHeight = if (size.compact) 10.5f else 14f
-    val pillCenterY = destination.top + destination.height() * 0.48f
-    val pill = RectF(
-      centerX - pillWidth / 2f,
-      pillCenterY - pillHeight / 2f,
-      centerX + pillWidth / 2f,
-      pillCenterY + pillHeight / 2f,
-    )
-    canvas.drawRoundRect(pill, pillHeight / 2f, pillHeight / 2f, fillPaint(Color.argb(225, 5, 16, 43)))
-    canvas.drawRoundRect(pill, pillHeight / 2f, pillHeight / 2f, strokePaint(withAlpha(accent, 210), 0.85f))
-    drawCenteredText(
-      canvas,
-      "${(progress * 100f).roundToInt()}%",
-      centerX,
-      pillCenterY,
-      textPaint(if (size.compact) 6.2f else 7.5f, Color.WHITE, true),
+      size.compact,
     )
 
     drawStatusGoalGrid(
@@ -981,7 +991,94 @@ object HabHubWidgetRenderer {
       goals,
       outerPad + avatarAreaWidth + if (size.compact) 2f else 5f,
       size.widthDp - outerPad,
+      outerPad,
+      size.heightDp - outerPad,
       accent,
+    )
+  }
+
+  /** Uses a portrait stack for 2-3 column widgets stretched to 3-5 rows. */
+  private fun drawPortraitAvatarCard(
+    canvas: Canvas,
+    size: HabHubWidgetSize,
+    item: JSONObject,
+    avatarBitmap: Bitmap?,
+    heightScale: Float,
+    goals: JSONArray,
+    progress: Float,
+    accent: Int,
+  ) {
+    val outerPad = 7f
+    val avatarRegionHeight = min(size.heightDp * 0.42f, size.widthDp * 1.04f)
+      .coerceAtLeast(58f)
+    val avatarMaxHeight = max(36f, avatarRegionHeight - 5f)
+    val avatarMaxWidth = min(72f, size.widthDp * 0.56f)
+    val resolvedHeight = min(
+      avatarMaxHeight,
+      avatarMaxWidth * 512f / 328f * heightScale,
+    )
+    val avatarWidth = resolvedHeight * 328f / 512f
+    val destination = RectF(
+      size.widthDp / 2f - avatarWidth / 2f,
+      outerPad + (avatarRegionHeight - resolvedHeight) / 2f,
+      size.widthDp / 2f + avatarWidth / 2f,
+      outerPad + (avatarRegionHeight - resolvedHeight) / 2f + resolvedHeight,
+    )
+    drawAvatarWithProgress(
+      canvas,
+      avatarBitmap,
+      destination,
+      item,
+      progress,
+      accent,
+      false,
+    )
+    drawStatusGoalGrid(
+      canvas,
+      size,
+      goals,
+      outerPad,
+      size.widthDp - outerPad,
+      outerPad + avatarRegionHeight + 3f,
+      size.heightDp - outerPad,
+      accent,
+    )
+  }
+
+  private fun drawAvatarWithProgress(
+    canvas: Canvas,
+    avatarBitmap: Bitmap?,
+    destination: RectF,
+    item: JSONObject,
+    progress: Float,
+    accent: Int,
+    compact: Boolean,
+  ) {
+    drawAvatarLayers(
+      canvas,
+      avatarBitmap,
+      destination,
+      progress,
+      accent,
+      item.optString("avatarStyle", "silhouette") == "body_model",
+    )
+    val pillWidth = if (compact) 23f else (destination.width() * 0.72f).coerceIn(28f, 42f)
+    val pillHeight = if (compact) 10.5f else (destination.height() * 0.14f).coerceIn(12f, 17f)
+    val pillCenterY = destination.top + destination.height() * 0.48f
+    val pill = RectF(
+      destination.centerX() - pillWidth / 2f,
+      pillCenterY - pillHeight / 2f,
+      destination.centerX() + pillWidth / 2f,
+      pillCenterY + pillHeight / 2f,
+    )
+    canvas.drawRoundRect(pill, pillHeight / 2f, pillHeight / 2f, fillPaint(Color.argb(225, 5, 16, 43)))
+    canvas.drawRoundRect(pill, pillHeight / 2f, pillHeight / 2f, strokePaint(withAlpha(accent, 210), 0.85f))
+    drawCenteredText(
+      canvas,
+      "${(progress * 100f).roundToInt()}%",
+      destination.centerX(),
+      pillCenterY,
+      textPaint((pillHeight * 0.52f).coerceIn(6.2f, 8.8f), Color.WHITE, true),
     )
   }
 
@@ -992,45 +1089,62 @@ object HabHubWidgetRenderer {
     goals: JSONArray,
     left: Float,
     right: Float,
+    top: Float,
+    bottom: Float,
     accent: Int,
   ) {
     val capacity = when {
-      size.compact && size.wide -> 6
+      size.compact && size.roomy -> 6
       size.compact -> 3
-      size.wide -> 8
+      size.heightDp >= 260f -> 12
+      size.heightDp >= 205f -> 10
+      size.heightDp >= 145f -> 8
+      size.roomy -> 8
       else -> 6
     }
-    val count = min(goals.length(), capacity)
-    if (count <= 0 || right - left < 18f) return
-    val columns = when {
-      size.compact -> count
-      size.wide -> min(4, count)
-      else -> min(2, count)
-    }
-    val rows = (count + columns - 1) / columns
-    val verticalPad = if (size.compact) 4f else 6f
-    val labelHeight = if (size.compact) 8f else 9f
+    var count = min(goals.length(), capacity)
+    if (count <= 0 || right - left < 18f || bottom - top < 16f) return
     val gridWidth = right - left
-    val gridHeight = size.heightDp - verticalPad * 2f
+    val gridHeight = bottom - top
+    var columns = 1
+    var diameter = 0f
+    while (count > 0) {
+      diameter = 0f
+      val maximumColumns = when {
+        size.compact -> count
+        gridWidth >= 118f -> min(3, count)
+        else -> min(2, count)
+      }
+      for (candidate in 1..maximumColumns) {
+        val candidateRows = (count + candidate - 1) / candidate
+        val candidateCellWidth = gridWidth / candidate
+        val candidateCellHeight = gridHeight / candidateRows
+        val candidateLabelHeight = if (size.compact) 7f else (candidateCellHeight * 0.2f).coerceIn(8f, 13f)
+        val candidateDiameter = min(
+          candidateCellWidth - 5f,
+          candidateCellHeight - candidateLabelHeight - 4f,
+        ).coerceAtMost(if (size.compact) 15f else 52f)
+        if (candidateDiameter > diameter) {
+          columns = candidate
+          diameter = candidateDiameter
+        }
+      }
+      if (diameter >= 8f) break
+      count -= 1
+    }
+    if (count <= 0) return
+    val rows = (count + columns - 1) / columns
     val cellWidth = gridWidth / columns
     val cellHeight = gridHeight / rows
-    val preferredDiameter = when {
-      size.compact -> 15f
-      size.wide -> 29f
-      else -> 20f
-    }
-    val diameter = min(
-      preferredDiameter,
-      min(cellWidth - 5f, cellHeight - labelHeight - 4f),
-    )
-    if (diameter < 8f) return
+    val labelHeight = if (size.compact) 7f else (cellHeight * 0.2f).coerceIn(8f, 13f)
+    val labelSize = (diameter * 0.24f).coerceIn(if (size.compact) 5.2f else 5.8f, 9.5f)
     val radius = diameter / 2f
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
       val row = index / columns
       val column = index % columns
       val cellLeft = left + column * cellWidth
-      val cellTop = verticalPad + row * cellHeight
+      val cellTop = top + row * cellHeight
       drawStatusGoalCircle(
         canvas,
         cellLeft + cellWidth / 2f,
@@ -1040,6 +1154,7 @@ object HabHubWidgetRenderer {
         accent,
         cellTop + cellHeight - 2f,
         max(10f, cellWidth - 2f),
+        labelSize,
       )
     }
   }
@@ -1053,6 +1168,7 @@ object HabHubWidgetRenderer {
     accent: Int,
     labelBaseline: Float,
     labelWidth: Float,
+    labelSize: Float,
   ) {
     val goalProgress = goal.optDouble("progress", 0.0).toFloat().coerceIn(0f, 1f)
     val unavailable = goal.optBoolean("unavailable", false)
@@ -1081,7 +1197,7 @@ object HabHubWidgetRenderer {
       centerX,
       labelBaseline,
       labelWidth,
-      textPaint(if (radius < 9f) 5.8f else 6.2f, Color.argb(225, 240, 245, 255), true),
+      textPaint(labelSize, Color.argb(225, 240, 245, 255), true),
     )
   }
 

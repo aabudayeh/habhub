@@ -77,6 +77,7 @@ export type WidgetConfiguration = {
 
 type HabHubAndroidModule = {
   updateWidgetSnapshot(snapshot: string): Promise<boolean>;
+  clearWidgetSnapshot(): Promise<boolean>;
   refreshWidgets(): Promise<boolean>;
   configureWidget(
     widgetId: number,
@@ -89,14 +90,31 @@ type HabHubAndroidModule = {
 const androidModule = NativeModules.HabHubAndroid as
   | HabHubAndroidModule
   | undefined;
+let widgetSnapshotGeneration = 0;
 
 export function areHomeScreenWidgetsSupported() {
   return Platform.OS === "android" && Boolean(androidModule);
 }
 
-export async function updateHomeScreenWidgets(snapshot: WidgetSnapshot) {
+export function homeScreenWidgetSnapshotGeneration() {
+  return widgetSnapshotGeneration;
+}
+
+export async function updateHomeScreenWidgets(
+  snapshot: WidgetSnapshot,
+  expectedGeneration = widgetSnapshotGeneration,
+) {
   if (!areHomeScreenWidgetsSupported()) return false;
+  if (expectedGeneration !== widgetSnapshotGeneration) return false;
   return androidModule!.updateWidgetSnapshot(JSON.stringify(snapshot));
+}
+
+export async function clearHomeScreenWidgetSnapshot() {
+  // Invalidate any JS snapshot calculation that began before this privacy
+  // boundary, even if its native configuration read is still in flight.
+  widgetSnapshotGeneration += 1;
+  if (!areHomeScreenWidgetsSupported()) return false;
+  return androidModule!.clearWidgetSnapshot();
 }
 
 export async function refreshHomeScreenWidgets() {

@@ -56,7 +56,11 @@ const widgetLayout = read("plugins/habhub-android/res/layout/habhub_widget.xml")
 const widgetConfig = read(
   "plugins/habhub-android/java/HabHubWidgetConfigActivity.kt",
 );
+const nativeModule = read(
+  "plugins/habhub-android/java/HabHubNativeModule.kt",
+);
 const widgetBridge = read("src/widgets/WidgetSnapshotBridge.tsx");
+const authProvider = read("src/auth/AuthProvider.tsx");
 const widgetSnapshots = read("src/widgets/snapshot.ts");
 const widgetTypes = read("src/widgets/index.ts");
 const smallInfo = read("plugins/habhub-android/res/xml/habhub_widget_small_info.xml");
@@ -71,6 +75,52 @@ const smallPreview = read(
 const wideCompactPreview = read(
   "plugins/habhub-android/res/drawable/habhub_widget_preview_wide_compact.xml",
 );
+const widgetValues = read(
+  "plugins/habhub-android/res/values/habhub_widgets.xml",
+);
+const backupRules = read(
+  "plugins/habhub-android/res/xml/habhub_widget_backup_rules.xml",
+);
+const dataExtractionRules = read(
+  "plugins/habhub-android/res/xml/habhub_widget_data_extraction_rules.xml",
+);
+
+for (const fileName of ["HabHubWidgetConfigActivity.kt", "HabHubNativeModule.kt"]) {
+  assert.equal(
+    normalizeEol(
+      read(`plugins/habhub-android/java/${fileName}`).replace(
+        "__ANDROID_PACKAGE__",
+        "app.paceboard.mobile",
+      ),
+    ),
+    normalizeEol(
+      read(`android/app/src/main/java/app/paceboard/mobile/${fileName}`),
+    ),
+    `Generated ${fileName} must match its config-plugin source`,
+  );
+}
+for (const [resourceType, fileName] of [
+  ["drawable", "habhub_widget_preview_small.xml"],
+  ["drawable", "habhub_widget_preview_wide_compact.xml"],
+  ["values", "habhub_widgets.xml"],
+  ["xml", "habhub_widget_small_info.xml"],
+  ["xml", "habhub_widget_square_info.xml"],
+  ["xml", "habhub_widget_wide_compact_info.xml"],
+  ["xml", "habhub_widget_wide_info.xml"],
+  ["xml", "habhub_widget_backup_rules.xml"],
+  ["xml", "habhub_widget_data_extraction_rules.xml"],
+]) {
+  assert.equal(
+    normalizeEol(
+      read(`plugins/habhub-android/res/${resourceType}/${fileName}`).replaceAll(
+        "__ANDROID_PACKAGE__",
+        "app.paceboard.mobile",
+      ),
+    ),
+    normalizeEol(read(`android/app/src/main/res/${resourceType}/${fileName}`)),
+    `Generated ${fileName} must match its config-plugin source`,
+  );
+}
 
 assert.match(pluginConfig, /\["layout", "habhub_widget\.xml"\]/);
 assert.match(pluginConfig, /habhub_widget_preview_small/);
@@ -84,13 +134,13 @@ assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_ba
 
 assert.match(
   widgetConfig,
-  /"square", "wide" -> listOf\("__avatar__"[\s\S]*"wide_compact" -> listOf\("__featured__"[\s\S]*else -> listOf\([\s\S]*"__featured__"[\s\S]*"__avatar__"/,
-  "Featured is limited to horizontal 2x1/4x1 while 2x2/4x2 are Status families",
+  /"square", "wide" -> listOf\("__avatar__"[\s\S]*else -> listOf\("__featured__"/,
+  "Featured and Status must use dedicated providers with compatible resize axes",
 );
-assert.match(widgetConfig, /"square" -> "2 x 2"/);
-assert.match(widgetConfig, /"wide_compact" -> "4 x 1"/);
-assert.match(widgetConfig, /"wide" -> "4 x 2"/);
-assert.match(widgetConfig, /else -> "2 x 1"/);
+assert.match(widgetConfig, /"square" -> "2-3 x 1-5 \(starts 2 x 2\)"/);
+assert.match(widgetConfig, /"wide_compact" -> "2-5 x 1 \(starts 4 x 1\)"/);
+assert.match(widgetConfig, /"wide" -> "2-3 x 1-5 \(starts 3 x 2\)"/);
+assert.match(widgetConfig, /else -> "2-5 x 1 \(starts 2 x 1\)"/);
 assert.match(widgetConfig, /"theme"[\s\S]*"transparent"[\s\S]*"custom"/);
 assert.match(widgetConfig, /SeekBar\(this\)[\s\S]*max = 100/);
 assert.match(widgetConfig, /habhub_widget_blur_note/);
@@ -100,7 +150,7 @@ assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
-  /private fun fixedTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
+  /private fun fixedTracker[\s\S]*HabHubSmallWidgetProvider[\s\S]*-> "__featured__"[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
   "Fixed widget families must redirect stale content choices to their intended layout",
 );
 assert.match(
@@ -112,22 +162,24 @@ assert.match(
   pluginSource,
   /configuration\.trackerId == "__avatar__"[\s\S]*snapshot\.optJSONObject\("avatar"\)[\s\S]*snapshot\.optJSONObject\("featured"\)/,
 );
-for (const [source, width, height, preview, widthDp, heightDp] of [
-  [smallInfo, 2, 1, "small", 110, 48],
-  [squareInfo, 2, 2, "square", 110, 105],
-  [wideCompactInfo, 4, 1, "wide_compact", 250, 48],
-  [wideInfo, 4, 2, "wide", 250, 105],
+for (const [source, expected] of [
+  [smallInfo, { width: 2, height: 1, preview: "small", minWidth: 109, maxWidth: 349, minHeight: 50, maxHeight: 50, mode: "horizontal" }],
+  [squareInfo, { width: 2, height: 2, preview: "square", minWidth: 109, maxWidth: 203, minHeight: 50, maxHeight: 315, mode: "horizontal\\|vertical" }],
+  [wideCompactInfo, { width: 4, height: 1, preview: "wide_compact", minWidth: 109, maxWidth: 349, minHeight: 50, maxHeight: 50, mode: "horizontal" }],
+  [wideInfo, { width: 3, height: 2, preview: "wide", minWidth: 109, maxWidth: 203, minHeight: 50, maxHeight: 315, mode: "horizontal\\|vertical" }],
 ]) {
-  assert.match(source, new RegExp(`android:targetCellWidth="${width}"`));
-  assert.match(source, new RegExp(`android:targetCellHeight="${height}"`));
-  assert.match(source, new RegExp(`android:previewImage="@drawable/habhub_widget_preview_${preview}"`));
-  assert.match(source, new RegExp(`android:previewLayout="@layout/habhub_widget_preview_${preview}"`));
-  assert.match(source, new RegExp(`android:minResizeWidth="${widthDp}dp"`));
-  assert.match(source, new RegExp(`android:maxResizeWidth="${widthDp}dp"`));
-  assert.match(source, new RegExp(`android:minResizeHeight="${heightDp}dp"`));
-  assert.match(source, new RegExp(`android:maxResizeHeight="${heightDp}dp"`));
-  assert.match(source, /android:resizeMode="none"/);
+  assert.match(source, new RegExp(`android:targetCellWidth="${expected.width}"`));
+  assert.match(source, new RegExp(`android:targetCellHeight="${expected.height}"`));
+  assert.match(source, new RegExp(`android:previewImage="@drawable/habhub_widget_preview_${expected.preview}"`));
+  assert.match(source, new RegExp(`android:previewLayout="@layout/habhub_widget_preview_${expected.preview}"`));
+  assert.match(source, new RegExp(`android:minResizeWidth="${expected.minWidth}dp"`));
+  assert.match(source, new RegExp(`android:maxResizeWidth="${expected.maxWidth}dp"`));
+  assert.match(source, new RegExp(`android:minResizeHeight="${expected.minHeight}dp"`));
+  assert.match(source, new RegExp(`android:maxResizeHeight="${expected.maxHeight}dp"`));
+  assert.match(source, new RegExp(`android:resizeMode="${expected.mode}"`));
 }
+assert.match(widgetValues, /Featured card - resizes from 2-5 x 1/);
+assert.match(widgetValues, /Status avatar and tracker rings - resizes from 2-3 x 1-5/);
 assert.match(pluginSource, /paceboard:\/\/status/);
 assert.match(pluginSource, /paceboard:\/\//);
 assert.match(pluginSource, /setImageViewBitmap/);
@@ -139,8 +191,12 @@ assert.match(pluginSource, /drawFeaturedGoalDot/);
 assert.match(pluginSource, /drawAvatarCard/);
 assert.match(pluginSource, /drawStatusGoalGrid/);
 assert.match(pluginSource, /val rows = \(count \+ columns - 1\) \/ columns/);
-assert.match(pluginSource, /size\.wide -> 29f/);
-assert.match(pluginSource, /else -> 20f/);
+assert.match(pluginSource, /size\.heightDp >= 260f -> 12/);
+assert.match(pluginSource, /while \(count > 0\)[\s\S]*if \(diameter >= 8f\) break[\s\S]*count -= 1/);
+assert.match(pluginSource, /drawPortraitAvatarCard/);
+assert.match(pluginSource, /val roomy = widthDp >= 165f/);
+assert.match(pluginSource, /widgetId in wideWidgetIds -> 203/);
+assert.match(pluginSource, /val portrait = context\.resources\.configuration\.orientation != Configuration\.ORIENTATION_LANDSCAPE[\s\S]*if \(portrait\) minWidth else maxWidth[\s\S]*if \(portrait\) maxHeight else minHeight/);
 assert.match(pluginSource, /goal\.optString\("title", "Goal"\)/);
 assert.match(pluginSource, /item\.optJSONArray\("goals"\)/);
 assert.match(pluginSource, /item\.optBoolean\("showProgressOutline", true\)/);
@@ -159,7 +215,7 @@ assert.doesNotMatch(
   "Featured completion must keep a neutral center with an arc and percentage",
 );
 assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
-assert.match(pluginSource, /contentWidth - dateWidth - headerGap/);
+assert.match(pluginSource, /pad \+ dateWidth \/ 2f[\s\S]*val eyebrowLeft = pad \+ dateWidth \+ headerGap/);
 assert.match(pluginSource, /PorterDuffColorFilter/);
 assert.match(pluginSource, /LruCache<String, Bitmap>/);
 assert.match(pluginSource, /MAX_RENDER_PIXELS/);
@@ -208,12 +264,55 @@ assert.match(widgetBridge, /scheduleDayBoundary/);
 assert.match(widgetBridge, /if \(dirtyRef\.current\) queueRef\.current\(100\)/);
 assert.doesNotMatch(widgetBridge, /InteractionManager/);
 assert.match(widgetBridge, /getHomeScreenWidgetConfigurations\(\)/);
-assert.match(widgetBridge, /const seededRef = useRef\(false\)/);
 assert.match(
   widgetBridge,
-  /if \(configurations\.length === 0 && seededRef\.current\) return/,
+  /if \(configurations\.length === 0\)[\s\S]*clearHomeScreenWidgetSnapshot\(\)[\s\S]*publishedRef\.current = false/,
+  "No installed widget must leave no durable health snapshot",
 );
-assert.match(widgetBridge, /seededRef\.current \? 320 : 1_200/);
+assert.doesNotMatch(widgetBridge, /seededRef|Seed the bounded/);
+assert.match(widgetBridge, /publishedRef\.current \? 320 : 1_200/);
+assert.match(
+  widgetBridge,
+  /authStatusRef\.current === "signedIn"[\s\S]*authUserIdRef\.current === stateRef\.current\.currentUserId/,
+  "Widget publishing must be bound to the hydrated signed-in identity",
+);
+assert.match(
+  widgetBridge,
+  /authStatusRef\.current === "demo" && !cloudConfiguredRef\.current/,
+  "Explicit cloud-account demo mode must not republish a prior account snapshot",
+);
 assert.match(widgetBridge, /scheduleDayBoundary\(\);\s*queueRef\.current\(1_200\)/);
+
+assert.match(pluginSource, /fun clearSnapshot\(context: Context\)[\s\S]*remove\(SNAPSHOT\)/);
+assert.match(pluginSource, /fun configurations[\s\S]*activeWidgetIds\(context\)\.map/);
+assert.match(
+  pluginSource,
+  /activeWidgetIds\(context\)\.none \{ it !in deleted \}[\s\S]*clearSnapshot\(context\)/,
+  "Deleting the last widget must clear durable health state even during launcher callback lag",
+);
+assert.match(pluginSource, /HabHubSmallWidgetProvider::class\.java[\s\S]*HabHubSquareWidgetProvider::class\.java[\s\S]*HabHubWideCompactWidgetProvider::class\.java[\s\S]*HabHubWideWidgetProvider::class\.java/);
+assert.doesNotMatch(pluginSource, /mergedTrackers|previous\.optJSONArray\("trackers"\)/);
+assert.match(nativeModule, /fun clearWidgetSnapshot\(promise: Promise\)[\s\S]*HabHubWidgetStore\.clearSnapshot[\s\S]*HabHubWidgetRenderer\.updateAll/);
+assert.match(widgetTypes, /clearWidgetSnapshot\(\): Promise<boolean>/);
+assert.match(widgetTypes, /export async function clearHomeScreenWidgetSnapshot/);
+assert.match(widgetTypes, /widgetSnapshotGeneration \+= 1/);
+assert.match(widgetTypes, /expectedGeneration !== widgetSnapshotGeneration/);
+assert.match(widgetBridge, /homeScreenWidgetSnapshotGeneration\(\)[\s\S]*updateHomeScreenWidgets\([\s\S]*snapshotGeneration/);
+assert.ok(
+  authProvider.match(/clearHomeScreenWidgetSnapshot\(\)/g)?.length >= 4,
+  "Auth sign-out, account transition, offline reconciliation, and demo boundaries must clear widget data",
+);
+assert.match(pluginConfig, /habhub_widget_backup_rules\.xml/);
+assert.match(pluginConfig, /habhub_widget_data_extraction_rules\.xml/);
+assert.match(pluginConfig, /android:fullBackupContent[\s\S]*@xml\/habhub_widget_backup_rules/);
+assert.match(pluginConfig, /android:dataExtractionRules[\s\S]*@xml\/habhub_widget_data_extraction_rules/);
+assert.match(backupRules, /exclude domain="sharedpref" path="habhub_widgets\.xml"/);
+assert.equal(
+  dataExtractionRules.match(/exclude domain="sharedpref" path="habhub_widgets\.xml"/g)?.length,
+  2,
+  "Android 12+ rules must exclude widget preferences from cloud backup and device transfer",
+);
+assert.match(manifest, /android:fullBackupContent="@xml\/habhub_widget_backup_rules"/);
+assert.match(manifest, /android:dataExtractionRules="@xml\/habhub_widget_data_extraction_rules"/);
 
 console.log("Native Chat layout and four privacy-safe Featured/Status widget families validated.");

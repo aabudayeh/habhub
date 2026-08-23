@@ -42,11 +42,7 @@ class HabHubWidgetConfigActivity : Activity() {
     val family = widgetFamily(widgetId)
     val choices = when (family) {
       "square", "wide" -> listOf("__avatar__" to getString(R.string.habhub_widget_status_avatar))
-      "wide_compact" -> listOf("__featured__" to getString(R.string.habhub_widget_featured_progress))
-      else -> listOf(
-        "__featured__" to getString(R.string.habhub_widget_featured_progress),
-        "__avatar__" to getString(R.string.habhub_widget_status_avatar),
-      )
+      else -> listOf("__featured__" to getString(R.string.habhub_widget_featured_progress))
     }
 
     val root = LinearLayout(this).apply {
@@ -166,10 +162,10 @@ class HabHubWidgetConfigActivity : Activity() {
   }
 
   private fun sizeName(family: String) = when (family) {
-    "square" -> "2 x 2"
-    "wide_compact" -> "4 x 1"
-    "wide" -> "4 x 2"
-    else -> "2 x 1"
+    "square" -> "2-3 x 1-5 (starts 2 x 2)"
+    "wide_compact" -> "2-5 x 1 (starts 4 x 1)"
+    "wide" -> "2-3 x 1-5 (starts 3 x 2)"
+    else -> "2-5 x 1 (starts 2 x 1)"
   }
 
   private fun radioGroup() = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }

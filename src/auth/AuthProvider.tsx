@@ -22,6 +22,7 @@ import {
   unregisterOrphanedDevicePushToken,
 } from '@/src/notifications/push';
 import { deleteGoogleHealthStepCheckpoint } from '@/src/storage/googleHealthStepCheckpoint';
+import { clearHomeScreenWidgetSnapshot } from '@/src/widgets';
 
 const DEMO_MODE_KEY = 'paceboard-explicit-demo-mode-v1';
 const CACHED_AUTH_IDENTITY_KEY = 'habhub-cached-auth-identity-v1';
@@ -105,6 +106,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       const transitionKey = `${previousUserId}:${nextUserId ?? 'signed-out'}`;
       if (startedIdentityTransitions.has(transitionKey)) return;
       startedIdentityTransitions.add(transitionKey);
+      // Launcher snapshots contain private, current-day tracker state. Start
+      // clearing at every account boundary before the next identity can
+      // publish its own projection; visual widget configurations are retained.
+      void clearHomeScreenWidgetSnapshot().catch(() => false);
       {
         // Append the native-token cleanup barrier synchronously, before the B
         // session is published below. Otherwise local alarm cleanup's first
@@ -310,6 +315,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let active = true;
     const cachedUserId = offlineUser.id;
     const queuePriorIdentityCleanup = () => {
+      void clearHomeScreenWidgetSnapshot().catch(() => false);
       // Append the push identity barrier before publishing another account or
       // signed-out state. This mirrors the auth-event path above and prevents
       // an old account cleanup from unregistering a newly restored token.
@@ -490,17 +496,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
       // device and bypass the causal workspace projection.
     },
     continueInDemo: async () => {
+      await clearHomeScreenWidgetSnapshot().catch(() => false);
       await AsyncStorage.setItem(DEMO_MODE_KEY, 'true');
       setOfflineUser(null);
       setStatus('demo');
     },
     useCloudAccount: async () => {
+      await clearHomeScreenWidgetSnapshot().catch(() => false);
       await AsyncStorage.removeItem(DEMO_MODE_KEY);
       if (session || offlineUser) setStatus('signedIn');
       else setStatus('signedOut');
     },
     signOut: async () => {
       const client = requireClient();
+      await clearHomeScreenWidgetSnapshot().catch(() => false);
       await AsyncStorage.multiRemove([
         DEMO_MODE_KEY,
         CACHED_AUTH_IDENTITY_KEY,

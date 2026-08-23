@@ -955,6 +955,17 @@ class HabHubNativeModule(
   }
 
   @ReactMethod
+  fun clearWidgetSnapshot(promise: Promise) {
+    try {
+      HabHubWidgetStore.clearSnapshot(reactContext)
+      HabHubWidgetRenderer.updateAll(reactContext)
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("widget_clear_failed", error)
+    }
+  }
+
+  @ReactMethod
   fun refreshWidgets(promise: Promise) {
     try {
       HabHubWidgetRenderer.updateAll(reactContext)

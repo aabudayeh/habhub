@@ -4,6 +4,7 @@ import { AppState as NativeAppState, Image } from "react-native";
 import { dateKey } from "@/src/domain/date";
 import { stateWithoutGoogleHealthLocalData } from "@/src/domain/googleHealthLocalPrivacy";
 import { useLocalization } from "@/src/i18n";
+import { useAuth } from "@/src/auth/AuthProvider";
 import { useApp } from "@/src/state/AppProvider";
 import {
   statusBodyAppearance,
@@ -21,7 +22,9 @@ import {
 } from "@/src/widgets/snapshot";
 import {
   areHomeScreenWidgetsSupported,
+  clearHomeScreenWidgetSnapshot,
   getHomeScreenWidgetConfigurations,
+  homeScreenWidgetSnapshotGeneration,
   updateHomeScreenWidgets,
   WidgetSnapshot,
   WidgetAvatarSnapshot,
@@ -81,6 +84,11 @@ function avatarSnapshot(
 /** Keeps Android widgets current without blocking navigation or app startup. */
 export function WidgetSnapshotBridge() {
   const { state, hydrated } = useApp();
+  const {
+    configured: cloudConfigured,
+    status: authStatus,
+    user: authUser,
+  } = useAuth();
   const tutorialSandbox = useTutorialSandboxActive();
   const { language, t } = useLocalization();
   const accent = useGroupAccent();
@@ -92,7 +100,11 @@ export function WidgetSnapshotBridge() {
   const translationRef = useRef(t);
   const accentRef = useRef(accent);
   const darkRef = useRef(colors.isDark);
-  const seededRef = useRef(false);
+  const publishedRef = useRef(false);
+  const snapshotClearedRef = useRef(false);
+  const authStatusRef = useRef(authStatus);
+  const authUserIdRef = useRef(authUser?.id ?? null);
+  const cloudConfiguredRef = useRef(cloudConfigured);
   const mountedRef = useRef(false);
   const dirtyRef = useRef(false);
   const publishingRef = useRef(false);
@@ -105,6 +117,9 @@ export function WidgetSnapshotBridge() {
   translationRef.current = t;
   accentRef.current = accent;
   darkRef.current = colors.isDark;
+  authStatusRef.current = authStatus;
+  authUserIdRef.current = authUser?.id ?? null;
+  cloudConfiguredRef.current = cloudConfigured;
 
   queueRef.current = (delay = 320) => {
     dirtyRef.current = true;
@@ -120,7 +135,12 @@ export function WidgetSnapshotBridge() {
       !mountedRef.current ||
       tutorialSandbox ||
       !hydratedRef.current ||
-      !areHomeScreenWidgetsSupported()
+      !areHomeScreenWidgetsSupported() ||
+      !(
+        (authStatusRef.current === "signedIn" &&
+          authUserIdRef.current === stateRef.current.currentUserId) ||
+        (authStatusRef.current === "demo" && !cloudConfiguredRef.current)
+      )
     )
       return;
     if (publishingRef.current) {
@@ -129,15 +149,26 @@ export function WidgetSnapshotBridge() {
     }
     publishingRef.current = true;
     dirtyRef.current = false;
+    const snapshotGeneration = homeScreenWidgetSnapshotGeneration();
     try {
       const configurations = await getHomeScreenWidgetConfigurations().catch(
         () => [],
       );
-      // Seed the bounded Featured and Status snapshots once per process so
-      // adding the first widget while HabHub is closed never produces an empty
-      // card. After that, no launcher widget means ordinary app updates skip
-      // all avatar/history work.
-      if (configurations.length === 0 && seededRef.current) return;
+      // Never retain current-day health data when the launcher has no HabHub
+      // widgets. Native deletion also clears immediately while the app is
+      // closed; this covers stale installs and launcher-specific callbacks.
+      if (configurations.length === 0) {
+        if (!snapshotClearedRef.current) {
+          const cleared = await clearHomeScreenWidgetSnapshot().catch(
+            () => false,
+          );
+          if (cleared) snapshotClearedRef.current = true;
+        }
+        lastPayloadRef.current = "";
+        publishedRef.current = false;
+        return;
+      }
+      snapshotClearedRef.current = false;
       // Android stores widget JSON in plaintext SharedPreferences. Build only
       // from the cache-safe projection; Google values continue to render in
       // the open app but never influence a durable launcher snapshot.
@@ -174,14 +205,22 @@ export function WidgetSnapshotBridge() {
         trackers: [],
       };
       const payload = JSON.stringify({ featured, avatar });
-      if (payload === lastPayloadRef.current) {
-        seededRef.current = true;
+      if (payload === lastPayloadRef.current && publishedRef.current) return;
+      if (
+        !(
+          (authStatusRef.current === "signedIn" &&
+            authUserIdRef.current === stateRef.current.currentUserId) ||
+          (authStatusRef.current === "demo" && !cloudConfiguredRef.current)
+        )
+      )
         return;
-      }
-      const updated = await updateHomeScreenWidgets(snapshot).catch(() => false);
+      const updated = await updateHomeScreenWidgets(
+        snapshot,
+        snapshotGeneration,
+      ).catch(() => false);
       if (updated) {
         lastPayloadRef.current = payload;
-        seededRef.current = true;
+        publishedRef.current = true;
       }
     } finally {
       publishingRef.current = false;
@@ -228,9 +267,12 @@ export function WidgetSnapshotBridge() {
   useEffect(() => {
     // A fixed trailing timer is never canceled by newer state. This prevents a
     // busy sync stream from starving widget updates indefinitely.
-    queueRef.current(seededRef.current ? 320 : 1_200);
+    queueRef.current(publishedRef.current ? 320 : 1_200);
   }, [
     accent,
+    authStatus,
+    authUser?.id,
+    cloudConfigured,
     colors.isDark,
     hydrated,
     language,

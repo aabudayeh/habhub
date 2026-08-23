@@ -46,6 +46,8 @@ const RESOURCE_FILES = [
   ["xml", "habhub_widget_square_info.xml"],
   ["xml", "habhub_widget_wide_compact_info.xml"],
   ["xml", "habhub_widget_wide_info.xml"],
+  ["xml", "habhub_widget_backup_rules.xml"],
+  ["xml", "habhub_widget_data_extraction_rules.xml"],
 ];
 
 const PROVIDERS = [
@@ -90,6 +92,10 @@ function withNativeManifest(config, packageName) {
     const application = AndroidConfig.Manifest.getMainApplicationOrThrow(
       androidConfig.modResults,
     );
+    application.$["android:fullBackupContent"] =
+      "@xml/habhub_widget_backup_rules";
+    application.$["android:dataExtractionRules"] =
+      "@xml/habhub_widget_data_extraction_rules";
 
     manifest["uses-permission"] = manifest["uses-permission"] ?? [];
     if (
