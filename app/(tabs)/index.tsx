@@ -210,6 +210,7 @@ function Today() {
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
   const [todayPageIndex, setTodayPageIndex] = useState(0);
+  const [requestedTodayPage, setRequestedTodayPage] = useState<number>();
   const todayUsesPages =
     (state.settings.todayLayoutMode ?? "pages") === "pages";
   const todaySummaryPinned =
@@ -425,6 +426,8 @@ function Today() {
         .filter(
           (item) =>
             !isInternalTracker(item) &&
+            (item.id !== "todo_completion" ||
+              state.settings.showTodosToday !== false) &&
             (item.sections.today ||
               activeTrackerViewId(state, "today") !== ALL_TRACKERS_FILTER) &&
             item.activeFrom <= today &&
@@ -1033,8 +1036,14 @@ function Today() {
         }
         contentContainerStyle={[
           styles.page,
-          iosWebDevice && styles.standaloneIosPage,
+          Platform.OS === "web" && styles.webTabPage,
         ]}
+        automaticallyAdjustContentInsets={
+          Platform.OS === "web" ? false : undefined
+        }
+        contentInsetAdjustmentBehavior={
+          Platform.OS === "web" ? "never" : undefined
+        }
         showsVerticalScrollIndicator={false}
         onScroll={(event) => {
           todayScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
@@ -1279,7 +1288,9 @@ function Today() {
               ]}
             />
           </View>
-          {heroUsesGoals && todayTodos.length ? (
+          {heroUsesGoals &&
+          todayTodos.length > 0 &&
+          state.settings.showFeaturedTodoProgress === true ? (
             <View style={styles.heroTodoProgressTrack}>
               <View
                 style={[
@@ -1393,31 +1404,41 @@ function Today() {
           </TutorialTarget>
           {todayPageCount > 1 ? (
             <View
-              accessible
               accessibilityLabel={t("Page {page} of {total}")
                 .replace(
                   "{page}",
                   String(Math.min(todayPageIndex + 1, todayPageCount)),
                 )
                 .replace("{total}", String(todayPageCount))}
-              pointerEvents="none"
+              accessibilityRole="tablist"
+              pointerEvents="box-none"
               style={styles.sectionPageIndicator}
             >
               {Array.from({ length: todayPageCount }, (_, index) => {
                 const selected = index === todayPageIndex;
                 return (
-                  <View
+                  <Pressable
                     key={index}
-                    style={[
-                      styles.sectionPageDot,
-                      {
-                        backgroundColor: selected
-                          ? colors.muted
-                          : colors.border,
-                        width: selected ? 12 : 5,
-                      },
-                    ]}
-                  />
+                    accessibilityRole="tab"
+                    accessibilityLabel={t("Page {page} of {total}")
+                      .replace("{page}", String(index + 1))
+                      .replace("{total}", String(todayPageCount))}
+                    accessibilityState={{ selected }}
+                    onPress={() => setRequestedTodayPage(index)}
+                    style={styles.sectionPageDotButton}
+                  >
+                    <View
+                      style={[
+                        styles.sectionPageDot,
+                        {
+                          backgroundColor: selected
+                            ? colors.muted
+                            : colors.border,
+                          width: selected ? 12 : 5,
+                        },
+                      ]}
+                    />
+                  </Pressable>
                 );
               })}
             </View>
@@ -1478,7 +1499,13 @@ function Today() {
           pageSize={pageCapacity}
           paged={todayUsesPages}
           scrollEnabled={!draggingMetricId}
-          onPageChange={setTodayPageIndex}
+          requestedPage={requestedTodayPage}
+          onPageChange={(page) => {
+            setTodayPageIndex(page);
+            setRequestedTodayPage((requested) =>
+              requested === page ? undefined : requested,
+            );
+          }}
           renderItem={(item, index) => (
             <ReorderItem
               key={item.id}
@@ -1651,14 +1678,22 @@ function Today() {
         ) : null}
         {state.settings.todosBelowGoals !== false ? (
           <TutorialTarget id="today-todo-list">
-          <TodoTodayList
-            localDate={today}
-            onComplete={celebrateTodo}
-            editing={editing}
-            onRequestEdit={beginEditing}
-            visibleOverride={customTodoVisible}
-            todoIds={customTodoIds}
-          />
+            <View
+              style={
+                todayUsesPages
+                  ? styles.todosAfterPagedTrackers
+                  : undefined
+              }
+            >
+              <TodoTodayList
+                localDate={today}
+                onComplete={celebrateTodo}
+                editing={editing}
+                onRequestEdit={beginEditing}
+                visibleOverride={customTodoVisible}
+                todoIds={customTodoIds}
+              />
+            </View>
           </TutorialTarget>
         ) : null}
         {editing ? (
@@ -2111,6 +2146,7 @@ function TodayTrackerPageFlow({
   pageSize,
   paged,
   scrollEnabled,
+  requestedPage,
   onPageChange,
   renderItem,
 }: {
@@ -2118,6 +2154,7 @@ function TodayTrackerPageFlow({
   pageSize: number;
   paged: boolean;
   scrollEnabled: boolean;
+  requestedPage?: number;
   onPageChange?: (page: number) => void;
   renderItem: (item: MetricDefinition, index: number) => React.ReactElement;
 }) {
@@ -2128,6 +2165,7 @@ function TodayTrackerPageFlow({
       accessibilityLabel="Today"
       testID="today-tracker-pages"
       onPageChange={onPageChange}
+      requestedPage={requestedPage}
       scrollEnabled={scrollEnabled}
       showPageDots={false}
       pages={chunkIntoPages(rows, pageSize).map((page, index) => (
@@ -2786,6 +2824,7 @@ function TrackerRow({
       onPress={handlePress}
       style={[
         styles.row,
+        editing && styles.rowEditing,
         !editing && historyRange !== "off" && historyExpanded
           ? styles.rowWithHistory
           : null,
@@ -2903,7 +2942,8 @@ function TrackerRow({
           </Text>
         ) : null}
       </View>
-      {(item.goalEnabled !== false || progressSubmetrics.length > 0) &&
+      {!editing &&
+      (item.goalEnabled !== false || progressSubmetrics.length > 0) &&
       applicable &&
       (!isFasting || Boolean(fastingProgress?.startedAt)) ? (
         <View
@@ -3698,6 +3738,7 @@ const styles = StyleSheet.create({
   rowEditActions: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 0,
     gap: 5,
   },
   rowEnd: {
@@ -3718,7 +3759,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   todayGoldTint: { ...StyleSheet.absoluteFillObject },
   page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
-  standaloneIosPage: { paddingBottom: 0 },
+  webTabPage: { paddingBottom: 0 },
   pinnedTodaySummary: {
     marginHorizontal: -14,
     paddingHorizontal: 14,
@@ -3940,7 +3981,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 3,
+    gap: 0,
+  },
+  sectionPageDotButton: {
+    width: 24,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
   },
   sectionPageDot: { height: 5, borderRadius: 999 },
   sectionActions: {
@@ -3979,6 +4026,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   list: { flex: 1, gap: 6 },
+  todosAfterPagedTrackers: { marginTop: 4 },
   row: {
     minHeight: 62,
     borderWidth: 1,
@@ -3988,6 +4036,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  rowEditing: { paddingHorizontal: 8, gap: 6 },
   celebrationDismiss: {
     width: 32,
     height: 32,
@@ -4026,7 +4075,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  name: { fontSize: 11, fontWeight: "900" },
+  name: { minWidth: 0, flexShrink: 1, fontSize: 11, fontWeight: "900" },
   completedText: { textDecorationLine: "line-through", opacity: 0.68 },
   primary: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   secondary: { fontSize: 8, lineHeight: 12, marginTop: 1 },

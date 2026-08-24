@@ -7,6 +7,8 @@ import {
   completionIndicatorOption,
 } from "@/src/domain/completionIndicators";
 import { compactDayDate } from "@/src/domain/date";
+import { leaderboardRows } from "@/src/domain/leaderboard";
+import { memberDisplayName } from "@/src/domain/members";
 import { statusRangeRollup } from "@/src/domain/status";
 import { todayHeroSummary } from "@/src/domain/todayHero";
 import { localizeMetricName } from "@/src/i18n/domain";
@@ -15,6 +17,7 @@ import type {
   WidgetAvatarSnapshot,
   WidgetFeaturedSnapshot,
   WidgetGoalSnapshot,
+  WidgetLeaderboardSnapshot,
 } from "@/src/widgets";
 
 type Translate = (source: string) => string;
@@ -88,9 +91,9 @@ export function featuredWidgetSnapshot(
         ? "TODAY'S FOCUS"
         : "To-Dos",
   );
-  const todoSuffix =
+  const todoSummary =
     summary.usesGoals && summary.todos.length
-      ? ` · ${summary.completedTodos}/${summary.todos.length} ${translate("To-Dos")}`
+      ? `${summary.completedTodos}/${summary.todos.length} ${translate("To-Dos")}`
       : "";
   const goals: WidgetGoalSnapshot[] = summary.usesGoals
     ? summary.goalProgress.map((goal) => ({
@@ -115,8 +118,11 @@ export function featuredWidgetSnapshot(
 
   return {
     id: "__featured__",
-    eyebrow: `${baseEyebrow}${todoSuffix}`,
+    eyebrow: baseEyebrow,
     dateLabel: compactDayDate(today, language),
+    compactSubtitle: [featuredSubtitle(summary, translate), todoSummary]
+      .filter(Boolean)
+      .join(" · "),
     title: "HabHub",
     value: `${summary.met} ${translate("of")} ${summary.total}`,
     subtitle: featuredSubtitle(summary, translate),
@@ -184,5 +190,85 @@ export function statusWidgetSnapshot(
     avatarStyle: visual.avatarStyle,
     heightScale: visual.heightScale,
     goals,
+  };
+}
+
+/**
+ * Builds only the configured, privacy-filtered current leaderboard rows.
+ * Private values belonging to other members remain labelled Private and never
+ * enter the launcher snapshot as exact data.
+ */
+export function leaderboardWidgetSnapshot(
+  state: AppState,
+  today: string,
+  language: AppLanguage,
+  translate: Translate,
+  theme: WidgetSnapshotTheme,
+  requestedMetricIds: readonly string[],
+  requestedCount: number,
+): WidgetLeaderboardSnapshot {
+  const eligible = (state.group.metricConfiguration ?? []).filter(
+    (metric) =>
+      metric.dataType !== "text" &&
+      metric.dataType !== "photo" &&
+      metric.sections.group,
+  );
+  const byId = new Map(eligible.map((metric) => [metric.id, metric]));
+  const fallbackIds =
+    state.settings.leaderboardMetricIdsByGroup?.[state.group.id]?.filter(
+      (id) => id !== "__score" && byId.has(id),
+    ) ?? [];
+  const explicitlyRequestedIds = [...new Set(requestedMetricIds)].filter((id) =>
+    byId.has(id),
+  );
+  // The request is the union across every installed leaderboard widget. Do
+  // not cap that union globally: each native widget applies its own 1-4 item
+  // limit after selecting its configured ids. Otherwise a second widget can
+  // silently lose all of its metrics when the first widget fills the cap.
+  const fallbackCount = Math.max(1, Math.min(4, requestedCount || 2));
+  const selectedIds = explicitlyRequestedIds.length
+    ? explicitlyRequestedIds
+    : fallbackIds.slice(0, fallbackCount);
+  if (!selectedIds.length)
+    selectedIds.push(...eligible.slice(0, fallbackCount).map((metric) => metric.id));
+  const metrics = selectedIds.flatMap((metricId) => {
+    const metric = byId.get(metricId);
+    if (!metric) return [];
+    const rows = leaderboardRows(
+      state,
+      [metric],
+      [today],
+      state.currentUserId,
+      false,
+    ).slice(0, 5);
+    return [
+      {
+        id: metric.id,
+        title: localizeMetricName(language, metric),
+        icon: metric.icon,
+        color: metric.color,
+        deepLink: `paceboard://leaderboard-detail?metric=${encodeURIComponent(metric.id)}&period=today&date=${today}`,
+        rows: rows.map((row) => {
+          const result = row.metrics[0]?.result;
+          const isPrivate = !result || result.mode === "private";
+          return {
+            id: row.member.id,
+            name: memberDisplayName(state, row.member),
+            initials: row.member.initials,
+            color: row.member.color,
+            value: isPrivate ? translate("Private") : result.label,
+            private: isPrivate,
+          };
+        }),
+      },
+    ];
+  });
+  return {
+    id: "__leaderboard__",
+    title: translate("Leaderboard"),
+    dateLabel: compactDayDate(today, language),
+    backgroundColor: theme.backgroundColor,
+    deepLink: "paceboard://group",
+    metrics,
   };
 }

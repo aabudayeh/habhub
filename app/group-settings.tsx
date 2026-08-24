@@ -65,6 +65,7 @@ export default function GroupSettings() {
     setGroupRestDays,
     setGroupTheme,
     setGroupApprovalRequired,
+    setGroupTodosEnabled,
     updateSettings,
     flushLocalPersistence,
     approveMember,
@@ -882,6 +883,28 @@ export default function GroupSettings() {
             : "Only the group owner or an admin can rename this group"}
         </Text>
       </Card>
+
+      <SectionHeader title="Group To-Dos" />
+      <Card style={styles.status}>
+        <View style={styles.copy}>
+          <Text style={[styles.name, { color: colors.ink }]}>Shared task lists</Text>
+          <Text style={[styles.meta, { color: colors.muted }]}>
+            Members can create nested tasks, complete them together or
+            individually, and share them in group chat. Off by default.
+          </Text>
+        </View>
+        <Switch
+          accessibilityLabel="Enable group to-dos"
+          disabled={!canEdit || personalSetup}
+          value={state.group.groupTodosEnabled === true}
+          onValueChange={setGroupTodosEnabled}
+          trackColor={{ false: colors.border, true: `${accent}88` }}
+          thumbColor={state.group.groupTodosEnabled ? accent : colors.faint}
+        />
+      </Card>
+      {!canEdit && !personalSetup ? (
+        <Text style={[styles.help, { color: colors.muted }]}>Only a group owner or admin can change this setting.</Text>
+      ) : null}
 
       <SectionHeader title="Group color" />
       <Card style={styles.colorPicker}>

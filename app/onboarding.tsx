@@ -236,6 +236,7 @@ export default function Onboarding() {
   );
   const [infoTracker, setInfoTracker] = useState<TrackerPreset | null>(null);
   const [expandedGoals, setExpandedGoals] = useState<string[]>([]);
+  const [goalTargets, setGoalTargets] = useState<Record<string, string>>({});
   const [direction, setDirection] = useState<WeightDirection>(
     state.settings.weightDirection ?? "lose",
   );
@@ -286,6 +287,7 @@ export default function Onboarding() {
         setSelected(draft.selectedTrackerIds);
         setTrackedSelected(draft.trackedGoalIds);
         setExpandedGoals(draft.expandedGoalIds);
+        setGoalTargets(draft.goalTargets ?? {});
         setDirection(draft.direction);
         setAge(draft.age);
         setHeight(draft.height);
@@ -412,6 +414,15 @@ export default function Onboarding() {
     });
     return [...groups.entries()];
   }, [visibleRecommendations]);
+  const editableGoalItems = proposed.filter(
+    (item) =>
+      selected.includes(item.templateId) &&
+      trackedSelected.includes(item.templateId) &&
+      item.goalEnabled !== false &&
+      item.dataType !== "boolean" &&
+      item.goal.kind !== "complete" &&
+      !item.goalRange,
+  );
   const trackedHealthHistoryCount = proposed.filter(
     (item) =>
       selected.includes(item.templateId) &&
@@ -503,6 +514,7 @@ export default function Onboarding() {
     draftReady,
     expandedGoals,
     finishing,
+    goalTargets,
     goals,
     healthHistoryDays,
     height,
@@ -528,6 +540,7 @@ export default function Onboarding() {
       selectedTrackerIds: selected,
       trackedGoalIds: trackedSelected,
       expandedGoalIds: expandedGoals,
+      goalTargets,
       direction,
       age,
       height,
@@ -630,7 +643,16 @@ export default function Onboarding() {
     const today = dateKey();
     return proposed
       .filter((item) => selected.includes(item.templateId))
-      .map((item, order) => ({
+      .map((item, order) => {
+        const rawTarget = goalTargets[item.templateId];
+        const parsedTarget = Number(rawTarget?.replace(",", "."));
+        const targetOverride =
+          rawTarget !== undefined &&
+          Number.isFinite(parsedTarget) &&
+          parsedTarget > 0
+            ? parsedTarget
+            : item.goal.target;
+        return {
         id: item.templateId,
         slug: item.templateId,
         name: item.name,
@@ -639,7 +661,7 @@ export default function Onboarding() {
         unit: item.unit,
         dataType: item.dataType,
         aggregation: item.aggregation,
-        goal: { ...item.goal },
+        goal: { ...item.goal, target: targetOverride },
         adaptiveGoalTarget: item.adaptiveGoalTarget
           ? { ...item.adaptiveGoalTarget }
           : undefined,
@@ -664,11 +686,12 @@ export default function Onboarding() {
         scoreWeight: 0,
         sections:
           item.templateId === "todo_completion"
-            ? { today: false, insights: false, group: false }
+            ? { today: true, insights: false, group: false }
             : { today: true, insights: true, group: false },
         order,
         activeFrom: today,
-      }));
+        };
+      });
   }
 
   function configure(options?: { keepLeaderboardVisible?: boolean }) {
@@ -981,6 +1004,75 @@ export default function Onboarding() {
                     </View>
                   </View>
                 ))}
+                {editableGoalItems.length ? (
+                  <View
+                    style={[
+                      styles.targetEditor,
+                      {
+                        backgroundColor: colors.card,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        expanded: expandedGoals.includes("tracker-targets"),
+                      }}
+                      onPress={() =>
+                        setExpandedGoals((current) =>
+                          current.includes("tracker-targets")
+                            ? current.filter((id) => id !== "tracker-targets")
+                            : [...current, "tracker-targets"],
+                        )
+                      }
+                      style={styles.targetEditorHeader}
+                    >
+                      <View style={styles.grow}>
+                        <Text style={[styles.goalTitle, { color: colors.ink }]}>Review daily goals (optional)</Text>
+                        <Text style={[styles.goalCopy, { color: colors.muted }]}>The defaults are ready; open this only if you want different targets.</Text>
+                      </View>
+                      <Ionicons
+                        name={expandedGoals.includes("tracker-targets") ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color={colors.faint}
+                      />
+                    </Pressable>
+                    {expandedGoals.includes("tracker-targets") ? (
+                      <View style={styles.targetRows}>
+                        {editableGoalItems.map((item) => (
+                          <View key={item.templateId} style={[styles.targetRow, { borderTopColor: colors.border }]}>
+                            <View style={[styles.metricIcon, { backgroundColor: `${item.color}18` }]}>
+                              <Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={16} color={item.color} />
+                            </View>
+                            <Text style={[styles.targetName, { color: colors.ink }]} numberOfLines={1}>{item.name}</Text>
+                            <TextInput
+                              accessibilityLabel={`${item.name} daily goal`}
+                              value={goalTargets[item.templateId] ?? String(item.goal.target)}
+                              onChangeText={(value) =>
+                                setGoalTargets((current) => ({
+                                  ...current,
+                                  [item.templateId]: value,
+                                }))
+                              }
+                              keyboardType="decimal-pad"
+                              selectTextOnFocus
+                              style={[
+                                styles.targetInput,
+                                {
+                                  color: colors.ink,
+                                  borderColor: colors.border,
+                                  backgroundColor: colors.canvas,
+                                },
+                              ]}
+                            />
+                            <Text style={[styles.targetUnit, { color: colors.muted }]}>{item.unit || "goal"}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </>
             ) : null}
 
@@ -1318,4 +1410,11 @@ function TourChoice({ selected, icon, title, copy, onPress }: { selected: boolea
 
 const styles = StyleSheet.create({
   safe: { flex: 1 }, loading: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }, loadingText: { fontSize: 10, fontWeight: "800" }, page: { flex: 1, width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 18, paddingBottom: 8 }, top: { height: 50, flexDirection: "row", alignItems: "center", gap: 9 }, mark: { width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center" }, brand: { fontSize: 12, fontWeight: "900", letterSpacing: 1.5 }, step: { marginLeft: "auto", fontSize: 10, fontWeight: "800" }, body: { flex: 1 }, bodyContent: { paddingTop: 15, paddingBottom: 16 }, title: { fontSize: 25, lineHeight: 30, fontWeight: "900", letterSpacing: -0.6 }, subtitle: { fontSize: 11, lineHeight: 17, marginTop: 5, marginBottom: 13 }, nameLabel: { fontSize: 11, fontWeight: "900", marginBottom: 6 }, input: { height: 41, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, fontSize: 12, fontWeight: "800", marginBottom: 8 }, defaultNotice: { flexDirection: "row", alignItems: "center", gap: 9, padding: 11, borderRadius: 15, marginBottom: 10 }, grow: { flex: 1, minWidth: 0 }, goalGrid: { gap: 7 }, goalChoice: { minHeight: 61, borderWidth: 1, borderRadius: 15, padding: 9, flexDirection: "row", alignItems: "center", gap: 9 }, goalIcon: { width: 37, height: 37, borderRadius: 12, alignItems: "center", justifyContent: "center" }, goalTitle: { fontSize: 11, fontWeight: "900" }, goalCopy: { fontSize: 9, lineHeight: 13, marginTop: 2 }, pressed: { opacity: 0.72 }, legend: { flexDirection: "row", flexWrap: "wrap", gap: 13, marginBottom: 9 }, legendItem: { flexDirection: "row", alignItems: "center", gap: 5 }, legendText: { fontSize: 9, fontWeight: "800" }, setupStats: { minHeight: 65, borderWidth: 1, borderRadius: 16, flexDirection: "row", alignItems: "center", padding: 8, marginBottom: 12 }, setupStat: { flex: 1, alignItems: "center", gap: 2 }, setupValue: { fontSize: 19, fontWeight: "900" }, setupLabel: { fontSize: 8, fontWeight: "800" }, statDivider: { width: StyleSheet.hairlineWidth, height: 35 }, sectionLabel: { fontSize: 11, fontWeight: "900", marginTop: 8, marginBottom: 7 }, sectionHelp: { fontSize: 9, lineHeight: 13, marginTop: -3, marginBottom: 8 }, metricGroup: { marginBottom: 5 }, metricGroupLabel: { fontSize: 9, fontWeight: "900", letterSpacing: 0.4, marginBottom: 5 }, metricGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 7, marginBottom: 9 }, metricCard: { minHeight: 57, borderWidth: 1, borderRadius: 14, padding: 8, flexDirection: "row", alignItems: "center", gap: 7 }, metricIcon: { width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center" }, metricName: { fontSize: 9, lineHeight: 12, fontWeight: "900", flexShrink: 1 }, metricState: { fontSize: 7, fontWeight: "700", marginTop: 2 }, trackerActions: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 }, miniFlag: { width: 23, height: 23, borderRadius: 8, alignItems: "center", justifyContent: "center" }, metricCheck: { width: 21, height: 23, alignItems: "center", justifyContent: "center" }, profileCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, fields: { flexDirection: "row", gap: 8 }, fieldLabel: { fontSize: 9, fontWeight: "800", marginBottom: 4 }, fieldGroupLabel: { fontSize: 10, fontWeight: "900", marginTop: 3, marginBottom: 6 }, wrap: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 }, rateControls: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 7 }, rateChips: { flex: 1, flexDirection: "row", flexWrap: "wrap", gap: 5 }, rateInputWrap: { width: 92, minHeight: 34, borderWidth: 1, borderRadius: 11, paddingHorizontal: 7, flexDirection: "row", alignItems: "center" }, rateInput: { flex: 1, minWidth: 0, paddingVertical: 5, fontSize: 10, fontWeight: "900", textAlign: "right" }, rateUnit: { marginLeft: 3, fontSize: 7, fontWeight: "800" }, weightEstimate: { minHeight: 32, borderRadius: 11, paddingHorizontal: 9, flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 7 }, weightEstimateText: { flex: 1, fontSize: 9, lineHeight: 12, fontWeight: "800" }, validation: { fontSize: 9, fontWeight: "800", marginBottom: 7 }, permission: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 9 }, done: { fontSize: 9, fontWeight: "900" }, importCard: { borderWidth: 1, borderRadius: 17, padding: 12, marginBottom: 9 }, switchRow: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, flexDirection: "row", alignItems: "center", gap: 10 }, readySummary: { flexDirection: "row", alignItems: "center", gap: 10, borderRadius: 16, padding: 13, marginBottom: 7 }, tourChoice: { minHeight: 76, borderWidth: 1, borderRadius: 17, padding: 11, flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }, switchCard: { minHeight: 58, borderWidth: 1, borderRadius: 15, paddingHorizontal: 11, paddingVertical: 8, flexDirection: "row", alignItems: "center", gap: 10 }, infoOverlay: { flex: 1, padding: 20, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(8,14,24,.66)" }, infoCard: { width: "100%", maxWidth: 430, borderWidth: 1, borderRadius: 20, padding: 16, gap: 12 }, infoHeading: { flexDirection: "row", alignItems: "center", gap: 10 }, infoIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" }, infoTitle: { fontSize: 16, lineHeight: 20, fontWeight: "900" }, infoGroup: { fontSize: 9, lineHeight: 12, fontWeight: "800", marginTop: 2 }, infoClose: { width: 32, height: 32, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDescription: { fontSize: 12, lineHeight: 18, fontWeight: "700" }, infoMetaRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 }, infoMeta: { minHeight: 28, borderRadius: 10, paddingHorizontal: 8, flexDirection: "row", alignItems: "center", gap: 5 }, infoMetaText: { fontSize: 8, lineHeight: 11, fontWeight: "900" }, infoDone: { minHeight: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" }, infoDoneText: { color: palette.white, fontSize: 11, fontWeight: "900" }, footer: { height: 58, flexDirection: "row", alignItems: "center", gap: 8 }, back: { padding: 11 }, backText: { fontSize: 11, fontWeight: "900" }, next: { flex: 1 },
+  targetEditor: { borderWidth: 1, borderRadius: 16, marginTop: 4, overflow: "hidden" },
+  targetEditorHeader: { minHeight: 52, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
+  targetRows: { paddingHorizontal: 10, paddingBottom: 8 },
+  targetRow: { minHeight: 43, borderTopWidth: StyleSheet.hairlineWidth, flexDirection: "row", alignItems: "center", gap: 7 },
+  targetName: { flex: 1, minWidth: 0, fontSize: 9, fontWeight: "900" },
+  targetInput: { width: 68, height: 32, borderWidth: 1, borderRadius: 9, paddingHorizontal: 7, textAlign: "right", fontSize: 10, fontWeight: "900" },
+  targetUnit: { width: 35, fontSize: 8, fontWeight: "800" },
 });

@@ -17,14 +17,15 @@ import {
 import {
   authoritativeHealthConnectStepGroups,
   combineDisjointStepWindows,
+  DEFAULT_LIVE_STEP_SOURCES,
   finalImportedStepTotal,
   healthSourceEnabled,
-  LIVE_STEP_SOURCES,
   localCalendarAggregateRange,
   partitionStepAggregateRange,
   reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
   resolveCurrentDeviceStepOrigins,
+  samsungDailySummaryStepCount,
 } from "@/src/domain/healthDedup";
 import { HealthAdapter, HealthImportRecord } from "@/src/health/types";
 import { HealthDataType, NutritionDetails } from "@/src/types";
@@ -145,7 +146,8 @@ async function readLocalPhoneSteps(from: Date, to: Date) {
 
 const RECORD_TYPES: Record<HealthDataType, string> = {
   steps: "Steps",
-  active_energy: "TotalCaloriesBurned",
+  active_energy: "ActiveCaloriesBurned",
+  total_energy: "TotalCaloriesBurned",
   weight: "Weight",
   nutrition: "Nutrition",
   water: "Hydration",
@@ -166,9 +168,9 @@ function recordTypesFor(dataTypes: HealthDataType[]) {
     ...new Set(
       dataTypes.flatMap((type) =>
         type === "workouts"
-          ? ["ExerciseSession", "Distance", "TotalCaloriesBurned"]
+          ? ["ExerciseSession", "Distance", "ActiveCaloriesBurned"]
           : type === "active_energy"
-            ? ["TotalCaloriesBurned", "ExerciseSession"]
+            ? ["ActiveCaloriesBurned", "ExerciseSession"]
             : [RECORD_TYPES[type]],
       ),
     ),
@@ -337,7 +339,6 @@ function recordDuration(record: Record<string, unknown>) {
 function individualIntervals(records: Record<string, unknown>[]) {
   return records.filter((candidate) => {
     const duration = recordDuration(candidate);
-    if (duration >= 6 * 60 * 60 * 1000) return false; // Samsung's running daily total includes resting metabolism.
     return !records.some(
       (other) =>
         other !== candidate &&
@@ -538,7 +539,7 @@ function convert(
     value = Number(record.count ?? 0);
     unit = "steps";
   }
-  if (type === "active_energy") {
+  if (type === "active_energy" || type === "total_energy") {
     value =
       nestedNumber(record, "energy", "inKilocalories") ||
       nestedNumber(record, "energy", "inCalories") / 1000 ||
@@ -824,6 +825,54 @@ export const healthConnectAdapter: HealthAdapter = {
       }
       return resolveCurrentDeviceStepOrigins([], observed);
     };
+    const readSamsungDailyStepSummary = async (
+      start: Date,
+      nextDayStart: Date,
+    ) => {
+      const records: Record<string, unknown>[] = [];
+      let pageToken: string | undefined;
+      // Samsung normally exposes only one row for this origin/day. Keep the
+      // read bounded in case a device retains replaced revisions as rows.
+      for (let page = 0; page < 4; page += 1) {
+        const result = await readRecords("Steps", {
+          timeRangeFilter: {
+            operator: "between",
+            startTime: start.toISOString(),
+            endTime: nextDayStart.toISOString(),
+          },
+          dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
+          ascendingOrder: false,
+          pageSize: 100,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        records.push(...(result.records as Record<string, unknown>[]));
+        pageToken = result.pageToken;
+        if (!pageToken) break;
+      }
+      const count = samsungDailySummaryStepCount(
+        records.map((record) => {
+          const metadata = record.metadata as
+            | Record<string, unknown>
+            | undefined;
+          return {
+            count: Number(record.count ?? 0),
+            startTime: String(record.startTime ?? ""),
+            endTime: String(record.endTime ?? ""),
+            lastModifiedTime: metadata?.lastModifiedTime
+              ? String(metadata.lastModifiedTime)
+              : undefined,
+          };
+        }),
+        start,
+        nextDayStart,
+      );
+      return count === null
+        ? null
+        : {
+            COUNT_TOTAL: count,
+            dataOrigins: [SAMSUNG_HEALTH_STEP_ORIGIN],
+          };
+    };
     const enabledRecords = (records: Record<string, unknown>[]) =>
       records.filter((record) =>
         healthSourceEnabled(origin(record), sourcePreferences),
@@ -831,14 +880,58 @@ export const healthConnectAdapter: HealthAdapter = {
     const needsWorkoutDetails = dataTypes.includes("workouts");
     const needsWorkoutNames =
       needsWorkoutDetails || dataTypes.includes("active_energy");
-    const calorieRecords =
+    const activeCalorieRecords =
       dataTypes.includes("active_energy") || needsWorkoutDetails
         ? dedupeCrossSource(
-            individualIntervals(enabledRecords(await readSafe("TotalCaloriesBurned"))),
+            individualIntervals(enabledRecords(await readSafe("ActiveCaloriesBurned"))),
             "activity",
             (record) => nestedNumber(record, "energy", "inKilocalories"),
           )
         : [];
+    const totalEnergyImports: HealthImportRecord[] = [];
+    if (dataTypes.includes("total_energy")) {
+      try {
+        const groups = await aggregateGroupByPeriod({
+          recordType: "TotalCaloriesBurned",
+          timeRangeFilter: {
+            operator: "between",
+            startTime: from.toISOString(),
+            endTime: to.toISOString(),
+          },
+          timeRangeSlicer: { period: "DAYS", length: 1 },
+        });
+        successfulReads += 1;
+        for (const group of groups) {
+          const result = group.result as unknown as Record<string, unknown>;
+          const energy = nestedNumber(result, "ENERGY_TOTAL", "inKilocalories");
+          if (!(energy > 0)) continue;
+          const localDate = group.startTime.slice(0, 10);
+          const sources = Array.isArray(result.dataOrigins)
+            ? result.dataOrigins.map(String).filter(Boolean)
+            : [];
+          const end = new Date(group.endTime);
+          totalEnergyImports.push({
+            id: `aggregate:total-energy:${localDate}`,
+            provider: "health_connect",
+            type: "total_energy",
+            startTime: group.startTime,
+            endTime: Number.isNaN(end.getTime())
+              ? group.endTime
+              : new Date(end.getTime() - 1).toISOString(),
+            localDate,
+            value: energy,
+            unit: "kcal",
+            origin: sources.length === 1 ? sources[0] : "Health Connect",
+            sourceOrigins: sources,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        failures.push(
+          `TotalCaloriesBurned: ${error instanceof Error ? error.message : "permission or provider error"}`,
+        );
+      }
+    }
     const distanceRecords = needsWorkoutDetails
       ? dedupeCrossSource(
           individualIntervals(enabledRecords(await readSafe("Distance"))),
@@ -865,7 +958,7 @@ export const healthConnectAdapter: HealthAdapter = {
         const sameSource = overlapping.filter((item) => origin(item) === source);
         return sameSource.length ? sameSource : overlapping;
       };
-      const calories = matching(calorieRecords).reduce(
+      const calories = matching(activeCalorieRecords).reduce(
         (sum, item) =>
           sum + nestedNumber(item, "energy", "inKilocalories"),
         0,
@@ -900,7 +993,7 @@ export const healthConnectAdapter: HealthAdapter = {
       };
       return [session, ...workoutSegmentImports(record, session)];
     });
-    const activeEnergyImports = calorieRecords.map((record) => {
+    const activeEnergyImports = activeCalorieRecords.map((record) => {
       const converted = convert("active_energy", record);
       const matchingWorkout = workoutRecords.find(
         (workout) =>
@@ -943,6 +1036,7 @@ export const healthConnectAdapter: HealthAdapter = {
       dataTypes.map(async (type) => {
         try {
           if (type === "active_energy") return activeEnergyImports;
+          if (type === "total_energy") return totalEnergyImports;
           if (type === "workouts") return workoutImports;
           if (type === "steps") {
             // Use one timestamp for range partitioning, the query end, and the
@@ -961,7 +1055,8 @@ export const healthConnectAdapter: HealthAdapter = {
               endTime: stepRange.to.toISOString(),
             };
             // Completed days keep Health Connect's unfiltered, priority-aware
-            // aggregate. Today reads Samsung Health, unfiltered Health Connect,
+            // aggregate. Today reads Samsung Health's full-day summary row,
+            // unfiltered Health Connect,
             // Android on-device, and Local Recording as independent complete
             // midnight-to-now candidates. The user's device-local combination
             // setting chooses one, takes the highest, or explicitly adds them.
@@ -973,7 +1068,7 @@ export const healthConnectAdapter: HealthAdapter = {
               const requestedLiveStepSources = new Set(
                 liveStepSources?.length
                   ? liveStepSources
-                  : LIVE_STEP_SOURCES,
+                  : DEFAULT_LIVE_STEP_SOURCES,
               );
               const needsHealthConnectCurrent =
                 requestedLiveStepSources.has("health_connect") ||
@@ -1016,15 +1111,34 @@ export const healthConnectAdapter: HealthAdapter = {
                       })
                     : Promise.resolve(null),
                   includesCurrentDay && needsSamsungCurrent
-                    ? aggregateRecord({
-                        recordType: "Steps",
-                        timeRangeFilter: {
-                          operator: "between",
-                          startTime: currentStart!.toISOString(),
-                          endTime: currentEnd!.toISOString(),
-                        },
-                        dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
-                      }).catch(() => null)
+                    ? (async () => {
+                        const nextDayStart = new Date(
+                          currentStart!.getFullYear(),
+                          currentStart!.getMonth(),
+                          currentStart!.getDate() + 1,
+                          0,
+                          0,
+                          0,
+                          0,
+                        );
+                        const dailySummary = await readSamsungDailyStepSummary(
+                          currentStart!,
+                          nextDayStart,
+                        ).catch(() => null);
+                        if (dailySummary) return dailySummary;
+                        // Older Samsung Health versions may expose only
+                        // ordinary interval records. Retain the source-filtered
+                        // aggregate as a compatibility fallback.
+                        return aggregateRecord({
+                          recordType: "Steps",
+                          timeRangeFilter: {
+                            operator: "between",
+                            startTime: currentStart!.toISOString(),
+                            endTime: currentEnd!.toISOString(),
+                          },
+                          dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
+                        }).catch(() => null);
+                      })()
                     : Promise.resolve(null),
                   includesCurrentDay && needsPhysicalActivityCurrent
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
@@ -1183,7 +1297,8 @@ export const healthConnectAdapter: HealthAdapter = {
                   ? Number(samsungCurrentAggregate.COUNT_TOTAL ?? 0)
                   : null,
                 {
-                  selectedSources: liveStepSources ?? LIVE_STEP_SOURCES,
+                  selectedSources:
+                    liveStepSources ?? DEFAULT_LIVE_STEP_SOURCES,
                   combination: liveStepCombination ?? "highest",
                 },
               );

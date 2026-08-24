@@ -321,7 +321,7 @@ assert.match(
 );
 assert.match(
   groupCloudSource,
-  /const fastRecentDateSet = new Set\(fastRecentDates\);[\s\S]{0,220}const supplementalStatusDates = statusDates\.filter\([\s\S]{0,180}!fastRecentDateSet\.has\(localDate\)[\s\S]{0,260}buildCloudDailyStatusRows\([\s\S]{0,180}supplementalStatusDates/,
+  /const fastRecentDateSet = new Set\(fastRecentDates\);[\s\S]{0,220}const supplementalStatusDates = statusDates\.filter\([\s\S]{0,180}!fastRecentDateSet\.has\(localDate\)[\s\S]{0,700}historicalCloudActivityDateBatches\(\s*supplementalStatusDates,[\s\S]{0,300}for \(const localDates of supplementalDateBatches\)[\s\S]{0,260}buildCloudDailyStatusRows\([\s\S]{0,180}localDates/,
   "the detailed workspace pass must build only dates outside its already-published recent window",
 );
 assert.match(

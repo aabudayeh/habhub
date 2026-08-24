@@ -59,7 +59,7 @@ MIN  MAX  AVERAGE  ROUND  ABS  CLAMP  IF
 Example:
 
 ```text
-CLAMP(baseline + exercise - food, -1000, 2000)
+CLAMP(energy_burned - food, -1000, 2000)
 ```
 
 Booleans resolve to `1` or `0` inside formulas. Unknown identifiers, divide-by-zero, unsupported characters, invalid function arity, and circular metric dependencies fail closed.

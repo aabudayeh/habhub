@@ -726,6 +726,9 @@ const todayScreen = read("app/(tabs)/index.tsx");
 const foodSearchSource = read("src/food/openFoodFacts.ts");
 const provider = read("src/state/AppProvider.tsx");
 const selectionMenu = read("src/components/SelectionMenu.tsx");
+const metricsSource = read("src/domain/metrics.ts");
+const todayHeroSource = read("src/domain/todayHero.ts");
+const statusSource = read("src/domain/status.ts");
 assert.match(detail, /const \[open, setOpen\] = useState\(false\)/);
 assert.match(
   detail,
@@ -841,5 +844,20 @@ assert.match(selectionMenu, /accessibilityRole="button"[\s\S]{0,120}setOpen\(fal
 assert.match(detail, /title="Shown nutrients"[\s\S]{0,1600}minimumSelected=\{1\}/);
 assert.match(provider, /case "updateFoodEntryTime"[\s\S]{0,2400}reconcileAutomaticFasting/);
 assert.match(provider, /preserveFoodEntryClockOverride/);
+assert.match(
+  metricsSource,
+  /if \(metric\.id === "food"\)[\s\S]{0,100}value \/ Math\.max\(1, target\)/,
+  "Food's shared visual progress must grow with logged intake",
+);
+assert.match(
+  todayHeroSource,
+  /met && metric\.id !== "food"/,
+  "the featured square must not force Food to 100% after its first log",
+);
+assert.match(
+  statusSource,
+  /reached && metric\.id !== "food"/,
+  "Status rings must not force Food to 100% after its first log",
+);
 
 console.log("Food metric validation passed.");

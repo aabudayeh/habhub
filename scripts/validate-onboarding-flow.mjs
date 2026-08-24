@@ -181,6 +181,11 @@ assert.match(
 );
 assert.match(source, /groupedRecommendations\.map/);
 assert.match(source, /trackerGroupLabel\(item\)/);
+assert.match(source, /Review daily goals \(optional\)/);
+assert.match(source, /expandedGoals\.includes\("tracker-targets"\)/);
+assert.match(source, /goalTargets\[item\.templateId\] \?\? String\(item\.goal\.target\)/);
+assert.match(source, /goal: \{ \.\.\.item\.goal, target: targetOverride \}/);
+assert.match(storageSource, /goalTargets\?: Record<string, string>/);
 assert.match(source, /Tap a tracker to learn what it records/);
 assert.match(source, /onShowInfo=\{\(\) => showTrackerInfo\(item\)\}/);
 assert.doesNotMatch(source, /numberOfLines=\{1\}[\s\S]{0,120}metricName/);

@@ -1,4 +1,62 @@
 export const HISTORICAL_SUMMARY_AUDIT_INTERVAL_MS = 15 * 60 * 1000;
+/** Routine freshness may touch today plus at most one explicitly relevant day. */
+export const MAX_ROUTINE_CLOUD_ACTIVITY_DATES = 2;
+/** Keep each historical projection slice small enough to yield between slices. */
+export const HISTORICAL_CLOUD_ACTIVITY_DATE_BATCH_SIZE = 14;
+/** Bound each PostgREST statement even when a group exposes many trackers. */
+export const MAX_CLOUD_STATUS_UPSERT_ROWS = 100;
+
+const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Select the tiny status window used by ordinary freshness publication.
+ * Candidate order is meaningful: callers put genuinely changed dates before
+ * fallback overlap dates. The returned dates are sorted for stable checkpoints.
+ */
+export function routineCloudActivityDates(
+  today: string,
+  candidateDates: readonly string[],
+) {
+  const selected: string[] = [];
+  for (const localDate of [today, ...candidateDates]) {
+    if (
+      !LOCAL_DATE_PATTERN.test(localDate) ||
+      localDate > today ||
+      selected.includes(localDate)
+    )
+      continue;
+    selected.push(localDate);
+    if (selected.length === MAX_ROUTINE_CLOUD_ACTIVITY_DATES) break;
+  }
+  return selected.sort();
+}
+
+/**
+ * Historical/backfilled dates are repaired newest-first in bounded slices.
+ * Routine dates are excluded because their rows were already acknowledged by
+ * the fast checkpoint in the same workspace publication.
+ */
+export function historicalCloudActivityDateBatches(
+  candidateDates: readonly string[],
+  routineDates: readonly string[],
+) {
+  const routine = new Set(routineDates);
+  const dates = [...new Set(candidateDates)]
+    .filter(
+      (localDate) => LOCAL_DATE_PATTERN.test(localDate) && !routine.has(localDate),
+    )
+    .sort((left, right) => right.localeCompare(left));
+  const batches: string[][] = [];
+  for (
+    let index = 0;
+    index < dates.length;
+    index += HISTORICAL_CLOUD_ACTIVITY_DATE_BATCH_SIZE
+  )
+    batches.push(
+      dates.slice(index, index + HISTORICAL_CLOUD_ACTIVITY_DATE_BATCH_SIZE),
+    );
+  return batches;
+}
 
 export type HistoricalSummaryAudit = {
   auditedAt: number;

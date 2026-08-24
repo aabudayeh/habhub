@@ -32,6 +32,10 @@ type RevocationRow = {
   attempt_count: number;
 };
 
+// Provider webhooks remain the low-latency path. This bounded hourly sweep
+// keeps closed PWAs current when a notification is delayed or lost.
+const BACKGROUND_CATCHUP_MS = 60 * 60_000;
+
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
@@ -288,7 +292,7 @@ Deno.serve(async (request) => {
           }
           if (serverJobs.length && serverJobs.every((event) => !failures.has(event.id))) {
             const scheduled = await admin.from("google_health_connections").update({
-              next_catchup_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString(),
+              next_catchup_at: new Date(Date.now() + BACKGROUND_CATCHUP_MS).toISOString(),
             })
               .eq("user_id", connection.user_id)
               .eq("status", "connected")

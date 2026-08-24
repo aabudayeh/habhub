@@ -9,7 +9,7 @@ This repository contains a working Expo app for iOS, Android, and web. It launch
 - Five-tab mobile experience: Today, Log, Leaderboard, Progress, and Chat.
 - Healthy Competition starter template with 30 days of demo history for every member, including dated progress photos.
 - Number, yes/no, and free-text logging with notes, food labels, image attachments, and offline persistence.
-- Profile-based BMR and general-activity estimates, recommended deficit from desired weekly loss, and a matching food-intake target. The default deficit is `bmr + daily_activity + exercise - food`; the food allowance adds logged active energy by default and can be switched to fixed mode.
+- Profile-based BMR and general-activity estimates, recommended deficit from desired weekly loss, and a matching food-intake target. The default deficit is `energy_burned - food`: connected total energy is preferred, with a prorated profile estimate plus active energy as the fallback. The food allowance can still add logged active energy or remain fixed.
 - Editable and removable metrics in dedicated modal editors, with 60 icons, aggregation, ranking, goal, privacy, and safe formulas assembled from selectable fields. Formula validation shows a persistent success check or a precise error.
 - User-configurable Today, Group, and Progress lists with drag ordering.
 - Fully adjustable normalized scoring weights.

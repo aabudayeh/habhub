@@ -21,6 +21,7 @@ import {
   Screen,
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
+import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { GoalSchedule, TodoPriority } from "@/src/types";
@@ -86,16 +87,20 @@ function plusMinutes(localDate: string, localTime: string, minutes: number) {
 }
 
 export default function TodoEditor() {
-  const { id, date, time } = useLocalSearchParams<{
+  const { id, date, time, parentId } = useLocalSearchParams<{
     id?: string;
     date?: string;
     time?: string;
+    parentId?: string;
   }>();
   const { state, saveTodo, deleteTodo } = useApp();
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const existing = (state.todos ?? []).find((todo) => todo.id === id);
+  const parent = (state.todos ?? []).find(
+    (todo) => todo.id === (existing?.parentId ?? parentId),
+  );
   const linkedScheduledReminders = existing
     ? (state.calendarReminders ?? []).filter(
         (reminder) =>
@@ -106,6 +111,11 @@ export default function TodoEditor() {
   const [description, setDescription] = useState(
     existing?.description ?? "",
   );
+  const parsedLabels = todoLabels({
+    title,
+    description,
+    labels: existing?.labels,
+  });
   const [priority, setPriority] = useState<TodoPriority>(
     existing?.priority ?? "normal",
   );
@@ -449,6 +459,8 @@ export default function TodoEditor() {
       skippedDates: existing?.skippedDates ?? [],
       completedAt: existing?.completedAt,
       order: existing?.order,
+      parentId: existing?.parentId ?? parentId,
+      labels: parsedLabels,
     });
     allowExit.current = true;
     exit();
@@ -486,8 +498,8 @@ export default function TodoEditor() {
   return (
     <Screen>
       <PageHeader
-        title={existing ? "Edit to-do" : "New to-do"}
-        subtitle="A task, not a tracker."
+        title={existing ? "Edit to-do" : parent ? "New subtask" : "New to-do"}
+        subtitle={parent ? `Under ${parent.title}` : "A task, not a tracker."}
         showMenu={false}
         action={<IconButton icon="close" label="Close" onPress={() => requestClose()} />}
       />
@@ -502,6 +514,15 @@ export default function TodoEditor() {
             { color: colors.ink, borderColor: colors.border },
           ]}
         />
+        {parsedLabels.length ? (
+          <View style={styles.wrap}>
+            {parsedLabels.map((label) => (
+              <Chip key={label} label={`#${label}`} selected />
+            ))}
+          </View>
+        ) : (
+          <Text style={[styles.help, { color: colors.muted }]}>Add #labels in the title or note to group and filter tasks quickly.</Text>
+        )}
         <TextInput
           value={description}
           onChangeText={setDescription}
@@ -1107,7 +1128,12 @@ export default function TodoEditor() {
       {existing ? (
         <Pressable
           onPress={() =>
-            Alert.alert("Delete to-do?", "This cannot be undone.", [
+            Alert.alert(
+              "Delete to-do?",
+              descendantTodoIds(state.todos ?? [], existing.id).size
+                ? "Its nested subtasks will also be deleted. This cannot be undone."
+                : "This cannot be undone.",
+              [
               { text: "Cancel", style: "cancel" },
               {
                 text: "Delete",
@@ -1118,7 +1144,8 @@ export default function TodoEditor() {
                   router.back();
                 },
               },
-            ])
+              ],
+            )
           }
           style={styles.delete}
         >

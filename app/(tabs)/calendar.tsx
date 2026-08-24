@@ -58,7 +58,7 @@ const SCHEDULE_LOG_EXCLUDED = new Set([
 ]);
 const DEFAULT_SCHEDULE_LOG_NOISE = new Set([
   "active_energy",
-  "workout_calories",
+  "energy_burned",
   "workout_distance",
 ]);
 const DEFAULT_SCHEDULE_ACTIVITY_IDS = new Set([

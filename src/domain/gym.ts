@@ -14,9 +14,11 @@ import {
   GymMetricMapping,
   GymSession,
   MuscleGroup,
+  WorkoutQualification,
   WorkoutExerciseTrackingMode,
 } from "@/src/types";
 import { gymSessionsForDay } from "@/src/domain/dataIndex";
+import { workoutQualifies } from "@/src/domain/workoutQualification";
 
 export function completedGymSets(exercises: GymExercise[]) {
   return exercises.reduce(
@@ -34,16 +36,28 @@ export function gymMetricValue(
   mapping: GymMetricMapping,
   userId: string,
   localDate: string,
+  workoutQualification?: WorkoutQualification,
 ) {
   const sessions = gymSessionsForDay(state.gymSessions, userId, localDate);
   if (!sessions.length) return 0;
-  const values = sessions.map((session) =>
-    gymSessionMetricValue(session, mapping),
-  );
-  if (
-    mapping.kind === "session_completed" ||
-    mapping.kind === "exercise_one_rep_max"
-  )
+  const values = sessions.map((session) => {
+    if (mapping.kind !== "session_completed")
+      return gymSessionMetricValue(session, mapping);
+    if (completedGymSets(session.exercises) <= 0) return 0;
+    return workoutQualifies(
+      {
+        activity: "strength",
+        durationMinutes: session.durationMinutes,
+        activeCalories: session.calories,
+      },
+      workoutQualification,
+    )
+      ? 1
+      : 0;
+  });
+  if (mapping.kind === "session_completed")
+    return values.reduce((sum, value) => sum + value, 0);
+  if (mapping.kind === "exercise_one_rep_max")
     return Math.max(0, ...values);
   return values.reduce((sum, value) => sum + value, 0);
 }

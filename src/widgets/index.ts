@@ -38,6 +38,8 @@ export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
   id: "__featured__";
   /** Compact local date rendered in the existing Featured header line. */
   dateLabel: string;
+  /** Short enough to remain visible beside goal status in a 2 x 1 widget. */
+  compactSubtitle: string;
   goals: WidgetGoalSnapshot[];
   completionIcon: string;
   showProgressOutline: boolean;
@@ -60,10 +62,38 @@ export type WidgetAvatarSnapshot = {
   goals: WidgetGoalSnapshot[];
 };
 
+export type WidgetLeaderboardRowSnapshot = {
+  id: string;
+  name: string;
+  initials: string;
+  color: string;
+  value: string;
+  private: boolean;
+};
+
+export type WidgetLeaderboardMetricSnapshot = {
+  id: string;
+  title: string;
+  icon: string;
+  color: string;
+  deepLink: string;
+  rows: WidgetLeaderboardRowSnapshot[];
+};
+
+export type WidgetLeaderboardSnapshot = {
+  id: "__leaderboard__";
+  title: string;
+  dateLabel: string;
+  backgroundColor: string;
+  deepLink: string;
+  metrics: WidgetLeaderboardMetricSnapshot[];
+};
+
 export type WidgetSnapshot = {
   updatedAt: string;
   featured?: WidgetFeaturedSnapshot;
   avatar?: WidgetAvatarSnapshot;
+  leaderboard?: WidgetLeaderboardSnapshot;
   /** Cheap picker metadata; no historical metric payload is duplicated here. */
   catalog: { id: string; title: string }[];
   trackers: WidgetTrackerSnapshot[];
@@ -73,6 +103,8 @@ export type WidgetConfiguration = {
   widgetId: number;
   trackerId: string;
   range: "week" | "month" | "year";
+  leaderboardMetricIds?: string[];
+  leaderboardCount?: number;
 };
 
 type HabHubAndroidModule = {

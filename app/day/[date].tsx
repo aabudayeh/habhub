@@ -600,7 +600,9 @@ export default function DayDetail() {
           );
         })}
       </View>
-      {weightLogged ? <AlignmentCard status={alignment} /> : null}
+      {weightLogged && alignment.status !== "insufficient" ? (
+        <AlignmentCard status={alignment} />
+      ) : null}
       {dayPhotos.length ? (
         <>
           <Pressable onPress={() => setPhotosOpen((open) => !open)}>

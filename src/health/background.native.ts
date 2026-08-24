@@ -217,7 +217,17 @@ TaskManager.defineTask(TASK_NAME, async () => {
       try {
         const { data } = await supabase.auth.getSession();
         if (data.session?.user.id === nextState.currentUserId) {
-          const published = await pushCloudRecentActivity(nextState, 2);
+          const changedDates = [
+            ...new Set(
+              revisionSafeEntriesWithFloors.map((entry) => entry.localDate),
+            ),
+          ].sort((left, right) => right.localeCompare(left));
+          const published = await pushCloudRecentActivity(
+            nextState,
+            2,
+            undefined,
+            changedDates,
+          );
           if (published.updatedAt)
             await AsyncStorage.setItem(
               `${CLOUD_SYNC_CHECKPOINT_KEY_PREFIX}${nextState.currentUserId}`,

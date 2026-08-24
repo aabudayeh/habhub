@@ -674,7 +674,7 @@ export default function LeaderboardDetail() {
                   );
                 })}
               </View>
-              {alignment ? (
+              {alignment && alignment.status !== "insufficient" ? (
                 <View
                   style={[
                     styles.alignment,
@@ -695,9 +695,7 @@ export default function LeaderboardDetail() {
                     <Text style={[styles.note, { color: colors.muted }]}>
                       {alignment.status === "aligned"
                         ? "Scale change roughly matches the reported deficit."
-                        : alignment.status === "insufficient"
-                          ? "A prior weight entry is needed."
-                          : `Logged energy balance ${Math.round(alignment.reportedDailyDeficit)} vs scale-implied ${Math.round(alignment.actualDailyDeficit)} kcal/day (positive follows the member's deficit/surplus plan).`}
+                        : `Logged energy balance ${Math.round(alignment.reportedDailyDeficit)} vs scale-implied ${Math.round(alignment.actualDailyDeficit)} kcal/day (positive follows the member's deficit/surplus plan).`}
                     </Text>
                   </View>
                 </View>

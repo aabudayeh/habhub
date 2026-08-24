@@ -23,9 +23,13 @@ import { leaderboardRows } from "@/src/domain/leaderboard";
 import { confirmedCloudPublishRevision } from "@/src/domain/cloudConflict";
 import {
   cloudEntryNeedsItemDetail,
+  historicalCloudActivityDateBatches,
+  MAX_CLOUD_STATUS_UPSERT_ROWS,
+  routineCloudActivityDates,
   type HistoricalSummaryAudit,
   shouldAuditHistoricalSummary,
 } from "@/src/domain/cloudMaintenance";
+import { createKeyedLatestAsyncDrain } from "@/src/domain/latestAsyncDrain";
 import { cloudAccountEnergyProjection } from "@/src/domain/energy";
 import {
   isBloodPressureDiastolic,
@@ -657,7 +661,7 @@ async function upsertCloudDailyStatusRows(
   if (!rows.length) return;
   // Upsert before deleting anything. A transient server failure must not make
   // a member disappear from the leaderboard on other devices.
-  for (const batch of batches(rows)) {
+  for (const batch of batches(rows, MAX_CLOUD_STATUS_UPSERT_ROWS)) {
     let { error } = await client.from("daily_metric_status").upsert(batch, {
       onConflict: "group_id,metric_id,user_id,local_date",
     });
@@ -777,6 +781,36 @@ function messageForGroup(
       groupId,
     ),
   };
+}
+
+function todoAttachmentFromMetadata(
+  metadata: unknown,
+  groupId: string,
+): ChatMessage["todoAttachment"] {
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const value = (metadata as Record<string, unknown>).todoAttachment;
+  if (!value || typeof value !== "object") return undefined;
+  const attachment = value as Record<string, unknown>;
+  if (
+    typeof attachment.groupTodoId !== "string" ||
+    attachment.groupId !== groupId ||
+    typeof attachment.title !== "string" ||
+    (attachment.completionMode !== "shared" &&
+      attachment.completionMode !== "individual")
+  )
+    return undefined;
+  return {
+    groupTodoId: attachment.groupTodoId,
+    groupId,
+    title: attachment.title.slice(0, 240),
+    completionMode: attachment.completionMode,
+  };
+}
+
+function messageMetadata(message: ChatMessage) {
+  return message.todoAttachment
+    ? { todoAttachment: message.todoAttachment }
+    : {};
 }
 
 function memberColor(id: string) {
@@ -967,6 +1001,7 @@ export async function loadCloudMessages(
     imageUri: message.image_path
       ? (urls.get(message.image_path) ?? undefined)
       : undefined,
+    todoAttachment: todoAttachmentFromMetadata(message.metadata, groupId),
   }));
   const otherGroupMessages = state.messages.filter(
     (message) => !messageBelongsToGroup(state, message, groupId),
@@ -1503,6 +1538,8 @@ export async function loadCloudGroupShells(
       )
         ? (row.settings as Record<string, any>).gymPlans
         : [],
+      groupTodosEnabled:
+        (row.settings as Record<string, any>)?.groupTodosEnabled === true,
       metricConfiguration: (metrics ?? [])
         .filter((metric) => metric.group_id === row.id)
         .map(metricFromRow)
@@ -1909,6 +1946,7 @@ export async function loadCloudWorkspace(
       imageUri: message.image_path
         ? (urls.get(message.image_path) ?? undefined)
         : undefined,
+      todoAttachment: todoAttachmentFromMetadata(message.metadata, groupId),
     }),
   );
   // Keep locally-created messages until their cloud upsert is visible. A realtime
@@ -2048,7 +2086,7 @@ export async function pushCloudMessagesNow(
           message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
         image_path: message.imageStoragePath ?? null,
-        metadata: {},
+        metadata: messageMetadata(message),
         created_at: message.createdAt,
       },
       { onConflict: "sender_id,client_generated_id" },
@@ -2097,7 +2135,7 @@ export async function pushCloudMessagesNow(
         conversation_id: message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
         image_path: message.imageStoragePath ?? null,
-        metadata: {},
+        metadata: messageMetadata(message),
         created_at: message.createdAt,
       })),
       { onConflict: "sender_id,client_generated_id" },
@@ -2133,9 +2171,12 @@ function chatPushPayload(
   message: ChatMessage,
 ) {
   const hasUserText = Boolean(message.text);
+  const fallback = message.todoAttachment
+    ? `Shared a to-do: ${message.todoAttachment.title}`
+    : "Sent an image";
   const body = message.recipientId
-    ? message.text || "Sent an image"
-    : `${state.group.name}: ${message.text || "Sent an image"}`;
+    ? message.text || fallback
+    : `${state.group.name}: ${message.text || fallback}`;
   const payload = withLocalizedPushCopy({
     eventKey: `message:${state.group.id}:${message.id}`,
     clientMessageId: message.id,
@@ -2164,6 +2205,7 @@ function chatPushPayload(
     // phrase catalog, even when it happens to match a built-in label.
     return { ...payload, bodies: literalPushCopy(body) };
   }
+  if (message.todoAttachment) return payload;
   const imageCopy = localizedUiText("Sent an image");
   return {
     ...payload,
@@ -2181,11 +2223,25 @@ function chatPushPayload(
  * imports use this path so group freshness can improve while the app is closed
  * without uploading photos, chat, detailed logs, or historical backfills.
  */
-export async function pushCloudRecentActivity(
-  state: AppState,
-  days = 2,
-  accountRevision?: number,
-): Promise<{ published: boolean; version?: number; updatedAt?: string }> {
+type CloudRecentActivityResult = {
+  published: boolean;
+  version?: number;
+  updatedAt?: string;
+};
+
+type CloudRecentActivityRequest = {
+  state: AppState;
+  days: number;
+  accountRevision?: number;
+  preferredDates?: readonly string[];
+};
+
+async function pushCloudRecentActivityNow({
+  state,
+  days,
+  accountRevision,
+  preferredDates,
+}: CloudRecentActivityRequest): Promise<CloudRecentActivityResult> {
   if (!isCloudGroupId(state.group.id) || days < 1)
     return { published: false };
   const client = requireCloud();
@@ -2213,7 +2269,15 @@ export async function pushCloudRecentActivity(
     (entry) =>
       entry.userId === state.currentUserId && idBySlug.has(entry.metricId),
   );
-  const dates = dateRangeEnding(dateKey(), Math.min(30, Math.ceil(days)));
+  const today = dateKey();
+  const fallbackDates = dateRangeEnding(
+    today,
+    Math.min(2, Math.ceil(days)),
+  ).reverse();
+  const dates = routineCloudActivityDates(today, [
+    ...(preferredDates ?? []),
+    ...fallbackDates,
+  ]);
   const rows = buildCloudDailyStatusRows(
     state,
     idBySlug,
@@ -2234,6 +2298,26 @@ export async function pushCloudRecentActivity(
     version: checkpoint.version,
     updatedAt: checkpoint.updatedAt,
   };
+}
+
+const pushCloudRecentActivityDrain = createKeyedLatestAsyncDrain<
+  string,
+  CloudRecentActivityRequest,
+  CloudRecentActivityResult
+>((_key, request) => pushCloudRecentActivityNow(request));
+
+export function pushCloudRecentActivity(
+  state: AppState,
+  days = 2,
+  accountRevision?: number,
+  preferredDates?: readonly string[],
+): Promise<CloudRecentActivityResult> {
+  if (!isCloudGroupId(state.group.id) || days < 1)
+    return Promise.resolve({ published: false });
+  return pushCloudRecentActivityDrain(
+    `${state.currentUserId}:${state.group.id}`,
+    { state, days, accountRevision, preferredDates },
+  );
 }
 
 function currentAccountMember(state: AppState) {
@@ -2368,6 +2452,7 @@ export async function pushCloudWorkspace(
             themeColor: state.group.themeColor ?? "#0FBFB8",
             requireMemberApproval:
               state.group.requireMemberApproval ?? false,
+            groupTodosEnabled: state.group.groupTodosEnabled ?? false,
             gymPlans: state.group.gymPlans ?? [],
           }
         : null,
@@ -2483,8 +2568,11 @@ export async function pushCloudWorkspace(
       });
     }
   }
-  const recentCommitSinceDate = dateWithOffsetFrom(dateKey(), -29);
-  const fastRecentDates = dateRangeEnding(dateKey(), 30);
+  const today = dateKey();
+  const fastRecentDates = routineCloudActivityDates(
+    today,
+    dateRangeEnding(today, 2).reverse(),
+  );
   const fastRecentStatuses = buildCloudDailyStatusRows(
     state,
     idBySlug,
@@ -2492,15 +2580,15 @@ export async function pushCloudWorkspace(
     fastRecentDates,
     publishRevision,
   );
-  // Publish the current leaderboard window before comparing/uploading detailed
-  // food, workout, message, photo, and historical rows. This keeps a manual or
-  // Health Connect refresh responsive even for accounts with a large history.
+  // Publish only the two-day routine overlap before comparing/uploading detailed
+  // food, workout, message, photo, and historical rows. The previous 30-day
+  // matrix made every live Steps change rewrite hundreds of unchanged rows.
   await upsertCloudDailyStatusRows(client, fastRecentStatuses);
   const fastRecentCheckpoint = await commitCloudActivityCheckpoint(
     client,
     state.group.id,
     fastRecentDates,
-    recentCommitSinceDate,
+    fastRecentDates[0] ?? today,
     publishRevision,
   );
   if (fastRecentCheckpoint.updatedAt)
@@ -2632,7 +2720,6 @@ export async function pushCloudWorkspace(
   // Never infer deletion from absence in the device cache. Only the explicit
   // tombstones processed above may remove a server row.
   const leadEntriesByMetric = new Map<string, MetricEntry[]>();
-  const today = dateKey();
   const sharedCompetitionState = (source: AppState): AppState => ({
     ...source,
     // Ranking alerts must be evaluated exactly as another group member sees
@@ -2910,7 +2997,7 @@ export async function pushCloudWorkspace(
     // The old coverage check compared only the earliest day. A Health Connect
     // backfill could therefore publish an old first day and a recent window,
     // yet leave missing days between them forever. Compare the compact row
-    // count too; recent no-data rows are included so normal 30-day publishing
+    // count too; routine no-data rows are included so normal publication
     // does not look like a gap.
     const expectedCoverageDates = [
       ...new Set(
@@ -2971,33 +3058,6 @@ export async function pushCloudWorkspace(
       )
       .map((session) => session.localDate),
   ];
-  // Source timestamps describe when Health Connect recorded a measurement,
-  // not when this device imported it. A newly backfilled/corrected row can be
-  // older than the latest server status timestamp and must still refresh the
-  // bounded recent leaderboard window.
-  const boundedRecentActivityDates = [
-    ...ownedEntries
-      .filter((entry) => entry.localDate >= recentCommitSinceDate)
-      .map((entry) => entry.localDate),
-    ...(state.gymSessions ?? [])
-      .filter(
-        (session) =>
-          session.userId === state.currentUserId &&
-          session.localDate >= recentCommitSinceDate,
-      )
-      .map((session) => session.localDate),
-    ...state.dailyMetricStatuses
-      .filter(
-        (status) =>
-          status.groupId === state.group.id &&
-          status.userId === state.currentUserId &&
-          status.localDate >= recentCommitSinceDate,
-      )
-      .map((status) => status.localDate),
-    ...vacationDates(state, state.currentUserId).filter(
-      (localDate) => localDate >= recentCommitSinceDate,
-    ),
-  ];
   const statusDates = [
     ...new Set([
       ...(rebuildStatusHistory
@@ -3007,7 +3067,6 @@ export async function pushCloudWorkspace(
         : []),
       ...entriesToUpsert.map((entry) => entry.localDate),
       ...changedActivityDates,
-      ...boundedRecentActivityDates,
       ...explicitlyDeletedLocalDates,
       ...(rebuildStatusHistory
         ? (state.gymSessions ?? [])
@@ -3033,20 +3092,13 @@ export async function pushCloudWorkspace(
             (localDate) => localDate >= statusSinceDate,
           )
         : []),
-      dateKey(),
+      today,
     ]),
   ];
   await yieldMaintenance();
   const fastRecentDateSet = new Set(fastRecentDates);
   const supplementalStatusDates = statusDates.filter(
     (localDate) => !fastRecentDateSet.has(localDate),
-  );
-  const supplementalStatuses = buildCloudDailyStatusRows(
-    state,
-    idBySlug,
-    ownedEntries,
-    supplementalStatusDates,
-    publishRevision,
   );
   const upsertStatuses = (rows: CloudDailyStatusUpsertRow[]) =>
     upsertCloudDailyStatusRows(client, rows);
@@ -3059,34 +3111,35 @@ export async function pushCloudWorkspace(
       publishRevision,
     );
 
-  // Publish the newest month first. A large first-time history backfill can
-  // continue afterwards, while peers already receive today's values and an
-  // honest recent-sync timestamp instead of seeing "No data" for minutes.
-  const recentSince = recentCommitSinceDate;
-  // The fast pass above already wrote every applicable row in the newest
-  // 30-day window. Calculate only older/supplemental dates instead of deriving
-  // about 500 duplicate rows and then throwing them away.
-  const supplementalRecentStatuses = supplementalStatuses.filter(
-    (status) => status.local_date >= recentSince,
+  // Build and upload explicit corrections/backfills newest-first in bounded
+  // date slices. All slices are acknowledged by one activity commit below;
+  // routine cloud hydration can therefore never re-enqueue the same repair.
+  const supplementalDateBatches = historicalCloudActivityDateBatches(
+    supplementalStatusDates,
+    fastRecentDates,
   );
-  const olderStatuses = supplementalStatuses.filter(
-    (status) => status.local_date < recentSince,
-  );
-  await upsertStatuses(supplementalRecentStatuses);
-  await upsertStatuses(olderStatuses);
+  for (const localDates of supplementalDateBatches) {
+    await upsertStatuses(
+      buildCloudDailyStatusRows(
+        state,
+        idBySlug,
+        ownedEntries,
+        localDates,
+        publishRevision,
+      ),
+    );
+    await yieldMaintenance();
+  }
 
   const activityCommitDates = [
+    ...fastRecentDates,
     ...statusDates,
     ...explicitlyDeletedLocalDates,
   ];
-  const needsHistoricalCommit = activityCommitDates.some(
-    (localDate) => localDate < recentSince,
-  );
   // The fast checkpoint above already published and stamped the current
-  // leaderboard window. Reuse it for routine saves; only commit a second
-  // version when this request genuinely widened historical coverage or
-  // propagated an older correction/deletion.
-  const activityCommit = needsHistoricalCommit
+  // leaderboard window. Reuse it for routine saves; commit a second version
+  // only after every explicit correction/backfill slice is durable.
+  const activityCommit = supplementalDateBatches.length > 0
     ? await commitActivity(activityCommitDates)
     : fastRecentCheckpoint;
   const completedAudit = historicalSummaryAuditByGroup.get(auditKey);
@@ -3290,7 +3343,7 @@ export async function pushCloudWorkspace(
         conversation_id: message.conversationId ?? `group:${state.group.id}`,
         recipient_id: message.recipientId ?? null,
         image_path: message.imageStoragePath ?? null,
-        metadata: {},
+        metadata: messageMetadata(message),
         created_at: message.createdAt,
       })),
       { onConflict: "sender_id,client_generated_id" },
@@ -3314,7 +3367,7 @@ export async function pushCloudWorkspace(
           sender_id: state.currentUserId,
           kind: message.kind,
           content: message.text || "Shared an update",
-          metadata: {},
+          metadata: messageMetadata(message),
           created_at: message.createdAt,
         })),
       );

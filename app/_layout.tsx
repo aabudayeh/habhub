@@ -1169,6 +1169,10 @@ function RootNavigator() {
                 options={{ presentation: "modal" }}
               />
               <Stack.Screen
+                name="group-todo-editor"
+                options={{ presentation: "modal" }}
+              />
+              <Stack.Screen
                 name="reminder-editor"
                 options={{ presentation: "modal" }}
               />

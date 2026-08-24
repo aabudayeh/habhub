@@ -8,6 +8,7 @@ import { statusRangeRollup } from "../src/domain/status.ts";
 import { todayHeroSummary } from "../src/domain/todayHero.ts";
 import {
   featuredWidgetSnapshot,
+  leaderboardWidgetSnapshot,
   statusWidgetSnapshot,
 } from "../src/widgets/snapshot.ts";
 
@@ -84,6 +85,68 @@ for (const forbidden of [
     `Status snapshot must omit ${forbidden}`,
   );
 
+const leaderboardMetricIds = ["steps", "food", "exercise", "water"];
+const leaderboardState = {
+  ...state,
+  group: {
+    ...state.group,
+    metricConfiguration: state.group.metricConfiguration.map((metric) =>
+      leaderboardMetricIds.includes(metric.id)
+        ? { ...metric, sections: { ...metric.sections, group: true } }
+        : metric,
+    ),
+  },
+};
+const leaderboard = leaderboardWidgetSnapshot(
+  leaderboardState,
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+  leaderboardMetricIds,
+  2,
+);
+assert.equal(leaderboard.id, "__leaderboard__");
+assert.equal(leaderboard.deepLink, "paceboard://group");
+assert.deepEqual(
+  leaderboard.metrics.map((metric) => metric.id),
+  leaderboardMetricIds,
+  "The snapshot must retain the union selected by multiple widgets; each native widget applies its own count",
+);
+for (const metric of leaderboard.metrics) {
+  assert.ok(metric.rows.length <= 5);
+  assert.match(metric.deepLink, new RegExp(`metric=${metric.id}(?:&|$)`));
+}
+
+const privateMemberState = {
+  ...leaderboardState,
+  dailyMetricStatuses: [
+    ...(state.dailyMetricStatuses ?? []),
+    {
+      groupId: state.group.id,
+      metricId: "steps",
+      userId: "sarah",
+      localDate: today,
+      visibility: "private",
+      hasData: true,
+    },
+  ],
+};
+const privateLeaderboard = leaderboardWidgetSnapshot(
+  privateMemberState,
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+  ["steps"],
+  1,
+);
+const privateSarah = privateLeaderboard.metrics[0]?.rows.find(
+  (row) => row.id === "sarah",
+);
+assert.equal(privateSarah?.private, true);
+assert.equal(privateSarah?.value, "Private");
+
 const activeTodoFilterState = {
   ...state,
   settings: {
@@ -142,6 +205,15 @@ const safePayload = JSON.stringify({
     theme,
     { avatarStyle: "silhouette", heightScale: 1 },
   ),
+  leaderboard: leaderboardWidgetSnapshot(
+    safeState,
+    today,
+    safeState.settings.language ?? "en",
+    identity,
+    theme,
+    ["steps"],
+    1,
+  ),
 });
 assert.doesNotMatch(safePayload, /google_health|widget-private-steps|987654/);
 
@@ -152,4 +224,4 @@ assert.match(
   "both durable widget snapshots must be derived only after the Google projection",
 );
 
-console.log("Privacy-safe Featured and Status widget snapshots validated.");
+console.log("Privacy-safe Featured, Status, and Leaderboard widget snapshots validated.");

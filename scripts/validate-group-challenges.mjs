@@ -289,6 +289,15 @@ const periodMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const notificationAmbiguityRepair = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608240004_fix_challenge_notification_event_key_ambiguity.sql",
+  ),
+  "utf8",
+);
 const notificationUuidHotfix = fs.readFileSync(
   path.join(
     root,
@@ -579,6 +588,21 @@ assert.match(periodMigration, /alter column target_value drop not null/i);
 assert.match(periodMigration, /add column if not exists end_date date/i);
 assert.match(periodMigration, /create or replace function public\.group_challenge_exact_standings/i);
 assert.match(periodMigration, /create or replace function public\.stage_group_challenge_notifications/i);
+assert.match(
+  notificationAmbiguityRepair,
+  /on conflict on constraint group_notification_events_recipient_id_event_key_key do nothing/i,
+  "recipient feed inserts must not confuse the event_key output parameter with a table column",
+);
+assert.match(
+  notificationAmbiguityRepair,
+  /on conflict on constraint push_dispatch_events_event_key_key do nothing returning push_dispatch_events\.event_key into v_inserted/i,
+  "push inserts must use a named conflict constraint and a qualified RETURNING column",
+);
+assert.match(
+  notificationAmbiguityRepair,
+  /v_event_conflicts <> 2 or v_push_returns <> 2/i,
+  "the forward repair must fail closed if the deployed function shape drifts",
+);
 assert.match(periodMigration, /occurrence_date date not null/i);
 assert.match(
   periodMigration,

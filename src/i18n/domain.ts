@@ -585,7 +585,7 @@ const builtInIds = new Set([
   "steps", "food", "exercise", "deficit", "water", "workout", "weight", "protein",
   "fat", "carbs", "fiber", "sodium", "progress_photo", "workout_duration", "body_fat",
   "lean_body_mass", "body_water_mass", "bone_mass", "blood_pressure_systolic", "blood_pressure_diastolic", "pulse",
-  "workout_calories", "workout_distance", "sugar", "saturated_fat", "cholesterol",
+  "energy_burned", "workout_distance", "sugar", "saturated_fat", "cholesterol",
   "potassium", "calcium", "iron", "magnesium", "vitamin_c", "vitamin_d", "vitamin_b12",
   "weekly_deficit_balance", "sleep", "blood_glucose", "menstrual_cycle", "period_flow", "menstrual_flow",
   "cycle_symptoms", "cycle_day", "next_period_estimate", "days_until_period", "overall_score", "todos", "todo_completion",

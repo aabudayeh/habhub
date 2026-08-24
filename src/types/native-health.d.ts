@@ -48,6 +48,19 @@ declare module 'react-native-health-connect' {
     startTime: string;
     endTime: string;
   }[]>;
+  export function aggregateGroupByPeriod(request: {
+    recordType: 'TotalCaloriesBurned';
+    timeRangeFilter: Record<string, unknown>;
+    timeRangeSlicer: { period: 'DAYS'; length: number };
+    dataOriginFilter?: string[];
+  }): Promise<{
+    result: {
+      ENERGY_TOTAL?: { inKilocalories?: number };
+      dataOrigins?: string[];
+    };
+    startTime: string;
+    endTime: string;
+  }[]>;
   export function openHealthConnectSettings(): Promise<void>;
 }
 

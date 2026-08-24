@@ -24,6 +24,7 @@ const [
   serverSnapshotMigration,
   serverSnapshotRepairMigration,
   durableCatchupMigration,
+  hourlyCatchupMigration,
   endpoint,
   sync,
   api,
@@ -45,6 +46,7 @@ const [
   read("supabase/migrations/202608220003_preserve_google_health_server_snapshot.sql"),
   read("supabase/migrations/202608220004_harden_google_health_snapshot_repair.sql"),
   read("supabase/migrations/202608220005_google_health_durable_catchups.sql"),
+  read("supabase/migrations/202608240001_hourly_google_health_catchups.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1283,6 +1285,18 @@ assert.match(durableCatchupMigration, /created_at > now\(\) - interval '1 minute
 assert.match(durableCatchupMigration, /order by connection\.next_catchup_at, connection\.user_id[\s\S]*?limit 1/);
 assert.match(durableCatchupMigration, /when 'webhook' then 0[\s\S]*?when 'initial' then 1/);
 assert.match(durableCatchupMigration, /for update skip locked/);
+assert.match(hourlyCatchupMigration, /now\(\) \+ interval '1 hour'/);
+assert.match(hourlyCatchupMigration, /create or replace function public\.invoke_google_health_worker\(\)/);
+assert.match(hourlyCatchupMigration, /v_hourly_maintenance/);
+assert.match(hourlyCatchupMigration, /google_health_webhook_queue/);
+assert.match(hourlyCatchupMigration, /google_health_revocation_queue/);
+assert.match(hourlyCatchupMigration, /google_health_pending_grants/);
+assert.match(hourlyCatchupMigration, /next_catchup_at <= clock_timestamp\(\)/);
+assert.ok(
+  hourlyCatchupMigration.indexOf("if not v_hourly_maintenance") <
+    hourlyCatchupMigration.indexOf("from vault.decrypted_secrets"),
+  "the cron hook must reject an idle tick before Vault reads and pg_net",
+);
 assert.match(endpoint, /stage_google_health_pending_grant/);
 assert.match(endpoint, /delete_google_health_connection_data/);
 assert.match(endpoint, /mutate_google_health_food_family/);
@@ -1385,7 +1399,8 @@ assert.match(worker, /event\.job_kind === "webhook"/);
 assert.match(worker, /queuedRetryTypes/);
 assert.match(worker, /connection_generation/);
 assert.match(worker, /next_catchup_at/);
-assert.match(worker, /6 \* 60 \* 60_000/);
+assert.match(worker, /const BACKGROUND_CATCHUP_MS = 60 \* 60_000/);
+assert.match(worker, /Date\.now\(\) \+ BACKGROUND_CATCHUP_MS/);
 assert.match(worker, /payload: \{ dataTypes: retryTypes\.get\(event\.id\) \}/);
 assert.match(endpoint, /sync,\s*\n\s*\}/);
 assert.ok(

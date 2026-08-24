@@ -123,7 +123,13 @@ export function metricValue(
       localDate,
     );
     const localValue = localHasData
-      ? gymMetricValue(state, metric.gymMapping, userId, localDate)
+      ? gymMetricValue(
+          state,
+          metric.gymMapping,
+          userId,
+          localDate,
+          metric.workoutQualification,
+        )
       : 0;
     // saveGymSession writes convenience `gym-sync:*` rows for broad workout
     // totals. Derived trackers already read the source session, so counting
@@ -138,10 +144,9 @@ export function metricValue(
     if (!externalEntries.length) return localValue;
     const externalValue = aggregate(externalEntries, metric.aggregation);
     if (!localHasData) return externalValue;
-    if (
-      metric.gymMapping.kind === "session_completed" ||
-      metric.gymMapping.kind === "exercise_one_rep_max"
-    )
+    if (metric.gymMapping.kind === "session_completed")
+      return localValue + externalValue;
+    if (metric.gymMapping.kind === "exercise_one_rep_max")
       return Math.max(localValue, externalValue);
     if (metric.aggregation === "max") return Math.max(localValue, externalValue);
     if (metric.aggregation === "min") return Math.min(localValue, externalValue);
@@ -170,6 +175,48 @@ export function metricValue(
       (todos.filter((todo) => todoResolvedOnDate(todo, localDate)).length /
         todos.length) *
       100
+    );
+  }
+  if (metric.id === "energy_burned") {
+    const imported = entriesForDay(
+      state.entries,
+      metric.id,
+      userId,
+      localDate,
+    )
+      .slice()
+      .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+    if (imported.length) return aggregate(imported, metric.aggregation);
+    const today = dateKey();
+    if (localDate > today) return 0;
+    const profile =
+      state.energyProfiles?.[userId] ?? state.settings.energyProfile;
+    const baseline = energyFormulaVariables(
+      profile,
+      state.settings.baselineCalories,
+    ).daily_energy;
+    const elapsedFraction =
+      localDate === today
+        ? Math.max(
+            0,
+            Math.min(
+              1,
+              (Date.now() - new Date(`${today}T00:00:00`).getTime()) /
+                86400000,
+            ),
+          )
+        : 1;
+    const activeEnergy = state.metrics.find(
+      (candidate) => candidate.id === "exercise",
+    );
+    return (
+      baseline * elapsedFraction +
+      (activeEnergy
+        ? metricValue(state, activeEnergy, userId, localDate, [
+            ...stack,
+            metric.id,
+          ])
+        : 0)
     );
   }
   if (
@@ -280,12 +327,11 @@ export function safeMetricValue(
   localDate: string,
 ): number {
   if (
-    Boolean(metric.fastingSettings) &&
+    (Boolean(metric.fastingSettings) || metric.id === "energy_burned") &&
     localDate === dateKey()
   )
-    // Live fasting progress changes with the clock, even while an earlier
-    // completed session remains in today's Entries. Never reuse that day's
-    // cached metric value for the featured card.
+    // Live fasting/energy progress changes with the clock. Never reuse today's
+    // cached value for the featured card or energy-balance formulas.
     return metricValue(state, metric, userId, localDate);
   return cachedMetricDateValue(
     metricValueCache,
@@ -431,7 +477,13 @@ function visibilityFilteredMetricValue(
       localDate,
     );
     const localValue = localHasData
-      ? gymMetricValue(gymState, metric.gymMapping, userId, localDate)
+      ? gymMetricValue(
+          gymState,
+          metric.gymMapping,
+          userId,
+          localDate,
+          metric.workoutQualification,
+        )
       : 0;
     const externalEntries = numericMetricEntries(
       visibleEntries.filter((entry) => !entry.id.startsWith("gym-sync:")),
@@ -439,8 +491,9 @@ function visibilityFilteredMetricValue(
     if (!externalEntries.length) return localHasData ? localValue : undefined;
     const externalValue = aggregate(externalEntries, metric.aggregation);
     if (!localHasData) return externalValue;
+    if (metric.gymMapping.kind === "session_completed")
+      return localValue + externalValue;
     if (
-      metric.gymMapping.kind === "session_completed" ||
       metric.gymMapping.kind === "exercise_one_rep_max" ||
       metric.aggregation === "max"
     )
@@ -1232,6 +1285,8 @@ export function metricVisualProgress(
   value = safeMetricValue(state, metric, userId, localDate),
   target = effectiveGoalTarget(state, metric, userId, localDate),
 ) {
+  if (metric.id === "food")
+    return Math.max(0, Math.min(1, value / Math.max(1, target)));
   if (metric.id === "weight")
     return weightProgressStats(state, userId, localDate).progress;
   if (metric.goalProgressMode === "journey")
@@ -1386,6 +1441,7 @@ export function hasMetricData(
         return (state.todos ?? []).some((todo) =>
           todoAppearsOnDate(todo, localDate),
         );
+      if (metric.id === "energy_burned") return localDate <= dateKey();
       if (metric.dataType === "calculated") return true;
       return (
         entriesForDay(state.entries, metric.id, userId, localDate).length > 0
@@ -2127,6 +2183,10 @@ export type DeficitRealityCheck = {
 export const DEFICIT_ALIGNMENT_CLOSE_KCAL = 200;
 /** Beyond this daily difference the two estimates are materially far apart. */
 export const DEFICIT_ALIGNMENT_FAR_KCAL = 500;
+/** Ignore short-term scale noise: comparisons need at least a full week. */
+export const DEFICIT_REALITY_MIN_INTERVAL_DAYS = 7;
+/** A comparison also needs enough genuinely logged intake days to be useful. */
+export const DEFICIT_REALITY_MIN_LOGGED_DAYS = 4;
 
 export function deficitAlignmentBand(
   result: DeficitRealityCheck,
@@ -2190,13 +2250,27 @@ export function deficitRealityCheckAtDate(
     .map((entry) => entry.localDate)
     .lastIndexOf(localDate);
   if (currentIndex < 1) return emptyRealityCheck();
-  const previous = weightEntries[currentIndex - 1];
   const current = weightEntries[currentIndex];
+  const currentDay = new Date(`${current.localDate}T12:00:00`).getTime();
+  const previous = weightEntries
+    .slice(0, currentIndex)
+    .reverse()
+    .find(
+      (entry) =>
+        Math.round(
+          (currentDay -
+            new Date(`${entry.localDate}T12:00:00`).getTime()) /
+            86400000,
+        ) >= DEFICIT_REALITY_MIN_INTERVAL_DAYS,
+    );
+  if (!previous) return emptyRealityCheck();
   const days = Math.max(
-    0.5,
-    (new Date(current.recordedAt).getTime() -
-      new Date(previous.recordedAt).getTime()) /
-      86400000,
+    DEFICIT_REALITY_MIN_INTERVAL_DAYS,
+    Math.round(
+      (currentDay -
+        new Date(`${previous.localDate}T12:00:00`).getTime()) /
+        86400000,
+    ),
   );
   const weightChangeKg = Number(previous.value) - Number(current.value);
   const dateCursor = new Date(`${previous.localDate}T12:00:00`);
@@ -2226,14 +2300,14 @@ export function deficitRealityCheckAtDate(
   const actualDailyDeficit =
     ((weightChangeKg * KCAL_PER_KG_ESTIMATE) / days) *
     (weightDirectionFromProfile(profile) === "gain" ? -1 : 1);
-  if (!reported.length)
+  if (reported.length < DEFICIT_REALITY_MIN_LOGGED_DAYS)
     return {
       status: "insufficient",
       actualDailyDeficit,
-      reportedDailyDeficit: 0,
+      reportedDailyDeficit,
       days,
       weightChangeKg,
-      loggedDays: 0,
+      loggedDays: reported.length,
       estimatedDays: intervalDays,
       fromDate: previous.localDate,
       toDate: current.localDate,
@@ -2522,7 +2596,9 @@ export function weeklyBalancePeriodReport(
         (entry) =>
           entry.userId === userId && entry.metricId === "food",
       )
-      .map((entry) => entry.localDate),
+      .map((entry) => entry.localDate)
+      // Today's energy balance remains provisional until the day has ended.
+      .filter((localDate) => localDate < today),
   );
 
   if (["today", "yesterday", "custom"].includes(period)) {

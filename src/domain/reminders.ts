@@ -25,7 +25,6 @@ const DEFAULT_TRACKER_PROGRESS_PRESETS: Record<string, readonly number[]> = {
   steps: [50, 75, 90, 100],
   exercise: [50, 75, 100],
   workout_duration: [50, 75, 100],
-  workout_calories: [50, 75, 100],
   workout_distance: [50, 75, 100],
   protein: [50, 75, 100],
   fiber: [50, 75, 100],

@@ -28,6 +28,7 @@ export type HealthProvider = "apple_health" | "health_connect" | "google_health"
 export type HealthDataType =
   | "steps"
   | "active_energy"
+  | "total_energy"
   | "weight"
   | "nutrition"
   | "water"
@@ -206,6 +207,28 @@ export type GoalReminder = {
   schedule?: GoalSchedule;
 };
 
+export type WorkoutQualificationActivity =
+  | "any"
+  | "walking"
+  | "running"
+  | "strength"
+  | "other";
+
+export type WorkoutQualificationRule = {
+  /** Stable activity family; `any` deliberately includes unknown activities. */
+  activity: WorkoutQualificationActivity;
+  /** Whether every configured threshold or just one threshold must pass. */
+  thresholdMode: "all" | "any";
+  minimumDurationMinutes?: number;
+  minimumDistanceKm?: number;
+  minimumActiveCalories?: number;
+};
+
+export type WorkoutQualification = {
+  /** A session counts when at least one activity rule passes. */
+  rules: WorkoutQualificationRule[];
+};
+
 export type MetricDefinition = {
   id: string;
   name: string;
@@ -235,6 +258,8 @@ export type MetricDefinition = {
   gymMapping?: GymMetricMapping;
   /** Primary muscles for a custom exercise-backed workout tracker. */
   gymMuscleGroups?: MuscleGroup[];
+  /** Defines which imported/local sessions count toward the Workout goal. */
+  workoutQualification?: WorkoutQualification;
   /** Estimate uncovered walking activity from steps when no canonical activity calories exist. */
   stepFallback?: boolean;
   /** False for device-owned readings such as steps. */
@@ -393,6 +418,13 @@ export type ChatMessage = {
   recipientId?: string;
   imageUri?: string;
   imageStoragePath?: string;
+  /** A group-visible task snapshot. Personal to-dos are never attachable. */
+  todoAttachment?: {
+    groupTodoId: string;
+    groupId: string;
+    title: string;
+    completionMode: GroupTodoCompletionMode;
+  };
 };
 
 export type DailyMetricStatus = {
@@ -589,6 +621,36 @@ export type TodoItem = {
   order?: number;
   /** Pinned to-dos remain above the rest of the Today list. */
   pinnedAt?: string;
+  /** Flat adjacency keeps arbitrary-depth subtasks backward compatible. */
+  parentId?: string;
+  /** Normalized lowercase labels parsed from #label shortcuts. */
+  labels?: string[];
+};
+
+export type GroupTodoCompletionMode = "shared" | "individual";
+
+/**
+ * A group-owned task. It never enters a member's private account snapshot;
+ * reads and mutations are authorized by the dedicated backend table/RPCs.
+ */
+export type GroupTodoItem = {
+  id: string;
+  groupId: string;
+  creatorId: string;
+  title: string;
+  description?: string;
+  parentId?: string;
+  labels?: string[];
+  priority: TodoPriority;
+  dueAt?: string;
+  completionMode: GroupTodoCompletionMode;
+  /** Shared completion state. */
+  completedAt?: string;
+  completedByUserId?: string;
+  /** Individual completion state, scoped to active group members. */
+  completedByIds: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 export type JournalNote = {
   id: string;
@@ -772,6 +834,8 @@ export type HealthSyncSettings = {
   liveStepSources?: LiveStepSource[];
   /** How multiple selected whole-day candidates become today's displayed total. */
   liveStepCombination?: LiveStepCombination;
+  /** One-time selector migration as more authoritative current-day sources become available. */
+  liveStepStrategyVersion?: number;
   /** Requested separately because both mobile operating systems may decline it. */
   backgroundAccess: boolean;
   /**
@@ -945,6 +1009,8 @@ export type UserSettings = {
   completionIndicatorFillMode?: CompletionFillMode;
   /** Show the percentage-revealed outline around Today's featured card. */
   showFeaturedCardProgressOutline?: boolean;
+  /** Optional slim to-do progress line; hidden by default to save hero space. */
+  showFeaturedTodoProgress?: boolean;
   /** Keep Today's page header and featured summary visible while the list scrolls. */
   pinTodayHeaderAndFeaturedCard?: boolean;
   /** Personal visual treatment for the continuously morphed Status figure. */
@@ -979,6 +1045,8 @@ export type UserSettings = {
   /** Default-visible avatar-and-goal Status tab; users may hide it in Display. */
   showStatus?: boolean;
   showTodosToday?: boolean;
+  /** One-time repair marker for the default To-Dos Today tracker placement. */
+  todoTodayDefaultApplied?: boolean;
   /** Hide tracked-goal tiles from Today without changing tracking history. */
   showGoalsToday?: boolean;
   /** Elapsed stopwatch/countdown thresholds that trigger local alerts. */
@@ -1149,6 +1217,8 @@ export type Group = {
   metricConfiguration?: MetricDefinition[];
   /** Admin-published workout templates shared into every member's Workout picker. */
   gymPlans?: GymPlan[];
+  /** Group-owned collaborative to-dos are opt-in and disabled by default. */
+  groupTodosEnabled?: boolean;
 };
 
 export type AppState = {
@@ -1219,6 +1289,7 @@ export type NewMetric = Pick<
   | "healthMapping"
   | "gymMapping"
   | "gymMuscleGroups"
+  | "workoutQualification"
   | "stepFallback"
   | "manualEntry"
   | "timerEnabled"

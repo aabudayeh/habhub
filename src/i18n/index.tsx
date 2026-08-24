@@ -16,6 +16,7 @@ import { tutorialChromeTranslationRows } from "@/src/i18n/tutorialChrome";
 import { googleHealthTranslationRows } from "@/src/i18n/googleHealth";
 import { weeklyBalanceTranslationRows } from "@/src/i18n/weeklyBalance";
 import { liveStepTranslationRows } from "@/src/i18n/liveSteps";
+import { releaseAdditionTranslationRows } from "@/src/i18n/releaseAdditions";
 import arGenerated from "@/src/i18n/catalogs/ar.json";
 import deGenerated from "@/src/i18n/catalogs/de.json";
 import esGenerated from "@/src/i18n/catalogs/es.json";
@@ -570,6 +571,7 @@ const allTranslationRows = [
   ...googleHealthTranslationRows,
   ...weeklyBalanceTranslationRows,
   ...liveStepTranslationRows,
+  ...releaseAdditionTranslationRows,
   ...templateTranslationRows,
 ] as const;
 

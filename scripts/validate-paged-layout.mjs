@@ -35,11 +35,11 @@ assert.equal(configuredPageCapacity(4.9, 1, 1, 4), 4);
 assert.equal(todayPageCapacity(568, false), 2);
 assert.equal(todayPageCapacity(667, false), 4);
 assert.equal(todayPageCapacity(900, false), 6);
-assert.equal(leaderboardPageCapacity(720, 2, true, false), 2);
-assert.equal(leaderboardPageCapacity(720, 4, true, false), 1);
-assert.equal(leaderboardPageCapacity(900, 4, true, false), 2);
-assert.equal(leaderboardPageCapacity(1200, 1, false, false), 4);
-assert.equal(leaderboardPageCapacity(900, 2, false, true), 1);
+assert.equal(leaderboardPageCapacity(720, 2, true), 2);
+assert.equal(leaderboardPageCapacity(720, 4, true), 1);
+assert.equal(leaderboardPageCapacity(900, 4, true), 2);
+assert.equal(leaderboardPageCapacity(1200, 1, false), 4);
+assert.equal(leaderboardPageCapacity(900, 2, false), 4);
 
 const types = source("src/types.ts");
 const seed = source("src/data/seed.ts");
@@ -98,8 +98,15 @@ assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
 assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);
 assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
 assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
-assert.match(today, /onPageChange=\{setTodayPageIndex\}/);
+assert.match(today, /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/);
+assert.match(today, /requestedPage=\{requestedTodayPage\}/);
+assert.match(today, /setTodayPageIndex\(page\)/);
 assert.match(today, /showPageDots=\{false\}/);
+assert.doesNotMatch(
+  leaderboard,
+  /if \(expandedGridRows\.length > 0\) return 1/,
+  "expanded member calendars must not repaginate Leaderboard cards",
+);
 assert.match(pager, /pagingEnabled/);
 assert.match(pager, /showPageDots && pages\.length > 1/);
 assert.match(pager, /accessibilityRole="tablist"/);

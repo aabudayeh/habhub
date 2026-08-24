@@ -48,6 +48,12 @@ import {
 } from "@/src/domain/reminders";
 import { trackerPresets, TrackerPreset } from "@/src/domain/trackerCatalog";
 import { metricVisualization } from "@/src/domain/visualization";
+import {
+  ANY_RECORDED_WORKOUT_QUALIFICATION,
+  DEFAULT_WORKOUT_QUALIFICATION,
+  isAnyRecordedWorkoutQualification,
+  isDefaultWorkoutQualification,
+} from "@/src/domain/workoutQualification";
 import { useApp } from "@/src/state/AppProvider";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
@@ -68,6 +74,9 @@ import {
   RankingDirection,
   TrackerCategory,
   Visibility,
+  WorkoutQualification,
+  WorkoutQualificationActivity,
+  WorkoutQualificationRule,
 } from "@/src/types";
 import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
 import {
@@ -156,6 +165,58 @@ const CATEGORIES: {
   { id: "other", label: "Other", icon: "apps-outline" },
 ];
 
+type WorkoutRuleDraft = {
+  id: string;
+  activity: WorkoutQualificationActivity;
+  thresholdMode: WorkoutQualificationRule["thresholdMode"];
+  minimumDurationMinutes: string;
+  minimumDistanceKm: string;
+  minimumActiveCalories: string;
+};
+
+function workoutRuleDrafts(
+  qualification: WorkoutQualification = DEFAULT_WORKOUT_QUALIFICATION,
+): WorkoutRuleDraft[] {
+  return qualification.rules.map((rule, index) => ({
+    id: `workout-rule-${index}`,
+    activity: rule.activity,
+    thresholdMode: rule.thresholdMode,
+    minimumDurationMinutes:
+      rule.minimumDurationMinutes === undefined
+        ? ""
+        : String(rule.minimumDurationMinutes),
+    minimumDistanceKm:
+      rule.minimumDistanceKm === undefined ? "" : String(rule.minimumDistanceKm),
+    minimumActiveCalories:
+      rule.minimumActiveCalories === undefined
+        ? ""
+        : String(rule.minimumActiveCalories),
+  }));
+}
+
+function optionalPositiveNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function workoutQualificationFromDrafts(
+  drafts: WorkoutRuleDraft[],
+): WorkoutQualification {
+  return {
+    rules: drafts.map((draft) => ({
+      activity: draft.activity,
+      thresholdMode: draft.thresholdMode,
+      minimumDurationMinutes: optionalPositiveNumber(
+        draft.minimumDurationMinutes,
+      ),
+      minimumDistanceKm: optionalPositiveNumber(draft.minimumDistanceKm),
+      minimumActiveCalories: optionalPositiveNumber(
+        draft.minimumActiveCalories,
+      ),
+    })),
+  };
+}
+
 function clockPlusMinutes(time: string, minutes: number) {
   const [hour, minute] = time.split(":").map(Number);
   const total = ((hour * 60 + minute + minutes) % 1440 + 1440) % 1440;
@@ -182,6 +243,11 @@ const SOURCES: {
   {
     id: "active_energy",
     label: "Active calories",
+    fields: [{ id: "value", label: "Calories" }],
+  },
+  {
+    id: "total_energy",
+    label: "Total energy burned",
     fields: [{ id: "value", label: "Calories" }],
   },
   {
@@ -485,6 +551,30 @@ export default function TrackerEditor() {
         /min|hour|hr|sec/i.test(tracker?.unit ?? "") ||
         tracker?.category === "mind"),
   );
+  const [workoutQualificationMode, setWorkoutQualificationMode] = useState<
+    "recommended" | "any" | "custom"
+  >(
+    isAnyRecordedWorkoutQualification(tracker?.workoutQualification)
+      ? "any"
+      : isDefaultWorkoutQualification(tracker?.workoutQualification)
+        ? "recommended"
+        : "custom",
+  );
+  const [workoutRules, setWorkoutRules] = useState<WorkoutRuleDraft[]>(() =>
+    workoutRuleDrafts(
+      isDefaultWorkoutQualification(tracker?.workoutQualification) ||
+        isAnyRecordedWorkoutQualification(tracker?.workoutQualification)
+        ? DEFAULT_WORKOUT_QUALIFICATION
+        : tracker?.workoutQualification,
+    ),
+  );
+  const isWorkoutTracker = (presetId || tracker?.id) === "workout";
+  const workoutQualification =
+    workoutQualificationMode === "recommended"
+      ? DEFAULT_WORKOUT_QUALIFICATION
+      : workoutQualificationMode === "any"
+        ? ANY_RECORDED_WORKOUT_QUALIFICATION
+        : workoutQualificationFromDrafts(workoutRules);
   const [fastingStartTime, setFastingStartTime] = useState(
     tracker?.fastingSettings?.startTime ?? "20:00",
   );
@@ -726,6 +816,8 @@ export default function TrackerEditor() {
     stepFallback,
     manualEntry,
     timerEnabled,
+    workoutQualificationMode,
+    workoutRules,
     fastingStartTime,
     fastingHours,
     automaticFoodBreak,
@@ -816,6 +908,8 @@ export default function TrackerEditor() {
     setStepFallback(false);
     setManualEntry(true);
     setTimerEnabled(false);
+    setWorkoutQualificationMode("recommended");
+    setWorkoutRules(workoutRuleDrafts());
     setFastingStartTime("20:00");
     setFastingHours("16");
     setAutomaticFoodBreak(false);
@@ -881,6 +975,21 @@ export default function TrackerEditor() {
       preset.timerEnabled ??
         (/min|hour|hr|sec/i.test(preset.unit) ||
           preset.category === "mind"),
+    );
+    setWorkoutQualificationMode(
+      isAnyRecordedWorkoutQualification(preset.workoutQualification)
+        ? "any"
+        : isDefaultWorkoutQualification(preset.workoutQualification)
+          ? "recommended"
+          : "custom",
+    );
+    setWorkoutRules(
+      workoutRuleDrafts(
+        isDefaultWorkoutQualification(preset.workoutQualification) ||
+          isAnyRecordedWorkoutQualification(preset.workoutQualification)
+          ? DEFAULT_WORKOUT_QUALIFICATION
+          : preset.workoutQualification,
+      ),
     );
     setFastingStartTime(preset.fastingSettings?.startTime ?? "20:00");
     setFastingHours(
@@ -1169,6 +1278,9 @@ export default function TrackerEditor() {
         : undefined,
       gymMapping,
       gymMuscleGroups: category === "gym" ? gymMuscles : undefined,
+      workoutQualification: isWorkoutTracker
+        ? workoutQualification
+        : undefined,
       stepFallback,
       manualEntry:
         healthType === "steps" ||
@@ -2145,6 +2257,179 @@ export default function TrackerEditor() {
                 </Text>
               </>
             ) : null}
+          </>
+        ) : null}
+        {isWorkoutTracker ? (
+          <>
+            <View
+              style={[styles.advancedSection, { borderColor: colors.border }]}
+            >
+              <Text style={[styles.rowTitle, { color: colors.ink }]}>What counts as a workout</Text>
+              <Text style={[styles.help, { color: colors.muted }]}>Short incidental activity stays visible in duration, distance and active energy without automatically completing Workout.</Text>
+              <View style={styles.wrap}>
+                <Chip
+                  label="Recommended"
+                  selected={workoutQualificationMode === "recommended"}
+                  onPress={() => setWorkoutQualificationMode("recommended")}
+                />
+                <Chip
+                  label="Any recorded workout"
+                  selected={workoutQualificationMode === "any"}
+                  onPress={() => setWorkoutQualificationMode("any")}
+                />
+                <Chip
+                  label="Custom"
+                  selected={workoutQualificationMode === "custom"}
+                  onPress={() => setWorkoutQualificationMode("custom")}
+                />
+              </View>
+              <Text style={[styles.help, { color: colors.muted }]}>Recommended: 30-minute walk, 20-minute run, 30-minute strength session, or 20 minutes of another workout.</Text>
+              {workoutQualificationMode === "custom" ? (
+                <View style={styles.workoutRuleList}>
+                  {workoutRules.map((rule, index) => (
+                    <View
+                      key={rule.id}
+                      style={[styles.workoutRuleCard, { borderColor: colors.border }]}
+                    >
+                      <View style={styles.submetricHeading}>
+                        <Text style={[styles.rowTitle, { color: colors.ink }]}>Rule {index + 1}</Text>
+                        {workoutRules.length > 1 ? (
+                          <IconButton
+                            icon="trash-outline"
+                            label={`Remove workout rule ${index + 1}`}
+                            onPress={() =>
+                              setWorkoutRules((current) =>
+                                current.filter((item) => item.id !== rule.id),
+                              )
+                            }
+                          />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.label, { color: colors.ink }]}>Activity</Text>
+                      <View style={styles.wrap}>
+                        {([
+                          ["any", "Any"],
+                          ["walking", "Walk"],
+                          ["running", "Run"],
+                          ["strength", "Strength"],
+                          ["other", "Other"],
+                        ] as const).map(([activity, label]) => (
+                          <Chip
+                            key={activity}
+                            label={label}
+                            size="small"
+                            selected={rule.activity === activity}
+                            onPress={() =>
+                              setWorkoutRules((current) =>
+                                current.map((item) =>
+                                  item.id === rule.id
+                                    ? { ...item, activity }
+                                    : item,
+                                ),
+                              )
+                            }
+                          />
+                        ))}
+                      </View>
+                      <Text style={[styles.label, { color: colors.ink }]}>When several minimums are set</Text>
+                      <View style={styles.wrap}>
+                        <Chip
+                          label="Meet all"
+                          size="small"
+                          selected={rule.thresholdMode === "all"}
+                          onPress={() =>
+                            setWorkoutRules((current) =>
+                              current.map((item) =>
+                                item.id === rule.id
+                                  ? { ...item, thresholdMode: "all" }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                        <Chip
+                          label="Meet any one"
+                          size="small"
+                          selected={rule.thresholdMode === "any"}
+                          onPress={() =>
+                            setWorkoutRules((current) =>
+                              current.map((item) =>
+                                item.id === rule.id
+                                  ? { ...item, thresholdMode: "any" }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </View>
+                      <View style={styles.workoutRuleFields}>
+                        <Field
+                          label="Minimum minutes"
+                          value={rule.minimumDurationMinutes}
+                          set={(minimumDurationMinutes) =>
+                            setWorkoutRules((current) =>
+                              current.map((item) =>
+                                item.id === rule.id
+                                  ? { ...item, minimumDurationMinutes }
+                                  : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                        />
+                        <Field
+                          label="Minimum distance (km)"
+                          value={rule.minimumDistanceKm}
+                          set={(minimumDistanceKm) =>
+                            setWorkoutRules((current) =>
+                              current.map((item) =>
+                                item.id === rule.id
+                                  ? { ...item, minimumDistanceKm }
+                                  : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                        />
+                        <Field
+                          label="Minimum active kcal"
+                          value={rule.minimumActiveCalories}
+                          set={(minimumActiveCalories) =>
+                            setWorkoutRules((current) =>
+                              current.map((item) =>
+                                item.id === rule.id
+                                  ? { ...item, minimumActiveCalories }
+                                  : item,
+                              ),
+                            )
+                          }
+                          colors={colors}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                  <Pressable
+                    onPress={() =>
+                      setWorkoutRules((current) => [
+                        ...current,
+                        {
+                          id: `workout-rule-${Date.now().toString(36)}`,
+                          activity: "any",
+                          thresholdMode: "all",
+                          minimumDurationMinutes: "20",
+                          minimumDistanceKm: "",
+                          minimumActiveCalories: "",
+                        },
+                      ])
+                    }
+                    style={[styles.addReminder, { borderColor: accent }]}
+                  >
+                    <Ionicons name="add" size={16} color={accent} />
+                    <Text style={[styles.help, { color: accent }]}>Add alternative rule</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
           </>
         ) : null}
         {!groupScope && isFastingTracker ? (
@@ -4187,6 +4472,9 @@ const styles = StyleSheet.create({
   shortField: { width: 92 },
   submetricList: { borderTopWidth: 1, paddingTop: 10, gap: 9 },
   submetricCard: { borderWidth: 1, borderRadius: 14, padding: 10 },
+  workoutRuleList: { gap: 9, marginTop: 4 },
+  workoutRuleCard: { borderWidth: 1, borderRadius: 14, padding: 10 },
+  workoutRuleFields: { gap: 2 },
   submetricHeading: {
     flexDirection: "row",
     alignItems: "center",

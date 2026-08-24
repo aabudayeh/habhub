@@ -13,6 +13,8 @@ export type OnboardingDraft = {
   selectedTrackerIds: string[];
   trackedGoalIds: string[];
   expandedGoalIds: string[];
+  /** Optional numeric target edits keyed by starter tracker id. */
+  goalTargets?: Record<string, string>;
   direction: "lose" | "maintain" | "gain";
   age: string;
   height: string;

@@ -1,0 +1,134 @@
+import { GroupTodoItem, TodoItem } from "@/src/types";
+
+const TODO_LABEL_PATTERN = /(^|\s)#([\p{L}\p{N}][\p{L}\p{N}_-]{0,31})/gu;
+const MAX_TODO_LABELS = 12;
+
+type TodoNode = Pick<TodoItem, "id" | "parentId">;
+
+export function normalizeTodoLabel(value: string) {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/^#+/, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}_-]+/gu, "")
+    .slice(0, 32);
+}
+
+export function extractTodoLabels(...values: (string | undefined)[]) {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    for (const match of value.matchAll(TODO_LABEL_PATTERN)) {
+      const label = normalizeTodoLabel(match[2] ?? "");
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      labels.push(label);
+      if (labels.length >= MAX_TODO_LABELS) return labels;
+    }
+  }
+  return labels;
+}
+
+export function todoLabels(
+  todo: Pick<TodoItem | GroupTodoItem, "title" | "description" | "labels">,
+) {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [
+    ...(todo.labels ?? []),
+    ...extractTodoLabels(todo.title, todo.description),
+  ]) {
+    const label = normalizeTodoLabel(candidate);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+    if (labels.length >= MAX_TODO_LABELS) break;
+  }
+  return labels;
+}
+
+/**
+ * Repairs legacy/corrupt adjacency without flattening a valid hierarchy.
+ * Missing parents, self-parenting, and cycles become roots deterministically.
+ */
+export function normalizeTodoItems(todos: TodoItem[]) {
+  const ids = new Set(todos.map((todo) => todo.id));
+  const normalized = todos.map((todo) => ({
+    ...todo,
+    parentId:
+      todo.parentId && todo.parentId !== todo.id && ids.has(todo.parentId)
+        ? todo.parentId
+        : undefined,
+    labels: todoLabels(todo),
+  }));
+  const byId = new Map(normalized.map((todo) => [todo.id, todo]));
+
+  for (const todo of normalized) {
+    const visited = new Set([todo.id]);
+    let parentId = todo.parentId;
+    while (parentId) {
+      if (visited.has(parentId)) {
+        todo.parentId = undefined;
+        break;
+      }
+      visited.add(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+  }
+  return normalized;
+}
+
+export function descendantTodoIds<T extends TodoNode>(
+  todos: readonly T[],
+  parentId: string,
+) {
+  const children = new Map<string, string[]>();
+  for (const todo of todos) {
+    if (!todo.parentId) continue;
+    const list = children.get(todo.parentId) ?? [];
+    list.push(todo.id);
+    children.set(todo.parentId, list);
+  }
+  const descendants = new Set<string>();
+  const pending = [...(children.get(parentId) ?? [])];
+  while (pending.length) {
+    const id = pending.pop();
+    if (!id || descendants.has(id) || id === parentId) continue;
+    descendants.add(id);
+    pending.push(...(children.get(id) ?? []));
+  }
+  return descendants;
+}
+
+export type FlattenedTodo<T> = { item: T; depth: number };
+
+/** Preserves the caller's sorting while placing every child after its parent. */
+export function flattenTodoHierarchy<T extends TodoNode>(todos: readonly T[]) {
+  const byId = new Map(todos.map((todo) => [todo.id, todo]));
+  const children = new Map<string, T[]>();
+  const roots: T[] = [];
+  for (const todo of todos) {
+    if (!todo.parentId || !byId.has(todo.parentId) || todo.parentId === todo.id) {
+      roots.push(todo);
+      continue;
+    }
+    const list = children.get(todo.parentId) ?? [];
+    list.push(todo);
+    children.set(todo.parentId, list);
+  }
+
+  const result: FlattenedTodo<T>[] = [];
+  const visited = new Set<string>();
+  const append = (todo: T, depth: number) => {
+    if (visited.has(todo.id)) return;
+    visited.add(todo.id);
+    result.push({ item: todo, depth });
+    for (const child of children.get(todo.id) ?? []) append(child, depth + 1);
+  };
+  for (const root of roots) append(root, 0);
+  // Cycle-only islands are still visible and editable rather than disappearing.
+  for (const todo of todos) append(todo, 0);
+  return result;
+}

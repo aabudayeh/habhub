@@ -4,6 +4,7 @@ import { AppState as NativeAppState, Image } from "react-native";
 import { dateKey } from "@/src/domain/date";
 import { stateWithoutGoogleHealthLocalData } from "@/src/domain/googleHealthLocalPrivacy";
 import { useLocalization } from "@/src/i18n";
+import { localizeMetricName } from "@/src/i18n/domain";
 import { useAuth } from "@/src/auth/AuthProvider";
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -18,6 +19,7 @@ import type { AppLanguage, AppState } from "@/src/types";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import {
   featuredWidgetSnapshot,
+  leaderboardWidgetSnapshot,
   statusWidgetSnapshot,
 } from "@/src/widgets/snapshot";
 import {
@@ -195,16 +197,70 @@ export function WidgetSnapshotBridge() {
           completedBackgroundColor,
         },
       );
+      const catalog = (currentState.group.metricConfiguration ?? [])
+        .filter(
+          (metric) =>
+            metric.dataType !== "text" &&
+            metric.dataType !== "photo" &&
+            metric.sections.group,
+        )
+        .map((metric) => ({
+          id: metric.id,
+          title: localizeMetricName(currentLanguage, metric),
+        }));
+      const leaderboardConfigurations = configurations.filter(
+        (configuration) => configuration.trackerId === "__leaderboard__",
+      );
+      const defaultLeaderboardMetricIds = catalog
+        .map((metric) => metric.id)
+        .slice(0, 2);
+      const requestedLeaderboardMetricIds = [
+        ...new Set(
+          leaderboardConfigurations.flatMap(
+            (configuration) =>
+              configuration.leaderboardMetricIds?.length
+                ? configuration.leaderboardMetricIds.slice(
+                    0,
+                    configuration.leaderboardCount ?? 2,
+                  )
+                : defaultLeaderboardMetricIds.slice(
+                    0,
+                    configuration.leaderboardCount ?? 2,
+                  ),
+          ),
+        ),
+      ];
+      const leaderboardCount = Math.max(
+        1,
+        ...leaderboardConfigurations.map(
+          (configuration) => configuration.leaderboardCount ?? 2,
+        ),
+      );
+      const leaderboard = leaderboardConfigurations.length
+        ? leaderboardWidgetSnapshot(
+            currentState,
+            today,
+            currentLanguage,
+            translate,
+            {
+              backgroundColor: currentAccent,
+              completedBackgroundColor,
+            },
+            requestedLeaderboardMetricIds,
+            leaderboardCount,
+          )
+        : undefined;
       const snapshot: WidgetSnapshot = {
         updatedAt: new Date().toISOString(),
         featured,
         avatar,
-        // Legacy tracker fields remain empty; Featured and Status carry only
-        // their bounded current-day projections.
-        catalog: [],
+        leaderboard,
+        // Catalog is names-only; exact leaderboard values are generated only
+        // for metrics explicitly configured on an active widget.
+        catalog,
         trackers: [],
       };
-      const payload = JSON.stringify({ featured, avatar });
+      const payload = JSON.stringify({ featured, avatar, leaderboard, catalog });
       if (payload === lastPayloadRef.current && publishedRef.current) return;
       if (
         !(
@@ -279,6 +335,7 @@ export function WidgetSnapshotBridge() {
     state.currentUserId,
     state.energyProfiles,
     state.entries,
+    state.group,
     state.gymSessions,
     state.metrics,
     state.settings,

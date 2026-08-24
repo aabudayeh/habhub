@@ -1001,6 +1001,13 @@ class HabHubNativeModule(
             putInt("widgetId", configuration.widgetId)
             putString("trackerId", configuration.trackerId)
             putString("range", configuration.range)
+            putArray(
+              "leaderboardMetricIds",
+              Arguments.createArray().apply {
+                configuration.leaderboardMetricIds.forEach { pushString(it) }
+              },
+            )
+            putInt("leaderboardCount", configuration.leaderboardCount)
           },
         )
       }

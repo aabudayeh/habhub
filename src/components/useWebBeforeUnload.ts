@@ -68,16 +68,56 @@ export function useWebBackDismiss(active: boolean, onDismiss: () => void) {
       );
 
     let consumed = false;
+    let dismissQueued = false;
+    const dismiss = (navigationWasCancelled: boolean) => {
+      if (dismissQueued || !activeRef.current) return;
+      dismissQueued = true;
+      consumed = true;
+      activeRef.current = false;
+      queueMicrotask(() => {
+        onDismissRef.current();
+        if (navigationWasCancelled) {
+          // Chromium PWAs expose the Navigation API. Cancelling the traversal
+          // keeps the app alive, but it also leaves our sentinel current. Move
+          // to the same-URL entry underneath after closing the transient mode
+          // so the user's following Back action is not a no-op.
+          window.history.back();
+        }
+      });
+    };
     const popstate = () => {
       if (consumed || !activeRef.current) return;
       // Back has already landed on the same-URL entry beneath the sentinel.
       // Consume it by closing the mode without asking Expo Router to navigate.
-      consumed = true;
-      activeRef.current = false;
-      queueMicrotask(() => onDismissRef.current());
+      dismiss(false);
     };
+
+    type NavigationApiEvent = Event & {
+      destination?: { sameDocument?: boolean };
+      navigationType?: string;
+    };
+    const navigationApi = (
+      window as typeof window & { navigation?: EventTarget }
+    ).navigation;
+    const navigate = (rawEvent: Event) => {
+      const event = rawEvent as NavigationApiEvent;
+      if (
+        event.navigationType !== "traverse" ||
+        event.destination?.sameDocument === false ||
+        !event.cancelable ||
+        !activeRef.current
+      )
+        return;
+      // Prevent Expo Router or the installed PWA shell from handling the
+      // browser traversal first. The same-URL sentinel remains the Safari
+      // fallback for browsers without this API.
+      event.preventDefault();
+      dismiss(true);
+    };
+    navigationApi?.addEventListener("navigate", navigate);
     window.addEventListener("popstate", popstate);
     return () => {
+      navigationApi?.removeEventListener("navigate", navigate);
       window.removeEventListener("popstate", popstate);
       if (consumed) return;
       // Done/Cancel can dismiss the mode without consuming browser Back. Drop

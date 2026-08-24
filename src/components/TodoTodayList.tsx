@@ -1,20 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import {
   todoAppearsOnDate,
   todoCompletedOnDate,
   todoSkippedOnDate,
 } from "@/src/domain/schedule";
+import { flattenTodoHierarchy, todoLabels } from "@/src/domain/todos";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { TodoItem } from "@/src/types";
+import { GroupTodoItem, TodoItem } from "@/src/types";
 
 const priorityColors = {
   low: "#6C8AA6",
@@ -49,8 +51,11 @@ export function TodoTodayList({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const visible = state.settings.showTodosToday !== false;
+  const groupEnabled = state.group.groupTodosEnabled === true;
+  const groupTodos = useGroupTodos(state.group.id, groupEnabled);
+  const [activeLabel, setActiveLabel] = useState<string>();
   const allowedIds = todoIds ? new Set(todoIds) : undefined;
-  const items = (state.todos ?? [])
+  const baseItems = (state.todos ?? [])
     .filter((todo) => !allowedIds || allowedIds.has(todo.id))
     .filter((todo) => todoAppearsOnDate(todo, localDate))
     .sort(
@@ -70,7 +75,22 @@ export function TodoTodayList({
         (a.order ?? 0) - (b.order ?? 0) ||
         (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"),
     );
-  const shownItems =
+  const allLabels = useMemo(
+    () =>
+      [...new Set(
+        [...baseItems, ...(groupEnabled ? groupTodos.todos : [])].flatMap(
+          (todo) => todoLabels(todo),
+        ),
+      )].sort((a, b) => a.localeCompare(b)),
+    [baseItems, groupEnabled, groupTodos.todos],
+  );
+  useEffect(() => {
+    if (activeLabel && !allLabels.includes(activeLabel)) setActiveLabel(undefined);
+  }, [activeLabel, allLabels]);
+  const items = activeLabel
+    ? baseItems.filter((todo) => todoLabels(todo).includes(activeLabel))
+    : baseItems;
+  const visiblePersonalItems =
     !editing && state.settings.completedTodayBehavior === "hide"
       ? items.filter(
           (todo) =>
@@ -78,6 +98,35 @@ export function TodoTodayList({
             !todoSkippedOnDate(todo, localDate),
         )
       : items;
+  const shownItems = flattenTodoHierarchy(visiblePersonalItems);
+  const groupItems = [
+    ...(activeLabel
+      ? groupTodos.todos.filter((todo) => todoLabels(todo).includes(activeLabel))
+      : groupTodos.todos),
+  ].sort((a, b) => {
+    const aComplete =
+      a.completionMode === "shared"
+        ? Boolean(a.completedAt)
+        : a.completedByIds.includes(state.currentUserId);
+    const bComplete =
+      b.completionMode === "shared"
+        ? Boolean(b.completedAt)
+        : b.completedByIds.includes(state.currentUserId);
+    return (
+      (state.settings.completedTodayBehavior === "bottom"
+        ? Number(aComplete) - Number(bComplete)
+        : 0) || a.createdAt.localeCompare(b.createdAt)
+    );
+  });
+  const visibleGroupItems =
+    !editing && state.settings.completedTodayBehavior === "hide"
+      ? groupItems.filter((todo) =>
+          todo.completionMode === "shared"
+            ? !todo.completedAt
+            : !todo.completedByIds.includes(state.currentUserId),
+        )
+      : groupItems;
+  const shownGroupItems = flattenTodoHierarchy(visibleGroupItems);
   if (visibleOverride === false || (!visible && !editing)) return null;
 
   const moveTodoBeside = (todo: TodoItem, targetTodo?: TodoItem) => {
@@ -132,8 +181,39 @@ export function TodoTodayList({
           Hidden from Today. Tap the eye to show it.
         </Text>
       ) : null}
+      {visible && allLabels.length ? (
+        <View style={styles.labelFilters}>
+          <Pressable
+            onPress={() => setActiveLabel(undefined)}
+            style={[
+              styles.labelChip,
+              {
+                backgroundColor: activeLabel ? colors.canvas : colors.primarySoft,
+                borderColor: activeLabel ? colors.border : accent,
+              },
+            ]}
+          >
+            <Text style={[styles.labelChipText, { color: activeLabel ? colors.muted : accent }]}>All</Text>
+          </Pressable>
+          {allLabels.map((label) => (
+            <Pressable
+              key={label}
+              onPress={() => setActiveLabel((current) => current === label ? undefined : label)}
+              style={[
+                styles.labelChip,
+                {
+                  backgroundColor: activeLabel === label ? colors.primarySoft : colors.canvas,
+                  borderColor: activeLabel === label ? accent : colors.border,
+                },
+              ]}
+            >
+              <Text translate={false} style={[styles.labelChipText, { color: activeLabel === label ? accent : colors.muted }]}>#{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {visible
-        ? shownItems.map((todo, index) => (
+        ? shownItems.map(({ item: todo, depth }, index) => (
             <TodoRow
               key={todo.id}
               todo={todo}
@@ -141,6 +221,13 @@ export function TodoTodayList({
               editing={editing}
               index={index}
               count={shownItems.length}
+              depth={depth}
+              onAddChild={() =>
+                router.navigate({
+                  pathname: "/todo-editor",
+                  params: { parentId: todo.id },
+                } as never)
+              }
               onPin={() =>
                 saveTodo({
                   ...todo,
@@ -150,7 +237,7 @@ export function TodoTodayList({
                 })
               }
               onMove={(targetIndex) => {
-                moveTodoBeside(todo, shownItems[targetIndex]);
+                moveTodoBeside(todo, shownItems[targetIndex]?.item);
               }}
               onLongPress={() => {
                 if (!editing) onRequestEdit?.();
@@ -163,7 +250,7 @@ export function TodoTodayList({
             />
           ))
         : null}
-      {visible && !items.length ? (
+      {visible && !baseItems.length && !activeLabel ? (
         <Pressable
           onPress={() => router.navigate("/todo-editor" as never)}
           delayLongPress={325}
@@ -177,6 +264,55 @@ export function TodoTodayList({
             Nothing due. Add a quick to-do
           </Text>
         </Pressable>
+      ) : null}
+      {visible && groupEnabled ? (
+        <View style={styles.groupSection}>
+          <View style={styles.groupHeading}>
+            <View style={styles.groupTitleRow}>
+              <Ionicons name="people-outline" size={13} color={accent} />
+              <Text style={[styles.groupTitle, { color: colors.ink }]}>Group To-Dos</Text>
+            </View>
+            <Pressable
+              onPress={() => router.navigate("/group-todo-editor" as never)}
+              style={styles.add}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={accent} />
+              <Text style={[styles.addText, { color: accent }]}>New</Text>
+            </Pressable>
+          </View>
+          {shownGroupItems.map(({ item: todo, depth }) => (
+            <GroupTodoRow
+              key={todo.id}
+              todo={todo}
+              depth={depth}
+              currentUserId={state.currentUserId}
+              memberCount={state.group.members.length}
+              onToggle={() => void groupTodos.toggle(todo)}
+              onAddChild={() =>
+                router.navigate({
+                  pathname: "/group-todo-editor",
+                  params: { parentId: todo.id },
+                } as never)
+              }
+            />
+          ))}
+          {!groupTodos.loading && !groupTodos.todos.length && !activeLabel ? (
+            <Pressable
+              onPress={() => router.navigate("/group-todo-editor" as never)}
+              style={[styles.empty, { borderColor: colors.border }]}
+            >
+              <Ionicons name="people-circle-outline" size={16} color={accent} />
+              <Text style={[styles.emptyText, { color: colors.muted }]}>Add the first shared task</Text>
+            </Pressable>
+          ) : null}
+          {groupTodos.loading ? (
+            <Text style={[styles.groupMeta, { color: colors.muted }]}>Refreshing group tasks…</Text>
+          ) : groupTodos.error ? (
+            <Pressable onPress={() => void groupTodos.refresh()}>
+              <Text translate={false} style={[styles.groupMeta, { color: "#D24B4B" }]}>{groupTodos.error} · Tap to retry</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -192,6 +328,8 @@ function TodoRow({
   onMove,
   onToggle,
   onLongPress,
+  onAddChild,
+  depth,
 }: {
   todo: TodoItem;
   localDate: string;
@@ -202,6 +340,8 @@ function TodoRow({
   onMove: (targetIndex: number) => void;
   onToggle: () => void;
   onLongPress: () => void;
+  onAddChild: () => void;
+  depth: number;
 }) {
   const colors = useAppColors();
   const smoothDrag = useSmoothReorderGesture({
@@ -246,6 +386,7 @@ function TodoRow({
       onLongPress={onLongPress}
       style={[
         styles.row,
+        { marginLeft: Math.min(depth, 8) * 10 },
         {
           backgroundColor: colors.card,
           borderColor:
@@ -313,6 +454,11 @@ function TodoRow({
         </View>
       </View>
       <View style={styles.rowActions}>
+        {!editing ? (
+          <Pressable accessibilityLabel="Add subtask" hitSlop={7} onPress={onAddChild} style={styles.smallAction}>
+            <Ionicons name="return-down-forward-outline" size={14} color={colors.faint} />
+          </Pressable>
+        ) : null}
         {editing ? (
           <Pressable
             accessibilityLabel={todo.pinnedAt ? "Unpin to-do" : "Pin to-do"}
@@ -356,6 +502,73 @@ function TodoRow({
   );
 }
 
+function GroupTodoRow({
+  todo,
+  depth,
+  currentUserId,
+  memberCount,
+  onToggle,
+  onAddChild,
+}: {
+  todo: GroupTodoItem;
+  depth: number;
+  currentUserId: string;
+  memberCount: number;
+  onToggle: () => void;
+  onAddChild: () => void;
+}) {
+  const colors = useAppColors();
+  const complete =
+    todo.completionMode === "shared"
+      ? Boolean(todo.completedAt)
+      : todo.completedByIds.includes(currentUserId);
+  const overdue = Boolean(
+    todo.dueAt && todo.dueAt < new Date().toISOString() && !complete,
+  );
+  return (
+    <Pressable
+      onPress={() =>
+        router.navigate({
+          pathname: "/group-todo-editor",
+          params: { id: todo.id },
+        } as never)
+      }
+      style={[
+        styles.row,
+        { marginLeft: Math.min(depth, 8) * 10 },
+        {
+          backgroundColor: colors.card,
+          borderColor: overdue ? "#D24B4B66" : colors.border,
+        },
+      ]}
+    >
+      <Pressable onPress={onToggle} hitSlop={8}>
+        <Ionicons
+          name={complete ? "checkmark-circle" : "ellipse-outline"}
+          size={21}
+          color={complete ? "#B8E45C" : colors.faint}
+        />
+      </Pressable>
+      <View style={styles.copy}>
+        <Text translate={false} numberOfLines={1} style={[styles.name, { color: colors.ink }, complete && styles.complete]}>{todo.title}</Text>
+        <View style={styles.metaRow}>
+          <Ionicons name="flag" size={10} color={priorityColors[todo.priority]} />
+          <Text style={[styles.meta, { color: overdue ? "#D24B4B" : colors.muted }]}>
+            {todo.completionMode === "shared"
+              ? complete ? "Done for group" : "Shared completion"
+              : `${todo.completedByIds.length}/${memberCount} completed`}
+            {todo.dueAt ? ` · due ${todo.dueAt.slice(0, 10)}` : ""}
+          </Text>
+        </View>
+      </View>
+      <Pressable accessibilityLabel="Add group subtask" hitSlop={7} onPress={onAddChild} style={styles.smallAction}>
+        <Ionicons name="return-down-forward-outline" size={14} color={colors.faint} />
+      </Pressable>
+      <Ionicons name="ellipsis-horizontal" size={14} color={colors.faint} />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { gap: 5, marginTop: 9 },
   heading: {
@@ -369,6 +582,9 @@ const styles = StyleSheet.create({
   titleButton: { flex: 1, flexDirection: "row", alignItems: "center", gap: 3 },
   add: { flexDirection: "row", alignItems: "center", gap: 4 },
   addText: { fontSize: 8, fontWeight: "900" },
+  labelFilters: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginBottom: 2 },
+  labelChip: { minHeight: 25, borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
+  labelChipText: { fontSize: 7, fontWeight: "900" },
   hidden: { fontSize: 8, fontWeight: "800", paddingVertical: 5 },
   row: {
     minHeight: 49,
@@ -409,4 +625,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   emptyText: { fontSize: 8, fontWeight: "800" },
+  groupSection: { gap: 5, marginTop: 8 },
+  groupHeading: { minHeight: 28, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  groupTitleRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  groupTitle: { fontSize: 10, fontWeight: "900" },
+  groupMeta: { fontSize: 7, fontWeight: "700", paddingVertical: 5 },
 });

@@ -2211,6 +2211,7 @@ function groupConfigurationHash(state: AppState) {
     streakRestDaysPerWeek: state.group.streakRestDaysPerWeek,
     themeColor: state.group.themeColor,
     requireMemberApproval: state.group.requireMemberApproval,
+    groupTodosEnabled: state.group.groupTodosEnabled ?? false,
     gymPlans: state.group.gymPlans,
     metrics: state.group.metricConfiguration,
     roles: state.group.members.map((member) => [member.id, member.role]),
@@ -2421,6 +2422,8 @@ function mergeWorkspaceWithoutRegression(
         themeColor: localGroupConfiguration.themeColor,
         requireMemberApproval:
           localGroupConfiguration.requireMemberApproval,
+        groupTodosEnabled:
+          localGroupConfiguration.groupTodosEnabled,
         metricConfiguration:
           localGroupConfiguration.metricConfiguration,
         gymPlans: localGroupConfiguration.gymPlans,
@@ -6754,6 +6757,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           streakRestDaysPerWeek: 1,
           themeColor,
           requireMemberApproval,
+          groupTodosEnabled: false,
           metricConfiguration,
         };
         const next = {
@@ -6832,6 +6836,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             members: [current],
             streakRestDaysPerWeek: 1,
             themeColor: DEFAULT_GROUP_THEME,
+            groupTodosEnabled: false,
             metricConfiguration: [],
           } satisfies Group);
         const next = {

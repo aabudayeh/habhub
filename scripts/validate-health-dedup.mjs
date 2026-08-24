@@ -10,6 +10,7 @@ import {
   aggregateRangeThroughLocalDate,
   combineDisjointStepWindows,
   currentDayStepFloorsForEmptyReplacement,
+  DEFAULT_LIVE_STEP_SOURCES,
   deduplicateHealthImportRecords,
   finalImportedStepTotal,
   healthSourceId,
@@ -30,6 +31,7 @@ import {
   reconcileCurrentDayStepTotal,
   replaceCanonicalStepAggregateForDay,
   resolveCurrentDeviceStepOrigins,
+  samsungDailySummaryStepCount,
   selectCanonicalHealthConnectStepAggregate,
   stepRepairRangeCovered,
 } from "../src/domain/healthDedup.ts";
@@ -109,6 +111,44 @@ assert.equal(finalImportedStepTotal(2_887), 2_887);
 assert.equal(finalImportedStepTotal(27), 27);
 assert.equal(finalImportedStepTotal(0), 0, "a real zero must remain zero");
 assert.equal(finalImportedStepTotal(Number.NaN), 0);
+const samsungDayStart = new Date("2026-08-24T00:00:00+02:00");
+const samsungNextDay = new Date("2026-08-25T00:00:00+02:00");
+assert.equal(
+  samsungDailySummaryStepCount(
+    [
+      {
+        count: 12,
+        startTime: "2026-08-24T08:57:00+02:00",
+        endTime: "2026-08-24T08:58:00+02:00",
+      },
+      {
+        count: 6_258,
+        startTime: "2026-08-24T00:00:00+02:00",
+        endTime: "2026-08-24T23:59:59+02:00",
+        lastModifiedTime: "2026-08-24T14:51:00Z",
+      },
+    ],
+    samsungDayStart,
+    samsungNextDay,
+  ),
+  6_258,
+  "Samsung's 00:00-23:59 row must be selected without adding overlapping minute rows",
+);
+assert.equal(
+  samsungDailySummaryStepCount(
+    [
+      {
+        count: 4_000,
+        startTime: "2026-08-24T08:00:00+02:00",
+        endTime: "2026-08-24T14:00:00+02:00",
+      },
+    ],
+    samsungDayStart,
+    samsungNextDay,
+  ),
+  null,
+  "ordinary Samsung intervals must not masquerade as the watch-inclusive daily summary",
+);
 const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
   [
     record({ id: "yesterday", localDate: "2026-08-12", value: 8_000 }),
@@ -272,8 +312,8 @@ assert.deepEqual(
 
 assert.deepEqual(
   normalizeLiveStepSources(undefined),
-  LIVE_STEP_SOURCES,
-  "upgraded devices must safely enable every independent live Step candidate",
+  DEFAULT_LIVE_STEP_SOURCES,
+  "new and pre-selector devices must prefer Samsung's daily total and retain an Android fallback",
 );
 assert.deepEqual(
   normalizeLiveStepSources([
@@ -2099,6 +2139,36 @@ const stateMigrationSource = fs.readFileSync(
   "utf8",
 );
 const appConfig = fs.readFileSync(path.join(root, "app.json"), "utf8");
+assert.match(
+  androidHealthSource,
+  /active_energy: "ActiveCaloriesBurned"[\s\S]{0,100}total_energy: "TotalCaloriesBurned"/,
+  "active energy and total energy must use distinct Health Connect records",
+);
+assert.match(
+  androidHealthSource,
+  /aggregateGroupByPeriod\(\{[\s\S]{0,120}recordType: "TotalCaloriesBurned"/,
+  "total energy must use Health Connect's priority-aware daily aggregate",
+);
+assert.match(
+  appConfig,
+  /READ_ACTIVE_CALORIES_BURNED[\s\S]{0,160}READ_TOTAL_CALORIES_BURNED/,
+  "Android must request both distinct energy permissions",
+);
+assert.match(
+  seedSource,
+  /energy_burned: \{ dataType: "total_energy", field: "value" \}/,
+  "the total-energy tracker must map to the provider total",
+);
+assert.doesNotMatch(
+  seedSource,
+  /workout_calories: \{ dataType: "workouts"/,
+  "the retired workout-calories mapping must not return",
+);
+assert.match(
+  healthMappingSource,
+  /record\.type === 'total_energy'[\s\S]{0,180}'energy_burned'/,
+  "provider totals must become Energy burned entries",
+);
 const androidNativeSource = fs.readFileSync(
   path.join(
     root,
@@ -2243,12 +2313,17 @@ assert.match(
 );
 assert.match(
   stateMigrationSource,
-  /normalizeLiveStepSources[\s\S]{0,900}liveStepCombination[\s\S]{0,300}"highest"/,
-  "older snapshots must migrate to all candidates with the non-additive Highest default",
+  /const normalizedLiveStepSources = normalizeLiveStepSources[\s\S]{0,1000}migrateLiveStepStrategy[\s\S]{0,900}liveStepSources:[\s\S]{0,400}DEFAULT_LIVE_STEP_SOURCES[\s\S]{0,400}liveStepCombination[\s\S]{0,180}liveStepStrategyVersion/,
+  "older Step strategies must migrate to the current candidate defaults without replacing a valid current override",
+);
+assert.match(
+  seedSource,
+  /liveStepSources:\s*\["samsung_health",\s*"android_device"\][\s\S]{0,80}liveStepCombination:\s*"priority"[\s\S]{0,80}liveStepStrategyVersion:\s*2/,
+  "new installs must prefer Samsung's full-day phone-and-watch total with Android on-device fallback",
 );
 assert.match(
   settingsSource,
-  /Samsung Health \(All steps proxy\)[\s\S]*Health Connect total[\s\S]*Android on-device[\s\S]*Physical Activity live/,
+  /Samsung Health daily total[\s\S]*Health Connect total[\s\S]*Android on-device[\s\S]*Physical Activity live/,
   "Android health settings must expose every meaningful current-day candidate",
 );
 assert.match(
@@ -2283,7 +2358,7 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /needsHealthConnectCurrent[\s\S]{0,300}needsSamsungCurrent[\s\S]{0,250}needsAndroidDeviceCurrent[\s\S]{0,250}needsPhysicalActivityCurrent[\s\S]{0,1800}includesCurrentDay && needsHealthConnectCurrent[\s\S]{0,900}includesCurrentDay && needsSamsungCurrent[\s\S]{0,900}includesCurrentDay && needsPhysicalActivityCurrent[\s\S]{0,700}includesCurrentDay && needsAndroidDeviceCurrent/,
+  /needsHealthConnectCurrent[\s\S]{0,300}needsSamsungCurrent[\s\S]{0,250}needsAndroidDeviceCurrent[\s\S]{0,250}needsPhysicalActivityCurrent[\s\S]{0,1800}includesCurrentDay && needsHealthConnectCurrent[\s\S]{0,900}includesCurrentDay && needsSamsungCurrent[\s\S]{0,2600}includesCurrentDay && needsPhysicalActivityCurrent[\s\S]{0,700}includesCurrentDay && needsAndroidDeviceCurrent/,
   "single-source diagnostics must avoid unrelated live-source native queries",
 );
 assert.match(

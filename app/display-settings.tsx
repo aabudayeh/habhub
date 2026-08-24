@@ -506,6 +506,15 @@ export default function DisplaySettings() {
               updateSettings({ showFeaturedCardProgressOutline })
             }
           />
+          <ToggleRow
+            icon="checkbox-outline"
+            title="To-do progress bar"
+            copy="Show a slim task-progress bar in Today's focus; the completed count remains visible"
+            enabled={state.settings.showFeaturedTodoProgress === true}
+            onChange={(showFeaturedTodoProgress) =>
+              updateSettings({ showFeaturedTodoProgress })
+            }
+          />
           {(state.settings.weightManagementEnabled ??
           state.settings.selectedGoals.includes("weight")) ? (
             <ToggleRow

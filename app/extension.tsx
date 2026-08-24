@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
+  PanResponder,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -36,9 +37,14 @@ export default function ExtensionDashboard() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const t = useTranslation();
-  const { height } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const [panel, setPanel] = useState<Panel>(null);
   const [now, setNow] = useState(Date.now());
+  const [dockHidden, setDockHidden] = useState(false);
+  const [dockPosition, setDockPosition] = useState({ right: 12, bottom: 12 });
+  const dockPositionRef = React.useRef(dockPosition);
+  dockPositionRef.current = dockPosition;
+  const dockStorageKey = `habhub-extension-dock-v1:${state.currentUserId}`;
   const timers = state.activityTimers?.length
     ? state.activityTimers
     : state.activeTimer
@@ -58,6 +64,65 @@ export default function ExtensionDashboard() {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [hasRunningTimer]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(dockStorageKey) ?? "{}") as {
+        right?: number;
+        bottom?: number;
+        hidden?: boolean;
+      };
+      const right = Number(saved.right);
+      const bottom = Number(saved.bottom);
+      setDockPosition({
+        right: Number.isFinite(right) ? Math.max(4, Math.min(width - 48, right)) : 12,
+        bottom: Number.isFinite(bottom) ? Math.max(4, Math.min(height - 62, bottom)) : 12,
+      });
+      setDockHidden(saved.hidden === true);
+    } catch {
+      setDockPosition({ right: 12, bottom: 12 });
+      setDockHidden(false);
+    }
+  }, [dockStorageKey, height, width]);
+
+  function saveDock(next = dockPositionRef.current, hidden = dockHidden) {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      dockStorageKey,
+      JSON.stringify({ ...next, hidden }),
+    );
+  }
+
+  const dockDrag = useMemo(() => {
+    let start = { right: 12, bottom: 12 };
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) =>
+        Math.abs(gesture.dx) + Math.abs(gesture.dy) > 2,
+      onPanResponderGrant: () => {
+        start = dockPositionRef.current;
+      },
+      onPanResponderMove: (_, gesture) => {
+        const next = {
+          right: Math.max(4, Math.min(width - 48, start.right - gesture.dx)),
+          bottom: Math.max(4, Math.min(height - 62, start.bottom - gesture.dy)),
+        };
+        dockPositionRef.current = next;
+        setDockPosition(next);
+      },
+      onPanResponderRelease: () => saveDock(dockPositionRef.current),
+      onPanResponderTerminate: () => saveDock(dockPositionRef.current),
+    });
+    // saveDock reads refs/current account values; recreating for viewport
+    // changes keeps the draggable bounds correct.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [height, width, dockStorageKey, dockHidden]);
+
+  function setDockVisibility(hidden: boolean) {
+    setDockHidden(hidden);
+    saveDock(dockPositionRef.current, hidden);
+  }
 
   useEffect(() => {
     if (typeof window === "undefined" || window.parent === window) return;
@@ -175,25 +240,57 @@ export default function ExtensionDashboard() {
   return (
     <View style={[styles.root, { minHeight: height }]}>
       <TodayPage />
-      <View
-        style={[
-          styles.dock,
-          { backgroundColor: colors.card, borderColor: colors.border },
-        ]}
-      >
-        <DockButton
-          icon="timer-outline"
-          label={timers.length ? t("Active timers") : t("Timer")}
-          active={timers.length > 0}
-          onPress={() => setPanel("timers")}
-        />
-        <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <DockButton
-          icon="calendar-outline"
-          label={t("Today’s schedule")}
-          onPress={() => setPanel("schedule")}
-        />
-      </View>
+      {dockHidden ? (
+        <View
+          style={[
+            styles.dockCollapsed,
+            {
+              right: dockPosition.right,
+              bottom: dockPosition.bottom,
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+            },
+          ]}
+        >
+          <View accessibilityLabel="Drag companion shortcuts" {...dockDrag.panHandlers} style={styles.dragHandle}>
+            <Ionicons name="reorder-three" size={18} color={colors.faint} />
+          </View>
+          <Pressable accessibilityLabel="Show timer and schedule shortcuts" onPress={() => setDockVisibility(false)} hitSlop={6} style={styles.hideDockButton}>
+            <Ionicons name="eye-outline" size={17} color={accent} />
+          </Pressable>
+        </View>
+      ) : (
+        <View
+          style={[
+            styles.dock,
+            {
+              right: dockPosition.right,
+              bottom: dockPosition.bottom,
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+            },
+          ]}
+        >
+          <View accessibilityLabel="Drag companion shortcuts" {...dockDrag.panHandlers} style={styles.dragHandle}>
+            <Ionicons name="reorder-three" size={18} color={colors.faint} />
+          </View>
+          <DockButton
+            icon="timer-outline"
+            label={timers.length ? t("Active timers") : t("Timer")}
+            active={timers.length > 0}
+            onPress={() => setPanel("timers")}
+          />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <DockButton
+            icon="calendar-outline"
+            label={t("Today’s schedule")}
+            onPress={() => setPanel("schedule")}
+          />
+          <Pressable accessibilityLabel="Hide timer and schedule shortcuts" onPress={() => setDockVisibility(true)} hitSlop={6} style={styles.hideDockButton}>
+            <Ionicons name="eye-off-outline" size={15} color={colors.faint} />
+          </Pressable>
+        </View>
+      )}
 
       <Modal
         transparent
@@ -464,10 +561,8 @@ const styles = StyleSheet.create({
   stateActionText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   dock: {
     position: "absolute",
-    right: 12,
-    bottom: 12,
     minHeight: 44,
-    maxWidth: 240,
+    maxWidth: 286,
     borderWidth: 1,
     borderRadius: 18,
     paddingHorizontal: 7,
@@ -478,6 +573,21 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 8,
   },
+  dockCollapsed: {
+    position: "absolute",
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  dragHandle: { width: 25, minHeight: 40, alignItems: "center", justifyContent: "center", cursor: "pointer" as const },
+  hideDockButton: { width: 27, minHeight: 40, alignItems: "center", justifyContent: "center" },
   dockButton: {
     minWidth: 86,
     maxWidth: 112,

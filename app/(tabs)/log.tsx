@@ -497,21 +497,59 @@ function LogScreen() {
   const replaceMode =
     selected?.id === "steps" || selected?.aggregation === "latest";
 
-  async function pickImage(setter: (uri: string) => void) {
+  function storePickedImage(
+    result: ImagePicker.ImagePickerResult,
+    setter: (uri: string) => void,
+  ) {
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    setter(
+      asset.base64
+        ? `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}`
+        : asset.uri,
+    );
+  }
+  async function takeImage(setter: (uri: string) => void) {
+    if (tutorialSandbox) return;
+    if (Platform.OS !== "web") {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          "Camera permission needed",
+          "Allow camera access to take a photo for this log.",
+        );
+        return;
+      }
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+      base64: Platform.OS === "web",
+    });
+    storePickedImage(result, setter);
+  }
+  async function chooseImage(setter: (uri: string) => void) {
     if (tutorialSandbox) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ["images"],
       quality: 0.8,
       base64: Platform.OS === "web",
     });
-    if (!result.canceled) {
-      const asset = result.assets[0];
-      setter(
-        asset.base64
-          ? `data:${asset.mimeType ?? "image/jpeg"};base64,${asset.base64}`
-          : asset.uri,
-      );
-    }
+    storePickedImage(result, setter);
+  }
+  function pickImage(setter: (uri: string) => void) {
+    if (tutorialSandbox) return;
+    Alert.alert("Attach a photo", "Choose how to add it.", [
+      {
+        text: "Camera",
+        onPress: () => void takeImage(setter),
+      },
+      {
+        text: "Photo library",
+        onPress: () => void chooseImage(setter),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   }
   function entryTimestamp(localDate = logDate, localTime = logTime) {
     const date = new Date(
@@ -1751,9 +1789,9 @@ function LogScreen() {
             onPress={() => pickImage(setEntryImage)}
             style={styles.attachRow}
           >
-            <Ionicons name="image-outline" size={19} color={accent} />
+            <Ionicons name="camera-outline" size={19} color={accent} />
             <Text style={[styles.attachText, { color: accent }]}>
-              {entryImage ? "Change attached image" : "Attach an image"}
+              {entryImage ? "Change attached photo" : "Attach a photo"}
             </Text>
           </Pressable>
           <Button

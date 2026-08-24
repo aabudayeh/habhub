@@ -238,7 +238,24 @@ order by start_time desc
 limit 10;
 ```
 
-Cron reclaims stale leases, drains pending signed webhook events and token revocations, and removes consumed/expired OAuth state after its one-hour audit window every minute. OAuth completion atomically queues the first import before returning. Each worker tick may also stage at most one due connected account for a roughly six-hour safety sweep; webhook notifications always claim first. In addition, a visible signed-in Web client makes a lightweight foreground check no more than once every 15 minutes. If that account's last completed import is at least 30 minutes old, the authenticated Edge endpoint marks its durable catch-up due and nudges the same worker. The server freshness check and queue deduplication prevent multiple tabs or repeated app opens from creating duplicate provider imports. This catches missed notifications and provider-side grant changes without creating a polling burst for the 100-account pilot. Revocation retries continue indefinitely with a capped 24-hour backoff.
+The database hook still runs every minute so retryable work does not wait, but
+it returns before Vault or `pg_net` unless an indexed queue/catch-up row is due.
+One hourly maintenance tick runs even when the queues are idle. The Edge worker
+reclaims stale leases, drains pending signed webhook events and token
+revocations, and removes consumed/expired OAuth state after its one-hour audit window.
+OAuth completion atomically queues the first import before returning.
+Each worker tick may stage at most one due connected account for a roughly
+hourly safety sweep; webhook notifications always claim first. Accounts are
+spread across minute ticks rather than launched as one burst, so a full
+100-account pilot can take about 100 minutes in the worst case. In addition, a
+visible signed-in Web client makes a lightweight foreground check no more than
+once every 15 minutes. If that account's last completed import is at least 30
+minutes old, the authenticated Edge endpoint marks its durable catch-up due and
+nudges the same worker. The server freshness check and queue deduplication
+prevent multiple tabs or repeated app opens from creating duplicate provider
+imports. This catches missed notifications and provider-side grant changes
+without requiring the PWA to be open. Revocation retries continue indefinitely
+with a capped 24-hour backoff.
 
 An abandoned/denied OAuth attempt sets the compatibility marker before the
 browser redirect. The worker releases that marker only after the one-hour

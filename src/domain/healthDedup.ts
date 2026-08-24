@@ -693,6 +693,54 @@ export function finalImportedStepTotal(count: number) {
   return Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
 }
 
+export type SamsungDailyStepCandidate = {
+  count: number;
+  startTime: string;
+  endTime: string;
+  lastModifiedTime?: string;
+};
+
+/**
+ * Select Samsung Health's one full-local-day Steps row rather than summing
+ * the overlapping phone/Google minute rows that Health Connect also exposes.
+ * Samsung publishes this row with a 00:00-23:59 interval and continuously
+ * replaces its count with the same phone+watch total shown in Samsung Health.
+ */
+export function samsungDailySummaryStepCount(
+  candidates: readonly SamsungDailyStepCandidate[],
+  localDayStart: Date,
+  nextLocalDayStart: Date,
+) {
+  const startMs = localDayStart.getTime();
+  const endMs = nextLocalDayStart.getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
+    return null;
+  const boundaryToleranceMs = 5 * 60_000;
+  const minimumFullDayDurationMs = 23 * 60 * 60_000;
+  const summaries = candidates
+    .filter((candidate) => {
+      const candidateStart = new Date(candidate.startTime).getTime();
+      const candidateEnd = new Date(candidate.endTime).getTime();
+      return (
+        Number.isFinite(candidate.count) &&
+        candidate.count >= 0 &&
+        Number.isFinite(candidateStart) &&
+        Number.isFinite(candidateEnd) &&
+        candidateStart >= startMs - boundaryToleranceMs &&
+        candidateStart <= startMs + boundaryToleranceMs &&
+        candidateEnd >= endMs - boundaryToleranceMs &&
+        candidateEnd <= endMs + boundaryToleranceMs &&
+        candidateEnd - candidateStart >= minimumFullDayDurationMs
+      );
+    })
+    .sort((left, right) => {
+      const leftUpdated = new Date(left.lastModifiedTime ?? 0).getTime() || 0;
+      const rightUpdated = new Date(right.lastModifiedTime ?? 0).getTime() || 0;
+      return rightUpdated - leftUpdated || right.count - left.count;
+    });
+  return summaries.length ? finalImportedStepTotal(summaries[0].count) : null;
+}
+
 export const LIVE_STEP_SOURCES: readonly LiveStepSource[] = [
   "samsung_health",
   "health_connect",
@@ -700,9 +748,21 @@ export const LIVE_STEP_SOURCES: readonly LiveStepSource[] = [
   "physical_activity",
 ] as const;
 
+export const LIVE_STEP_STRATEGY_VERSION = 2;
+
+/**
+ * Samsung's full-day row is the only generally available Health Connect value
+ * that mirrors Samsung Health's combined phone+watch total. Android on-device
+ * is the deterministic fallback when Samsung has no row on the device.
+ */
+export const DEFAULT_LIVE_STEP_SOURCES: readonly LiveStepSource[] = [
+  "samsung_health",
+  "android_device",
+] as const;
+
 /** Repairs persisted/remote arrays while retaining a deterministic UI order. */
 export function normalizeLiveStepSources(value: unknown): LiveStepSource[] {
-  if (!Array.isArray(value)) return [...LIVE_STEP_SOURCES];
+  if (!Array.isArray(value)) return [...DEFAULT_LIVE_STEP_SOURCES];
   const selected = new Set(value);
   return LIVE_STEP_SOURCES.filter((source) => selected.has(source));
 }
@@ -759,7 +819,7 @@ export function reconcileCurrentDayStepTotal(
     const normalizedSources = normalizeLiveStepSources(options.selectedSources);
     const selectedSources = normalizedSources.length
       ? normalizedSources
-      : [...LIVE_STEP_SOURCES];
+      : [...DEFAULT_LIVE_STEP_SOURCES];
     const candidates = {
       samsung_health: samsungHealth,
       health_connect: healthConnect,
@@ -1279,7 +1339,11 @@ export function healthRecordsAreEquivalent(
     const b = cleanText(right.label);
     return !a || !b || a === b || a.includes(b) || b.includes(a);
   }
-  if (left.type === "sleep" || left.type === "active_energy") {
+  if (
+    left.type === "sleep" ||
+    left.type === "active_energy" ||
+    left.type === "total_energy"
+  ) {
     return (
       sameInterval(left, right) &&
       closeNumber(numeric(left.value), numeric(right.value), 2, 0.08)

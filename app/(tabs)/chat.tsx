@@ -44,6 +44,7 @@ import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { palette, useAppColors, useGroupAccent } from "@/src/theme";
 import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
 
@@ -66,6 +67,8 @@ function ChatScreen() {
   syncMessagesNowRef.current = syncMessagesNow;
   const [draft, setDraft] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [attachedTodoId, setAttachedTodoId] = useState<string>();
+  const [todoPickerOpen, setTodoPickerOpen] = useState(false);
   const [recipientId, setRecipientId] = useState<string | null>(null);
   const appliedRequestedRecipient = useRef<string | null>(null);
   useEffect(() => {
@@ -95,6 +98,22 @@ function ChatScreen() {
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
     : undefined;
+  const groupTodos = useGroupTodos(
+    state.group.id,
+    state.group.groupTodosEnabled === true &&
+      (todoPickerOpen || Boolean(attachedTodoId)),
+  );
+  const attachedTodo = groupTodos.todos.find(
+    (todo) => todo.id === attachedTodoId,
+  );
+  useEffect(() => {
+    if (
+      attachedTodoId &&
+      (!state.group.groupTodosEnabled ||
+        (!groupTodos.loading && !attachedTodo))
+    )
+      setAttachedTodoId(undefined);
+  }, [attachedTodo, attachedTodoId, groupTodos.loading, state.group.groupTodosEnabled]);
   const groupConversationId = `group:${state.group.id}`;
   const conversationMemberIds = useMemo(
     () =>
@@ -198,7 +217,7 @@ function ChatScreen() {
   );
   const latestMessage = messages[messages.length - 1];
   const latestMessageKey = latestMessage
-    ? `${messages.length}:${latestMessage.id}:${latestMessage.createdAt}:${latestMessage.text}:${latestMessage.imageUri ?? ""}`
+    ? `${messages.length}:${latestMessage.id}:${latestMessage.createdAt}:${latestMessage.text}:${latestMessage.imageUri ?? ""}:${latestMessage.todoAttachment?.groupTodoId ?? ""}`
     : `${conversationId}:empty`;
   const scrollToNewest = useCallback((animated = false) => {
     // Coalesce callers into one frame. In particular, do not repeatedly force
@@ -449,15 +468,25 @@ function ChatScreen() {
     updateSettings,
   ]);
   function submit() {
-    if (!draft.trim() && !imageUri) return;
+    if (!draft.trim() && !imageUri && !attachedTodo) return;
     sendMessage(
       draft,
       conversationId,
       recipientId ?? undefined,
       imageUri ?? undefined,
+      attachedTodo
+        ? {
+            groupTodoId: attachedTodo.id,
+            groupId: attachedTodo.groupId,
+            title: attachedTodo.title,
+            completionMode: attachedTodo.completionMode,
+          }
+        : undefined,
     );
     setDraft("");
     setImageUri(null);
+    setAttachedTodoId(undefined);
+    setTodoPickerOpen(false);
     setTimeout(() => scrollToNewest(true), 30);
   }
   function suggest(kind: MessageCategory) {
@@ -810,6 +839,37 @@ function ChatScreen() {
                               thumbnailStyle={styles.messageImage}
                             />
                           ) : null}
+                          {message.todoAttachment ? (
+                            <Pressable
+                              accessibilityLabel={`Open group to-do ${message.todoAttachment.title}`}
+                              onPress={() =>
+                                router.navigate({
+                                  pathname: "/group-todo-editor",
+                                  params: { id: message.todoAttachment?.groupTodoId },
+                                } as never)
+                              }
+                              style={[
+                                styles.todoAttachment,
+                                {
+                                  backgroundColor: mine
+                                    ? "rgba(255,255,255,.14)"
+                                    : colors.canvas,
+                                  borderColor: mine
+                                    ? "rgba(255,255,255,.3)"
+                                    : colors.border,
+                                },
+                              ]}
+                            >
+                              <Ionicons name="checkbox-outline" size={16} color={mine ? palette.white : accent} />
+                              <View style={styles.todoAttachmentCopy}>
+                                <Text translate={false} numberOfLines={2} preserveColor={mine} style={[styles.todoAttachmentTitle, { color: mine ? palette.white : colors.ink }]}>{message.todoAttachment.title}</Text>
+                                <Text preserveColor={mine} style={[styles.todoAttachmentMeta, { color: mine ? "rgba(255,255,255,.72)" : colors.muted }]}>
+                                  {message.todoAttachment.completionMode === "shared" ? "Shared completion" : "Everyone completes it"}
+                                </Text>
+                              </View>
+                              <Ionicons name="chevron-forward" size={14} color={mine ? palette.white : colors.faint} />
+                            </Pressable>
+                          ) : null}
                           {message.text ? (
                             <Text
                               translate={false}
@@ -892,6 +952,46 @@ function ChatScreen() {
                 </Pressable>
               </View>
             ) : null}
+            {attachedTodo ? (
+              <View style={[styles.todoPreview, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <Ionicons name="checkbox-outline" size={16} color={accent} />
+                <View style={styles.todoAttachmentCopy}>
+                  <Text translate={false} numberOfLines={1} style={[styles.todoAttachmentTitle, { color: colors.ink }]}>{attachedTodo.title}</Text>
+                  <Text style={[styles.todoAttachmentMeta, { color: colors.muted }]}>Attached group to-do</Text>
+                </View>
+                <Pressable accessibilityLabel="Remove attached to-do" onPress={() => setAttachedTodoId(undefined)} hitSlop={8}>
+                  <Ionicons name="close" size={17} color={colors.muted} />
+                </Pressable>
+              </View>
+            ) : null}
+            {todoPickerOpen && state.group.groupTodosEnabled ? (
+              <View style={[styles.todoPicker, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={styles.todoPickerHeading}>
+                  <Text style={[styles.todoPickerTitle, { color: colors.ink }]}>Attach a group to-do</Text>
+                  <Pressable onPress={() => router.navigate("/group-todo-editor" as never)}>
+                    <Text style={[styles.todoPickerNew, { color: accent }]}>+ New</Text>
+                  </Pressable>
+                </View>
+                <ScrollView nestedScrollEnabled style={styles.todoPickerList} keyboardShouldPersistTaps="handled">
+                  {groupTodos.todos.slice(0, 40).map((todo) => (
+                    <Pressable
+                      key={todo.id}
+                      onPress={() => {
+                        setAttachedTodoId(todo.id);
+                        setTodoPickerOpen(false);
+                      }}
+                      style={[styles.todoPickerRow, { borderTopColor: colors.border }]}
+                    >
+                      <Ionicons name="ellipse-outline" size={15} color={accent} />
+                      <Text translate={false} numberOfLines={1} style={[styles.todoPickerRowText, { color: colors.ink }]}>{todo.title}</Text>
+                    </Pressable>
+                  ))}
+                  {!groupTodos.todos.length ? (
+                    <Text style={[styles.todoPickerEmpty, { color: colors.muted }]}>No group to-dos yet.</Text>
+                  ) : null}
+                </ScrollView>
+              </View>
+            ) : null}
             <View style={styles.quickRow}>
               <Quick
                 label="Cheer"
@@ -908,6 +1008,13 @@ function ChatScreen() {
                 icon="notifications-outline"
                 onPress={() => suggest("reminder")}
               />
+              {state.group.groupTodosEnabled ? (
+                <Quick
+                  label="To-Do"
+                  icon="checkbox-outline"
+                  onPress={() => setTodoPickerOpen((open) => !open)}
+                />
+              ) : null}
             </View>
             <TutorialTarget id="chat-composer">
             <View
@@ -955,12 +1062,12 @@ function ChatScreen() {
                 submitBehavior={Platform.OS === "web" ? "newline" : "submit"}
               />
               <Pressable
-                disabled={!draft.trim() && !imageUri}
+                disabled={!draft.trim() && !imageUri && !attachedTodo}
                 onPress={submit}
                 style={({ pressed }) => [
                   styles.send,
                   { backgroundColor: accent },
-                  !draft.trim() && !imageUri && styles.sendDisabled,
+                  !draft.trim() && !imageUri && !attachedTodo && styles.sendDisabled,
                   pressed && styles.pressed,
                 ]}
               >
@@ -1237,6 +1344,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 3,
   },
+  todoAttachment: {
+    minWidth: 180,
+    maxWidth: 240,
+    minHeight: 50,
+    borderWidth: 1,
+    borderRadius: 11,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    marginBottom: 3,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  todoAttachmentCopy: { flex: 1, minWidth: 0 },
+  todoAttachmentTitle: { fontSize: 9, lineHeight: 13, fontWeight: "900" },
+  todoAttachmentMeta: { fontSize: 7, lineHeight: 10, fontWeight: "700", marginTop: 1 },
   empty: { alignItems: "center", paddingVertical: 45 },
   emptyTitle: {
     color: palette.ink,
@@ -1258,6 +1381,45 @@ const styles = StyleSheet.create({
     position: "relative",
     marginBottom: 8,
   },
+  todoPreview: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 12,
+    marginHorizontal: 14,
+    marginBottom: 7,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  todoPicker: {
+    maxHeight: 190,
+    borderWidth: 1,
+    borderRadius: 13,
+    marginHorizontal: 14,
+    marginBottom: 7,
+    overflow: "hidden",
+  },
+  todoPickerHeading: {
+    minHeight: 38,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  todoPickerTitle: { fontSize: 9, fontWeight: "900" },
+  todoPickerNew: { fontSize: 8, fontWeight: "900" },
+  todoPickerList: { maxHeight: 145 },
+  todoPickerRow: {
+    minHeight: 38,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  todoPickerRowText: { flex: 1, fontSize: 8, fontWeight: "800" },
+  todoPickerEmpty: { fontSize: 8, paddingHorizontal: 10, paddingBottom: 10 },
   composerDock: { flexShrink: 0 },
   previewImage: { width: 76, height: 76, borderRadius: 12 },
   removeImage: {

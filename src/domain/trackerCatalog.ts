@@ -137,7 +137,7 @@ export function trackerPresets(state: AppState, includeInternal = false): Tracke
         preset.name = direction === 'gain' ? 'Daily surplus' : direction === 'maintain' ? 'Energy balance' : 'Daily deficit';
         preset.goal = direction === 'maintain' ? { kind: 'exact', target: 0 } : { kind: 'at_least', target: adjustment };
         preset.goalRange = direction === 'maintain' ? { min: -150, max: 150 } : undefined;
-        preset.formula = direction === 'lose' ? 'bmr + daily_activity + exercise - food' : 'food - bmr - daily_activity - exercise';
+        preset.formula = direction === 'lose' ? 'energy_burned - food' : 'food - energy_burned';
       }
       if (item.id === 'blood_glucose') {
         preset.goalEnabled = false;
@@ -391,6 +391,7 @@ export const TRACKER_PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
   steps: "Your total steps for each day. A phone can import them from connected health; web users can enter the day's total manually.",
   food: "Calories and nutrients from meals, snacks, food search, or barcode scans. It also powers your energy balance.",
   exercise: "Active energy burned through movement. HabHub combines compatible health data and saved workouts without counting the same activity twice.",
+  energy_burned: "Total calories burned, including resting energy and activity. Connected-health totals are preferred; HabHub otherwise estimates the day from your energy profile and recorded activity.",
   deficit: "Calories burned minus calories eaten for the day. It is calculated after food is logged and adapts to your weight direction.",
   water: "Drinks recorded in 250 ml cups. Daily entries add together toward your hydration target.",
   workout: "Whether you completed a workout that day. Saved HabHub sessions and compatible connected-health workouts can update it.",
@@ -409,7 +410,6 @@ export const TRACKER_PRESET_DESCRIPTIONS: Readonly<Record<string, string>> = {
   blood_pressure_systolic: "A paired systolic and diastolic blood-pressure reading. HabHub keeps both numbers together and lets you personalize the preferred range.",
   blood_pressure_diastolic: "The lower number in a blood-pressure reading. It is stored with the systolic value rather than shown as a separate tracker.",
   pulse: "Heart rate in beats per minute. Connected readings can be summarized for the day, with a personal preferred range if useful.",
-  workout_calories: "Active calories attributed specifically to workout sessions. Compatible connected-health sessions can provide this value.",
   workout_distance: "Distance covered during compatible workouts such as walking, running, or cycling, combined into a daily total.",
   sugar: "Total sugar across logged food, shown in grams. Use it for reference or set a personal daily limit.",
   saturated_fat: "Saturated fat across logged food, shown in grams. It can be observed or compared with a personal limit.",

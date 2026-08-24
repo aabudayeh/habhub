@@ -103,6 +103,13 @@ const healthDataTypes: {
     icon: "flash-outline",
   },
   {
+    id: "total_energy",
+    title: "Energy burned",
+    subtitle: "Total calories including resting energy from Health Connect",
+    icon: "flame-outline",
+    platforms: ["android"],
+  },
+  {
     id: "nutrition",
     title: "Food & nutrients",
     subtitle: "Calories, protein, fat, carbs, fiber, and sodium when supplied",
@@ -199,9 +206,9 @@ const liveStepSourceChoices: {
 }[] = [
   {
     id: "samsung_health",
-    title: "Samsung Health (All steps proxy)",
+    title: "Samsung Health daily total",
     subtitle:
-      "Best watch-inclusive proxy, but watch-to-phone-to-Health Connect updates can lag.",
+      "Samsung's 00:00-23:59 Health Connect row. It mirrors Samsung Health's combined phone and watch total when available.",
     icon: "watch-outline",
   },
   {

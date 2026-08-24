@@ -48,6 +48,8 @@ data class HabHubWidgetConfiguration(
   val backgroundMode: String = "transparent",
   val backgroundColor: String = "#081B49",
   val backgroundOpacity: Int = 55,
+  val leaderboardMetricIds: List<String> = emptyList(),
+  val leaderboardCount: Int = 2,
 )
 
 object HabHubWidgetStore {
@@ -58,6 +60,8 @@ object HabHubWidgetStore {
   private const val BACKGROUND_MODE_PREFIX = "background_mode_"
   private const val BACKGROUND_COLOR_PREFIX = "background_color_"
   private const val BACKGROUND_OPACITY_PREFIX = "background_opacity_"
+  private const val LEADERBOARD_METRICS_PREFIX = "leaderboard_metrics_"
+  private const val LEADERBOARD_COUNT_PREFIX = "leaderboard_count_"
 
   private fun preferences(context: Context) =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -68,6 +72,7 @@ object HabHubWidgetStore {
     // legacy tracker rows that current Featured/Status widgets do not use.
     val incoming = JSONObject(snapshot)
     incoming.put("trackers", incoming.optJSONArray("trackers") ?: JSONArray())
+    pruneLeaderboardPayload(context, incoming)
     preferences(context).edit().putString(SNAPSHOT, incoming.toString()).apply()
   }
 
@@ -89,17 +94,30 @@ object HabHubWidgetStore {
     backgroundMode: String = "transparent",
     backgroundColor: String = "#081B49",
     backgroundOpacity: Int = 55,
+    leaderboardMetricIds: List<String>? = null,
+    leaderboardCount: Int? = null,
   ) {
-    preferences(context).edit()
-      .putString(
+    preferences(context).edit().apply {
+      putString(
         "$TRACKER_PREFIX$widgetId",
         fixedTracker(context, widgetId) ?: normalizedTracker(trackerId),
       )
-      .putString("$RANGE_PREFIX$widgetId", normalizedRange(range))
-      .putString("$BACKGROUND_MODE_PREFIX$widgetId", normalizedBackgroundMode(backgroundMode))
-      .putString("$BACKGROUND_COLOR_PREFIX$widgetId", normalizedColor(backgroundColor))
-      .putInt("$BACKGROUND_OPACITY_PREFIX$widgetId", backgroundOpacity.coerceIn(0, 100))
-      .apply()
+      putString("$RANGE_PREFIX$widgetId", normalizedRange(range))
+      putString("$BACKGROUND_MODE_PREFIX$widgetId", normalizedBackgroundMode(backgroundMode))
+      putString("$BACKGROUND_COLOR_PREFIX$widgetId", normalizedColor(backgroundColor))
+      putInt("$BACKGROUND_OPACITY_PREFIX$widgetId", backgroundOpacity.coerceIn(0, 100))
+      if (leaderboardMetricIds != null) {
+        putString(
+          "$LEADERBOARD_METRICS_PREFIX$widgetId",
+          leaderboardMetricIds.map(String::trim).filter(String::isNotBlank).distinct().take(4).joinToString(","),
+        )
+      }
+      if (leaderboardCount != null)
+        putInt("$LEADERBOARD_COUNT_PREFIX$widgetId", leaderboardCount.coerceIn(1, 4))
+    }.apply()
+    // Configuration can change without opening React Native. Immediately
+    // remove exact leaderboard values no longer used by an active widget.
+    pruneStoredLeaderboardPayload(context)
   }
 
   fun configuration(context: Context, widgetId: Int): HabHubWidgetConfiguration {
@@ -113,6 +131,9 @@ object HabHubWidgetStore {
       normalizedBackgroundMode(prefs.getString("$BACKGROUND_MODE_PREFIX$widgetId", "transparent") ?: "transparent"),
       normalizedColor(prefs.getString("$BACKGROUND_COLOR_PREFIX$widgetId", DEFAULT_BACKGROUND) ?: DEFAULT_BACKGROUND),
       prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 55).coerceIn(0, 100),
+      prefs.getString("$LEADERBOARD_METRICS_PREFIX$widgetId", "").orEmpty()
+        .split(",").map(String::trim).filter(String::isNotBlank).distinct().take(4),
+      prefs.getInt("$LEADERBOARD_COUNT_PREFIX$widgetId", 2).coerceIn(1, 4),
     )
   }
 
@@ -130,8 +151,11 @@ object HabHubWidgetStore {
         remove("$BACKGROUND_MODE_PREFIX$widgetId")
         remove("$BACKGROUND_COLOR_PREFIX$widgetId")
         remove("$BACKGROUND_OPACITY_PREFIX$widgetId")
+        remove("$LEADERBOARD_METRICS_PREFIX$widgetId")
+        remove("$LEADERBOARD_COUNT_PREFIX$widgetId")
       }
     }.apply()
+    pruneStoredLeaderboardPayload(context)
     // Some launchers still report deleted IDs while onDeleted is running, so
     // explicitly subtract this callback's IDs before deciding whether the
     // last durable health snapshot can be discarded.
@@ -151,15 +175,67 @@ object HabHubWidgetStore {
     }.distinct()
   }
 
+  private fun pruneStoredLeaderboardPayload(context: Context) {
+    val prefs = preferences(context)
+    val stored = prefs.getString(SNAPSHOT, null) ?: return
+    val snapshot = try {
+      JSONObject(stored)
+    } catch (_: Exception) {
+      return
+    }
+    pruneLeaderboardPayload(context, snapshot)
+    prefs.edit().putString(SNAPSHOT, snapshot.toString()).apply()
+  }
+
+  private fun pruneLeaderboardPayload(context: Context, snapshot: JSONObject) {
+    val leaderboard = snapshot.optJSONObject("leaderboard") ?: return
+    val active = configurations(context).filter { it.trackerId == "__leaderboard__" }
+    if (active.isEmpty()) {
+      snapshot.remove("leaderboard")
+      return
+    }
+    val metrics = leaderboard.optJSONArray("metrics") ?: JSONArray()
+    val allowedIds = active.flatMap {
+      it.leaderboardMetricIds.take(it.leaderboardCount)
+    }.toMutableSet()
+    // Backward-compatible empty configurations render the first N payload
+    // metrics. Retain only that actually visible fallback instead of the whole
+    // union while the user has not re-saved the widget yet.
+    active.filter { it.leaderboardMetricIds.isEmpty() }.forEach { configuration ->
+      for (index in 0 until min(configuration.leaderboardCount, metrics.length())) {
+        metrics.optJSONObject(index)?.optString("id")
+          ?.takeIf(String::isNotBlank)?.let(allowedIds::add)
+      }
+    }
+    val filtered = JSONArray()
+    for (index in 0 until metrics.length()) {
+      val metric = metrics.optJSONObject(index) ?: continue
+      if (metric.optString("id") in allowedIds) filtered.put(metric)
+    }
+    leaderboard.put("metrics", filtered)
+  }
+
   private fun normalizedRange(range: String) =
     if (range in setOf("week", "month", "year")) range else "week"
 
-  private fun normalizedTracker(trackerId: String) =
-    if (trackerId == "__avatar__") "__avatar__" else "__featured__"
+  private fun normalizedTracker(trackerId: String) = when (trackerId) {
+    "__avatar__", "__leaderboard__" -> trackerId
+    else -> "__featured__"
+  }
 
   /** Matches each optional-config widget's advertised/default content. */
-  private fun defaultTracker(context: Context, widgetId: Int) =
-    fixedTracker(context, widgetId) ?: "__featured__"
+  private fun defaultTracker(context: Context, widgetId: Int): String {
+    val manager = AppWidgetManager.getInstance(context)
+    return when {
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubSquareWidgetProvider::class.java),
+      ) -> "__avatar__"
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubWideWidgetProvider::class.java),
+      ) -> "__avatar__"
+      else -> "__featured__"
+    }
+  }
 
   /** Fixed-size families redirect stale configurations to their intended UI. */
   private fun fixedTracker(context: Context, widgetId: Int): String? {
@@ -168,12 +244,6 @@ object HabHubWidgetStore {
       widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubSmallWidgetProvider::class.java),
       ) -> "__featured__"
-      widgetId in manager.getAppWidgetIds(
-        ComponentName(context, HabHubSquareWidgetProvider::class.java),
-      ) -> "__avatar__"
-      widgetId in manager.getAppWidgetIds(
-        ComponentName(context, HabHubWideWidgetProvider::class.java),
-      ) -> "__avatar__"
       widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubWideCompactWidgetProvider::class.java),
       ) -> "__featured__"
@@ -261,10 +331,10 @@ object HabHubWidgetRenderer {
     val manager = AppWidgetManager.getInstance(context)
     val configuration = HabHubWidgetStore.configuration(context, widgetId)
     val snapshot = HabHubWidgetStore.snapshot(context)
-    val selected = if (configuration.trackerId == "__avatar__") {
-      snapshot.optJSONObject("avatar")
-    } else {
-      snapshot.optJSONObject("featured")
+    val selected = when (configuration.trackerId) {
+      "__avatar__" -> snapshot.optJSONObject("avatar")
+      "__leaderboard__" -> snapshot.optJSONObject("leaderboard")
+      else -> snapshot.optJSONObject("featured")
         ?: findTracker(snapshot.optJSONArray("trackers"), "__featured__")
         ?: snapshot.optJSONArray("trackers")?.optJSONObject(0)
     }
@@ -278,7 +348,7 @@ object HabHubWidgetRenderer {
     views.setCharSequence(
       R.id.widget_root,
       "setContentDescription",
-      contentDescription(context, item),
+      contentDescription(context, item, configuration, size),
     )
     views.setOnClickPendingIntent(
       R.id.widget_root,
@@ -287,7 +357,11 @@ object HabHubWidgetRenderer {
         widgetId,
         item.optString(
           "deepLink",
-          if (configuration.trackerId == "__avatar__") "paceboard://status" else "paceboard://",
+          when (configuration.trackerId) {
+            "__avatar__" -> "paceboard://status"
+            "__leaderboard__" -> "paceboard://group"
+            else -> "paceboard://"
+          },
         ),
       ),
     )
@@ -335,15 +409,61 @@ object HabHubWidgetRenderer {
 
   private fun emptySnapshot(context: Context, requestedId: String) = JSONObject().apply {
     put("id", requestedId)
-    put("eyebrow", if (requestedId == "__avatar__") context.getString(R.string.habhub_widget_status_avatar) else "HabHub")
+    put("eyebrow", when (requestedId) {
+      "__avatar__" -> context.getString(R.string.habhub_widget_status_avatar)
+      "__leaderboard__" -> context.getString(R.string.habhub_widget_leaderboard)
+      else -> "HabHub"
+    })
     put("title", "HabHub")
     put("value", "\u2014")
     put("subtitle", context.getString(R.string.habhub_widget_open_to_update))
     put("progress", 0)
-    put("deepLink", if (requestedId == "__avatar__") "paceboard://status" else "paceboard://")
+    put("deepLink", when (requestedId) {
+      "__avatar__" -> "paceboard://status"
+      "__leaderboard__" -> "paceboard://group"
+      else -> "paceboard://"
+    })
   }
 
-  private fun contentDescription(context: Context, item: JSONObject): String {
+  private fun leaderboardCapacity(size: HabHubWidgetSize) = when {
+    size.compact -> 1
+    size.roomy && size.tall -> 4
+    size.roomy || size.tall -> 2
+    else -> 1
+  }
+
+  private fun configuredLeaderboardMetrics(
+    item: JSONObject,
+    configuration: HabHubWidgetConfiguration,
+    size: HabHubWidgetSize,
+  ): List<JSONObject> {
+    val allMetrics = item.optJSONArray("metrics") ?: JSONArray()
+    val ordered = mutableListOf<JSONObject>()
+    fun addMetric(metric: JSONObject) {
+      if (ordered.none { it.optString("id") == metric.optString("id") }) ordered += metric
+    }
+    configuration.leaderboardMetricIds.forEach { id ->
+      for (index in 0 until allMetrics.length()) {
+        val metric = allMetrics.optJSONObject(index) ?: continue
+        if (metric.optString("id") == id) {
+          addMetric(metric)
+          break
+        }
+      }
+    }
+    if (ordered.isEmpty()) {
+      for (index in 0 until allMetrics.length())
+        allMetrics.optJSONObject(index)?.let(::addMetric)
+    }
+    return ordered.take(min(configuration.leaderboardCount, leaderboardCapacity(size)))
+  }
+
+  private fun contentDescription(
+    context: Context,
+    item: JSONObject,
+    configuration: HabHubWidgetConfiguration,
+    size: HabHubWidgetSize,
+  ): String {
     val values = mutableListOf<String>()
     if (item.optString("id") == "__avatar__") {
       values += context.getString(R.string.habhub_widget_status_avatar)
@@ -356,6 +476,17 @@ object HabHubWidgetRenderer {
               .joinToString(" ")
           }
         }
+      }
+    } else if (item.optString("id") == "__leaderboard__") {
+      values += context.getString(R.string.habhub_widget_leaderboard)
+      configuredLeaderboardMetrics(item, configuration, size).forEach { metric ->
+          values += metric.optString("title")
+          metric.optJSONArray("rows")?.let { rows ->
+            for (rowIndex in 0 until min(3, rows.length())) {
+              val row = rows.optJSONObject(rowIndex) ?: continue
+              values += "${row.optString("name")} ${row.optString("value")}".trim()
+            }
+          }
       }
     } else {
       values += listOf(
@@ -401,7 +532,8 @@ object HabHubWidgetRenderer {
       parseColor(if (allComplete) GOAL_GOLD else GOAL_LIME, Color.rgb(184, 228, 92)),
     )
     drawCardSurface(canvas, size, item, allComplete, configuration)
-    if (item.optString("id") == "__avatar__" || item.optBoolean("showProgressOutline", true)) {
+    if (item.optString("id") != "__leaderboard__" &&
+      (item.optString("id") == "__avatar__" || item.optBoolean("showProgressOutline", true))) {
       drawProgressOutline(
         canvas,
         size,
@@ -410,10 +542,10 @@ object HabHubWidgetRenderer {
         accent,
       )
     }
-    if (item.optString("id") == "__avatar__") {
-      drawAvatarCard(context, canvas, size, item, progress, accent)
-    } else {
-      drawFeaturedCard(canvas, size, item, progress, accent)
+    when (item.optString("id")) {
+      "__avatar__" -> drawAvatarCard(context, canvas, size, item, progress, accent)
+      "__leaderboard__" -> drawLeaderboardCard(context, canvas, size, item, configuration)
+      else -> drawFeaturedCard(canvas, size, item, progress, accent)
     }
     return bitmap
   }
@@ -524,6 +656,123 @@ object HabHubWidgetRenderer {
     }
   }
 
+  private fun drawLeaderboardCard(
+    context: Context,
+    canvas: Canvas,
+    size: HabHubWidgetSize,
+    item: JSONObject,
+    configuration: HabHubWidgetConfiguration,
+  ) {
+    val pad = if (size.compact) 6f else 9f
+    val headerBaseline = if (size.compact) 10f else 15f
+    drawText(
+      canvas,
+      item.optString("title", "Leaderboard"),
+      pad,
+      headerBaseline,
+      size.widthDp * 0.62f,
+      textPaint(if (size.compact) 6.5f else 9f, Color.WHITE, true),
+    )
+    drawCenteredEllipsizedText(
+      canvas,
+      item.optString("dateLabel"),
+      size.widthDp - pad - if (size.compact) 16f else 20f,
+      headerBaseline,
+      if (size.compact) 32f else 40f,
+      textPaint(if (size.compact) 5.5f else 6.8f, Color.argb(210, 222, 230, 242), true),
+    )
+    val metrics = configuredLeaderboardMetrics(item, configuration, size)
+    if (metrics.isEmpty()) {
+      drawCenteredText(
+        canvas,
+        context.getString(R.string.habhub_widget_open_to_update),
+        size.widthDp / 2f,
+        size.heightDp / 2f + 4f,
+        textPaint(if (size.compact) 6f else 8f, Color.argb(210, 222, 230, 242), true),
+      )
+      return
+    }
+    val gridTop = if (size.compact) 14f else 20f
+    val gridBottom = size.heightDp - pad
+    val columns = if (size.roomy && metrics.size > 1) 2 else 1
+    val rows = (metrics.size + columns - 1) / columns
+    val gap = if (size.compact) 2f else 4f
+    val cellWidth = (size.widthDp - pad * 2f - gap * (columns - 1)) / columns
+    val cellHeight = (gridBottom - gridTop - gap * (rows - 1)) / rows
+    metrics.forEachIndexed { index, metric ->
+      val column = index % columns
+      val row = index / columns
+      val left = pad + column * (cellWidth + gap)
+      val top = gridTop + row * (cellHeight + gap)
+      val rect = RectF(left, top, left + cellWidth, top + cellHeight)
+      canvas.drawRoundRect(rect, 8f, 8f, fillPaint(Color.argb(30, 255, 255, 255)))
+      val metricColor = parseColor(metric.optString("color"), Color.rgb(184, 228, 92))
+      val iconRadius = if (size.compact) 3.4f else 4.6f
+      canvas.drawCircle(left + 7f, top + 8f, iconRadius + 1.5f, fillPaint(withAlpha(metricColor, 64)))
+      drawCompletionIcon(
+        canvas,
+        left + 7f,
+        top + 8f,
+        iconRadius,
+        metric.optString("icon", "trophy-outline"),
+        metricColor,
+      )
+      drawText(
+        canvas,
+        metric.optString("title", "Tracker"),
+        left + 14f,
+        top + if (size.compact) 9.5f else 10.5f,
+        cellWidth - 18f,
+        textPaint(if (size.compact) 5.6f else 7f, Color.WHITE, true),
+      )
+      val metricRows = metric.optJSONArray("rows") ?: JSONArray()
+      val rowTop = top + if (size.compact) 13f else 16f
+      val availableHeight = rect.bottom - rowTop - 2f
+      val preferredRowHeight = if (size.compact) 11f else 14f
+      val visibleRows = min(metricRows.length(), max(1, (availableHeight / preferredRowHeight).toInt()))
+      val rowHeight = availableHeight / max(1, visibleRows)
+      repeat(visibleRows) { rowIndex ->
+        val entry = metricRows.optJSONObject(rowIndex) ?: return@repeat
+        val centerY = rowTop + rowHeight * rowIndex + rowHeight / 2f
+        val avatarRadius = min(if (size.compact) 3.8f else 5f, rowHeight * 0.34f)
+        canvas.drawCircle(
+          left + 7f,
+          centerY,
+          avatarRadius,
+          fillPaint(parseColor(entry.optString("color"), metricColor)),
+        )
+        drawCenteredText(
+          canvas,
+          entry.optString("initials").take(2),
+          left + 7f,
+          centerY,
+          textPaint(max(3.5f, avatarRadius * 0.92f), Color.WHITE, true),
+        )
+        val valueWidth = if (size.compact) cellWidth * 0.36f else cellWidth * 0.38f
+        drawText(
+          canvas,
+          "${rowIndex + 1}. ${entry.optString("name")}",
+          left + 13f,
+          centerY + if (size.compact) 2f else 2.4f,
+          cellWidth - valueWidth - 18f,
+          textPaint(if (size.compact) 4.8f else 6f, Color.argb(230, 242, 246, 255), true),
+        )
+        drawText(
+          canvas,
+          entry.optString("value", "—"),
+          rect.right - valueWidth - 3f,
+          centerY + if (size.compact) 2f else 2.4f,
+          valueWidth,
+          textPaint(
+            if (size.compact) 4.8f else 6f,
+            if (entry.optBoolean("private", false)) Color.argb(170, 210, 220, 238) else metricColor,
+            true,
+          ),
+        )
+      }
+    }
+  }
+
   private fun drawFeaturedCard(
     canvas: Canvas,
     size: HabHubWidgetSize,
@@ -531,7 +780,7 @@ object HabHubWidgetRenderer {
     progress: Float,
     accent: Int,
   ) {
-    val pad = if (size.compact) 9f else 11f
+    val pad = if (size.compact) 6f else 11f
     val badgeDiameter = if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
     val badgeCenterY = if (size.compact) min(19f, size.heightDp * 0.42f) else 30f
@@ -539,16 +788,16 @@ object HabHubWidgetRenderer {
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
     val dateLabel = item.optString("dateLabel")
-    val dateWidth = if (dateLabel.isBlank()) 0f else if (size.compact) 31f else 38f
-    val headerGap = if (dateWidth > 0f) 3f else 0f
+    val dateWidth = if (dateLabel.isBlank()) 0f else if (size.compact) 23f else 38f
+    val headerGap = if (dateWidth > 0f) if (size.compact) 2f else 3f else 0f
     if (dateWidth > 0f) {
       drawCenteredEllipsizedText(
         canvas,
         dateLabel,
         pad + dateWidth / 2f,
-        if (size.compact) 10.5f else 17f,
+        if (size.compact) 9.8f else 17f,
         dateWidth,
-        textPaint(if (size.compact) 6.5f else 7.3f, Color.argb(225, 222, 230, 242), true),
+        textPaint(if (size.compact) 5.8f else 7.3f, Color.argb(225, 222, 230, 242), true),
       )
     }
     val eyebrowLeft = pad + dateWidth + headerGap
@@ -556,19 +805,28 @@ object HabHubWidgetRenderer {
       canvas,
       eyebrow,
       eyebrowLeft,
-      if (size.compact) 10.5f else 17f,
+      if (size.compact) 9.8f else 17f,
       max(10f, contentWidth - dateWidth - headerGap),
-      textPaint(if (size.compact) 6.5f else 7.5f, Color.argb(205, 255, 255, 255), true, 0.12f),
+      textPaint(if (size.compact) 5.8f else 7.5f, Color.argb(205, 255, 255, 255), true, if (size.compact) 0.07f else 0.12f),
     )
     drawText(
       canvas,
       item.optString("value", "\u2014"),
       pad,
-      if (size.compact) 25.5f else 42f,
+      if (size.compact) 23.5f else 42f,
       contentWidth,
       textPaint(if (size.compact) 14f else 24f, Color.WHITE, true),
     )
-    if (!size.compact) {
+    if (size.compact) {
+      drawText(
+        canvas,
+        item.optString("compactSubtitle", item.optString("subtitle")),
+        pad,
+        31.5f,
+        contentWidth,
+        textPaint(5.45f, Color.argb(220, 224, 234, 250), true),
+      )
+    } else {
       drawText(
         canvas,
         item.optString("subtitle"),
@@ -609,8 +867,8 @@ object HabHubWidgetRenderer {
         canvas,
         size,
         goals,
-        max(29.5f, barTop - 13.5f),
-        barTop - 2.5f,
+        max(33.5f, barTop - 10.5f),
+        barTop - 1.5f,
         accent,
       )
     } else if (!size.compact) {
@@ -637,14 +895,14 @@ object HabHubWidgetRenderer {
     if (count <= 0 || bottom <= top) return
     val gap = 3f
     val badgeReserve = if (size.wide) 46f else 35f
-    val availableWidth = size.widthDp - 18f - badgeReserve
+    val availableWidth = size.widthDp - 12f - badgeReserve
     val tileSize = min(
       if (size.wide) 12f else 10.5f,
       min(bottom - top, (availableWidth - gap * (count - 1)) / count),
     )
     if (tileSize < 6f) return
     val totalWidth = tileSize * count + gap * (count - 1)
-    val startX = 9f
+    val startX = 6f
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
       val left = startX + index * (tileSize + gap)
@@ -863,6 +1121,71 @@ object HabHubWidgetRenderer {
       icon.startsWith("planet") || icon.startsWith("compass") -> {
         canvas.drawCircle(centerX, centerY, radius * 0.68f, stroke)
         canvas.drawOval(RectF(centerX - radius, centerY - radius * 0.32f, centerX + radius, centerY + radius * 0.32f), stroke)
+      }
+      icon.startsWith("briefcase") || icon.startsWith("business") -> {
+        canvas.drawRoundRect(
+          RectF(centerX - radius, centerY - radius * 0.55f, centerX + radius, centerY + radius * 0.78f),
+          radius * 0.14f,
+          radius * 0.14f,
+          stroke,
+        )
+        canvas.drawArc(
+          RectF(centerX - radius * 0.42f, centerY - radius, centerX + radius * 0.42f, centerY - radius * 0.28f),
+          180f,
+          180f,
+          false,
+          stroke,
+        )
+        canvas.drawLine(centerX - radius, centerY, centerX + radius, centerY, stroke)
+      }
+      icon.startsWith("school") -> canvas.drawPath(Path().apply {
+        moveTo(centerX, centerY - radius)
+        lineTo(centerX + radius, centerY - radius * 0.30f)
+        lineTo(centerX, centerY + radius * 0.34f)
+        lineTo(centerX - radius, centerY - radius * 0.30f)
+        close()
+        moveTo(centerX - radius * 0.62f, centerY + radius * 0.02f)
+        lineTo(centerX - radius * 0.62f, centerY + radius * 0.66f)
+        quadTo(centerX, centerY + radius, centerX + radius * 0.62f, centerY + radius * 0.66f)
+        lineTo(centerX + radius * 0.62f, centerY + radius * 0.02f)
+      }, stroke)
+      icon.startsWith("book") -> {
+        canvas.drawPath(Path().apply {
+          moveTo(centerX, centerY - radius * 0.72f)
+          quadTo(centerX - radius * 0.48f, centerY - radius, centerX - radius * 0.92f, centerY - radius * 0.68f)
+          lineTo(centerX - radius * 0.92f, centerY + radius * 0.72f)
+          quadTo(centerX - radius * 0.46f, centerY + radius * 0.42f, centerX, centerY + radius * 0.78f)
+          quadTo(centerX + radius * 0.46f, centerY + radius * 0.42f, centerX + radius * 0.92f, centerY + radius * 0.72f)
+          lineTo(centerX + radius * 0.92f, centerY - radius * 0.68f)
+          quadTo(centerX + radius * 0.48f, centerY - radius, centerX, centerY - radius * 0.72f)
+        }, stroke)
+        canvas.drawLine(centerX, centerY - radius * 0.72f, centerX, centerY + radius * 0.78f, stroke)
+      }
+      icon.startsWith("trending") || icon.startsWith("analytics") || icon.startsWith("stats") -> {
+        canvas.drawLine(centerX - radius, centerY + radius * 0.72f, centerX - radius * 0.28f, centerY + radius * 0.10f, stroke)
+        canvas.drawLine(centerX - radius * 0.28f, centerY + radius * 0.10f, centerX + radius * 0.20f, centerY + radius * 0.42f, stroke)
+        canvas.drawLine(centerX + radius * 0.20f, centerY + radius * 0.42f, centerX + radius, centerY - radius * 0.70f, stroke)
+      }
+      icon.startsWith("calendar") -> {
+        canvas.drawRoundRect(
+          RectF(centerX - radius, centerY - radius * 0.78f, centerX + radius, centerY + radius * 0.90f),
+          radius * 0.16f,
+          radius * 0.16f,
+          stroke,
+        )
+        canvas.drawLine(centerX - radius, centerY - radius * 0.28f, centerX + radius, centerY - radius * 0.28f, stroke)
+        canvas.drawCircle(centerX - radius * 0.42f, centerY + radius * 0.20f, radius * 0.09f, fillPaint(color))
+        canvas.drawCircle(centerX + radius * 0.12f, centerY + radius * 0.20f, radius * 0.09f, fillPaint(color))
+      }
+      icon.startsWith("checkbox") || icon.startsWith("checkmark-circle") -> {
+        canvas.drawRoundRect(
+          RectF(centerX - radius, centerY - radius, centerX + radius, centerY + radius),
+          radius * 0.22f,
+          radius * 0.22f,
+          stroke,
+        )
+        canvas.drawLine(centerX - radius * 0.55f, centerY, centerX - radius * 0.12f, centerY + radius * 0.42f, stroke)
+        canvas.drawLine(centerX - radius * 0.12f, centerY + radius * 0.42f, centerX + radius * 0.62f, centerY - radius * 0.46f, stroke)
       }
       else -> canvas.drawCircle(centerX, centerY, radius, stroke)
     }

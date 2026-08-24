@@ -676,12 +676,10 @@ function LeaderboardScreen() {
     });
   }, [editing, orderedCardIds, pinnedIds]);
   const leaderboardPageSize = useMemo(() => {
-    if (expandedGridRows.length > 0) return 1;
     const fittingCapacity = leaderboardPageCapacity(
       viewportHeight,
       state.group.members.length,
       dateNavigatorOpen,
-      false,
     );
     const preferredCapacity = configuredPageCapacity(
       state.settings.leaderboardCardsPerPage,
@@ -692,7 +690,6 @@ function LeaderboardScreen() {
     return Math.min(fittingCapacity, preferredCapacity);
   }, [
     dateNavigatorOpen,
-    expandedGridRows.length,
     state.group.members.length,
     state.settings.leaderboardCardsPerPage,
     viewportHeight,

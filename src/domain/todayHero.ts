@@ -82,7 +82,7 @@ export function todayHeroSummary(
       met,
       progress: unavailable
         ? 0
-        : met
+        : met && metric.id !== "food"
           ? 1
           : boundedProgress(
               metricVisualProgress(

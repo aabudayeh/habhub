@@ -47,7 +47,6 @@ import {
   useOptionalTutorial,
 } from "@/src/components/TutorialSpotlight";
 import {
-  isIosWebDevice,
   resolveScreenBottomPadding,
   WebDisplayEnvironment,
 } from "@/src/domain/webSafeArea";
@@ -118,11 +117,11 @@ export function Screen({
     isTabScene,
     webDisplayEnvironment,
   );
-  const removeIosWebTabGutter =
-    isTabScene &&
-    Boolean(
-      webDisplayEnvironment && isIosWebDevice(webDisplayEnvironment),
-    );
+  // The tab navigator owns the complete area below every Web tab scene. Keep
+  // this independent of iOS user-agent detection because installed PWAs can
+  // report desktop-like navigator fields even while using iPhone safe areas.
+  const removeWebTabGutter =
+    Platform.OS === "web" && isTabScene;
   useKeyboardReveal(activeRef);
   const revealTutorialTarget = useCallback(
     (targetWindowY: number) => {
@@ -251,10 +250,10 @@ export function Screen({
               compact && styles.screenCompact,
               { paddingBottom },
               contentContainerStyle,
-              // A few tab pages deliberately use a small bottom gutter. iOS
-              // Web already renders the navigator immediately below them, so
+              // A few tab pages deliberately use a small bottom gutter. Web
+              // already renders the navigator immediately below them, so
               // keep that page style from recreating the reported blank band.
-              removeIosWebTabGutter && { paddingBottom: 0 },
+              removeWebTabGutter && { paddingBottom: 0 },
             ]}
             {...props}
           >

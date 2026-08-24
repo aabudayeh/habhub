@@ -542,6 +542,10 @@ const webScheduleRepairMigration = fs.readFileSync(
   "supabase/migrations/202608230002_web_personal_notification_worker_reliability.sql",
   "utf8",
 );
+const webScheduleCpuGuardMigration = fs.readFileSync(
+  "supabase/migrations/202608240001_hourly_google_health_catchups.sql",
+  "utf8",
+);
 const webScheduleWorker = fs.readFileSync(
   "supabase/functions/web-personal-notifications/index.ts",
   "utf8",
@@ -633,7 +637,8 @@ assert.match(workoutTimerSource, /timestamp: phaseOrigin/);
 assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
 assert.match(
   workoutTimerSource,
-  /categoryIdentifier: flow\.paused \|\| hasNext[\s\S]{0,100}WORKOUT_TIMER_CATEGORY/,
+  /const hasNext = !flow\.paused && flow\.index < flow\.steps\.length - 1[\s\S]{0,900}categoryIdentifier: hasNext[\s\S]{0,100}WORKOUT_TIMER_CATEGORY/,
+  "native category selection must retain the proven pre-regression paused and final action layout",
 );
 assert.match(workoutTimerSource, /export const WORKOUT_TIMER_RESUME = "workout-resume"/);
 assert.match(workoutTimerSource, /suspendWorkoutTimerNotificationPersistence/);
@@ -658,8 +663,8 @@ const workoutFlowAction = workoutTimerSource.slice(
 );
 assert.match(
   workoutFlowAction,
-  /action === WORKOUT_TIMER_NEXT[\s\S]{0,120}if \(flow\.paused\)[\s\S]{0,140}flow\.paused = false/,
-  "the one remaining Web notification action must resume a paused flow",
+  /action === WORKOUT_TIMER_PAUSE[\s\S]{0,220}flow\.paused = true[\s\S]{0,500}!flow\.paused && flow\.index < flow\.steps\.length - 1/,
+  "native fallback handling must retain independent Pause/resume and active Next transitions",
 );
 const nativeWorkoutCategories = workoutTimerSource.slice(
   workoutTimerSource.indexOf("setNotificationCategoryAsync(WORKOUT_TIMER_CATEGORY"),
@@ -669,12 +674,18 @@ assert.match(nativeWorkoutCategories, /identifier: WORKOUT_TIMER_NEXT/);
 assert.match(
   nativeWorkoutCategories,
   /identifier: WORKOUT_TIMER_FINISH[\s\S]{0,140}opensAppToForeground: false/,
-  "the final notification action must finish in the background; only the notification body opens the app",
+  "the final native action must finish in the background; only the notification body opens the app",
+);
+assert.equal(
+  (nativeWorkoutCategories.match(/identifier: WORKOUT_TIMER_PAUSE/g) ?? [])
+    .length,
+  2,
+  "both native workout categories must expose the restored Pause/resume control",
 );
 assert.doesNotMatch(
   nativeWorkoutCategories,
-  /identifier: WORKOUT_TIMER_PAUSE/,
-  "native live-notification categories must not expose Pause",
+  /identifier: WORKOUT_TIMER_PAUSE[\s\S]{0,140}opensAppToForeground: true/,
+  "native Pause/resume must stay a background action",
 );
 assert.match(gymSource, /document\.visibilityState === "visible"/);
 assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
@@ -1062,12 +1073,13 @@ assert.match(
 );
 assert.match(
   persistentWorkoutBuilder,
-  /if \(flow\.paused\)[\s\S]{0,120}NotificationAction\(NEXT_ACTION, "Resume"/,
+  /NotificationAction\(\s*PAUSE_ACTION,[\s\S]{0,100}if \(flow\.paused\) "Resume" else "Pause"[\s\S]{0,80}false/,
+  "a restored persistent workout notification must recreate background Pause/resume",
 );
-assert.doesNotMatch(
-  persistentWorkoutBuilder,
-  /NotificationAction\(\s*PAUSE_ACTION/,
-  "a restored persistent workout notification must not recreate Pause",
+assert.match(
+  androidNotificationServiceSource,
+  /flow\.paused -> previousActions\.mapIndexed[\s\S]{0,160}relabel\(action, "Resume"\)[\s\S]{0,260}relabel\(action, "Pause"\)/,
+  "native in-place notification refreshes must retain both progression and Pause/resume controls",
 );
 assert.doesNotMatch(androidNotificationServiceSource, /startForegroundService/);
 assert.match(androidPluginSource, /HabHubWorkoutNotificationPersistenceReceiver/);
@@ -1277,6 +1289,18 @@ assert.match(
 assert.doesNotMatch(
   webScheduleRepairMigration,
   /nullif\([^;]{0,200}then return/,
+);
+assert.match(
+  webScheduleCpuGuardMigration,
+  /create or replace function public\.invoke_web_personal_notification_worker\(\)/,
+);
+assert.match(webScheduleCpuGuardMigration, /scheduled\.dispatched_at is null/);
+assert.match(webScheduleCpuGuardMigration, /scheduled\.next_attempt_at <= clock_timestamp\(\)/);
+assert.match(webScheduleCpuGuardMigration, /scheduled\.scheduled_for <= clock_timestamp\(\)/);
+assert.ok(
+  webScheduleCpuGuardMigration.indexOf("if not exists") <
+    webScheduleCpuGuardMigration.lastIndexOf("from vault.decrypted_secrets"),
+  "an idle reminder tick must return before Vault reads and pg_net",
 );
 assert.match(webScheduleWorker, /PERSONAL_NOTIFICATION_WORKER_SECRET/);
 assert.match(webScheduleWorker, /constantTimeEqual/);

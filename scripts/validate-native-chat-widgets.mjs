@@ -134,8 +134,8 @@ assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_ba
 
 assert.match(
   widgetConfig,
-  /"square", "wide" -> listOf\("__avatar__"[\s\S]*else -> listOf\("__featured__"/,
-  "Featured and Status must use dedicated providers with compatible resize axes",
+  /"square", "wide" -> listOf\([\s\S]*"__avatar__"[\s\S]*"__leaderboard__"[\s\S]*else -> listOf\("__featured__"/,
+  "Resizable Status providers must offer the configurable Leaderboard surface",
 );
 assert.match(widgetConfig, /"square" -> "2-3 x 1-5 \(starts 2 x 2\)"/);
 assert.match(widgetConfig, /"wide_compact" -> "2-5 x 1 \(starts 4 x 1\)"/);
@@ -147,11 +147,13 @@ assert.match(widgetConfig, /habhub_widget_blur_note/);
 assert.match(pluginSource, /BACKGROUND_MODE_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_COLOR_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
+assert.match(pluginSource, /LEADERBOARD_METRICS_PREFIX/);
+assert.match(pluginSource, /LEADERBOARD_COUNT_PREFIX/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
-  /private fun fixedTracker[\s\S]*HabHubSmallWidgetProvider[\s\S]*-> "__featured__"[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
-  "Fixed widget families must redirect stale content choices to their intended layout",
+  /private fun defaultTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*private fun fixedTracker[\s\S]*HabHubSmallWidgetProvider[\s\S]*-> "__featured__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
+  "Featured-only families stay fixed while resizable families default to Status and allow Leaderboard",
 );
 assert.match(
   pluginSource,
@@ -160,7 +162,7 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /configuration\.trackerId == "__avatar__"[\s\S]*snapshot\.optJSONObject\("avatar"\)[\s\S]*snapshot\.optJSONObject\("featured"\)/,
+  /when \(configuration\.trackerId\)[\s\S]*"__avatar__" -> snapshot\.optJSONObject\("avatar"\)[\s\S]*"__leaderboard__" -> snapshot\.optJSONObject\("leaderboard"\)[\s\S]*snapshot\.optJSONObject\("featured"\)/,
 );
 for (const [source, expected] of [
   [smallInfo, { width: 2, height: 1, preview: "small", minWidth: 109, maxWidth: 349, minHeight: 50, maxHeight: 50, mode: "horizontal" }],
@@ -179,8 +181,10 @@ for (const [source, expected] of [
   assert.match(source, new RegExp(`android:resizeMode="${expected.mode}"`));
 }
 assert.match(widgetValues, /Featured card - resizes from 2-5 x 1/);
-assert.match(widgetValues, /Status avatar and tracker rings - resizes from 2-3 x 1-5/);
+assert.match(widgetValues, /Status avatar or leaderboard - resizes from 2-3 x 1-5/);
 assert.match(pluginSource, /paceboard:\/\/status/);
+assert.match(pluginSource, /paceboard:\/\/group/);
+assert.doesNotMatch(pluginSource, /paceboard:\/\/leaderboard"/);
 assert.match(pluginSource, /paceboard:\/\//);
 assert.match(pluginSource, /setImageViewBitmap/);
 assert.match(pluginSource, /LinearGradient/);
@@ -189,6 +193,18 @@ assert.match(pluginSource, /drawProgressOutline/);
 assert.match(pluginSource, /drawGoalTiles/);
 assert.match(pluginSource, /drawFeaturedGoalDot/);
 assert.match(pluginSource, /drawAvatarCard/);
+assert.match(pluginSource, /drawLeaderboardCard/);
+assert.match(pluginSource, /configuredLeaderboardMetrics/);
+assert.match(
+  pluginSource,
+  /size\.roomy && size\.tall -> 4[\s\S]*size\.roomy \|\| size\.tall -> 2/,
+  "Large resizable Leaderboard widgets must be able to show the configured four trackers",
+);
+assert.match(
+  pluginSource,
+  /contentDescription\(context, item, configuration, size\)/,
+  "Leaderboard accessibility text must be filtered to the metrics visible on that widget",
+);
 assert.match(pluginSource, /drawStatusGoalGrid/);
 assert.match(pluginSource, /val rows = \(count \+ columns - 1\) \/ columns/);
 assert.match(pluginSource, /size\.heightDp >= 260f -> 12/);
@@ -216,6 +232,8 @@ assert.doesNotMatch(
 );
 assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
 assert.match(pluginSource, /pad \+ dateWidth \/ 2f[\s\S]*val eyebrowLeft = pad \+ dateWidth \+ headerGap/);
+assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
+assert.match(pluginSource, /val pad = if \(size\.compact\) 6f else 11f/);
 assert.match(pluginSource, /PorterDuffColorFilter/);
 assert.match(pluginSource, /LruCache<String, Bitmap>/);
 assert.match(pluginSource, /MAX_RENDER_PIXELS/);
@@ -225,6 +243,12 @@ assert.match(pluginSource, /Never block a widget broadcast on a development URL/
 assert.match(pluginSource, /setContentDescription/);
 assert.match(pluginSource, /GOAL_LIME/);
 assert.match(pluginSource, /GOAL_GOLD/);
+for (const iconFamily of ["briefcase", "school", "book", "trending", "calendar", "checkbox"])
+  assert.match(
+    pluginSource,
+    new RegExp(`icon\\.startsWith\\(\"${iconFamily}`),
+    `widget renderer needs a recognizable ${iconFamily} tracker glyph`,
+  );
 assert.doesNotMatch(pluginSource, /ValueAnimator|ObjectAnimator|AnimationUtils/);
 for (const preview of [smallPreview, wideCompactPreview]) {
   assert.match(preview, /android:fillColor="#3D4550"/);
@@ -237,6 +261,9 @@ assert.match(widgetTypes, /export type WidgetGoalSnapshot/);
 assert.match(widgetTypes, /export type WidgetFeaturedSnapshot/);
 assert.match(widgetTypes, /dateLabel: string/);
 assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);
+assert.match(widgetTypes, /export type WidgetLeaderboardSnapshot/);
+assert.match(widgetTypes, /leaderboardMetricIds\?: string\[\]/);
+assert.match(widgetTypes, /leaderboardCount\?: number/);
 assert.match(widgetTypes, /avatarUri\?: string/);
 assert.match(widgetTypes, /goals: WidgetGoalSnapshot\[\]/);
 assert.doesNotMatch(widgetTypes, /weightLabel|bodyCompositionLabel/);
@@ -249,15 +276,29 @@ assert.match(
   /const currentState = stateWithoutGoogleHealthLocalData\(stateRef\.current\)[\s\S]*featuredWidgetSnapshot\([\s\S]*currentState/,
   "durable Featured and Status payloads must use the Google-safe projection",
 );
-assert.match(widgetBridge, /const payload = JSON\.stringify\(\{ featured, avatar \}\)/);
+assert.match(widgetBridge, /const payload = JSON\.stringify\(\{ featured, avatar, leaderboard, catalog \}\)/);
 assert.match(widgetSnapshots, /todayHeroSummary\(state, state\.currentUserId, today\)/);
 assert.match(widgetSnapshots, /statusRangeRollup\(state, state\.currentUserId, \[today\]\)/);
 assert.match(widgetSnapshots, /completionIndicatorOption/);
 assert.match(widgetSnapshots, /dateLabel: compactDayDate\(today, language\)/);
 assert.match(widgetSnapshots, /showProgressOutline:/);
+assert.match(widgetSnapshots, /compactSubtitle:/);
+assert.match(widgetSnapshots, /leaderboardRows\([\s\S]*state\.currentUserId/);
+assert.match(
+  widgetSnapshots,
+  /const explicitlyRequestedIds[\s\S]*const selectedIds = explicitlyRequestedIds\.length[\s\S]*\? explicitlyRequestedIds/,
+  "Multiple installed Leaderboard widgets must retain the union of their explicitly selected metrics",
+);
 assert.match(widgetSnapshots, /goals: WidgetGoalSnapshot\[\]/);
 assert.doesNotMatch(widgetSnapshots, /weightLabel|bodyCompositionLabel/);
-assert.match(widgetBridge, /catalog: \[\]/);
+assert.match(widgetBridge, /const catalog = \(currentState\.group\.metricConfiguration \?\? \[\]\)/);
+assert.match(widgetBridge, /configuration\.trackerId === "__leaderboard__"/);
+assert.match(widgetBridge, /configuration\.leaderboardMetricIds\?\.length/);
+assert.match(
+  widgetBridge,
+  /configuration\.leaderboardMetricIds\.slice\([\s\S]*configuration\.leaderboardCount \?\? 2/,
+  "Durable snapshots must include only each widget's visible configured tracker count",
+);
 assert.match(widgetBridge, /trackers: \[\]/);
 assert.match(widgetBridge, /NativeAppState\.addEventListener/);
 assert.match(widgetBridge, /scheduleDayBoundary/);
@@ -287,10 +328,28 @@ assert.match(pluginSource, /fun clearSnapshot\(context: Context\)[\s\S]*remove\(
 assert.match(pluginSource, /fun configurations[\s\S]*activeWidgetIds\(context\)\.map/);
 assert.match(
   pluginSource,
+  /fun saveSnapshot[\s\S]*pruneLeaderboardPayload\(context, incoming\)[\s\S]*private fun pruneStoredLeaderboardPayload[\s\S]*private fun pruneLeaderboardPayload/,
+  "Native storage must prune stale exact leaderboard values even when configuration changes outside React Native",
+);
+assert.ok(
+  pluginSource.match(/pruneStoredLeaderboardPayload\(context\)/g)?.length >= 2,
+  "Changing or deleting a widget must immediately prune no-longer-visible leaderboard payloads",
+);
+assert.match(
+  pluginSource,
+  /if \(active\.isEmpty\(\)\) \{[\s\S]*snapshot\.remove\("leaderboard"\)/,
+  "No active Leaderboard widget may leave an exact leaderboard payload on the launcher",
+);
+assert.match(
+  pluginSource,
   /activeWidgetIds\(context\)\.none \{ it !in deleted \}[\s\S]*clearSnapshot\(context\)/,
   "Deleting the last widget must clear durable health state even during launcher callback lag",
 );
 assert.match(pluginSource, /HabHubSmallWidgetProvider::class\.java[\s\S]*HabHubSquareWidgetProvider::class\.java[\s\S]*HabHubWideCompactWidgetProvider::class\.java[\s\S]*HabHubWideWidgetProvider::class\.java/);
+assert.match(widgetConfig, /selectedCount < 4/);
+assert.match(widgetConfig, /selectedLeaderboardMetricIds[\s\S]*\.ifEmpty/);
+assert.match(nativeModule, /putArray\([\s\S]*"leaderboardMetricIds"/);
+assert.match(nativeModule, /putInt\("leaderboardCount"/);
 assert.doesNotMatch(pluginSource, /mergedTrackers|previous\.optJSONArray\("trackers"\)/);
 assert.match(nativeModule, /fun clearWidgetSnapshot\(promise: Promise\)[\s\S]*HabHubWidgetStore\.clearSnapshot[\s\S]*HabHubWidgetRenderer\.updateAll/);
 assert.match(widgetTypes, /clearWidgetSnapshot\(\): Promise<boolean>/);
@@ -315,4 +374,4 @@ assert.equal(
 assert.match(manifest, /android:fullBackupContent="@xml\/habhub_widget_backup_rules"/);
 assert.match(manifest, /android:dataExtractionRules="@xml\/habhub_widget_data_extraction_rules"/);
 
-console.log("Native Chat layout and four privacy-safe Featured/Status widget families validated.");
+console.log("Native Chat layout and privacy-safe Featured/Status/Leaderboard widget families validated.");

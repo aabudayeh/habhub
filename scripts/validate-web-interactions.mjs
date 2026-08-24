@@ -32,13 +32,15 @@ assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /export function useWebBackDismiss/);
 assert.match(guards, /__habhubDismissBackGuard/);
 assert.match(guards, /typeof existingGuardId !== "string"/);
-assert.match(guards, /queueMicrotask\(\(\) => onDismissRef\.current\(\)\)/);
 assert.match(dismissGuard, /window\.history\.pushState\(/);
-assert.doesNotMatch(
+assert.match(
   dismissGuard,
-  /window[^;]*\.navigation|navigationApi/,
-  "transient Web edit modes must always install a history sentinel, even when the Navigation API exists",
+  /navigationApi\?\.addEventListener\("navigate", navigate\)/,
+  "modern PWAs must cancel Back before Expo Router can close the app",
 );
+assert.match(dismissGuard, /event\.preventDefault\(\)/);
+assert.match(dismissGuard, /dismiss\(true\)/);
+assert.match(dismissGuard, /window\.history\.back\(\)/);
 assert.match(guards, /navigationApi\.addEventListener\("navigate", navigate\)/);
 assert.match(guards, /event\.navigationType !== "traverse"/);
 assert.match(guards, /event\.preventDefault\(\)/);
@@ -163,8 +165,8 @@ assert.equal(
     userAgent: "Mozilla/5.0 (Linux; Android 15)",
     platform: "Linux armv8l",
   }),
-  154,
-  "other standalone platforms remain unchanged",
+  0,
+  "every Web tab scene must rely on the navigator rather than duplicate its bottom clearance",
 );
 assert.equal(
   resolveScreenBottomPadding(120, undefined, 14, 0, true, {
@@ -172,20 +174,21 @@ assert.equal(
     userAgent: "Mozilla/5.0 (Linux; Android 15)",
     platform: "Linux armv8l",
   }),
-  120,
-  "non-iOS pages retain the navigator-safe minimum when their gutter is smaller",
+  0,
+  "Web tab padding must not depend on a device user agent or reported inset",
 );
 assert.match(tabs, /height: 55 \+ tabBarBottomInset/);
 assert.match(tabs, /paddingBottom: Math\.max\(1, tabBarBottomInset\)/);
 assert.match(screen, /resolveScreenBottomPadding\(/);
 assert.match(
   screen,
-  /contentContainerStyle,[\s\S]{0,500}removeIosWebTabGutter && \{ paddingBottom: 0 \}/,
-  "iOS Web tab padding removal must be the final style override",
+  /contentContainerStyle,[\s\S]{0,500}removeWebTabGutter && \{ paddingBottom: 0 \}/,
+  "Web tab padding removal must be the final style override",
 );
 assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
-assert.match(today, /iosWebDevice && styles\.standaloneIosPage/);
-assert.match(today, /standaloneIosPage: \{ paddingBottom: 0 \}/);
+assert.match(today, /Platform\.OS === "web" && styles\.webTabPage/);
+assert.match(today, /webTabPage: \{ paddingBottom: 0 \}/);
+assert.match(today, /contentInsetAdjustmentBehavior=\{[\s\S]{0,80}Platform\.OS === "web" \? "never"/);
 assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);
 assert.match(
   today,
@@ -194,6 +197,14 @@ assert.match(
 assert.match(
   source("app/(tabs)/group.tsx"),
   /useWebBackDismiss\(\s*screenIsFocused && editing,\s*finishLeaderboardEditing,\s*\)/,
+);
+assert.match(today, /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/);
+assert.match(today, /requestedPage=\{requestedTodayPage\}/);
+assert.match(today, /todosAfterPagedTrackers/);
+assert.match(
+  today,
+  /\{!editing &&\s*\(item\.goalEnabled !== false \|\| progressSubmetrics\.length > 0\)/,
+  "Today edit rows must reclaim progress-bar width for their edit controls",
 );
 
 assert.match(metricEditor, /fixedBottom=\{/);

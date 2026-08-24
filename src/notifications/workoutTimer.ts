@@ -782,7 +782,7 @@ async function presentFlow(flow: StoredWorkoutFlow) {
   const phaseLabel =
     phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
   const notificationTitle = `${phaseLabel} · ${step.title}`;
-  const hasNext = flow.index < flow.steps.length - 1;
+  const hasNext = !flow.paused && flow.index < flow.steps.length - 1;
   // Hand the complete remaining flow to Android before the notification can
   // be tapped. Its receiver can then update the row synchronously even if
   // TaskManager is deferred by a locked/dozing device.
@@ -803,9 +803,7 @@ async function presentFlow(flow: StoredWorkoutFlow) {
         workoutOwnerId: flow.ownerId,
         workoutGeneration: flow.generation,
       },
-      // A paused final phase still needs the NEXT PendingIntent because that
-      // action resumes it; Finish is restored after the phase is running.
-      categoryIdentifier: flow.paused || hasNext
+      categoryIdentifier: hasNext
         ? WORKOUT_TIMER_CATEGORY
         : WORKOUT_TIMER_LAST_CATEGORY,
       // Ongoing/sticky phone notifications are not bridged to paired Wear OS
@@ -886,15 +884,10 @@ async function applyFlowAction(action: QueuedWorkoutTimerAction["action"]) {
       flow.paused = false;
       flow.phaseStartedAt = occurredAt;
     }
-  } else if (action === WORKOUT_TIMER_NEXT) {
-    if (flow.paused) {
-      flow.paused = false;
-      flow.phaseStartedAt = occurredAt;
-    } else if (flow.index < flow.steps.length - 1) {
-      flow.index += 1;
-      flow.phaseStartedAt = occurredAt;
-      flow.phaseElapsedMs = 0;
-    }
+  } else if (!flow.paused && flow.index < flow.steps.length - 1) {
+    flow.index += 1;
+    flow.phaseStartedAt = occurredAt;
+    flow.phaseElapsedMs = 0;
   }
 
   // Commit before rendering so the lock-screen notification and replay queue
@@ -961,6 +954,11 @@ export async function configureWorkoutTimerNotification() {
       buttonTitle: "Next",
       options: { opensAppToForeground: false },
     },
+    {
+      identifier: WORKOUT_TIMER_PAUSE,
+      buttonTitle: "Pause / resume",
+      options: { opensAppToForeground: false },
+    },
   ]);
   await Notifications.setNotificationCategoryAsync(
     WORKOUT_TIMER_LAST_CATEGORY,
@@ -968,6 +966,11 @@ export async function configureWorkoutTimerNotification() {
       {
         identifier: WORKOUT_TIMER_FINISH,
         buttonTitle: "Finish workout",
+        options: { opensAppToForeground: false },
+      },
+      {
+        identifier: WORKOUT_TIMER_PAUSE,
+        buttonTitle: "Pause / resume",
         options: { opensAppToForeground: false },
       },
     ],

@@ -12,6 +12,11 @@ const migration = read(
   "202608130002_nonretry_revision_conflicts.sql",
 );
 const provider = read("src", "cloud", "CloudSyncProvider.tsx");
+const dailyStatusBatchMigration = read(
+  "supabase",
+  "migrations",
+  "202608240003_batch_daily_status_revision_fence.sql",
+);
 
 const expectedFunctions = [
   "assert_account_snapshot_revision",
@@ -108,6 +113,16 @@ assert.doesNotMatch(
   migration,
   /return\s+null|exception\s+when/i,
   "revision conflicts must still reject atomically rather than being swallowed",
+);
+assert.doesNotMatch(
+  dailyStatusBatchMigration,
+  /using errcode = '40001'/i,
+  "new statement-level revision guards must not reintroduce retry-class SQLSTATE 40001",
+);
+assert.match(
+  dailyStatusBatchMigration,
+  /account_revision_required' using errcode = 'P0001'/i,
+  "the batched daily-status fence must keep deterministic revision failures non-retryable",
 );
 assert.match(
   provider,

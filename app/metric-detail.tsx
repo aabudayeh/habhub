@@ -89,6 +89,7 @@ import {
   todoResolvedOnDate,
   todoSkippedOnDate,
 } from "@/src/domain/schedule";
+import { flattenTodoHierarchy, todoLabels } from "@/src/domain/todos";
 import {
   completedGymSets,
   gymSessionClockBounds,
@@ -1935,21 +1936,18 @@ export default function TrackerDetail() {
           />
         </Card>
       ) : null}
-      {reality ? (
+      {reality && reality.status !== "insufficient" ? (
       <Card style={{ borderColor: realityColor }}>
           <Text style={[styles.entryTitle, { color: colors.ink }]}>
             Reported vs scale-estimated energy
           </Text>
           <Text style={[styles.sub, { color: colors.muted }]}>
-            {reality.status === "insufficient"
-              ? "Add at least two weight entries and log food between them to compare reported deficit with scale-estimated change."
-              : reality.status === "aligned"
+            {reality.status === "aligned"
                 ? `The two estimates are within ${DEFICIT_ALIGNMENT_CLOSE_KCAL} kcal/day.`
                 : reality.status === "noise"
                   ? "Normal scale variation is larger than the current signal. Keep logging."
                   : `Measured change and reported energy differ across ${Math.round(reality.days)} days.`}
           </Text>
-          {reality.status !== "insufficient" ? (
             <>
               <Text style={[styles.entryValue, { color: realityColor }]}>
                 Logged {state.settings.weightDirection === "gain" ? "surplus" : "deficit"} {Math.round(reality.reportedDailyDeficit)} kcal/day ·
@@ -1962,7 +1960,6 @@ export default function TrackerDetail() {
                 </Text>
               ) : null}
             </>
-          ) : null}
         </Card>
       ) : null}
       {tracker.id === "todo_completion" ? (
@@ -2989,21 +2986,29 @@ function TodoTrackerEntries({
   const colors = useAppColors();
   const accent = useGroupAccent();
   const [openIds, setOpenIds] = useState<string[]>([]);
+  const [activeTodoLabel, setActiveTodoLabel] = useState<string>();
   const priorities = {
     low: "#6C8AA6",
     normal: "#8A8F98",
     high: "#F59E0B",
     urgent: "#D24B4B",
   } as const;
-  const items = (state.todos ?? [])
+  const allItems = (state.todos ?? [])
     .map((todo) => {
       const relevantDates = dates.filter((date) =>
         todoAppearsOnDate(todo, date),
       );
-      return { todo, relevantDates };
+      return { id: todo.id, parentId: todo.parentId, todo, relevantDates };
     })
     .filter((item) => item.relevantDates.length)
     .sort((a, b) => (a.todo.dueAt ?? "9999").localeCompare(b.todo.dueAt ?? "9999"));
+  const todoLabelsInView = [
+    ...new Set(allItems.flatMap(({ todo }) => todoLabels(todo))),
+  ].sort((a, b) => a.localeCompare(b));
+  const items = activeTodoLabel
+    ? allItems.filter(({ todo }) => todoLabels(todo).includes(activeTodoLabel))
+    : allItems;
+  const flattenedItems = flattenTodoHierarchy(items);
   return (
     <Card style={styles.todoDetailCard}>
       <View style={styles.logHeader}>
@@ -3024,7 +3029,26 @@ function TodoTrackerEntries({
           <Text style={styles.logButtonText}>New to-do</Text>
         </Pressable>
       </View>
-      {items.map(({ todo, relevantDates }) => {
+      {todoLabelsInView.length ? (
+        <View style={styles.todoLabelFilters}>
+          <Pressable
+            onPress={() => setActiveTodoLabel(undefined)}
+            style={[styles.todoLabelChip, { borderColor: activeTodoLabel ? colors.border : accent, backgroundColor: activeTodoLabel ? colors.canvas : colors.primarySoft }]}
+          >
+            <Text style={[styles.todoLabelText, { color: activeTodoLabel ? colors.muted : accent }]}>All</Text>
+          </Pressable>
+          {todoLabelsInView.map((label) => (
+            <Pressable
+              key={label}
+              onPress={() => setActiveTodoLabel((current) => current === label ? undefined : label)}
+              style={[styles.todoLabelChip, { borderColor: activeTodoLabel === label ? accent : colors.border, backgroundColor: activeTodoLabel === label ? colors.primarySoft : colors.canvas }]}
+            >
+              <Text translate={false} style={[styles.todoLabelText, { color: activeTodoLabel === label ? accent : colors.muted }]}>#{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {flattenedItems.map(({ item: { todo, relevantDates }, depth }) => {
         const complete = relevantDates.every((date) =>
           todoCompletedOnDate(todo, date),
         );
@@ -3060,7 +3084,7 @@ function TodoTrackerEntries({
               } as never)
             }
             onLongPress={() => {
-              const index = items.findIndex((item) => item.todo.id === todo.id);
+              const index = flattenedItems.findIndex((item) => item.item.todo.id === todo.id);
               const actionDate = relevantDates.at(-1)!;
               Alert.alert(todo.title, "Reorder, skip, or delete this to-do.", [
                 ...(index > 0
@@ -3071,7 +3095,7 @@ function TodoTrackerEntries({
                       },
                     ]
                   : []),
-                ...(index < items.length - 1
+                ...(index < flattenedItems.length - 1
                   ? [
                       {
                         text: "Move down",
@@ -3093,9 +3117,23 @@ function TodoTrackerEntries({
             }}
             style={[
               styles.todoDetailRow,
+              { marginLeft: Math.min(depth, 8) * 10 },
               { borderColor: urgency, backgroundColor: colors.canvas },
             ]}
           >
+            <Pressable
+              accessibilityLabel="Add subtask"
+              onPress={(event) => {
+                event.stopPropagation();
+                router.navigate({
+                  pathname: "/todo-editor",
+                  params: { parentId: todo.id },
+                } as never);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="return-down-forward-outline" size={14} color={colors.faint} />
+            </Pressable>
             <Pressable
               onPress={() => toggleTodo(todo.id, relevantDates.at(-1)!)}
               hitSlop={8}
@@ -3177,10 +3215,12 @@ function TodoTrackerEntries({
           </Pressable>
         );
       })}
-      {!items.length ? (
+      {!allItems.length ? (
         <Text style={[styles.empty, { color: colors.muted }]}>
           No to-dos appear in this period.
         </Text>
+      ) : activeTodoLabel && !items.length ? (
+        <Text translate={false} style={[styles.empty, { color: colors.muted }]}>No #{activeTodoLabel} to-dos appear in this period.</Text>
       ) : null}
     </Card>
   );
@@ -5099,6 +5139,9 @@ const styles = StyleSheet.create({
   logButtonText: { color: palette.white, fontSize: 9, fontWeight: "900" },
   entries: { gap: 7 },
   todoDetailCard: { gap: 7 },
+  todoLabelFilters: { flexDirection: "row", flexWrap: "wrap", gap: 5 },
+  todoLabelChip: { minHeight: 25, borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
+  todoLabelText: { fontSize: 7, fontWeight: "900" },
   todoDetailRow: {
     minHeight: 48,
     borderWidth: 1,

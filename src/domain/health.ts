@@ -12,14 +12,16 @@ import { metricEntryKey } from '@/src/domain/metricEntry';
 import { FOOD_NUTRIENTS } from '@/src/domain/food';
 import { HealthImportRecord } from '@/src/health/types';
 import { AppState, EnergyProfile, HealthDataType, HealthMetricField, HealthMetricMapping, HealthProvider, HealthSourcePreference, MetricDefinition, MetricEntry, NutritionDetails, Visibility } from '@/src/types';
+import { workoutQualifies } from './workoutQualification';
 
 const METRICS_BY_DATA_TYPE: Record<HealthDataType, string[]> = {
   steps: ['steps'],
   active_energy: ['exercise'],
+  total_energy: ['energy_burned'],
   weight: ['weight'],
   nutrition: ['food', ...FOOD_NUTRIENTS.map((nutrient) => nutrient.id)],
   water: ['water'],
-  workouts: ['workout','workout_duration','workout_calories','workout_distance'],
+  workouts: ['workout','workout_duration','workout_distance'],
   body_fat: ['body_fat'],
   lean_body_mass: ['lean_body_mass'],
   body_water_mass: ['body_water_mass'],
@@ -48,7 +50,24 @@ const NUTRITION_FIELDS: Partial<
 > = Object.fromEntries(
   FOOD_NUTRIENTS.map((nutrient) => [nutrient.id, nutrient.nutritionKey]),
 );
-function mappedValue(record:HealthImportRecord,metric:MetricDefinition){const field=metric.healthMapping?.field;if(!field)return undefined;if(field==='value')return metric.dataType==='boolean'?Number(record.value)>0:Number(record.value);if(field==='duration_minutes'){const minutes=record.measurements?.durationMinutes;if(minutes===undefined)return undefined;return metric.unit.toLowerCase().startsWith('hr')?minutes/60:minutes;}if(field==='active_calories')return record.measurements?.activeCalories;if(field==='distance_km')return record.measurements?.distanceKm;if(field==='systolic')return record.measurements?.systolic;if(field==='diastolic')return record.measurements?.diastolic;const nutritionField=NUTRITION_FIELDS[field];const value=nutritionField?record.nutrition?.[nutritionField]:undefined;return typeof value==='number'?value:undefined;}
+function mappedValue(record:HealthImportRecord,metric:MetricDefinition){const field=metric.healthMapping?.field;if(!field)return undefined;if(field==='value'){if(record.type==='workouts')return metric.dataType==='boolean'?true:1;return metric.dataType==='boolean'?Number(record.value)>0:Number(record.value);}if(field==='duration_minutes'){const minutes=record.measurements?.durationMinutes;if(minutes===undefined)return undefined;return metric.unit.toLowerCase().startsWith('hr')?minutes/60:minutes;}if(field==='active_calories')return record.measurements?.activeCalories;if(field==='distance_km')return record.measurements?.distanceKm;if(field==='systolic')return record.measurements?.systolic;if(field==='diastolic')return record.measurements?.diastolic;const nutritionField=NUTRITION_FIELDS[field];const value=nutritionField?record.nutrition?.[nutritionField]:undefined;return typeof value==='number'?value:undefined;}
+
+function workoutCompletionQualifies(record: HealthImportRecord, metric: MetricDefinition) {
+  if (
+    record.type !== 'workouts' ||
+    metric.healthMapping?.dataType !== 'workouts' ||
+    metric.healthMapping.field !== 'value'
+  ) return true;
+  return workoutQualifies(
+    {
+      activityKey: record.activityKey,
+      durationMinutes: record.measurements?.durationMinutes ?? Number(record.value),
+      distanceKm: record.measurements?.distanceKm,
+      activeCalories: record.measurements?.activeCalories,
+    },
+    metric.workoutQualification,
+  );
+}
 
 function healthMappingMatchesRecord(
   mapping: HealthMetricMapping | undefined,
@@ -217,7 +236,7 @@ export function mapHealthRecordsToEntries(
   }
   for (const record of deduplicateHealthImportRecords(records, sourcePreferences)) {
     if(metrics){
-      for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record))){
+      for(const metric of (directByType.get(record.type) ?? []).filter((item)=>healthMappingMatchesRecord(item.healthMapping,record)&&workoutCompletionQualifies(record,item))){
         const value=mappedValue(record,metric);if(value===undefined||value===false||Number(value)<=0)continue;
         const entry =
           record.type === 'nutrition' && metric.id !== 'food'
@@ -298,12 +317,12 @@ export function mapHealthRecordsToEntries(
     }
     if (record.type === 'steps' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'steps', Number(record.value), importedMetricVisibility(visibility,'steps')));
     if (record.type === 'active_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'exercise', Number(record.value), importedMetricVisibility(visibility,'exercise')));
+    if (record.type === 'total_energy' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'energy_burned', Number(record.value), importedMetricVisibility(visibility,'energy_burned')));
     if (record.type === 'weight' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'weight', Number(record.value), importedMetricVisibility(visibility,'weight')));
     if (record.type === 'water' && Number(record.value) > 0) entries.push(entryFor(record, userId, 'water', Number(record.value), importedMetricVisibility(visibility,'water')));
     if (record.type === 'workouts' && record.workoutRecordKind !== 'segment' && Number(record.value)>0) {
-      entries.push(entryFor(record, userId, 'workout', true, importedMetricVisibility(visibility,'workout')));
+      if (workoutQualifies({activityKey:record.activityKey,durationMinutes:record.measurements?.durationMinutes??Number(record.value),distanceKm:record.measurements?.distanceKm,activeCalories:record.measurements?.activeCalories})) entries.push(entryFor(record, userId, 'workout', true, importedMetricVisibility(visibility,'workout')));
       entries.push(entryFor(record, userId, 'workout_duration', Math.round((record.measurements?.durationMinutes??Number(record.value))*10)/10, importedMetricVisibility(visibility,'workout_duration')));
-      if((record.measurements?.activeCalories??0)>0)entries.push(entryFor(record,userId,'workout_calories',Math.round(record.measurements!.activeCalories!),importedMetricVisibility(visibility,'workout_calories')));
       if((record.measurements?.distanceKm??0)>0)entries.push(entryFor(record,userId,'workout_distance',Math.round(record.measurements!.distanceKm!*100)/100,importedMetricVisibility(visibility,'workout_distance')));
     }
     if (record.type === 'body_fat' && Number(record.value)>0) entries.push(entryFor(record,userId,'body_fat',Math.round(Number(record.value)*10)/10,importedMetricVisibility(visibility,'body_fat')));
@@ -708,7 +727,8 @@ function legacyIntervalMirror(
   right: MetricEntry,
   type: HealthDataType,
 ) {
-  if (!["active_energy", "workouts", "sleep"].includes(type)) return false;
+  if (!["active_energy", "total_energy", "workouts", "sleep"].includes(type))
+    return false;
   if (left.localDate !== right.localDate) return false;
   const leftSource = healthSourceId(left.sourceOrigin);
   const rightSource = healthSourceId(right.sourceOrigin);

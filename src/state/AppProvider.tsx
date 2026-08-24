@@ -84,6 +84,12 @@ import {
 } from "@/src/domain/metrics";
 import { randomMessage } from "@/src/domain/social";
 import { defaultReminderTimes } from "@/src/domain/reminders";
+import { workoutQualifies } from "@/src/domain/workoutQualification";
+import {
+  descendantTodoIds,
+  normalizeTodoItems,
+  todoLabels,
+} from "@/src/domain/todos";
 import { upgradeStateV21 } from "@/src/domain/stateMigration";
 import { formulaIdentifiers } from "@/src/domain/formula";
 import { completedGymSets } from "@/src/domain/gym";
@@ -123,6 +129,7 @@ import {
   ActivityTimer,
   AppState,
   CalendarReminder,
+  ChatMessage,
   DashboardSection,
   EnergyProfile,
   EntryDetails,
@@ -436,6 +443,7 @@ type Action =
       conversationId: string;
       recipientId?: string;
       imageUri?: string;
+      todoAttachment?: ChatMessage["todoAttachment"];
     }
   | { type: "saveTodo"; todo: TodoItem }
   | { type: "deleteTodo"; todoId: string }
@@ -460,6 +468,7 @@ type Action =
   | { type: "groupRestDays"; value: number }
   | { type: "groupTheme"; color: string }
   | { type: "groupApproval"; value: boolean }
+  | { type: "groupTodosEnabled"; value: boolean }
   | { type: "approveMember"; memberId: string }
   | { type: "removeMember"; memberId: string }
   | { type: "memberAvatar"; memberId: string; avatarUri?: string }
@@ -616,10 +625,10 @@ function withEnergyProfile(state: AppState, energyProfile: EnergyProfile) {
     state.metrics.map((metric) =>
       metric.id === "deficit"
         ? direction === "lose"
-          ? { ...metric, name: "Daily deficit", formula: "bmr + daily_activity + exercise - food", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
+          ? { ...metric, name: "Daily deficit", formula: "energy_burned - food", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
           : direction === "gain"
-            ? { ...metric, name: "Daily surplus", formula: "food - bmr - daily_activity - exercise", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
-            : { ...metric, name: "Energy balance", formula: "food - bmr - daily_activity - exercise", goal: { kind: "exact" as const, target: 0 }, goalRange: { min: -150, max: 150 } }
+            ? { ...metric, name: "Daily surplus", formula: "food - energy_burned", goal: { kind: "at_least" as const, target: deficitTarget }, goalRange: undefined }
+            : { ...metric, name: "Energy balance", formula: "food - energy_burned", goal: { kind: "exact" as const, target: 0 }, goalRange: { min: -150, max: 150 } }
         : metric.id === "food"
           ? {
               ...metric,
@@ -2110,10 +2119,18 @@ function reducer(state: AppState, action: Action): AppState {
       const session = action.session;
       const completedSets = completedGymSets(session.exercises);
       const calorieValue = Math.max(0, Number(session.calories ?? 0));
+      const workoutMetric = state.metrics.find((metric) => metric.id === "workout");
+      const qualifiesAsWorkout = workoutQualifies(
+        {
+          activity: "strength",
+          durationMinutes: session.durationMinutes,
+          activeCalories: calorieValue,
+        },
+        workoutMetric?.workoutQualification,
+      );
       const synced = (completedSets > 0 ? [
-        { metricId: "workout", value: true },
+        ...(qualifiesAsWorkout ? [{ metricId: "workout", value: true }] : []),
         { metricId: "workout_duration", value: session.durationMinutes },
-        { metricId: "workout_calories", value: calorieValue },
         { metricId: "exercise", value: calorieValue },
       ] : [])
         .filter(
@@ -2257,34 +2274,49 @@ function reducer(state: AppState, action: Action): AppState {
             conversationId: action.conversationId,
             recipientId: action.recipientId,
             imageUri: action.imageUri,
+            todoAttachment: action.todoAttachment,
             createdAt: new Date().toISOString(),
             kind: "message",
           },
         ],
       };
-    case "saveTodo":
+    case "saveTodo": {
+      const previous = state.todos ?? [];
+      const parentId = action.todo.parentId;
+      const invalidParent =
+        parentId === action.todo.id ||
+        (parentId &&
+          descendantTodoIds(previous, action.todo.id).has(parentId));
       return {
         ...state,
-        todos: [
-          ...(state.todos ?? []).filter((todo) => todo.id !== action.todo.id),
+        todos: normalizeTodoItems([
+          ...previous.filter((todo) => todo.id !== action.todo.id),
           {
             ...action.todo,
+            parentId: invalidParent ? undefined : parentId,
+            labels: todoLabels(action.todo),
             order:
               action.todo.order ??
-              (state.todos ?? []).find((todo) => todo.id === action.todo.id)
-                ?.order ??
-              (state.todos ?? []).length,
+              previous.find((todo) => todo.id === action.todo.id)?.order ??
+              previous.length,
           },
-        ],
+        ]),
       };
-    case "deleteTodo":
+    }
+    case "deleteTodo": {
+      const removedIds = descendantTodoIds(
+        state.todos ?? [],
+        action.todoId,
+      );
+      removedIds.add(action.todoId);
       return {
         ...state,
-        todos: (state.todos ?? []).filter((todo) => todo.id !== action.todoId),
+        todos: (state.todos ?? []).filter((todo) => !removedIds.has(todo.id)),
         calendarReminders: (state.calendarReminders ?? []).filter(
-          (reminder) => reminder.todoId !== action.todoId,
+          (reminder) => !reminder.todoId || !removedIds.has(reminder.todoId),
         ),
       };
+    }
     case "toggleTodo":
       return {
         ...state,
@@ -2702,6 +2734,20 @@ function reducer(state: AppState, action: Action): AppState {
         ),
       });
     }
+    case "groupTodosEnabled": {
+      const current = state.group.members.find(
+        (member) => member.id === state.currentUserId,
+      );
+      if (current?.role !== "owner" && current?.role !== "admin") return state;
+      const group = { ...state.group, groupTodosEnabled: action.value };
+      return markGroupConfigurationPending(state, {
+        ...state,
+        group,
+        groups: state.groups.map((candidate) =>
+          candidate.id === group.id ? group : candidate,
+        ),
+      });
+    }
     case "approveMember": {
       const pending = state.group.pendingMembers ?? [];
       const member = pending.find((item) => item.id === action.memberId);
@@ -3103,6 +3149,7 @@ type AppContextValue = {
     conversationId?: string,
     recipientId?: string,
     imageUri?: string,
+    todoAttachment?: ChatMessage["todoAttachment"],
   ) => void;
   saveTodo: (todo: TodoItem) => void;
   deleteTodo: (todoId: string) => void;
@@ -3127,6 +3174,7 @@ type AppContextValue = {
   setGroupRestDays: (value: number) => void;
   setGroupTheme: (color: string) => void;
   setGroupApprovalRequired: (value: boolean) => void;
+  setGroupTodosEnabled: (value: boolean) => void;
   approveMember: (memberId: string) => void;
   removeMember: (memberId: string) => void;
   updateMemberAvatar: (memberId: string, avatarUri?: string) => void;
@@ -3631,7 +3679,7 @@ export function AppProvider({
                 enriched.formula === "baseline + exercise - food"
                   ? {
                       ...enriched,
-                      formula: "bmr + daily_activity + exercise - food",
+                      formula: "energy_burned - food",
                     }
                   : enriched;
               const reminderUpgraded =
@@ -4371,13 +4419,20 @@ export function AppProvider({
         }),
       setPhotoVisibility: (photoId, visibility) =>
         void commitAction({ type: "setPhotoVisibility", photoId, visibility }),
-      sendMessage: (text, conversationId = "group", recipientId, imageUri) =>
+      sendMessage: (
+        text,
+        conversationId = "group",
+        recipientId,
+        imageUri,
+        todoAttachment,
+      ) =>
         void commitAction({
           type: "sendMessage",
           text,
           conversationId,
           recipientId,
           imageUri,
+          todoAttachment,
         }),
       saveTodo: (todo) => void commitAction({ type: "saveTodo", todo }),
       deleteTodo: (todoId) => void commitAction({ type: "deleteTodo", todoId }),
@@ -4424,6 +4479,8 @@ export function AppProvider({
       setGroupTheme: (color) => void commitAction({ type: "groupTheme", color }),
       setGroupApprovalRequired: (value) =>
         void commitAction({ type: "groupApproval", value }),
+      setGroupTodosEnabled: (value) =>
+        void commitAction({ type: "groupTodosEnabled", value }),
       approveMember: (memberId) =>
         void commitAction({ type: "approveMember", memberId }),
       removeMember: (memberId) =>

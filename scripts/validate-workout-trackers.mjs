@@ -5,6 +5,58 @@ import {
   canonicalWorkoutTrackerId,
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
+import {
+  ANY_RECORDED_WORKOUT_QUALIFICATION,
+  DEFAULT_WORKOUT_QUALIFICATION,
+  workoutQualifies,
+} from "../src/domain/workoutQualification.ts";
+
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", durationMinutes: 8 },
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  false,
+  "an incidental walk must not complete Workout",
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", durationMinutes: 30 },
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  true,
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "running", durationMinutes: 20 },
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  true,
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", durationMinutes: 1 },
+    ANY_RECORDED_WORKOUT_QUALIFICATION,
+  ),
+  true,
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "running", durationMinutes: 35, distanceKm: 3 },
+    {
+      rules: [
+        {
+          activity: "running",
+          thresholdMode: "all",
+          minimumDurationMinutes: 30,
+          minimumDistanceKm: 5,
+        },
+      ],
+    },
+  ),
+  false,
+  "all-mode must enforce every configured minimum",
+);
 
 const metric = (id, overrides = {}) => ({
   id,
@@ -138,8 +190,17 @@ const catalog = fs.readFileSync("src/domain/trackerCatalog.ts", "utf8");
 const onboarding = fs.readFileSync("app/onboarding.tsx", "utf8");
 const provider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const migration = fs.readFileSync("src/domain/stateMigration.ts", "utf8");
+const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
+const health = fs.readFileSync("src/domain/health.ts", "utf8");
 assert.match(seed, /id: "workout"[\s\S]{0,500}gymMapping: \{ kind: "session_completed" \}/);
 assert.match(seed, /id: "workout_duration"[\s\S]{0,500}gymMapping: \{ kind: "session_duration" \}/);
+assert.match(seed, /id: "workout"[\s\S]{0,600}workoutQualification: DEFAULT_WORKOUT_QUALIFICATION/);
+assert.doesNotMatch(seed, /id: "workout_calories"/);
+assert.doesNotMatch(provider, /metricId: "workout_calories"/);
+assert.match(provider, /workoutQualifies\(/);
+assert.match(health, /workoutCompletionQualifies/);
+assert.match(migration, /RETIRED_METRIC_IDS = new Set\(\["workout_calories"\]\)/);
+assert.match(editor, /What counts as a workout/);
 assert.doesNotMatch(catalog, /templateId: "gym_completed"/);
 assert.doesNotMatch(catalog, /templateId: "gym_duration"/);
 assert.doesNotMatch(onboarding.match(/gym: \[([^\]]+)\]/)?.[1] ?? "", /gym_completed|gym_duration|gym_total_volume/);
