@@ -15,12 +15,18 @@ type SubtaskSummary = {
 export function TodoSubtaskEditorSection({
   items,
   canManage = true,
+  canAdd = canManage,
+  canManageItem,
+  addingDisabled = false,
   onAdd,
   onEdit,
   onRemove,
 }: {
   items: SubtaskSummary[];
   canManage?: boolean;
+  canAdd?: boolean;
+  canManageItem?: (id: string) => boolean;
+  addingDisabled?: boolean;
   onAdd: () => void;
   onEdit: (id: string) => void;
   onRemove: (id: string) => void;
@@ -32,30 +38,47 @@ export function TodoSubtaskEditorSection({
 
   return (
     <View style={[styles.section, { borderColor: colors.border }]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: !collapsed }}
-        accessibilityLabel={
-          collapsed ? "Expand Sub-To-Dos" : "Collapse Sub-To-Dos"
-        }
-        onPress={() => setCollapsed((current) => !current)}
-        style={styles.heading}
-      >
-        <Ionicons name="git-branch-outline" size={17} color={accent} />
-        <View style={styles.copy}>
-          <Text style={[styles.title, { color: colors.ink }]}>Sub-To-Dos</Text>
-          <Text style={[styles.count, { color: colors.muted }]}>
-            {items.length
-              ? `Nested tasks: ${items.length}`
-              : "Break this task into smaller steps"}
-          </Text>
-        </View>
-        <Ionicons
-          name={collapsed ? "chevron-down" : "chevron-up"}
-          size={16}
-          color={colors.faint}
-        />
-      </Pressable>
+      <View style={styles.heading}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: !collapsed }}
+          accessibilityLabel={
+            collapsed ? "Expand Sub-To-Dos" : "Collapse Sub-To-Dos"
+          }
+          onPress={() => setCollapsed((current) => !current)}
+          style={styles.headingToggle}
+        >
+          <Ionicons name="git-branch-outline" size={17} color={accent} />
+          <View style={styles.copy}>
+            <Text style={[styles.title, { color: colors.ink }]}>Sub-To-Dos</Text>
+            <Text style={[styles.count, { color: colors.muted }]}>
+              {items.length
+                ? `Nested tasks: ${items.length}`
+                : "Break this task into smaller steps"}
+            </Text>
+          </View>
+          <Ionicons
+            name={collapsed ? "chevron-down" : "chevron-up"}
+            size={16}
+            color={colors.faint}
+          />
+        </Pressable>
+        {collapsed && canAdd ? (
+          <Pressable
+            accessibilityLabel="Add sub-to-do"
+            disabled={addingDisabled}
+            hitSlop={6}
+            onPress={onAdd}
+            style={[
+              styles.compactAdd,
+              { borderColor: accent, opacity: addingDisabled ? 0.45 : 1 },
+            ]}
+          >
+            <Ionicons name="add" size={15} color={accent} />
+            <Text style={[styles.compactAddText, { color: accent }]}>Add</Text>
+          </Pressable>
+        ) : null}
+      </View>
       {!collapsed ? (
         <View style={styles.body}>
           {flattened.map(({ item, depth }) => (
@@ -85,7 +108,7 @@ export function TodoSubtaskEditorSection({
                 {item.title}
               </Text>
               <Ionicons name="create-outline" size={14} color={accent} />
-              {canManage ? (
+              {canManageItem?.(item.id) ?? canManage ? (
                 <Pressable
                   accessibilityLabel={`Delete sub-to-do ${item.title}`}
                   hitSlop={8}
@@ -105,11 +128,15 @@ export function TodoSubtaskEditorSection({
               No sub-to-dos yet.
             </Text>
           ) : null}
-          {canManage ? (
+          {canAdd ? (
             <Pressable
               accessibilityLabel="Add sub-to-do"
+              disabled={addingDisabled}
               onPress={onAdd}
-              style={[styles.add, { borderColor: accent }]}
+              style={[
+                styles.add,
+                { borderColor: accent, opacity: addingDisabled ? 0.45 : 1 },
+              ]}
             >
               <Ionicons name="add" size={16} color={accent} />
               <Text style={[styles.addText, { color: accent }]}>
@@ -135,8 +162,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     flexDirection: "row",
     alignItems: "center",
+    gap: 6,
+  },
+  headingToggle: {
+    minHeight: 46,
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
+  compactAdd: {
+    minHeight: 29,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderRadius: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  compactAddText: { fontSize: 7.5, fontWeight: "900" },
   copy: { flex: 1, minWidth: 0 },
   title: { fontSize: 10, fontWeight: "900" },
   count: { fontSize: 7.5, lineHeight: 11, fontWeight: "700", marginTop: 1 },

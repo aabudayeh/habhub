@@ -9,6 +9,14 @@ import {
   groupTodoReminderFeatureEnabled,
   normalizeTodoItems,
 } from "../src/domain/todos.ts";
+import {
+  clearTodoEditorDraftTree,
+  getTodoEditorDraftNodes,
+  orderTodoEditorDraftNodes,
+  removeTodoEditorDraftSubtree,
+  resolveTodoEditorDraftParentId,
+  upsertTodoEditorDraft,
+} from "../src/state/todoEditorDrafts.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8");
@@ -56,6 +64,83 @@ assert.deepEqual(
   [["root", 0], ["child", 1], ["grandchild", 2], ["other", 0]],
   "arbitrary nesting should stay ordered and visibly indented",
 );
+
+const editorTreeId = "validation-editor-drafts";
+clearTodoEditorDraftTree(editorTreeId);
+upsertTodoEditorDraft(editorTreeId, {
+  id: "draft-root",
+  title: "Unsaved parent",
+  value: { title: "Unsaved parent" },
+});
+upsertTodoEditorDraft(editorTreeId, {
+  id: "draft-child",
+  parentId: "draft-root",
+  title: "Child",
+  value: { title: "Child" },
+});
+upsertTodoEditorDraft(editorTreeId, {
+  id: "draft-grandchild",
+  parentId: "draft-child",
+  title: "Grandchild",
+  value: { title: "Grandchild" },
+});
+upsertTodoEditorDraft(editorTreeId, {
+  id: "draft-child",
+  parentId: "draft-root",
+  title: "Edited child",
+  value: { title: "Edited child" },
+});
+assert.equal(
+  getTodoEditorDraftNodes(editorTreeId).find(
+    (node) => node.id === "draft-child",
+  )?.title,
+  "Edited child",
+  "opening and saving a specific staged child should replace that child only",
+);
+const orderedDrafts = orderTodoEditorDraftNodes(
+  [
+    getTodoEditorDraftNodes(editorTreeId).find(
+      (node) => node.id === "draft-grandchild",
+    ),
+    getTodoEditorDraftNodes(editorTreeId).find(
+      (node) => node.id === "draft-child",
+    ),
+  ].filter(Boolean),
+  ["draft-root"],
+);
+assert.deepEqual(
+  orderedDrafts.map((node) => node.id),
+  ["draft-child", "draft-grandchild"],
+  "nested drafts must persist parent-first even when collected out of order",
+);
+const serverIds = new Map([["draft-root", "server-root"]]);
+assert.equal(
+  resolveTodoEditorDraftParentId(orderedDrafts[0].parentId, serverIds),
+  "server-root",
+  "a group child must use its parent's server-generated id",
+);
+serverIds.set("draft-child", "server-child");
+assert.equal(
+  resolveTodoEditorDraftParentId(orderedDrafts[1].parentId, serverIds),
+  "server-child",
+  "a nested group child must use the remapped server id at every depth",
+);
+assert.throws(
+  () =>
+    orderTodoEditorDraftNodes([
+      { id: "cycle-a", parentId: "cycle-b", title: "A", value: {} },
+      { id: "cycle-b", parentId: "cycle-a", title: "B", value: {} },
+    ]),
+  /unresolved cycle/,
+  "corrupt draft cycles must fail instead of partially saving",
+);
+removeTodoEditorDraftSubtree(editorTreeId, "draft-child");
+assert.deepEqual(
+  getTodoEditorDraftNodes(editorTreeId).map((node) => node.id),
+  ["draft-root"],
+  "discarding a child draft must also discard its nested descendants",
+);
+clearTodoEditorDraftTree(editorTreeId);
 
 const reminderFeatureState = {
   group: { id: "active", groupTodosEnabled: true },
@@ -258,17 +343,30 @@ assert.match(chat, /groupTodoItemVisibility\.isVisible/);
 
 const groupEditor = read("app/group-todo-editor.tsx");
 assert.match(groupEditor, /repeatMode/);
-assert.match(groupEditor, /groupTodoId: saved\.id/);
+assert.match(groupEditor, /groupTodoId: savedId/);
 assert.match(groupEditor, /Private to you and synced only with your account/);
 assert.match(groupEditor, /<TodoSubtaskEditorSection/);
-assert.match(groupEditor, /void save\(null\)\.then/);
+assert.match(groupEditor, /draftTreeId: editorTreeId/);
+assert.match(groupEditor, /resolveTodoEditorDraftParentId/);
+assert.match(groupEditor, /rootPersistedId/);
+assert.match(groupEditor, /persistedId: savedChild\.id/);
+assert.match(groupEditor, /createdDuringDraft/);
+assert.match(groupEditor, /cleanupCreatedDraftRows/);
+assert.match(groupEditor, /canAdd/);
+assert.match(groupEditor, /addingDisabled=\{saving\}/);
+assert.match(groupEditor, /canManageItem=/);
+assert.match(groupEditor, /useWebBackNavigationGuard/);
 const personalEditor = read("app/todo-editor.tsx");
 assert.match(personalEditor, /<TodoSubtaskEditorSection/);
-assert.match(personalEditor, /const savedId = persist\(\)/);
+assert.match(personalEditor, /router\.push/);
+assert.match(personalEditor, /draftTreeId: editorTreeId/);
+assert.match(personalEditor, /useWebBackNavigationGuard/);
 const editorSection = read("src/components/TodoSubtaskEditorSection.tsx");
 assert.match(editorSection, /useState\(true\)/);
 assert.match(editorSection, /flattenTodoHierarchy\(items\)/);
 assert.match(editorSection, /Add sub-to-do/);
+assert.match(editorSection, /canManageItem\?\.\(item\.id\)/);
+assert.match(editorSection, /collapsed && canAdd/);
 const expansionPreference = read("src/components/useTodoSubtaskExpansion.ts");
 assert.match(expansionPreference, /AsyncStorage\.getItem/);
 assert.match(expansionPreference, /AsyncStorage\.setItem/);

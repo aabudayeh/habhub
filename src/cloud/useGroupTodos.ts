@@ -212,7 +212,11 @@ export function useGroupTodos(groupId: string, enabled = true) {
             input.parentId &&
             descendantTodoIds(currentTodos, input.id).has(input.parentId));
         const saved: GroupTodoItem = {
-          id: input.id ?? `local-group-todo-${Date.now()}`,
+          id:
+            input.id ??
+            `local-group-todo-${Date.now().toString(36)}-${Math.random()
+              .toString(36)
+              .slice(2, 10)}`,
           groupId: input.groupId,
           creatorId: state.currentUserId,
           title: input.title.trim(),

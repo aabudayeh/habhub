@@ -6,7 +6,10 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "@/src/components/AppText";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
-import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import {
+  useWebBackNavigationGuard,
+  useWebBeforeUnload,
+} from "@/src/components/useWebBeforeUnload";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
@@ -14,6 +17,16 @@ import { dateKey } from "@/src/domain/date";
 import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
+import {
+  clearTodoEditorDraftTree,
+  getTodoEditorDraftNodes,
+  newTodoEditorDraftId,
+  orderTodoEditorDraftNodes,
+  removeTodoEditorDraftSubtree,
+  resolveTodoEditorDraftParentId,
+  upsertTodoEditorDraft,
+  useTodoEditorDraftTree,
+} from "@/src/state/todoEditorDrafts";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import {
   GoalSchedule,
@@ -43,6 +56,12 @@ type Draft = {
   reminderEnabled: boolean;
   reminderDate: string;
   reminderTime: string;
+};
+
+type GroupTodoEditorDraftPayload = {
+  draft: Draft;
+  persistedId?: string;
+  createdDuringDraft?: boolean;
 };
 
 const emptyDraft = (): Draft => ({
@@ -77,7 +96,19 @@ function repeatModeFor(schedule?: GoalSchedule): GroupTodoRepeatMode {
 }
 
 export default function GroupTodoEditor() {
-  const { id, parentId } = useLocalSearchParams<{ id?: string; parentId?: string }>();
+  const {
+    id,
+    parentId,
+    draftTreeId,
+    draftId,
+    draftParentId,
+  } = useLocalSearchParams<{
+    id?: string;
+    parentId?: string;
+    draftTreeId?: string;
+    draftId?: string;
+    draftParentId?: string;
+  }>();
   const {
     state,
     saveCalendarReminder,
@@ -87,13 +118,22 @@ export default function GroupTodoEditor() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const groupTodos = useGroupTodos(state.group.id, state.group.groupTodosEnabled === true);
-  const [savedTodoId, setSavedTodoId] = useState<string>();
-  const existing = groupTodos.todos.find(
-    (todo) => todo.id === (id ?? savedTodoId),
+  const editorTreeId = useRef(
+    draftTreeId ?? newTodoEditorDraftId("group-todo-tree"),
+  ).current;
+  const editorDraftId = useRef(
+    id ?? draftId ?? newTodoEditorDraftId("group-todo"),
+  ).current;
+  const stagedNodes = useTodoEditorDraftTree<GroupTodoEditorDraftPayload>(
+    editorTreeId,
   );
-  const parent = groupTodos.todos.find(
-    (todo) => todo.id === (existing?.parentId ?? parentId),
-  );
+  const stagedNode = stagedNodes.find((node) => node.id === editorDraftId);
+  const existing = groupTodos.todos.find((todo) => todo.id === id);
+  const resolvedParentId =
+    existing?.parentId ?? parentId ?? draftParentId ?? stagedNode?.parentId;
+  const parent =
+    groupTodos.todos.find((todo) => todo.id === resolvedParentId) ??
+    stagedNodes.find((node) => node.id === resolvedParentId);
   const me = state.group.members.find((member) => member.id === state.currentUserId);
   const canDelete =
     existing?.creatorId === state.currentUserId || me?.role === "owner" || me?.role === "admin";
@@ -102,7 +142,9 @@ export default function GroupTodoEditor() {
     (reminder) =>
       reminder.groupId === state.group.id && reminder.groupTodoId === existing?.id,
   );
-  const [draft, setDraft] = useState<Draft>(emptyDraft);
+  const [draft, setDraft] = useState<Draft>(
+    () => stagedNode?.value.draft ?? emptyDraft(),
+  );
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [reminderCalendarOpen, setReminderCalendarOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -137,7 +179,9 @@ export default function GroupTodoEditor() {
     labels: existing?.labels,
   });
   const signature = useMemo(() => JSON.stringify(draft), [draft]);
-  const initialSignature = useRef(JSON.stringify(emptyDraft()));
+  const initialSignature = useRef(
+    JSON.stringify(stagedNode?.value.draft ?? emptyDraft()),
+  );
   useEffect(() => {
     if (!existing || initializedId.current !== existing.id) return;
     initialSignature.current = JSON.stringify({
@@ -159,79 +203,215 @@ export default function GroupTodoEditor() {
     });
   }, [existing, personalReminder]);
   const allowExit = useRef(false);
-  const dirty = signature !== initialSignature.current;
-  useWebBeforeUnload(() => dirty && !allowExit.current);
+  const promptOpen = useRef(false);
+  const ownsDraftTree = !draftTreeId;
+  const hasStagedDescendants =
+    ownsDraftTree && stagedNodes.some((node) => node.id !== editorDraftId);
+  const dirty =
+    signature !== initialSignature.current || hasStagedDescendants;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useWebBeforeUnload(() => dirtyRef.current && !allowExit.current);
 
   const patchDraft = (changes: Partial<Draft>) =>
     setDraft((current) => ({ ...current, ...changes }));
-  const save = async (exit: (() => void) | null = () => router.back()) => {
+  const recurrenceFor = (value: Draft): GoalSchedule | undefined => {
+    const anchorDate = value.hasDeadline ? value.dueDate : dateKey();
+    const anchorDay = new Date(`${anchorDate}T12:00:00`).getDay();
+    if (value.repeatMode === "none") return undefined;
+    if (value.repeatMode === "daily") return { mode: "daily", anchorDate };
+    if (value.repeatMode === "weekdays")
+      return {
+        mode: "selected_days",
+        daysOfWeek: [1, 2, 3, 4, 5],
+        anchorDate,
+      };
+    if (value.repeatMode === "every_other")
+      return { mode: "every_other_day", anchorDate };
+    if (value.repeatMode === "custom")
+      return {
+        mode: "interval_days",
+        intervalDays: Math.max(
+          1,
+          Math.round(Number(value.repeatInterval) || 1),
+        ),
+        anchorDate,
+      };
+    if (value.repeatMode === "weekly")
+      return { mode: "selected_days", daysOfWeek: [anchorDay], anchorDate };
+    return {
+      mode: "days_of_month",
+      daysOfMonth: [Number(anchorDate.slice(-2))],
+      anchorDate,
+    };
+  };
+  const stageCurrentDraft = () => {
     if (canEdit && !draft.title.trim()) {
       Alert.alert("Add a title", "What does the group need to do?");
-      return;
+      return undefined;
+    }
+    upsertTodoEditorDraft(editorTreeId, {
+      id: editorDraftId,
+      parentId: resolvedParentId,
+      title: draft.title.trim(),
+      value: {
+        draft: { ...draft },
+        persistedId: existing?.id ?? stagedNode?.value.persistedId,
+        createdDuringDraft: stagedNode?.value.createdDuringDraft,
+      },
+    });
+    return editorDraftId;
+  };
+  const persistGroupDraft = (
+    value: GroupTodoEditorDraftPayload,
+    resolvedId: string | undefined,
+    resolvedDraftParentId: string | undefined,
+  ) => {
+    const todoDraft = value.draft;
+    return groupTodos.save({
+      id: resolvedId,
+      groupId: state.group.id,
+      parentId: resolvedDraftParentId,
+      title: todoDraft.title.trim(),
+      description: todoDraft.description.trim() || undefined,
+      labels: todoLabels({
+        title: todoDraft.title,
+        description: todoDraft.description,
+      }),
+      priority: todoDraft.priority,
+      dueAt: todoDraft.hasDeadline
+        ? `${todoDraft.dueDate}T${todoDraft.dueTime}:00`
+        : undefined,
+      recurrence: recurrenceFor(todoDraft),
+      completionMode: todoDraft.completionMode,
+    });
+  };
+  const savePersonalReminder = (
+    savedId: string,
+    savedTitle: string,
+    value: Draft,
+    previousReminderId?: string,
+  ) => {
+    const recurrence = recurrenceFor(value);
+    if (value.reminderEnabled) {
+      saveCalendarReminder({
+        id:
+          previousReminderId ??
+          `group-todo-reminder-${savedId}-${state.currentUserId}`,
+        title: savedTitle,
+        kind: "todo",
+        groupId: state.group.id,
+        groupTodoId: savedId,
+        time: value.reminderTime,
+        schedule: recurrence ?? {
+          mode: "once",
+          anchorDate: value.hasDeadline
+            ? value.dueDate
+            : value.reminderDate,
+        },
+        enabled: true,
+      });
+    } else if (previousReminderId)
+      deleteCalendarReminder(previousReminderId);
+  };
+  const cleanupCreatedDraftRows = async (
+    scopeRootId = editorDraftId,
+  ) => {
+    const nodes = getTodoEditorDraftNodes<GroupTodoEditorDraftPayload>(
+      editorTreeId,
+    );
+    const scopeIds = descendantTodoIds(nodes, scopeRootId);
+    scopeIds.add(scopeRootId);
+    const createdNodes = orderTodoEditorDraftNodes(
+      nodes.filter(
+        (node) =>
+          scopeIds.has(node.id) &&
+          node.value.createdDuringDraft &&
+          node.value.persistedId,
+      ),
+    ).reverse();
+    for (const node of createdNodes) {
+      await groupTodos.remove(node.value.persistedId!);
+      deleteCalendarReminder(
+        `group-todo-reminder-${node.value.persistedId}-${state.currentUserId}`,
+      );
+      upsertTodoEditorDraft(editorTreeId, {
+        ...node,
+        value: {
+          ...node.value,
+          persistedId: undefined,
+          createdDuringDraft: undefined,
+        },
+      });
+    }
+  };
+  const save = async (exit: (() => void) | null = () => router.back()) => {
+    if (!stageCurrentDraft()) return undefined;
+    if (draftTreeId) {
+      initialSignature.current = signature;
+      if (exit) {
+        allowExit.current = true;
+        exit();
+      }
+      return stagedNode;
     }
     setSaving(true);
     setSaveError(undefined);
     try {
-      const anchorDate = draft.hasDeadline ? draft.dueDate : dateKey();
-      const anchorDay = new Date(`${anchorDate}T12:00:00`).getDay();
-      const recurrence: GoalSchedule | undefined =
-        draft.repeatMode === "none"
-          ? undefined
-          : draft.repeatMode === "daily"
-            ? { mode: "daily", anchorDate }
-            : draft.repeatMode === "weekdays"
-              ? { mode: "selected_days", daysOfWeek: [1, 2, 3, 4, 5], anchorDate }
-              : draft.repeatMode === "every_other"
-                ? { mode: "every_other_day", anchorDate }
-                : draft.repeatMode === "custom"
-                  ? {
-                      mode: "interval_days",
-                      intervalDays: Math.max(1, Math.round(Number(draft.repeatInterval) || 1)),
-                      anchorDate,
-                    }
-              : draft.repeatMode === "weekly"
-                ? { mode: "selected_days", daysOfWeek: [anchorDay], anchorDate }
-                : {
-                    mode: "days_of_month",
-                    daysOfMonth: [Number(anchorDate.slice(-2))],
-                    anchorDate,
-                  };
+      const rootPersistedId =
+        existing?.id ?? stagedNode?.value.persistedId;
       const saved = canEdit
-        ? await groupTodos.save({
-            id: existing?.id,
-            groupId: state.group.id,
-            parentId: existing?.parentId ?? parentId,
-            title: draft.title.trim(),
-            description: draft.description.trim() || undefined,
-            labels,
-            priority: draft.priority,
-            dueAt: draft.hasDeadline
-              ? `${draft.dueDate}T${draft.dueTime}:00`
-              : undefined,
-            recurrence,
-            completionMode: draft.completionMode,
-          })
+        ? await persistGroupDraft(
+            { draft, persistedId: rootPersistedId },
+            rootPersistedId,
+            resolvedParentId,
+          )
         : existing;
       if (!saved) throw new Error("The group to-do is unavailable.");
-      const reminderId =
-        personalReminder?.id ??
-        `group-todo-reminder-${saved.id}-${state.currentUserId}`;
-      if (draft.reminderEnabled)
-        saveCalendarReminder({
-          id: reminderId,
-          title: saved.title,
-          kind: "todo",
-          groupId: state.group.id,
-          groupTodoId: saved.id,
-          time: draft.reminderTime,
-          schedule: recurrence ?? {
-            mode: "once",
-            anchorDate: draft.hasDeadline ? draft.dueDate : draft.reminderDate,
+      upsertTodoEditorDraft(editorTreeId, {
+        id: editorDraftId,
+        parentId: resolvedParentId,
+        title: saved.title,
+        value: {
+          draft: { ...draft },
+          persistedId: saved.id,
+          createdDuringDraft:
+            stagedNode?.value.createdDuringDraft ?? !rootPersistedId,
+        },
+      });
+      savePersonalReminder(saved.id, saved.title, draft, personalReminder?.id);
+
+      const idMap = new Map([[editorDraftId, saved.id]]);
+      const pending = orderTodoEditorDraftNodes(
+        getTodoEditorDraftNodes<GroupTodoEditorDraftPayload>(
+          editorTreeId,
+        ).filter((node) => node.id !== editorDraftId),
+        [editorDraftId],
+      );
+      for (const next of pending) {
+        const savedChild = await persistGroupDraft(
+          next.value,
+          next.value.persistedId,
+          resolveTodoEditorDraftParentId(next.parentId, idMap),
+        );
+        idMap.set(next.id, savedChild.id);
+        upsertTodoEditorDraft(editorTreeId, {
+          ...next,
+          title: savedChild.title,
+          value: {
+            ...next.value,
+            persistedId: savedChild.id,
+            createdDuringDraft:
+              next.value.createdDuringDraft ?? !next.value.persistedId,
           },
-          enabled: true,
         });
-      else if (personalReminder) deleteCalendarReminder(personalReminder.id);
-      setSavedTodoId(saved.id);
+        savePersonalReminder(
+          savedChild.id,
+          savedChild.title,
+          next.value.draft,
+        );
+      }
+      clearTodoEditorDraftTree(editorTreeId);
       initialSignature.current = signature;
       if (exit) {
         allowExit.current = true;
@@ -239,40 +419,97 @@ export default function GroupTodoEditor() {
       }
       return saved;
     } catch (reason) {
-      setSaveError(reason instanceof Error ? reason.message : String(reason));
+      const saveMessage =
+        reason instanceof Error ? reason.message : String(reason);
+      try {
+        await cleanupCreatedDraftRows();
+        setSaveError(`${saveMessage} Nothing partial was kept; try again.`);
+      } catch (cleanupReason) {
+        const cleanupMessage =
+          cleanupReason instanceof Error
+            ? cleanupReason.message
+            : String(cleanupReason);
+        setSaveError(
+          `${saveMessage} Saved portions remain staged for a safe retry (${cleanupMessage}).`,
+        );
+      }
     } finally {
       setSaving(false);
     }
   };
   const requestClose = (exit: () => void = () => router.back()) => {
-    if (!dirty) {
+    if (!dirtyRef.current) {
+      if (!draftTreeId) clearTodoEditorDraftTree(editorTreeId);
       allowExit.current = true;
       exit();
       return;
     }
+    if (promptOpen.current) return;
+    promptOpen.current = true;
     Alert.alert("Save your changes?", "This group to-do has unsaved changes.", [
-      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Keep editing",
+        style: "cancel",
+        onPress: () => {
+          promptOpen.current = false;
+        },
+      },
       {
         text: "Discard",
         style: "destructive",
         onPress: () => {
-          allowExit.current = true;
-          exit();
+          promptOpen.current = false;
+          if (draftTreeId) {
+            if (!draftId)
+              removeTodoEditorDraftSubtree(editorTreeId, editorDraftId);
+            allowExit.current = true;
+            exit();
+            return;
+          }
+          setSaving(true);
+          setSaveError(undefined);
+          void cleanupCreatedDraftRows()
+            .then(() => {
+              clearTodoEditorDraftTree(editorTreeId);
+              allowExit.current = true;
+              exit();
+            })
+            .catch((reason) =>
+              setSaveError(
+                reason instanceof Error ? reason.message : String(reason),
+              ),
+            )
+            .finally(() => setSaving(false));
         },
       },
-      { text: "Save", onPress: () => void save(exit) },
-    ]);
+      {
+        text: "Save",
+        onPress: () => {
+          promptOpen.current = false;
+          void save(exit);
+        },
+      },
+    ], {
+      cancelable: true,
+      onDismiss: () => {
+        promptOpen.current = false;
+      },
+    });
   };
   const requestCloseRef = useRef(requestClose);
   requestCloseRef.current = requestClose;
   useEffect(
     () =>
       navigation.addListener("beforeRemove", (event) => {
-        if (allowExit.current || !dirty) return;
+        if (allowExit.current || !dirtyRef.current) return;
         event.preventDefault();
         requestCloseRef.current(() => navigation.dispatch(event.data.action));
       }),
-    [dirty, navigation],
+    [navigation],
+  );
+  useWebBackNavigationGuard(
+    () => dirtyRef.current && !allowExit.current,
+    (continueBack) => requestCloseRef.current(continueBack),
   );
 
   if (id && groupTodos.loading && !existing)
@@ -298,7 +535,7 @@ export default function GroupTodoEditor() {
   return (
     <Screen>
       <PageHeader
-        title={existing ? (canEdit ? "Edit group to-do" : "Group to-do") : parent ? "New group subtask" : "New group to-do"}
+        title={existing ? (canEdit ? "Edit group to-do" : "Group to-do") : stagedNode ? "Edit group subtask" : parent ? "New group subtask" : "New group to-do"}
         subtitle={parent ? `Under ${parent.title}` : canEdit ? "Visible to active group members." : "Only its creator or a group admin can edit it."}
         showMenu={false}
         action={<IconButton icon="close" label="Close" onPress={() => requestClose()} />}
@@ -505,30 +742,71 @@ export default function GroupTodoEditor() {
 
       <TodoSubtaskEditorSection
         items={
-          existing
-            ? groupTodos.todos.filter((todo) =>
-                descendantTodoIds(groupTodos.todos, existing.id).has(todo.id),
+          existing || stagedNode
+            ? [
+                ...groupTodos.todos.filter(
+                  (todo) =>
+                    !stagedNodes.some(
+                      (node) =>
+                        node.id === todo.id ||
+                        node.value.persistedId === todo.id,
+                    ),
+                ),
+                ...stagedNodes.map((node) => ({
+                  id: node.id,
+                  parentId: node.parentId,
+                  title: node.title,
+                })),
+              ].filter((todo, _index, all) =>
+                descendantTodoIds(
+                  all,
+                  existing?.id ?? editorDraftId,
+                ).has(todo.id),
               )
             : []
         }
+        canAdd
         canManage={canEdit}
-        onAdd={() => {
-          void save(null).then((saved) => {
-            if (!saved) return;
-            router.navigate({
-              pathname: "/group-todo-editor",
-              params: { parentId: saved.id },
-            } as never);
-          });
+        canManageItem={(subtaskId) => {
+          if (stagedNodes.some((node) => node.id === subtaskId)) return true;
+          const subtask = groupTodos.todos.find((todo) => todo.id === subtaskId);
+          return (
+            subtask?.creatorId === state.currentUserId ||
+            me?.role === "owner" ||
+            me?.role === "admin"
+          );
         }}
-        onEdit={(subtaskId) =>
-          router.navigate({
+        addingDisabled={saving}
+        onAdd={() => {
+          if (saving || !stageCurrentDraft()) return;
+          router.push({
             pathname: "/group-todo-editor",
-            params: { id: subtaskId },
-          } as never)
-        }
+            params: {
+              draftTreeId: editorTreeId,
+              draftParentId: editorDraftId,
+            },
+          } as never);
+        }}
+        onEdit={(subtaskId) => {
+          const staged = stagedNodes.some((node) => node.id === subtaskId);
+          router.push({
+            pathname: "/group-todo-editor",
+            params: staged
+              ? { draftTreeId: editorTreeId, draftId: subtaskId }
+              : { id: subtaskId },
+          } as never);
+        }}
         onRemove={(subtaskId) => {
-          const removedIds = descendantTodoIds(groupTodos.todos, subtaskId);
+          const staged = stagedNodes.some((node) => node.id === subtaskId);
+          const editorItems = [
+            ...groupTodos.todos,
+            ...stagedNodes.map((node) => ({
+              id: node.id,
+              parentId: node.parentId,
+              title: node.title,
+            })),
+          ];
+          const removedIds = descendantTodoIds(editorItems, subtaskId);
           removedIds.add(subtaskId);
           Alert.alert(
             "Delete group sub-to-do?",
@@ -541,6 +819,26 @@ export default function GroupTodoEditor() {
                 text: "Delete",
                 style: "destructive",
                 onPress: () => {
+                  if (staged) {
+                    setSaving(true);
+                    setSaveError(undefined);
+                    void cleanupCreatedDraftRows(subtaskId)
+                      .then(() =>
+                        removeTodoEditorDraftSubtree(
+                          editorTreeId,
+                          subtaskId,
+                        ),
+                      )
+                      .catch((reason) =>
+                        setSaveError(
+                          reason instanceof Error
+                            ? reason.message
+                            : String(reason),
+                        ),
+                      )
+                      .finally(() => setSaving(false));
+                    return;
+                  }
                   for (const reminder of state.calendarReminders ?? [])
                     if (
                       reminder.groupTodoId &&
@@ -588,6 +886,7 @@ export default function GroupTodoEditor() {
                     setSaving(true);
                     if (personalReminder)
                       deleteCalendarReminder(personalReminder.id);
+                    clearTodoEditorDraftTree(editorTreeId);
                     void groupTodos.remove(existing.id)
                       .then(() => {
                         allowExit.current = true;

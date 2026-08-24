@@ -28,6 +28,7 @@ export const releaseAdditionTranslationRows = [
   ["Drag companion shortcuts", "اسحب اختصارات الأدوات المساعدة", "Arrastrar accesos directos complementarios", "拖动配套快捷方式", "Dra tillhörande genvägar", "Begleitende Verknüpfungen verschieben", "Перетащить дополнительные ярлыки", "Faire glisser les raccourcis associés"],
   ["Each member checks off their own copy.", "يكمل كل عضو نسخته الخاصة.", "Cada miembro completa su propia copia.", "每位成员分别勾选自己的任务。", "Varje medlem bockar av sin egen kopia.", "Jedes Mitglied hakt die eigene Aufgabe ab.", "Каждый участник отмечает выполненной свою копию.", "Chaque membre valide sa propre copie."],
   ["Edit group to-do", "تعديل مهمة المجموعة", "Editar tarea de grupo", "编辑群组待办事项", "Redigera gruppuppgift", "Gruppenaufgabe bearbeiten", "Изменить задачу группы", "Modifier la tâche de groupe"],
+  ["Edit group subtask", "تعديل مهمة فرعية للمجموعة", "Editar subtarea de grupo", "编辑群组子任务", "Redigera gruppdeluppgift", "Gruppen-Unteraufgabe bearbeiten", "Изменить подзадачу группы", "Modifier la sous-tâche de groupe"],
   ["Enable group to-dos", "تمكين مهام المجموعة", "Activar tareas de grupo", "启用群组待办事项", "Aktivera gruppuppgifter", "Gruppenaufgaben aktivieren", "Включить задачи группы", "Activer les tâches de groupe"],
   ["Energy burned", "الطاقة المحروقة", "Energía quemada", "消耗能量", "Förbränd energi", "Energieverbrauch", "Затраченная энергия", "Énergie dépensée"],
   ["Everyone completes it", "يكملها الجميع", "Todos la completan", "每个人都需完成", "Alla slutför den", "Alle erledigen sie", "Выполняют все", "Tout le monde la réalise"],

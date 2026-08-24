@@ -11,7 +11,10 @@ import { LocalizedAlert as Alert } from "@/src/i18n";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
-import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import {
+  useWebBackNavigationGuard,
+  useWebBeforeUnload,
+} from "@/src/components/useWebBeforeUnload";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
 import {
@@ -24,8 +27,17 @@ import {
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
 import { useApp } from "@/src/state/AppProvider";
+import {
+  clearTodoEditorDraftTree,
+  getTodoEditorDraftNodes,
+  newTodoEditorDraftId,
+  orderTodoEditorDraftNodes,
+  removeTodoEditorDraftSubtree,
+  upsertTodoEditorDraft,
+  useTodoEditorDraftTree,
+} from "@/src/state/todoEditorDrafts";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { GoalSchedule, TodoPriority } from "@/src/types";
+import { GoalSchedule, TodoItem, TodoPriority } from "@/src/types";
 
 type RepeatMode = "none" | GoalSchedule["mode"];
 type ReminderDraft = {
@@ -88,26 +100,49 @@ function plusMinutes(localDate: string, localTime: string, minutes: number) {
 }
 
 export default function TodoEditor() {
-  const { id, date, time, parentId } = useLocalSearchParams<{
+  const {
+    id,
+    date,
+    time,
+    parentId,
+    draftTreeId,
+    draftId,
+    draftParentId,
+  } = useLocalSearchParams<{
     id?: string;
     date?: string;
     time?: string;
     parentId?: string;
+    draftTreeId?: string;
+    draftId?: string;
+    draftParentId?: string;
   }>();
   const { state, saveTodo, deleteTodo } = useApp();
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const draftTodoId = useRef(
-    id ?? `todo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  const editorTreeId = useRef(
+    draftTreeId ?? newTodoEditorDraftId("personal-todo-tree"),
   ).current;
-  const [savedTodoId, setSavedTodoId] = useState<string>();
-  const existing = (state.todos ?? []).find(
-    (todo) => todo.id === (id ?? savedTodoId),
+  const draftTodoId = useRef(
+    id ?? draftId ?? newTodoEditorDraftId("todo"),
+  ).current;
+  const stagedNodes = useTodoEditorDraftTree<TodoItem>(editorTreeId);
+  const stagedNode = stagedNodes.find((node) => node.id === draftTodoId);
+  const persistedTodo = (state.todos ?? []).find((todo) => todo.id === id);
+  const existing = persistedTodo ?? stagedNode?.value;
+  const editorTodos = useMemo(
+    () => [
+      ...(state.todos ?? []).filter(
+        (todo) => !stagedNodes.some((node) => node.id === todo.id),
+      ),
+      ...stagedNodes.map((node) => node.value),
+    ],
+    [stagedNodes, state.todos],
   );
-  const parent = (state.todos ?? []).find(
-    (todo) => todo.id === (existing?.parentId ?? parentId),
-  );
+  const resolvedParentId =
+    existing?.parentId ?? parentId ?? draftParentId;
+  const parent = editorTodos.find((todo) => todo.id === resolvedParentId);
   const linkedScheduledReminders = existing
     ? (state.calendarReminders ?? []).filter(
         (reminder) =>
@@ -250,8 +285,15 @@ export default function TodoEditor() {
   );
   const initialSignature = useRef(signature);
   const allowExit = useRef(false);
-  const dirty = signature !== initialSignature.current;
-  useWebBeforeUnload(() => dirty && !allowExit.current);
+  const promptOpen = useRef(false);
+  const ownsDraftTree = !draftTreeId;
+  const hasStagedDescendants =
+    ownsDraftTree && stagedNodes.some((node) => node.id !== draftTodoId);
+  const dirty =
+    signature !== initialSignature.current || hasStagedDescendants;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useWebBeforeUnload(() => dirtyRef.current && !allowExit.current);
   const addReminder = (daysBeforeDue?: number) => {
     const date =
       daysBeforeDue !== undefined
@@ -389,15 +431,26 @@ export default function TodoEditor() {
       ),
     );
   }, [dueDate]);
-  const persist = () => {
-    if (!title.trim())
-      return Alert.alert("Add a title", "What needs to be done?");
+  const buildTodo = (): TodoItem | undefined => {
+    if (!title.trim()) {
+      Alert.alert("Add a title", "What needs to be done?");
+      return undefined;
+    }
     const now = new Date().toISOString();
     if (hasTimeBlock) {
       const starts = new Date(`${blockStartDate}T${blockStartTime}:00`);
       const ends = new Date(`${blockEndDate}T${blockEndTime}:00`);
-      if (Number.isNaN(starts.getTime()) || Number.isNaN(ends.getTime()) || ends <= starts)
-        return Alert.alert("Check the planned time", "The end must be after the start. Overnight blocks can end on the next date.");
+      if (
+        Number.isNaN(starts.getTime()) ||
+        Number.isNaN(ends.getTime()) ||
+        ends <= starts
+      ) {
+        Alert.alert(
+          "Check the planned time",
+          "The end must be after the start. Overnight blocks can end on the next date.",
+        );
+        return undefined;
+      }
     }
     const recurrenceAnchor = hasTimeBlock
       ? blockStartDate
@@ -432,7 +485,7 @@ export default function TodoEditor() {
             anchorDate: recurrenceAnchor,
           };
     const savedId = existing?.id ?? draftTodoId;
-    saveTodo({
+    return {
       id: savedId,
       title: title.trim(),
       description: description.trim() || undefined,
@@ -467,12 +520,46 @@ export default function TodoEditor() {
       skippedDates: existing?.skippedDates ?? [],
       completedAt: existing?.completedAt,
       order: existing?.order,
-      parentId: existing?.parentId ?? parentId,
+      parentId: resolvedParentId,
       labels: parsedLabels,
+    };
+  };
+  const stageCurrentTodo = () => {
+    const todo = buildTodo();
+    if (!todo) return undefined;
+    upsertTodoEditorDraft(editorTreeId, {
+      id: todo.id,
+      parentId: todo.parentId,
+      title: todo.title,
+      value: todo,
     });
-    setSavedTodoId(savedId);
+    return todo;
+  };
+  const persist = () => {
+    const todo = stageCurrentTodo();
+    if (!todo) return undefined;
+    if (draftTreeId) {
+      initialSignature.current = signature;
+      return todo.id;
+    }
+
+    saveTodo(todo);
+    const savedIds = new Set([
+      ...(state.todos ?? []).map((item) => item.id),
+      todo.id,
+    ]);
+    const pending = orderTodoEditorDraftNodes(
+      getTodoEditorDraftNodes<TodoItem>(editorTreeId).filter(
+        (node) => node.id !== todo.id,
+      ),
+      savedIds,
+    );
+    for (const next of pending) {
+      saveTodo(next.value);
+    }
+    clearTodoEditorDraftTree(editorTreeId);
     initialSignature.current = signature;
-    return savedId;
+    return todo.id;
   };
   const save = (exit: () => void = () => router.back()) => {
     const savedId = persist();
@@ -481,34 +568,63 @@ export default function TodoEditor() {
     exit();
   };
   const requestClose = (exit: () => void = () => router.back()) => {
-    if (!dirty) {
+    if (!dirtyRef.current) {
+      if (!draftTreeId) clearTodoEditorDraftTree(editorTreeId);
       allowExit.current = true;
       exit();
       return;
     }
+    if (promptOpen.current) return;
+    promptOpen.current = true;
     Alert.alert("Save your changes?", "This to-do has unsaved changes.", [
-      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Keep editing",
+        style: "cancel",
+        onPress: () => {
+          promptOpen.current = false;
+        },
+      },
       {
         text: "Discard",
         style: "destructive",
         onPress: () => {
+          promptOpen.current = false;
+          if (draftTreeId) {
+            if (!draftId)
+              removeTodoEditorDraftSubtree(editorTreeId, draftTodoId);
+          } else clearTodoEditorDraftTree(editorTreeId);
           allowExit.current = true;
           exit();
         },
       },
-      { text: "Save", onPress: () => save(exit) },
-    ]);
+      {
+        text: "Save",
+        onPress: () => {
+          promptOpen.current = false;
+          save(exit);
+        },
+      },
+    ], {
+      cancelable: true,
+      onDismiss: () => {
+        promptOpen.current = false;
+      },
+    });
   };
   const requestCloseRef = useRef(requestClose);
   requestCloseRef.current = requestClose;
   useEffect(
     () =>
       navigation.addListener("beforeRemove", (event) => {
-        if (allowExit.current || !dirty) return;
+        if (allowExit.current || !dirtyRef.current) return;
         event.preventDefault();
         requestCloseRef.current(() => navigation.dispatch(event.data.action));
       }),
-    [dirty, navigation],
+    [navigation],
+  );
+  useWebBackNavigationGuard(
+    () => dirtyRef.current && !allowExit.current,
+    (continueBack) => requestCloseRef.current(continueBack),
   );
   return (
     <Screen>
@@ -1140,30 +1256,34 @@ export default function TodoEditor() {
       <TodoSubtaskEditorSection
         items={
           existing
-            ? (state.todos ?? []).filter((todo) =>
-                descendantTodoIds(state.todos ?? [], existing.id).has(todo.id),
+            ? editorTodos.filter((todo) =>
+                descendantTodoIds(editorTodos, existing.id).has(todo.id),
               )
             : []
         }
         onAdd={() => {
-          const savedId = persist();
-          if (!savedId) return;
-          router.navigate({
+          const staged = stageCurrentTodo();
+          if (!staged) return;
+          router.push({
             pathname: "/todo-editor",
-            params: { parentId: savedId },
+            params: {
+              draftTreeId: editorTreeId,
+              draftParentId: staged.id,
+            },
           } as never);
         }}
-        onEdit={(subtaskId) =>
-          router.navigate({
+        onEdit={(subtaskId) => {
+          const staged = stagedNodes.some((node) => node.id === subtaskId);
+          router.push({
             pathname: "/todo-editor",
-            params: { id: subtaskId },
-          } as never)
-        }
+            params: staged
+              ? { draftTreeId: editorTreeId, draftId: subtaskId }
+              : { id: subtaskId },
+          } as never);
+        }}
         onRemove={(subtaskId) => {
-          const nestedCount = descendantTodoIds(
-            state.todos ?? [],
-            subtaskId,
-          ).size;
+          const staged = stagedNodes.some((node) => node.id === subtaskId);
+          const nestedCount = descendantTodoIds(editorTodos, subtaskId).size;
           Alert.alert(
             "Delete sub-to-do?",
             nestedCount
@@ -1174,7 +1294,10 @@ export default function TodoEditor() {
               {
                 text: "Delete",
                 style: "destructive",
-                onPress: () => deleteTodo(subtaskId),
+                onPress: () =>
+                  staged
+                    ? removeTodoEditorDraftSubtree(editorTreeId, subtaskId)
+                    : deleteTodo(subtaskId),
               },
             ],
           );
@@ -1183,12 +1306,12 @@ export default function TodoEditor() {
       <Pressable onPress={() => save()} style={[styles.save, { backgroundColor: accent }]}>
         <Text style={styles.saveText}>Save to-do</Text>
       </Pressable>
-      {existing ? (
+      {persistedTodo ? (
         <Pressable
           onPress={() =>
             Alert.alert(
               "Delete to-do?",
-              descendantTodoIds(state.todos ?? [], existing.id).size
+              descendantTodoIds(state.todos ?? [], persistedTodo.id).size
                 ? "Its nested subtasks will also be deleted. This cannot be undone."
                 : "This cannot be undone.",
               [
@@ -1198,7 +1321,8 @@ export default function TodoEditor() {
                 style: "destructive",
                 onPress: () => {
                   allowExit.current = true;
-                  deleteTodo(existing.id);
+                  clearTodoEditorDraftTree(editorTreeId);
+                  deleteTodo(persistedTodo.id);
                   router.back();
                 },
               },
