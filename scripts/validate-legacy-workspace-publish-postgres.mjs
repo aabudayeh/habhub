@@ -278,6 +278,9 @@ try {
   await db.exec(await Deno.readTextFile(
     "supabase/migrations/202608240009_legacy_workspace_publish_containment.sql",
   ));
+  await db.exec(await Deno.readTextFile(
+    "supabase/migrations/202608240010_harden_legacy_publish_causality.sql",
+  ));
 
   await db.exec(`
     insert into public.user_snapshots (user_id, revision)
@@ -437,6 +440,49 @@ try {
   );
 
   await db.exec(`
+    update public.daily_metric_status
+       set score_contribution = 70, exact_value = 70
+     where group_id = '${groupId}' and metric_id = '${metricId}'
+       and user_id = '${userId}' and local_date = '${day}';
+    update public.group_activity_versions
+       set version = version + 1,
+           since_date = '${day}',
+           updated_at = clock_timestamp()
+     where group_id = '${groupId}';
+  `);
+  assert.equal(
+    Number(await scalar(
+      "select public.commit_group_activity_version($1, $2, $3)",
+      [groupId, day, 7],
+    )),
+    16,
+    "a newer unrelated checkpoint timestamp must not acknowledge this member's dirty sequence",
+  );
+
+  await db.exec(`
+    update public.daily_metric_status
+       set local_date = '2026-08-22'
+     where group_id = '${groupId}' and metric_id = '${metricId}'
+       and user_id = '${userId}' and local_date = '${day}';
+  `);
+  assert.equal(
+    Number(await scalar(
+      "select public.commit_group_activity_version($1, $2, $3)",
+      [groupId, day, 7],
+    )),
+    17,
+    "moving a mutable status identity must invalidate its old and new projection",
+  );
+  assert.equal(
+    String(await scalar(`
+      select to_char(since_date, 'YYYY-MM-DD') from public.group_activity_versions
+       where group_id = '${groupId}'
+    `)),
+    "2026-08-22",
+    "a moved status must retain the earliest affected date",
+  );
+
+  await db.exec(`
     insert into public.metric_entries (
       client_generated_id, metric_id, user_id, value, local_date,
       recorded_at, visibility, source, note, account_revision
@@ -450,7 +496,7 @@ try {
       "select public.commit_group_activity_version($1, $2, $3)",
       [groupId, day, 7],
     )),
-    15,
+    18,
   );
   assert.equal(
     String(await scalar(`
@@ -484,7 +530,7 @@ try {
       "select public.commit_group_activity_version($1, $2, $3)",
       [groupId, day, 8],
     )),
-    15,
+    18,
     "a revision-only raw-entry retry must also be a no-op",
   );
   await db.exec(`
@@ -496,7 +542,7 @@ try {
       "select public.commit_group_activity_version($1, $2, $3)",
       [groupId, day, 8],
     )),
-    16,
+    19,
     "a detail-only entry edit must remain material",
   );
 
@@ -512,13 +558,35 @@ try {
       "select public.commit_group_activity_version($1, $2, $3)",
       [groupId, day, 8],
     )),
-    17,
+    20,
     "entry deletion/tombstone changes must still publish once",
   );
 
   await db.exec(`
     update auth.test_context set user_id = '${pendingUserId}' where singleton;
   `);
+  await assert.rejects(
+    () => db.exec(`
+      insert into public.metric_entries (
+        client_generated_id, metric_id, user_id, value, local_date,
+        recorded_at, visibility, source, note, account_revision
+      ) values (
+        'pending-injection', '${metricId}', '${pendingUserId}', '1'::jsonb,
+        '${day}', '${day}T12:00:00Z', 'group', 'manual', 'blocked', 5
+      );
+    `),
+    /group_membership_required/,
+    "a pending or removed member must not inject a shared entry by retaining a metric UUID",
+  );
+  assert.equal(
+    Number(await scalar(`
+      select count(*) from public.metric_entries
+       where user_id = '${pendingUserId}'
+         and client_generated_id = 'pending-injection'
+    `)),
+    0,
+    "the rejected shared injection must roll back atomically",
+  );
   await assert.rejects(
     () => db.query(
       "select public.commit_group_activity_version($1, $2, $3)",
@@ -556,7 +624,7 @@ try {
   );
 
   console.log(
-    "Legacy workspace publish PostgreSQL validation passed (no-op rows/commits, privacy re-share, rapid edits, earliest date, tombstones, membership, and private marker ACL).",
+    "Legacy workspace publish PostgreSQL validation passed (no-op rows/commits, causal dirty checkpoints, identity moves, privacy re-share, rapid edits, tombstones, membership, and private marker ACL).",
   );
 } finally {
   await db.close();
