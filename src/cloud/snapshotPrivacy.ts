@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const HABHUB_PRIVACY_SCHEMA_VERSION = 27 as const;
 export const HABHUB_PRIVACY_SCHEMA_HEADER = "x-habhub-privacy-schema";
+export const HABHUB_CLOUD_PROTOCOL_VERSION = 2 as const;
+export const HABHUB_CLOUD_PROTOCOL_HEADER = "x-habhub-cloud-protocol";
 export const GOOGLE_HEALTH_PRIVACY_UPGRADE_ERROR =
   "google_health_privacy_client_upgrade_required";
 
@@ -35,9 +37,10 @@ function isPostgrestRequest(input: RequestInfo | URL) {
 }
 
 /**
- * Advertise the privacy-safe snapshot schema only to PostgREST. Supabase's
- * global headers are also inherited by Auth, Storage and Edge Functions;
- * sending this custom header there would add unrelated browser CORS preflights.
+ * Advertise the privacy-safe snapshot schema and current cloud protocol only
+ * to PostgREST. Supabase's global headers are also inherited by Auth, Storage
+ * and Edge Functions; sending these custom headers there would add unrelated
+ * browser CORS preflights.
  */
 export function createPostgrestPrivacySchemaFetch(
   fetchImpl: FetchLike,
@@ -53,6 +56,10 @@ export function createPostgrestPrivacySchemaFetch(
     headers.set(
       HABHUB_PRIVACY_SCHEMA_HEADER,
       String(HABHUB_PRIVACY_SCHEMA_VERSION),
+    );
+    headers.set(
+      HABHUB_CLOUD_PROTOCOL_HEADER,
+      String(HABHUB_CLOUD_PROTOCOL_VERSION),
     );
     return fetchImpl(input, { ...init, headers });
   };

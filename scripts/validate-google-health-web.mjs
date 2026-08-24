@@ -24,6 +24,8 @@ import {
   getPrivacyAwareUserSnapshot,
   getPrivacyAwareUserSnapshotMetadata,
   GOOGLE_HEALTH_PRIVACY_UPGRADE_ERROR,
+  HABHUB_CLOUD_PROTOCOL_HEADER,
+  HABHUB_CLOUD_PROTOCOL_VERSION,
   HABHUB_PRIVACY_SCHEMA_HEADER,
   HABHUB_PRIVACY_SCHEMA_VERSION,
   isGoogleHealthPrivacyUpgradeError,
@@ -91,6 +93,8 @@ clearCapturedGoogleHealthCompletion();
 
 assert.equal(HABHUB_PRIVACY_SCHEMA_VERSION, 27);
 assert.equal(HABHUB_PRIVACY_SCHEMA_HEADER, "x-habhub-privacy-schema");
+assert.equal(HABHUB_CLOUD_PROTOCOL_VERSION, 2);
+assert.equal(HABHUB_CLOUD_PROTOCOL_HEADER, "x-habhub-cloud-protocol");
 assert.equal(
   privacyAwareSnapshotTopic("owner-a"),
   "account:owner-a:snapshot:v27",
@@ -131,6 +135,13 @@ assert.deepEqual(
   ),
   ["27", "27", null, null, null, null],
   "the privacy schema header must be scoped to PostgREST table/RPC requests",
+);
+assert.deepEqual(
+  privacyFetchCalls.map(({ headers }) =>
+    headers.get(HABHUB_CLOUD_PROTOCOL_HEADER),
+  ),
+  ["2", "2", null, null, null, null],
+  "the cloud protocol header must be scoped to PostgREST table/RPC requests",
 );
 assert.equal(
   privacyFetchCalls[1].headers.get("authorization"),
@@ -1097,6 +1108,8 @@ assert.ok(supabaseClient.includes("createPostgrestPrivacySchemaFetch"));
 assert.ok(supabaseClient.includes("fetch: boundedSupabaseFetch"));
 assert.ok(!supabaseClient.includes("HABHUB_PRIVACY_SCHEMA_HEADER"));
 assert.ok(!supabaseClient.includes("HABHUB_PRIVACY_SCHEMA_VERSION"));
+assert.ok(!supabaseClient.includes("HABHUB_CLOUD_PROTOCOL_HEADER"));
+assert.ok(!supabaseClient.includes("HABHUB_CLOUD_PROTOCOL_VERSION"));
 assert.ok(snapshotPrivacy.includes('pathname.startsWith("/rest/v1/")'));
 assert.ok(snapshotPrivacy.includes("new Headers(requestHeaders)"));
 assert.ok(snapshotPrivacy.includes('client.rpc("get_user_snapshot"'));

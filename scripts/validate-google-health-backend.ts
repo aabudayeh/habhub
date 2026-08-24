@@ -27,6 +27,7 @@ const [
   hourlyCatchupMigration,
   forwardWorkerHardeningMigration,
   groupProjectionMigration,
+  cloudProtocolMigration,
   endpoint,
   sync,
   api,
@@ -51,6 +52,7 @@ const [
   read("supabase/migrations/202608240001_hourly_google_health_catchups.sql"),
   read("supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql"),
   read("supabase/migrations/202608240007_google_health_group_projection.sql"),
+  read("supabase/migrations/202608240011_google_health_cloud_protocol_gate.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1218,6 +1220,47 @@ assert.match(migration, /create policy google_health_status_read_privacy_gate/);
 assert.match(migration, /create policy google_health_status_delete_privacy_gate/);
 assert.match(migration, /create policy google_health_tombstone_delete_privacy_gate/);
 assert.match(migration, /google_health_privacy_client_upgrade_required/);
+assert.match(cloudProtocolMigration,
+  /create or replace function public\.habhub_cloud_protocol_version\(\)/);
+assert.match(cloudProtocolMigration, /x-habhub-cloud-protocol/);
+const cloudProtocolVersionBody = cloudProtocolMigration.match(
+  /create or replace function public\.habhub_cloud_protocol_version[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(cloudProtocolVersionBody,
+  /exception when others then\s+return 0;/);
+assert.match(cloudProtocolVersionBody,
+  /coalesce\(v_value, ''\) ~ '\^\[0-9\]\{1,4\}\$'/);
+assert.match(cloudProtocolMigration,
+  /public\.habhub_cloud_protocol_version\(\) < 2/);
+assert.match(cloudProtocolMigration,
+  /google_health_privacy_client_upgrade_required/);
+const cloudProtocolGateBody = cloudProtocolMigration.match(
+  /create or replace function public\.assert_google_health_privacy_client[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(cloudProtocolGateBody,
+  /if \(select auth\.uid\(\)\) is null or \(select auth\.uid\(\)\) <> p_user_id/);
+assert.match(cloudProtocolGateBody,
+  /from public\.google_health_account_deletion_guards guard/);
+assert.match(cloudProtocolGateBody,
+  /from public\.google_health_privacy_accounts privacy[\s\S]*?then\s+return;/);
+assert.ok(
+  cloudProtocolGateBody.indexOf("from public.google_health_privacy_accounts privacy") <
+    cloudProtocolGateBody.indexOf("public.habhub_cloud_protocol_version() < 2"),
+  "non-Google accounts must return before the cloud protocol gate",
+);
+assert.doesNotMatch(cloudProtocolMigration,
+  /create or replace function public\.habhub_privacy_schema_version/,
+  "the cloud protocol gate must not change privacy schema/topic versioning",
+);
+assert.doesNotMatch(cloudProtocolMigration,
+  /snapshot:v28|update public\.google_health_runtime_config|create policy/,
+  "the protocol gate must not mutate Realtime topics, rollout config, or RLS",
+);
+const accountRevisionFenceBody = migration.match(
+  /create or replace function public\.assert_account_snapshot_revision[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(accountRevisionFenceBody, /assert_google_health_privacy_client/,
+  "workspace writes must pass through the Google client capability gate");
 assert.match(migration, /insert into public\.google_health_privacy_accounts \(user_id, required_since\)/);
 assert.match(migration, /release_google_health_privacy_markers_if_clean/);
 assert.match(migration, /not exists \([\s\S]*google_health_revocation_queue revocation/);
