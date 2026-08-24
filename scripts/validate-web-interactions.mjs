@@ -34,6 +34,7 @@ const extensionPopup = source("browser-extension/popup.html");
 const extensionPopupScript = source("browser-extension/popup.js");
 const extensionManifest = source("browser-extension/manifest.json");
 const extensionReadme = source("browser-extension/README.md");
+const extensionRoute = source("app/extension.tsx");
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /export function useWebBackDismiss/);
@@ -285,6 +286,12 @@ assert.equal(parsedExtensionManifest.action.default_popup, "popup.html");
 assert.equal(parsedExtensionManifest.side_panel, undefined);
 assert.equal(parsedExtensionManifest.background, undefined);
 assert.doesNotMatch(extensionReadme, /side panel|companion surface|active timer|schedule card/i);
+assert.match(extensionRoute, /<Redirect href=\{\"\/\" as never\} \/>/);
+assert.doesNotMatch(
+  extensionRoute,
+  /TodayPage|ActiveTimer|scheduleEvents|floating|dock/i,
+  "legacy extension URLs must redirect to the full app without a companion overlay",
+);
 
 console.log(
   "Web editor, pager, tracker gestures, and standalone iOS safe-area validation passed.",
