@@ -30,6 +30,39 @@ try {
     create function auth.uid() returns uuid language sql stable as
       'select user_id from auth.test_context where singleton';
 
+    create table public.google_health_account_deletion_guards (
+      user_id uuid primary key
+    );
+    create table public.google_health_privacy_accounts (
+      user_id uuid primary key
+    );
+    create table public.google_health_runtime_config (
+      singleton boolean primary key,
+      min_privacy_schema integer not null
+    );
+    insert into public.google_health_runtime_config (
+      singleton, min_privacy_schema
+    ) values (true, 27);
+    create function public.habhub_privacy_schema_version()
+    returns integer language plpgsql stable security definer
+    set search_path = '' as $$
+    declare
+      v_headers jsonb;
+      v_value text;
+    begin
+      begin
+        v_headers := nullif(current_setting('request.headers', true), '')::jsonb;
+      exception when others then
+        return 0;
+      end;
+      v_value := v_headers ->> 'x-habhub-privacy-schema';
+      if coalesce(v_value, '') ~ '^[0-9]{1,4}$' then
+        return v_value::integer;
+      end if;
+      return 0;
+    end;
+    $$;
+
     create type public.entry_visibility as enum ('private', 'status', 'group');
     create table public.user_snapshots (
       user_id uuid primary key,
@@ -281,6 +314,20 @@ try {
   await db.exec(await Deno.readTextFile(
     "supabase/migrations/202608240010_harden_legacy_publish_causality.sql",
   ));
+  await db.exec(await Deno.readTextFile(
+    "supabase/migrations/202608240011_google_health_cloud_protocol_gate.sql",
+  ));
+  await db.exec(await Deno.readTextFile(
+    "supabase/migrations/202608240012_universal_cloud_protocol_gate.sql",
+  ));
+
+  await db.exec(`
+    select set_config(
+      'request.headers',
+      '{"x-habhub-privacy-schema":"27","x-habhub-cloud-protocol":"2"}',
+      false
+    );
+  `);
 
   await db.exec(`
     insert into public.user_snapshots (user_id, revision)
@@ -295,6 +342,100 @@ try {
       group_id, version, since_date, updated_at
     ) values ('${groupId}', 10, '${day}', '2026-08-24T00:00:00Z');
   `);
+
+  await db.exec(`
+    select set_config(
+      'request.headers',
+      '{"x-habhub-privacy-schema":"27","x-habhub-cloud-protocol":"0"}',
+      false
+    );
+  `);
+  await assert.rejects(
+    () => db.query(
+      "select public.assert_account_snapshot_revision($1, $2)",
+      [userId, 5],
+    ),
+    /habhub_cloud_protocol_upgrade_required/,
+    "a non-Google legacy client must be rejected at the shared revision fence",
+  );
+  await assert.rejects(
+    () => db.exec(`
+      insert into public.metric_entries (
+        client_generated_id, metric_id, user_id, value, local_date,
+        recorded_at, visibility, source, note, account_revision
+      ) values (
+        'legacy-protocol-entry', '${metricId}', '${userId}', '1'::jsonb,
+        '${day}', '${day}T08:00:00Z', 'group', 'manual', 'blocked', 5
+      );
+    `),
+    /habhub_cloud_protocol_upgrade_required/,
+    "the protocol floor must reject direct shared entry writes atomically",
+  );
+  assert.equal(
+    Number(await scalar(`
+      select count(*) from public.metric_entries
+       where user_id = '${userId}'
+         and client_generated_id = 'legacy-protocol-entry'
+    `)),
+    0,
+  );
+  assert.equal(
+    Number(await scalar(`
+      select count(*) from public.group_activity_publish_state
+       where user_id = '${userId}'
+    `)),
+    0,
+    "a protocol rejection must not leave a dirty activity marker",
+  );
+  await assert.rejects(
+    () => db.query(
+      "select public.commit_group_activity_version($1, $2, $3)",
+      [groupId, day, 5],
+    ),
+    /habhub_cloud_protocol_upgrade_required/,
+    "legacy activity commits must stop before membership or checkpoint work",
+  );
+
+  await db.exec(`
+    insert into public.google_health_privacy_accounts (user_id)
+      values ('${userId}');
+  `);
+  await assert.doesNotReject(
+    () => db.query(
+      "select public.assert_google_health_privacy_client($1, $2)",
+      [userId, 27],
+    ),
+    "a schema-27 Google private snapshot must remain usable without protocol 2",
+  );
+  await db.exec(`
+    select set_config(
+      'request.headers',
+      '{"x-habhub-privacy-schema":"26","x-habhub-cloud-protocol":"2"}',
+      false
+    );
+  `);
+  await assert.rejects(
+    () => db.query(
+      "select public.assert_google_health_privacy_client($1, $2)",
+      [userId, 27],
+    ),
+    /google_health_privacy_client_upgrade_required/,
+    "schema-26 Google clients must remain privacy-blocked",
+  );
+  await db.exec(`
+    select set_config(
+      'request.headers',
+      '{"x-habhub-privacy-schema":"27","x-habhub-cloud-protocol":"2"}',
+      false
+    );
+  `);
+  await assert.doesNotReject(
+    () => db.query(
+      "select public.assert_account_snapshot_revision($1, $2)",
+      [userId, 5],
+    ),
+    "protocol-2 publication must retain the normal revision contract",
+  );
 
   await db.exec(`
     insert into public.daily_metric_status (
@@ -624,7 +765,7 @@ try {
   );
 
   console.log(
-    "Legacy workspace publish PostgreSQL validation passed (no-op rows/commits, causal dirty checkpoints, identity moves, privacy re-share, rapid edits, tombstones, membership, and private marker ACL).",
+    "Legacy workspace publish PostgreSQL validation passed (universal protocol floor, private snapshot compatibility, no-op rows/commits, causal dirty checkpoints, identity moves, privacy re-share, rapid edits, tombstones, membership, and private marker ACL).",
   );
 } finally {
   await db.close();

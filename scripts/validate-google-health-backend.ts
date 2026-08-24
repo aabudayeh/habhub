@@ -28,6 +28,7 @@ const [
   forwardWorkerHardeningMigration,
   groupProjectionMigration,
   cloudProtocolMigration,
+  universalCloudProtocolMigration,
   endpoint,
   sync,
   api,
@@ -53,6 +54,7 @@ const [
   read("supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql"),
   read("supabase/migrations/202608240007_google_health_group_projection.sql"),
   read("supabase/migrations/202608240011_google_health_cloud_protocol_gate.sql"),
+  read("supabase/migrations/202608240012_universal_cloud_protocol_gate.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1255,6 +1257,37 @@ assert.doesNotMatch(cloudProtocolMigration,
 assert.doesNotMatch(cloudProtocolMigration,
   /snapshot:v28|update public\.google_health_runtime_config|create policy/,
   "the protocol gate must not mutate Realtime topics, rollout config, or RLS",
+);
+const restoredPrivacyGateBody = universalCloudProtocolMigration.match(
+  /create or replace function public\.assert_google_health_privacy_client[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(restoredPrivacyGateBody,
+  /from public\.google_health_account_deletion_guards guard/);
+assert.match(restoredPrivacyGateBody,
+  /from public\.google_health_privacy_accounts privacy[\s\S]*?then\s+return;/);
+assert.match(restoredPrivacyGateBody, /public\.habhub_privacy_schema_version\(\)/);
+assert.doesNotMatch(restoredPrivacyGateBody, /habhub_cloud_protocol/,
+  "private snapshot compatibility must not depend on the relational protocol");
+const universalProtocolAssertBody = universalCloudProtocolMigration.match(
+  /create or replace function public\.assert_habhub_cloud_protocol[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(universalProtocolAssertBody,
+  /public\.habhub_cloud_protocol_version\(\) < v_required/);
+assert.match(universalProtocolAssertBody,
+  /habhub_cloud_protocol_upgrade_required/);
+const universalRevisionFenceBody = universalCloudProtocolMigration.match(
+  /create or replace function public\.assert_account_snapshot_revision[\s\S]*?\$\$;/i,
+)?.[0] ?? "";
+assert.match(universalRevisionFenceBody, /assert_google_health_privacy_client/);
+assert.match(universalRevisionFenceBody, /assert_habhub_cloud_protocol\(2\)/);
+assert.ok(
+  universalRevisionFenceBody.indexOf("assert_habhub_cloud_protocol(2)") <
+    universalRevisionFenceBody.indexOf("from public.user_snapshots snapshot"),
+  "legacy relational publication must fail before locking the snapshot row",
+);
+assert.doesNotMatch(universalCloudProtocolMigration,
+  /snapshot:v28|update public\.google_health_runtime_config|create policy/,
+  "the universal protocol fence must not change privacy topics, rollout config, or RLS",
 );
 const accountRevisionFenceBody = migration.match(
   /create or replace function public\.assert_account_snapshot_revision[\s\S]*?\$\$;/i,
