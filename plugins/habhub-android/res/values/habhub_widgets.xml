@@ -2,9 +2,10 @@
 <resources>
   <string name="habhub_widget_description">Today goals and tracker progress</string>
   <string name="habhub_widget_description_small">Featured card - resizes from 2-5 x 1</string>
-  <string name="habhub_widget_description_square">Status avatar or leaderboard - resizes from 2-3 x 1-5</string>
+  <string name="habhub_widget_description_square">Status avatar - resizes from 2-3 x 1-5</string>
   <string name="habhub_widget_description_featured_wide_compact">Featured card and goal progress - resizes from 2-5 x 1</string>
-  <string name="habhub_widget_description_wide">Status avatar or leaderboard - resizes from 2-3 x 1-5</string>
+  <string name="habhub_widget_description_wide">Status avatar - resizes from 2-3 x 1-5</string>
+  <string name="habhub_widget_description_leaderboard">Leaderboard - resizes from 1-5 x 1-6</string>
   <string name="habhub_widget_open_to_update">Open HabHub to update</string>
   <string name="habhub_widget_featured_progress">Featured progress</string>
   <string name="habhub_widget_status_avatar">Status avatar</string>

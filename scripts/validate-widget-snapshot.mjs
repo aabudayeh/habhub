@@ -38,6 +38,11 @@ const featured = featuredWidgetSnapshot(
 assert.equal(featured.id, "__featured__");
 assert.equal(featured.progress, hero.progress);
 assert.equal(featured.allComplete, hero.allMet);
+assert.match(
+  featured.dateLabel,
+  /\s/,
+  "Widget dates must visibly separate the weekday and numeric day",
+);
 assert.deepEqual(
   featured.goals.map((goal) => goal.id),
   hero.goalProgress.map((goal) => goal.id),
@@ -53,6 +58,31 @@ for (const goal of featured.goals) {
   assert.ok(goal.progress >= 0 && goal.progress <= 1);
   assert.match(goal.deepLink, new RegExp(`metric=${goal.id}(?:&|$)`));
 }
+
+const todoFeatured = featuredWidgetSnapshot(
+  {
+    ...state,
+    todos: [
+      {
+        id: "widget-todo",
+        title: "Widget to-do",
+        createdAt: `${today}T08:00:00.000Z`,
+        priority: "normal",
+        reminders: [],
+        completedDates: [],
+      },
+    ],
+  },
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+);
+assert.match(
+  todoFeatured.compactSubtitle,
+  /goals? left · 0\/1 To-Dos/,
+  "A Featured widget with goals and to-dos must keep both counts on one separated summary line",
+);
 
 const status = statusRangeRollup(state, state.currentUserId, [today]);
 const avatar = statusWidgetSnapshot(
@@ -108,6 +138,11 @@ const leaderboard = leaderboardWidgetSnapshot(
 );
 assert.equal(leaderboard.id, "__leaderboard__");
 assert.equal(leaderboard.deepLink, "paceboard://group");
+assert.match(
+  leaderboard.dateLabel,
+  /\s/,
+  "Leaderboard dates must visibly separate the weekday and numeric day",
+);
 assert.deepEqual(
   leaderboard.metrics.map((metric) => metric.id),
   leaderboardMetricIds,

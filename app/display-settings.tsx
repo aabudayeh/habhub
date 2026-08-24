@@ -649,6 +649,44 @@ export default function DisplaySettings() {
               </View>
             </View>
           ) : null}
+          {state.group.groupTodosEnabled === true ? (
+            <>
+              <ToggleRow
+                icon="checkbox-outline"
+                title="Show group To-Dos"
+                copy="Reveal your group's shared task list on Leaderboard"
+                enabled={
+                  state.settings.showGroupTodosByGroup?.[state.group.id] === true
+                }
+                onChange={(visible) =>
+                  updateSettings({
+                    showGroupTodosByGroup: {
+                      ...(state.settings.showGroupTodosByGroup ?? {}),
+                      [state.group.id]: visible,
+                    },
+                  })
+                }
+              />
+              <SelectionMenu
+                title="Group To-Do placement"
+                items={[
+                  { id: "above", label: "Above trackers", icon: "arrow-up-outline" },
+                  { id: "below", label: "Below trackers", icon: "arrow-down-outline" },
+                ]}
+                selectedIds={[
+                  state.settings.groupTodosBelowTrackers === false
+                    ? "above"
+                    : "below",
+                ]}
+                onChange={([value]) =>
+                  value &&
+                  updateSettings({ groupTodosBelowTrackers: value === "below" })
+                }
+                multiple={false}
+                searchable={false}
+              />
+            </>
+          ) : null}
         </Card>
       </CollapsibleSection>
 

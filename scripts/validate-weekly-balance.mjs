@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 import { dateKey, dateWithOffsetFrom } from "../src/domain/date.ts";
-import { energyFormulaVariables } from "../src/domain/energy.ts";
+import { calculateBmr } from "../src/domain/energy.ts";
+import { unrecordedStepActivity } from "../src/domain/health.ts";
 import {
   metricValue,
   metricVisualProgress,
@@ -240,10 +241,7 @@ const defaults = {
 };
 const energyDate = "2026-08-20";
 const profile = defaults.energyProfiles[energyUserId];
-const baseline = energyFormulaVariables(
-  profile,
-  defaults.settings.baselineCalories,
-).daily_energy;
+const baseline = calculateBmr(profile);
 const energyState = {
   ...defaults,
   entries: [
@@ -272,7 +270,7 @@ const energyState = {
 assert.equal(
   metricValue(energyState, energyMetric, energyUserId, energyDate),
   baseline + 300,
-  "the fallback total combines profile daily energy and active energy",
+  "the fallback total combines resting energy and active energy without double-counting the activity-level estimate",
 );
 assert.equal(
   metricValue(energyState, dailyDeficitMetric, energyUserId, energyDate),
@@ -298,7 +296,7 @@ const providerEnergyState = {
 assert.equal(
   metricValue(providerEnergyState, energyMetric, energyUserId, energyDate),
   2_500,
-  "a provider total replaces rather than adds to the fallback",
+  "a complete provider total replaces rather than adds to the fallback",
 );
 assert.equal(
   metricValue(providerEnergyState, dailyDeficitMetric, energyUserId, energyDate),
@@ -309,8 +307,129 @@ assert.equal(
   0.25,
   "Food's featured/status progress must fill with intake instead of completing after one entry",
 );
+assert.equal(
+  metricVisualProgress(providerEnergyState, foodMetric, energyUserId, energyDate, 2_500, 2_000),
+  0.75,
+  "Food progress must drain after the allowance is exceeded",
+);
+assert.equal(
+  metricVisualProgress(providerEnergyState, foodMetric, energyUserId, energyDate, 4_000, 2_000),
+  0,
+  "Food progress must reach zero at twice the allowance",
+);
+assert.equal(
+  metricVisualProgress(providerEnergyState, dailyDeficitMetric, energyUserId, energyDate, 750, 500),
+  0.5,
+  "Daily-deficit progress must use the same target-peak shape",
+);
+const staleProviderEnergyState = {
+  ...energyState,
+  entries: [
+    ...energyState.entries,
+    {
+      id: "stale-provider-total-energy-test",
+      metricId: "energy_burned",
+      userId: energyUserId,
+      value: baseline,
+      localDate: energyDate,
+      recordedAt: `${energyDate}T23:59:00.000Z`,
+      visibility: "private",
+      source: "imported",
+      sourceProvider: "health_connect",
+    },
+  ],
+};
+assert.equal(
+  metricValue(staleProviderEnergyState, energyMetric, energyUserId, energyDate),
+  baseline + 300,
+  "a stale rest-only provider total must not hide workout and uncovered-step activity",
+);
+
+const stepsMetric = {
+  id: "steps",
+  name: "Steps",
+  unit: "steps",
+  dataType: "number",
+  aggregation: "sum",
+  healthMapping: { dataType: "steps", field: "value" },
+};
+const stepAwareExerciseMetric = {
+  ...exerciseMetric,
+  stepFallback: true,
+  healthMapping: { dataType: "active_energy", field: "value" },
+};
+const stepAwareEntries = [
+  ...energyState.entries,
+  {
+    id: "energy-steps-test",
+    metricId: "steps",
+    userId: energyUserId,
+    value: 6_000,
+    localDate: energyDate,
+    recordedAt: `${energyDate}T12:02:00.000Z`,
+    visibility: "private",
+    source: "imported",
+  },
+  {
+    id: "stale-materialized-step-fallback",
+    metricId: "exercise",
+    userId: energyUserId,
+    value: 1,
+    localDate: energyDate,
+    recordedAt: `${energyDate}T12:03:00.000Z`,
+    visibility: "private",
+    source: "calculated",
+    sourceRecordId: `step-fallback:${energyDate}`,
+  },
+];
+const stepAwareMetrics = [
+  energyMetric,
+  stepAwareExerciseMetric,
+  stepsMetric,
+  foodMetric,
+  dailyDeficitMetric,
+];
+const stepAwareState = {
+  ...energyState,
+  metrics: stepAwareMetrics,
+  entries: stepAwareEntries,
+};
+const uncovered = unrecordedStepActivity(
+  stepAwareEntries,
+  stepAwareMetrics,
+  6_000,
+  profile,
+);
+const expectedActiveEnergy = Math.round(300 + uncovered.estimatedCalories);
+assert.equal(
+  metricValue(
+    stepAwareState,
+    stepAwareExerciseMetric,
+    energyUserId,
+    energyDate,
+  ),
+  expectedActiveEnergy,
+  "active energy must combine measured workout calories with a fresh uncovered-step estimate without reusing a stale materialized fallback",
+);
+assert.equal(
+  metricValue(stepAwareState, energyMetric, energyUserId, energyDate),
+  baseline + expectedActiveEnergy,
+  "total energy must combine BMR, measured workout calories, and uncovered-step activity",
+);
 
 const detail = fs.readFileSync("app/metric-detail.tsx", "utf8");
+const todayHero = fs.readFileSync("src/domain/todayHero.ts", "utf8");
+const status = fs.readFileSync("src/domain/status.ts", "utf8");
+assert.match(
+  todayHero,
+  /met && metric\.id !== "deficit"/,
+  "a completed under-limit Food day must finish with a full Featured square while Deficit keeps its target-peak shape",
+);
+assert.match(
+  status,
+  /reached && metric\.id !== "deficit"/,
+  "Status must finalize an under-limit Food day at 100% without flattening an excessive deficit",
+);
 assert.match(detail, /weeklyBalancePeriodReport\(/);
 assert.match(detail, /DETAIL_PERIODS\.map/);
 assert.match(detail, /accessibilityLabel=\{t\("Energy balance chart"\)\}/);

@@ -848,7 +848,7 @@ export default function SettingsScreen() {
             {showLiveStepSetup ? (
               <>
                 <Text style={[styles.originLabel, styles.stepGroupLabel]}>
-                  {"TODAY'S SOURCES · SELECT ONE OR MORE"}
+                  {"STEP SOURCES · SELECT ONE OR MORE"}
                 </Text>
                 {liveStepSourceChoices.map((choice) => {
                   const selected = selectedLiveStepSources.includes(choice.id);
@@ -1026,7 +1026,7 @@ export default function SettingsScreen() {
                     { color: colors.muted },
                   ]}
                 >
-                  {"This affects today only. Completed days keep Health Connect's historical aggregate."}
+                  {"Samsung's daily total also repairs completed days. Other devices keep their platform historical aggregate."}
                 </Text>
               </>
             ) : null}

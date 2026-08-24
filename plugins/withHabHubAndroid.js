@@ -29,11 +29,13 @@ const RESOURCE_FILES = [
   ["drawable", "habhub_widget_preview_square.xml"],
   ["drawable", "habhub_widget_preview_wide_compact.xml"],
   ["drawable", "habhub_widget_preview_wide.xml"],
+  ["drawable", "habhub_widget_preview_leaderboard.xml"],
   ["layout", "habhub_widget.xml"],
   ["layout", "habhub_widget_preview_small.xml"],
   ["layout", "habhub_widget_preview_square.xml"],
   ["layout", "habhub_widget_preview_wide_compact.xml"],
   ["layout", "habhub_widget_preview_wide.xml"],
+  ["layout", "habhub_widget_preview_leaderboard.xml"],
   ["values", "habhub_widgets.xml"],
   ["values-ar", "habhub_widgets.xml"],
   ["values-de", "habhub_widgets.xml"],
@@ -46,23 +48,25 @@ const RESOURCE_FILES = [
   ["xml", "habhub_widget_square_info.xml"],
   ["xml", "habhub_widget_wide_compact_info.xml"],
   ["xml", "habhub_widget_wide_info.xml"],
+  ["xml", "habhub_widget_leaderboard_info.xml"],
   ["xml", "habhub_widget_backup_rules.xml"],
   ["xml", "habhub_widget_data_extraction_rules.xml"],
 ];
 
 const PROVIDERS = [
-  ["HabHubSmallWidgetProvider", "@xml/habhub_widget_small_info"],
-  ["HabHubSquareWidgetProvider", "@xml/habhub_widget_square_info"],
-  ["HabHubWideCompactWidgetProvider", "@xml/habhub_widget_wide_compact_info"],
-  ["HabHubWideWidgetProvider", "@xml/habhub_widget_wide_info"],
+  ["HabHubSmallWidgetProvider", "@xml/habhub_widget_small_info", "HabHub"],
+  ["HabHubSquareWidgetProvider", "@xml/habhub_widget_square_info", "HabHub"],
+  ["HabHubWideCompactWidgetProvider", "@xml/habhub_widget_wide_compact_info", "HabHub"],
+  ["HabHubWideWidgetProvider", "@xml/habhub_widget_wide_info", "HabHub"],
+  ["HabHubLeaderboardWidgetProvider", "@xml/habhub_widget_leaderboard_info", "@string/habhub_widget_leaderboard"],
 ];
 
-function appWidgetReceiver(packageName, className, infoResource) {
+function appWidgetReceiver(packageName, className, infoResource, label) {
   return {
     $: {
       "android:name": `${packageName}.${className}`,
       "android:exported": "false",
-      "android:label": "HabHub",
+      "android:label": label,
     },
     "intent-filter": [
       {
@@ -188,9 +192,9 @@ function withNativeManifest(config, packageName) {
         "android:exported": "false",
       },
     });
-    PROVIDERS.forEach(([className, infoResource]) => {
+    PROVIDERS.forEach(([className, infoResource, label]) => {
       application.receiver.push(
-        appWidgetReceiver(packageName, className, infoResource),
+        appWidgetReceiver(packageName, className, infoResource, label),
       );
     });
 

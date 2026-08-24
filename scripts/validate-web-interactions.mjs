@@ -27,6 +27,14 @@ const screen = source("src/components/ui.tsx");
 const today = source("app/(tabs)/index.tsx");
 const status = source("app/(tabs)/status.tsx");
 const log = source("app/(tabs)/log.tsx");
+const chat = source("app/(tabs)/chat.tsx");
+const appText = source("src/components/AppText.tsx");
+const html = source("app/+html.tsx");
+const extensionDashboard = source("app/extension.tsx");
+const extensionPopup = source("browser-extension/popup.html");
+const extensionPanel = source("browser-extension/panel.html");
+const extensionScript = source("browser-extension/panel.js");
+const extensionManifest = source("browser-extension/manifest.json");
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /export function useWebBackDismiss/);
@@ -59,6 +67,11 @@ assert.match(
 assert.match(pager, /onMomentumScrollEnd=\{updateActivePage\}/);
 assert.match(pager, /onScrollEndDrag=\{updateActivePage\}/);
 assert.match(pager, /const activePageRef = useRef\(0\)/);
+assert.match(pager, /PanResponder\.create\(/);
+assert.match(pager, /onMoveShouldSetPanResponderCapture/);
+assert.match(pager, /scrollRef\.current\?\.scrollTo\(\{ x: offset, animated: false \}\)/);
+assert.match(pager, /Math\.abs\(gesture\.dx\) >= Math\.min\(52, pageWidth \* 0\.14\)/);
+assert.match(pager, /moveToPage\(target\)/);
 assert.match(
   pager,
   /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,
@@ -127,7 +140,8 @@ assert.equal(
     displayModeStandalone: false,
     navigatorStandalone: false,
   }),
-  34,
+  10,
+  "iOS Safari and installed iOS Web apps must use the same compact tab inset",
 );
 assert.equal(resolveTabBarBottomInset(34), 34);
 const standaloneIos = {
@@ -190,6 +204,17 @@ assert.match(today, /Platform\.OS === "web" && styles\.webTabPage/);
 assert.match(today, /webTabPage: \{ paddingBottom: 0 \}/);
 assert.match(today, /contentInsetAdjustmentBehavior=\{[\s\S]{0,80}Platform\.OS === "web" \? "never"/);
 assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);
+assert.match(appText, /preventWebFocusZoom\?: boolean/);
+assert.match(appText, /Math\.max\(16, scaledFontSize\)/);
+assert.match(chat, /<TextInput[\s\S]{0,180}preventWebFocusZoom/);
+assert.match(html, /viewport-fit=cover/);
+assert.doesNotMatch(
+  html,
+  /maximum-scale|user-scalable\s*=\s*no/i,
+  "focus zoom must be prevented by input sizing without disabling accessible page zoom",
+);
+assert.match(html, /@supports \(height: 100dvh\)/);
+assert.match(html, /body \{[\s\S]{0,120}position: fixed;[\s\S]{0,80}inset: 0;/);
 assert.match(
   today,
   /useWebBackDismiss\(screenIsFocused && editing, finishEditing\)/,
@@ -232,6 +257,25 @@ assert.match(
   /params\.metric && metrics\.some\(\(metric\) => metric\.id === params\.metric\)[\s\S]{0,80}setSelectedId\(params\.metric\)/,
   "Log deep links must focus the tracker requested by a double tap",
 );
+
+assert.match(extensionDashboard, /featuredTimerMetric/);
+assert.match(extensionDashboard, /nextScheduleEvent/);
+assert.match(extensionDashboard, /detail=\{/);
+for (const extensionShell of [extensionPopup, extensionPanel]) {
+  assert.match(extensionShell, /class="quick-nav"/);
+  assert.match(extensionShell, /data-companion-home/);
+  assert.match(extensionShell, /data-app-path="\/group"/);
+  assert.match(extensionShell, /data-app-path="\/log"/);
+  assert.match(extensionShell, /data-app-path="\/gym"/);
+  assert.match(extensionShell, />Full app<\/span>/);
+}
+assert.match(extensionScript, /querySelectorAll\("\[data-app-path\]"\)/);
+assert.match(extensionScript, /function showFullApp\(path = "\/"\)/);
+assert.match(extensionScript, /frame\.src = new URL\(path, appUrl\)\.toString\(\)/);
+assert.match(extensionScript, /openFullAppButton\?\.addEventListener\("click", \(\) => showFullApp\("\/"\)\)/);
+assert.match(extensionScript, /if \(typeof path === "string" && path\.startsWith\("\/"\)\)[\s\S]{0,80}showFullApp\(path\)/);
+assert.match(extensionScript, /button\.addEventListener\("click", \(\) => loadCompanion\(\)\)/);
+assert.equal(JSON.parse(extensionManifest).version, "0.3.3");
 
 console.log(
   "Web editor, pager, tracker gestures, and standalone iOS safe-area validation passed.",

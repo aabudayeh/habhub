@@ -2,6 +2,7 @@ import { supabase } from "@/src/lib/supabase";
 import {
   GroupTodoCompletionMode,
   GroupTodoItem,
+  GoalSchedule,
   TodoPriority,
 } from "@/src/types";
 
@@ -15,6 +16,7 @@ type GroupTodoRow = {
   labels: string[] | null;
   priority: TodoPriority;
   due_at: string | null;
+  recurrence: GoalSchedule | null;
   completion_mode: GroupTodoCompletionMode;
   shared_completed_at: string | null;
   shared_completed_by: string | null;
@@ -35,6 +37,7 @@ export type SaveGroupTodoInput = {
   labels?: string[];
   priority: TodoPriority;
   dueAt?: string;
+  recurrence?: GoalSchedule;
   completionMode: GroupTodoCompletionMode;
 };
 
@@ -60,6 +63,7 @@ function fromRow(row: GroupTodoRow): GroupTodoItem {
     labels: [...new Set(row.labels ?? [])],
     priority: row.priority,
     dueAt: row.due_at ?? undefined,
+    recurrence: row.recurrence ?? undefined,
     completionMode: row.completion_mode,
     completedAt: row.shared_completed_at ?? undefined,
     completedByUserId: row.shared_completed_by ?? undefined,
@@ -70,6 +74,10 @@ function fromRow(row: GroupTodoRow): GroupTodoItem {
         ),
       ),
     ],
+    completedBy: (row.group_todo_completions ?? []).map((completion) => ({
+      userId: completion.user_id,
+      completedAt: completion.completed_at,
+    })),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -83,7 +91,7 @@ export async function loadGroupTodos(groupId: string) {
     const { data, error } = await supabase
       .from("group_todos")
       .select(
-        "id, group_id, creator_id, parent_id, title, description, labels, priority, due_at, completion_mode, shared_completed_at, shared_completed_by, created_at, updated_at, group_todo_completions(user_id, completed_at)",
+        "id, group_id, creator_id, parent_id, title, description, labels, priority, due_at, recurrence, completion_mode, shared_completed_at, shared_completed_by, created_at, updated_at, group_todo_completions(user_id, completed_at)",
       )
       .eq("group_id", groupId)
       .order("created_at", { ascending: true })
@@ -99,7 +107,7 @@ export async function loadGroupTodos(groupId: string) {
 
 export async function saveGroupTodo(input: SaveGroupTodoInput) {
   if (!supabase) throw new Error("Sign in to save a group to-do.");
-  const { data, error } = await supabase.rpc("save_group_todo", {
+  const { data, error } = await supabase.rpc("save_group_todo_v2", {
     p_todo_id: input.id ?? null,
     p_group_id: input.groupId,
     p_parent_id: input.parentId ?? null,
@@ -108,6 +116,7 @@ export async function saveGroupTodo(input: SaveGroupTodoInput) {
     p_labels: input.labels ?? [],
     p_priority: input.priority,
     p_due_at: input.dueAt ?? null,
+    p_recurrence: input.recurrence ?? null,
     p_completion_mode: input.completionMode,
   });
   if (error) throw cloudError(error);

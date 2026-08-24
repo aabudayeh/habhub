@@ -33,10 +33,11 @@ export function isStandaloneIosWebApp(
 }
 
 /**
- * Installed iOS web apps already dedicate the bottom edge to the PWA shell.
- * Keep a small visual gutter in our tab bar instead of repeating the full
- * home-indicator inset inside it. Browser tabs, Android, desktop, and native
- * callers pass no matching environment and retain the complete safe area.
+ * iOS Safari and installed iOS web apps expose a visual viewport that already
+ * stops above their browser/system gesture chrome. Reusing the full reported
+ * inset inside React Navigation makes the tab bar reserve the same space a
+ * second time. Keep a small touch-safe gutter in both iOS Web modes. Android,
+ * desktop, and native callers retain the complete reported inset.
  */
 export function resolveTabBarBottomInset(
   safeAreaBottom: number,
@@ -46,7 +47,7 @@ export function resolveTabBarBottomInset(
     ? Math.max(0, safeAreaBottom)
     : 0;
 
-  if (!environment || !isStandaloneIosWebApp(environment)) {
+  if (!environment || !isIosWebDevice(environment)) {
     return normalizedInset;
   }
 

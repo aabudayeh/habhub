@@ -14,7 +14,20 @@ import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
-import { GroupTodoCompletionMode, TodoPriority } from "@/src/types";
+import {
+  GoalSchedule,
+  GroupTodoCompletionMode,
+  TodoPriority,
+} from "@/src/types";
+
+type GroupTodoRepeatMode =
+  | "none"
+  | "daily"
+  | "weekdays"
+  | "weekly"
+  | "every_other"
+  | "custom"
+  | "monthly";
 
 type Draft = {
   title: string;
@@ -24,6 +37,11 @@ type Draft = {
   hasDeadline: boolean;
   dueDate: string;
   dueTime: string;
+  repeatMode: GroupTodoRepeatMode;
+  repeatInterval: string;
+  reminderEnabled: boolean;
+  reminderDate: string;
+  reminderTime: string;
 };
 
 const emptyDraft = (): Draft => ({
@@ -34,11 +52,36 @@ const emptyDraft = (): Draft => ({
   hasDeadline: false,
   dueDate: dateKey(),
   dueTime: "18:00",
+  repeatMode: "none",
+  repeatInterval: "3",
+  reminderEnabled: false,
+  reminderDate: dateKey(),
+  reminderTime: "09:00",
 });
+
+function repeatModeFor(schedule?: GoalSchedule): GroupTodoRepeatMode {
+  if (!schedule) return "none";
+  if (schedule.mode === "daily") return "daily";
+  if (schedule.mode === "every_other_day") return "every_other";
+  if (schedule.mode === "interval_days") return "custom";
+  if (
+    schedule.mode === "selected_days" &&
+    JSON.stringify([...(schedule.daysOfWeek ?? [])].sort()) ===
+      JSON.stringify([1, 2, 3, 4, 5])
+  )
+    return "weekdays";
+  if (schedule.mode === "selected_days") return "weekly";
+  if (schedule.mode === "days_of_month") return "monthly";
+  return "daily";
+}
 
 export default function GroupTodoEditor() {
   const { id, parentId } = useLocalSearchParams<{ id?: string; parentId?: string }>();
-  const { state } = useApp();
+  const {
+    state,
+    saveCalendarReminder,
+    deleteCalendarReminder,
+  } = useApp();
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
@@ -51,8 +94,13 @@ export default function GroupTodoEditor() {
   const canDelete =
     existing?.creatorId === state.currentUserId || me?.role === "owner" || me?.role === "admin";
   const canEdit = !existing || canDelete;
+  const personalReminder = (state.calendarReminders ?? []).find(
+    (reminder) =>
+      reminder.groupId === state.group.id && reminder.groupTodoId === id,
+  );
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [reminderCalendarOpen, setReminderCalendarOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
   const initializedId = useRef<string | undefined>(undefined);
@@ -68,8 +116,16 @@ export default function GroupTodoEditor() {
       hasDeadline: Boolean(existing.dueAt),
       dueDate: existing.dueAt?.slice(0, 10) ?? dateKey(),
       dueTime: existing.dueAt?.slice(11, 16) ?? "18:00",
+      repeatMode: repeatModeFor(existing.recurrence),
+      repeatInterval: String(existing.recurrence?.intervalDays ?? 3),
+      reminderEnabled: personalReminder?.enabled === true,
+      reminderDate:
+        personalReminder?.schedule.anchorDate ??
+        existing.dueAt?.slice(0, 10) ??
+        dateKey(),
+      reminderTime: personalReminder?.time ?? "09:00",
     });
-  }, [existing]);
+  }, [existing, personalReminder]);
 
   const labels = todoLabels({
     title: draft.title,
@@ -88,8 +144,16 @@ export default function GroupTodoEditor() {
       hasDeadline: Boolean(existing.dueAt),
       dueDate: existing.dueAt?.slice(0, 10) ?? dateKey(),
       dueTime: existing.dueAt?.slice(11, 16) ?? "18:00",
+      repeatMode: repeatModeFor(existing.recurrence),
+      repeatInterval: String(existing.recurrence?.intervalDays ?? 3),
+      reminderEnabled: personalReminder?.enabled === true,
+      reminderDate:
+        personalReminder?.schedule.anchorDate ??
+        existing.dueAt?.slice(0, 10) ??
+        dateKey(),
+      reminderTime: personalReminder?.time ?? "09:00",
     });
-  }, [existing]);
+  }, [existing, personalReminder]);
   const allowExit = useRef(false);
   const dirty = signature !== initialSignature.current;
   useWebBeforeUnload(() => dirty && !allowExit.current);
@@ -97,26 +161,72 @@ export default function GroupTodoEditor() {
   const patchDraft = (changes: Partial<Draft>) =>
     setDraft((current) => ({ ...current, ...changes }));
   const save = async (exit: () => void = () => router.back()) => {
-    if (!draft.title.trim()) {
+    if (canEdit && !draft.title.trim()) {
       Alert.alert("Add a title", "What does the group need to do?");
       return;
     }
     setSaving(true);
     setSaveError(undefined);
     try {
-      await groupTodos.save({
-        id: existing?.id,
-        groupId: state.group.id,
-        parentId: existing?.parentId ?? parentId,
-        title: draft.title.trim(),
-        description: draft.description.trim() || undefined,
-        labels,
-        priority: draft.priority,
-        dueAt: draft.hasDeadline
-          ? `${draft.dueDate}T${draft.dueTime}:00`
-          : undefined,
-        completionMode: draft.completionMode,
-      });
+      const anchorDate = draft.hasDeadline ? draft.dueDate : dateKey();
+      const anchorDay = new Date(`${anchorDate}T12:00:00`).getDay();
+      const recurrence: GoalSchedule | undefined =
+        draft.repeatMode === "none"
+          ? undefined
+          : draft.repeatMode === "daily"
+            ? { mode: "daily", anchorDate }
+            : draft.repeatMode === "weekdays"
+              ? { mode: "selected_days", daysOfWeek: [1, 2, 3, 4, 5], anchorDate }
+              : draft.repeatMode === "every_other"
+                ? { mode: "every_other_day", anchorDate }
+                : draft.repeatMode === "custom"
+                  ? {
+                      mode: "interval_days",
+                      intervalDays: Math.max(1, Math.round(Number(draft.repeatInterval) || 1)),
+                      anchorDate,
+                    }
+              : draft.repeatMode === "weekly"
+                ? { mode: "selected_days", daysOfWeek: [anchorDay], anchorDate }
+                : {
+                    mode: "days_of_month",
+                    daysOfMonth: [Number(anchorDate.slice(-2))],
+                    anchorDate,
+                  };
+      const saved = canEdit
+        ? await groupTodos.save({
+            id: existing?.id,
+            groupId: state.group.id,
+            parentId: existing?.parentId ?? parentId,
+            title: draft.title.trim(),
+            description: draft.description.trim() || undefined,
+            labels,
+            priority: draft.priority,
+            dueAt: draft.hasDeadline
+              ? `${draft.dueDate}T${draft.dueTime}:00`
+              : undefined,
+            recurrence,
+            completionMode: draft.completionMode,
+          })
+        : existing;
+      if (!saved) throw new Error("The group to-do is unavailable.");
+      const reminderId =
+        personalReminder?.id ??
+        `group-todo-reminder-${saved.id}-${state.currentUserId}`;
+      if (draft.reminderEnabled)
+        saveCalendarReminder({
+          id: reminderId,
+          title: saved.title,
+          kind: "todo",
+          groupId: state.group.id,
+          groupTodoId: saved.id,
+          time: draft.reminderTime,
+          schedule: recurrence ?? {
+            mode: "once",
+            anchorDate: draft.hasDeadline ? draft.dueDate : draft.reminderDate,
+          },
+          enabled: true,
+        });
+      else if (personalReminder) deleteCalendarReminder(personalReminder.id);
       allowExit.current = true;
       exit();
     } catch (reason) {
@@ -226,6 +336,96 @@ export default function GroupTodoEditor() {
       </Card>
 
       <Card style={styles.form}>
+        <Text style={[styles.label, { color: colors.ink }]}>Repeat</Text>
+        <View style={styles.wrap}>
+          {([
+            ["none", "Does not repeat"],
+            ["daily", "Daily"],
+            ["weekdays", "Weekdays"],
+            ["weekly", "Weekly"],
+            ["every_other", "Every other day"],
+            ["custom", "Custom interval"],
+            ["monthly", "Monthly"],
+          ] as const).map(([mode, label]) => (
+            <Chip
+              key={mode}
+              label={label}
+              selected={draft.repeatMode === mode}
+              onPress={canEdit ? () => patchDraft({ repeatMode: mode }) : undefined}
+              size="small"
+            />
+          ))}
+        </View>
+        {draft.repeatMode === "custom" ? (
+          <View style={styles.intervalRow}>
+            <Text style={[styles.help, { color: colors.muted }]}>Every</Text>
+            <TextInput
+              value={draft.repeatInterval}
+              editable={canEdit}
+              onChangeText={(repeatInterval) => patchDraft({ repeatInterval })}
+              keyboardType="number-pad"
+              maxLength={3}
+              style={[styles.intervalInput, { color: colors.ink, borderColor: colors.border }]}
+            />
+            <Text style={[styles.help, { color: colors.muted }]}>days</Text>
+          </View>
+        ) : null}
+        <Text style={[styles.help, { color: colors.muted }]}>Recurring completion resets on each scheduled day.</Text>
+      </Card>
+
+      <Card style={styles.form}>
+        <Pressable
+          onPress={() => patchDraft({ reminderEnabled: !draft.reminderEnabled })}
+          style={styles.switchLine}
+        >
+          <View style={styles.copy}>
+            <Text style={[styles.label, { color: colors.ink }]}>My reminder</Text>
+            <Text style={[styles.help, { color: colors.muted }]}>Private to you and synced only with your account.</Text>
+          </View>
+          <Ionicons
+            name={draft.reminderEnabled ? "checkbox" : "square-outline"}
+            size={21}
+            color={draft.reminderEnabled ? accent : colors.faint}
+          />
+        </Pressable>
+        {draft.reminderEnabled ? (
+          <>
+            {!draft.repeatMode || draft.repeatMode === "none" ? (
+              <>
+                <Pressable
+                  disabled={draft.hasDeadline}
+                  onPress={() => setReminderCalendarOpen((open) => !open)}
+                  style={[styles.dateButton, { borderColor: colors.border }]}
+                >
+                  <Ionicons name="calendar-outline" size={17} color={accent} />
+                  <Text translate={false} style={[styles.dateText, { color: colors.ink }]}>{draft.hasDeadline ? draft.dueDate : draft.reminderDate}</Text>
+                  {draft.hasDeadline ? null : (
+                    <Ionicons name={reminderCalendarOpen ? "chevron-up" : "chevron-down"} size={15} color={colors.muted} />
+                  )}
+                </Pressable>
+                {reminderCalendarOpen && !draft.hasDeadline ? (
+                  <MonthCalendar
+                    monthDate={draft.reminderDate}
+                    selectedDate={draft.reminderDate}
+                    onSelect={(reminderDate) => {
+                      patchDraft({ reminderDate });
+                      setReminderCalendarOpen(false);
+                    }}
+                  />
+                ) : null}
+              </>
+            ) : null}
+            <TimeInput
+              value={draft.reminderTime}
+              onChange={(reminderTime) => patchDraft({ reminderTime })}
+              label="Reminder time"
+              wheelPicker
+            />
+          </>
+        ) : null}
+      </Card>
+
+      <Card style={styles.form}>
         <Text style={[styles.label, { color: colors.ink }]}>Completion</Text>
         <View style={styles.wrap}>
           <Chip
@@ -297,13 +497,13 @@ export default function GroupTodoEditor() {
       {saveError || groupTodos.error ? (
         <Text translate={false} style={[styles.error, { color: "#D24B4B" }]}>{saveError ?? groupTodos.error}</Text>
       ) : null}
-      {canEdit ? (
+      {canEdit || existing ? (
         <Pressable
           disabled={saving}
           onPress={() => void save()}
           style={[styles.save, { backgroundColor: accent, opacity: saving ? 0.6 : 1 }]}
         >
-          <Text style={styles.saveText}>{saving ? "Saving…" : "Save group to-do"}</Text>
+          <Text style={styles.saveText}>{saving ? "Saving…" : canEdit ? "Save group to-do" : "Save my reminder"}</Text>
         </Pressable>
       ) : null}
       {existing && canDelete ? (
@@ -321,6 +521,8 @@ export default function GroupTodoEditor() {
                   style: "destructive",
                   onPress: () => {
                     setSaving(true);
+                    if (personalReminder)
+                      deleteCalendarReminder(personalReminder.id);
                     void groupTodos.remove(existing.id)
                       .then(() => {
                         allowExit.current = true;
@@ -350,6 +552,8 @@ const styles = StyleSheet.create({
   label: { fontSize: 10, fontWeight: "900" },
   help: { fontSize: 8, lineHeight: 12 },
   switchLine: { flexDirection: "row", alignItems: "center", gap: 8 },
+  intervalRow: { flexDirection: "row", alignItems: "center", gap: 7 },
+  intervalInput: { width: 54, minHeight: 35, borderWidth: 1, borderRadius: 10, paddingHorizontal: 9, fontSize: 10, fontWeight: "800", textAlign: "center" },
   copy: { flex: 1 },
   dateButton: { minHeight: 42, borderWidth: 1, borderRadius: 12, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", gap: 8 },
   dateText: { flex: 1, fontSize: 10, fontWeight: "800" },

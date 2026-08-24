@@ -9,6 +9,7 @@ const migrationPaths = [
   "supabase/migrations/202608220004_harden_google_health_snapshot_repair.sql",
   "supabase/migrations/202608220005_google_health_durable_catchups.sql",
   "supabase/migrations/202608240001_hourly_google_health_catchups.sql",
+  "supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql",
 ];
 
 function statements(source: string) {

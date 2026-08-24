@@ -1,4 +1,11 @@
-import { GroupTodoItem, TodoItem } from "@/src/types";
+import {
+  AppState,
+  CalendarReminder,
+  GroupTodoItem,
+  TodoItem,
+} from "@/src/types";
+import { dateKey } from "@/src/domain/date";
+import { scheduleAppliesOnDate } from "@/src/domain/schedule";
 
 const TODO_LABEL_PATTERN = /(^|\s)#([\p{L}\p{N}][\p{L}\p{N}_-]{0,31})/gu;
 const MAX_TODO_LABELS = 12;
@@ -131,4 +138,49 @@ export function flattenTodoHierarchy<T extends TodoNode>(todos: readonly T[]) {
   // Cycle-only islands are still visible and editable rather than disappearing.
   for (const todo of todos) append(todo, 0);
   return result;
+}
+
+export function groupTodoAppearsOnDate(
+  todo: GroupTodoItem,
+  localDate = dateKey(),
+) {
+  if (!todo.recurrence) return true;
+  return scheduleAppliesOnDate(
+    todo.recurrence,
+    todo.recurrence.anchorDate ?? todo.dueAt?.slice(0, 10) ?? todo.createdAt.slice(0, 10),
+    localDate,
+  );
+}
+
+export function groupTodoCompletedOnDate(
+  todo: GroupTodoItem,
+  currentUserId: string,
+  localDate = dateKey(),
+) {
+  if (todo.completionMode === "shared")
+    return Boolean(
+      todo.completedAt &&
+        (!todo.recurrence || dateKey(new Date(todo.completedAt)) === localDate),
+    );
+  const completion = todo.completedBy.find(
+    (item) => item.userId === currentUserId,
+  );
+  return Boolean(
+    completion &&
+      (!todo.recurrence || dateKey(new Date(completion.completedAt)) === localDate),
+  );
+}
+
+/** Fail closed when a private reminder references a disabled or missing group. */
+export function groupTodoReminderFeatureEnabled(
+  state: Pick<AppState, "group" | "groups">,
+  reminder: Pick<CalendarReminder, "groupId" | "groupTodoId">,
+) {
+  if (!reminder.groupTodoId) return true;
+  if (!reminder.groupId) return false;
+  const group =
+    state.group.id === reminder.groupId
+      ? state.group
+      : state.groups.find((candidate) => candidate.id === reminder.groupId);
+  return group?.groupTodosEnabled === true;
 }

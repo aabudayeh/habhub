@@ -69,11 +69,17 @@ const wideCompactInfo = read(
   "plugins/habhub-android/res/xml/habhub_widget_wide_compact_info.xml",
 );
 const wideInfo = read("plugins/habhub-android/res/xml/habhub_widget_wide_info.xml");
+const leaderboardInfo = read(
+  "plugins/habhub-android/res/xml/habhub_widget_leaderboard_info.xml",
+);
 const smallPreview = read(
   "plugins/habhub-android/res/drawable/habhub_widget_preview_small.xml",
 );
 const wideCompactPreview = read(
   "plugins/habhub-android/res/drawable/habhub_widget_preview_wide_compact.xml",
+);
+const leaderboardPreview = read(
+  "plugins/habhub-android/res/drawable/habhub_widget_preview_leaderboard.xml",
 );
 const widgetValues = read(
   "plugins/habhub-android/res/values/habhub_widgets.xml",
@@ -102,11 +108,14 @@ for (const fileName of ["HabHubWidgetConfigActivity.kt", "HabHubNativeModule.kt"
 for (const [resourceType, fileName] of [
   ["drawable", "habhub_widget_preview_small.xml"],
   ["drawable", "habhub_widget_preview_wide_compact.xml"],
+  ["drawable", "habhub_widget_preview_leaderboard.xml"],
+  ["layout", "habhub_widget_preview_leaderboard.xml"],
   ["values", "habhub_widgets.xml"],
   ["xml", "habhub_widget_small_info.xml"],
   ["xml", "habhub_widget_square_info.xml"],
   ["xml", "habhub_widget_wide_compact_info.xml"],
   ["xml", "habhub_widget_wide_info.xml"],
+  ["xml", "habhub_widget_leaderboard_info.xml"],
   ["xml", "habhub_widget_backup_rules.xml"],
   ["xml", "habhub_widget_data_extraction_rules.xml"],
 ]) {
@@ -127,19 +136,22 @@ assert.match(pluginConfig, /habhub_widget_preview_small/);
 assert.match(pluginConfig, /habhub_widget_preview_square/);
 assert.match(pluginConfig, /habhub_widget_preview_wide_compact/);
 assert.match(pluginConfig, /habhub_widget_preview_wide/);
+assert.match(pluginConfig, /habhub_widget_preview_leaderboard/);
 assert.match(pluginConfig, /HabHubWideCompactWidgetProvider/);
+assert.match(pluginConfig, /HabHubLeaderboardWidgetProvider/);
 assert.match(widgetLayout, /android:id="@\+id\/widget_card_image"/);
 assert.match(widgetLayout, /android:scaleType="fitXY"/);
 assert.doesNotMatch(widgetLayout, /ProgressBar|widget_goal_|widget_completion_badge/);
 
 assert.match(
   widgetConfig,
-  /"square", "wide" -> listOf\([\s\S]*"__avatar__"[\s\S]*"__leaderboard__"[\s\S]*else -> listOf\("__featured__"/,
-  "Resizable Status providers must offer the configurable Leaderboard surface",
+  /"leaderboard" -> listOf\("__leaderboard__"[\s\S]*"square", "wide" -> listOf\("__avatar__"[\s\S]*else -> listOf\("__featured__"/,
+  "Leaderboard and Status must be distinct launcher choices",
 );
 assert.match(widgetConfig, /"square" -> "2-3 x 1-5 \(starts 2 x 2\)"/);
 assert.match(widgetConfig, /"wide_compact" -> "2-5 x 1 \(starts 4 x 1\)"/);
 assert.match(widgetConfig, /"wide" -> "2-3 x 1-5 \(starts 3 x 2\)"/);
+assert.match(widgetConfig, /"leaderboard" -> "1-5 x 1-6 \(starts 2 x 2\)"/);
 assert.match(widgetConfig, /else -> "2-5 x 1 \(starts 2 x 1\)"/);
 assert.match(widgetConfig, /"theme"[\s\S]*"transparent"[\s\S]*"custom"/);
 assert.match(widgetConfig, /SeekBar\(this\)[\s\S]*max = 100/);
@@ -152,8 +164,8 @@ assert.match(pluginSource, /LEADERBOARD_COUNT_PREFIX/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
-  /private fun defaultTracker[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*HabHubWideWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*private fun fixedTracker[\s\S]*HabHubSmallWidgetProvider[\s\S]*-> "__featured__"[\s\S]*HabHubWideCompactWidgetProvider[\s\S]*-> "__featured__"/,
-  "Featured-only families stay fixed while resizable families default to Status and allow Leaderboard",
+  /private fun defaultTracker[\s\S]*HabHubLeaderboardWidgetProvider[\s\S]*-> "__leaderboard__"[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"[\s\S]*private fun fixedTracker[\s\S]*HabHubLeaderboardWidgetProvider[\s\S]*-> "__leaderboard__"[\s\S]*HabHubSmallWidgetProvider[\s\S]*-> "__featured__"[\s\S]*HabHubSquareWidgetProvider[\s\S]*-> "__avatar__"/,
+  "Each launcher family must remain fixed to its advertised Featured, Status, or Leaderboard surface",
 );
 assert.match(
   pluginSource,
@@ -169,6 +181,7 @@ for (const [source, expected] of [
   [squareInfo, { width: 2, height: 2, preview: "square", minWidth: 109, maxWidth: 203, minHeight: 50, maxHeight: 315, mode: "horizontal\\|vertical" }],
   [wideCompactInfo, { width: 4, height: 1, preview: "wide_compact", minWidth: 109, maxWidth: 349, minHeight: 50, maxHeight: 50, mode: "horizontal" }],
   [wideInfo, { width: 3, height: 2, preview: "wide", minWidth: 109, maxWidth: 203, minHeight: 50, maxHeight: 315, mode: "horizontal\\|vertical" }],
+  [leaderboardInfo, { width: 2, height: 2, preview: "leaderboard", minWidth: 40, maxWidth: 420, minHeight: 40, maxHeight: 420, mode: "horizontal\\|vertical" }],
 ]) {
   assert.match(source, new RegExp(`android:targetCellWidth="${expected.width}"`));
   assert.match(source, new RegExp(`android:targetCellHeight="${expected.height}"`));
@@ -181,7 +194,9 @@ for (const [source, expected] of [
   assert.match(source, new RegExp(`android:resizeMode="${expected.mode}"`));
 }
 assert.match(widgetValues, /Featured card - resizes from 2-5 x 1/);
-assert.match(widgetValues, /Status avatar or leaderboard - resizes from 2-3 x 1-5/);
+assert.match(widgetValues, /Status avatar - resizes from 2-3 x 1-5/);
+assert.match(widgetValues, /Leaderboard - resizes from 1-5 x 1-6/);
+assert.match(manifest, /HabHubLeaderboardWidgetProvider[\s\S]*@xml\/habhub_widget_leaderboard_info/);
 assert.match(pluginSource, /paceboard:\/\/status/);
 assert.match(pluginSource, /paceboard:\/\/group/);
 assert.doesNotMatch(pluginSource, /paceboard:\/\/leaderboard"/);
@@ -197,9 +212,10 @@ assert.match(pluginSource, /drawLeaderboardCard/);
 assert.match(pluginSource, /configuredLeaderboardMetrics/);
 assert.match(
   pluginSource,
-  /size\.roomy && size\.tall -> 4[\s\S]*size\.roomy \|\| size\.tall -> 2/,
-  "Large resizable Leaderboard widgets must be able to show the configured four trackers",
+  /bestLeaderboardGrid[\s\S]*cellWidth \/ 68f[\s\S]*cellHeight \/ 39f[\s\S]*for \(count in 4 downTo 2\)/,
+  "Leaderboard capacity and grid geometry must adapt across launcher spans",
 );
+assert.match(pluginSource, /cellScale[\s\S]*metricTitleSize[\s\S]*rowTextSize[\s\S]*iconRadius/);
 assert.match(
   pluginSource,
   /contentDescription\(context, item, configuration, size\)/,
@@ -231,9 +247,39 @@ assert.doesNotMatch(
   "Featured completion must keep a neutral center with an arc and percentage",
 );
 assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
-assert.match(pluginSource, /pad \+ dateWidth \/ 2f[\s\S]*val eyebrowLeft = pad \+ dateWidth \+ headerGap/);
+assert.match(
+  pluginSource,
+  /val pad = if \(size\.compact\) 5f else 11f[\s\S]*dateLabel[\s\S]*pad,[\s\S]*if \(size\.compact\) 6\.2f[\s\S]*eyebrow,[\s\S]*pad,[\s\S]*if \(size\.compact\) 11\.8f/,
+  "Compact Featured date and eyebrow must share the headline's left axis",
+);
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
-assert.match(pluginSource, /val pad = if \(size\.compact\) 6f else 11f/);
+assert.match(
+  pluginSource,
+  /compactSubtitleWidth = size\.widthDp - pad \* 2f[\s\S]*fittedTextPaint\([\s\S]*compactSubtitleWidth[\s\S]*31\.5f[\s\S]*compactSubtitleWidth/,
+  "The goals-left and To-Do summary must share one full-width compact baseline",
+);
+assert.match(pluginSource, /max\(34f, barTop - 10\.5f\)/);
+const featured2x1Width = 109;
+const featured2x1Pad = 5;
+const featuredBadgeDiameter = 24;
+const featuredBadgeCenter =
+  featured2x1Width - featured2x1Pad - featuredBadgeDiameter / 2;
+const featuredContentWidth =
+  featuredBadgeCenter - featuredBadgeDiameter / 2 - featured2x1Pad - 5;
+assert.equal(
+  featuredContentWidth,
+  70,
+  "The minimum 2x1 Featured header must retain 70dp for the complete TODAY'S FOCUS label",
+);
+assert.equal(
+  featured2x1Width - featured2x1Pad * 2,
+  99,
+  "The compact goals-left and x/n To-Dos line must use the full 99dp inner width",
+);
+assert.ok(
+  34 - 31.5 >= 2.5,
+  "Compact goal tiles must begin below the shared summary baseline",
+);
 assert.match(pluginSource, /PorterDuffColorFilter/);
 assert.match(pluginSource, /LruCache<String, Bitmap>/);
 assert.match(pluginSource, /MAX_RENDER_PIXELS/);
@@ -256,6 +302,9 @@ for (const preview of [smallPreview, wideCompactPreview]) {
   assert.match(preview, /android:strokeColor="#B8E45C"/);
   assert.match(preview, /android:fillColor="#DDE6F5"/);
 }
+assert.match(leaderboardPreview, /android:fillColor="#081B49"/);
+assert.match(leaderboardPreview, /android:fillColor="#B8E45C"/);
+assert.match(leaderboardPreview, /android:fillColor="#DDE6F5"/);
 
 assert.match(widgetTypes, /export type WidgetGoalSnapshot/);
 assert.match(widgetTypes, /export type WidgetFeaturedSnapshot/);
@@ -280,7 +329,11 @@ assert.match(widgetBridge, /const payload = JSON\.stringify\(\{ featured, avatar
 assert.match(widgetSnapshots, /todayHeroSummary\(state, state\.currentUserId, today\)/);
 assert.match(widgetSnapshots, /statusRangeRollup\(state, state\.currentUserId, \[today\]\)/);
 assert.match(widgetSnapshots, /completionIndicatorOption/);
-assert.match(widgetSnapshots, /dateLabel: compactDayDate\(today, language\)/);
+assert.match(widgetSnapshots, /function compactWidgetDate[\s\S]*\.join\(" "\)/);
+assert.ok(
+  widgetSnapshots.match(/dateLabel: compactWidgetDate\(today, language\)/g)?.length >= 2,
+  "Featured and Leaderboard dates must use visibly separated date parts",
+);
 assert.match(widgetSnapshots, /showProgressOutline:/);
 assert.match(widgetSnapshots, /compactSubtitle:/);
 assert.match(widgetSnapshots, /leaderboardRows\([\s\S]*state\.currentUserId/);
@@ -345,7 +398,7 @@ assert.match(
   /activeWidgetIds\(context\)\.none \{ it !in deleted \}[\s\S]*clearSnapshot\(context\)/,
   "Deleting the last widget must clear durable health state even during launcher callback lag",
 );
-assert.match(pluginSource, /HabHubSmallWidgetProvider::class\.java[\s\S]*HabHubSquareWidgetProvider::class\.java[\s\S]*HabHubWideCompactWidgetProvider::class\.java[\s\S]*HabHubWideWidgetProvider::class\.java/);
+assert.match(pluginSource, /HabHubSmallWidgetProvider::class\.java[\s\S]*HabHubSquareWidgetProvider::class\.java[\s\S]*HabHubWideCompactWidgetProvider::class\.java[\s\S]*HabHubWideWidgetProvider::class\.java[\s\S]*HabHubLeaderboardWidgetProvider::class\.java/);
 assert.match(widgetConfig, /selectedCount < 4/);
 assert.match(widgetConfig, /selectedLeaderboardMetricIds[\s\S]*\.ifEmpty/);
 assert.match(nativeModule, /putArray\([\s\S]*"leaderboardMetricIds"/);

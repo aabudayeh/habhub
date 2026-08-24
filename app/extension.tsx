@@ -42,6 +42,7 @@ export default function ExtensionDashboard() {
   const [now, setNow] = useState(Date.now());
   const [dockHidden, setDockHidden] = useState(false);
   const [dockPosition, setDockPosition] = useState({ right: 12, bottom: 12 });
+  const expandedDockWidth = Math.min(300, Math.max(220, width - 24));
   const dockPositionRef = React.useRef(dockPosition);
   dockPositionRef.current = dockPosition;
   const dockStorageKey = `habhub-extension-dock-v1:${state.currentUserId}`;
@@ -75,16 +76,20 @@ export default function ExtensionDashboard() {
       };
       const right = Number(saved.right);
       const bottom = Number(saved.bottom);
+      const savedHidden = saved.hidden === true;
+      const renderedWidth = savedHidden ? 56 : expandedDockWidth;
       setDockPosition({
-        right: Number.isFinite(right) ? Math.max(4, Math.min(width - 48, right)) : 12,
+        right: Number.isFinite(right)
+          ? Math.max(4, Math.min(Math.max(4, width - renderedWidth - 4), right))
+          : 12,
         bottom: Number.isFinite(bottom) ? Math.max(4, Math.min(height - 62, bottom)) : 12,
       });
-      setDockHidden(saved.hidden === true);
+      setDockHidden(savedHidden);
     } catch {
       setDockPosition({ right: 12, bottom: 12 });
       setDockHidden(false);
     }
-  }, [dockStorageKey, height, width]);
+  }, [dockStorageKey, expandedDockWidth, height, width]);
 
   function saveDock(next = dockPositionRef.current, hidden = dockHidden) {
     if (typeof window === "undefined") return;
@@ -104,8 +109,15 @@ export default function ExtensionDashboard() {
         start = dockPositionRef.current;
       },
       onPanResponderMove: (_, gesture) => {
+        const renderedWidth = dockHidden ? 56 : expandedDockWidth;
         const next = {
-          right: Math.max(4, Math.min(width - 48, start.right - gesture.dx)),
+          right: Math.max(
+            4,
+            Math.min(
+              Math.max(4, width - renderedWidth - 4),
+              start.right - gesture.dx,
+            ),
+          ),
           bottom: Math.max(4, Math.min(height - 62, start.bottom - gesture.dy)),
         };
         dockPositionRef.current = next;
@@ -117,11 +129,22 @@ export default function ExtensionDashboard() {
     // saveDock reads refs/current account values; recreating for viewport
     // changes keeps the draggable bounds correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, width, dockStorageKey, dockHidden]);
+  }, [height, width, expandedDockWidth, dockStorageKey, dockHidden]);
 
   function setDockVisibility(hidden: boolean) {
+    const nextPosition = hidden
+      ? dockPositionRef.current
+      : {
+          ...dockPositionRef.current,
+          right: Math.min(
+            dockPositionRef.current.right,
+            Math.max(4, width - expandedDockWidth - 4),
+          ),
+        };
+    dockPositionRef.current = nextPosition;
+    setDockPosition(nextPosition);
     setDockHidden(hidden);
-    saveDock(dockPositionRef.current, hidden);
+    saveDock(nextPosition, hidden);
   }
 
   useEffect(() => {
@@ -169,6 +192,13 @@ export default function ExtensionDashboard() {
         .slice(0, 12),
     [state],
   );
+  const featuredTimer =
+    timers.find((timer) => timer.status === "running") ?? timers[0];
+  const featuredTimerMetric = featuredTimer
+    ? state.metrics.find((metric) => metric.id === featuredTimer.metricId)
+    : undefined;
+  const nextScheduleEvent = events.find((event) => !event.completed) ?? events[0];
+  const remainingScheduleCount = events.filter((event) => !event.completed).length;
 
   const toggleTimer = (timer: ActivityTimer) => {
     const timestamp = new Date().toISOString();
@@ -264,6 +294,7 @@ export default function ExtensionDashboard() {
           style={[
             styles.dock,
             {
+              width: expandedDockWidth,
               right: dockPosition.right,
               bottom: dockPosition.bottom,
               backgroundColor: colors.card,
@@ -276,14 +307,34 @@ export default function ExtensionDashboard() {
           </View>
           <DockButton
             icon="timer-outline"
-            label={timers.length ? t("Active timers") : t("Timer")}
+            label={
+              featuredTimer
+                ? featuredTimerMetric?.name ?? t("Active timer")
+                : t("Timer")
+            }
+            detail={
+              featuredTimer
+                ? `${formatActivityTimer(
+                    activityTimerDisplaySeconds(featuredTimer, now),
+                  )}${timers.length > 1 ? ` · +${timers.length - 1}` : ""}`
+                : t("Start a timer")
+            }
             active={timers.length > 0}
             onPress={() => setPanel("timers")}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <DockButton
             icon="calendar-outline"
-            label={t("Today’s schedule")}
+            label={nextScheduleEvent?.title ?? t("Today’s schedule")}
+            detail={
+              nextScheduleEvent
+                ? `${nextScheduleEvent.time ?? t("All day")}${
+                    remainingScheduleCount > 1
+                      ? ` · ${remainingScheduleCount} ${t("left")}`
+                      : ""
+                  }`
+                : t("Clear today")
+            }
             onPress={() => setPanel("schedule")}
           />
           <Pressable accessibilityLabel="Hide timer and schedule shortcuts" onPress={() => setDockVisibility(true)} hitSlop={6} style={styles.hideDockButton}>
@@ -467,11 +518,13 @@ function ExtensionState({
 function DockButton({
   icon,
   label,
+  detail,
   active = false,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
+  detail: string;
   active?: boolean;
   onPress: () => void;
 }) {
@@ -480,12 +533,22 @@ function DockButton({
   return (
     <Pressable onPress={onPress} style={styles.dockButton}>
       <Ionicons name={icon} size={17} color={active ? accent : colors.muted} />
-      <Text
-        numberOfLines={1}
-        style={[styles.dockText, { color: active ? accent : colors.ink }]}
-      >
-        {label}
-      </Text>
+      <View style={styles.dockCopy}>
+        <Text
+          translate={false}
+          numberOfLines={1}
+          style={[styles.dockText, { color: active ? accent : colors.ink }]}
+        >
+          {label}
+        </Text>
+        <Text
+          translate={false}
+          numberOfLines={1}
+          style={[styles.dockDetail, { color: colors.muted }]}
+        >
+          {detail}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -561,8 +624,8 @@ const styles = StyleSheet.create({
   stateActionText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   dock: {
     position: "absolute",
-    minHeight: 44,
-    maxWidth: 286,
+    minHeight: 52,
+    maxWidth: 310,
     borderWidth: 1,
     borderRadius: 18,
     paddingHorizontal: 7,
@@ -586,19 +649,21 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 8,
   },
-  dragHandle: { width: 25, minHeight: 40, alignItems: "center", justifyContent: "center", cursor: "pointer" as const },
-  hideDockButton: { width: 27, minHeight: 40, alignItems: "center", justifyContent: "center" },
+  dragHandle: { width: 25, minHeight: 48, alignItems: "center", justifyContent: "center", cursor: "pointer" as const },
+  hideDockButton: { width: 27, minHeight: 48, alignItems: "center", justifyContent: "center" },
   dockButton: {
-    minWidth: 86,
-    maxWidth: 112,
-    minHeight: 42,
+    flex: 1,
+    minWidth: 0,
+    maxWidth: 126,
+    minHeight: 50,
     paddingHorizontal: 7,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: 5,
   },
-  dockText: { flexShrink: 1, fontSize: 9, fontWeight: "900" },
+  dockCopy: { flex: 1, minWidth: 0, gap: 1 },
+  dockText: { fontSize: 9, lineHeight: 12, fontWeight: "900" },
+  dockDetail: { fontSize: 7, lineHeight: 10, fontWeight: "700" },
   divider: { width: 1, height: 24 },
   backdrop: {
     flex: 1,

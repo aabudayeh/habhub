@@ -170,6 +170,7 @@ object HabHubWidgetStore {
       HabHubSquareWidgetProvider::class.java,
       HabHubWideCompactWidgetProvider::class.java,
       HabHubWideWidgetProvider::class.java,
+      HabHubLeaderboardWidgetProvider::class.java,
     ).flatMap { provider ->
       manager.getAppWidgetIds(ComponentName(context, provider)).asList()
     }.distinct()
@@ -228,6 +229,9 @@ object HabHubWidgetStore {
     val manager = AppWidgetManager.getInstance(context)
     return when {
       widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubLeaderboardWidgetProvider::class.java),
+      ) -> "__leaderboard__"
+      widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubSquareWidgetProvider::class.java),
       ) -> "__avatar__"
       widgetId in manager.getAppWidgetIds(
@@ -242,11 +246,20 @@ object HabHubWidgetStore {
     val manager = AppWidgetManager.getInstance(context)
     return when {
       widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubLeaderboardWidgetProvider::class.java),
+      ) -> "__leaderboard__"
+      widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubSmallWidgetProvider::class.java),
       ) -> "__featured__"
       widgetId in manager.getAppWidgetIds(
         ComponentName(context, HabHubWideCompactWidgetProvider::class.java),
       ) -> "__featured__"
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubSquareWidgetProvider::class.java),
+      ) -> "__avatar__"
+      widgetId in manager.getAppWidgetIds(
+        ComponentName(context, HabHubWideWidgetProvider::class.java),
+      ) -> "__avatar__"
       else -> null
     }
   }
@@ -291,6 +304,7 @@ class HabHubSmallWidgetProvider : HabHubWidgetProvider()
 class HabHubSquareWidgetProvider : HabHubWidgetProvider()
 class HabHubWideCompactWidgetProvider : HabHubWidgetProvider()
 class HabHubWideWidgetProvider : HabHubWidgetProvider()
+class HabHubLeaderboardWidgetProvider : HabHubWidgetProvider()
 
 private data class HabHubWidgetSize(
   val heightDp: Float,
@@ -312,6 +326,7 @@ object HabHubWidgetRenderer {
     HabHubSquareWidgetProvider::class.java,
     HabHubWideCompactWidgetProvider::class.java,
     HabHubWideWidgetProvider::class.java,
+    HabHubLeaderboardWidgetProvider::class.java,
   )
   private val avatarCache = object : LruCache<String, Bitmap>(2 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap) = value.byteCount
@@ -383,7 +398,11 @@ object HabHubWidgetRenderer {
     val smallWidgetIds = manager.getAppWidgetIds(
       ComponentName(context, HabHubSmallWidgetProvider::class.java),
     )
+    val leaderboardWidgetIds = manager.getAppWidgetIds(
+      ComponentName(context, HabHubLeaderboardWidgetProvider::class.java),
+    )
     val fallbackWidth = when {
+      widgetId in leaderboardWidgetIds -> 203
       widgetId in wideWidgetIds -> 203
       widgetId in wideCompactWidgetIds -> 250
       else -> 110
@@ -403,7 +422,7 @@ object HabHubWidgetRenderer {
     val height = if (portrait) maxHeight else minHeight
     return HabHubWidgetSize(
       heightDp = height.coerceIn(42, 420).toFloat(),
-      widthDp = width.coerceIn(90, 420).toFloat(),
+      widthDp = width.coerceIn(42, 420).toFloat(),
     )
   }
 
@@ -425,11 +444,48 @@ object HabHubWidgetRenderer {
     })
   }
 
-  private fun leaderboardCapacity(size: HabHubWidgetSize) = when {
-    size.compact -> 1
-    size.roomy && size.tall -> 4
-    size.roomy || size.tall -> 2
-    else -> 1
+  private data class LeaderboardGrid(
+    val columns: Int,
+    val rows: Int,
+    val cellWidth: Float,
+    val cellHeight: Float,
+    val readability: Float,
+  )
+
+  private fun bestLeaderboardGrid(
+    count: Int,
+    width: Float,
+    height: Float,
+    gap: Float,
+  ): LeaderboardGrid {
+    var best = LeaderboardGrid(1, count, width, height / max(1, count), 0f)
+    for (columns in 1..count) {
+      val rows = (count + columns - 1) / columns
+      val cellWidth = (width - gap * (columns - 1)) / columns
+      val cellHeight = (height - gap * (rows - 1)) / rows
+      if (cellWidth <= 0f || cellHeight <= 0f) continue
+      // A leaderboard card is naturally wider than it is tall. Maximising the
+      // smaller of these two ratios produces one column in narrow/tall widgets,
+      // horizontal cards in one-row widgets, and balanced grids at larger sizes.
+      val readability = min(cellWidth / 68f, cellHeight / 39f)
+      if (readability > best.readability) {
+        best = LeaderboardGrid(columns, rows, cellWidth, cellHeight, readability)
+      }
+    }
+    return best
+  }
+
+  private fun leaderboardCapacity(size: HabHubWidgetSize): Int {
+    val pad = (min(size.widthDp, size.heightDp) * 0.065f).coerceIn(4f, 12f)
+    val headerSize = min(size.widthDp / 14f, size.heightDp / 6.5f).coerceIn(6.2f, 15f)
+    val gridWidth = max(1f, size.widthDp - pad * 2f)
+    val gridHeight = max(1f, size.heightDp - (pad + headerSize + max(3f, headerSize * 0.45f)) - pad)
+    val gap = (min(size.widthDp, size.heightDp) * 0.035f).coerceIn(2f, 7f)
+    for (count in 4 downTo 2) {
+      if (bestLeaderboardGrid(count, gridWidth, gridHeight, gap).readability >= 0.48f)
+        return count
+    }
+    return 1
   }
 
   private fun configuredLeaderboardMetrics(
@@ -663,23 +719,34 @@ object HabHubWidgetRenderer {
     item: JSONObject,
     configuration: HabHubWidgetConfiguration,
   ) {
-    val pad = if (size.compact) 6f else 9f
-    val headerBaseline = if (size.compact) 10f else 15f
+    val pad = (min(size.widthDp, size.heightDp) * 0.065f).coerceIn(4f, 12f)
+    val headerSize = min(size.widthDp / 14f, size.heightDp / 6.5f).coerceIn(6.2f, 15f)
+    val headerBaseline = pad + headerSize
+    val datePaint = textPaint(
+      (headerSize * 0.72f).coerceIn(5f, 10.5f),
+      Color.argb(210, 222, 230, 242),
+      true,
+    )
+    val dateLabel = item.optString("dateLabel")
+    val dateWidth = min(
+      size.widthDp * 0.38f,
+      max(24f, datePaint.measureText(dateLabel) + 2f),
+    )
     drawText(
       canvas,
       item.optString("title", "Leaderboard"),
       pad,
       headerBaseline,
-      size.widthDp * 0.62f,
-      textPaint(if (size.compact) 6.5f else 9f, Color.WHITE, true),
+      max(12f, size.widthDp - pad * 2f - dateWidth - 4f),
+      textPaint(headerSize, Color.WHITE, true),
     )
-    drawCenteredEllipsizedText(
+    drawRightAlignedEllipsizedText(
       canvas,
-      item.optString("dateLabel"),
-      size.widthDp - pad - if (size.compact) 16f else 20f,
+      dateLabel,
+      size.widthDp - pad,
       headerBaseline,
-      if (size.compact) 32f else 40f,
-      textPaint(if (size.compact) 5.5f else 6.8f, Color.argb(210, 222, 230, 242), true),
+      dateWidth,
+      datePaint,
     )
     val metrics = configuredLeaderboardMetrics(item, configuration, size)
     if (metrics.isEmpty()) {
@@ -688,31 +755,40 @@ object HabHubWidgetRenderer {
         context.getString(R.string.habhub_widget_open_to_update),
         size.widthDp / 2f,
         size.heightDp / 2f + 4f,
-        textPaint(if (size.compact) 6f else 8f, Color.argb(210, 222, 230, 242), true),
+        textPaint((headerSize * 0.82f).coerceIn(5.2f, 11f), Color.argb(210, 222, 230, 242), true),
       )
       return
     }
-    val gridTop = if (size.compact) 14f else 20f
+    val gridTop = headerBaseline + max(3f, headerSize * 0.45f)
     val gridBottom = size.heightDp - pad
-    val columns = if (size.roomy && metrics.size > 1) 2 else 1
-    val rows = (metrics.size + columns - 1) / columns
-    val gap = if (size.compact) 2f else 4f
-    val cellWidth = (size.widthDp - pad * 2f - gap * (columns - 1)) / columns
-    val cellHeight = (gridBottom - gridTop - gap * (rows - 1)) / rows
+    val gap = (min(size.widthDp, size.heightDp) * 0.035f).coerceIn(2f, 7f)
+    val grid = bestLeaderboardGrid(
+      metrics.size,
+      size.widthDp - pad * 2f,
+      gridBottom - gridTop,
+      gap,
+    )
     metrics.forEachIndexed { index, metric ->
-      val column = index % columns
-      val row = index / columns
-      val left = pad + column * (cellWidth + gap)
-      val top = gridTop + row * (cellHeight + gap)
-      val rect = RectF(left, top, left + cellWidth, top + cellHeight)
-      canvas.drawRoundRect(rect, 8f, 8f, fillPaint(Color.argb(30, 255, 255, 255)))
+      val column = index % grid.columns
+      val row = index / grid.columns
+      val left = pad + column * (grid.cellWidth + gap)
+      val top = gridTop + row * (grid.cellHeight + gap)
+      val rect = RectF(left, top, left + grid.cellWidth, top + grid.cellHeight)
+      val cellScale = min(grid.cellWidth / 68f, grid.cellHeight / 39f).coerceIn(0.62f, 2.6f)
+      val innerPad = (4.5f * cellScale).coerceIn(3f, 10f)
+      val metricTitleSize = (8.2f * cellScale).coerceIn(6.2f, 18f)
+      val rowTextSize = (6.6f * cellScale).coerceIn(5.2f, 14.5f)
+      val iconRadius = (4.8f * cellScale).coerceIn(3.4f, 12f)
+      val cornerRadius = (7f * cellScale).coerceIn(5f, 15f)
+      canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(30, 255, 255, 255)))
       val metricColor = parseColor(metric.optString("color"), Color.rgb(184, 228, 92))
-      val iconRadius = if (size.compact) 3.4f else 4.6f
-      canvas.drawCircle(left + 7f, top + 8f, iconRadius + 1.5f, fillPaint(withAlpha(metricColor, 64)))
+      val iconCenterX = left + innerPad + iconRadius
+      val iconCenterY = top + innerPad + iconRadius
+      canvas.drawCircle(iconCenterX, iconCenterY, iconRadius + max(1.2f, cellScale), fillPaint(withAlpha(metricColor, 64)))
       drawCompletionIcon(
         canvas,
-        left + 7f,
-        top + 8f,
+        iconCenterX,
+        iconCenterY,
         iconRadius,
         metric.optString("icon", "trophy-outline"),
         metricColor,
@@ -720,23 +796,25 @@ object HabHubWidgetRenderer {
       drawText(
         canvas,
         metric.optString("title", "Tracker"),
-        left + 14f,
-        top + if (size.compact) 9.5f else 10.5f,
-        cellWidth - 18f,
-        textPaint(if (size.compact) 5.6f else 7f, Color.WHITE, true),
+        iconCenterX + iconRadius + innerPad * 0.65f,
+        iconCenterY + metricTitleSize * 0.34f,
+        max(8f, grid.cellWidth - (iconCenterX - left) - iconRadius - innerPad * 1.65f),
+        textPaint(metricTitleSize, Color.WHITE, true),
       )
       val metricRows = metric.optJSONArray("rows") ?: JSONArray()
-      val rowTop = top + if (size.compact) 13f else 16f
-      val availableHeight = rect.bottom - rowTop - 2f
-      val preferredRowHeight = if (size.compact) 11f else 14f
+      val titleBandHeight = max(iconRadius * 2f + innerPad * 1.45f, metricTitleSize * 1.65f + innerPad)
+      val rowTop = top + titleBandHeight
+      val availableHeight = max(0f, rect.bottom - rowTop - innerPad * 0.45f)
+      val preferredRowHeight = max(10f, rowTextSize * 2.15f)
       val visibleRows = min(metricRows.length(), max(1, (availableHeight / preferredRowHeight).toInt()))
       val rowHeight = availableHeight / max(1, visibleRows)
       repeat(visibleRows) { rowIndex ->
         val entry = metricRows.optJSONObject(rowIndex) ?: return@repeat
         val centerY = rowTop + rowHeight * rowIndex + rowHeight / 2f
-        val avatarRadius = min(if (size.compact) 3.8f else 5f, rowHeight * 0.34f)
+        val avatarRadius = min((rowTextSize * 0.9f).coerceAtLeast(3.5f), rowHeight * 0.32f)
+        val avatarCenterX = left + innerPad + avatarRadius
         canvas.drawCircle(
-          left + 7f,
+          avatarCenterX,
           centerY,
           avatarRadius,
           fillPaint(parseColor(entry.optString("color"), metricColor)),
@@ -744,27 +822,34 @@ object HabHubWidgetRenderer {
         drawCenteredText(
           canvas,
           entry.optString("initials").take(2),
-          left + 7f,
+          avatarCenterX,
           centerY,
-          textPaint(max(3.5f, avatarRadius * 0.92f), Color.WHITE, true),
+          textPaint(max(3.8f, avatarRadius * 0.92f), Color.WHITE, true),
         )
-        val valueWidth = if (size.compact) cellWidth * 0.36f else cellWidth * 0.38f
+        val valueWidth = (grid.cellWidth * if (grid.cellWidth < 64f) 0.38f else 0.34f)
+          .coerceAtLeast(12f)
+        val labelLeft = avatarCenterX + avatarRadius + innerPad * 0.65f
+        val name = if (grid.cellWidth < 62f) {
+          "${rowIndex + 1}. ${entry.optString("initials").take(2)}"
+        } else {
+          "${rowIndex + 1}. ${entry.optString("name")}"
+        }
         drawText(
           canvas,
-          "${rowIndex + 1}. ${entry.optString("name")}",
-          left + 13f,
-          centerY + if (size.compact) 2f else 2.4f,
-          cellWidth - valueWidth - 18f,
-          textPaint(if (size.compact) 4.8f else 6f, Color.argb(230, 242, 246, 255), true),
+          name,
+          labelLeft,
+          centerY + rowTextSize * 0.34f,
+          max(5f, rect.right - innerPad - valueWidth - labelLeft),
+          textPaint(rowTextSize, Color.argb(230, 242, 246, 255), true),
         )
-        drawText(
+        drawRightAlignedEllipsizedText(
           canvas,
           entry.optString("value", "—"),
-          rect.right - valueWidth - 3f,
-          centerY + if (size.compact) 2f else 2.4f,
+          rect.right - innerPad,
+          centerY + rowTextSize * 0.34f,
           valueWidth,
           textPaint(
-            if (size.compact) 4.8f else 6f,
+            rowTextSize,
             if (entry.optBoolean("private", false)) Color.argb(170, 210, 220, 238) else metricColor,
             true,
           ),
@@ -780,7 +865,7 @@ object HabHubWidgetRenderer {
     progress: Float,
     accent: Int,
   ) {
-    val pad = if (size.compact) 6f else 11f
+    val pad = if (size.compact) 5f else 11f
     val badgeDiameter = if (size.compact) 24f else 35f
     val badgeCenterX = size.widthDp - pad - badgeDiameter / 2f
     val badgeCenterY = if (size.compact) min(19f, size.heightDp * 0.42f) else 30f
@@ -788,43 +873,63 @@ object HabHubWidgetRenderer {
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
     val dateLabel = item.optString("dateLabel")
-    val dateWidth = if (dateLabel.isBlank()) 0f else if (size.compact) 23f else 38f
-    val headerGap = if (dateWidth > 0f) if (size.compact) 2f else 3f else 0f
-    if (dateWidth > 0f) {
-      drawCenteredEllipsizedText(
+    if (dateLabel.isNotBlank()) {
+      drawText(
         canvas,
         dateLabel,
-        pad + dateWidth / 2f,
-        if (size.compact) 9.8f else 17f,
-        dateWidth,
-        textPaint(if (size.compact) 5.8f else 7.3f, Color.argb(225, 222, 230, 242), true),
+        pad,
+        if (size.compact) 6.2f else 10f,
+        contentWidth,
+        textPaint(if (size.compact) 4.8f else 7.3f, Color.argb(225, 222, 230, 242), true),
       )
     }
-    val eyebrowLeft = pad + dateWidth + headerGap
+    val eyebrowPaint = if (size.compact) {
+      fittedTextPaint(
+        eyebrow,
+        contentWidth,
+        5.1f,
+        4.5f,
+        Color.argb(205, 255, 255, 255),
+        true,
+        0.04f,
+      )
+    } else {
+      textPaint(7.5f, Color.argb(205, 255, 255, 255), true, 0.12f)
+    }
     drawText(
       canvas,
       eyebrow,
-      eyebrowLeft,
-      if (size.compact) 9.8f else 17f,
-      max(10f, contentWidth - dateWidth - headerGap),
-      textPaint(if (size.compact) 5.8f else 7.5f, Color.argb(205, 255, 255, 255), true, if (size.compact) 0.07f else 0.12f),
+      pad,
+      if (size.compact) 11.8f else 19f,
+      contentWidth,
+      eyebrowPaint,
     )
     drawText(
       canvas,
       item.optString("value", "\u2014"),
       pad,
-      if (size.compact) 23.5f else 42f,
+      if (size.compact) 25.2f else 42f,
       contentWidth,
-      textPaint(if (size.compact) 14f else 24f, Color.WHITE, true),
+      textPaint(if (size.compact) 13.2f else 24f, Color.WHITE, true),
     )
     if (size.compact) {
+      val compactSubtitle = item.optString("compactSubtitle", item.optString("subtitle"))
+      val compactSubtitleWidth = size.widthDp - pad * 2f
+      val compactSubtitlePaint = fittedTextPaint(
+        compactSubtitle,
+        compactSubtitleWidth,
+        5.45f,
+        4.2f,
+        Color.argb(220, 224, 234, 250),
+        true,
+      )
       drawText(
         canvas,
-        item.optString("compactSubtitle", item.optString("subtitle")),
+        compactSubtitle,
         pad,
         31.5f,
-        contentWidth,
-        textPaint(5.45f, Color.argb(220, 224, 234, 250), true),
+        compactSubtitleWidth,
+        compactSubtitlePaint,
       )
     } else {
       drawText(
@@ -867,7 +972,7 @@ object HabHubWidgetRenderer {
         canvas,
         size,
         goals,
-        max(33.5f, barTop - 10.5f),
+        max(34f, barTop - 10.5f),
         barTop - 1.5f,
         accent,
       )
@@ -1266,7 +1371,7 @@ object HabHubWidgetRenderer {
     val avatarBitmap = avatarBitmap(context, item.optString("avatarUri"))
     val heightScale = item.optDouble("heightScale", 1.0).toFloat().coerceIn(0.9f, 1.1f)
     val goals = item.optJSONArray("goals") ?: JSONArray()
-    if (size.tall && size.heightDp > size.widthDp * 1.28f) {
+    if (size.tall && size.heightDp > size.widthDp * 1.38f) {
       drawPortraitAvatarCard(
         canvas,
         size,
@@ -1282,7 +1387,10 @@ object HabHubWidgetRenderer {
     val outerPad = if (size.compact) 5f else 7f
     val avatarAreaWidth = when {
       size.compact -> min(37f, size.widthDp * 0.34f)
-      else -> min(72f, max(42f, size.widthDp * 0.32f))
+      else -> min(
+        size.widthDp * 0.48f,
+        max(48f, (size.heightDp - outerPad * 2f) * 328f / 512f / heightScale + 8f),
+      )
     }
     val availableHeight = size.heightDp - outerPad * 2f
     val resolvedHeight = min(
@@ -1332,10 +1440,13 @@ object HabHubWidgetRenderer {
     accent: Int,
   ) {
     val outerPad = 7f
-    val avatarRegionHeight = min(size.heightDp * 0.42f, size.widthDp * 1.04f)
+    val avatarRegionHeight = min(
+      size.heightDp * if (size.heightDp >= 260f) 0.48f else 0.45f,
+      size.widthDp * 1.35f,
+    )
       .coerceAtLeast(58f)
-    val avatarMaxHeight = max(36f, avatarRegionHeight - 5f)
-    val avatarMaxWidth = min(72f, size.widthDp * 0.56f)
+    val avatarMaxHeight = max(36f, avatarRegionHeight - 4f)
+    val avatarMaxWidth = size.widthDp * 0.78f
     val resolvedHeight = min(
       avatarMaxHeight,
       avatarMaxWidth * 512f / 328f * heightScale,
@@ -1446,7 +1557,11 @@ object HabHubWidgetRenderer {
         val candidateDiameter = min(
           candidateCellWidth - 5f,
           candidateCellHeight - candidateLabelHeight - 4f,
-        ).coerceAtMost(if (size.compact) 15f else 52f)
+        ).coerceAtMost(
+          if (size.compact) 15f
+          else if (max(size.widthDp, size.heightDp) >= 300f) 66f
+          else 56f,
+        )
         if (candidateDiameter > diameter) {
           columns = candidate
           diameter = candidateDiameter
@@ -1460,7 +1575,7 @@ object HabHubWidgetRenderer {
     val cellWidth = gridWidth / columns
     val cellHeight = gridHeight / rows
     val labelHeight = if (size.compact) 7f else (cellHeight * 0.2f).coerceIn(8f, 13f)
-    val labelSize = (diameter * 0.24f).coerceIn(if (size.compact) 5.2f else 5.8f, 9.5f)
+    val labelSize = (diameter * 0.24f).coerceIn(if (size.compact) 5.2f else 5.8f, 11f)
     val radius = diameter / 2f
     repeat(count) { index ->
       val goal = goals.optJSONObject(index) ?: return@repeat
@@ -1646,6 +1761,24 @@ object HabHubWidgetRenderer {
     this.letterSpacing = letterSpacing
   }
 
+  private fun fittedTextPaint(
+    value: String,
+    maxWidth: Float,
+    preferredSize: Float,
+    minimumSize: Float,
+    color: Int,
+    bold: Boolean,
+    letterSpacing: Float = 0f,
+  ): TextPaint {
+    val paint = textPaint(preferredSize, color, bold, letterSpacing)
+    if (value.isBlank() || maxWidth <= 0f) return paint
+    val measured = paint.measureText(value)
+    if (measured > maxWidth) {
+      paint.textSize = max(minimumSize, preferredSize * maxWidth / measured)
+    }
+    return paint
+  }
+
   private fun drawText(
     canvas: Canvas,
     value: String,
@@ -1684,6 +1817,21 @@ object HabHubWidgetRenderer {
     val layout = singleLineLayout(value, paint, maxWidth, Layout.Alignment.ALIGN_CENTER)
     canvas.save()
     canvas.translate(centerX - maxWidth / 2f, baseline - layout.getLineBaseline(0))
+    layout.draw(canvas)
+    canvas.restore()
+  }
+
+  private fun drawRightAlignedEllipsizedText(
+    canvas: Canvas,
+    value: String,
+    right: Float,
+    baseline: Float,
+    maxWidth: Float,
+    paint: TextPaint,
+  ) {
+    val layout = singleLineLayout(value, paint, maxWidth, Layout.Alignment.ALIGN_OPPOSITE)
+    canvas.save()
+    canvas.translate(right - maxWidth, baseline - layout.getLineBaseline(0))
     layout.draw(canvas)
     canvas.restore()
   }

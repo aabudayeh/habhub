@@ -10,11 +10,14 @@ const offline = document.querySelector("#offline");
 const connectionLabel = document.querySelector("#connection-label");
 const refreshButton = document.querySelector("#refresh");
 const openPanelButton = document.querySelector("#open-panel");
+const openFullAppButton = document.querySelector("#open-full-app");
 const openSiteButton = document.querySelector("#open-site");
 const retryButton = document.querySelector("#retry");
 const signInButton = document.querySelector("#sign-in");
 const authSignInButton = document.querySelector("#auth-sign-in");
 const authRetryButton = document.querySelector("#auth-retry");
+const quickNavigationButtons = document.querySelectorAll("[data-app-path]");
+const companionHomeButtons = document.querySelectorAll("[data-companion-home]");
 
 let appUrl = "";
 let appOrigin = "";
@@ -23,6 +26,7 @@ let probeInterval = 0;
 let companionReady = false;
 let companionPhase = "loading";
 let handshakeNonce = "";
+let surfaceMode = "companion";
 
 function newNonce() {
   const bytes = new Uint32Array(4);
@@ -40,7 +44,9 @@ function updateConnectivity() {
   const online = navigator.onLine;
   offline.hidden = online;
   if (!online) connectionLabel.textContent = "Offline - changes sync later";
-  else if (companionReady) connectionLabel.textContent = "Live companion";
+  else if (companionReady)
+    connectionLabel.textContent =
+      surfaceMode === "full" ? "Full app in this window" : "Live companion";
   else if (companionPhase === "signed-out") connectionLabel.textContent = "Sign in required";
   else if (companionPhase === "setup-required") connectionLabel.textContent = "Finish setup required";
   else if (companionPhase === "data-loading") connectionLabel.textContent = "Loading your HabHub data...";
@@ -142,8 +148,22 @@ function companionUrl(cacheBust = false) {
 
 function loadCompanion(cacheBust = false) {
   if (!appUrl) return;
+  surfaceMode = "companion";
   setLoading();
   frame.src = companionUrl(cacheBust);
+}
+
+function showFullApp(path = "/") {
+  if (!appUrl || typeof path !== "string" || !path.startsWith("/")) return;
+  window.clearTimeout(loadTimeout);
+  window.clearInterval(probeInterval);
+  companionReady = true;
+  companionPhase = "ready";
+  surfaceMode = "full";
+  hideAllStates();
+  frame.classList.add("ready");
+  frame.src = new URL(path, appUrl).toString();
+  updateConnectivity();
 }
 
 async function openWebsite(path = "/") {
@@ -182,11 +202,22 @@ refreshButton?.addEventListener("click", () => loadCompanion(true));
 retryButton?.addEventListener("click", () => loadCompanion(true));
 authRetryButton?.addEventListener("click", () => loadCompanion(true));
 openSiteButton?.addEventListener("click", () => void openWebsite("/"));
+openFullAppButton?.addEventListener("click", () => showFullApp("/"));
 openPanelButton?.addEventListener("click", () => void openSidePanel().catch(() => openWebsite("/extension")));
 signInButton?.addEventListener("click", () => void openWebsite("/sign-in"));
 authSignInButton?.addEventListener("click", () => {
   const path = companionPhase === "setup-required" ? "/onboarding" : "/sign-in";
   void openWebsite(path);
+});
+quickNavigationButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const path = button.dataset.appPath;
+    if (typeof path === "string" && path.startsWith("/"))
+      showFullApp(path);
+  });
+});
+companionHomeButtons.forEach((button) => {
+  button.addEventListener("click", () => loadCompanion());
 });
 
 appUrl = await getAppUrl();

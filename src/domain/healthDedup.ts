@@ -716,7 +716,14 @@ export function samsungDailySummaryStepCount(
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
     return null;
   const boundaryToleranceMs = 5 * 60_000;
-  const minimumFullDayDurationMs = 23 * 60 * 60_000;
+  // A local day is 23 or 25 hours at a daylight-saving transition. Compare
+  // against this date's real midnight-to-midnight span so Samsung's
+  // 00:00-23:59 summary remains valid on the spring-forward day without
+  // accepting an ordinary partial interval on a normal day.
+  const minimumFullDayDurationMs = Math.max(
+    0,
+    endMs - startMs - boundaryToleranceMs,
+  );
   const summaries = candidates
     .filter((candidate) => {
       const candidateStart = new Date(candidate.startTime).getTime();

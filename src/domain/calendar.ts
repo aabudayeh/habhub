@@ -7,6 +7,7 @@ import { AppState, TodoItem } from "@/src/types";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
 import { gymSessionClockBounds } from "@/src/domain/gym";
 import { scheduledGoalReached } from "@/src/domain/metrics";
+import { groupTodoReminderFeatureEnabled } from "@/src/domain/todos";
 import {
   entriesForMetric,
   entriesForUserDay,
@@ -20,6 +21,8 @@ export type ScheduleEvent = {
   kind: "todo" | "tracker" | "reminder" | "log" | "gym" | "fasting";
   metricId?: string;
   todoId?: string;
+  groupTodoId?: string;
+  groupId?: string;
   completed?: boolean;
   skipped?: boolean;
   failed?: boolean;
@@ -361,6 +364,7 @@ export function scheduleEventsForDate(
     .filter(
       (reminder) =>
         reminder.enabled &&
+        groupTodoReminderFeatureEnabled(state, reminder) &&
         scheduleAppliesOnDate(
           reminder.schedule,
           reminder.schedule.anchorDate ?? localDate,
@@ -387,6 +391,8 @@ export function scheduleEventsForDate(
         kind: "reminder" as const,
         metricId: reminder.metricId,
         todoId: reminder.todoId,
+        groupTodoId: reminder.groupTodoId,
+        groupId: reminder.groupId,
         color: metric?.color,
         durationMinutes: reminder.durationMinutes,
         completed,

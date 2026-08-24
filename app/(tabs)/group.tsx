@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
 import React, {
   ReactNode,
@@ -17,6 +17,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   UIManager,
   useWindowDimensions,
@@ -40,6 +41,7 @@ import {
   type GoalHeatmapModel,
 } from "@/src/components/GoalHeatmap";
 import { GroupChallengeEditor } from "@/src/components/GroupChallengeEditor";
+import { GroupTodoLeaderboardSection } from "@/src/components/GroupTodoLeaderboardSection";
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import {
   adjacentPeriod,
@@ -289,6 +291,16 @@ if (
 }
 
 function LeaderboardScreen() {
+  const routeParams = useLocalSearchParams<{
+    focusGroupTodo?: string | string[];
+    todoFocusAt?: string | string[];
+  }>();
+  const requestedGroupTodoId = Array.isArray(routeParams.focusGroupTodo)
+    ? routeParams.focusGroupTodo[0]
+    : routeParams.focusGroupTodo;
+  const requestedGroupTodoAt = Array.isArray(routeParams.todoFocusAt)
+    ? routeParams.todoFocusAt[0]
+    : routeParams.todoFocusAt;
   const screenIsFocused = useIsFocused();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
@@ -319,6 +331,8 @@ function LeaderboardScreen() {
   const celebratingChallengeIds = useRef(new Set<string>());
   const [, setClockTick] = useState(0);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const screenScrollRef = useRef<ScrollView>(null);
+  const groupTodoY = useRef<number | undefined>(undefined);
   const rankingStateRef = useRef(state);
   rankingStateRef.current = state;
   useFocusEffect(
@@ -343,6 +357,31 @@ function LeaderboardScreen() {
       setDraggingCardId(null);
     }
   }, [editing]);
+  useEffect(() => {
+    if (!requestedGroupTodoId || state.group.groupTodosEnabled !== true) return;
+    if (state.settings.showGroupTodosByGroup?.[state.group.id] !== true)
+      updateSettings({
+        showGroupTodosByGroup: {
+          ...(state.settings.showGroupTodosByGroup ?? {}),
+          [state.group.id]: true,
+        },
+      });
+    const frame = requestAnimationFrame(() => {
+      if (groupTodoY.current === undefined) return;
+      screenScrollRef.current?.scrollTo({
+        y: Math.max(0, groupTodoY.current - 12),
+        animated: true,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    requestedGroupTodoAt,
+    requestedGroupTodoId,
+    state.group.groupTodosEnabled,
+    state.group.id,
+    state.settings.showGroupTodosByGroup,
+    updateSettings,
+  ]);
   useFocusedCloudSyncPause(
     "leaderboard-edit",
     editing || challengeEditorOpen,
@@ -1083,6 +1122,7 @@ function LeaderboardScreen() {
   );
   return (
     <Screen
+      scrollRef={screenScrollRef}
       contentContainerStyle={{ paddingBottom: 14 }}
       refreshEnabled={!editing}
     >
@@ -1210,26 +1250,25 @@ function LeaderboardScreen() {
                   },
                 )}
               </View>
-              <View style={styles.gridDisclosureActions}>
-                <Pressable
-                  onPress={() => setExpandedGridRows(visibleGridKeys)}
-                  style={styles.gridDisclosureAction}
-                >
-                  <Ionicons name="expand-outline" size={14} color={accent} />
-                  <Text style={[styles.gridDisclosureText, { color: accent }]}>{t("Expand all")}</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setExpandedGridRows([])}
-                  style={styles.gridDisclosureAction}
-                >
-                  <Ionicons name="contract-outline" size={14} color={accent} />
-                  <Text style={[styles.gridDisclosureText, { color: accent }]}>{t("Collapse all")}</Text>
-                </Pressable>
-              </View>
             </View>
             <Text style={[styles.gridEditHint, { color: colors.muted }]}>{t("Calendar rows are collapsed by default. The selected range is saved for this group.")}</Text>
           </Card>
         ) : null}
+      {state.settings.groupTodosBelowTrackers === false ? (
+        <GroupTodoLeaderboardSection
+          editing={editing}
+          onRequestEdit={() => setEditing(true)}
+          focusTodoId={requestedGroupTodoId}
+          onLayout={(event) => {
+            groupTodoY.current = event.nativeEvent.layout.y;
+            if (requestedGroupTodoId)
+              screenScrollRef.current?.scrollTo({
+                y: Math.max(0, event.nativeEvent.layout.y - 12),
+                animated: true,
+              });
+          }}
+        />
+      ) : null}
       {(() => {
         const rankingCards = displayedSelected.map((id, cardIndex) => {
         const challengeId = challengeIdFromCard(id);
@@ -1614,6 +1653,40 @@ function LeaderboardScreen() {
           />
         );
       })()}
+      {state.settings.groupTodosBelowTrackers !== false ? (
+        <GroupTodoLeaderboardSection
+          editing={editing}
+          onRequestEdit={() => setEditing(true)}
+          focusTodoId={requestedGroupTodoId}
+          onLayout={(event) => {
+            groupTodoY.current = event.nativeEvent.layout.y;
+            if (requestedGroupTodoId)
+              screenScrollRef.current?.scrollTo({
+                y: Math.max(0, event.nativeEvent.layout.y - 12),
+                animated: true,
+              });
+          }}
+        />
+      ) : null}
+      {editing ? (
+        <View style={[styles.gridBulkBox, { borderColor: colors.border }] }>
+          <Pressable
+            onPress={() => setExpandedGridRows(visibleGridKeys)}
+            style={styles.gridBulkButton}
+          >
+            <Ionicons name="chevron-down" size={17} color={accent} />
+            <Text style={[styles.gridBulkText, { color: colors.ink }]}>{t("Expand all")}</Text>
+          </Pressable>
+          <View style={[styles.gridBulkDivider, { backgroundColor: colors.border }]} />
+          <Pressable
+            onPress={() => setExpandedGridRows([])}
+            style={styles.gridBulkButton}
+          >
+            <Ionicons name="chevron-up" size={17} color={accent} />
+            <Text style={[styles.gridBulkText, { color: colors.ink }]}>{t("Collapse all")}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {editing ? (
         <>
           <View style={styles.editActions}>
@@ -2202,9 +2275,10 @@ const styles = StyleSheet.create({
   gridRangeChoices: { flex: 1, flexDirection: "row", gap: 5 },
   gridRangeChoice: { minHeight: 30, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
   gridRangeChoiceText: { fontSize: 8, fontWeight: "900" },
-  gridDisclosureActions: { flexDirection: "row", alignItems: "center", gap: 4 },
-  gridDisclosureAction: { minHeight: 30, flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 4 },
-  gridDisclosureText: { fontSize: 7, fontWeight: "900" },
+  gridBulkBox: { minHeight: 43, marginTop: 7, marginBottom: 7, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "stretch" },
+  gridBulkButton: { flex: 1, minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  gridBulkDivider: { width: StyleSheet.hairlineWidth, marginVertical: 8 },
+  gridBulkText: { fontSize: 9, fontWeight: "900" },
   gridEditHint: { fontSize: 7, lineHeight: 10, marginTop: 5 },
   ranking: { padding: 7 },
   challengeCard: { overflow: "hidden" },

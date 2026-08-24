@@ -36,7 +36,7 @@ export type WidgetTrackerSnapshot = {
 
 export type WidgetFeaturedSnapshot = WidgetTrackerSnapshot & {
   id: "__featured__";
-  /** Compact local date rendered in the existing Featured header line. */
+  /** Compact local date rendered above the Featured eyebrow. */
   dateLabel: string;
   /** Short enough to remain visible beside goal status in a 2 x 1 widget. */
   compactSubtitle: string;

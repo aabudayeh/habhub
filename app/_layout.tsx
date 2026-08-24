@@ -22,6 +22,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AiAssistantButton } from "@/src/components/AiAssistantButton";
 import { ActiveTimerOverlay } from "@/src/components/ActiveTimerOverlay";
 import { InAppChatBanner } from "@/src/components/InAppChatBanner";
+import { GroupTodoReminderReconciler } from "@/src/components/GroupTodoReminderReconciler";
 import { WebAlertHost } from "@/src/components/WebAlertHost";
 import {
   TutorialProvider,
@@ -1231,6 +1232,7 @@ function RootNavigator() {
               hidden={rootSegment === "timer" || rootSegment === "extension"}
             />
             <InAppChatBanner />
+            {tutorialActive ? null : <GroupTodoReminderReconciler />}
             <WebAlertHost />
             </TutorialRouteBoundary>
             </View>

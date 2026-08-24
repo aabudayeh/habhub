@@ -21,6 +21,13 @@ type AppTextProps = TextProps & {
 type AppTextInputProps = TextInputProps & {
   /** Disable interface translation for user-authored placeholder copy. */
   translate?: boolean;
+  /**
+   * Keep the rendered Web font at 16 CSS pixels or larger. Mobile Safari
+   * otherwise zooms the whole viewport when this input receives focus.
+   * This is opt-in so compact native controls and unrelated Web forms keep
+   * their established visual density.
+   */
+  preventWebFocusZoom?: boolean;
 };
 
 function translateTextChildren(
@@ -136,6 +143,7 @@ function AppTextInput(
     accessibilityLabel,
     accessibilityHint,
     translate = true,
+    preventWebFocusZoom = false,
     ...props
   },
   ref,
@@ -145,6 +153,11 @@ function AppTextInput(
   const locale = useLocalization();
   const flattened = StyleSheet.flatten(style) as TextStyle | undefined;
   const fontSize = flattened?.fontSize ?? 14;
+  const scaledFontSize = fontSize * scale;
+  const focusSafeWebFontSize =
+    Platform.OS === "web" && preventWebFocusZoom
+      ? Math.max(16, scaledFontSize)
+      : undefined;
   return (
     <NativeTextInput
       ref={ref}
@@ -169,7 +182,10 @@ function AppTextInput(
           backgroundColor: remapColor(flattened?.backgroundColor, colors),
           borderColor: remapColor(flattened?.borderColor, colors),
         },
-        scale === 1 ? undefined : { fontSize: fontSize * scale },
+        scale === 1 ? undefined : { fontSize: scaledFontSize },
+        focusSafeWebFontSize === undefined
+          ? undefined
+          : { fontSize: focusSafeWebFontSize },
         locale.isRtl
           ? {
               writingDirection: "rtl",

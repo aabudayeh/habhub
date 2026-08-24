@@ -12,7 +12,34 @@ const webShellStyles = `
   }
 
   html, body, #root {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
     background-color: var(--habhub-shell-background);
+  }
+
+  /*
+   * iOS Safari's legacy 100vh includes browser chrome and can leave a stale
+   * strip between the React Navigation scene and its bottom bar. Keep the
+   * single app viewport fixed to the dynamic visual viewport instead. The
+   * safe-area provider remains responsible for the top and bottom insets.
+   */
+  @supports (height: 100dvh) {
+    html, body {
+      height: 100dvh;
+    }
+  }
+
+  body {
+    position: fixed;
+    inset: 0;
+  }
+
+  #root {
+    position: relative;
+    isolation: isolate;
   }
 
   #root {

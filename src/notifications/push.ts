@@ -49,6 +49,7 @@ import {
   todoReminderAppliesOnDate,
   todoResolvedOnDate,
 } from '@/src/domain/schedule';
+import { groupTodoReminderFeatureEnabled } from '@/src/domain/todos';
 import {
   ensureLocalNotificationChannels,
 } from '@/src/notifications/localChannels';
@@ -1560,6 +1561,7 @@ async function syncProductivityNotificationsNow(state: AppState) {
     for (const reminder of state.calendarReminders ?? []) {
       if (
         !reminder.enabled ||
+        !groupTodoReminderFeatureEnabled(state, reminder) ||
         !scheduleAppliesOnDate(reminder.schedule, today, localDate)
       )
         continue;
@@ -1572,10 +1574,12 @@ async function syncProductivityNotificationsNow(state: AppState) {
           : reminder.kind === 'todo'
             ? 'A scheduled to-do reminder is ready.'
             : 'Scheduled reminder',
-        reminder.kind === 'tracker' && reminder.metricId && reminder.durationMinutes
+        reminder.groupTodoId && reminder.groupId
+          ? `/(tabs)/group?focusGroupTodo=${encodeURIComponent(reminder.groupTodoId)}&todoFocusAt=${encodeURIComponent(reminder.id)}`
+          : reminder.kind === 'tracker' && reminder.metricId && reminder.durationMinutes
           ? `/timer?metric=${encodeURIComponent(reminder.metricId)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`
           : '/calendar',
-        'calendar-reminder',
+        reminder.groupTodoId ? 'group-todo-reminder' : 'calendar-reminder',
         reminder.id,
       );
     }

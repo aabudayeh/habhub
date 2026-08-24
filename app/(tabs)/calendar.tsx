@@ -275,7 +275,15 @@ function SchedulePage() {
       ]);
       return;
     }
-    if (event.kind === "todo" && event.todoId)
+    if (event.groupTodoId && event.groupId)
+      router.navigate({
+        pathname: "/(tabs)/group",
+        params: {
+          focusGroupTodo: event.groupTodoId,
+          todoFocusAt: Date.now().toString(),
+        },
+      } as never);
+    else if (event.kind === "todo" && event.todoId)
       router.navigate({
         pathname: "/todo-editor",
         params: { id: event.todoId },

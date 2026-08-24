@@ -298,6 +298,15 @@ const notificationAmbiguityRepair = fs.readFileSync(
   ),
   "utf8",
 );
+const notificationGuardHardening = fs.readFileSync(
+  path.join(
+    root,
+    "supabase",
+    "migrations",
+    "202608240006_worker_and_challenge_guard_hardening.sql",
+  ),
+  "utf8",
+);
 const notificationUuidHotfix = fs.readFileSync(
   path.join(
     root,
@@ -602,6 +611,21 @@ assert.match(
   notificationAmbiguityRepair,
   /v_event_conflicts <> 2 or v_push_returns <> 2/i,
   "the forward repair must fail closed if the deployed function shape drifts",
+);
+assert.match(
+  notificationGuardHardening,
+  /v_event_conflicts = 0 and v_push_returns = 0/i,
+  "the post-deploy guard must be repeat-safe after the first repair",
+);
+assert.match(
+  notificationGuardHardening,
+  /constraint_row\.conname =[\s\S]{0,120}group_notification_events_recipient_id_event_key_key[\s\S]{0,500}push_dispatch_events_event_key_key/i,
+  "the repeat-safe guard must verify both named conflict constraints",
+);
+assert.match(
+  notificationGuardHardening,
+  /rewritten_definition is distinct from current_definition[\s\S]{0,80}execute rewritten_definition/i,
+  "an already repaired function must not be replaced again",
 );
 assert.match(periodMigration, /occurrence_date date not null/i);
 assert.match(

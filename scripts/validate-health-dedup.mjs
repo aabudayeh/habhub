@@ -84,8 +84,8 @@ assert.equal(
 );
 assert.equal(
   HEALTH_STEPS_IMPORT_VERSION,
-  5,
-  "workout-uncovered Step fallbacks must trigger a one-time historical repair for existing connected accounts",
+  6,
+  "Samsung daily totals and workout-uncovered Step fallbacks must trigger a one-time historical repair",
 );
 
 const platformPriorityAggregate = [
@@ -148,6 +148,23 @@ assert.equal(
   ),
   null,
   "ordinary Samsung intervals must not masquerade as the watch-inclusive daily summary",
+);
+const springForwardStart = new Date("2026-03-29T00:00:00+01:00");
+const springForwardEnd = new Date("2026-03-30T00:00:00+02:00");
+assert.equal(
+  samsungDailySummaryStepCount(
+    [
+      {
+        count: 9_001,
+        startTime: "2026-03-29T00:00:00+01:00",
+        endTime: "2026-03-29T23:59:59+02:00",
+      },
+    ],
+    springForwardStart,
+    springForwardEnd,
+  ),
+  9_001,
+  "Samsung's full-day summary must remain valid on a 23-hour spring-forward day",
 );
 const refreshedCurrentDay = replaceCanonicalStepAggregateForDay(
   [
@@ -1908,7 +1925,7 @@ assert.match(
 assert.match(
   androidHealthSource,
   /authoritativeHealthConnectStepGroups\(\s*unfilteredGroups,?\s*\)/,
-  "completed-day Steps must preserve Health Connect's Activity-priority aggregate",
+  "completed-day fallback must retain Health Connect's Activity-priority aggregate when no Samsung daily row exists",
 );
 assert.match(
   androidHealthSource,
@@ -1922,12 +1939,12 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /Promise\.all\(\[[\s\S]{0,3000}aggregateRecord\(\{[\s\S]{0,1200}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
+  /Promise\.all\(\[[\s\S]{0,7000}aggregateRecord\(\{[\s\S]{0,2500}readLocalPhoneSteps\(currentStart!, currentEnd!\)/,
   "the current-day cross-device and Physical Activity reads must run concurrently",
 );
 assert.match(
   androidHealthSource,
-  /Promise\.all\(\[[\s\S]{0,3200}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,3200}dataOriginFilter: androidDeviceOrigins/,
+  /Promise\.all\(\[[\s\S]{0,7000}currentDeviceStepOrigins\(\)[\s\S]{0,500}\]\)[\s\S]{0,4000}dataOriginFilter: androidDeviceOrigins/,
   "every current-day read must discover and aggregate only Android's phone-owned origin",
 );
 assert.match(
@@ -1988,7 +2005,12 @@ assert.match(
 assert.match(
   androidHealthSource,
   /SAMSUNG_HEALTH_STEP_ORIGIN = "com\.sec\.android\.app\.shealth"[\s\S]{0,50000}dataOriginFilter: \[SAMSUNG_HEALTH_STEP_ORIGIN\]/,
-  "today must independently aggregate Samsung Health's exported All steps records",
+  "Samsung Steps must be read independently from the overlapping writers",
+);
+assert.match(
+  androidHealthSource,
+  /readSamsungDailyStepSummaries[\s\S]{0,30000}samsungDailyTotals\.get\(localDate\)[\s\S]{0,400}samsungCount \?\? Number\(group\.result\.COUNT_TOTAL/,
+  "completed Samsung days must prefer the same full-day phone+watch total used today",
 );
 assert.match(
   androidHealthSource,
@@ -1997,7 +2019,12 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /LOCAL_PHONE_STEP_SOURCE = "Android phone \(Physical Activity\)"[\s\S]{0,50000}usedLocalPhone[\s\S]{0,300}LOCAL_PHONE_STEP_SOURCE/,
+  /const LOCAL_PHONE_STEP_SOURCE = "Android phone \(Physical Activity\)"/,
+  "Physical Activity must retain its explicit user-facing source label",
+);
+assert.match(
+  androidHealthSource,
+  /reconciledCurrent\.usedLocalPhone[\s\S]{0,160}\? LOCAL_PHONE_STEP_SOURCE/,
   "a Physical Activity-owned current-day total must expose an explicit source label",
 );
 assert.match(
@@ -2358,8 +2385,8 @@ assert.match(
 );
 assert.match(
   androidHealthSource,
-  /needsHealthConnectCurrent[\s\S]{0,300}needsSamsungCurrent[\s\S]{0,250}needsAndroidDeviceCurrent[\s\S]{0,250}needsPhysicalActivityCurrent[\s\S]{0,1800}includesCurrentDay && needsHealthConnectCurrent[\s\S]{0,900}includesCurrentDay && needsSamsungCurrent[\s\S]{0,2600}includesCurrentDay && needsPhysicalActivityCurrent[\s\S]{0,700}includesCurrentDay && needsAndroidDeviceCurrent/,
-  "single-source diagnostics must avoid unrelated live-source native queries",
+  /needsHealthConnectCurrent[\s\S]{0,300}needsSamsungCurrent[\s\S]{0,250}needsAndroidDeviceCurrent[\s\S]{0,250}needsPhysicalActivityCurrent[\s\S]{0,1800}includesCurrentDay && needsHealthConnectCurrent[\s\S]{0,1200}needsSamsungCurrent[\s\S]{0,2600}includesCurrentDay && needsPhysicalActivityCurrent[\s\S]{0,700}includesCurrentDay && needsAndroidDeviceCurrent/,
+  "single-source diagnostics must avoid unrelated native queries while Samsung selection can also repair history",
 );
 assert.match(
   androidHealthSource,
@@ -2633,5 +2660,5 @@ assert.equal(normalizedYear.length, 365);
 assert.ok(elapsed < 1000, `Year dedupe took ${elapsed.toFixed(1)}ms`);
 
 console.log(
-  `Health import validation passed: configurable live Step candidates, workout-safe fallbacks, exact priority-aware historical totals, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
+  `Health import validation passed: configurable live Step candidates, Samsung daily historical totals with platform fallbacks, workout-safe activity, manual overrides, repair/refresh contracts, body composition, and 365-day fixture (${elapsed.toFixed(1)}ms).`,
 );

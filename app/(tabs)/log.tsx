@@ -1263,7 +1263,7 @@ function LogScreen() {
                 style={styles.fieldInput}
               />
             </>
-          ) : selected.dataType === "boolean" ? (
+          ) : selected.dataType === "boolean" && selected.id !== "workout" ? (
             <Pressable
               onPress={toggleBoolean}
               style={[styles.completion, { backgroundColor: colors.canvas }]}

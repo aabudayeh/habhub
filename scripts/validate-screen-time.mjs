@@ -155,8 +155,23 @@ const nativePlugin = fs.readFileSync("plugins/withHabHubAndroid.js", "utf8");
 const easIgnore = fs.readFileSync(".easignore", "utf8");
 assert.match(
   nativePlugin,
-  /NATIVE_SOURCES[\s\S]{0,300}"HabHubNativeModule\.kt"[\s\S]{0,9000}replace\(\/\^package[\s\S]{0,500}fs\.writeFileSync\(path\.join\(javaRoot, fileName\), source\)/,
-  "managed prebuild must install the authoritative HabHub native template under the configured package",
+  /const NATIVE_SOURCES = \[[\s\S]{0,300}"HabHubNativeModule\.kt"/,
+  "managed prebuild must include the authoritative HabHub native module template",
+);
+assert.match(
+  nativePlugin,
+  /for \(const fileName of NATIVE_SOURCES\)/,
+  "managed prebuild must copy every authoritative native source",
+);
+assert.match(
+  nativePlugin,
+  /\.replace\(\/\^package\\s\+\[\^\\r\\n\]\+\/m, `package \$\{packageName\}`\)/,
+  "managed prebuild must rewrite templates into the configured package",
+);
+assert.match(
+  nativePlugin,
+  /fs\.writeFileSync\(path\.join\(javaRoot, fileName\), source\)/,
+  "managed prebuild must write each rewritten native template",
 );
 assert.match(
   easIgnore,

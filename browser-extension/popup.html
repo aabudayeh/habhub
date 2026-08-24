@@ -23,11 +23,23 @@
         <button id="open-panel" class="icon-button" type="button" aria-label="Expand in side panel" title="Expand in side panel">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16M17.5 9.5l2 2-2 2" /></svg>
         </button>
-        <button id="open-site" class="icon-button" type="button" aria-label="Open full HabHub website" title="Open full HabHub website">
+        <button id="open-full-app" class="icon-button full-app-button" type="button" aria-label="Show the full HabHub app in this popup" title="Show full app here">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 15h18M8 15v5M16 15v5" /></svg>
+          <span>Full app</span>
+        </button>
+        <button id="open-site" class="icon-button" type="button" aria-label="Open HabHub in a new browser tab" title="Open in new tab">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>
         </button>
       </div>
     </header>
+
+    <nav class="quick-nav" aria-label="Open a full HabHub page">
+      <button type="button" data-companion-home>Companion</button>
+      <button type="button" data-app-path="/">Today</button>
+      <button type="button" data-app-path="/group">Leaderboard</button>
+      <button type="button" data-app-path="/log">Log</button>
+      <button type="button" data-app-path="/gym">Workout</button>
+    </nav>
 
     <div id="offline" class="offline" hidden>
       Offline. HabHub will show locally saved data and sync when you reconnect.

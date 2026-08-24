@@ -13,6 +13,7 @@ import {
   yearDateRange,
 } from "./date";
 import {
+  calculateBmr,
   dailyFoodGoal,
   energyFormulaVariables,
   KCAL_PER_KG_ESTIMATE,
@@ -34,7 +35,10 @@ import {
   currentStreakWithRest,
   longestStreakWithRest,
 } from "./streaks";
-import { unrecordedStepActivity } from "./health";
+import {
+  isCalculatedStepFallback,
+  unrecordedStepActivity,
+} from "./health";
 import {
   activeFastingHours,
   automaticFastProgress,
@@ -186,15 +190,11 @@ export function metricValue(
     )
       .slice()
       .sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
-    if (imported.length) return aggregate(imported, metric.aggregation);
     const today = dateKey();
     if (localDate > today) return 0;
     const profile =
       state.energyProfiles?.[userId] ?? state.settings.energyProfile;
-    const baseline = energyFormulaVariables(
-      profile,
-      state.settings.baselineCalories,
-    ).daily_energy;
+    const restingDaily = calculateBmr(profile) || state.settings.baselineCalories;
     const elapsedFraction =
       localDate === today
         ? Math.max(
@@ -209,14 +209,23 @@ export function metricValue(
     const activeEnergy = state.metrics.find(
       (candidate) => candidate.id === "exercise",
     );
-    return (
-      baseline * elapsedFraction +
+    const calculatedTotal =
+      restingDaily * elapsedFraction +
       (activeEnergy
         ? metricValue(state, activeEnergy, userId, localDate, [
             ...stack,
             metric.id,
           ])
-        : 0)
+        : 0);
+    if (!imported.length) return calculatedTotal;
+    // TotalCaloriesBurned normally already contains rest + activity, so it
+    // must never be added to the fallback. Some writers, however, publish a
+    // rest-only or temporarily stale total. Taking the larger complete-day
+    // candidate keeps recorded workouts and uncovered-step activity visible
+    // without double-counting a provider total that already includes them.
+    return Math.max(
+      aggregate(imported, metric.aggregation),
+      calculatedTotal,
     );
   }
   if (
@@ -245,14 +254,19 @@ export function metricValue(
     const sameDay = entriesForDay(state.entries, metric.id, userId, localDate)
       .slice()
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
-    if (sameDay.length)
-      return aggregate(
-        metric.id === "steps"
-          ? authoritativeStepEntries(sameDay)
-          : sameDay,
-        metric.aggregation,
-      );
     if (metric.stepFallback) {
+      // Recalculate the uncovered-step component from the current day instead
+      // of depending on a previously materialized `step-fallback` row. This
+      // keeps live totals correct when a cloud/native refresh replaces only
+      // part of the day's health entries. Stored fallback rows remain useful
+      // for sync/history, but are excluded here so they cannot be counted
+      // twice alongside the fresh estimate.
+      const measuredEntries = sameDay.filter(
+        (entry) => !isCalculatedStepFallback(entry),
+      );
+      const measuredValue = measuredEntries.length
+        ? aggregate(measuredEntries, metric.aggregation)
+        : 0;
       const steps = state.metrics.find(
         (candidate) =>
           candidate.healthMapping?.dataType === "steps" &&
@@ -273,16 +287,25 @@ export function metricValue(
         metric.healthMapping?.dataType === "workouts" &&
         metric.healthMapping.field === "distance_km"
       )
-        return estimate.distanceKm;
+        return measuredValue + estimate.distanceKm;
       if (
         metric.healthMapping?.dataType === "workouts" &&
         metric.healthMapping.field === "duration_minutes"
       )
-        return estimate.durationMinutes;
+        return measuredValue + estimate.durationMinutes;
       return Math.round(
-        estimate.knownWorkoutCalories + estimate.estimatedCalories,
+        measuredValue +
+          (measuredValue > 0 ? 0 : estimate.knownWorkoutCalories) +
+          estimate.estimatedCalories,
       );
     }
+    if (sameDay.length)
+      return aggregate(
+        metric.id === "steps"
+          ? authoritativeStepEntries(sameDay)
+          : sameDay,
+        metric.aggregation,
+      );
     if (metric.aggregation !== "latest") return 0;
     const carried = latestEntryOnOrBefore(
       state.entries,
@@ -1285,8 +1308,16 @@ export function metricVisualProgress(
   value = safeMetricValue(state, metric, userId, localDate),
   target = effectiveGoalTarget(state, metric, userId, localDate),
 ) {
-  if (metric.id === "food")
-    return Math.max(0, Math.min(1, value / Math.max(1, target)));
+  if (metric.id === "food" || metric.id === "deficit") {
+    const peak = Math.max(0, target);
+    if (peak <= 0) return goalProgress(metric, value, target);
+    const ratio = Math.max(0, value) / peak;
+    // These two targets have an optimum rather than an unlimited direction:
+    // fill toward the target, then drain symmetrically until 2x. Food that
+    // finishes below its limit is promoted to complete by the end-of-day
+    // reached override in Today/Status, while a live day still shows intake.
+    return Math.max(0, Math.min(1, ratio <= 1 ? ratio : 2 - ratio));
+  }
   if (metric.id === "weight")
     return weightProgressStats(state, userId, localDate).progress;
   if (metric.goalProgressMode === "journey")

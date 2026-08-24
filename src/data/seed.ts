@@ -1925,6 +1925,8 @@ export function createInitialState(): AppState {
       statusAvatarCalculationSource: "bmi",
       statusDateNavigatorCollapsed: false,
       todosBelowGoals: true,
+      groupTodosBelowTrackers: true,
+      showGroupTodosByGroup: {},
       scheduleStartHour: 7,
       scheduleViewFilters: [],
       timeFormat: "24h",

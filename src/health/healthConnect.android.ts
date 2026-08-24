@@ -825,53 +825,84 @@ export const healthConnectAdapter: HealthAdapter = {
       }
       return resolveCurrentDeviceStepOrigins([], observed);
     };
-    const readSamsungDailyStepSummary = async (
+    const readSamsungDailyStepSummaries = async (
       start: Date,
-      nextDayStart: Date,
+      endExclusive: Date,
     ) => {
       const records: Record<string, unknown>[] = [];
       let pageToken: string | undefined;
-      // Samsung normally exposes only one row for this origin/day. Keep the
-      // read bounded in case a device retains replaced revisions as rows.
-      for (let page = 0; page < 4; page += 1) {
+      // Samsung normally exposes only one full-day row per date. Read the
+      // selected repair/current range once, rather than issuing one bridge
+      // call per historical day. The high defensive page cap still bounds a
+      // corrupt provider that retained thousands of replaced revisions.
+      for (let page = 0; page < 16; page += 1) {
         const result = await readRecords("Steps", {
           timeRangeFilter: {
             operator: "between",
             startTime: start.toISOString(),
-            endTime: nextDayStart.toISOString(),
+            endTime: endExclusive.toISOString(),
           },
           dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
           ascendingOrder: false,
-          pageSize: 100,
+          pageSize: 1000,
           ...(pageToken ? { pageToken } : {}),
         });
         records.push(...(result.records as Record<string, unknown>[]));
         pageToken = result.pageToken;
         if (!pageToken) break;
       }
-      const count = samsungDailySummaryStepCount(
-        records.map((record) => {
-          const metadata = record.metadata as
-            | Record<string, unknown>
-            | undefined;
-          return {
-            count: Number(record.count ?? 0),
-            startTime: String(record.startTime ?? ""),
-            endTime: String(record.endTime ?? ""),
-            lastModifiedTime: metadata?.lastModifiedTime
-              ? String(metadata.lastModifiedTime)
-              : undefined,
-          };
-        }),
-        start,
-        nextDayStart,
+      const candidates = records.map((record) => {
+        const metadata = record.metadata as
+          | Record<string, unknown>
+          | undefined;
+        return {
+          count: Number(record.count ?? 0),
+          startTime: String(record.startTime ?? ""),
+          endTime: String(record.endTime ?? ""),
+          lastModifiedTime: metadata?.lastModifiedTime
+            ? String(metadata.lastModifiedTime)
+            : undefined,
+        };
+      });
+      const candidateBuckets = new Map<string, typeof candidates>();
+      for (const candidate of candidates) {
+        const candidateStart = new Date(candidate.startTime);
+        if (Number.isNaN(candidateStart.getTime())) continue;
+        const key = `${candidateStart.getFullYear()}-${String(candidateStart.getMonth() + 1).padStart(2, "0")}-${String(candidateStart.getDate()).padStart(2, "0")}`;
+        const bucket = candidateBuckets.get(key);
+        if (bucket) bucket.push(candidate);
+        else candidateBuckets.set(key, [candidate]);
+      }
+      const totals = new Map<string, number>();
+      let dayStart = new Date(
+        start.getFullYear(),
+        start.getMonth(),
+        start.getDate(),
+        0,
+        0,
+        0,
+        0,
       );
-      return count === null
-        ? null
-        : {
-            COUNT_TOTAL: count,
-            dataOrigins: [SAMSUNG_HEALTH_STEP_ORIGIN],
-          };
+      while (dayStart < endExclusive) {
+        const localDate = `${dayStart.getFullYear()}-${String(dayStart.getMonth() + 1).padStart(2, "0")}-${String(dayStart.getDate()).padStart(2, "0")}`;
+        const nextDayStart = new Date(
+          dayStart.getFullYear(),
+          dayStart.getMonth(),
+          dayStart.getDate() + 1,
+          0,
+          0,
+          0,
+          0,
+        );
+        const count = samsungDailySummaryStepCount(
+          candidateBuckets.get(localDate) ?? [],
+          dayStart,
+          nextDayStart,
+        );
+        if (count !== null) totals.set(localDate, count);
+        dayStart = nextDayStart;
+      }
+      return totals;
     };
     const enabledRecords = (records: Record<string, unknown>[]) =>
       records.filter((record) =>
@@ -1054,9 +1085,11 @@ export const healthConnectAdapter: HealthAdapter = {
               startTime: stepRange.from.toISOString(),
               endTime: stepRange.to.toISOString(),
             };
-            // Completed days keep Health Connect's unfiltered, priority-aware
-            // aggregate. Today reads Samsung Health's full-day summary row,
-            // unfiltered Health Connect,
+            // Samsung devices use Samsung Health's full-day summary row for
+            // both completed days and today. It is the single phone+watch
+            // total displayed by Samsung Health itself. Other Android devices
+            // retain Health Connect's priority-aware historical aggregate.
+            // Today additionally reads unfiltered Health Connect,
             // Android on-device, and Local Recording as independent complete
             // midnight-to-now candidates. The user's device-local combination
             // setting chooses one, takes the highest, or explicitly adds them.
@@ -1085,7 +1118,7 @@ export const healthConnectAdapter: HealthAdapter = {
               const [
                 unfilteredGroups,
                 currentAggregate,
-                samsungCurrentAggregate,
+                samsungDailyTotals,
                 localPhoneSlice,
                 discoveredDeviceOrigins,
               ] =
@@ -1110,36 +1143,25 @@ export const healthConnectAdapter: HealthAdapter = {
                         },
                       })
                     : Promise.resolve(null),
-                  includesCurrentDay && needsSamsungCurrent
+                  needsSamsungCurrent
                     ? (async () => {
-                        const nextDayStart = new Date(
-                          currentStart!.getFullYear(),
-                          currentStart!.getMonth(),
-                          currentStart!.getDate() + 1,
-                          0,
-                          0,
-                          0,
-                          0,
-                        );
-                        const dailySummary = await readSamsungDailyStepSummary(
-                          currentStart!,
-                          nextDayStart,
-                        ).catch(() => null);
-                        if (dailySummary) return dailySummary;
-                        // Older Samsung Health versions may expose only
-                        // ordinary interval records. Retain the source-filtered
-                        // aggregate as a compatibility fallback.
-                        return aggregateRecord({
-                          recordType: "Steps",
-                          timeRangeFilter: {
-                            operator: "between",
-                            startTime: currentStart!.toISOString(),
-                            endTime: currentEnd!.toISOString(),
-                          },
-                          dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
-                        }).catch(() => null);
+                        const samsungEnd = includesCurrentDay
+                          ? new Date(
+                              currentStart!.getFullYear(),
+                              currentStart!.getMonth(),
+                              currentStart!.getDate() + 1,
+                              0,
+                              0,
+                              0,
+                              0,
+                            )
+                          : stepRange.to;
+                        return readSamsungDailyStepSummaries(
+                          stepRange.from,
+                          samsungEnd,
+                        ).catch(() => new Map<string, number>());
                       })()
-                    : Promise.resolve(null),
+                    : Promise.resolve(new Map<string, number>()),
                   includesCurrentDay && needsPhysicalActivityCurrent
                     ? readLocalPhoneSteps(currentStart!, currentEnd!)
                     : Promise.resolve(null),
@@ -1206,7 +1228,9 @@ export const healthConnectAdapter: HealthAdapter = {
                       (group) => group.result.dataOrigins ?? [],
                     ),
                     ...(currentAggregate?.dataOrigins ?? []),
-                    ...(samsungCurrentAggregate?.dataOrigins ?? []),
+                    ...(samsungDailyTotals.size
+                      ? [SAMSUNG_HEALTH_STEP_ORIGIN]
+                      : []),
                     ...(androidDeviceAggregate?.dataOrigins ?? []),
                   ],
                 ),
@@ -1221,18 +1245,21 @@ export const healthConnectAdapter: HealthAdapter = {
               const historicalRecords = groups.flatMap(
                 (group): HealthImportRecord[] => {
                   const localDate = group.startTime.slice(0, 10);
+                  const samsungCount = samsungDailyTotals.get(localDate);
                   const count = finalImportedStepTotal(
-                    Number(group.result.COUNT_TOTAL ?? 0),
+                    samsungCount ?? Number(group.result.COUNT_TOTAL ?? 0),
                   );
                   if (!(count > 0)) return [];
-                  const sources = [
-                    ...new Set(
-                      (group.result.dataOrigins?.length
-                        ? group.result.dataOrigins
-                        : observedOrigins
-                      ).filter(Boolean),
-                    ),
-                  ].sort((a, b) => a.localeCompare(b));
+                  const sources = samsungCount !== undefined
+                    ? [SAMSUNG_HEALTH_STEP_ORIGIN]
+                    : [
+                        ...new Set(
+                          (group.result.dataOrigins?.length
+                            ? group.result.dataOrigins
+                            : observedOrigins
+                          ).filter(Boolean),
+                        ),
+                      ].sort((a, b) => a.localeCompare(b));
                   const end = new Date(group.endTime);
                   const recordedAt = Number.isNaN(end.getTime())
                     ? group.endTime
@@ -1248,8 +1275,13 @@ export const healthConnectAdapter: HealthAdapter = {
                       value: count,
                       unit: "steps",
                       origin:
-                        (sources.length === 1 ? sources[0] : "Health Connect"),
-                      sourceOrigins: observedOrigins,
+                        samsungCount !== undefined
+                          ? SAMSUNG_HEALTH_STEP_SOURCE
+                          : sources.length === 1
+                            ? sources[0]
+                            : "Health Connect",
+                      sourceOrigins:
+                        samsungCount !== undefined ? sources : observedOrigins,
                       updatedAt: syncRevision,
                     },
                   ];
@@ -1258,6 +1290,35 @@ export const healthConnectAdapter: HealthAdapter = {
               const currentSlice = stepSlices.current;
               if (!currentSlice) return historicalRecords;
               const currentLocalDate = currentSlice.localDate;
+              const samsungCurrentCount =
+                samsungDailyTotals.get(currentLocalDate) ?? null;
+              let samsungCurrentAggregate: {
+                COUNT_TOTAL?: number;
+                dataOrigins?: string[];
+              } | null = samsungCurrentCount === null
+                ? null
+                : {
+                    COUNT_TOTAL: samsungCurrentCount,
+                    dataOrigins: [SAMSUNG_HEALTH_STEP_ORIGIN],
+                  };
+              if (
+                samsungCurrentAggregate === null &&
+                needsSamsungCurrent
+              ) {
+                // Older Samsung Health versions may expose only ordinary
+                // interval rows. Keep a source-filtered current-day aggregate
+                // as a compatibility fallback; completed days remain on the
+                // platform aggregate when no full-day Samsung row exists.
+                samsungCurrentAggregate = await aggregateRecord({
+                  recordType: "Steps",
+                  timeRangeFilter: {
+                    operator: "between",
+                    startTime: currentStart!.toISOString(),
+                    endTime: currentEnd!.toISOString(),
+                  },
+                  dataOriginFilter: [SAMSUNG_HEALTH_STEP_ORIGIN],
+                }).catch(() => null);
+              }
               let disjointPhoneCandidate: number | null = null;
               if (localPhoneSlice) {
                 const coverageStartMs = Math.min(

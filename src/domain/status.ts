@@ -271,7 +271,7 @@ export function statusRangeRollup(
         // all-journey calculation that scans and sorts weight history again for
         // every date in an all-time range.
         const reached = scheduledGoalReached(state, metric, userId, date);
-        const visualProgress = reached && metric.id !== "food"
+        const visualProgress = reached && metric.id !== "deficit"
           ? 1
           : bounded(
               metric.id === "weight"

@@ -1176,7 +1176,7 @@ export function GoogleHealthWebCard() {
                 />
               </View>
             </View>
-            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>HabHub processes signed Google Health updates every minute. While the app is open, it requests a refresh when the last sync is at least 30 minutes old; a six-hour safety sweep catches missed updates. Sync now checks immediately.</Text>
+            <Text style={[styles.backgroundCopy, { color: colors.muted }]}>HabHub processes signed Google Health updates every minute. While the app is open, it requests a refresh when the last sync is at least 30 minutes old; a roughly hourly safety sweep catches missed updates while the app is closed. Sync now checks immediately.</Text>
             <View style={styles.connectionLinks}>
               <Pressable
                 accessibilityRole="button"

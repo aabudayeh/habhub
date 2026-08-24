@@ -94,6 +94,46 @@ button { font: inherit; }
 .icon-button:focus-visible { border-color: var(--border); color: var(--ink); background: var(--card); outline: none; }
 .icon-button:active { transform: scale(0.96); }
 .icon-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.full-app-button {
+  width: auto;
+  padding-inline: 8px 10px;
+  grid-auto-flow: column;
+  gap: 5px;
+}
+.full-app-button span { font-size: 10px; font-weight: 800; white-space: nowrap; }
+
+.quick-nav {
+  flex: 0 0 auto;
+  min-height: 35px;
+  padding: 4px 8px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(15, 29, 58, 0.94);
+}
+.quick-nav button {
+  min-width: 0;
+  min-height: 27px;
+  overflow: hidden;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.quick-nav button:hover,
+.quick-nav button:focus-visible {
+  color: var(--ink);
+  border-color: var(--border);
+  background: var(--card-raised);
+  outline: none;
+}
+.quick-nav button[data-companion-home] { color: #bafaf4; background: rgba(25, 199, 190, 0.12); }
 
 .offline {
   flex: 0 0 auto;

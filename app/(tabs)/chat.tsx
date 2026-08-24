@@ -98,9 +98,13 @@ function ChatScreen() {
   const recipient = recipientId
     ? state.group.members.find((member) => member.id === recipientId)
     : undefined;
+  const groupTodosVisible =
+    state.settings.showGroupTodosByGroup?.[state.group.id] === true;
+  const groupTodosAvailable =
+    state.group.groupTodosEnabled === true && groupTodosVisible;
   const groupTodos = useGroupTodos(
     state.group.id,
-    state.group.groupTodosEnabled === true &&
+    groupTodosAvailable &&
       (todoPickerOpen || Boolean(attachedTodoId)),
   );
   const attachedTodo = groupTodos.todos.find(
@@ -109,11 +113,11 @@ function ChatScreen() {
   useEffect(() => {
     if (
       attachedTodoId &&
-      (!state.group.groupTodosEnabled ||
+      (!groupTodosAvailable ||
         (!groupTodos.loading && !attachedTodo))
     )
       setAttachedTodoId(undefined);
-  }, [attachedTodo, attachedTodoId, groupTodos.loading, state.group.groupTodosEnabled]);
+  }, [attachedTodo, attachedTodoId, groupTodos.loading, groupTodosAvailable]);
   const groupConversationId = `group:${state.group.id}`;
   const conversationMemberIds = useMemo(
     () =>
@@ -842,12 +846,21 @@ function ChatScreen() {
                           {message.todoAttachment ? (
                             <Pressable
                               accessibilityLabel={`Open group to-do ${message.todoAttachment.title}`}
-                              onPress={() =>
+                              onPress={() => {
+                                updateSettings({
+                                  showGroupTodosByGroup: {
+                                    ...(state.settings.showGroupTodosByGroup ?? {}),
+                                    [state.group.id]: true,
+                                  },
+                                });
                                 router.navigate({
-                                  pathname: "/group-todo-editor",
-                                  params: { id: message.todoAttachment?.groupTodoId },
-                                } as never)
-                              }
+                                  pathname: "/(tabs)/group",
+                                  params: {
+                                    focusGroupTodo: message.todoAttachment?.groupTodoId,
+                                    todoFocusAt: Date.now().toString(),
+                                  },
+                                } as never);
+                              }}
                               style={[
                                 styles.todoAttachment,
                                 {
@@ -964,7 +977,7 @@ function ChatScreen() {
                 </Pressable>
               </View>
             ) : null}
-            {todoPickerOpen && state.group.groupTodosEnabled ? (
+            {todoPickerOpen && groupTodosAvailable ? (
               <View style={[styles.todoPicker, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={styles.todoPickerHeading}>
                   <Text style={[styles.todoPickerTitle, { color: colors.ink }]}>Attach a group to-do</Text>
@@ -1008,7 +1021,7 @@ function ChatScreen() {
                 icon="notifications-outline"
                 onPress={() => suggest("reminder")}
               />
-              {state.group.groupTodosEnabled ? (
+              {groupTodosAvailable ? (
                 <Quick
                   label="To-Do"
                   icon="checkbox-outline"
@@ -1034,6 +1047,7 @@ function ChatScreen() {
                 value={draft}
                 onChangeText={setDraft}
                 onFocus={handleComposerFocus}
+                preventWebFocusZoom
                 onKeyPress={(event) => {
                   if (Platform.OS !== "web") return;
                   const key = event.nativeEvent as typeof event.nativeEvent & {

@@ -4,11 +4,11 @@ export const HEALTH_HISTORY_DAYS = 730;
 /** Keep first-run onboarding responsive; deeper history is an explicit repair. */
 export const HEALTH_INITIAL_DAYS = 30;
 /**
- * Version 5 recalculates historical synthetic walking from only the Steps not
- * already explained by walking/running workouts. Displayed completed-day Steps
- * continue to use Health Connect's priority-aware historical aggregate.
+ * Version 6 recalculates historical synthetic walking and replaces Samsung
+ * completed-day Steps with Samsung Health's full-day phone+watch summary row.
+ * Non-Samsung devices retain Health Connect's priority-aware aggregate.
  */
-export const HEALTH_STEPS_IMPORT_VERSION = 5;
+export const HEALTH_STEPS_IMPORT_VERSION = 6;
 /**
  * One automatic, post-hydration request per native device/account/version.
  * Version 3 gives existing accounts one contextual opportunity to grant the

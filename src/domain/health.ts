@@ -491,7 +491,7 @@ export function estimateLevelWalkingFromSteps(
 const MOVEMENT_WORKOUT = /(walk|run|hike|treadmill)/i;
 const RUNNING_WORKOUT = /(run|treadmill)/i;
 
-function isCalculatedStepFallback(entry: MetricEntry) {
+export function isCalculatedStepFallback(entry: MetricEntry) {
   return (
     entry.source === "calculated" &&
     (entry.sourceRecordId?.startsWith("step-fallback:") ||

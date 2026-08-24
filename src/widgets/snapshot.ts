@@ -6,7 +6,6 @@ import {
   completionIndicatorFillMode,
   completionIndicatorOption,
 } from "@/src/domain/completionIndicators";
-import { compactDayDate } from "@/src/domain/date";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import { statusRangeRollup } from "@/src/domain/status";
@@ -21,6 +20,21 @@ import type {
 } from "@/src/widgets";
 
 type Translate = (source: string) => string;
+
+function compactWidgetDate(date: string, language: AppLanguage) {
+  const parts = new Intl.DateTimeFormat(language, {
+    weekday: "short",
+    day: "numeric",
+  }).formatToParts(new Date(`${date}T12:00:00`));
+  // Some Android Intl builds concatenate the numeric day and weekday. Joining
+  // the semantic parts ourselves guarantees a readable `Mon 24` / `24 Mon`
+  // while retaining each locale's natural part order.
+  return parts
+    .filter((part) => part.type === "weekday" || part.type === "day")
+    .map((part) => part.value.trim())
+    .filter(Boolean)
+    .join(" ");
+}
 
 export type WidgetSnapshotTheme = {
   backgroundColor: string;
@@ -119,7 +133,7 @@ export function featuredWidgetSnapshot(
   return {
     id: "__featured__",
     eyebrow: baseEyebrow,
-    dateLabel: compactDayDate(today, language),
+    dateLabel: compactWidgetDate(today, language),
     compactSubtitle: [featuredSubtitle(summary, translate), todoSummary]
       .filter(Boolean)
       .join(" · "),
@@ -266,7 +280,7 @@ export function leaderboardWidgetSnapshot(
   return {
     id: "__leaderboard__",
     title: translate("Leaderboard"),
-    dateLabel: compactDayDate(today, language),
+    dateLabel: compactWidgetDate(today, language),
     backgroundColor: theme.backgroundColor,
     deepLink: "paceboard://group",
     metrics,

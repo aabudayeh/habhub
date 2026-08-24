@@ -19,6 +19,7 @@ import {
   todoReminderAppliesOnDate,
   todoResolvedOnDate,
 } from "@/src/domain/schedule";
+import { groupTodoReminderFeatureEnabled } from "@/src/domain/todos";
 import { translateUiText } from "@/src/i18n";
 import { localizeMetricName } from "@/src/i18n/domain";
 import type { AppState } from "@/src/types";
@@ -337,11 +338,14 @@ function productivityPlans(state: AppState, now: Date) {
     for (const reminder of state.calendarReminders ?? []) {
       if (
         !reminder.enabled ||
+        !groupTodoReminderFeatureEnabled(state, reminder) ||
         !scheduleAppliesOnDate(reminder.schedule, today, localDate)
       )
         continue;
       const route =
-        reminder.kind === "tracker" &&
+        reminder.groupTodoId && reminder.groupId
+          ? `/(tabs)/group?focusGroupTodo=${encodeURIComponent(reminder.groupTodoId)}&todoFocusAt=${encodeURIComponent(reminder.id)}`
+          : reminder.kind === "tracker" &&
         reminder.metricId &&
         reminder.durationMinutes
           ? `/timer?metric=${encodeURIComponent(reminder.metricId)}&date=${localDate}&duration=${Math.round(reminder.durationMinutes)}`
@@ -358,7 +362,7 @@ function productivityPlans(state: AppState, now: Date) {
               ? "A scheduled to-do reminder is ready."
               : "Scheduled reminder",
         route,
-        kind: "calendar-reminder",
+        kind: reminder.groupTodoId ? "group-todo-reminder" : "calendar-reminder",
         sourceId: reminder.id,
       });
     }

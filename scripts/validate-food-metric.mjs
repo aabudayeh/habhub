@@ -846,18 +846,23 @@ assert.match(provider, /case "updateFoodEntryTime"[\s\S]{0,2400}reconcileAutomat
 assert.match(provider, /preserveFoodEntryClockOverride/);
 assert.match(
   metricsSource,
-  /if \(metric\.id === "food"\)[\s\S]{0,100}value \/ Math\.max\(1, target\)/,
-  "Food's shared visual progress must grow with logged intake",
+  /if \(metric\.id === "food" \|\| metric\.id === "deficit"\)[\s\S]{0,180}const ratio = Math\.max\(0, value\) \/ peak/,
+  "Food and deficit visual progress must share the same target-relative ratio",
+);
+assert.match(
+  metricsSource,
+  /return Math\.max\(0, Math\.min\(1, ratio <= 1 \? ratio : 2 - ratio\)\)/,
+  "Food and deficit visual progress must fill to target and drain beyond it",
 );
 assert.match(
   todayHeroSource,
-  /met && metric\.id !== "food"/,
-  "the featured square must not force Food to 100% after its first log",
+  /met && metric\.id !== "deficit"/,
+  "the featured square must promote an under-limit Food day only after its end-of-day goal is final",
 );
 assert.match(
   statusSource,
-  /reached && metric\.id !== "food"/,
-  "Status rings must not force Food to 100% after its first log",
+  /reached && metric\.id !== "deficit"/,
+  "Status rings must promote an under-limit Food day only after its end-of-day goal is final",
 );
 
 console.log("Food metric validation passed.");

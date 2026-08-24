@@ -44,10 +44,8 @@ class HabHubWidgetConfigActivity : Activity() {
     val alreadyConfigured = HabHubWidgetStore.hasConfiguration(this, widgetId)
     val family = widgetFamily(widgetId)
     val choices = when (family) {
-      "square", "wide" -> listOf(
-        "__avatar__" to getString(R.string.habhub_widget_status_avatar),
-        "__leaderboard__" to getString(R.string.habhub_widget_leaderboard),
-      )
+      "leaderboard" -> listOf("__leaderboard__" to getString(R.string.habhub_widget_leaderboard))
+      "square", "wide" -> listOf("__avatar__" to getString(R.string.habhub_widget_status_avatar))
       else -> listOf("__featured__" to getString(R.string.habhub_widget_featured_progress))
     }
 
@@ -248,6 +246,7 @@ class HabHubWidgetConfigActivity : Activity() {
       belongsTo(HabHubSquareWidgetProvider::class.java) -> "square"
       belongsTo(HabHubWideCompactWidgetProvider::class.java) -> "wide_compact"
       belongsTo(HabHubWideWidgetProvider::class.java) -> "wide"
+      belongsTo(HabHubLeaderboardWidgetProvider::class.java) -> "leaderboard"
       else -> "small"
     }
   }
@@ -256,6 +255,7 @@ class HabHubWidgetConfigActivity : Activity() {
     "square" -> "2-3 x 1-5 (starts 2 x 2)"
     "wide_compact" -> "2-5 x 1 (starts 4 x 1)"
     "wide" -> "2-3 x 1-5 (starts 3 x 2)"
+    "leaderboard" -> "1-5 x 1-6 (starts 2 x 2)"
     else -> "2-5 x 1 (starts 2 x 1)"
   }
 

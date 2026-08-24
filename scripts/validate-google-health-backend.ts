@@ -25,6 +25,7 @@ const [
   serverSnapshotRepairMigration,
   durableCatchupMigration,
   hourlyCatchupMigration,
+  forwardWorkerHardeningMigration,
   endpoint,
   sync,
   api,
@@ -47,6 +48,7 @@ const [
   read("supabase/migrations/202608220004_harden_google_health_snapshot_repair.sql"),
   read("supabase/migrations/202608220005_google_health_durable_catchups.sql"),
   read("supabase/migrations/202608240001_hourly_google_health_catchups.sql"),
+  read("supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1296,6 +1298,21 @@ assert.ok(
   hourlyCatchupMigration.indexOf("if not v_hourly_maintenance") <
     hourlyCatchupMigration.indexOf("from vault.decrypted_secrets"),
   "the cron hook must reject an idle tick before Vault reads and pg_net",
+);
+assert.match(
+  forwardWorkerHardeningMigration,
+  /v_runtime_enabled := coalesce\(v_runtime_enabled, false\)/,
+  "a missing runtime-config singleton must keep the worker disabled",
+);
+assert.match(
+  forwardWorkerHardeningMigration,
+  /from public\.google_health_pending_grants staged[\s\S]{0,100}staged\.consumed_at is null[\s\S]{0,100}staged\.expires_at <= clock_timestamp\(\)/,
+  "the idle guard must use the pending-grant partial expiry index predicate",
+);
+assert.match(
+  forwardWorkerHardeningMigration,
+  /revoke all on function public\.invoke_google_health_worker\(\)[\s\S]{0,120}grant execute[\s\S]{0,100}service_role/,
+  "the forward replacement must preserve the worker's service-only ACL",
 );
 assert.match(endpoint, /stage_google_health_pending_grant/);
 assert.match(endpoint, /delete_google_health_connection_data/);

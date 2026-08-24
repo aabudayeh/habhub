@@ -643,12 +643,16 @@ export type GroupTodoItem = {
   labels?: string[];
   priority: TodoPriority;
   dueAt?: string;
+  /** Group-owned recurrence; individual reminders remain private per member. */
+  recurrence?: GoalSchedule;
   completionMode: GroupTodoCompletionMode;
   /** Shared completion state. */
   completedAt?: string;
   completedByUserId?: string;
   /** Individual completion state, scoped to active group members. */
   completedByIds: string[];
+  /** Completion timestamps let recurring tasks reset for each local day. */
+  completedBy: { userId: string; completedAt: string }[];
   createdAt: string;
   updatedAt: string;
 };
@@ -707,6 +711,9 @@ export type CalendarReminder = {
   kind: "general" | "tracker" | "todo";
   metricId?: string;
   todoId?: string;
+  /** Private reminder attached to a group task; never written to group tables. */
+  groupTodoId?: string;
+  groupId?: string;
   time: string;
   /** Planned duration for timed tracker reminders. */
   durationMinutes?: number;
@@ -857,7 +864,7 @@ export type HealthSourcePreference = {
   enabled: boolean;
 };
 
-/** Independent Android candidates for today's live Step total. */
+/** Independent Android Step candidates; Samsung selection also repairs history. */
 export type LiveStepSource =
   | "samsung_health"
   | "health_connect"
@@ -1021,6 +1028,10 @@ export type UserSettings = {
   statusDateNavigatorCollapsed?: boolean;
   /** Put the to-do block below goal trackers instead of above them (default). */
   todosBelowGoals?: boolean;
+  /** Put the collaborative task block below Leaderboard tracker cards. */
+  groupTodosBelowTrackers?: boolean;
+  /** Group To-Dos are personally hidden until a member explicitly reveals them. */
+  showGroupTodosByGroup?: Record<string, boolean>;
   /** Personal ordering for mixed Schedule-page events. */
   calendarEventOrder?: string[];
   /** First visible hour in Schedule; earlier hours remain reachable by scrolling. */

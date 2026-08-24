@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   deleteGroupTodo,
@@ -8,7 +8,11 @@ import {
   setGroupTodoCompletion,
 } from "@/src/cloud/groupTodos";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
-import { descendantTodoIds } from "@/src/domain/todos";
+import {
+  descendantTodoIds,
+  groupTodoCompletedOnDate,
+} from "@/src/domain/todos";
+import { dateKey } from "@/src/domain/date";
 import { supabase } from "@/src/lib/supabase";
 import { useApp } from "@/src/state/AppProvider";
 import { GroupTodoItem } from "@/src/types";
@@ -16,6 +20,81 @@ import { useTutorialSandbox } from "@/src/tutorial/TutorialSandboxContext";
 
 const localTodosByGroup = new Map<string, GroupTodoItem[]>();
 const localTodoListeners = new Map<string, Set<(todos: GroupTodoItem[]) => void>>();
+const groupTodoLoadsByGroup = new Map<string, Promise<GroupTodoItem[]>>();
+
+function loadGroupTodosShared(groupId: string) {
+  const inFlight = groupTodoLoadsByGroup.get(groupId);
+  if (inFlight) return inFlight;
+  let request: Promise<GroupTodoItem[]>;
+  request = loadGroupTodos(groupId).finally(() => {
+    if (groupTodoLoadsByGroup.get(groupId) === request)
+      groupTodoLoadsByGroup.delete(groupId);
+  });
+  groupTodoLoadsByGroup.set(groupId, request);
+  return request;
+}
+
+type GroupTodoRealtimeChannel = ReturnType<
+  NonNullable<typeof supabase>["channel"]
+>;
+
+type GroupTodoRealtimeEntry = {
+  channel: GroupTodoRealtimeChannel;
+  listeners: Set<() => void>;
+  references: number;
+};
+
+const groupTodoRealtimeByGroup = new Map<string, GroupTodoRealtimeEntry>();
+
+/**
+ * Every hook in this JS runtime shares one group topic/channel. A per-hook
+ * topic would isolate the sender from every other device, while separate
+ * channels with the same topic can replace each other inside supabase-js.
+ */
+function acquireGroupTodoRealtime(
+  groupId: string,
+  onInvalidated: () => void,
+) {
+  if (!supabase) return undefined;
+  let entry = groupTodoRealtimeByGroup.get(groupId);
+  if (!entry) {
+    const listeners = new Set<() => void>();
+    const channel = supabase
+      .channel(`group-todos:${groupId}`)
+      .on("broadcast", { event: "changed" }, () => {
+        for (const listener of [...listeners]) listener();
+      })
+      .subscribe();
+    entry = { channel, listeners, references: 0 };
+    groupTodoRealtimeByGroup.set(groupId, entry);
+  }
+  const acquired = entry;
+  acquired.references += 1;
+  acquired.listeners.add(onInvalidated);
+  let released = false;
+  return {
+    send() {
+      return acquired.channel.send({
+        type: "broadcast",
+        event: "changed",
+        payload: {},
+      });
+    },
+    release() {
+      if (released) return;
+      released = true;
+      acquired.listeners.delete(onInvalidated);
+      acquired.references = Math.max(0, acquired.references - 1);
+      if (
+        acquired.references > 0 ||
+        groupTodoRealtimeByGroup.get(groupId) !== acquired
+      )
+        return;
+      groupTodoRealtimeByGroup.delete(groupId);
+      void supabase?.removeChannel(acquired.channel).catch(() => undefined);
+    },
+  };
+}
 
 function updateLocalGroupTodos(
   groupId: string,
@@ -34,16 +113,15 @@ function updateLocalGroupTodos(
 export function useGroupTodos(groupId: string, enabled = true) {
   const tutorial = useTutorialSandbox();
   const { state } = useApp();
-  const subscriberId = useId();
   const [todos, setTodos] = useState<GroupTodoItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
   const requestRef = useRef<Promise<void> | null>(null);
   const groupIdRef = useRef(groupId);
-  const channelRef = useRef<
-    ReturnType<NonNullable<typeof supabase>["channel"]> | null
-  >(null);
+  const realtimeRef = useRef<
+    ReturnType<typeof acquireGroupTodoRealtime>
+  >(undefined);
   groupIdRef.current = groupId;
 
   const cloudEnabled =
@@ -60,10 +138,11 @@ export function useGroupTodos(groupId: string, enabled = true) {
     let request: Promise<void>;
     setLoading(true);
     setReady(false);
-    request = loadGroupTodos(groupId)
+    request = loadGroupTodosShared(groupId)
       .then((rows) => {
         if (groupIdRef.current !== groupId) return;
         setTodos(rows);
+        updateLocalGroupTodos(groupId, () => rows);
         setError(undefined);
       })
       .catch((reason) => {
@@ -86,7 +165,7 @@ export function useGroupTodos(groupId: string, enabled = true) {
   }, [refresh]);
 
   useEffect(() => {
-    if (cloudEnabled || !enabled) return;
+    if (!enabled) return;
     setTodos(localTodosByGroup.get(groupId) ?? []);
     setReady(true);
     const listeners = localTodoListeners.get(groupId) ?? new Set();
@@ -97,7 +176,7 @@ export function useGroupTodos(groupId: string, enabled = true) {
       listeners.delete(listener);
       if (!listeners.size) localTodoListeners.delete(groupId);
     };
-  }, [cloudEnabled, enabled, groupId]);
+  }, [enabled, groupId]);
 
   useEffect(() => {
     if (!cloudEnabled || !supabase) return;
@@ -106,22 +185,17 @@ export function useGroupTodos(groupId: string, enabled = true) {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 120);
     };
-    const channel = supabase
-      .channel(`group-todos:${groupId}:${subscriberId}`)
-      .on("broadcast", { event: "changed" }, queueRefresh)
-      .subscribe();
-    channelRef.current = channel;
+    const realtime = acquireGroupTodoRealtime(groupId, queueRefresh);
+    realtimeRef.current = realtime;
     return () => {
       if (timer) clearTimeout(timer);
-      if (channelRef.current === channel) channelRef.current = null;
-      supabase?.removeChannel(channel).catch(() => undefined);
+      if (realtimeRef.current === realtime) realtimeRef.current = undefined;
+      realtime?.release();
     };
-  }, [cloudEnabled, groupId, refresh, subscriberId]);
+  }, [cloudEnabled, groupId, refresh]);
 
   const broadcast = useCallback(() => {
-    void channelRef.current
-      ?.send({ type: "broadcast", event: "changed", payload: {} })
-      .catch(() => undefined);
+    void realtimeRef.current?.send().catch(() => undefined);
   }, []);
 
   const save = useCallback(
@@ -147,6 +221,7 @@ export function useGroupTodos(groupId: string, enabled = true) {
           labels: input.labels ?? [],
           priority: input.priority,
           dueAt: input.dueAt,
+          recurrence: input.recurrence,
           completionMode: input.completionMode,
           completedAt:
             input.completionMode === "shared"
@@ -160,6 +235,10 @@ export function useGroupTodos(groupId: string, enabled = true) {
             input.completionMode === "individual"
               ? previous?.completedByIds ?? []
               : [],
+          completedBy:
+            input.completionMode === "individual"
+              ? previous?.completedBy ?? []
+              : [],
           createdAt: previous?.createdAt ?? now,
           updatedAt: now,
         };
@@ -169,9 +248,26 @@ export function useGroupTodos(groupId: string, enabled = true) {
         ]);
         return saved;
       }
-      const saved = await saveGroupTodo(input);
-      await refresh();
+      const previous = input.id
+        ? (localTodosByGroup.get(input.groupId) ?? []).find(
+            (todo) => todo.id === input.id,
+          )
+        : undefined;
+      const response = await saveGroupTodo(input);
+      const saved =
+        response.completionMode === "individual" && previous
+          ? {
+              ...response,
+              completedBy: previous.completedBy,
+              completedByIds: previous.completedByIds,
+            }
+          : response;
+      updateLocalGroupTodos(input.groupId, (current) => [
+        ...current.filter((todo) => todo.id !== saved.id),
+        saved,
+      ]);
       broadcast();
+      void refresh();
       return saved;
     },
     [broadcast, cloudEnabled, refresh, state.currentUserId],
@@ -179,54 +275,79 @@ export function useGroupTodos(groupId: string, enabled = true) {
 
   const toggle = useCallback(
     async (todo: GroupTodoItem) => {
-      const completed =
-        todo.completionMode === "shared"
-          ? Boolean(todo.completedAt)
-          : todo.completedByIds.includes(state.currentUserId);
-      if (!cloudEnabled) {
-        const now = new Date().toISOString();
-        updateLocalGroupTodos(groupId, (current) =>
-          current.map((item) =>
-            item.id !== todo.id
-              ? item
-              : item.completionMode === "shared"
-                ? {
-                    ...item,
-                    completedAt: completed ? undefined : now,
-                    completedByUserId: completed
-                      ? undefined
-                      : state.currentUserId,
-                  }
-                : {
-                    ...item,
-                    completedByIds: completed
-                      ? item.completedByIds.filter(
-                          (id) => id !== state.currentUserId,
-                        )
-                      : [...item.completedByIds, state.currentUserId],
-                  },
-          ),
+      const completed = groupTodoCompletedOnDate(
+        todo,
+        state.currentUserId,
+        dateKey(),
+      );
+      const now = new Date().toISOString();
+      const optimistic = (current: GroupTodoItem[]) =>
+        current.map((item) =>
+          item.id !== todo.id
+            ? item
+            : item.completionMode === "shared"
+              ? {
+                  ...item,
+                  completedAt: completed ? undefined : now,
+                  completedByUserId: completed
+                    ? undefined
+                    : state.currentUserId,
+                }
+              : {
+                  ...item,
+                  completedByIds: completed
+                    ? item.completedByIds.filter(
+                        (id) => id !== state.currentUserId,
+                      )
+                    : [...new Set([...item.completedByIds, state.currentUserId])],
+                  completedBy: completed
+                    ? item.completedBy.filter(
+                        (entry) => entry.userId !== state.currentUserId,
+                      )
+                    : [
+                        ...item.completedBy.filter(
+                          (entry) => entry.userId !== state.currentUserId,
+                        ),
+                        { userId: state.currentUserId, completedAt: now },
+                      ],
+                },
         );
+      if (!cloudEnabled) {
+        updateLocalGroupTodos(groupId, optimistic);
         return;
       }
-      await setGroupTodoCompletion(todo.id, !completed);
-      await refresh();
-      broadcast();
+      const before = localTodosByGroup.get(groupId) ?? [];
+      updateLocalGroupTodos(groupId, optimistic);
+      try {
+        await setGroupTodoCompletion(todo.id, !completed);
+        broadcast();
+        void refresh();
+      } catch (reason) {
+        updateLocalGroupTodos(groupId, () => before);
+        throw reason;
+      }
     },
     [broadcast, cloudEnabled, groupId, refresh, state.currentUserId],
   );
 
   const remove = useCallback(
     async (todoId: string) => {
-      if (cloudEnabled) await deleteGroupTodo(todoId);
       const removeFrom = (current: GroupTodoItem[]) => {
         const removed = descendantTodoIds(current, todoId);
         removed.add(todoId);
         return current.filter((todo) => !removed.has(todo.id));
       };
-      if (cloudEnabled) setTodos(removeFrom);
-      else updateLocalGroupTodos(groupId, removeFrom);
-      broadcast();
+      const before = localTodosByGroup.get(groupId) ?? [];
+      updateLocalGroupTodos(groupId, removeFrom);
+      if (cloudEnabled) {
+        try {
+          await deleteGroupTodo(todoId);
+          broadcast();
+        } catch (reason) {
+          updateLocalGroupTodos(groupId, () => before);
+          throw reason;
+        }
+      } else broadcast();
     },
     [broadcast, cloudEnabled, groupId],
   );

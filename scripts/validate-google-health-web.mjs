@@ -787,7 +787,7 @@ assert.match(autoSync, /GOOGLE_HEALTH_FOREGROUND_REFRESH_MIN_AGE_MS = 30 \* 60 \
 assert.match(autoSync, /invokeGoogleHealth\("refresh"\)/);
 assert.match(layout, /requestGoogleHealthForegroundRefresh\(accountId\)/);
 assert.match(layout, /document\.addEventListener\("visibilitychange", visible\)/);
-assert.match(card, /six-hour safety sweep/);
+assert.match(card, /roughly hourly safety sweep/);
 
 const stepOne = card.indexOf("Install or open Google Health");
 const stepTwo = card.indexOf("Connect your Google account");

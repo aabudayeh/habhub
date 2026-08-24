@@ -192,6 +192,7 @@ const provider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const migration = fs.readFileSync("src/domain/stateMigration.ts", "utf8");
 const editor = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const health = fs.readFileSync("src/domain/health.ts", "utf8");
+const log = fs.readFileSync("app/(tabs)/log.tsx", "utf8");
 assert.match(seed, /id: "workout"[\s\S]{0,500}gymMapping: \{ kind: "session_completed" \}/);
 assert.match(seed, /id: "workout_duration"[\s\S]{0,500}gymMapping: \{ kind: "session_duration" \}/);
 assert.match(seed, /id: "workout"[\s\S]{0,600}workoutQualification: DEFAULT_WORKOUT_QUALIFICATION/);
@@ -207,5 +208,10 @@ assert.doesNotMatch(onboarding.match(/gym: \[([^\]]+)\]/)?.[1] ?? "", /gym_compl
 assert.match(provider, /historyMode: "today" \| "history"/);
 assert.match(provider, /action\.historyMode === "history"[\s\S]{0,100}goalHistoryStart/);
 assert.match(migration, /consolidateWorkoutTrackers\(state, defaults\)/);
+assert.match(
+  log,
+  /selected\.dataType === "boolean" && selected\.id !== "workout"/,
+  "Workout logging must use its detail/Add flow rather than a redundant Mark as complete toggle",
+);
 
 console.log("Canonical workout tracker merge, compatibility aliases, and onboarding recommendations validated.");

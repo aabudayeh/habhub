@@ -1,8 +1,16 @@
-import React, { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -42,6 +50,9 @@ export function HorizontalPager({
   const { t } = useLocalization();
   const scrollRef = useRef<ScrollView>(null);
   const activePageRef = useRef(0);
+  const scrollOffsetRef = useRef(0);
+  const webDragStartOffsetRef = useRef(0);
+  const webDragStartPageRef = useRef(0);
   const [pageWidth, setPageWidth] = useState(0);
   const [activePage, setActivePage] = useState(0);
 
@@ -55,6 +66,7 @@ export function HorizontalPager({
       const page = clampPageIndex(requestedPage, pages.length);
       commitActivePage(page);
       if (pageWidth > 0) {
+        scrollOffsetRef.current = page * pageWidth;
         scrollRef.current?.scrollTo({ x: page * pageWidth, animated });
       }
     },
@@ -69,6 +81,7 @@ export function HorizontalPager({
     // correction to `activePage` interrupts an in-progress Web scroll with a
     // second, non-animated scrollTo and creates a one-frame duplicate/snap.
     const frame = requestAnimationFrame(() => {
+      scrollOffsetRef.current = next * pageWidth;
       scrollRef.current?.scrollTo({ x: next * pageWidth, animated: false });
     });
     return () => cancelAnimationFrame(frame);
@@ -84,6 +97,7 @@ export function HorizontalPager({
     commitActivePage(next);
     if (pageWidth <= 0) return;
     const frame = requestAnimationFrame(() => {
+      scrollOffsetRef.current = next * pageWidth;
       scrollRef.current?.scrollTo({ x: next * pageWidth, animated: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -91,6 +105,7 @@ export function HorizontalPager({
 
   const updateActivePage = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      scrollOffsetRef.current = event.nativeEvent.contentOffset.x;
       commitActivePage(
         pageIndexFromOffset(event.nativeEvent.contentOffset.x, pageWidth, pages.length),
       );
@@ -103,13 +118,79 @@ export function HorizontalPager({
     if (width > 0) setPageWidth(width);
   }, []);
 
+  const webPointerDrag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          Platform.OS === "web" &&
+          scrollEnabled &&
+          pages.length > 1 &&
+          Math.abs(gesture.dx) > 7 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15,
+        onPanResponderGrant: () => {
+          webDragStartOffsetRef.current = scrollOffsetRef.current;
+          webDragStartPageRef.current = pageIndexFromOffset(
+            scrollOffsetRef.current,
+            pageWidth,
+            pages.length,
+          );
+        },
+        onPanResponderMove: (_event, gesture) => {
+          if (pageWidth <= 0) return;
+          const maximumOffset = Math.max(0, (pages.length - 1) * pageWidth);
+          const offset = Math.max(
+            0,
+            Math.min(maximumOffset, webDragStartOffsetRef.current - gesture.dx),
+          );
+          scrollOffsetRef.current = offset;
+          scrollRef.current?.scrollTo({ x: offset, animated: false });
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          if (pageWidth <= 0) return;
+          const crossedPageThreshold =
+            Math.abs(gesture.dx) >= Math.min(52, pageWidth * 0.14) ||
+            Math.abs(gesture.vx) >= 0.35;
+          const target = crossedPageThreshold
+            ? webDragStartPageRef.current + (gesture.dx < 0 ? 1 : -1)
+            : pageIndexFromOffset(
+                scrollOffsetRef.current,
+                pageWidth,
+                pages.length,
+              );
+          moveToPage(target);
+        },
+        onPanResponderTerminate: () => {
+          moveToPage(
+            pageIndexFromOffset(
+              scrollOffsetRef.current,
+              pageWidth,
+              pages.length,
+            ),
+          );
+        },
+        onPanResponderTerminationRequest: () => false,
+        onShouldBlockNativeResponder: () => false,
+      }),
+    [moveToPage, pageWidth, pages.length, scrollEnabled],
+  );
+
   if (!pages.length) return null;
 
   return (
     <View
+      {...(Platform.OS === "web" ? webPointerDrag.panHandlers : {})}
       accessibilityLabel={t(accessibilityLabel)}
       onLayout={measure}
-      style={styles.root}
+      style={[
+        styles.root,
+        Platform.OS === "web"
+          ? ({
+              cursor:
+                scrollEnabled && pages.length > 1 ? "pointer" : "default",
+            } as ViewStyle)
+          : undefined,
+      ]}
       testID={testID}
     >
       <ScrollView

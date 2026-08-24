@@ -1,10 +1,13 @@
 # HabHub Live Companion for Chrome and Edge
 
-Version 0.3.2 opens as a normal 400 x 560 toolbar popup. It contains HabHub's
+Version 0.3.3 opens as a normal 400 x 560 toolbar popup. It contains HabHub's
 live Today surface: the featured card, to-dos, filterable/reorderable trackers,
 active timers, and today's schedule. The expand button in the popup opens the
-same dashboard in a full-height browser side panel, and the external-link
-button opens the complete HabHub website.
+same dashboard in a full-height browser side panel. **Full app** and the compact
+navigation row load the real HabHub tab app inside the popup/panel, including
+its bottom navigation; **Companion** returns to the movable timer/schedule
+dashboard. The external-link icon remains available when a normal browser tab
+is preferable.
 
 The popup and side panel embed HabHub's dedicated `/extension` app surface.
 That surface uses the same authenticated, offline-first snapshot merge and
