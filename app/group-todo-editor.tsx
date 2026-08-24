@@ -7,6 +7,7 @@ import { AppText as Text, AppTextInput as TextInput } from "@/src/components/App
 import { MonthCalendar } from "@/src/components/MonthCalendar";
 import { TimeInput } from "@/src/components/TimeInput";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
+import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { dateKey } from "@/src/domain/date";
@@ -86,7 +87,10 @@ export default function GroupTodoEditor() {
   const colors = useAppColors();
   const accent = useGroupAccent();
   const groupTodos = useGroupTodos(state.group.id, state.group.groupTodosEnabled === true);
-  const existing = groupTodos.todos.find((todo) => todo.id === id);
+  const [savedTodoId, setSavedTodoId] = useState<string>();
+  const existing = groupTodos.todos.find(
+    (todo) => todo.id === (id ?? savedTodoId),
+  );
   const parent = groupTodos.todos.find(
     (todo) => todo.id === (existing?.parentId ?? parentId),
   );
@@ -96,7 +100,7 @@ export default function GroupTodoEditor() {
   const canEdit = !existing || canDelete;
   const personalReminder = (state.calendarReminders ?? []).find(
     (reminder) =>
-      reminder.groupId === state.group.id && reminder.groupTodoId === id,
+      reminder.groupId === state.group.id && reminder.groupTodoId === existing?.id,
   );
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -160,7 +164,7 @@ export default function GroupTodoEditor() {
 
   const patchDraft = (changes: Partial<Draft>) =>
     setDraft((current) => ({ ...current, ...changes }));
-  const save = async (exit: () => void = () => router.back()) => {
+  const save = async (exit: (() => void) | null = () => router.back()) => {
     if (canEdit && !draft.title.trim()) {
       Alert.alert("Add a title", "What does the group need to do?");
       return;
@@ -227,8 +231,13 @@ export default function GroupTodoEditor() {
           enabled: true,
         });
       else if (personalReminder) deleteCalendarReminder(personalReminder.id);
-      allowExit.current = true;
-      exit();
+      setSavedTodoId(saved.id);
+      initialSignature.current = signature;
+      if (exit) {
+        allowExit.current = true;
+        exit();
+      }
+      return saved;
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -493,6 +502,62 @@ export default function GroupTodoEditor() {
           </>
         ) : null}
       </Card>
+
+      <TodoSubtaskEditorSection
+        items={
+          existing
+            ? groupTodos.todos.filter((todo) =>
+                descendantTodoIds(groupTodos.todos, existing.id).has(todo.id),
+              )
+            : []
+        }
+        canManage={canEdit}
+        onAdd={() => {
+          void save(null).then((saved) => {
+            if (!saved) return;
+            router.navigate({
+              pathname: "/group-todo-editor",
+              params: { parentId: saved.id },
+            } as never);
+          });
+        }}
+        onEdit={(subtaskId) =>
+          router.navigate({
+            pathname: "/group-todo-editor",
+            params: { id: subtaskId },
+          } as never)
+        }
+        onRemove={(subtaskId) => {
+          const removedIds = descendantTodoIds(groupTodos.todos, subtaskId);
+          removedIds.add(subtaskId);
+          Alert.alert(
+            "Delete group sub-to-do?",
+            removedIds.size > 1
+              ? "Its nested sub-to-dos will also be deleted for everyone."
+              : "This removes it for everyone.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () => {
+                  for (const reminder of state.calendarReminders ?? [])
+                    if (
+                      reminder.groupTodoId &&
+                      removedIds.has(reminder.groupTodoId)
+                    )
+                      deleteCalendarReminder(reminder.id);
+                  void groupTodos.remove(subtaskId).catch((reason) =>
+                    setSaveError(
+                      reason instanceof Error ? reason.message : String(reason),
+                    ),
+                  );
+                },
+              },
+            ],
+          );
+        }}
+      />
 
       {saveError || groupTodos.error ? (
         <Text translate={false} style={[styles.error, { color: "#D24B4B" }]}>{saveError ?? groupTodos.error}</Text>

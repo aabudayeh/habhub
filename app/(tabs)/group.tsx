@@ -80,7 +80,10 @@ import {
 } from "@/src/domain/leaderboard";
 import { leaderboardSyncTimestamp } from "@/src/domain/leaderboardSync";
 import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
-import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
+import {
+  useCloudSyncActions,
+  useCloudSyncStatus,
+} from "@/src/cloud/CloudSyncProvider";
 import { isCloudGroupId } from "@/src/cloud/groupCloud";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useGroupChallenges } from "@/src/cloud/useGroupChallenges";
@@ -306,6 +309,7 @@ function LeaderboardScreen() {
   const tutorial = useTutorial();
   const { state, updateMetric, updateSettings } = useApp();
   const cloud = useCloudSyncActions();
+  const cloudStatus = useCloudSyncStatus();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height: viewportHeight } = useWindowDimensions();
@@ -318,6 +322,7 @@ function LeaderboardScreen() {
   const leaderboardUsesPages =
     (state.settings.leaderboardLayoutMode ?? "pages") === "pages";
   const [showPicker, setShowPicker] = useState(false);
+  const [showHistoryOptions, setShowHistoryOptions] = useState(false);
   const [challengeEditorOpen, setChallengeEditorOpen] = useState(false);
   const [pendingChallengeCardId, setPendingChallengeCardId] = useState<string>();
   const [editingChallenge, setEditingChallenge] = useState<GroupChallenge>();
@@ -1103,6 +1108,7 @@ function LeaderboardScreen() {
   const finishLeaderboardEditing = useCallback(() => {
     setEditing(false);
     setShowPicker(false);
+    setShowHistoryOptions(false);
   }, []);
   useFocusEffect(
     useCallback(() => {
@@ -1211,48 +1217,6 @@ function LeaderboardScreen() {
               onMonthChange={setAnchor}
             />
           </DateRangeNavigator>
-        ) : null}
-        {editing ? (
-          <Card style={styles.gridEditControls}>
-            <View style={styles.gridEditLine}>
-              <View style={styles.gridRangeChoices}>
-                {(["week", "month", "year"] as HistoryRange[]).map(
-                  (range) => {
-                    const selectedRange = gridRange === range;
-                    return (
-                      <Pressable
-                        key={range}
-                        accessibilityRole="radio"
-                        accessibilityState={{ checked: selectedRange }}
-                        onPress={() => saveGridRange(range)}
-                        style={[
-                          styles.gridRangeChoice,
-                          {
-                            borderColor: selectedRange
-                              ? accent
-                              : colors.border,
-                            backgroundColor: selectedRange
-                              ? colors.primarySoft
-                              : colors.card,
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.gridRangeChoiceText,
-                            { color: selectedRange ? accent : colors.muted },
-                          ]}
-                        >
-                          {range[0].toUpperCase() + range.slice(1)}
-                        </Text>
-                      </Pressable>
-                    );
-                  },
-                )}
-              </View>
-            </View>
-            <Text style={[styles.gridEditHint, { color: colors.muted }]}>{t("Calendar rows are collapsed by default. The selected range is saved for this group.")}</Text>
-          </Card>
         ) : null}
       {state.settings.groupTodosBelowTrackers === false ? (
         <GroupTodoLeaderboardSection
@@ -1412,18 +1376,15 @@ function LeaderboardScreen() {
               )}
               </View>
             </Pressable>
-            {false ? (
-              <View style={[styles.loadingRankings, { borderTopColor: colors.border }]}>
-                <Text style={[styles.detail, { color: colors.muted }]}>
-                  Loading saved rankings…
-                </Text>
-              </View>
-            ) : null}
             {rows.map((row, index) => {
               const result = row.metrics[0]?.result;
-              const value = includeScore
-                ? `${Math.round(row.score)} pts`
-                : (result?.label ?? "No data");
+              const loadingSavedResult =
+                cloudStatus === "initializing" && !result;
+              const value = loadingSavedResult
+                ? "…"
+                : includeScore
+                  ? `${Math.round(row.score)} pts`
+                  : (result?.label ?? "No data");
               const resultColor =
                 !includeScore &&
                 result &&
@@ -1512,7 +1473,11 @@ function LeaderboardScreen() {
                         {memberOriginalLabel(state, row.member)}
                       </Text>
                     ) : null}
-                    {includeScore ? (
+                    {loadingSavedResult ? (
+                      <Text style={[styles.detail, { color: colors.muted }]}>
+                        Loading saved data…
+                      </Text>
+                    ) : includeScore ? (
                       <Text style={[styles.detail, { color: colors.muted }]}>
                         Group-weighted score
                       </Text>
@@ -1669,25 +1634,6 @@ function LeaderboardScreen() {
         />
       ) : null}
       {editing ? (
-        <View style={[styles.gridBulkBox, { borderColor: colors.border }] }>
-          <Pressable
-            onPress={() => setExpandedGridRows(visibleGridKeys)}
-            style={styles.gridBulkButton}
-          >
-            <Ionicons name="chevron-down" size={17} color={accent} />
-            <Text style={[styles.gridBulkText, { color: colors.ink }]}>{t("Expand all")}</Text>
-          </Pressable>
-          <View style={[styles.gridBulkDivider, { backgroundColor: colors.border }]} />
-          <Pressable
-            onPress={() => setExpandedGridRows([])}
-            style={styles.gridBulkButton}
-          >
-            <Ionicons name="chevron-up" size={17} color={accent} />
-            <Text style={[styles.gridBulkText, { color: colors.ink }]}>{t("Collapse all")}</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {editing ? (
         <>
           <View style={styles.editActions}>
             <Pressable
@@ -1736,6 +1682,17 @@ function LeaderboardScreen() {
               </Pressable>
             ) : null}
           </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showHistoryOptions }}
+            onPress={() => setShowHistoryOptions(true)}
+            style={[styles.addExisting, { borderColor: accent }]}
+          >
+            <Ionicons name="calendar-outline" size={18} color={accent} />
+            <Text style={[styles.addExistingText, { color: accent }]}>
+              {t("History")}
+            </Text>
+          </Pressable>
         </>
       ) : (
         <TutorialTarget id="leaderboard-edit">
@@ -1776,6 +1733,81 @@ function LeaderboardScreen() {
           setShowPicker(false);
         }}
       />
+      <Modal
+        transparent
+        animationType="fade"
+        visible={showHistoryOptions}
+        onRequestClose={() => setShowHistoryOptions(false)}
+      >
+        <Pressable
+          style={styles.historyBackdrop}
+          onPress={() => setShowHistoryOptions(false)}
+        >
+          <View style={[styles.historySheet, { backgroundColor: colors.card }] }>
+            <View style={styles.historySheetHandle} />
+            <Text style={[styles.historySheetTitle, { color: colors.ink }] }>
+              {t("History")}
+            </Text>
+            {(
+              [
+                ["week", "Week", "Seven daily cells"],
+                ["month", "Month", "Every day in the selected month"],
+                ["year", "Year", "A compact full-year grid"],
+              ] as const
+            ).map(([range, label, description]) => (
+              <Pressable
+                key={range}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: gridRange === range }}
+                onPress={() => saveGridRange(range)}
+                style={[styles.historySheetRow, { borderColor: colors.border }]}
+              >
+                <Ionicons name="calendar-outline" size={17} color={accent} />
+                <View style={styles.historyOptionCopy}>
+                  <Text style={[styles.historyOptionTitle, { color: colors.ink }] }>
+                    {t(label)}
+                  </Text>
+                  <Text style={[styles.historyOptionDescription, { color: colors.muted }] }>
+                    {t(description)}
+                  </Text>
+                </View>
+                {gridRange === range ? (
+                  <Ionicons name="checkmark" size={17} color={accent} />
+                ) : null}
+              </Pressable>
+            ))}
+            <Text style={[styles.gridEditHint, { color: colors.muted }] }>
+              {t("Calendar rows are collapsed by default. The selected range is saved for this group.")}
+            </Text>
+            <View style={styles.historyBulkRow}>
+              <Pressable
+                onPress={() => {
+                  setExpandedGridRows(visibleGridKeys);
+                  setShowHistoryOptions(false);
+                }}
+                style={[styles.historyBulkButton, { borderColor: colors.border }]}
+              >
+                <Ionicons name="chevron-down" size={17} color={accent} />
+                <Text style={[styles.historyBulkText, { color: colors.ink }] }>
+                  {t("Expand all")}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setExpandedGridRows([]);
+                  setShowHistoryOptions(false);
+                }}
+                style={[styles.historyBulkButton, { borderColor: colors.border }]}
+              >
+                <Ionicons name="chevron-up" size={17} color={accent} />
+                <Text style={[styles.historyBulkText, { color: colors.ink }] }>
+                  {t("Collapse all")}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Modal>
       <GroupChallengeEditor
         visible={challengeEditorOpen}
         group={state.group}
@@ -2270,16 +2302,18 @@ const styles = StyleSheet.create({
   addExistingText: { fontSize: 10, fontWeight: "900" },
   editHint: { alignItems: "center", paddingVertical: 7 },
   hint: { fontSize: 9, fontWeight: "700" },
-  gridEditControls: { padding: 8, marginBottom: 6 },
-  gridEditLine: { flexDirection: "row", alignItems: "center", gap: 8 },
-  gridRangeChoices: { flex: 1, flexDirection: "row", gap: 5 },
-  gridRangeChoice: { minHeight: 30, borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, alignItems: "center", justifyContent: "center" },
-  gridRangeChoiceText: { fontSize: 8, fontWeight: "900" },
-  gridBulkBox: { minHeight: 43, marginTop: 7, marginBottom: 7, borderWidth: 1, borderStyle: "dashed", borderRadius: 13, flexDirection: "row", alignItems: "stretch" },
-  gridBulkButton: { flex: 1, minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  gridBulkDivider: { width: StyleSheet.hairlineWidth, marginVertical: 8 },
-  gridBulkText: { fontSize: 9, fontWeight: "900" },
   gridEditHint: { fontSize: 7, lineHeight: 10, marginTop: 5 },
+  historyBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(5,14,36,0.6)" },
+  historySheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 30 },
+  historySheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "#89918C", alignSelf: "center", marginBottom: 12 },
+  historySheetTitle: { fontSize: 15, fontWeight: "900", marginBottom: 8 },
+  historySheetRow: { minHeight: 54, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  historyOptionCopy: { flex: 1, minHeight: 40, justifyContent: "center", gap: 1 },
+  historyOptionTitle: { fontSize: 10, lineHeight: 14, fontWeight: "900" },
+  historyOptionDescription: { fontSize: 8, lineHeight: 11, fontWeight: "600" },
+  historyBulkRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  historyBulkButton: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 13, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  historyBulkText: { fontSize: 9, fontWeight: "900" },
   ranking: { padding: 7 },
   challengeCard: { overflow: "hidden" },
   challengeHead: { flexDirection: "row", alignItems: "center", gap: 9, padding: 5, paddingBottom: 8 },
@@ -2322,12 +2356,6 @@ const styles = StyleSheet.create({
   eyebrow: { fontSize: 8, fontWeight: "900", letterSpacing: 1 },
   title: { fontSize: 14, fontWeight: "900", marginTop: 1 },
   max: { fontSize: 8, fontWeight: "900", padding: 7, borderRadius: 10 },
-  loadingRankings: {
-    minHeight: 45,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   rankingHeadAction: { flexDirection: "row", alignItems: "center", gap: 7 },
   row: {
     flexDirection: "row",

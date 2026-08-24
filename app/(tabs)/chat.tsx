@@ -47,6 +47,7 @@ import { useCloudSyncActions } from "@/src/cloud/CloudSyncProvider";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { usePageSwipeGesture } from "@/src/components/usePageSwipeGesture";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
+import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 
 function ChatScreen() {
   const tutorialSandbox = useTutorialSandboxActive();
@@ -107,7 +108,13 @@ function ChatScreen() {
     groupTodosAvailable &&
       (todoPickerOpen || Boolean(attachedTodoId)),
   );
-  const attachedTodo = groupTodos.todos.find(
+  const groupTodoItemVisibility = useTodoItemVisibility(
+    `group:${state.currentUserId}:${state.group.id}`,
+  );
+  const attachableGroupTodos = groupTodos.todos.filter((todo) =>
+    groupTodoItemVisibility.isVisible(todo.id),
+  );
+  const attachedTodo = attachableGroupTodos.find(
     (todo) => todo.id === attachedTodoId,
   );
   useEffect(() => {
@@ -986,7 +993,7 @@ function ChatScreen() {
                   </Pressable>
                 </View>
                 <ScrollView nestedScrollEnabled style={styles.todoPickerList} keyboardShouldPersistTaps="handled">
-                  {groupTodos.todos.slice(0, 40).map((todo) => (
+                  {attachableGroupTodos.slice(0, 40).map((todo) => (
                     <Pressable
                       key={todo.id}
                       onPress={() => {
@@ -999,7 +1006,7 @@ function ChatScreen() {
                       <Text translate={false} numberOfLines={1} style={[styles.todoPickerRowText, { color: colors.ink }]}>{todo.title}</Text>
                     </Pressable>
                   ))}
-                  {!groupTodos.todos.length ? (
+                  {!attachableGroupTodos.length ? (
                     <Text style={[styles.todoPickerEmpty, { color: colors.muted }]}>No group to-dos yet.</Text>
                   ) : null}
                 </ScrollView>

@@ -55,6 +55,15 @@ export function HorizontalPager({
   const webDragStartPageRef = useRef(0);
   const [pageWidth, setPageWidth] = useState(0);
   const [activePage, setActivePage] = useState(0);
+  // React Native Web's ScrollView already provides compositor-driven touch
+  // scrolling. A JS PanResponder competing for the same Android/iOS pointer
+  // stream makes installed PWAs feel sticky and causes snap-back frames. Keep
+  // the mouse-drag affordance only on pointer-only desktop browsers.
+  const webMouseDragEnabled = useMemo(() => {
+    if (Platform.OS !== "web") return false;
+    if (typeof navigator === "undefined") return true;
+    return (navigator.maxTouchPoints ?? 0) <= 0;
+  }, []);
 
   const commitActivePage = useCallback((page: number) => {
     activePageRef.current = page;
@@ -72,7 +81,6 @@ export function HorizontalPager({
     },
     [commitActivePage, pageWidth, pages.length],
   );
-
   useEffect(() => {
     const next = clampPageIndex(activePageRef.current, pages.length);
     commitActivePage(next);
@@ -123,7 +131,7 @@ export function HorizontalPager({
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponderCapture: (_event, gesture) =>
-          Platform.OS === "web" &&
+          webMouseDragEnabled &&
           scrollEnabled &&
           pages.length > 1 &&
           Math.abs(gesture.dx) > 7 &&
@@ -172,19 +180,19 @@ export function HorizontalPager({
         onPanResponderTerminationRequest: () => false,
         onShouldBlockNativeResponder: () => false,
       }),
-    [moveToPage, pageWidth, pages.length, scrollEnabled],
+    [moveToPage, pageWidth, pages.length, scrollEnabled, webMouseDragEnabled],
   );
 
   if (!pages.length) return null;
 
   return (
     <View
-      {...(Platform.OS === "web" ? webPointerDrag.panHandlers : {})}
+      {...(webMouseDragEnabled ? webPointerDrag.panHandlers : {})}
       accessibilityLabel={t(accessibilityLabel)}
       onLayout={measure}
       style={[
         styles.root,
-        Platform.OS === "web"
+        webMouseDragEnabled
           ? ({
               cursor:
                 scrollEnabled && pages.length > 1 ? "pointer" : "default",

@@ -57,9 +57,23 @@ assert.match(
   /period === "overall"[\s\S]*SHARED_LEADERBOARD_SUMMARY_START/,
 );
 assert.match(group, /calendarPeriodRange\(anchor, gridRange, weekStartsOn\)/);
-assert.match(group, /\["week", "month", "year"\]/);
+assert.match(group, /\["week", "Week", "Seven daily cells"\]/);
+assert.match(group, /\["month", "Month", "Every day in the selected month"\]/);
+assert.match(group, /\["year", "Year", "A compact full-year grid"\]/);
 assert.match(group, /Expand all/);
 assert.match(group, /Collapse all/);
+assert.match(group, /const \[showHistoryOptions, setShowHistoryOptions\] = useState\(false\)/);
+assert.match(group, /visible=\{showHistoryOptions\}/);
+assert.match(group, /onPress=\{\(\) => setShowHistoryOptions\(true\)\}/);
+assert.match(group, /setExpandedGridRows\(visibleGridKeys\)/);
+assert.doesNotMatch(group, /styles\.gridRangeChoices|styles\.gridBulkBox/);
+assert.match(group, /const cloudStatus = useCloudSyncStatus\(\)/);
+assert.match(
+  group,
+  /cloudStatus === "initializing" && !result[\s\S]{0,5000}Loading saved data…/,
+  "initial leaderboard hydration must label only absent results without hiding cached values",
+);
+assert.doesNotMatch(group, /ActivityIndicator/);
 assert.match(group, /useState<string\[]>\(\[\]\)/);
 assert.match(group, /sharedLeaderboardHeatmapModel/);
 assert.match(group, /const LeaderboardMemberGrid = React\.memo/);

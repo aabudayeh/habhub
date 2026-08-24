@@ -5,6 +5,8 @@ import { LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
 
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { AppText as Text } from "@/src/components/AppText";
+import { useTodoSubtaskExpansion } from "@/src/components/useTodoSubtaskExpansion";
+import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { dateKey } from "@/src/domain/date";
 import {
   groupTodoAppearsOnDate,
@@ -42,6 +44,13 @@ export function GroupTodoLeaderboardSection({
   const visible =
     state.settings.showGroupTodosByGroup?.[state.group.id] === true;
   const groupTodos = useGroupTodos(state.group.id, enabled && (visible || editing));
+  const subtaskExpansion = useTodoSubtaskExpansion(
+    `group:${state.currentUserId}:${state.group.id}`,
+  );
+  const expandSubtaskBranch = subtaskExpansion.expand;
+  const itemVisibility = useTodoItemVisibility(
+    `group:${state.currentUserId}:${state.group.id}`,
+  );
   const [activeLabel, setActiveLabel] = useState<string>();
   const today = dateKey();
   const reminders = useMemo(
@@ -75,6 +84,17 @@ export function GroupTodoLeaderboardSection({
       if (reminder.groupTodoId && !availableIds.has(reminder.groupTodoId))
         deleteCalendarReminder(reminder.id);
   }, [deleteCalendarReminder, editing, enabled, groupTodos.error, groupTodos.ready, groupTodos.todos, reminders, visible]);
+  useEffect(() => {
+    if (!focusTodoId) return;
+    const byId = new Map(groupTodos.todos.map((todo) => [todo.id, todo]));
+    const visited = new Set<string>();
+    let parentId = byId.get(focusTodoId)?.parentId;
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      expandSubtaskBranch(parentId);
+      parentId = byId.get(parentId)?.parentId;
+    }
+  }, [expandSubtaskBranch, focusTodoId, groupTodos.todos]);
 
   if (!enabled || (!visible && !editing)) return null;
 
@@ -87,6 +107,12 @@ export function GroupTodoLeaderboardSection({
     });
   const eligible = groupTodos.todos
     .filter((todo) => groupTodoAppearsOnDate(todo, today))
+    .filter(
+      (todo) =>
+        editing ||
+        itemVisibility.isVisible(todo.id) ||
+        focusTodoId === todo.id,
+    )
     .filter(
       (todo) => !activeLabel || todoLabels(todo).includes(activeLabel),
     );
@@ -139,6 +165,8 @@ export function GroupTodoLeaderboardSection({
 
   const renderBranch = (todo: GroupTodoItem, depth: number): React.ReactNode => {
     const nested = children.get(todo.id) ?? [];
+    const nestedExpanded = subtaskExpansion.isExpanded(todo.id);
+    const itemVisible = itemVisibility.isVisible(todo.id);
     const done = complete(todo);
     const overdue = Boolean(
       !todo.recurrence &&
@@ -172,6 +200,7 @@ export function GroupTodoLeaderboardSection({
             depth > 0 && styles.subtaskRow,
             {
               backgroundColor: colors.card,
+              opacity: itemVisible ? 1 : 0.56,
               borderColor:
                 focusTodoId === todo.id
                   ? accent
@@ -184,7 +213,10 @@ export function GroupTodoLeaderboardSection({
           <Pressable
             accessibilityLabel={done ? "Mark incomplete" : "Mark complete"}
             hitSlop={8}
-            onPress={() => void groupTodos.toggle(todo)}
+            onPress={(event) => {
+              event.stopPropagation();
+              void groupTodos.toggle(todo);
+            }}
           >
             <Ionicons
               name={done ? "checkmark-circle" : "ellipse-outline"}
@@ -235,15 +267,55 @@ export function GroupTodoLeaderboardSection({
             </View>
           </View>
           <View style={styles.actions}>
+            {editing ? (
+              <Pressable
+                accessibilityLabel={itemVisible ? "Hide group to-do" : "Show group to-do"}
+                hitSlop={7}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  itemVisibility.toggle(todo.id);
+                }}
+                style={styles.smallAction}
+              >
+                <Ionicons
+                  name={itemVisible ? "eye-outline" : "eye-off-outline"}
+                  size={13}
+                  color={itemVisible ? colors.faint : "#E9A23B"}
+                />
+              </Pressable>
+            ) : null}
+            {nested.length ? (
+              <Pressable
+                accessibilityLabel={
+                  nestedExpanded
+                    ? "Collapse group sub-to-dos"
+                    : "Expand group sub-to-dos"
+                }
+                accessibilityState={{ expanded: nestedExpanded }}
+                hitSlop={7}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  subtaskExpansion.toggle(todo.id);
+                }}
+                style={styles.smallAction}
+              >
+                <Ionicons
+                  name={nestedExpanded ? "chevron-up" : "chevron-down"}
+                  size={13}
+                  color={colors.faint}
+                />
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityLabel="Add group subtask"
               hitSlop={7}
-              onPress={() =>
+              onPress={(event) => {
+                event.stopPropagation();
                 router.navigate({
                   pathname: "/group-todo-editor",
                   params: { parentId: todo.id },
-                } as never)
-              }
+                } as never);
+              }}
               style={styles.smallAction}
             >
               <Ionicons name="return-down-forward-outline" size={13} color={colors.faint} />
@@ -252,7 +324,10 @@ export function GroupTodoLeaderboardSection({
               <Pressable
                 accessibilityLabel="Delete group to-do"
                 hitSlop={7}
-                onPress={() => confirmDelete(todo)}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  confirmDelete(todo);
+                }}
                 style={styles.smallAction}
               >
                 <Ionicons name="trash-outline" size={13} color={colors.faint} />
@@ -261,7 +336,7 @@ export function GroupTodoLeaderboardSection({
             <Ionicons name="chevron-forward" size={13} color={colors.faint} />
           </View>
         </Pressable>
-        {nested.length ? (
+        {nested.length && nestedExpanded ? (
           <View style={[styles.subtaskSection, { borderLeftColor: colors.border }] }>
             {nested.map((child) => renderBranch(child, depth + 1))}
           </View>

@@ -20,6 +20,7 @@ import {
   LIVE_STEP_SOURCES,
   localCalendarAggregateRange,
   manualStepEntriesEligibleForReplacement,
+  mergeLocalCurrentDayDeviceHealthEntries,
   mergeLocalCurrentDayDeviceStepEntries,
   normalizeLiveStepSources,
   partitionStepAggregateRange,
@@ -39,7 +40,10 @@ import {
   healthFallbackContextForRead,
   mapHealthRecordsToEntries,
   reconcileGoogleHealthNativeMirrors,
+  unrecordedStepActivity,
 } from "../src/domain/health.ts";
+import { calculateBmr } from "../src/domain/energy.ts";
+import { metricValue } from "../src/domain/metrics.ts";
 import {
   HEALTH_PHYSICAL_ACTIVITY_MIGRATION_VERSION,
   HEALTH_STEPS_IMPORT_VERSION,
@@ -553,6 +557,141 @@ assert.deepEqual(
 assert.ok(
   derivedWalkingFallbacks.every((entry) => Number(entry.value) > 0),
   "the workout-uncovered fixture must exercise every derived fallback branch",
+);
+assert.equal(
+  Number(
+    derivedWalkingFallbacks.find((entry) => entry.metricId === "exercise")
+      ?.value,
+  ),
+  169.6,
+  "a walking session without provider calories must contribute an estimated workout component as well as the uncovered-step component",
+);
+assert.match(
+  String(
+    derivedWalkingFallbacks.find((entry) => entry.metricId === "exercise")
+      ?.note,
+  ),
+  /provider supplied duration or distance but no calories/,
+  "the estimated Active energy row must explain why workout calories were estimated",
+);
+const energyProfile = {
+  age: 35,
+  sex: "unspecified",
+  heightCm: 175,
+  weightKg: 70,
+  targetWeightKg: 70,
+  activityLevel: "sedentary",
+  desiredWeeklyLossKg: 0,
+};
+const energyBurnedMetric = {
+  id: "energy_burned",
+  name: "Energy burned",
+  dataType: "number",
+  unit: "kcal",
+  aggregation: "latest",
+  defaultVisibility: "group",
+  healthMapping: { dataType: "total_energy", field: "value" },
+};
+const workoutEnergyState = {
+  entries: currentDayWithWalkingWorkout,
+  metrics: [...workoutFallbackMetrics, energyBurnedMetric],
+  energyProfiles: { owner: energyProfile },
+  settings: { energyProfile, baselineCalories: 2_000 },
+};
+const estimatedActiveEnergy = metricValue(
+  workoutEnergyState,
+  workoutFallbackMetrics[1],
+  "owner",
+  "2026-08-13",
+);
+assert.ok(
+  estimatedActiveEnergy > 150,
+  "profile-aware activity must retain both the workout and uncovered-step components",
+);
+assert.equal(
+  metricValue(
+    workoutEnergyState,
+    energyBurnedMetric,
+    "owner",
+    "2026-08-13",
+  ),
+  calculateBmr(energyProfile) + estimatedActiveEnergy,
+  "Total energy burned must include the estimated calories from a synced movement workout when the provider omits them",
+);
+const gymCalorieEntry = {
+  id: "gym-sync:strength-session:exercise",
+  metricId: "exercise",
+  userId: "owner",
+  value: 225,
+  localDate: "2026-08-13",
+  recordedAt: "2026-08-13T18:00:00.000Z",
+  visibility: "group",
+  source: "manual",
+  label: "Evening strength",
+};
+const gymAndWalkingState = {
+  ...workoutEnergyState,
+  entries: [...currentDayWithWalkingWorkout, gymCalorieEntry],
+};
+assert.equal(
+  metricValue(
+    gymAndWalkingState,
+    workoutFallbackMetrics[1],
+    "owner",
+    "2026-08-13",
+  ),
+  estimatedActiveEnergy + 225,
+  "app gym calories must remain additive without suppressing a separate synced walk whose provider omitted calories",
+);
+assert.equal(
+  metricValue(
+    gymAndWalkingState,
+    energyBurnedMetric,
+    "owner",
+    "2026-08-13",
+  ),
+  calculateBmr(energyProfile) + estimatedActiveEnergy + 225,
+  "Total energy burned must contain BMR, app gym calories, and the separate synced-walk estimate exactly once",
+);
+const providerActiveEnergyEntry = {
+  id: "health:health_connect:active_energy:daily-stream:exercise",
+  metricId: "exercise",
+  userId: "owner",
+  value: 180,
+  localDate: "2026-08-13",
+  recordedAt: "2026-08-13T19:00:00.000Z",
+  visibility: "group",
+  source: "imported",
+  sourceProvider: "health_connect",
+  sourceRecordId: "daily-stream",
+  sourceOrigin: "Samsung Health",
+  label: "Active calories",
+};
+const providerAndGymState = {
+  ...gymAndWalkingState,
+  entries: [
+    ...currentDayWithWalkingWorkout,
+    gymCalorieEntry,
+    providerActiveEnergyEntry,
+  ],
+};
+const walkingEstimate = unrecordedStepActivity(
+  providerAndGymState.entries,
+  providerAndGymState.metrics,
+  6_000,
+  energyProfile,
+);
+assert.equal(
+  metricValue(
+    providerAndGymState,
+    workoutFallbackMetrics[1],
+    "owner",
+    "2026-08-13",
+  ),
+  Math.round(
+    225 + providerActiveEnergyEntry.value + walkingEstimate.estimatedCalories,
+  ),
+  "an imported ActiveCaloriesBurned stream must suppress only overlapping health-workout calories, not app gym calories or uncovered-step activity",
 );
 const persistedWalkingWorkouts = mapHealthRecordsToEntries(
   [
@@ -1699,6 +1838,160 @@ assert.equal(
   unchangedCloudSteps,
   "a no-op cloud Steps guard must preserve entry-array identity",
 );
+const localNativeCalculationInputs = [
+  {
+    id: "health:health_connect:nutrition:meal-1:food",
+    metricId: "food",
+    userId: "owner",
+    localDate: "2026-08-13",
+    recordedAt: "2026-08-13T12:00:00.000Z",
+    source: "imported",
+    sourceProvider: "health_connect",
+    sourceRecordId: "meal-1",
+    value: 1_900,
+  },
+  {
+    id: "health:health_connect:active_energy:energy-1:exercise",
+    metricId: "exercise",
+    userId: "owner",
+    localDate: "2026-08-13",
+    recordedAt: "2026-08-13T14:00:00.000Z",
+    source: "imported",
+    sourceProvider: "health_connect",
+    sourceRecordId: "energy-1",
+    value: 420,
+  },
+  {
+    id: "health:health_connect:workouts:walk-1:workout_duration",
+    metricId: "workout_duration",
+    userId: "owner",
+    localDate: "2026-08-13",
+    recordedAt: "2026-08-13T14:00:00.000Z",
+    source: "imported",
+    sourceProvider: "health_connect",
+    sourceRecordId: "walk-1",
+    value: 30,
+  },
+  {
+    id: "health:health_connect:active_energy:old:exercise",
+    metricId: "exercise",
+    userId: "owner",
+    localDate: "2026-08-12",
+    recordedAt: "2026-08-12T14:00:00.000Z",
+    source: "imported",
+    sourceProvider: "health_connect",
+    sourceRecordId: "old",
+    value: 300,
+  },
+  {
+    id: "health:health_connect:step-fallback:2026-08-13:exercise:calories",
+    metricId: "exercise",
+    userId: "owner",
+    localDate: "2026-08-13",
+    recordedAt: "2026-08-13T14:00:00.000Z",
+    source: "calculated",
+    sourceProvider: "health_connect",
+    sourceRecordId: "step-fallback:2026-08-13",
+    value: 100,
+  },
+];
+const restartSafeHealth = mergeLocalCurrentDayDeviceHealthEntries(
+  [],
+  localNativeCalculationInputs,
+  {
+    userId: "owner",
+    currentLocalDate: "2026-08-13",
+    stepMetricIds: new Set(["steps"]),
+  },
+);
+assert.deepEqual(
+  restartSafeHealth.map((entry) => entry.metricId).sort(),
+  ["exercise", "food", "workout_duration"],
+  "cloud hydration must retain today's native Food/activity/workout inputs but not history or stale materialized step fallbacks",
+);
+const updatedLocalEnergy = {
+  ...localNativeCalculationInputs[1],
+  value: 480,
+};
+const restartWithStaleCloudEnergy = mergeLocalCurrentDayDeviceHealthEntries(
+  [{ ...localNativeCalculationInputs[1], value: 300 }],
+  [updatedLocalEnergy],
+  {
+    userId: "owner",
+    currentLocalDate: "2026-08-13",
+    stepMetricIds: new Set(["steps"]),
+  },
+);
+assert.equal(
+  restartWithStaleCloudEnergy[0]?.value,
+  480,
+  "the current device copy must win the same native event identity while a cloud snapshot lags",
+);
+const restartFoodMetric = {
+  id: "food",
+  name: "Food",
+  dataType: "number",
+  unit: "kcal",
+  aggregation: "sum",
+};
+const restartDeficitMetric = {
+  id: "deficit",
+  name: "Daily deficit",
+  dataType: "calculated",
+  unit: "kcal",
+  aggregation: "latest",
+  formula: "energy_burned - food",
+};
+const restartMetrics = [
+  ...workoutFallbackMetrics,
+  energyBurnedMetric,
+  restartFoodMetric,
+  restartDeficitMetric,
+];
+const restartState = (entries) => ({
+  entries,
+  metrics: restartMetrics,
+  energyProfiles: { owner: energyProfile },
+  settings: { energyProfile, baselineCalories: 2_000 },
+});
+assert.equal(
+  metricValue(
+    restartState(restartSafeHealth),
+    restartDeficitMetric,
+    "owner",
+    "2026-08-13",
+  ),
+  metricValue(
+    restartState(localNativeCalculationInputs),
+    restartDeficitMetric,
+    "owner",
+    "2026-08-13",
+  ),
+  "Daily deficit must not change when a cloud hydrate temporarily omits today's native calculation inputs",
+);
+const appProviderHydrationSource = fs.readFileSync(
+  "src/state/AppProvider.tsx",
+  "utf8",
+);
+assert.match(
+  appProviderHydrationSource,
+  /preserveDeviceHealthEntries[\s\S]{0,700}mergeLocalCurrentDayDeviceHealthEntries\(/,
+  "the cloud hydrate boundary must use the all-health current-day preservation guard",
+);
+assert.match(
+  appProviderHydrationSource,
+  /case "saveGymSession"[\s\S]{0,900}\{ metricId: "exercise", value: calorieValue \}/,
+  "saving an app gym session must materialize its calories into Active energy",
+);
+const metricCalculationSource = fs.readFileSync(
+  "src/domain/metrics.ts",
+  "utf8",
+);
+assert.match(
+  metricCalculationSource,
+  /metric\.id === "energy_burned" \|\|[\s\S]{0,80}metric\.id === "deficit"/,
+  "today's Daily deficit must remain live instead of reusing a clock-dependent cached value",
+);
 const stableFallback = {
   id: "fallback",
   metricId: "exercise",
@@ -2609,8 +2902,8 @@ assert.match(
 );
 assert.match(
   appProviderSource,
-  /preserveDeviceHealthEntries[\s\S]{0,700}mergeLocalCurrentDayDeviceStepEntries\([\s\S]{0,500}metricIdsForHealthDataTypes\([\s\S]{0,100}\["steps"\]/,
-  "every cloud hydrate path must preserve newer native current-day Steps from stale cloud snapshots",
+  /preserveDeviceHealthEntries[\s\S]{0,700}mergeLocalCurrentDayDeviceHealthEntries\([\s\S]{0,500}metricIdsForHealthDataTypes\([\s\S]{0,100}\["steps"\]/,
+  "every cloud hydrate path must preserve current-day native health calculations while retaining the specialized Steps guard",
 );
 assert.match(
   appProviderSource,

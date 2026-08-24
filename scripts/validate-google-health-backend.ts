@@ -26,6 +26,7 @@ const [
   durableCatchupMigration,
   hourlyCatchupMigration,
   forwardWorkerHardeningMigration,
+  groupProjectionMigration,
   endpoint,
   sync,
   api,
@@ -49,6 +50,7 @@ const [
   read("supabase/migrations/202608220005_google_health_durable_catchups.sql"),
   read("supabase/migrations/202608240001_hourly_google_health_catchups.sql"),
   read("supabase/migrations/202608240006_worker_and_challenge_guard_hardening.sql"),
+  read("supabase/migrations/202608240007_google_health_group_projection.sql"),
   read("supabase/functions/google-health/index.ts"),
   read("supabase/functions/_shared/google-health-sync.ts"),
   read("supabase/functions/_shared/google-health-api.ts"),
@@ -1269,6 +1271,43 @@ assert.match(migration, /googleHealthEntryOverrides/);
 assert.match(migration, /if v_entries is distinct from v_original_entries/);
 assert.match(migration, /and owned\.entry = item -> 'entry'/);
 assert.match(migration, /source_provider is null or source_provider in \('apple_health', 'health_connect', 'google_health'\)/);
+
+const groupProjectionBody = groupProjectionMigration.match(
+  /create or replace function public\.project_google_health_group_data[\s\S]*?\n\$\$;/i,
+)?.[0] ?? "";
+assert.match(groupProjectionBody, /auth\.role\(\)\) is distinct from 'service_role'/);
+assert.match(groupProjectionBody, /v_revision <> p_snapshot_revision/);
+assert.match(groupProjectionBody, /membership\.status = 'active'/);
+assert.match(groupProjectionBody, /definition\.slug = target\.metric_slug/);
+assert.match(groupProjectionBody, /from public\.google_health_import_records owned/);
+assert.match(groupProjectionBody, /source\.owned_google[\s\S]*source\.visibility = 'group'/);
+assert.match(groupProjectionBody, /'group'::public\.entry_visibility/);
+assert.match(groupProjectionBody, /privacy_projection_version/);
+assert.match(groupProjectionBody, /2::smallint|\n\s+2,/);
+assert.match(groupProjectionBody, /case when projected\.projected_visibility = 'group'[\s\S]*then projected\.exact_value else null end/);
+assert.match(groupProjectionMigration, /floor\(greatest\(0, least\(100, v_score\)\) \/ 25\) \* 25/);
+assert.match(groupProjectionMigration, /'goalTarget',[\s\S]*p_visibility = 'status' then null/);
+assert.match(groupProjectionBody, /source\.entry ->> 'label'/);
+assert.match(groupProjectionBody, /source\.entry -> 'nutrition'/);
+assert.match(groupProjectionBody, /source\.entry ->> 'sourceRecordId'/);
+assert.match(groupProjectionBody, /source\.entry ->> 'sourceOrigin'/);
+assert.match(groupProjectionBody, /source\.entry ->> 'sourceUpdatedAt'/);
+assert.match(groupProjectionBody, /insert into public\.metric_privacy_cache_fences/);
+assert.match(groupProjectionBody, /insert into public\.metric_entry_tombstones/);
+assert.match(groupProjectionBody, /insert into public\.group_activity_versions/);
+assert.match(groupProjectionBody, /account_revision/);
+assert.match(groupProjectionMigration, /grant execute on function public\.project_google_health_group_data\(uuid, bigint\)\s+to service_role/);
+assert.doesNotMatch(groupProjectionMigration, /grant execute on function public\.project_google_health_group_data\([^;]+\)\s+to (?:anon|authenticated)/);
+assert.match(groupProjectionMigration, /metric_entries_a_handoff_google_health_projection/);
+
+const importCall = sync.indexOf('admin.rpc("apply_google_health_import"');
+const projectionCall = sync.indexOf('admin.rpc("project_google_health_group_data"');
+const finishCallAfterImport = sync.indexOf('admin.rpc("finish_google_health_sync"', importCall);
+assert.ok(importCall >= 0 && projectionCall > importCall);
+assert.ok(finishCallAfterImport > projectionCall);
+assert.match(sync, /p_snapshot_revision: projectionRevision/);
+assert.match(sync, /google_health_projection_conflict\|40001/);
+
 assert.match(migration, /create extension if not exists pg_cron/);
 assert.match(migration, /vault\.decrypted_secrets/);
 assert.match(migration, /create or replace function public\.persist_google_health_refresh_replacement/);

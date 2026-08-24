@@ -9,6 +9,27 @@ export const MAX_CLOUD_STATUS_UPSERT_ROWS = 100;
 const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * Compare source revisions by instant, not by their wire representation.
+ * Postgres normally returns `+00:00` while device imports use `Z`; a lexical
+ * comparison treats the same instant as newer forever and can repeatedly
+ * upsert an otherwise unchanged detailed Health row.
+ */
+export function cloudSourceTimestampIsNewer(
+  incoming: string | null | undefined,
+  stored: string | null | undefined,
+) {
+  if (!incoming) return false;
+  if (!stored) return true;
+  const incomingMs = Date.parse(incoming);
+  const storedMs = Date.parse(stored);
+  if (Number.isFinite(incomingMs) && Number.isFinite(storedMs))
+    return incomingMs > storedMs;
+  // Source revisions are expected to be ISO timestamps. If legacy malformed
+  // data reaches this comparison, do not create an unbounded rewrite loop.
+  return false;
+}
+
+/**
  * Select the tiny status window used by ordinary freshness publication.
  * Candidate order is meaningful: callers put genuinely changed dates before
  * fallback overlap dates. The returned dates are sorted for stable checkpoints.

@@ -40,6 +40,10 @@ import {
   withoutGoogleHealthDerivedStatuses,
   withoutGoogleHealthEntries,
 } from "../src/domain/googleHealthLocalPrivacy.ts";
+import {
+  buildGoogleHealthGroupCheckpoint,
+  parseGoogleHealthGroupCheckpoint,
+} from "../src/domain/googleHealthGroupCheckpoint.ts";
 
 const sampleCompletionToken = "a".repeat(64);
 assert.deepEqual(
@@ -344,6 +348,61 @@ assert.deepEqual(
   ),
   ["owner:mood:2026-08-21", "owner:steps:2026-08-20"],
   "Google projections stay memory-only without dropping unrelated statuses from the same day",
+);
+const protectedGroupCheckpoint = buildGoogleHealthGroupCheckpoint(
+  {
+    currentUserId: "viewer",
+    groupId: "group",
+    dailyMetricStatuses: [
+      {
+        ...cacheStatuses[2],
+        visibility: "group",
+        privacyProjectionVersion: 2,
+        exactValue: 5_400,
+        goalTarget: 10_000,
+        syncedAt: "2026-08-21T10:00:00.000Z",
+      },
+      {
+        ...cacheStatuses[2],
+        metricId: "exercise",
+        visibility: "status",
+        privacyProjectionVersion: 2,
+        syncedAt: "2026-08-21T10:00:00.000Z",
+      },
+      cacheStatuses[0],
+    ],
+  },
+  new Date("2026-08-24T12:00:00.000Z"),
+);
+assert.equal(protectedGroupCheckpoint?.dailyMetricStatuses.length, 2);
+assert.equal(protectedGroupCheckpoint?.dailyMetricStatuses[0].exactValue, 5_400);
+assert.equal(
+  protectedGroupCheckpoint?.dailyMetricStatuses[1].exactValue,
+  undefined,
+  "status-only protected checkpoints must remain non-invertible",
+);
+assert.equal(
+  protectedGroupCheckpoint?.dailyMetricStatuses[1].goalTarget,
+  undefined,
+);
+assert.ok(
+  parseGoogleHealthGroupCheckpoint(
+    protectedGroupCheckpoint,
+    "viewer",
+    "group",
+    new Date("2026-08-24T12:00:00.000Z"),
+  ),
+  "an encrypted, account/group-bound compact projection must restore",
+);
+assert.equal(
+  parseGoogleHealthGroupCheckpoint(
+    protectedGroupCheckpoint,
+    "different-viewer",
+    "group",
+    new Date("2026-08-24T12:00:00.000Z"),
+  ),
+  undefined,
+  "a protected group checkpoint must never cross account boundaries",
 );
 const editedGoogleEntry = {
   ...googleEntry,
@@ -733,6 +792,10 @@ const groupCacheNative = fs.readFileSync(
   "src/storage/groupActivityCache.native.ts",
   "utf8",
 );
+const protectedGroupCache = fs.readFileSync(
+  "src/storage/googleHealthGroupCheckpoint.web.ts",
+  "utf8",
+);
 const localPersistence = fs.readFileSync(
   "src/domain/localPersistence.ts",
   "utf8",
@@ -942,6 +1005,15 @@ assert.ok(cloudProvider.includes("purgeLegacyGoogleHealthCloudCaches"));
 assert.ok(cloudProvider.includes("workspaceAckMayPersist"));
 assert.ok(groupCache.includes("withoutGoogleHealthEntries"));
 assert.ok(groupCache.includes("withoutGoogleHealthDerivedStatuses"));
+assert.ok(protectedGroupCache.includes('name: "AES-GCM"'));
+assert.ok(protectedGroupCache.includes("additionalData"));
+assert.match(
+  protectedGroupCache,
+  /if \(!checkpoint\)[\s\S]{0,180}deleteGoogleHealthGroupCheckpoint/,
+  "an empty authorized projection must clear the stale encrypted group checkpoint",
+);
+assert.ok(cloudProvider.includes("readGoogleHealthGroupCheckpoint"));
+assert.ok(cloudProvider.includes("writeGoogleHealthGroupCheckpoint"));
 assert.ok(groupCacheTypes.includes("GROUP_ACTIVITY_CACHE_SCHEMA_VERSION = 3"));
 assert.ok(groupCacheAsync.includes("purgeLegacyGroupActivityCaches"));
 assert.ok(

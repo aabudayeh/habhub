@@ -160,7 +160,7 @@ assert.match(pluginSource, /BACKGROUND_MODE_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_COLOR_PREFIX/);
 assert.match(pluginSource, /BACKGROUND_OPACITY_PREFIX/);
 assert.match(pluginSource, /LEADERBOARD_METRICS_PREFIX/);
-assert.match(pluginSource, /LEADERBOARD_COUNT_PREFIX/);
+assert.doesNotMatch(pluginSource, /LEADERBOARD_COUNT_PREFIX|val leaderboardCount:/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
 assert.match(
   pluginSource,
@@ -218,6 +218,16 @@ assert.match(
 assert.match(pluginSource, /cellScale[\s\S]*metricTitleSize[\s\S]*rowTextSize[\s\S]*iconRadius/);
 assert.match(
   pluginSource,
+  /val stackRows = grid\.cellWidth < 76f[\s\S]*fittedTextPaint\(value, valueWidth/,
+  "Leaderboard values must fit responsively instead of truncating units in narrow widgets",
+);
+assert.match(
+  pluginSource,
+  /icon\.startsWith\("walk"\)[\s\S]*conventional walking-person glyph/,
+  "Steps needs a recognizable native walking glyph",
+);
+assert.match(
+  pluginSource,
   /contentDescription\(context, item, configuration, size\)/,
   "Leaderboard accessibility text must be filtered to the metrics visible on that widget",
 );
@@ -249,8 +259,8 @@ assert.doesNotMatch(
 assert.match(pluginSource, /val dateLabel = item\.optString\("dateLabel"\)/);
 assert.match(
   pluginSource,
-  /val pad = if \(size\.compact\) 5f else 11f[\s\S]*dateLabel[\s\S]*pad,[\s\S]*if \(size\.compact\) 6\.2f[\s\S]*eyebrow,[\s\S]*pad,[\s\S]*if \(size\.compact\) 11\.8f/,
-  "Compact Featured date and eyebrow must share the headline's left axis",
+  /val headerBaseline = if \(size\.compact\) 8\.7f else 16f[\s\S]*drawText\(canvas, dateLabel, pad, headerBaseline[\s\S]*eyebrowLeft,[\s\S]*headerBaseline/,
+  "Featured date and TODAY'S FOCUS must share one baseline, with the date at the left",
 );
 assert.match(pluginSource, /item\.optString\("compactSubtitle", item\.optString\("subtitle"\)\)/);
 assert.match(
@@ -266,10 +276,16 @@ const featuredBadgeCenter =
   featured2x1Width - featured2x1Pad - featuredBadgeDiameter / 2;
 const featuredContentWidth =
   featuredBadgeCenter - featuredBadgeDiameter / 2 - featured2x1Pad - 5;
+const featuredDateWidth = Math.min(featuredContentWidth * 0.38, 17);
+const featuredEyebrowWidth = featuredContentWidth - featuredDateWidth - 2.2;
 assert.equal(
   featuredContentWidth,
   70,
   "The minimum 2x1 Featured header must retain 70dp for the complete TODAY'S FOCUS label",
+);
+assert.ok(
+  featuredEyebrowWidth > 48,
+  "The compact date must leave enough width to show TODAY'S FOCUS in full",
 );
 assert.equal(
   featured2x1Width - featured2x1Pad * 2,
@@ -312,7 +328,7 @@ assert.match(widgetTypes, /dateLabel: string/);
 assert.match(widgetTypes, /export type WidgetAvatarSnapshot/);
 assert.match(widgetTypes, /export type WidgetLeaderboardSnapshot/);
 assert.match(widgetTypes, /leaderboardMetricIds\?: string\[\]/);
-assert.match(widgetTypes, /leaderboardCount\?: number/);
+assert.doesNotMatch(widgetTypes, /leaderboardCount/);
 assert.match(widgetTypes, /avatarUri\?: string/);
 assert.match(widgetTypes, /goals: WidgetGoalSnapshot\[\]/);
 assert.doesNotMatch(widgetTypes, /weightLabel|bodyCompositionLabel/);
@@ -349,8 +365,8 @@ assert.match(widgetBridge, /configuration\.trackerId === "__leaderboard__"/);
 assert.match(widgetBridge, /configuration\.leaderboardMetricIds\?\.length/);
 assert.match(
   widgetBridge,
-  /configuration\.leaderboardMetricIds\.slice\([\s\S]*configuration\.leaderboardCount \?\? 2/,
-  "Durable snapshots must include only each widget's visible configured tracker count",
+  /configuration\.leaderboardMetricIds\?\.length[\s\S]*\? configuration\.leaderboardMetricIds[\s\S]*: defaultLeaderboardMetricIds/,
+  "The selected tracker list must be the single source of truth for each Leaderboard widget",
 );
 assert.match(widgetBridge, /trackers: \[\]/);
 assert.match(widgetBridge, /NativeAppState\.addEventListener/);
@@ -401,8 +417,10 @@ assert.match(
 assert.match(pluginSource, /HabHubSmallWidgetProvider::class\.java[\s\S]*HabHubSquareWidgetProvider::class\.java[\s\S]*HabHubWideCompactWidgetProvider::class\.java[\s\S]*HabHubWideWidgetProvider::class\.java[\s\S]*HabHubLeaderboardWidgetProvider::class\.java/);
 assert.match(widgetConfig, /selectedCount < 4/);
 assert.match(widgetConfig, /selectedLeaderboardMetricIds[\s\S]*\.ifEmpty/);
+assert.doesNotMatch(widgetConfig, /leaderboardCountSlider|leaderboardCountLabel|habhub_widget_leaderboard_count/);
+assert.doesNotMatch(widgetValues, /habhub_widget_leaderboard_count/);
 assert.match(nativeModule, /putArray\([\s\S]*"leaderboardMetricIds"/);
-assert.match(nativeModule, /putInt\("leaderboardCount"/);
+assert.doesNotMatch(nativeModule, /leaderboardCount/);
 assert.doesNotMatch(pluginSource, /mergedTrackers|previous\.optJSONArray\("trackers"\)/);
 assert.match(nativeModule, /fun clearWidgetSnapshot\(promise: Promise\)[\s\S]*HabHubWidgetStore\.clearSnapshot[\s\S]*HabHubWidgetRenderer\.updateAll/);
 assert.match(widgetTypes, /clearWidgetSnapshot\(\): Promise<boolean>/);

@@ -6,6 +6,8 @@ import { GestureDetector } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 
 import { AppText as Text } from "@/src/components/AppText";
+import { useTodoSubtaskExpansion } from "@/src/components/useTodoSubtaskExpansion";
+import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import {
   todoAppearsOnDate,
@@ -49,12 +51,19 @@ export function TodoTodayList({
   } = useApp();
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const subtaskExpansion = useTodoSubtaskExpansion(
+    `personal:${state.currentUserId}`,
+  );
+  const itemVisibility = useTodoItemVisibility(
+    `personal:${state.currentUserId}`,
+  );
   const visible = state.settings.showTodosToday !== false;
   const [activeLabel, setActiveLabel] = useState<string>();
   const allowedIds = todoIds ? new Set(todoIds) : undefined;
   const baseItems = (state.todos ?? [])
     .filter((todo) => !allowedIds || allowedIds.has(todo.id))
     .filter((todo) => todoAppearsOnDate(todo, localDate))
+    .filter((todo) => editing || itemVisibility.isVisible(todo.id))
     .sort(
       (a, b) =>
         Number(Boolean(b.pinnedAt)) -
@@ -119,6 +128,7 @@ export function TodoTodayList({
     const todo = node.item;
     const flatIndex = shownItems.findIndex((item) => item.item.id === todo.id);
     const children = childNodes.get(todo.id) ?? [];
+    const childrenExpanded = subtaskExpansion.isExpanded(todo.id);
     return (
       <View key={todo.id} style={depth ? styles.subtaskBranch : undefined}>
         <TodoRow
@@ -128,6 +138,11 @@ export function TodoTodayList({
           index={flatIndex}
           count={shownItems.length}
           depth={depth}
+          childCount={children.length}
+          childrenExpanded={childrenExpanded}
+          onToggleChildren={() => subtaskExpansion.toggle(todo.id)}
+          visible={itemVisibility.isVisible(todo.id)}
+          onToggleVisibility={() => itemVisibility.toggle(todo.id)}
           onAddChild={() =>
             router.navigate({
               pathname: "/todo-editor",
@@ -152,7 +167,7 @@ export function TodoTodayList({
             if (completing) onComplete?.(todo.id);
           }}
         />
-        {children.length ? (
+        {children.length && childrenExpanded ? (
           <View style={[styles.subtaskSection, { borderLeftColor: colors.border }] }>
             {children.map((child) => renderTodoBranch(child, depth + 1))}
           </View>
@@ -267,6 +282,11 @@ function TodoRow({
   onToggle,
   onLongPress,
   onAddChild,
+  childCount,
+  childrenExpanded,
+  onToggleChildren,
+  visible,
+  onToggleVisibility,
   depth,
 }: {
   todo: TodoItem;
@@ -279,6 +299,11 @@ function TodoRow({
   onToggle: () => void;
   onLongPress: () => void;
   onAddChild: () => void;
+  childCount: number;
+  childrenExpanded: boolean;
+  onToggleChildren: () => void;
+  visible: boolean;
+  onToggleVisibility: () => void;
   depth: number;
 }) {
   const colors = useAppColors();
@@ -327,12 +352,19 @@ function TodoRow({
         depth > 0 && styles.subtaskRow,
         {
           backgroundColor: colors.card,
+          opacity: visible ? 1 : 0.56,
           borderColor:
             deadline && !complete && !skipped ? "#D24B4B66" : colors.border,
         },
       ]}
     >
-      <Pressable onPress={onToggle} hitSlop={8}>
+      <Pressable
+        onPress={(event) => {
+          event.stopPropagation();
+          onToggle();
+        }}
+        hitSlop={8}
+      >
         <Ionicons
           name={
             skipped
@@ -393,8 +425,53 @@ function TodoRow({
         </View>
       </View>
       <View style={styles.rowActions}>
+        {editing ? (
+          <Pressable
+            accessibilityLabel={visible ? "Hide to-do" : "Show to-do"}
+            hitSlop={7}
+            onPress={(event) => {
+              event.stopPropagation();
+              onToggleVisibility();
+            }}
+            style={styles.smallAction}
+          >
+            <Ionicons
+              name={visible ? "eye-outline" : "eye-off-outline"}
+              size={14}
+              color={visible ? colors.faint : "#E9A23B"}
+            />
+          </Pressable>
+        ) : null}
+        {childCount ? (
+          <Pressable
+            accessibilityLabel={
+              childrenExpanded ? "Collapse sub-to-dos" : "Expand sub-to-dos"
+            }
+            accessibilityState={{ expanded: childrenExpanded }}
+            hitSlop={7}
+            onPress={(event) => {
+              event.stopPropagation();
+              onToggleChildren();
+            }}
+            style={styles.smallAction}
+          >
+            <Ionicons
+              name={childrenExpanded ? "chevron-up" : "chevron-down"}
+              size={14}
+              color={colors.faint}
+            />
+          </Pressable>
+        ) : null}
         {!editing ? (
-          <Pressable accessibilityLabel="Add subtask" hitSlop={7} onPress={onAddChild} style={styles.smallAction}>
+          <Pressable
+            accessibilityLabel="Add subtask"
+            hitSlop={7}
+            onPress={(event) => {
+              event.stopPropagation();
+              onAddChild();
+            }}
+            style={styles.smallAction}
+          >
             <Ionicons name="return-down-forward-outline" size={14} color={colors.faint} />
           </Pressable>
         ) : null}
@@ -402,7 +479,10 @@ function TodoRow({
           <Pressable
             accessibilityLabel={todo.pinnedAt ? "Unpin to-do" : "Pin to-do"}
             hitSlop={7}
-            onPress={onPin}
+            onPress={(event) => {
+              event.stopPropagation();
+              onPin();
+            }}
             style={styles.smallAction}
           >
             <Ionicons

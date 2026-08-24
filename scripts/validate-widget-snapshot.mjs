@@ -83,6 +83,18 @@ assert.match(
   /goals? left · 0\/1 To-Dos/,
   "A Featured widget with goals and to-dos must keep both counts on one separated summary line",
 );
+const noTodoFeatured = featuredWidgetSnapshot(
+  { ...state, todos: [] },
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+);
+assert.match(
+  noTodoFeatured.compactSubtitle,
+  /goals? left · 0\/0 To-Dos/,
+  "A compact Featured widget must reserve its To-Do count even before the first To-Do is added",
+);
 
 const status = statusRangeRollup(state, state.currentUserId, [today]);
 const avatar = statusWidgetSnapshot(
@@ -134,7 +146,6 @@ const leaderboard = leaderboardWidgetSnapshot(
   identity,
   theme,
   leaderboardMetricIds,
-  2,
 );
 assert.equal(leaderboard.id, "__leaderboard__");
 assert.equal(leaderboard.deepLink, "paceboard://group");
@@ -174,7 +185,6 @@ const privateLeaderboard = leaderboardWidgetSnapshot(
   identity,
   theme,
   ["steps"],
-  1,
 );
 const privateSarah = privateLeaderboard.metrics[0]?.rows.find(
   (row) => row.id === "sarah",
@@ -247,7 +257,6 @@ const safePayload = JSON.stringify({
     identity,
     theme,
     ["steps"],
-    1,
   ),
 });
 assert.doesNotMatch(safePayload, /google_health|widget-private-steps|987654/);

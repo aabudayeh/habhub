@@ -63,7 +63,7 @@ import {
   currentDayStepFloorsForEmptyReplacement,
   isDailyStepReplacementCandidate,
   manualStepEntriesEligibleForReplacement,
-  mergeLocalCurrentDayDeviceStepEntries,
+  mergeLocalCurrentDayDeviceHealthEntries,
   preserveCurrentDayStepFloor,
   preserveCurrentDayStepReplacementFloor,
   preserveUnchangedStepFallback,
@@ -987,7 +987,7 @@ function reducer(state: AppState, action: Action): AppState {
         incoming.currentUserId === state.currentUserId
           ? {
               ...incoming,
-              entries: mergeLocalCurrentDayDeviceStepEntries(
+              entries: mergeLocalCurrentDayDeviceHealthEntries(
                 incoming.entries,
                 state.entries,
                 {
@@ -3940,9 +3940,10 @@ export function AppProvider({
   useEffect(() => {
     if (!hydrated || ephemeral) return;
     // Google imports stay out of the plaintext app snapshot. The Web-specific
-    // implementation writes only the recent daily Steps aggregate into an
-    // AES-GCM checkpoint, immediately after an authoritative cloud refresh,
-    // so a killed/reopened PWA never paints a fabricated zero first.
+    // implementation writes only recent calculation inputs into an AES-GCM
+    // checkpoint immediately after an authoritative cloud refresh, so a
+    // killed/reopened PWA never paints false zeroes for Steps, Food, activity,
+    // Total energy, or the Daily deficit derived from them.
     void writeGoogleHealthStepCheckpoint(googleHealthStepCheckpointSource).catch(
       () => undefined,
     );

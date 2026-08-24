@@ -13,6 +13,7 @@ import { TimeInput } from "@/src/components/TimeInput";
 import { SelectionMenu } from "@/src/components/SelectionMenu";
 import { useWebBeforeUnload } from "@/src/components/useWebBeforeUnload";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
+import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
 import {
   Card,
   Chip,
@@ -97,7 +98,13 @@ export default function TodoEditor() {
   const navigation = useNavigation();
   const colors = useAppColors();
   const accent = useGroupAccent();
-  const existing = (state.todos ?? []).find((todo) => todo.id === id);
+  const draftTodoId = useRef(
+    id ?? `todo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  ).current;
+  const [savedTodoId, setSavedTodoId] = useState<string>();
+  const existing = (state.todos ?? []).find(
+    (todo) => todo.id === (id ?? savedTodoId),
+  );
   const parent = (state.todos ?? []).find(
     (todo) => todo.id === (existing?.parentId ?? parentId),
   );
@@ -382,7 +389,7 @@ export default function TodoEditor() {
       ),
     );
   }, [dueDate]);
-  const save = (exit: () => void = () => router.back()) => {
+  const persist = () => {
     if (!title.trim())
       return Alert.alert("Add a title", "What needs to be done?");
     const now = new Date().toISOString();
@@ -424,8 +431,9 @@ export default function TodoEditor() {
                 : undefined,
             anchorDate: recurrenceAnchor,
           };
+    const savedId = existing?.id ?? draftTodoId;
     saveTodo({
-      id: existing?.id ?? `todo-${Date.now().toString(36)}`,
+      id: savedId,
       title: title.trim(),
       description: description.trim() || undefined,
       createdAt: existing?.createdAt ?? now,
@@ -462,6 +470,13 @@ export default function TodoEditor() {
       parentId: existing?.parentId ?? parentId,
       labels: parsedLabels,
     });
+    setSavedTodoId(savedId);
+    initialSignature.current = signature;
+    return savedId;
+  };
+  const save = (exit: () => void = () => router.back()) => {
+    const savedId = persist();
+    if (!savedId) return;
     allowExit.current = true;
     exit();
   };
@@ -1122,6 +1137,49 @@ export default function TodoEditor() {
         </> : null}
       </Card>
       </TutorialTarget>
+      <TodoSubtaskEditorSection
+        items={
+          existing
+            ? (state.todos ?? []).filter((todo) =>
+                descendantTodoIds(state.todos ?? [], existing.id).has(todo.id),
+              )
+            : []
+        }
+        onAdd={() => {
+          const savedId = persist();
+          if (!savedId) return;
+          router.navigate({
+            pathname: "/todo-editor",
+            params: { parentId: savedId },
+          } as never);
+        }}
+        onEdit={(subtaskId) =>
+          router.navigate({
+            pathname: "/todo-editor",
+            params: { id: subtaskId },
+          } as never)
+        }
+        onRemove={(subtaskId) => {
+          const nestedCount = descendantTodoIds(
+            state.todos ?? [],
+            subtaskId,
+          ).size;
+          Alert.alert(
+            "Delete sub-to-do?",
+            nestedCount
+              ? "Its nested sub-to-dos will also be deleted."
+              : "This cannot be undone.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () => deleteTodo(subtaskId),
+              },
+            ],
+          );
+        }}
+      />
       <Pressable onPress={() => save()} style={[styles.save, { backgroundColor: accent }]}>
         <Text style={styles.saveText}>Save to-do</Text>
       </Pressable>

@@ -219,23 +219,11 @@ export function WidgetSnapshotBridge() {
           leaderboardConfigurations.flatMap(
             (configuration) =>
               configuration.leaderboardMetricIds?.length
-                ? configuration.leaderboardMetricIds.slice(
-                    0,
-                    configuration.leaderboardCount ?? 2,
-                  )
-                : defaultLeaderboardMetricIds.slice(
-                    0,
-                    configuration.leaderboardCount ?? 2,
-                  ),
+                ? configuration.leaderboardMetricIds
+                : defaultLeaderboardMetricIds,
           ),
         ),
       ];
-      const leaderboardCount = Math.max(
-        1,
-        ...leaderboardConfigurations.map(
-          (configuration) => configuration.leaderboardCount ?? 2,
-        ),
-      );
       const leaderboard = leaderboardConfigurations.length
         ? leaderboardWidgetSnapshot(
             currentState,
@@ -247,7 +235,6 @@ export function WidgetSnapshotBridge() {
               completedBackgroundColor,
             },
             requestedLeaderboardMetricIds,
-            leaderboardCount,
           )
         : undefined;
       const snapshot: WidgetSnapshot = {

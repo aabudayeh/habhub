@@ -393,8 +393,52 @@ export type UnrecordedStepActivity = {
   distanceKm: number;
   durationMinutes: number;
   estimatedCalories: number;
+  estimatedWorkoutCalories: number;
   knownWorkoutCalories: number;
 };
+
+/**
+ * Workout calories that still need to be added to an Active energy tracker.
+ *
+ * A manual/app workout row is an independent contribution, so it must not
+ * suppress a calorie estimate for a different synced walking/running session.
+ * Conversely, an imported ActiveCaloriesBurned stream normally already
+ * contains the provider's workout calories. In that case adding a second
+ * workout-derived value would count the same activity twice.
+ */
+export function supplementalWorkoutCaloriesForActiveEnergy(
+  dayEntries: readonly MetricEntry[],
+  metrics: readonly MetricDefinition[],
+  activeEnergyMetricId: string,
+  estimate: Pick<
+    UnrecordedStepActivity,
+    "estimatedWorkoutCalories" | "knownWorkoutCalories"
+  >,
+) {
+  const activeEnergyMetric = metrics.find(
+    (metric) => metric.id === activeEnergyMetricId,
+  );
+  const hasImportedActiveEnergy = dayEntries.some(
+    (entry) =>
+      entry.metricId === activeEnergyMetricId &&
+      !isCalculatedStepFallback(entry) &&
+      entry.source === "imported" &&
+      activeEnergyMetric?.healthMapping?.dataType === "active_energy" &&
+      activeEnergyMetric.healthMapping.field === "value" &&
+      Number(entry.value || 0) > 0,
+  );
+  if (hasImportedActiveEnergy) return 0;
+
+  const activeMetricAlreadyStoresWorkoutCalories =
+    activeEnergyMetric?.healthMapping?.dataType === "workouts" &&
+    activeEnergyMetric.healthMapping.field === "active_calories";
+  return (
+    estimate.estimatedWorkoutCalories +
+    (activeMetricAlreadyStoresWorkoutCalories
+      ? 0
+      : estimate.knownWorkoutCalories)
+  );
+}
 
 export type StepActivityProfile = Pick<
   EnergyProfile,
@@ -574,6 +618,7 @@ export function unrecordedStepActivity(
     entry.sourceRecordId === source.sourceRecordId &&
     entry.sourceProvider === source.sourceProvider;
   let coveredSteps = 0;
+  let estimatedWorkoutCalories = 0;
   for (const source of sessionKeys.values()) {
     const matching = dayEntries.filter((entry) => sameSession(entry, source));
     const label =
@@ -597,6 +642,29 @@ export function unrecordedStepActivity(
     coveredSteps +=
       (estimatedDistanceKm * 1000) /
       (running ? 1 : walkingEstimate.stepLengthM);
+
+    // A provider can expose a walking/running session with duration and
+    // distance but omit ActiveCaloriesBurned (this is common when a workout
+    // was forwarded by another app). In that case the session still needs to
+    // contribute to Active energy and therefore Total energy burned. Prefer a
+    // measured workout-calorie mapping whenever one exists for this native
+    // session; otherwise estimate only this session from its measured
+    // distance. The final metric composition below uses this estimate only
+    // when no day-level ActiveCaloriesBurned rows exist, so an overlapping
+    // provider total can never be counted twice.
+    const hasMeasuredSessionCalories = matching.some(
+      (entry) => calorieIds.has(entry.metricId) && Number(entry.value || 0) > 0,
+    );
+    if (!hasMeasuredSessionCalories && estimatedDistanceKm > 0) {
+      const weightKg = clamp(
+        Number(stepProfile(profileOrWeight).weightKg) || 70,
+        35,
+        300,
+      );
+      estimatedWorkoutCalories +=
+        estimatedDistanceKm * weightKg *
+        (running ? 1 : LEGACY_WALKING_KCAL_PER_KG_KM);
+    }
   }
   // Non-movement workouts still contribute their known calories, but must not
   // subtract steps. Count each native workout once even when custom trackers
@@ -628,6 +696,7 @@ export function unrecordedStepActivity(
     distanceKm: uncovered.distanceKm,
     durationMinutes: uncovered.durationMinutes,
     estimatedCalories: uncovered.estimatedCalories,
+    estimatedWorkoutCalories,
     knownWorkoutCalories,
   };
 }
@@ -663,13 +732,13 @@ function appendStepFallbackEntries(entries:MetricEntry[],userId:string,visibilit
     if(steps<=0)continue;
     const estimate=unrecordedStepActivity(dayEntries,metrics,steps,profileOrWeight);
     const stepEntry=importedDayEntries.find((entry)=>stepIdSet.has(entry.metricId))!;
-    const make=(metricId:string,value:number,suffix:string):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
+    const make=(metricId:string,value:number,suffix:string,includedEstimatedWorkoutCalories=0):MetricEntry=>({id:`health:${stepEntry.sourceProvider??'health_connect'}:step-fallback:${day}:${metricId}:${suffix}`,metricId,userId,value:Math.round(value*10)/10,localDate:day,recordedAt:stepEntry.recordedAt,visibility:importedMetricVisibility(visibility,metricId),source:'calculated',label:'Estimated unrecorded walking from steps',note:[`Uses ${Math.round(estimate.uncoveredSteps).toLocaleString()} steps not already explained by walking or running workouts.`,suffix==='calories'&&includedEstimatedWorkoutCalories>0?`Also includes ${Math.round(includedEstimatedWorkoutCalories).toLocaleString()} estimated active kcal for synced movement workouts whose provider supplied duration or distance but no calories.`:undefined].filter(Boolean).join(' '),sourceProvider:stepEntry.sourceProvider,sourceRecordId:`step-fallback:${day}`,sourceOrigin:stepEntry.sourceOrigin});
     for(const metric of fallback){
       const mapping=metric.healthMapping;
       if(mapping?.dataType==='active_energy'&&mapping.field==='value'){
-        const existing=dayEntries.filter((entry)=>entry.metricId===metric.id).reduce((sum,entry)=>sum+Number(entry.value||0),0);
-        const calories=(existing>0?0:estimate.knownWorkoutCalories)+estimate.estimatedCalories;
-        if(calories>0)derived.push(make(metric.id,calories,'calories'));
+        const supplementalWorkoutCalories=supplementalWorkoutCaloriesForActiveEnergy(dayEntries,metrics,metric.id,estimate);
+        const calories=supplementalWorkoutCalories+estimate.estimatedCalories;
+        if(calories>0)derived.push(make(metric.id,calories,'calories',Math.min(estimate.estimatedWorkoutCalories,supplementalWorkoutCalories)));
       } else if(mapping?.dataType==='workouts'&&mapping.field==='distance_km'&&estimate.uncoveredSteps>0) {
         derived.push(make(metric.id,estimate.distanceKm,'distance'));
       } else if(mapping?.dataType==='workouts'&&mapping.field==='duration_minutes'&&estimate.uncoveredSteps>0) {

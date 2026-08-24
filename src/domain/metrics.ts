@@ -37,6 +37,7 @@ import {
 } from "./streaks";
 import {
   isCalculatedStepFallback,
+  supplementalWorkoutCaloriesForActiveEnergy,
   unrecordedStepActivity,
 } from "./health";
 import {
@@ -295,7 +296,12 @@ export function metricValue(
         return measuredValue + estimate.durationMinutes;
       return Math.round(
         measuredValue +
-          (measuredValue > 0 ? 0 : estimate.knownWorkoutCalories) +
+          supplementalWorkoutCaloriesForActiveEnergy(
+            entriesForUserDay(state.entries, userId, localDate),
+            state.metrics,
+            metric.id,
+            estimate,
+          ) +
           estimate.estimatedCalories,
       );
     }
@@ -350,12 +356,18 @@ export function safeMetricValue(
   localDate: string,
 ): number {
   if (
-    (Boolean(metric.fastingSettings) || metric.id === "energy_burned") &&
+    (Boolean(metric.fastingSettings) ||
+      metric.id === "energy_burned" ||
+      metric.id === "deficit") &&
     localDate === dateKey()
   )
     // Live fasting/energy progress changes with the clock. Never reuse today's
     // cached value for the featured card or energy-balance formulas.
-    return metricValue(state, metric, userId, localDate);
+    try {
+      return metricValue(state, metric, userId, localDate);
+    } catch {
+      return 0;
+    }
   return cachedMetricDateValue(
     metricValueCache,
     state,

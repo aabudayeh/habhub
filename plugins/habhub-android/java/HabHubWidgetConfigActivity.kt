@@ -114,27 +114,6 @@ class HabHubWidgetConfigActivity : Activity() {
       check.setOnCheckedChangeListener { _, _ -> refreshLeaderboardChecks() }
     }
     refreshLeaderboardChecks()
-    val leaderboardCountLabel = label("", 13f, true)
-    val leaderboardCountSlider = SeekBar(this).apply {
-      max = 3
-      progress = existing.leaderboardCount.coerceIn(1, 4) - 1
-      progressTintList = ColorStateList.valueOf(lime)
-      thumbTintList = ColorStateList.valueOf(lime)
-    }
-    fun refreshLeaderboardCount() {
-      leaderboardCountLabel.text = getString(
-        R.string.habhub_widget_leaderboard_count,
-        leaderboardCountSlider.progress + 1,
-      )
-    }
-    refreshLeaderboardCount()
-    leaderboardCountSlider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) = refreshLeaderboardCount()
-      override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-      override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-    })
-    leaderboardPanel.addView(leaderboardCountLabel)
-    leaderboardPanel.addView(leaderboardCountSlider, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
     val leaderboardCard = card(leaderboardPanel).apply {
       visibility = if (selectedContent == "__leaderboard__") View.VISIBLE else View.GONE
     }
@@ -217,7 +196,7 @@ class HabHubWidgetConfigActivity : Activity() {
           .filter { it.isChecked }
           .map { it.tag.toString() }
           .ifEmpty {
-            leaderboardChecks.take(leaderboardCountSlider.progress + 1).map { it.tag.toString() }
+            leaderboardChecks.take(2).map { it.tag.toString() }
           }
         HabHubWidgetStore.saveConfiguration(
           this@HabHubWidgetConfigActivity,
@@ -228,7 +207,6 @@ class HabHubWidgetConfigActivity : Activity() {
           colorInput.text?.toString()?.trim().orEmpty().ifBlank { "#081B49" },
           opacitySlider.progress,
           leaderboardMetricIds = selectedLeaderboardMetricIds,
-          leaderboardCount = leaderboardCountSlider.progress + 1,
         )
         HabHubWidgetRenderer.updateWidget(this@HabHubWidgetConfigActivity, widgetId)
         setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))

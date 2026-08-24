@@ -18,11 +18,35 @@ const source = fs.readFileSync(
   path.join(root, "app", "(tabs)", "calendar.tsx"),
   "utf8",
 );
+const metricDetailSource = fs.readFileSync(
+  path.join(root, "app", "metric-detail.tsx"),
+  "utf8",
+);
 
 assert.match(
   source,
   /events=\{\(eventsByDate\[date\] \?\? \[\]\)\.filter\([\s\S]*?!event\.time[\s\S]*?\)\}[\s\S]*?slotEvents=\{eventsByDate\[date\] \?\? \[\]\}/,
   "ALL keeps an all-day grid preview but opens every filtered event on that date",
+);
+assert.match(
+  source,
+  /event\.kind === "todo"[\s\S]{0,220}pathname: "\/metric-detail"[\s\S]{0,220}metric: "todo_completion"[\s\S]{0,220}focusTodo: event\.todoId/,
+  "opening a scheduled to-do must show that date's To-Do tracker instead of its editor",
+);
+assert.match(
+  metricDetailSource,
+  /focusTodoId=\{focusTodo\}[\s\S]{0,180}onRequestScroll/,
+  "the To-Do tracker must receive the schedule focus target and a scroll callback",
+);
+assert.match(
+  metricDetailSource,
+  /highlightedTodoId === todo\.id \? "#E9A23B"/,
+  "the selected scheduled to-do must receive an orange outline",
+);
+assert.match(
+  metricDetailSource,
+  /focusAnimation\.interpolate\([\s\S]{0,180}outputRange: \[-5, 0, 5\]/,
+  "the selected scheduled to-do must receive a wiggle animation",
 );
 assert.match(
   source,

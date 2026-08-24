@@ -104,7 +104,6 @@ export type WidgetConfiguration = {
   trackerId: string;
   range: "week" | "month" | "year";
   leaderboardMetricIds?: string[];
-  leaderboardCount?: number;
 };
 
 type HabHubAndroidModule = {

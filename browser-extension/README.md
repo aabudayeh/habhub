@@ -1,25 +1,14 @@
-# HabHub Live Companion for Chrome and Edge
+# HabHub for Chrome and Edge
 
-Version 0.3.3 opens as a normal 400 x 560 toolbar popup. It contains HabHub's
-live Today surface: the featured card, to-dos, filterable/reorderable trackers,
-active timers, and today's schedule. The expand button in the popup opens the
-same dashboard in a full-height browser side panel. **Full app** and the compact
-navigation row load the real HabHub tab app inside the popup/panel, including
-its bottom navigation; **Companion** returns to the movable timer/schedule
-dashboard. The external-link icon remains available when a normal browser tab
-is preferable.
+Version 0.3.4 opens the complete HabHub app as-is in a normal 400 x 560 toolbar
+popup, including HabHub's own navigation. There is no extension-specific mode
+bar or secondary browser surface: the popup is the same app users open on the
+web.
 
-The popup and side panel embed HabHub's dedicated `/extension` app surface.
-That surface uses the same authenticated, offline-first snapshot merge and
-Supabase realtime subscription as the mobile app and website. The extension
-does not carry a service key, duplicate account data, or perform a second
-competing snapshot write. It runs only while its popup or side panel is open.
-
-The companion uses a nonce-bound, origin-checked readiness handshake. It only
-reveals the live dashboard after the route confirms a signed-in account and a
-hydrated local workspace. Signed-out, onboarding, loading, offline, and route
-errors are shown explicitly; a generic document load is never reported as a
-ready companion.
+The popup embeds the normal HabHub `/` route and uses the app's existing
+authenticated, offline-first sync. The extension does not carry a service key,
+duplicate account data, or perform a second competing snapshot write. It runs
+only while the popup is open.
 
 ## Install locally
 
@@ -28,15 +17,11 @@ ready companion.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked** and select the extracted `browser-extension`
    folder (the folder containing `manifest.json`).
-5. Pin **HabHub Live Companion** to the browser toolbar.
-6. Click the HabHub icon to open the normal popup.
+5. Pin **HabHub** to the browser toolbar.
+6. Click the HabHub icon to open the complete app in the popup.
 
-Use the middle toolbar button to expand into the side panel. Use the right-hand
-button to open the full website. Sign in to `https://habhub.expo.app` with the
-same account used on the phone. If the companion asks you to sign in, open the
-sign-in page once, then click refresh or reopen the popup.
-
-The production companion page is `https://habhub.expo.app/extension`.
+Sign in inside the popup or at `https://habhub.expo.app` with the same account
+used on the phone.
 
 If the public HabHub URL changes, edit `DEFAULT_APP_URL` in `config.js` and the
 matching `host_permissions`/`frame-src` values in `manifest.json` before loading

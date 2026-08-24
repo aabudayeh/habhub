@@ -89,7 +89,7 @@ assert.ok(
 assert.ok(
   [
     ...cloudProvider.matchAll(
-      /writeGroupActivityCache\([\s\S]{0,450}minimumUserQuietMs: 1_600/g,
+      /writeGroupActivityCache\([\s\S]{0,900}minimumUserQuietMs: 1_600/g,
     ),
   ].length >= 2,
   "large SQLite group-cache serialization must wait for real-touch quiet",

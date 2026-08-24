@@ -49,6 +49,7 @@ import {
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { latestMemberActivityPublishedAt } from "@/src/domain/leaderboardSync";
+import { FOOD_NUTRIENTS } from "@/src/domain/food";
 import {
   memberDisplayName,
   memberOriginalLabel,
@@ -170,7 +171,7 @@ export default function LeaderboardDetail() {
           status.syncedAt ?? `${status.localDate}T12:00:00.000Z`,
         visibility: "group",
         source: "calculated",
-        label: "Shared daily total",
+        label: "Daily summary · individual log details have not synced yet",
       }));
     return [...shared, ...exactDailySnapshots];
   }, [
@@ -834,15 +835,15 @@ function LogRow({ entry, state }: { entry: MetricEntry; state: AppState }) {
         ) : null}
         {entry.nutrition ? (
           <Text style={[styles.nutrition, { color: colors.primary }]}>
-            {[
-              ["Protein", entry.nutrition.proteinG, "g"],
-              ["Carbs", entry.nutrition.carbsG, "g"],
-              ["Fat", entry.nutrition.fatG, "g"],
-              ["Fiber", entry.nutrition.fiberG, "g"],
-              ["Sodium", entry.nutrition.sodiumMg, "mg"],
-            ]
-              .filter((item) => item[1])
-              .map((item) => `${item[0]} ${Math.round(Number(item[1]) * 10) / 10}${item[2]}`)
+            {FOOD_NUTRIENTS
+              .flatMap((nutrient) => {
+                const amount = entry.nutrition?.[nutrient.nutritionKey];
+                return typeof amount === "number" && amount > 0
+                  ? [
+                      `${nutrient.label} ${Math.round(amount * 10) / 10}${nutrient.unit}`,
+                    ]
+                  : [];
+              })
               .join(" · ")}
           </Text>
         ) : null}

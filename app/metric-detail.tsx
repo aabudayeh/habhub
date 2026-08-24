@@ -2,9 +2,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Animated,
   Modal,
   PanResponder,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
 } from "react-native";
@@ -147,10 +149,18 @@ function OptionalTutorialTarget({
 }
 
 export default function TrackerDetail() {
-  const { metric: trackerId, date, period: requestedPeriod } = useLocalSearchParams<{
+  const {
+    metric: trackerId,
+    date,
+    period: requestedPeriod,
+    focusTodo,
+    todoFocusAt,
+  } = useLocalSearchParams<{
     metric: string;
     date?: string;
     period?: LeaderboardPeriod;
+    focusTodo?: string;
+    todoFocusAt?: string;
   }>();
   const {
     state: persistedState,
@@ -173,6 +183,10 @@ export default function TrackerDetail() {
   const [period, setPeriod] = useState<LeaderboardPeriod>(
     requestedPeriod ?? "today",
   );
+  useEffect(() => {
+    if (date) setDay(date);
+    if (requestedPeriod) setPeriod(requestedPeriod);
+  }, [date, requestedPeriod, todoFocusAt]);
   const [dateNavigatorOpen, setDateNavigatorOpen] = useState(true);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [photoCompareOpen, setPhotoCompareOpen] = useState(false);
@@ -186,6 +200,10 @@ export default function TrackerDetail() {
   const lastFoodTapRef = useRef<{ entryId: string; at: number } | undefined>(
     undefined,
   );
+  const detailScrollRef = useRef<ScrollView>(null);
+  const scrollToTodo = useCallback((y: number) => {
+    detailScrollRef.current?.scrollTo({ y, animated: true });
+  }, []);
   const weekly =
     trackerId === "weekly_deficit_balance" || trackerId === "weekly_deficit";
   const persistedTracker = persistedState.metrics.find(
@@ -881,7 +899,7 @@ export default function TrackerDetail() {
     tracker.dataType !== "calculated";
   const canOpenWorkout = tracker.id === "workout";
   return (
-    <Screen>
+    <Screen scrollRef={detailScrollRef}>
       <PageHeader
         tutorialId="metric-detail-header"
         title={tracker.name}
@@ -1963,7 +1981,13 @@ export default function TrackerDetail() {
         </Card>
       ) : null}
       {tracker.id === "todo_completion" ? (
-        <TodoTrackerEntries state={state} dates={dates} />
+        <TodoTrackerEntries
+          state={state}
+          dates={dates}
+          focusTodoId={focusTodo}
+          focusToken={todoFocusAt}
+          onRequestScroll={scrollToTodo}
+        />
       ) : null}
       {tracker.id !== "todo_completion" ? <View style={styles.logHeader}>
         <Text style={[styles.section, { color: colors.ink }]}>
@@ -2977,9 +3001,15 @@ function formatNutrientValue(
 function TodoTrackerEntries({
   state,
   dates,
+  focusTodoId,
+  focusToken,
+  onRequestScroll,
 }: {
   state: ReturnType<typeof useApp>["state"];
   dates: string[];
+  focusTodoId?: string;
+  focusToken?: string;
+  onRequestScroll: (y: number) => void;
 }) {
   const { toggleTodo, skipTodo, deleteTodo, reorderTodo } = useApp();
   const locale = useLocale();
@@ -2987,6 +3017,12 @@ function TodoTrackerEntries({
   const accent = useGroupAccent();
   const [openIds, setOpenIds] = useState<string[]>([]);
   const [activeTodoLabel, setActiveTodoLabel] = useState<string>();
+  const cardOffsetRef = useRef<number | undefined>(undefined);
+  const rowOffsetsRef = useRef(new Map<string, number>());
+  const focusAnimation = useRef(new Animated.Value(0)).current;
+  const [highlightedTodoId, setHighlightedTodoId] = useState<string>();
+  const completedFocusRef = useRef<string | undefined>(undefined);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const priorities = {
     low: "#6C8AA6",
     normal: "#8A8F98",
@@ -3009,7 +3045,78 @@ function TodoTrackerEntries({
     ? allItems.filter(({ todo }) => todoLabels(todo).includes(activeTodoLabel))
     : allItems;
   const flattenedItems = flattenTodoHierarchy(items);
+  const focusKey = focusTodoId
+    ? `${focusTodoId}:${focusToken ?? "focus"}`
+    : undefined;
+  const attemptFocus = useCallback(() => {
+    if (!focusTodoId || !focusKey || completedFocusRef.current === focusKey)
+      return;
+    const cardOffset = cardOffsetRef.current;
+    const rowOffset = rowOffsetsRef.current.get(focusTodoId);
+    if (cardOffset === undefined || rowOffset === undefined) return;
+    completedFocusRef.current = focusKey;
+    setHighlightedTodoId(focusTodoId);
+    onRequestScroll(Math.max(0, cardOffset + rowOffset - 24));
+    focusAnimation.stopAnimation();
+    focusAnimation.setValue(0);
+    Animated.sequence([
+      Animated.timing(focusAnimation, {
+        toValue: -1,
+        duration: 80,
+        useNativeDriver: false,
+      }),
+      Animated.timing(focusAnimation, {
+        toValue: 1,
+        duration: 110,
+        useNativeDriver: false,
+      }),
+      Animated.timing(focusAnimation, {
+        toValue: -1,
+        duration: 110,
+        useNativeDriver: false,
+      }),
+      Animated.timing(focusAnimation, {
+        toValue: 1,
+        duration: 110,
+        useNativeDriver: false,
+      }),
+      Animated.timing(focusAnimation, {
+        toValue: -1,
+        duration: 110,
+        useNativeDriver: false,
+      }),
+      Animated.timing(focusAnimation, {
+        toValue: 0,
+        duration: 80,
+        useNativeDriver: false,
+      }),
+    ]).start();
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => {
+      setHighlightedTodoId((current) =>
+        current === focusTodoId ? undefined : current,
+      );
+      highlightTimerRef.current = null;
+    }, 3_200);
+  }, [focusAnimation, focusKey, focusTodoId, onRequestScroll]);
+  useEffect(() => {
+    completedFocusRef.current = undefined;
+    const timer = setTimeout(attemptFocus, 100);
+    return () => clearTimeout(timer);
+  }, [attemptFocus, focusKey]);
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    },
+    [],
+  );
   return (
+    <View
+      onLayout={(event) => {
+        cardOffsetRef.current = event.nativeEvent.layout.y;
+        attemptFocus();
+      }}
+    >
     <Card style={styles.todoDetailCard}>
       <View style={styles.logHeader}>
         <View>
@@ -3075,8 +3182,28 @@ function TodoTrackerEntries({
                   ? "#4F8A3D"
                   : colors.border;
         return (
-          <Pressable
+          <Animated.View
             key={todo.id}
+            onLayout={(event) => {
+              rowOffsetsRef.current.set(todo.id, event.nativeEvent.layout.y);
+              attemptFocus();
+            }}
+            style={
+              focusTodoId === todo.id
+                ? {
+                    transform: [
+                      {
+                        translateX: focusAnimation.interpolate({
+                          inputRange: [-1, 0, 1],
+                          outputRange: [-5, 0, 5],
+                        }),
+                      },
+                    ],
+                  }
+                : undefined
+            }
+          >
+          <Pressable
             onPress={() =>
               router.navigate({
                 pathname: "/todo-editor",
@@ -3118,7 +3245,11 @@ function TodoTrackerEntries({
             style={[
               styles.todoDetailRow,
               { marginLeft: Math.min(depth, 8) * 10 },
-              { borderColor: urgency, backgroundColor: colors.canvas },
+              {
+                borderColor:
+                  highlightedTodoId === todo.id ? "#E9A23B" : urgency,
+                backgroundColor: colors.canvas,
+              },
             ]}
           >
             <Pressable
@@ -3213,6 +3344,7 @@ function TodoTrackerEntries({
               />
             </Pressable>
           </Pressable>
+          </Animated.View>
         );
       })}
       {!allItems.length ? (
@@ -3223,6 +3355,7 @@ function TodoTrackerEntries({
         <Text translate={false} style={[styles.empty, { color: colors.muted }]}>No #{activeTodoLabel} to-dos appear in this period.</Text>
       ) : null}
     </Card>
+    </View>
   );
 }
 

@@ -285,8 +285,14 @@ function SchedulePage() {
       } as never);
     else if (event.kind === "todo" && event.todoId)
       router.navigate({
-        pathname: "/todo-editor",
-        params: { id: event.todoId },
+        pathname: "/metric-detail",
+        params: {
+          metric: "todo_completion",
+          date: localDate,
+          period: "today",
+          focusTodo: event.todoId,
+          todoFocusAt: Date.now().toString(),
+        },
       } as never);
     else if (
       event.metricId &&

@@ -30,11 +30,10 @@ const log = source("app/(tabs)/log.tsx");
 const chat = source("app/(tabs)/chat.tsx");
 const appText = source("src/components/AppText.tsx");
 const html = source("app/+html.tsx");
-const extensionDashboard = source("app/extension.tsx");
 const extensionPopup = source("browser-extension/popup.html");
-const extensionPanel = source("browser-extension/panel.html");
-const extensionScript = source("browser-extension/panel.js");
+const extensionPopupScript = source("browser-extension/popup.js");
 const extensionManifest = source("browser-extension/manifest.json");
+const extensionReadme = source("browser-extension/README.md");
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /export function useWebBackDismiss/);
@@ -69,9 +68,17 @@ assert.match(pager, /onScrollEndDrag=\{updateActivePage\}/);
 assert.match(pager, /const activePageRef = useRef\(0\)/);
 assert.match(pager, /PanResponder\.create\(/);
 assert.match(pager, /onMoveShouldSetPanResponderCapture/);
+assert.match(pager, /navigator\.maxTouchPoints \?\? 0/);
+assert.match(
+  pager,
+  /\.\.\.\(webMouseDragEnabled \? webPointerDrag\.panHandlers : \{\}\)/,
+  "touch-capable Web devices must keep compositor-driven ScrollView swiping",
+);
 assert.match(pager, /scrollRef\.current\?\.scrollTo\(\{ x: offset, animated: false \}\)/);
 assert.match(pager, /Math\.abs\(gesture\.dx\) >= Math\.min\(52, pageWidth \* 0\.14\)/);
 assert.match(pager, /moveToPage\(target\)/);
+assert.match(pager, /onPress=\{\(\) => moveToPage\(index\)\}/);
+assert.doesNotMatch(pager, /disabled=\{Platform\.OS !== "web"\}/);
 assert.match(
   pager,
   /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,
@@ -152,21 +159,21 @@ const standaloneIos = {
 };
 assert.equal(
   resolveScreenBottomPadding(120, undefined, undefined, 34, true, standaloneIos),
-  0,
-  "standalone iOS tab scenes must not repeat navigator/tab safe-area clearance",
+  16,
+  "standalone iOS tab scenes keep content breathing room without repeating the safe area",
 );
 assert.equal(
   resolveScreenBottomPadding(120, 16, undefined, 34, true, standaloneIos),
-  0,
-  "iOS Web tab scenes must not leave an explicit gutter above navigation",
+  16,
+  "explicit content padding remains independent from the navigator safe area",
 );
 assert.equal(
   resolveScreenBottomPadding(120, 16, 14, 34, true, {
     ...standaloneIos,
     displayModeStandalone: false,
   }),
-  0,
-  "iOS Web tab clearance must not depend on unreliable standalone reporting",
+  16,
+  "iOS Web content padding must not depend on unreliable standalone reporting",
 );
 assert.equal(
   resolveScreenBottomPadding(120, undefined, undefined, 34, false, standaloneIos),
@@ -179,8 +186,8 @@ assert.equal(
     userAgent: "Mozilla/5.0 (Linux; Android 15)",
     platform: "Linux armv8l",
   }),
-  0,
-  "every Web tab scene must rely on the navigator rather than duplicate its bottom clearance",
+  16,
+  "every Web tab scene keeps a small content gutter without duplicating the navigator inset",
 );
 assert.equal(
   resolveScreenBottomPadding(120, undefined, 14, 0, true, {
@@ -188,20 +195,20 @@ assert.equal(
     userAgent: "Mozilla/5.0 (Linux; Android 15)",
     platform: "Linux armv8l",
   }),
-  0,
-  "Web tab padding must not depend on a device user agent or reported inset",
+  16,
+  "Web tab content padding must not depend on a device user agent or reported inset",
 );
 assert.match(tabs, /height: 55 \+ tabBarBottomInset/);
 assert.match(tabs, /paddingBottom: Math\.max\(1, tabBarBottomInset\)/);
 assert.match(screen, /resolveScreenBottomPadding\(/);
-assert.match(
+assert.doesNotMatch(
   screen,
-  /contentContainerStyle,[\s\S]{0,500}removeWebTabGutter && \{ paddingBottom: 0 \}/,
-  "Web tab padding removal must be the final style override",
+  /removeWebTabGutter|paddingBottom: 0/,
+  "content padding must not be globally erased to solve navigator safe-area ownership",
 );
 assert.match(screen, /segments\.join\("\/"\)\.includes\("\(tabs\)"\)/);
-assert.match(today, /Platform\.OS === "web" && styles\.webTabPage/);
-assert.match(today, /webTabPage: \{ paddingBottom: 0 \}/);
+assert.match(today, /page: \{ flexGrow: 1, paddingHorizontal: 14, paddingBottom: 16 \}/);
+assert.doesNotMatch(today, /styles\.webTabPage|webTabPage:/);
 assert.match(today, /contentInsetAdjustmentBehavior=\{[\s\S]{0,80}Platform\.OS === "web" \? "never"/);
 assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);
 assert.match(appText, /preventWebFocusZoom\?: boolean/);
@@ -223,9 +230,16 @@ assert.match(
   source("app/(tabs)/group.tsx"),
   /useWebBackDismiss\(\s*screenIsFocused && editing,\s*finishLeaderboardEditing,\s*\)/,
 );
-assert.match(today, /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/);
+assert.match(
+  today,
+  /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/,
+);
 assert.match(today, /requestedPage=\{requestedTodayPage\}/);
 assert.match(today, /todosAfterPagedTrackers/);
+assert.match(today, /refreshing=\{!editing && manualRefreshing\}/);
+assert.doesNotMatch(today, /cloudStatus === "syncing"/);
+assert.match(screen, /refreshing=\{manualRefreshing\}/);
+assert.doesNotMatch(screen, /cloudStatus === "syncing" \|\| health\.status === "syncing"/);
 assert.match(
   today,
   /\{!editing &&\s*\(item\.goalEnabled !== false \|\| progressSubmetrics\.length > 0\)/,
@@ -258,24 +272,19 @@ assert.match(
   "Log deep links must focus the tracker requested by a double tap",
 );
 
-assert.match(extensionDashboard, /featuredTimerMetric/);
-assert.match(extensionDashboard, /nextScheduleEvent/);
-assert.match(extensionDashboard, /detail=\{/);
-for (const extensionShell of [extensionPopup, extensionPanel]) {
-  assert.match(extensionShell, /class="quick-nav"/);
-  assert.match(extensionShell, /data-companion-home/);
-  assert.match(extensionShell, /data-app-path="\/group"/);
-  assert.match(extensionShell, /data-app-path="\/log"/);
-  assert.match(extensionShell, /data-app-path="\/gym"/);
-  assert.match(extensionShell, />Full app<\/span>/);
-}
-assert.match(extensionScript, /querySelectorAll\("\[data-app-path\]"\)/);
-assert.match(extensionScript, /function showFullApp\(path = "\/"\)/);
-assert.match(extensionScript, /frame\.src = new URL\(path, appUrl\)\.toString\(\)/);
-assert.match(extensionScript, /openFullAppButton\?\.addEventListener\("click", \(\) => showFullApp\("\/"\)\)/);
-assert.match(extensionScript, /if \(typeof path === "string" && path\.startsWith\("\/"\)\)[\s\S]{0,80}showFullApp\(path\)/);
-assert.match(extensionScript, /button\.addEventListener\("click", \(\) => loadCompanion\(\)\)/);
-assert.equal(JSON.parse(extensionManifest).version, "0.3.3");
+assert.doesNotMatch(extensionPopup, /toolbar|quick-nav|data-companion-home|data-app-path|Active timers|schedule card/i);
+assert.match(extensionPopup, /<iframe[\s\S]{0,180}class="ready"[\s\S]{0,180}title="HabHub"/);
+assert.match(extensionPopup, /src="popup\.js"/);
+assert.match(extensionPopupScript, /frame\.src = new URL\("\/", appUrl\)\.toString\(\)/);
+assert.doesNotMatch(extensionPopupScript, /\/extension|timer|schedule|companionUrl/);
+const parsedExtensionManifest = JSON.parse(extensionManifest);
+assert.equal(parsedExtensionManifest.version, "0.3.4");
+assert.equal(parsedExtensionManifest.name, "HabHub");
+assert.deepEqual(parsedExtensionManifest.permissions, ["storage"]);
+assert.equal(parsedExtensionManifest.action.default_popup, "popup.html");
+assert.equal(parsedExtensionManifest.side_panel, undefined);
+assert.equal(parsedExtensionManifest.background, undefined);
+assert.doesNotMatch(extensionReadme, /side panel|companion surface|active timer|schedule card/i);
 
 console.log(
   "Web editor, pager, tracker gestures, and standalone iOS safe-area validation passed.",

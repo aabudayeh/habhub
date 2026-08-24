@@ -1007,7 +1007,6 @@ class HabHubNativeModule(
                 configuration.leaderboardMetricIds.forEach { pushString(it) }
               },
             )
-            putInt("leaderboardCount", configuration.leaderboardCount)
           },
         )
       }

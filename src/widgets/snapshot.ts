@@ -106,7 +106,7 @@ export function featuredWidgetSnapshot(
         : "To-Dos",
   );
   const todoSummary =
-    summary.usesGoals && summary.todos.length
+    summary.usesGoals
       ? `${summary.completedTodos}/${summary.todos.length} ${translate("To-Dos")}`
       : "";
   const goals: WidgetGoalSnapshot[] = summary.usesGoals
@@ -219,7 +219,6 @@ export function leaderboardWidgetSnapshot(
   translate: Translate,
   theme: WidgetSnapshotTheme,
   requestedMetricIds: readonly string[],
-  requestedCount: number,
 ): WidgetLeaderboardSnapshot {
   const eligible = (state.group.metricConfiguration ?? []).filter(
     (metric) =>
@@ -236,10 +235,9 @@ export function leaderboardWidgetSnapshot(
     byId.has(id),
   );
   // The request is the union across every installed leaderboard widget. Do
-  // not cap that union globally: each native widget applies its own 1-4 item
-  // limit after selecting its configured ids. Otherwise a second widget can
-  // silently lose all of its metrics when the first widget fills the cap.
-  const fallbackCount = Math.max(1, Math.min(4, requestedCount || 2));
+  // not cap that union globally: each native widget selects its configured
+  // ids and adapts their visible layout to its current launcher span.
+  const fallbackCount = 2;
   const selectedIds = explicitlyRequestedIds.length
     ? explicitlyRequestedIds
     : fallbackIds.slice(0, fallbackCount);

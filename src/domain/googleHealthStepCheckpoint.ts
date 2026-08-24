@@ -4,8 +4,9 @@ import { isGoogleHealthEntry } from "@/src/domain/googleHealthLocalPrivacy";
 import { metricEntryKey } from "@/src/domain/metricEntry";
 import type { AppState, MetricEntry, Visibility } from "@/src/types";
 
-export const GOOGLE_HEALTH_STEP_CHECKPOINT_VERSION = 1 as const;
+export const GOOGLE_HEALTH_STEP_CHECKPOINT_VERSION = 2 as const;
 export const GOOGLE_HEALTH_STEP_CHECKPOINT_TTL_MS = 48 * 60 * 60 * 1000;
+const GOOGLE_HEALTH_CHECKPOINT_MAX_ENTRIES = 128;
 
 export type GoogleHealthStepCheckpoint = {
   version: typeof GOOGLE_HEALTH_STEP_CHECKPOINT_VERSION;
@@ -20,10 +21,19 @@ export type GoogleHealthStepCheckpointSource = Pick<
   "currentUserId" | "metrics" | "entries"
 >;
 
-function stepMetricIds(state: Pick<AppState, "metrics">) {
+function checkpointMetricIds(state: Pick<AppState, "metrics">) {
   return new Set(
     state.metrics
-      .filter((metric) => metric.healthMapping?.dataType === "steps")
+      .filter((metric) => {
+        const type = metric.healthMapping?.dataType;
+        return (
+          type === "steps" ||
+          type === "active_energy" ||
+          type === "total_energy" ||
+          type === "workouts" ||
+          (type === "nutrition" && metric.id === "food")
+        );
+      })
       .map((metric) => metric.id),
   );
 }
@@ -70,7 +80,7 @@ function validRecentEntry(
   );
 }
 
-function minimalStepEntry(entry: MetricEntry): MetricEntry {
+function minimalCheckpointEntry(entry: MetricEntry): MetricEntry {
   return {
     id: entry.id.slice(0, 500),
     metricId: entry.metricId.slice(0, 200),
@@ -101,10 +111,11 @@ function minimalStepEntry(entry: MetricEntry): MetricEntry {
 }
 
 /**
- * A deliberately tiny encrypted-at-rest browser checkpoint. It contains only
- * the recent daily Steps aggregates needed to avoid painting a false zero
- * while the protected cloud snapshot hydrates; provider record payloads,
- * nutrition, notes and override registries never enter it.
+ * A deliberately small encrypted-at-rest browser checkpoint. It contains only
+ * recent numeric inputs needed to avoid false zeroes for Steps, Food, activity,
+ * workout-derived activity and Total energy while the protected cloud snapshot
+ * hydrates. Nutrition payloads, notes, images and override registries never
+ * enter it.
  */
 export function buildGoogleHealthStepCheckpoint(
   state: GoogleHealthStepCheckpointSource,
@@ -112,7 +123,7 @@ export function buildGoogleHealthStepCheckpoint(
 ): GoogleHealthStepCheckpoint | undefined {
   const today = dateKey(now);
   const earliestDate = dateWithOffsetFrom(today, -1);
-  const metricIds = stepMetricIds(state);
+  const metricIds = checkpointMetricIds(state);
   const entries = state.entries
     .filter(
       (entry) =>
@@ -125,8 +136,8 @@ export function buildGoogleHealthStepCheckpoint(
         Number.isFinite(Number(entry.value)) &&
         Number(entry.value) >= 0,
     )
-    .slice(-8)
-    .map(minimalStepEntry);
+    .slice(-GOOGLE_HEALTH_CHECKPOINT_MAX_ENTRIES)
+    .map(minimalCheckpointEntry);
   if (!entries.length) return undefined;
   return {
     version: GOOGLE_HEALTH_STEP_CHECKPOINT_VERSION,
@@ -158,12 +169,12 @@ export function parseGoogleHealthStepCheckpoint(
     Date.parse(candidate.expiresAt) - Date.parse(candidate.createdAt) >
       GOOGLE_HEALTH_STEP_CHECKPOINT_TTL_MS + 5 * 60_000 ||
     !Array.isArray(candidate.entries) ||
-    candidate.entries.length > 8
+    candidate.entries.length > GOOGLE_HEALTH_CHECKPOINT_MAX_ENTRIES
   )
     return;
   const today = dateKey(now);
   const earliestDate = dateWithOffsetFrom(today, -1);
-  const metricIds = stepMetricIds(state);
+  const metricIds = checkpointMetricIds(state);
   if (
     !candidate.entries.every((entry) =>
       validRecentEntry(
@@ -181,7 +192,7 @@ export function parseGoogleHealthStepCheckpoint(
     accountId: state.currentUserId,
     createdAt: candidate.createdAt,
     expiresAt: candidate.expiresAt,
-    entries: candidate.entries.map(minimalStepEntry),
+    entries: candidate.entries.map(minimalCheckpointEntry),
   };
 }
 

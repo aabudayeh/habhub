@@ -50,9 +50,15 @@ const checkpoint = buildGoogleHealthStepCheckpoint(
   now,
 );
 assert.ok(checkpoint);
-assert.equal(checkpoint.entries.length, 1);
+assert.equal(checkpoint.entries.length, 2);
 assert.equal(checkpoint.entries[0].id, googleStep.id);
 assert.equal(checkpoint.entries[0].nutrition, undefined);
+assert.equal(checkpoint.entries[1].id, googleFood.id);
+assert.equal(
+  checkpoint.entries[1].nutrition,
+  undefined,
+  "the encrypted startup input keeps calories but never the meal payload",
+);
 assert.equal(
   Date.parse(checkpoint.expiresAt) - Date.parse(checkpoint.createdAt),
   GOOGLE_HEALTH_STEP_CHECKPOINT_TTL_MS,
@@ -84,8 +90,9 @@ assert.equal(
   "a transient clean hydration state has no authoritative checkpoint candidate",
 );
 const restored = mergeGoogleHealthStepCheckpoint(sanitized, checkpoint, now);
-assert.equal(restored.entries.length, 1);
+assert.equal(restored.entries.length, 2);
 assert.equal(restored.entries[0].value, 4321);
+assert.equal(restored.entries[1].value, 700);
 
 const authoritativeZero = {
   ...googleStep,
@@ -103,7 +110,7 @@ const keptAuthoritative = mergeGoogleHealthStepCheckpoint(
   checkpoint,
   now,
 );
-assert.equal(keptAuthoritative.entries.length, 1);
+assert.equal(keptAuthoritative.entries.length, 2);
 assert.equal(keptAuthoritative.entries[0].value, 0);
 
 const webStorage = fs.readFileSync(
@@ -158,5 +165,5 @@ assert.match(
 assert.match(cloudProvider, /deleteGoogleHealthStepCheckpoint\(accountId\)/);
 
 console.log(
-  "Google Health Steps restore from an encrypted, account-scoped and expiring PWA checkpoint.",
+  "Google Health calculation inputs restore from an encrypted, account-scoped and expiring PWA checkpoint.",
 );

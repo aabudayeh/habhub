@@ -92,6 +92,11 @@ import {
 import { AppStateStorageReadError } from "@/src/storage/appStateStorage";
 import { deleteGoogleHealthStepCheckpoint } from "@/src/storage/googleHealthStepCheckpoint";
 import {
+  deleteGoogleHealthGroupCheckpoint,
+  readGoogleHealthGroupCheckpoint,
+  writeGoogleHealthGroupCheckpoint,
+} from "@/src/storage/googleHealthGroupCheckpoint";
+import {
   purgeLegacyGroupActivityCaches,
   readGroupActivityCache,
   removeGroupActivityCache,
@@ -131,6 +136,7 @@ import {
 } from "@/src/domain/cloudHash";
 import { networkReachability } from "@/src/domain/network";
 import { accountOwnedCollections } from "@/src/domain/accountCollections";
+import { cloudSourceTimestampIsNewer } from "@/src/domain/cloudMaintenance";
 import {
   canBootstrapCloudSnapshotCursor,
   cloudSnapshotCursorForAcknowledgement,
@@ -164,6 +170,7 @@ const GOOGLE_HEALTH_CLOUD_CACHE_SCRUB_KEY =
   "habhub-google-health-cloud-cache-scrub-v2";
 const ACCOUNT_METADATA_ACK_KEY_PREFIX = "habhub-account-metadata-ack-v1:";
 const MAX_CLOUD_RETRY_MS = 5 * 60 * 1000;
+const MIN_CLOUD_FOLLOW_UP_MS = 5_000;
 const MAX_GROUP_READ_RETRY_MS = 2 * 60 * 1000;
 const MAX_SURFACE_READ_RETRY_MS = 60 * 1000;
 const CHAT_OUTBOX_RECOVERY_LIMIT = 200;
@@ -2244,9 +2251,10 @@ function mergeActivityEntries(
     const key = metricEntryKey(entry.userId, entry.id);
     const existing = entries.get(key);
     const existingIsNewer =
-      Boolean(existing?.sourceUpdatedAt) &&
-      Boolean(entry.sourceUpdatedAt) &&
-      existing!.sourceUpdatedAt! > entry.sourceUpdatedAt!;
+      cloudSourceTimestampIsNewer(
+        existing?.sourceUpdatedAt,
+        entry.sourceUpdatedAt,
+      );
     // Owned rows may be newer local writes waiting for upload. Fetched rows are
     // authoritative for friends unless their native-source revision is older
     // than the one already rendered from cache.
@@ -2676,6 +2684,12 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
   const mergeBaseRef = useRef<CloudMergeBase | null>(null);
   const accountMetadataHashRef = useRef<string | null>(null);
   const workspaceHashRef = useRef<string | null>(null);
+  // Google Health workspace hashes may fingerprint private record ids/values,
+  // so they must never be persisted in plaintext. Keep a separate in-session
+  // acknowledgement map: group/activity hydration can then retain a successful
+  // upload without reading only the intentionally empty durable ACK map and
+  // reopening the full workspace outbox after every activity-version refresh.
+  const workspaceSessionAckHashesRef = useRef(new Map<string, string>());
   const workspaceAckHashesRef = useRef(new Map<string, string>());
   const groupConfigurationAckHashesRef = useRef(
     new Map<string, string>(),
@@ -3247,7 +3261,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const live = stateRef.current;
       const departed = live.groups.find((group) => group.id === groupId);
       if (!departed || !isCloudGroupId(groupId)) {
-        await removeGroupActivityCache(groupId).catch(() => undefined);
+        await Promise.allSettled([
+          removeGroupActivityCache(groupId),
+          deleteGoogleHealthGroupCheckpoint(live.currentUserId, groupId),
+        ]);
         return;
       }
       let remaining = live.groups.filter((group) => group.id !== groupId);
@@ -3283,10 +3300,14 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       workspaceUploadRequiredGroupsRef.current.delete(groupId);
       activityVersionByGroupRef.current.delete(groupId);
       activityCoverageSinceByGroupRef.current.delete(groupId);
+      workspaceSessionAckHashesRef.current.delete(groupId);
       workspaceAckHashesRef.current.delete(groupId);
       groupConfigurationAckHashesRef.current.delete(groupId);
       replaceState(evicted, { source: "local" });
-      await removeGroupActivityCache(groupId).catch(() => undefined);
+      await Promise.allSettled([
+        removeGroupActivityCache(groupId),
+        deleteGoogleHealthGroupCheckpoint(live.currentUserId, groupId),
+      ]);
       setPendingChanges(true);
     },
     [replaceState],
@@ -3498,6 +3519,8 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
     hashRef.current = null;
     accountMetadataHashRef.current = null;
     workspaceHashRef.current = null;
+    workspaceSessionAckHashesRef.current.clear();
+    workspaceAckHashesRef.current.clear();
     groupConfigurationHashRef.current = null;
     initializedUserRef.current = null;
     identityResetUserRef.current = auth.user.id;
@@ -3667,7 +3690,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         accountMetadataHashRef.current = acceptedMetadataHash;
       }
       workspaceHashRef.current = isCloudGroupId(resolved.group.id)
-        ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
+        ? (workspaceSessionAckHashesRef.current.get(resolved.group.id) ?? null)
         : null;
       groupConfigurationHashRef.current = isCloudGroupId(resolved.group.id)
         ? (groupConfigurationAckHashesRef.current.get(resolved.group.id) ?? null)
@@ -3767,7 +3790,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
               stateRef.current = next;
               workspaceHashRef.current =
-                workspaceAckHashesRef.current.get(groupId) ?? null;
+                workspaceSessionAckHashesRef.current.get(groupId) ?? null;
               replaceState(next, { source: "cloud" });
               markGroupReadSucceeded(groupId);
             })
@@ -4228,6 +4251,10 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             workspaceUploadRequiredGroupsRef.current.delete(
               pushedGroupId,
             );
+            workspaceSessionAckHashesRef.current.set(
+              pushedGroupId,
+              pushedWorkspaceHash,
+            );
             if (workspaceAckMayPersist(candidate))
               workspaceAckHashesRef.current.set(
                 pushedGroupId,
@@ -4433,7 +4460,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             workspaceHashRef.current =
               candidate.group.id === pushedGroupId
                 ? pushedWorkspaceHash
-                : (workspaceAckHashesRef.current.get(candidate.group.id) ??
+                : (workspaceSessionAckHashesRef.current.get(candidate.group.id) ??
                   null);
           }
         }
@@ -4464,7 +4491,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (workspaceSynced && accountMetadataSynced) {
           workspaceConflictGateRef.current = null;
           cloudRetryAttemptRef.current = 0;
-          const retryAt = needsFollowUpSync ? Date.now() + 500 : 0;
+          // A follow-up captures a genuine edit that landed during this save.
+          // Keep it bounded to the same five-second latency promised by the
+          // normal autosave path; a bad ACK/hash edge case must never turn a
+          // full relational workspace publish into a twice-per-second loop.
+          const retryAt = needsFollowUpSync
+            ? Date.now() + MIN_CLOUD_FOLLOW_UP_MS
+            : 0;
           nextRetryAtRef.current = retryAt;
           setNextRetryAt(retryAt);
         }
@@ -4725,6 +4758,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         if (cancelled) return;
         deviceIdRef.current = deviceId;
         workspaceAckHashesRef.current = workspaceAcks;
+        workspaceSessionAckHashesRef.current = new Map(workspaceAcks);
         groupConfigurationAckHashesRef.current = groupConfigurationAcks;
         accountMetadataHashRef.current = accountMetadataAck;
         mergeBaseRef.current = savedMergeBase;
@@ -4850,7 +4884,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           hashRef.current = acknowledgedSnapshotHash;
           const live = stateRef.current;
           workspaceHashRef.current = isCloudGroupId(live.group.id)
-            ? (workspaceAckHashesRef.current.get(live.group.id) ?? null)
+            ? (workspaceSessionAckHashesRef.current.get(live.group.id) ?? null)
             : null;
           if (isCloudGroupId(live.group.id) && !workspaceHashRef.current)
             workspaceUploadRequiredGroupsRef.current.add(live.group.id);
@@ -4989,7 +5023,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               accountMetadataHashRef.current = acceptedMetadataHash;
             }
             workspaceHashRef.current = isCloudGroupId(resolved.group.id)
-              ? (workspaceAckHashesRef.current.get(resolved.group.id) ?? null)
+              ? (workspaceSessionAckHashesRef.current.get(resolved.group.id) ?? null)
               : null;
             if (
               isCloudGroupId(resolved.group.id) &&
@@ -5114,7 +5148,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           revisionRef.current = 0;
           hashRef.current = null;
           workspaceHashRef.current = isCloudGroupId(bound.group.id)
-            ? (workspaceAckHashesRef.current.get(bound.group.id) ?? null)
+            ? (workspaceSessionAckHashesRef.current.get(bound.group.id) ?? null)
             : null;
           groupConfigurationHashRef.current = isCloudGroupId(bound.group.id)
             ? (groupConfigurationAckHashesRef.current.get(bound.group.id) ?? null)
@@ -5153,7 +5187,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
               );
               stateRef.current = next;
               workspaceHashRef.current =
-                workspaceAckHashesRef.current.get(targetGroup.id) ?? null;
+                workspaceSessionAckHashesRef.current.get(targetGroup.id) ?? null;
               if (!workspaceHashRef.current)
                 workspaceUploadRequiredGroupsRef.current.add(targetGroup.id);
               replaceState(next, { source: "cloud" });
@@ -5553,7 +5587,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             );
             stateRef.current = merged;
             workspaceHashRef.current =
-              workspaceAckHashesRef.current.get(groupId) ?? null;
+              workspaceSessionAckHashesRef.current.get(groupId) ?? null;
             replaceState(merged, { source: "cloud" });
             markGroupReadSucceeded(groupId);
           })
@@ -5717,7 +5751,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
       const refreshed = mergeRemoteWorkspace(loaded, stateRef.current);
       stateRef.current = refreshed;
       workspaceHashRef.current =
-        workspaceAckHashesRef.current.get(groupId) ?? null;
+        workspaceSessionAckHashesRef.current.get(groupId) ?? null;
       replaceState(refreshed, { source: "cloud" });
       markGroupReadSucceeded(groupId);
     })().finally(() => {
@@ -5919,12 +5953,19 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           replaceState(next, { source: "cloud" });
           const cached = cachedGroupActivity(next, groupId);
           scheduleResponsiveWork(() => {
-            writeGroupActivityCache({
-              groupId,
-              version: activity.version,
-              updatedAt: activity.updatedAt,
-              ...cached,
-            }).catch(() => undefined);
+            void Promise.allSettled([
+              writeGroupActivityCache({
+                groupId,
+                version: activity.version,
+                updatedAt: activity.updatedAt,
+                ...cached,
+              }),
+              writeGoogleHealthGroupCheckpoint({
+                currentUserId: next.currentUserId,
+                groupId,
+                dailyMetricStatuses: next.dailyMetricStatuses,
+              }),
+            ]);
           }, {
             minimumDelayMs: 120,
             maximumDelayMs: 4_000,
@@ -6128,12 +6169,15 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             signal,
           ),
         );
-        const cached = await readGroupActivityCache(groupId).catch(
-          () => null,
-        );
+        const [cached, protectedGoogleStatuses] = await Promise.all([
+          readGroupActivityCache(groupId).catch(() => null),
+          readGoogleHealthGroupCheckpoint(base.currentUserId, groupId).catch(
+            () => undefined,
+          ),
+        ]);
         await yieldCloudMaintenanceToUi();
         if (
-          cached &&
+          (cached || protectedGoogleStatuses) &&
           sequence === groupLoadSequenceRef.current &&
           stateRef.current.group.id === groupId
         ) {
@@ -6142,15 +6186,18 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
             ...live,
             entries: mergeActivityEntries(
               live.entries,
-              cached.entries,
+              cached?.entries ?? [],
               live.currentUserId,
             ),
             dailyMetricStatuses: mergeActivityStatuses(
-              live.dailyMetricStatuses,
-              cached.dailyMetricStatuses,
+              mergeActivityStatuses(
+                live.dailyMetricStatuses,
+                cached?.dailyMetricStatuses ?? [],
+              ),
+              protectedGoogleStatuses?.dailyMetricStatuses ?? [],
             ),
           };
-          if (cached.version !== undefined)
+          if (cached?.version !== undefined)
             activityVersionByGroupRef.current.set(
               groupId,
               cached.version,
@@ -6178,17 +6225,24 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           stateRef.current = next;
           workspaceHashRef.current = workspaceUploadRequired
             ? null
-            : (workspaceAckHashesRef.current.get(groupId) ?? null);
+            : (workspaceSessionAckHashesRef.current.get(groupId) ?? null);
           replaceState(next, { source: "cloud" });
           markGroupReadSucceeded(groupId);
           setPendingChanges(hasUnsyncedLocalChanges());
           const cachePayload = cachedGroupActivity(next, groupId);
           scheduleResponsiveWork(() => {
-            writeGroupActivityCache({
-              groupId,
-              updatedAt: new Date().toISOString(),
-              ...cachePayload,
-            }).catch(() => undefined);
+            void Promise.allSettled([
+              writeGroupActivityCache({
+                groupId,
+                updatedAt: new Date().toISOString(),
+                ...cachePayload,
+              }),
+              writeGoogleHealthGroupCheckpoint({
+                currentUserId: next.currentUserId,
+                groupId,
+                dailyMetricStatuses: next.dailyMetricStatuses,
+              }),
+            ]);
           }, {
             minimumDelayMs: 120,
             maximumDelayMs: 4_000,
@@ -6872,7 +6926,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const next = stateWithActiveGroup(stateRef.current, group);
         stateRef.current = next;
         workspaceHashRef.current = isCloudGroupId(groupId)
-          ? (workspaceAckHashesRef.current.get(groupId) ?? null)
+          ? (workspaceSessionAckHashesRef.current.get(groupId) ?? null)
           : null;
         if (
           isCloudGroupId(groupId) &&
@@ -6917,7 +6971,7 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
         const next = stateWithActiveGroup(before, nextGroup, remaining);
         stateRef.current = next;
         workspaceHashRef.current = isCloudGroupId(nextGroup.id)
-          ? (workspaceAckHashesRef.current.get(nextGroup.id) ?? null)
+          ? (workspaceSessionAckHashesRef.current.get(nextGroup.id) ?? null)
           : null;
         if (
           isCloudGroupId(nextGroup.id) &&
@@ -6939,9 +6993,13 @@ export function CloudSyncProvider({ children }: PropsWithChildren) {
           );
           stateRef.current = purged;
           replaceState(purged, { source: "local" });
-          await removeGroupActivityCache(groupId).catch(() => undefined);
+          await Promise.allSettled([
+            removeGroupActivityCache(groupId),
+            deleteGoogleHealthGroupCheckpoint(before.currentUserId, groupId),
+          ]);
           activityVersionByGroupRef.current.delete(groupId);
           activityCoverageSinceByGroupRef.current.delete(groupId);
+          workspaceSessionAckHashesRef.current.delete(groupId);
           workspaceAckHashesRef.current.delete(groupId);
           groupConfigurationAckHashesRef.current.delete(groupId);
           setPendingChanges(true);

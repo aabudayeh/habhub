@@ -7,6 +7,7 @@ export type WebDisplayEnvironment = {
 };
 
 export const STANDALONE_IOS_TAB_BOTTOM_INSET = 10;
+export const WEB_TAB_CONTENT_BOTTOM_PADDING = 16;
 
 export function isIosWebDevice(
   environment: WebDisplayEnvironment,
@@ -55,12 +56,10 @@ export function resolveTabBarBottomInset(
 }
 
 /**
- * Screen's bottom padding predates the navigator-owned tab-bar space. A Web
- * tab scene already ends at the top edge of that navigator and must not reserve
- * another content gutter above it. This deliberately depends on the Web
- * environment being present rather than user-agent detection: installed iOS
- * apps can expose reduced or desktop-like navigator values. Native callers and
- * non-tab routes retain their existing safety clearance.
+ * The tab navigator owns the system safe area, while the screen owns a small
+ * aesthetic/scrolling gutter below its last control. Web tab scenes therefore
+ * keep content padding but must not add the reported safe-area inset again.
+ * Native callers and non-tab routes retain their existing full clearance.
  */
 export function resolveScreenBottomPadding(
   defaultMinimum: number,
@@ -70,8 +69,6 @@ export function resolveScreenBottomPadding(
   isTabScene: boolean,
   environment?: WebDisplayEnvironment,
 ) {
-  const webTabScene = isTabScene && Boolean(environment);
-  if (webTabScene) return 0;
   const requestedMinimum =
     typeof explicitMinimum === "number"
       ? Math.max(0, explicitMinimum)
@@ -81,5 +78,12 @@ export function resolveScreenBottomPadding(
   const safeInset = Number.isFinite(safeAreaBottom)
     ? Math.max(0, safeAreaBottom)
     : 0;
+  if (isTabScene && Boolean(environment)) {
+    const explicitContentPadding = Math.max(
+      typeof explicitMinimum === "number" ? requestedMinimum : 0,
+      requestedPadding,
+    );
+    return Math.max(WEB_TAB_CONTENT_BOTTOM_PADDING, explicitContentPadding);
+  }
   return Math.max(requestedMinimum, requestedPadding) + safeInset;
 }

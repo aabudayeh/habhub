@@ -1236,6 +1236,35 @@ async function performGoogleHealthSync(
   }
   if (applied === undefined) throw new Error("google_health_snapshot_conflict");
 
+  const appliedRow = Array.isArray(applied) ? applied[0] : applied;
+  let projectionRevision = Number(appliedRow?.revision);
+  if (!Number.isSafeInteger(projectionRevision) || projectionRevision < 0)
+    throw new Error("google_health_snapshot_conflict");
+  let groupProjectionApplied = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const projection = await admin.rpc("project_google_health_group_data", {
+      p_user_id: userId,
+      p_snapshot_revision: projectionRevision,
+    });
+    if (!projection.error) {
+      groupProjectionApplied = true;
+      break;
+    }
+    if (!/google_health_projection_conflict|40001/i.test(
+      String(projection.error.message ?? ""),
+    )) throw projection.error;
+    const latest = await admin.from("user_snapshots")
+      .select("revision")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (latest.error || latest.data?.revision === undefined)
+      throw latest.error ?? projection.error;
+    projectionRevision = Number(latest.data.revision);
+    if (!Number.isSafeInteger(projectionRevision) || projectionRevision < 0)
+      throw projection.error;
+  }
+  if (!groupProjectionApplied) throw new Error("google_health_projection_conflict");
+
   const finished = await admin.rpc("finish_google_health_sync", {
     p_user_id: userId,
     p_lease_id: leaseId,
@@ -1249,10 +1278,9 @@ async function performGoogleHealthSync(
   if (finished.error || finished.data !== true)
     throw finished.error ?? new Error("google_health_sync_cancelled");
 
-  const row = Array.isArray(applied) ? applied[0] : applied;
   return {
-    imported: Number(row?.imported_count ?? mapped.length),
-    deleted: Number(row?.deleted_count ?? 0),
+    imported: Number(appliedRow?.imported_count ?? mapped.length),
+    deleted: Number(appliedRow?.deleted_count ?? 0),
     dataTypes: successful.map((item) => item.definition.googleType),
     errors,
   };

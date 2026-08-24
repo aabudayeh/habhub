@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HabHub Live Companion",
-  "version": "0.3.3",
-  "description": "A live HabHub Today dashboard with to-dos, trackers, timers and schedule in a toolbar popup or side panel.",
+  "name": "HabHub",
+  "version": "0.3.4",
+  "description": "The complete HabHub app in a browser toolbar popup.",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "habhub-icon.png",
@@ -10,19 +10,12 @@
     "48": "habhub-icon.png",
     "128": "habhub-icon.png"
   },
-  "permissions": ["storage", "sidePanel"],
+  "permissions": ["storage"],
   "host_permissions": ["https://habhub.expo.app/*"],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
   "action": {
     "default_title": "HabHub",
     "default_icon": "habhub-icon.png",
     "default_popup": "popup.html"
-  },
-  "side_panel": {
-    "default_path": "panel.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; frame-src https://habhub.expo.app"

@@ -214,6 +214,10 @@ const today = read("src/components/TodoTodayList.tsx");
 assert.match(today, /flattenTodoHierarchy\(visiblePersonalItems\)/);
 assert.match(today, /return-down-forward-outline/);
 assert.match(today, /subtaskSection/);
+assert.match(today, /useTodoSubtaskExpansion/);
+assert.match(today, /useTodoItemVisibility/);
+assert.match(today, /accessibilityLabel=\{visible \? "Hide to-do" : "Show to-do"\}/);
+assert.match(today, /children\.length && childrenExpanded/);
 assert.doesNotMatch(
   today,
   /useGroupTodos|Group To-Dos|group-todo-editor/,
@@ -234,6 +238,10 @@ for (const required of [
     leaderboardTodos.includes(required),
     `Leaderboard group to-dos are missing: ${required}`,
   );
+assert.match(leaderboardTodos, /useTodoSubtaskExpansion/);
+assert.match(leaderboardTodos, /useTodoItemVisibility/);
+assert.match(leaderboardTodos, /accessibilityLabel=\{itemVisible \? "Hide group to-do" : "Show group to-do"\}/);
+assert.match(leaderboardTodos, /nested\.length && nestedExpanded/);
 const leaderboard = read("app/(tabs)/group.tsx");
 assert.match(leaderboard, /GroupTodoLeaderboardSection/);
 assert.match(leaderboard, /groupTodosBelowTrackers/);
@@ -245,10 +253,27 @@ assert.match(chat, /groupTodoId: attachedTodo\.id/);
 assert.match(chat, /!draft\.trim\(\) && !imageUri && !attachedTodo/);
 assert.match(chat, /pathname: "\/\(tabs\)\/group"/);
 assert.match(chat, /groupTodosAvailable/);
+assert.match(chat, /attachableGroupTodos/);
+assert.match(chat, /groupTodoItemVisibility\.isVisible/);
 
 const groupEditor = read("app/group-todo-editor.tsx");
 assert.match(groupEditor, /repeatMode/);
 assert.match(groupEditor, /groupTodoId: saved\.id/);
 assert.match(groupEditor, /Private to you and synced only with your account/);
+assert.match(groupEditor, /<TodoSubtaskEditorSection/);
+assert.match(groupEditor, /void save\(null\)\.then/);
+const personalEditor = read("app/todo-editor.tsx");
+assert.match(personalEditor, /<TodoSubtaskEditorSection/);
+assert.match(personalEditor, /const savedId = persist\(\)/);
+const editorSection = read("src/components/TodoSubtaskEditorSection.tsx");
+assert.match(editorSection, /useState\(true\)/);
+assert.match(editorSection, /flattenTodoHierarchy\(items\)/);
+assert.match(editorSection, /Add sub-to-do/);
+const expansionPreference = read("src/components/useTodoSubtaskExpansion.ts");
+assert.match(expansionPreference, /AsyncStorage\.getItem/);
+assert.match(expansionPreference, /AsyncStorage\.setItem/);
+const visibilityPreference = read("src/components/useTodoItemVisibility.ts");
+assert.match(visibilityPreference, /Local, account-scoped visibility/);
+assert.match(visibilityPreference, /AsyncStorage\.setItem/);
 
 console.log("To-do hierarchy, labels, group RLS/RPCs, and chat attachment checks passed.");

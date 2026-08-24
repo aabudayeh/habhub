@@ -96,7 +96,6 @@ import {
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 import {
   useCloudSyncActions,
-  useCloudSyncStatus,
 } from "@/src/cloud/CloudSyncProvider";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
 import { useApp } from "@/src/state/AppProvider";
@@ -183,7 +182,6 @@ function Today() {
   const reportTutorialEvent = tutorial.reportEvent;
   const health = useHealthSync();
   const cloud = useCloudSyncActions();
-  const cloudStatus = useCloudSyncStatus();
   const colors = useAppColors();
   const accent = useGroupAccent();
   const { height } = useWindowDimensions();
@@ -209,6 +207,7 @@ function Today() {
   const locale = useLocale();
   const { t } = useLocalization();
   const [editing, setEditing] = useState(false);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [todayPageIndex, setTodayPageIndex] = useState(0);
   const [requestedTodayPage, setRequestedTodayPage] = useState<number>();
   const todayUsesPages =
@@ -1016,28 +1015,28 @@ function Today() {
         refreshControl={
           <RefreshControl
             enabled={!editing}
-            refreshing={
-              !editing &&
-              (health.status === "syncing" || cloudStatus === "syncing")
-            }
+            refreshing={!editing && manualRefreshing}
             onRefresh={async () => {
-              // Health updates become local immediately. Upload the resulting
-              // snapshot once, then reconcile shared summaries without ever
-              // clearing the cached leaderboard first.
-              await health.syncNow("pull").catch(() => undefined);
-              await new Promise<void>((resolve) =>
-                setTimeout(resolve, 0),
-              );
-              await cloud.syncNow().catch(() => undefined);
-              await cloud.refreshActivity().catch(() => undefined);
+              if (manualRefreshing) return;
+              setManualRefreshing(true);
+              try {
+                // Health updates become local immediately. Upload the
+                // resulting snapshot once, then reconcile shared summaries
+                // without ever clearing the cached leaderboard first.
+                await health.syncNow("pull").catch(() => undefined);
+                await new Promise<void>((resolve) =>
+                  setTimeout(resolve, 0),
+                );
+                await cloud.syncNow().catch(() => undefined);
+                await cloud.refreshActivity().catch(() => undefined);
+              } finally {
+                setManualRefreshing(false);
+              }
             }}
             tintColor={accent}
           />
         }
-        contentContainerStyle={[
-          styles.page,
-          Platform.OS === "web" && styles.webTabPage,
-        ]}
+        contentContainerStyle={styles.page}
         automaticallyAdjustContentInsets={
           Platform.OS === "web" ? false : undefined
         }
@@ -1411,7 +1410,6 @@ function Today() {
                 )
                 .replace("{total}", String(todayPageCount))}
               accessibilityRole="tablist"
-              pointerEvents="box-none"
               style={styles.sectionPageIndicator}
             >
               {Array.from({ length: todayPageCount }, (_, index) => {
@@ -3758,8 +3756,7 @@ const styles = StyleSheet.create({
   dayEndChoice: { flex: 1, minHeight: 42, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   safe: { flex: 1 },
   todayGoldTint: { ...StyleSheet.absoluteFillObject },
-  page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 10 },
-  webTabPage: { paddingBottom: 0 },
+  page: { flexGrow: 1, paddingHorizontal: 14, paddingBottom: 16 },
   pinnedTodaySummary: {
     marginHorizontal: -14,
     paddingHorizontal: 14,

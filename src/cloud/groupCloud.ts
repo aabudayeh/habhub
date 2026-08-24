@@ -23,6 +23,7 @@ import { leaderboardRows } from "@/src/domain/leaderboard";
 import { confirmedCloudPublishRevision } from "@/src/domain/cloudConflict";
 import {
   cloudEntryNeedsItemDetail,
+  cloudSourceTimestampIsNewer,
   historicalCloudActivityDateBatches,
   MAX_CLOUD_STATUS_UPSERT_ROWS,
   routineCloudActivityDates,
@@ -658,10 +659,31 @@ async function upsertCloudDailyStatusRows(
   client: SupabaseClient,
   rows: CloudDailyStatusUpsertRow[],
 ) {
-  if (!rows.length) return;
+  if (!rows.length) return 0;
+  let changedRows = 0;
   // Upsert before deleting anything. A transient server failure must not make
   // a member disappear from the leaderboard on other devices.
   for (const batch of batches(rows, MAX_CLOUD_STATUS_UPSERT_ROWS)) {
+    // The projection deliberately includes a two-day overlap for self-healing.
+    // Let Postgres discard equivalent conflicts before UPDATE triggers,
+    // updated_at churn, and Realtime invalidations are generated. Older/self-
+    // hosted schemas fall back to the direct upsert below.
+    const conditional = await client.rpc(
+      "upsert_daily_metric_status_rows_if_changed",
+      { p_rows: batch },
+    );
+    if (!conditional.error) {
+      const batchChanges = Number(conditional.data);
+      changedRows += Number.isFinite(batchChanges) ? batchChanges : batch.length;
+      continue;
+    }
+    if (
+      !/upsert_daily_metric_status_rows_if_changed|schema cache|could not find the function|PGRST202/i.test(
+        `${conditional.error.code ?? ""} ${conditional.error.message ?? ""}`,
+      )
+    )
+      throw conditional.error;
+
     let { error } = await client.from("daily_metric_status").upsert(batch, {
       onConflict: "group_id,metric_id,user_id,local_date",
     });
@@ -690,7 +712,9 @@ async function upsertCloudDailyStatusRows(
       ));
     }
     if (error) throw error;
+    changedRows += batch.length;
   }
+  return changedRows;
 }
 
 async function commitCloudActivityCheckpoint(
@@ -1190,9 +1214,10 @@ export async function loadCloudGroupActivity(
     if (deletedEntryKeys.has(key)) return;
     const cached = entriesById.get(key);
     const cachedIsNewer =
-      Boolean(cached?.sourceUpdatedAt) &&
-      Boolean(entry.sourceUpdatedAt) &&
-      cached!.sourceUpdatedAt! > entry.sourceUpdatedAt!;
+      cloudSourceTimestampIsNewer(
+        cached?.sourceUpdatedAt,
+        entry.sourceUpdatedAt,
+      );
     if (cached?.userId !== state.currentUserId && !cachedIsNewer)
       entriesById.set(key, entry);
     else if (!cached) entriesById.set(key, entry);
@@ -2285,7 +2310,48 @@ async function pushCloudRecentActivityNow({
     dates,
     publishRevision,
   );
-  await upsertCloudDailyStatusRows(client, rows);
+  const changedStatusRows = await upsertCloudDailyStatusRows(client, rows);
+  if (changedStatusRows === 0) {
+    // An unchanged sync is still a successful freshness assertion. Stamp only
+    // this active membership without bumping the shared activity version (and
+    // therefore without waking every peer into another no-op refresh).
+    const freshness = await client.rpc("touch_group_member_data_freshness", {
+      p_group_id: state.group.id,
+    });
+    if (!freshness.error) {
+      const updatedAt =
+        typeof freshness.data === "string" &&
+        Number.isFinite(Date.parse(freshness.data))
+          ? freshness.data
+          : undefined;
+      if (!updatedAt)
+        throw new Error("Cloud freshness timestamp was not returned.");
+      return {
+        published: true,
+        updatedAt,
+      };
+    }
+    if (
+      !/touch_group_member_data_freshness|schema cache|could not find the function|PGRST202/i.test(
+        `${freshness.error.code ?? ""} ${freshness.error.message ?? ""}`,
+      )
+    )
+      throw freshness.error;
+    // During a rolling client-before-migration deployment, preserve the old
+    // freshness semantics even though this legacy fallback increments version.
+    const checkpoint = await commitCloudActivityCheckpoint(
+      client,
+      state.group.id,
+      dates,
+      dates[0] ?? dateKey(),
+      publishRevision,
+    );
+    return {
+      published: true,
+      version: checkpoint.version,
+      updatedAt: checkpoint.updatedAt,
+    };
+  }
   const checkpoint = await commitCloudActivityCheckpoint(
     client,
     state.group.id,
@@ -2661,10 +2727,9 @@ export async function pushCloudWorkspace(
     return (
       !remote ||
       remote.visibility !== entry.visibility ||
-      Boolean(
-        entry.sourceUpdatedAt &&
-          (!remote.source_updated_at ||
-            entry.sourceUpdatedAt > remote.source_updated_at),
+      cloudSourceTimestampIsNewer(
+        entry.sourceUpdatedAt,
+        remote.source_updated_at,
       ) ||
       Boolean(
         entry.visibility === "group" &&
@@ -3045,8 +3110,10 @@ export async function pushCloudWorkspace(
       .filter(
         (entry) =>
           !latestRemoteStatusUpdatedAt ||
-          (entry.sourceUpdatedAt ?? entry.recordedAt) >
+          cloudSourceTimestampIsNewer(
+            entry.sourceUpdatedAt ?? entry.recordedAt,
             latestRemoteStatusUpdatedAt,
+          ),
       )
       .map((entry) => entry.localDate),
     ...(state.gymSessions ?? [])

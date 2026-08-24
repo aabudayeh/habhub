@@ -49,7 +49,6 @@ data class HabHubWidgetConfiguration(
   val backgroundColor: String = "#081B49",
   val backgroundOpacity: Int = 55,
   val leaderboardMetricIds: List<String> = emptyList(),
-  val leaderboardCount: Int = 2,
 )
 
 object HabHubWidgetStore {
@@ -61,7 +60,6 @@ object HabHubWidgetStore {
   private const val BACKGROUND_COLOR_PREFIX = "background_color_"
   private const val BACKGROUND_OPACITY_PREFIX = "background_opacity_"
   private const val LEADERBOARD_METRICS_PREFIX = "leaderboard_metrics_"
-  private const val LEADERBOARD_COUNT_PREFIX = "leaderboard_count_"
 
   private fun preferences(context: Context) =
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -95,7 +93,6 @@ object HabHubWidgetStore {
     backgroundColor: String = "#081B49",
     backgroundOpacity: Int = 55,
     leaderboardMetricIds: List<String>? = null,
-    leaderboardCount: Int? = null,
   ) {
     preferences(context).edit().apply {
       putString(
@@ -112,8 +109,6 @@ object HabHubWidgetStore {
           leaderboardMetricIds.map(String::trim).filter(String::isNotBlank).distinct().take(4).joinToString(","),
         )
       }
-      if (leaderboardCount != null)
-        putInt("$LEADERBOARD_COUNT_PREFIX$widgetId", leaderboardCount.coerceIn(1, 4))
     }.apply()
     // Configuration can change without opening React Native. Immediately
     // remove exact leaderboard values no longer used by an active widget.
@@ -133,7 +128,6 @@ object HabHubWidgetStore {
       prefs.getInt("$BACKGROUND_OPACITY_PREFIX$widgetId", 55).coerceIn(0, 100),
       prefs.getString("$LEADERBOARD_METRICS_PREFIX$widgetId", "").orEmpty()
         .split(",").map(String::trim).filter(String::isNotBlank).distinct().take(4),
-      prefs.getInt("$LEADERBOARD_COUNT_PREFIX$widgetId", 2).coerceIn(1, 4),
     )
   }
 
@@ -152,7 +146,9 @@ object HabHubWidgetStore {
         remove("$BACKGROUND_COLOR_PREFIX$widgetId")
         remove("$BACKGROUND_OPACITY_PREFIX$widgetId")
         remove("$LEADERBOARD_METRICS_PREFIX$widgetId")
-        remove("$LEADERBOARD_COUNT_PREFIX$widgetId")
+        // Clean the retired count preference. The selected tracker list is
+        // now the single source of truth for Leaderboard widget content.
+        remove("leaderboard_count_$widgetId")
       }
     }.apply()
     pruneStoredLeaderboardPayload(context)
@@ -196,14 +192,12 @@ object HabHubWidgetStore {
       return
     }
     val metrics = leaderboard.optJSONArray("metrics") ?: JSONArray()
-    val allowedIds = active.flatMap {
-      it.leaderboardMetricIds.take(it.leaderboardCount)
-    }.toMutableSet()
+    val allowedIds = active.flatMap { it.leaderboardMetricIds }.toMutableSet()
     // Backward-compatible empty configurations render the first N payload
     // metrics. Retain only that actually visible fallback instead of the whole
     // union while the user has not re-saved the widget yet.
-    active.filter { it.leaderboardMetricIds.isEmpty() }.forEach { configuration ->
-      for (index in 0 until min(configuration.leaderboardCount, metrics.length())) {
+    active.filter { it.leaderboardMetricIds.isEmpty() }.forEach {
+      for (index in 0 until min(2, metrics.length())) {
         metrics.optJSONObject(index)?.optString("id")
           ?.takeIf(String::isNotBlank)?.let(allowedIds::add)
       }
@@ -511,7 +505,7 @@ object HabHubWidgetRenderer {
       for (index in 0 until allMetrics.length())
         allMetrics.optJSONObject(index)?.let(::addMetric)
     }
-    return ordered.take(min(configuration.leaderboardCount, leaderboardCapacity(size)))
+    return ordered.take(leaderboardCapacity(size))
   }
 
   private fun contentDescription(
@@ -732,13 +726,22 @@ object HabHubWidgetRenderer {
       size.widthDp * 0.38f,
       max(24f, datePaint.measureText(dateLabel) + 2f),
     )
+    val title = item.optString("title", "Leaderboard")
+    val titleWidth = max(12f, size.widthDp - pad * 2f - dateWidth - 4f)
     drawText(
       canvas,
-      item.optString("title", "Leaderboard"),
+      title,
       pad,
       headerBaseline,
-      max(12f, size.widthDp - pad * 2f - dateWidth - 4f),
-      textPaint(headerSize, Color.WHITE, true),
+      titleWidth,
+      fittedTextPaint(
+        title,
+        titleWidth,
+        headerSize,
+        (headerSize * 0.74f).coerceAtLeast(5.2f),
+        Color.WHITE,
+        true,
+      ),
     )
     drawRightAlignedEllipsizedText(
       canvas,
@@ -780,80 +783,123 @@ object HabHubWidgetRenderer {
       val rowTextSize = (6.6f * cellScale).coerceIn(5.2f, 14.5f)
       val iconRadius = (4.8f * cellScale).coerceIn(3.4f, 12f)
       val cornerRadius = (7f * cellScale).coerceIn(5f, 15f)
-      canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(30, 255, 255, 255)))
+      canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(34, 255, 255, 255)))
+      canvas.drawRoundRect(rect, cornerRadius, cornerRadius, strokePaint(Color.argb(42, 214, 226, 246), max(0.65f, cellScale * 0.55f)))
       val metricColor = parseColor(metric.optString("color"), Color.rgb(184, 228, 92))
       val iconCenterX = left + innerPad + iconRadius
       val iconCenterY = top + innerPad + iconRadius
-      canvas.drawCircle(iconCenterX, iconCenterY, iconRadius + max(1.2f, cellScale), fillPaint(withAlpha(metricColor, 64)))
+      val iconRectRadius = iconRadius + max(1.2f, cellScale)
+      canvas.drawRoundRect(
+        RectF(
+          iconCenterX - iconRectRadius,
+          iconCenterY - iconRectRadius,
+          iconCenterX + iconRectRadius,
+          iconCenterY + iconRectRadius,
+        ),
+        iconRectRadius * 0.38f,
+        iconRectRadius * 0.38f,
+        fillPaint(withAlpha(metricColor, 58)),
+      )
       drawCompletionIcon(
         canvas,
         iconCenterX,
         iconCenterY,
-        iconRadius,
+        iconRadius * 0.68f,
         metric.optString("icon", "trophy-outline"),
         metricColor,
       )
+      val metricTitle = metric.optString("title", "Tracker")
+      val metricTitleWidth = max(8f, grid.cellWidth - (iconCenterX - left) - iconRadius - innerPad * 1.65f)
       drawText(
         canvas,
-        metric.optString("title", "Tracker"),
+        metricTitle,
         iconCenterX + iconRadius + innerPad * 0.65f,
         iconCenterY + metricTitleSize * 0.34f,
-        max(8f, grid.cellWidth - (iconCenterX - left) - iconRadius - innerPad * 1.65f),
-        textPaint(metricTitleSize, Color.WHITE, true),
+        metricTitleWidth,
+        fittedTextPaint(
+          metricTitle,
+          metricTitleWidth,
+          metricTitleSize,
+          (metricTitleSize * 0.72f).coerceAtLeast(4.8f),
+          Color.WHITE,
+          true,
+        ),
       )
       val metricRows = metric.optJSONArray("rows") ?: JSONArray()
       val titleBandHeight = max(iconRadius * 2f + innerPad * 1.45f, metricTitleSize * 1.65f + innerPad)
       val rowTop = top + titleBandHeight
       val availableHeight = max(0f, rect.bottom - rowTop - innerPad * 0.45f)
-      val preferredRowHeight = max(10f, rowTextSize * 2.15f)
+      val stackRows = grid.cellWidth < 76f
+      val preferredRowHeight = max(
+        if (stackRows) 14f else 10f,
+        rowTextSize * if (stackRows) 3.15f else 2.15f,
+      )
       val visibleRows = min(metricRows.length(), max(1, (availableHeight / preferredRowHeight).toInt()))
       val rowHeight = availableHeight / max(1, visibleRows)
       repeat(visibleRows) { rowIndex ->
         val entry = metricRows.optJSONObject(rowIndex) ?: return@repeat
         val centerY = rowTop + rowHeight * rowIndex + rowHeight / 2f
-        val avatarRadius = min((rowTextSize * 0.9f).coerceAtLeast(3.5f), rowHeight * 0.32f)
-        val avatarCenterX = left + innerPad + avatarRadius
-        canvas.drawCircle(
-          avatarCenterX,
-          centerY,
-          avatarRadius,
-          fillPaint(parseColor(entry.optString("color"), metricColor)),
-        )
-        drawCenteredText(
-          canvas,
-          entry.optString("initials").take(2),
-          avatarCenterX,
-          centerY,
-          textPaint(max(3.8f, avatarRadius * 0.92f), Color.WHITE, true),
-        )
-        val valueWidth = (grid.cellWidth * if (grid.cellWidth < 64f) 0.38f else 0.34f)
-          .coerceAtLeast(12f)
-        val labelLeft = avatarCenterX + avatarRadius + innerPad * 0.65f
-        val name = if (grid.cellWidth < 62f) {
-          "${rowIndex + 1}. ${entry.optString("initials").take(2)}"
+        val rowColor = parseColor(entry.optString("color"), metricColor)
+        val rank = "${rowIndex + 1}."
+        val rankPaint = textPaint(rowTextSize, rowColor, true)
+        val rankWidth = rankPaint.measureText(rank) + innerPad * 0.45f
+        val labelLeft = left + innerPad + rankWidth
+        val right = rect.right - innerPad
+        val name = entry.optString("name").ifBlank { entry.optString("initials").take(2) }
+        val value = entry.optString("value", "—")
+        val valueColor = if (entry.optBoolean("private", false)) {
+          Color.argb(180, 210, 220, 238)
         } else {
-          "${rowIndex + 1}. ${entry.optString("name")}"
+          metricColor
         }
-        drawText(
-          canvas,
-          name,
-          labelLeft,
-          centerY + rowTextSize * 0.34f,
-          max(5f, rect.right - innerPad - valueWidth - labelLeft),
-          textPaint(rowTextSize, Color.argb(230, 242, 246, 255), true),
-        )
-        drawRightAlignedEllipsizedText(
-          canvas,
-          entry.optString("value", "—"),
-          rect.right - innerPad,
-          centerY + rowTextSize * 0.34f,
-          valueWidth,
-          textPaint(
-            rowTextSize,
-            if (entry.optBoolean("private", false)) Color.argb(170, 210, 220, 238) else metricColor,
-            true,
-          ),
-        )
+        if (stackRows) {
+          val firstBaseline = centerY - rowTextSize * 0.18f
+          drawText(canvas, rank, left + innerPad, firstBaseline, rankWidth, rankPaint)
+          drawText(
+            canvas,
+            name,
+            labelLeft,
+            firstBaseline,
+            max(5f, right - labelLeft),
+            fittedTextPaint(name, max(5f, right - labelLeft), rowTextSize, 4.2f, Color.argb(224, 242, 246, 255), false),
+          )
+          val valueWidth = max(8f, right - (left + innerPad))
+          drawRightAlignedEllipsizedText(
+            canvas,
+            value,
+            right,
+            centerY + rowTextSize * 1.16f,
+            valueWidth,
+            fittedTextPaint(value, valueWidth, rowTextSize, 3.8f, valueColor, true),
+          )
+        } else {
+          val baseline = centerY + rowTextSize * 0.34f
+          drawText(canvas, rank, left + innerPad, baseline, rankWidth, rankPaint)
+          val naturalValuePaint = textPaint(rowTextSize, valueColor, true)
+          val minimumNameWidth = min(32f, grid.cellWidth * 0.30f)
+          val maximumValueWidth = max(10f, right - labelLeft - minimumNameWidth - innerPad * 0.55f)
+          val valueWidth = min(
+            maximumValueWidth,
+            max(grid.cellWidth * 0.34f, naturalValuePaint.measureText(value) + 1f),
+          )
+          val nameWidth = max(5f, right - labelLeft - valueWidth - innerPad * 0.55f)
+          drawText(
+            canvas,
+            name,
+            labelLeft,
+            baseline,
+            nameWidth,
+            fittedTextPaint(name, nameWidth, rowTextSize, 4.2f, Color.argb(224, 242, 246, 255), false),
+          )
+          drawRightAlignedEllipsizedText(
+            canvas,
+            value,
+            right,
+            baseline,
+            valueWidth,
+            fittedTextPaint(value, valueWidth, rowTextSize, 3.8f, valueColor, true),
+          )
+        }
       }
     }
   }
@@ -873,22 +919,28 @@ object HabHubWidgetRenderer {
     val eyebrow = item.optString("eyebrow").ifBlank { item.optString("title", "HabHub") }
       .uppercase(Locale.getDefault())
     val dateLabel = item.optString("dateLabel")
+    val headerBaseline = if (size.compact) 8.7f else 16f
+    val datePaint = textPaint(
+      if (size.compact) 4.7f else 7.3f,
+      Color.argb(225, 222, 230, 242),
+      true,
+    )
+    val dateWidth = if (dateLabel.isBlank()) 0f else min(
+      contentWidth * 0.38f,
+      max(if (size.compact) 16f else 24f, datePaint.measureText(dateLabel) + 1f),
+    )
+    val headerGap = if (dateLabel.isBlank()) 0f else if (size.compact) 2.2f else 4f
+    val eyebrowLeft = pad + dateWidth + headerGap
+    val eyebrowWidth = max(16f, contentWidth - dateWidth - headerGap)
     if (dateLabel.isNotBlank()) {
-      drawText(
-        canvas,
-        dateLabel,
-        pad,
-        if (size.compact) 6.2f else 10f,
-        contentWidth,
-        textPaint(if (size.compact) 4.8f else 7.3f, Color.argb(225, 222, 230, 242), true),
-      )
+      drawText(canvas, dateLabel, pad, headerBaseline, dateWidth, datePaint)
     }
     val eyebrowPaint = if (size.compact) {
       fittedTextPaint(
         eyebrow,
-        contentWidth,
+        eyebrowWidth,
         5.1f,
-        4.5f,
+        4.1f,
         Color.argb(205, 255, 255, 255),
         true,
         0.04f,
@@ -899,9 +951,9 @@ object HabHubWidgetRenderer {
     drawText(
       canvas,
       eyebrow,
-      pad,
-      if (size.compact) 11.8f else 19f,
-      contentWidth,
+      eyebrowLeft,
+      headerBaseline,
+      eyebrowWidth,
       eyebrowPaint,
     )
     drawText(
@@ -1140,11 +1192,18 @@ object HabHubWidgetRenderer {
         canvas.drawLine(centerX + radius * 0.72f, centerY - radius * 0.46f, centerX + radius * 0.72f, centerY + radius * 0.46f, stroke)
       }
       icon.startsWith("walk") || icon.startsWith("accessibility") || icon.startsWith("body") -> {
-        canvas.drawCircle(centerX, centerY - radius * 0.58f, radius * 0.20f, fillPaint(color))
-        canvas.drawLine(centerX, centerY - radius * 0.30f, centerX - radius * 0.08f, centerY + radius * 0.18f, stroke)
-        canvas.drawLine(centerX - radius * 0.08f, centerY - radius * 0.06f, centerX - radius * 0.58f, centerY + radius * 0.12f, stroke)
-        canvas.drawLine(centerX - radius * 0.08f, centerY + radius * 0.18f, centerX - radius * 0.52f, centerY + radius * 0.82f, stroke)
-        canvas.drawLine(centerX - radius * 0.08f, centerY + radius * 0.18f, centerX + radius * 0.55f, centerY + radius * 0.65f, stroke)
+        // A centered, conventional walking-person glyph remains recognizable
+        // even in the smallest Leaderboard tracker tile.
+        canvas.drawCircle(centerX + radius * 0.08f, centerY - radius * 0.67f, radius * 0.19f, fillPaint(color))
+        val shoulderX = centerX - radius * 0.02f
+        val shoulderY = centerY - radius * 0.35f
+        val hipX = centerX - radius * 0.10f
+        val hipY = centerY + radius * 0.15f
+        canvas.drawLine(shoulderX, shoulderY, hipX, hipY, stroke)
+        canvas.drawLine(shoulderX, centerY - radius * 0.18f, centerX - radius * 0.58f, centerY + radius * 0.06f, stroke)
+        canvas.drawLine(shoulderX, centerY - radius * 0.18f, centerX + radius * 0.48f, centerY + radius * 0.02f, stroke)
+        canvas.drawLine(hipX, hipY, centerX - radius * 0.52f, centerY + radius * 0.82f, stroke)
+        canvas.drawLine(hipX, hipY, centerX + radius * 0.55f, centerY + radius * 0.67f, stroke)
       }
       icon.startsWith("restaurant") || icon.startsWith("nutrition") -> {
         canvas.drawLine(centerX - radius * 0.48f, centerY - radius * 0.82f, centerX - radius * 0.48f, centerY + radius * 0.82f, stroke)

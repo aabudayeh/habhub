@@ -536,6 +536,85 @@ export function mergeLocalCurrentDayDeviceStepEntries<
   ];
 }
 
+function isNativeHealthProvider(provider: unknown) {
+  const normalized = String(provider ?? "");
+  return (
+    normalized === "health_connect" ||
+    normalized === "apple_health" ||
+    normalized === "healthkit"
+  );
+}
+
+function deviceHealthEntryIdentity(entry: ImportedDailyAggregate) {
+  const id = String(entry.id ?? "").trim();
+  if (id)
+    return `${String(entry.userId ?? "")}\u0000${String(entry.metricId ?? "")}\u0000${id}`;
+  const sourceRecordId = String(entry.sourceRecordId ?? "").trim();
+  if (!sourceRecordId) return undefined;
+  return `${String(entry.userId ?? "")}\u0000${String(entry.metricId ?? "")}\u0000${String(entry.sourceProvider ?? "")}\u0000${sourceRecordId}`;
+}
+
+/**
+ * Preserve all current-day device-owned health inputs across a cloud hydrate.
+ *
+ * Steps keep their specialized revision/aggregate rules above. Other native
+ * rows are event-owned by Health Connect/HealthKit; the phone copy wins for
+ * the same identity and fills an absent server row until the next
+ * authoritative device read. This prevents a clean/lagging cloud snapshot
+ * from briefly erasing Food, activity, Total energy, or workout inputs and
+ * making calculated Daily deficit/status UI flicker on app reopen.
+ */
+export function mergeLocalCurrentDayDeviceHealthEntries<
+  TEntry extends ImportedDailyAggregate & { id?: unknown },
+>(
+  remoteEntries: TEntry[],
+  localEntries: readonly TEntry[],
+  options: {
+    userId: string;
+    currentLocalDate: string;
+    stepMetricIds: ReadonlySet<string>;
+  },
+): TEntry[] {
+  const stepSafe = mergeLocalCurrentDayDeviceStepEntries(
+    remoteEntries,
+    localEntries,
+    options,
+  );
+  const localNative = new Map<string, TEntry>();
+  for (const entry of localEntries) {
+    const metricId = String(entry.metricId ?? "");
+    if (
+      entry.userId !== options.userId ||
+      entry.localDate !== options.currentLocalDate ||
+      options.stepMetricIds.has(metricId) ||
+      !isNativeHealthProvider(entry.sourceProvider) ||
+      !hasHealthImportIdentity(entry) ||
+      entry.source === "manual" ||
+      String(entry.sourceRecordId ?? "").startsWith("step-fallback:")
+    )
+      continue;
+    const identity = deviceHealthEntryIdentity(entry);
+    if (identity) localNative.set(identity, entry);
+  }
+  if (!localNative.size) return stepSafe;
+
+  let changed = false;
+  const merged = stepSafe.map((remote) => {
+    const identity = deviceHealthEntryIdentity(remote);
+    const local = identity ? localNative.get(identity) : undefined;
+    if (!identity || !local) return remote;
+    localNative.delete(identity);
+    if (remote === local) return remote;
+    changed = true;
+    return local;
+  });
+  if (localNative.size) {
+    changed = true;
+    merged.push(...localNative.values());
+  }
+  return changed ? merged : stepSafe;
+}
+
 type CanonicalStepEntry = {
   sourceRecordId?: unknown;
   sourceProvider?: unknown;

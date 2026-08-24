@@ -98,7 +98,11 @@ assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
 assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);
 assert.match(leaderboard, /requestedPage=\{requestedLeaderboardPage\}/);
 assert.match(today, /style=\{styles\.sectionPageIndicator\}/);
-assert.match(today, /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/);
+assert.match(
+  today,
+  /onPress=\{\(\) => setRequestedTodayPage\(index\)\}/,
+  "Today's compact page dots must remain interactive on native and Web",
+);
 assert.match(today, /requestedPage=\{requestedTodayPage\}/);
 assert.match(today, /setTodayPageIndex\(page\)/);
 assert.match(today, /showPageDots=\{false\}/);
@@ -112,6 +116,9 @@ assert.match(pager, /showPageDots && pages\.length > 1/);
 assert.match(pager, /accessibilityRole="tablist"/);
 assert.match(pager, /Page \{page\} of \{total\}/);
 assert.match(pager, /const activePageRef = useRef\(0\)/);
+assert.match(pager, /onPress=\{\(\) => moveToPage\(index\)\}/);
+assert.doesNotMatch(pager, /disabled=\{Platform\.OS !== "web"\}/);
+assert.match(pager, /navigator\.maxTouchPoints \?\? 0/);
 assert.match(
   pager,
   /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,

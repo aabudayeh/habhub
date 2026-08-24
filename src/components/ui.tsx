@@ -8,6 +8,7 @@ import React, {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import {
   ActivityIndicator,
@@ -29,7 +30,6 @@ import { useTranslation } from "@/src/i18n";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   useCloudSyncActions,
-  useCloudSyncStatus,
 } from "@/src/cloud/CloudSyncProvider";
 import { useHealthSync } from "@/src/health/HealthSyncProvider";
 
@@ -117,11 +117,6 @@ export function Screen({
     isTabScene,
     webDisplayEnvironment,
   );
-  // The tab navigator owns the complete area below every Web tab scene. Keep
-  // this independent of iOS user-agent detection because installed PWAs can
-  // report desktop-like navigator fields even while using iPhone safe areas.
-  const removeWebTabGutter =
-    Platform.OS === "web" && isTabScene;
   useKeyboardReveal(activeRef);
   const revealTutorialTarget = useCallback(
     (targetWindowY: number) => {
@@ -250,10 +245,6 @@ export function Screen({
               compact && styles.screenCompact,
               { paddingBottom },
               contentContainerStyle,
-              // A few tab pages deliberately use a small bottom gutter. Web
-              // already renders the navigator immediately below them, so
-              // keep that page style from recreating the reported blank band.
-              removeWebTabGutter && { paddingBottom: 0 },
             ]}
             {...props}
           >
@@ -400,21 +391,29 @@ function DefaultRefreshControl(
   props: Partial<React.ComponentProps<typeof RefreshControl>>,
 ) {
   const cloud = useCloudSyncActions();
-  const cloudStatus = useCloudSyncStatus();
   const health = useHealthSync();
   const accent = useGroupAccent();
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   return (
     <RefreshControl
       // Android ScrollView clones this element and injects the native scroll
       // view as its child. Forward every injected prop so page content is not
       // discarded by this context-isolating wrapper.
       {...props}
-      refreshing={cloudStatus === "syncing" || health.status === "syncing"}
+      // Background cloud/health work stays invisible. Only a pull initiated by
+      // the user owns the native refresh spinner.
+      refreshing={manualRefreshing}
       onRefresh={async () => {
-        await health.syncNow("pull").catch(() => undefined);
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        await cloud.syncNow().catch(() => undefined);
-        await cloud.refreshActivity().catch(() => undefined);
+        if (manualRefreshing) return;
+        setManualRefreshing(true);
+        try {
+          await health.syncNow("pull").catch(() => undefined);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          await cloud.syncNow().catch(() => undefined);
+          await cloud.refreshActivity().catch(() => undefined);
+        } finally {
+          setManualRefreshing(false);
+        }
       }}
       tintColor={accent}
     />
