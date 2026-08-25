@@ -100,8 +100,18 @@ assert.match(
 );
 assert.match(
   source,
-  /isEditingTailRun[\s\S]*?styles\.editingTailRun/,
-  "The active trailing run must reserve the remaining row without spacing adjacent formatted runs",
+  /const isTailRun = runIndex === line\.runs\.length - 1;[\s\S]*?isTailRun && styles\.tailRun/,
+  "Every trailing run must keep a stable width after Enter moves focus to the next line",
+);
+assert.match(
+  source,
+  /tailRun:\s*\{\s*flexGrow:\s*1\s*\}/,
+  "The trailing formatted run must reserve the remainder of its visual row",
+);
+assert.doesNotMatch(
+  source,
+  /active\.line === lineIndex[\s\S]{0,160}runIndex === line\.runs\.length - 1/,
+  "Trailing-run layout must not depend on focus or the previous line will reflow after Enter",
 );
 assert.match(
   source,

@@ -684,17 +684,14 @@ export const RichNoteComposer = forwardRef<
                 fontSize * fontScale,
                 webDisplayEnvironment,
               );
-              const isEditingTailRun =
-                active.line === lineIndex &&
-                active.run === runIndex &&
-                runIndex === line.runs.length - 1;
+              const isTailRun = runIndex === line.runs.length - 1;
               return (
                 <View
                   key={key}
                   style={[
                     styles.run,
                     line.runs.length === 1 && styles.onlyRun,
-                    isEditingTailRun && styles.editingTailRun,
+                    isTailRun && styles.tailRun,
                   ]}
                 >
                   <NativeText
@@ -804,11 +801,12 @@ const styles = StyleSheet.create({
   runMeasure: {
     opacity: 0,
   },
-  // A trailing active run occupies the remaining row before the next key is
-  // painted. This prevents the native input from horizontally scrolling its
-  // caret while its measured wrapper catches up, without adding layout space
-  // at formatting boundaries in the middle of a word.
-  editingTailRun: { flexGrow: 1 },
+  // Keep the trailing run's width stable even after Enter moves focus to the
+  // next logical line. Tying this width to the active input made the previous
+  // line suddenly shrink and forced its absolute TextInput into narrow,
+  // overlapping visual rows. flexGrow reserves only real remaining row space,
+  // so adjacent formatting boundaries still have no artificial gap.
+  tailRun: { flexGrow: 1 },
   overlayRunInput: {
     position: "absolute",
     top: 0,

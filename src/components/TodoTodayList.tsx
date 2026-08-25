@@ -7,6 +7,7 @@ import Reanimated from "react-native-reanimated";
 
 import { AppText as Text } from "@/src/components/AppText";
 import { useTodoSubtaskExpansion } from "@/src/components/useTodoSubtaskExpansion";
+import { useTodoCardPress } from "@/src/components/useTodoDoubleTap";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { useSmoothReorderGesture } from "@/src/components/useSmoothReorderGesture";
 import {
@@ -70,6 +71,18 @@ export function TodoTodayList({
   );
   const visible = state.settings.showTodosToday !== false;
   const [activeLabel, setActiveLabel] = useState<string>();
+  const [labelsExpanded, setLabelsExpanded] = useState(false);
+  const todoCardPress = useTodoCardPress<TodoItem>({
+    onOpen: (todo) =>
+      router.navigate({
+        pathname: "/todo-editor",
+        params: { id: todo.id },
+      } as never),
+    onComplete: (todo) => {
+      toggleTodo(todo.id, localDate);
+      onComplete?.(todo.id);
+    },
+  });
   const baseItems = (state.todos ?? [])
     .filter((todo) => todoMatchesViewFilter(todo, { todoIds, todoLabels }))
     .filter((todo) => todoAppearsOnDate(todo, localDate))
@@ -99,7 +112,9 @@ export function TodoTodayList({
     [baseItems],
   );
   useEffect(() => {
-    if (activeLabel && !allLabels.includes(activeLabel)) setActiveLabel(undefined);
+    if (activeLabel && !allLabels.includes(activeLabel))
+      setActiveLabel(undefined);
+    if (!allLabels.length) setLabelsExpanded(false);
   }, [activeLabel, allLabels]);
   const items = activeLabel
     ? baseItems.filter((todo) => labelsForTodo(todo).includes(activeLabel))
@@ -185,8 +200,14 @@ export function TodoTodayList({
             moveTodoBeside(todo, shownItems[targetIndex]?.item);
           }}
           onLongPress={() => {
-            if (!editing) onRequestEdit?.();
+            todoCardPress.onLongPress(todo, () => {
+              if (!editing) onRequestEdit?.();
+            });
           }}
+          onPressIn={() => todoCardPress.onPressIn(todo)}
+          onPress={(alreadyComplete) =>
+            todoCardPress.onPress(todo, alreadyComplete, !editing)
+          }
           onToggle={() => {
             const completing = !todoCompletedOnDate(todo, localDate);
             toggleTodo(todo.id, localDate);
@@ -205,22 +226,46 @@ export function TodoTodayList({
   return (
     <View style={styles.root}>
       <View style={styles.heading}>
-        <Pressable
-          onPress={() =>
-            router.navigate({
-              pathname: "/metric-detail",
-              params: { metric: "todo_completion", date: localDate },
-            } as never)
-          }
-          delayLongPress={325}
-          onLongPress={() => {
-            if (!editing) onRequestEdit?.();
-          }}
-          style={styles.titleButton}
-        >
-          <Text style={[styles.title, { color: colors.ink }]}>To-Dos</Text>
-          <Ionicons name="chevron-forward" size={13} color={colors.faint} />
-        </Pressable>
+        <View style={styles.titleCluster}>
+          <Pressable
+            accessibilityHint="Opens the To-Do tracker"
+            onPress={() =>
+              router.navigate({
+                pathname: "/metric-detail",
+                params: { metric: "todo_completion", date: localDate },
+              } as never)
+            }
+            delayLongPress={325}
+            onLongPress={() => {
+              if (!editing) onRequestEdit?.();
+            }}
+            style={styles.titleButton}
+          >
+            <Text style={[styles.title, { color: colors.ink }]}>To-Dos</Text>
+          </Pressable>
+          {visible && allLabels.length ? (
+            <Pressable
+              accessibilityLabel={
+                labelsExpanded ? "Collapse To-Do labels" : "Expand To-Do labels"
+              }
+              accessibilityState={{ expanded: labelsExpanded }}
+              hitSlop={8}
+              onPress={() => {
+                setLabelsExpanded((expanded) => {
+                  if (expanded) setActiveLabel(undefined);
+                  return !expanded;
+                });
+              }}
+              style={styles.labelToggle}
+            >
+              <Ionicons
+                name={labelsExpanded ? "chevron-down" : "chevron-forward"}
+                size={13}
+                color={colors.faint}
+              />
+            </Pressable>
+          ) : null}
+        </View>
         {editing ? (
           <Pressable
             onPress={() => updateSettings({ showTodosToday: !visible })}
@@ -246,7 +291,7 @@ export function TodoTodayList({
           Hidden from Today. Tap the eye to show it.
         </Text>
       ) : null}
-      {visible && allLabels.length ? (
+      {visible && labelsExpanded && allLabels.length ? (
         <View style={styles.labelFilters}>
           <Pressable
             onPress={() => setActiveLabel(undefined)}
@@ -314,6 +359,8 @@ function TodoRow({
   onPin,
   onDelete,
   onMove,
+  onPressIn,
+  onPress,
   onToggle,
   onLongPress,
   onAddChild,
@@ -332,6 +379,8 @@ function TodoRow({
   onPin: () => void;
   onDelete: () => void;
   onMove: (targetIndex: number) => void;
+  onPressIn: () => void;
+  onPress: (alreadyComplete: boolean) => void;
   onToggle: () => void;
   onLongPress: () => void;
   onAddChild: () => void;
@@ -377,12 +426,9 @@ function TodoRow({
       ]}
     >
     <Pressable
-      onPress={() =>
-        router.navigate({
-          pathname: "/todo-editor",
-          params: { id: todo.id },
-        } as never)
-      }
+      accessibilityHint="Tap once to edit. Double-tap quickly to complete."
+      onPressIn={onPressIn}
+      onPress={() => onPress(complete)}
       onLongPress={onLongPress}
       style={[
         styles.row,
@@ -581,7 +627,14 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   title: { fontSize: 12, fontWeight: "900" },
-  titleButton: { flex: 1, flexDirection: "row", alignItems: "center", gap: 3 },
+  titleCluster: { flex: 1, flexDirection: "row", alignItems: "center", gap: 1 },
+  titleButton: { flexDirection: "row", alignItems: "center" },
+  labelToggle: {
+    minWidth: 22,
+    minHeight: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   add: { flexDirection: "row", alignItems: "center", gap: 4 },
   addText: { fontSize: 8, fontWeight: "900" },
   labelFilters: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginBottom: 2 },

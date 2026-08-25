@@ -946,6 +946,11 @@ assert.match(
 assert.match(gymScreen, /updateSettings\(\{ gymTimerMode: "guided" \}\)/);
 assert.match(gymScreen, /updateSettings\(\{ gymTimerMode: "whole_workout" \}\)/);
 assert.match(gymScreen, /onPress=\{completeAllSets\}[\s\S]{0,500}>Complete all</);
+assert.match(
+  gymScreen,
+  /plannedSetCount > 0 &&[\s\S]{0,180}!allWorkoutSetsComplete &&[\s\S]{0,180}workoutTimer\.mode === "whole_workout"/,
+  "Complete all must stay hidden until the workout contains at least one planned set",
+);
 assert.match(gymScreen, /setExercises\(\(current\) => completeGymWorkout\(current\)\)/);
 const exercisePicker = gymScreen.slice(
   gymScreen.indexOf('visible={pickerOpen}'),

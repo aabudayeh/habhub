@@ -35,6 +35,24 @@ export function isStandaloneIosWebApp(
 }
 
 /**
+ * React Native Web gives a horizontal ScrollView `flexShrink: 1`. That is
+ * normally harmless, but installed iOS web apps expose a taller full-screen
+ * viewport and can select one more card per page than the remaining scene can
+ * display. The pager then shrinks and clips the last card above the tab bar,
+ * which looks like a safe-area-coloured strip attached to the navigator.
+ *
+ * Keep existing browser/native sizing unless the caller already requested
+ * natural Web height or this is specifically an installed iOS web app. The
+ * navigator still owns the real bottom safe area and home-indicator clearance.
+ */
+export function resolveWebPagerNaturalHeight(
+  requested: boolean,
+  environment?: WebDisplayEnvironment,
+): boolean {
+  return requested || Boolean(environment && isStandaloneIosWebApp(environment));
+}
+
+/**
  * Mobile Safari zooms the complete page when a focused editor renders below
  * 16 CSS pixels. Protect every iOS Web editor by default, while preserving the
  * existing explicit opt-in used by compact cross-platform editors (Chat) and

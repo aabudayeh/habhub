@@ -153,8 +153,13 @@ assert.match(
 assert.match(pager, /scrollEnabled=\{scrollEnabled && pages\.length > 1\}/);
 assert.match(
   pager,
-  /Platform\.OS === "web" && webNaturalHeight[\s\S]{0,120}styles\.webNaturalHeightViewport/,
+  /const useNaturalWebHeight =[\s\S]{0,100}Platform\.OS === "web"[\s\S]{0,160}resolveWebPagerNaturalHeight\(webNaturalHeight, webDisplayEnvironment\)/,
   "natural-height pager sizing must remain Web-only so native paging behavior is unchanged",
+);
+assert.match(
+  pager,
+  /useNaturalWebHeight[\s\S]{0,100}styles\.webNaturalHeightViewport/,
+  "the resolved Web pager height policy must control the non-shrinking viewport style",
 );
 assert.match(
   pager,

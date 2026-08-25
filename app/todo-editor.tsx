@@ -17,6 +17,7 @@ import {
 } from "@/src/components/useWebBeforeUnload";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
+import { useTodoLabelDoubleTap } from "@/src/components/useTodoDoubleTap";
 import {
   Card,
   Chip,
@@ -25,7 +26,11 @@ import {
   Screen,
 } from "@/src/components/ui";
 import { dateKey, dateWithOffsetFrom } from "@/src/domain/date";
-import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
+import {
+  descendantTodoIds,
+  removeTodoLabelFromText,
+  todoLabels,
+} from "@/src/domain/todos";
 import { useApp } from "@/src/state/AppProvider";
 import {
   clearTodoEditorDraftTree,
@@ -156,7 +161,10 @@ export default function TodoEditor() {
   const parsedLabels = todoLabels({
     title,
     description,
-    labels: existing?.labels,
+  });
+  const onLabelTap = useTodoLabelDoubleTap((label) => {
+    setTitle((current) => removeTodoLabelFromText(current, label));
+    setDescription((current) => removeTodoLabelFromText(current, label));
   });
   const [priority, setPriority] = useState<TodoPriority>(
     existing?.priority ?? "normal",
@@ -646,11 +654,19 @@ export default function TodoEditor() {
           ]}
         />
         {parsedLabels.length ? (
-          <View style={styles.wrap}>
-            {parsedLabels.map((label) => (
-              <Chip key={label} label={`#${label}`} selected />
-            ))}
-          </View>
+          <>
+            <View style={styles.wrap}>
+              {parsedLabels.map((label) => (
+                <Chip
+                  key={label}
+                  label={`#${label}`}
+                  selected
+                  onPress={() => onLabelTap(label)}
+                />
+              ))}
+            </View>
+            <Text style={[styles.help, { color: colors.muted }]}>Double-tap a label to remove it, or delete its #label text.</Text>
+          </>
         ) : (
           <Text style={[styles.help, { color: colors.muted }]}>Add #labels in the title or note to group and filter tasks quickly.</Text>
         )}

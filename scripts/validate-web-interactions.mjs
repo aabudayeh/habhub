@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   isIosWebDevice,
   isStandaloneIosWebApp,
+  resolveWebPagerNaturalHeight,
   resolveWebEditorFontSize,
   resolveScreenBottomPadding,
   resolveTabBarBottomInset,
@@ -263,6 +264,34 @@ const standaloneIos = {
   maxTouchPoints: 5,
   displayModeStandalone: true,
 };
+assert.equal(
+  resolveWebPagerNaturalHeight(false, standaloneIos),
+  true,
+  "installed iOS Web pagers must grow to their complete card height instead of exposing a clipped strip above tabs",
+);
+assert.equal(
+  resolveWebPagerNaturalHeight(false, {
+    ...standaloneIos,
+    displayModeStandalone: false,
+    navigatorStandalone: false,
+  }),
+  false,
+  "regular iOS Safari must retain its established pager sizing",
+);
+assert.equal(
+  resolveWebPagerNaturalHeight(false, {
+    ...standaloneIos,
+    userAgent: "Mozilla/5.0 (Linux; Android 15)",
+    platform: "Linux armv8l",
+  }),
+  false,
+  "Android installed web apps must retain their established pager sizing",
+);
+assert.equal(
+  resolveWebPagerNaturalHeight(true),
+  true,
+  "an explicit natural-height pager request remains platform-independent",
+);
 assert.equal(
   resolveScreenBottomPadding(120, undefined, undefined, 34, true, standaloneIos),
   16,

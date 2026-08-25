@@ -23,6 +23,10 @@ import {
 import { useLocalization } from "@/src/i18n";
 import { clampPageIndex, pageIndexFromOffset } from "@/src/domain/pagedLayout";
 import { useAppColors } from "@/src/theme";
+import {
+  resolveWebPagerNaturalHeight,
+  WebDisplayEnvironment,
+} from "@/src/domain/webSafeArea";
 
 export function HorizontalPager({
   pages,
@@ -63,6 +67,27 @@ export function HorizontalPager({
   const webDragStartPageRef = useRef(0);
   const [pageWidth, setPageWidth] = useState(0);
   const [activePage, setActivePage] = useState(0);
+  const webDisplayEnvironment = useMemo<WebDisplayEnvironment | undefined>(() => {
+    if (
+      Platform.OS !== "web" ||
+      typeof window === "undefined" ||
+      typeof navigator === "undefined"
+    ) {
+      return undefined;
+    }
+    const browserNavigator = navigator as Navigator & { standalone?: boolean };
+    return {
+      userAgent: browserNavigator.userAgent,
+      platform: browserNavigator.platform,
+      maxTouchPoints: browserNavigator.maxTouchPoints,
+      displayModeStandalone:
+        window.matchMedia?.("(display-mode: standalone)").matches === true,
+      navigatorStandalone: browserNavigator.standalone === true,
+    };
+  }, []);
+  const useNaturalWebHeight =
+    Platform.OS === "web" &&
+    resolveWebPagerNaturalHeight(webNaturalHeight, webDisplayEnvironment);
   // React Native Web's ScrollView already provides compositor-driven touch
   // scrolling. A JS PanResponder competing for the same Android/iOS pointer
   // stream makes installed PWAs feel sticky and causes snap-back frames. Keep
@@ -245,7 +270,7 @@ export function HorizontalPager({
         onScrollEndDrag={updateActivePage}
         style={[
           styles.viewport,
-          Platform.OS === "web" && webNaturalHeight
+          useNaturalWebHeight
             ? styles.webNaturalHeightViewport
             : undefined,
         ]}

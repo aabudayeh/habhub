@@ -54,6 +54,48 @@ export function extractTodoLabels(...values: (string | undefined)[]) {
   return labels;
 }
 
+/**
+ * Removes one inline #label without changing surrounding words or newlines.
+ * Stored labels are derived from editable copy, so removing the token is the
+ * single source of truth for both the editor and saved filters.
+ */
+export function removeTodoLabelFromText(value: string, valueToRemove: string) {
+  const target = normalizeTodoLabel(valueToRemove);
+  if (!target || !value) return value;
+
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(TODO_LABEL_PATTERN)) {
+    const fullMatch = match[0] ?? "";
+    const leading = match[1] ?? "";
+    const label = match[2] ?? "";
+    const matchStart = match.index ?? 0;
+    const labelStart = matchStart + leading.length;
+    const matchEnd = matchStart + fullMatch.length;
+    if (normalizeTodoLabel(label) !== target) continue;
+
+    result += value.slice(cursor, labelStart);
+    cursor = matchEnd;
+
+    // If the removed token sat between two horizontal spaces, consume the
+    // trailing one so the remaining sentence keeps exactly one space. Before
+    // punctuation, a line break, or the end, remove the preceding space so
+    // `Task #work.` becomes `Task.` rather than `Task .`.
+    const before = value[labelStart - 1];
+    const after = value[cursor];
+    if (before === " " || before === "\t") {
+      if (after === " " || after === "\t") cursor += 1;
+      else result = result.slice(0, -1);
+    }
+    // A label at the beginning of a line must not leave an indentation gap.
+    if (labelStart === 0 || before === "\n" || before === "\r") {
+      while (value[cursor] === " " || value[cursor] === "\t") cursor += 1;
+    }
+  }
+  if (!cursor) return value;
+  return result + value.slice(cursor);
+}
+
 export function todoLabels(
   todo: Pick<TodoItem | GroupTodoItem, "title" | "description" | "labels">,
 ) {

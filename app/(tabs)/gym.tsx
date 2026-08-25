@@ -3417,7 +3417,8 @@ function GymScreen() {
                     <Text style={[styles.summary, { color: accent }]}>
                       {completedSets} sets · {Math.round(volume).toLocaleString(locale)} kg
                     </Text>
-                    {!allWorkoutSetsComplete &&
+                    {plannedSetCount > 0 &&
+                    !allWorkoutSetsComplete &&
                     (!workoutTimer || workoutTimer.mode === "whole_workout") ? (
                       <Pressable
                         accessibilityRole="button"

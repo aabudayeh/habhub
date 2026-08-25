@@ -5,6 +5,7 @@ import { LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
 
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { AppText as Text } from "@/src/components/AppText";
+import { useTodoCardPress } from "@/src/components/useTodoDoubleTap";
 import { useTodoSubtaskExpansion } from "@/src/components/useTodoSubtaskExpansion";
 import { useTodoItemVisibility } from "@/src/components/useTodoItemVisibility";
 import { dateKey } from "@/src/domain/date";
@@ -53,6 +54,14 @@ export function GroupTodoLeaderboardSection({
   );
   const [activeLabel, setActiveLabel] = useState<string>();
   const today = dateKey();
+  const todoCardPress = useTodoCardPress<GroupTodoItem>({
+    onOpen: (todo) =>
+      router.navigate({
+        pathname: "/group-todo-editor",
+        params: { id: todo.id },
+      } as never),
+    onComplete: (todo) => void groupTodos.toggle(todo),
+  });
   const reminders = useMemo(
     () =>
       (state.calendarReminders ?? []).filter(
@@ -187,13 +196,12 @@ export function GroupTodoLeaderboardSection({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Edit group to-do ${todo.title}`}
-          onPress={() =>
-            router.navigate({
-              pathname: "/group-todo-editor",
-              params: { id: todo.id },
-            } as never)
-          }
-          onLongPress={onRequestEdit}
+          accessibilityHint="Tap once to edit. Double-tap quickly to complete."
+          onPressIn={() => todoCardPress.onPressIn(todo)}
+          onPress={() => todoCardPress.onPress(todo, done, !editing)}
+          onLongPress={() => {
+            todoCardPress.onLongPress(todo, onRequestEdit);
+          }}
           delayLongPress={325}
           style={[
             styles.row,

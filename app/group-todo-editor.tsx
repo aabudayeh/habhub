@@ -11,10 +11,15 @@ import {
   useWebBeforeUnload,
 } from "@/src/components/useWebBeforeUnload";
 import { TodoSubtaskEditorSection } from "@/src/components/TodoSubtaskEditorSection";
+import { useTodoLabelDoubleTap } from "@/src/components/useTodoDoubleTap";
 import { Card, Chip, IconButton, PageHeader, Screen } from "@/src/components/ui";
 import { useGroupTodos } from "@/src/cloud/useGroupTodos";
 import { dateKey } from "@/src/domain/date";
-import { descendantTodoIds, todoLabels } from "@/src/domain/todos";
+import {
+  descendantTodoIds,
+  removeTodoLabelFromText,
+  todoLabels,
+} from "@/src/domain/todos";
 import { LocalizedAlert as Alert } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import {
@@ -176,7 +181,6 @@ export default function GroupTodoEditor() {
   const labels = todoLabels({
     title: draft.title,
     description: draft.description,
-    labels: existing?.labels,
   });
   const signature = useMemo(() => JSON.stringify(draft), [draft]);
   const initialSignature = useRef(
@@ -215,6 +219,13 @@ export default function GroupTodoEditor() {
 
   const patchDraft = (changes: Partial<Draft>) =>
     setDraft((current) => ({ ...current, ...changes }));
+  const onLabelTap = useTodoLabelDoubleTap((label) =>
+    setDraft((current) => ({
+      ...current,
+      title: removeTodoLabelFromText(current.title, label),
+      description: removeTodoLabelFromText(current.description, label),
+    })),
+  );
   const recurrenceFor = (value: Draft): GoalSchedule | undefined => {
     const anchorDate = value.hasDeadline ? value.dueDate : dateKey();
     const anchorDay = new Date(`${anchorDate}T12:00:00`).getDay();
@@ -561,9 +572,20 @@ export default function GroupTodoEditor() {
           style={[styles.noteInput, { color: colors.ink, borderColor: colors.border }]}
         />
         {labels.length ? (
-          <View style={styles.wrap}>
-            {labels.map((label) => <Chip key={label} label={`#${label}`} selected size="small" />)}
-          </View>
+          <>
+            <View style={styles.wrap}>
+              {labels.map((label) => (
+                <Chip
+                  key={label}
+                  label={`#${label}`}
+                  selected
+                  size="small"
+                  onPress={() => onLabelTap(label)}
+                />
+              ))}
+            </View>
+            <Text style={[styles.help, { color: colors.muted }]}>Double-tap a label to remove it, or delete its #label text.</Text>
+          </>
         ) : (
           <Text style={[styles.help, { color: colors.muted }]}>#labels are parsed automatically for quick filters.</Text>
         )}

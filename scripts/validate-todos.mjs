@@ -10,6 +10,7 @@ import {
   formatTodoLabelText,
   groupTodoReminderFeatureEnabled,
   normalizeTodoItems,
+  removeTodoLabelFromText,
   todoMatchesViewFilter,
 } from "../src/domain/todos.ts";
 import {
@@ -34,6 +35,26 @@ assert.equal(
   formatTodoLabelText("#work plan for #body-health"),
   "Work plan for Body-health",
   "Today copy should hide label hashes and capitalize each displayed label",
+);
+assert.equal(
+  removeTodoLabelFromText("Plan #Work sprint with #team", "work"),
+  "Plan sprint with #team",
+  "removing a label must remove its token without leaving doubled spacing",
+);
+assert.equal(
+  removeTodoLabelFromText("#work Start here\nKeep #body", "WORK"),
+  "Start here\nKeep #body",
+  "label removal must be normalized and preserve line boundaries",
+);
+assert.equal(
+  removeTodoLabelFromText("Task #work.", "work"),
+  "Task.",
+  "removing an end label must not leave a space before punctuation",
+);
+assert.equal(
+  removeTodoLabelFromText("Task #work", "work"),
+  "Task",
+  "removing a trailing label must not leave trailing whitespace",
 );
 
 const labeledTodo = {
@@ -345,6 +366,22 @@ assert.match(today, /onPress: \(\) => deleteTodo\(todo\.id\)/);
 assert.match(today, /children\.length && childrenExpanded/);
 assert.match(today, /formatTodoLabelText\(todo\.title\)/);
 assert.match(today, /formatTodoLabel\(label\)/);
+assert.match(today, /const \[labelsExpanded, setLabelsExpanded\] = useState\(false\)/);
+assert.match(today, /accessibilityHint="Opens the To-Do tracker"/);
+assert.match(
+  today,
+  /accessibilityHint="Opens the To-Do tracker"[\s\S]{0,300}pathname: "\/metric-detail"/,
+  "the To-Dos title itself must retain tracker navigation",
+);
+assert.match(today, /labelsExpanded \? "Collapse To-Do labels" : "Expand To-Do labels"/);
+assert.match(
+  today,
+  /setLabelsExpanded\(\(expanded\)[\s\S]{0,180}return !expanded/,
+  "the adjacent arrow must toggle the collapsed label tray instead of navigating",
+);
+assert.match(today, /visible && labelsExpanded && allLabels\.length/);
+assert.match(today, /useTodoCardPress<TodoItem>/);
+assert.match(today, /todoCardPress\.onPress\(todo, alreadyComplete, !editing\)/);
 assert.match(
   today,
   /todoMatchesViewFilter\(todo, \{ todoIds, todoLabels \}\)/,
@@ -383,6 +420,8 @@ assert.match(leaderboardTodos, /useTodoSubtaskExpansion/);
 assert.match(leaderboardTodos, /useTodoItemVisibility/);
 assert.match(leaderboardTodos, /accessibilityLabel=\{itemVisible \? "Hide group to-do" : "Show group to-do"\}/);
 assert.match(leaderboardTodos, /nested\.length && nestedExpanded/);
+assert.match(leaderboardTodos, /useTodoCardPress<GroupTodoItem>/);
+assert.match(leaderboardTodos, /todoCardPress\.onPress\(todo, done, !editing\)/);
 assert.match(
   leaderboardTodos,
   /\{editing && canDelete\(todo\) \? \([\s\S]{0,500}accessibilityLabel="Delete group to-do"/,
@@ -423,6 +462,28 @@ assert.match(personalEditor, /<TodoSubtaskEditorSection/);
 assert.match(personalEditor, /router\.push/);
 assert.match(personalEditor, /draftTreeId: editorTreeId/);
 assert.match(personalEditor, /useWebBackNavigationGuard/);
+assert.match(personalEditor, /useTodoLabelDoubleTap/);
+assert.match(personalEditor, /removeTodoLabelFromText/);
+assert.doesNotMatch(
+  personalEditor,
+  /const parsedLabels = todoLabels\(\{[\s\S]{0,120}existing\?\.labels/,
+  "removing the #label text must remove the saved label instead of restoring stale metadata",
+);
+assert.match(groupEditor, /useTodoLabelDoubleTap/);
+assert.match(groupEditor, /removeTodoLabelFromText/);
+assert.doesNotMatch(
+  groupEditor,
+  /const labels = todoLabels\(\{[\s\S]{0,120}existing\?\.labels/,
+  "group labels must also disappear when their inline #label text is removed",
+);
+const todoDoubleTap = read("src/components/useTodoDoubleTap.ts");
+assert.match(todoDoubleTap, /previous\?\.id === item\.id/);
+assert.match(todoDoubleTap, /if \(!alreadyComplete\) callbacks\.current\.onComplete\(item\)/);
+assert.match(todoDoubleTap, /callbacks\.current\.onOpen\(next\.item\)/);
+assert.match(todoDoubleTap, /TODO_DOUBLE_TAP_WINDOW_MS = 220/);
+assert.match(todoDoubleTap, /activePress\.current\.longPressTriggered/);
+assert.match(todoDoubleTap, /onPressIn/);
+assert.match(todoDoubleTap, /onLongPress/);
 const editorSection = read("src/components/TodoSubtaskEditorSection.tsx");
 assert.match(editorSection, /useState\(true\)/);
 assert.match(editorSection, /flattenTodoHierarchy\(items\)/);
