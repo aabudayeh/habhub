@@ -6,10 +6,20 @@ import {
   consolidateWorkoutTrackers,
 } from "../src/domain/workoutTrackers.ts";
 import { completeGymWorkout } from "../src/domain/gym.ts";
+import {
+  applyBackgroundGymSession,
+  finishStoredWorkoutDraft,
+  nativeWorkoutActionReceiptId,
+  parseStoredWorkoutDraft,
+  reconcileBackgroundWorkoutCompletion,
+  replayStoredWorkoutActions,
+  validBackgroundWorkoutCompletion,
+} from "../src/domain/backgroundWorkoutFinish.ts";
 import { migrateRetiredWorkoutCaloriesEntries } from "../src/domain/workoutCaloriesMigration.ts";
 import {
   ANY_RECORDED_WORKOUT_QUALIFICATION,
   DEFAULT_WORKOUT_QUALIFICATION,
+  isDefaultWorkoutQualification,
   workoutQualifies,
 } from "../src/domain/workoutQualification.ts";
 
@@ -42,6 +52,241 @@ assert.ok(
   "Complete all must finish every set without mutating the workout draft",
 );
 
+const backgroundTimerBase = Date.now() - 60_000;
+const backgroundWorkoutDraft = {
+  savedAt: Date.now(),
+  localDate: new Date().toISOString().slice(0, 10),
+  sessionId: "background-session",
+  sessionName: "Lock-screen workout",
+  duration: "",
+  calories: "",
+  calorieCalculationMode: "session_met",
+  intensity: "moderate",
+  sessionNotes: "",
+  visibility: "group",
+  selectedPlanId: null,
+  setStartDelaySeconds: 0,
+  exercises: [
+    {
+      id: "background-exercise",
+      name: "Bench press",
+      sets: [
+        { id: "background-set-1", reps: 8, weightKg: 70, completed: false },
+        { id: "background-set-2", reps: 8, weightKg: 70, completed: false },
+      ],
+    },
+  ],
+  timer: {
+    mode: "guided",
+    phase: "work",
+    startedAt: backgroundTimerBase,
+    phaseStartedAt: backgroundTimerBase,
+    phaseElapsedSeconds: 0,
+    completedElapsedSeconds: 0,
+    pausedSeconds: 0,
+    exerciseId: "background-exercise",
+    setId: "background-set-1",
+  },
+};
+assert.ok(
+  parseStoredWorkoutDraft(JSON.stringify(backgroundWorkoutDraft)),
+  "the headless Finish path must accept the persisted active-workout draft",
+);
+const nativeBackgroundActions = [
+  {
+    action: "workout-next",
+    occurredAt: backgroundTimerBase + 10_000,
+    ownerId: "user-a",
+    generation: "generation-a",
+  },
+  {
+    action: "workout-pause",
+    occurredAt: backgroundTimerBase + 15_000,
+    ownerId: "user-a",
+    generation: "generation-a",
+  },
+  {
+    action: "workout-next",
+    occurredAt: backgroundTimerBase + 20_000,
+    ownerId: "user-a",
+    generation: "generation-a",
+  },
+  {
+    action: "workout-next",
+    occurredAt: backgroundTimerBase + 24_000,
+    ownerId: "user-a",
+    generation: "generation-a",
+  },
+  {
+    action: "workout-finish",
+    occurredAt: backgroundTimerBase + 34_000,
+    ownerId: "user-a",
+    generation: "generation-a",
+  },
+];
+const replayedBackgroundDraft = replayStoredWorkoutActions(
+  backgroundWorkoutDraft,
+  nativeBackgroundActions,
+);
+assert.equal(replayedBackgroundDraft.timer.phase, "work");
+assert.equal(replayedBackgroundDraft.timer.setId, "background-set-2");
+assert.equal(replayedBackgroundDraft.timer.pausedSeconds, 5);
+assert.equal(replayedBackgroundDraft.exercises[0].sets[0].completed, true);
+const firstNativeActionId = nativeWorkoutActionReceiptId(
+  nativeBackgroundActions[0],
+);
+const draftAfterDurableFirstAction = replayStoredWorkoutActions(
+  backgroundWorkoutDraft,
+  nativeBackgroundActions.slice(0, 1),
+);
+const crashRecoveredDraft = replayStoredWorkoutActions(
+  {
+    ...draftAfterDurableFirstAction,
+    processedNativeWorkoutActionIds: [firstNativeActionId],
+  },
+  nativeBackgroundActions,
+);
+assert.deepEqual(
+  crashRecoveredDraft,
+  {
+    ...replayedBackgroundDraft,
+    processedNativeWorkoutActionIds: [firstNativeActionId],
+  },
+  "a Next already committed to the durable draft must be skipped while later receipts still replay exactly once",
+);
+const backgroundState = {
+  currentUserId: "user-a",
+  entries: [],
+  gymSessions: [],
+  metrics: [
+    { id: "workout", defaultVisibility: "group" },
+    { id: "workout_duration", defaultVisibility: "group" },
+    { id: "exercise", defaultVisibility: "group" },
+  ],
+  settings: {
+    energyProfile: {
+      age: 30,
+      sex: "male",
+      heightCm: 180,
+      weightKg: 80,
+      targetWeightKg: 75,
+      activityLevel: "moderate",
+      desiredWeeklyLossKg: 0.25,
+    },
+    pendingDeletedEntryIds: [],
+    deletedEntryIds: [],
+  },
+};
+const backgroundSession = finishStoredWorkoutDraft(
+  replayedBackgroundDraft,
+  backgroundState,
+  nativeBackgroundActions.at(-1).occurredAt,
+);
+assert.equal(backgroundSession.exercises[0].sets[1].completed, true);
+assert.equal(backgroundSession.pausedSeconds, 5);
+assert.equal(backgroundSession.completedAt, new Date(backgroundTimerBase + 34_000).toISOString());
+const backgroundApplied = applyBackgroundGymSession(
+  backgroundState,
+  backgroundSession,
+);
+assert.equal(backgroundApplied.gymSessions[0].id, "background-session");
+assert.ok(
+  backgroundApplied.entries.some(
+    (entry) => entry.id === "gym-sync:background-session:workout_duration",
+  ),
+  "headless Finish must materialize the same Workout duration row as foreground save",
+);
+assert.equal(
+  applyBackgroundGymSession(backgroundApplied, backgroundSession),
+  backgroundApplied,
+  "replayed/retried Finish receipts must be idempotent",
+);
+const completionReceipt = {
+  ownerId: "user-a",
+  generation: "generation-a",
+  occurredAt: backgroundTimerBase + 34_000,
+  baseSession: null,
+  session: backgroundSession,
+};
+assert.equal(
+  validBackgroundWorkoutCompletion(
+    {
+      ...completionReceipt,
+      baseSession: { ...backgroundSession, id: "another-session" },
+    },
+    "user-a",
+    completionReceipt.occurredAt,
+  ),
+  false,
+  "a recovery receipt must not use an unrelated session as its edit/delete baseline",
+);
+const preFinishState = {
+  ...backgroundState,
+  lastSavedAt: new Date(backgroundTimerBase - 1_000).toISOString(),
+};
+assert.equal(
+  reconcileBackgroundWorkoutCompletion(preFinishState, completionReceipt)
+    .resolution,
+  "applied",
+  "a receipt may recover only a snapshot that predates Finish",
+);
+assert.equal(
+  reconcileBackgroundWorkoutCompletion(
+    { ...backgroundApplied, lastSavedAt: new Date().toISOString() },
+    completionReceipt,
+  ).resolution,
+  "already_applied",
+  "an exact durable session must consume its receipt idempotently",
+);
+const userEditedSession = { ...backgroundSession, name: "User-edited name" };
+const editedAfterFinish = {
+  ...backgroundApplied,
+  gymSessions: [userEditedSession],
+  lastSavedAt: new Date(completionReceipt.occurredAt + 5_000).toISOString(),
+};
+const editedResolution = reconcileBackgroundWorkoutCompletion(
+  editedAfterFinish,
+  completionReceipt,
+);
+assert.equal(editedResolution.resolution, "superseded");
+assert.equal(
+  editedResolution.state.gymSessions[0].name,
+  "User-edited name",
+  "a stale completion receipt must never overwrite a later workout edit",
+);
+const deletedAfterFinish = {
+  ...backgroundApplied,
+  gymSessions: [],
+  entries: [],
+  settings: {
+    ...backgroundApplied.settings,
+    pendingDeletedEntryIds: [
+      "gym-sync:background-session:workout_duration",
+    ],
+  },
+  lastSavedAt: new Date(completionReceipt.occurredAt + 10_000).toISOString(),
+};
+const deletedResolution = reconcileBackgroundWorkoutCompletion(
+  deletedAfterFinish,
+  completionReceipt,
+);
+assert.equal(deletedResolution.resolution, "superseded");
+assert.equal(
+  deletedResolution.state.gymSessions.length,
+  0,
+  "a stale completion receipt must never resurrect a deleted workout",
+);
+const unrelatedLaterSave = {
+  ...preFinishState,
+  lastSavedAt: new Date(completionReceipt.occurredAt + 20_000).toISOString(),
+};
+assert.equal(
+  reconcileBackgroundWorkoutCompletion(unrelatedLaterSave, completionReceipt)
+    .resolution,
+  "applied",
+  "an unrelated later save without same-session edit or deletion evidence must not drop a valid recovered workout",
+);
+
 assert.equal(
   workoutQualifies(
     { activityKey: "walking", durationMinutes: 30 },
@@ -55,6 +300,189 @@ assert.equal(
     DEFAULT_WORKOUT_QUALIFICATION,
   ),
   true,
+);
+assert.deepEqual(
+  DEFAULT_WORKOUT_QUALIFICATION.rules,
+  [
+    {
+      activity: "walking",
+      thresholdMode: "any",
+      minimumDurationMinutes: 30,
+      minimumDistanceKm: 2,
+      minimumActiveCalories: 100,
+    },
+    {
+      activity: "running",
+      thresholdMode: "any",
+      minimumDurationMinutes: 20,
+      minimumDistanceKm: 3,
+      minimumActiveCalories: 150,
+    },
+    {
+      activity: "strength",
+      thresholdMode: "any",
+      minimumDurationMinutes: 30,
+      minimumActiveCalories: 120,
+    },
+    {
+      activity: "other",
+      thresholdMode: "any",
+      minimumDurationMinutes: 20,
+      minimumDistanceKm: 3,
+      minimumActiveCalories: 100,
+    },
+  ],
+  "recommended rules must use exercise-specific OR thresholds",
+);
+for (const [sample, message] of [
+  [{ activityKey: "walking", distanceKm: 2 }, "walking distance"],
+  [{ activityKey: "walking", activeCalories: 100 }, "walking calories"],
+  [{ activityKey: "running", distanceKm: 3 }, "running distance"],
+  [{ activityKey: "running", activeCalories: 150 }, "running calories"],
+  [
+    { activityKey: "strength_training", activeCalories: 120 },
+    "strength calories",
+  ],
+  [{ activityKey: "cycling", distanceKm: 3 }, "other-activity distance"],
+  [{ activityKey: "cycling", activeCalories: 100 }, "other-activity calories"],
+]) {
+  assert.equal(
+    workoutQualifies(sample, DEFAULT_WORKOUT_QUALIFICATION),
+    true,
+    `${message} alone must satisfy its recommended OR rule`,
+  );
+}
+assert.equal(
+  workoutQualifies(
+    {
+      activityKey: "strength_training",
+      durationMinutes: 12,
+      distanceKm: 50,
+      activeCalories: 40,
+    },
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  false,
+  "distance must not make a short strength session qualify",
+);
+assert.equal(
+  workoutQualifies(
+    {
+      activityKey: "walking",
+      durationMinutes: 29,
+      distanceKm: 1.9,
+      activeCalories: 99,
+    },
+    DEFAULT_WORKOUT_QUALIFICATION,
+  ),
+  false,
+  "a session below every recommended threshold must remain incomplete",
+);
+const legacyRecommendedQualification = {
+  rules: [
+    {
+      activity: "walking",
+      thresholdMode: "all",
+      minimumDurationMinutes: 30,
+    },
+    {
+      activity: "running",
+      thresholdMode: "all",
+      minimumDurationMinutes: 20,
+    },
+    {
+      activity: "strength",
+      thresholdMode: "all",
+      minimumDurationMinutes: 30,
+    },
+    {
+      activity: "other",
+      thresholdMode: "all",
+      minimumDurationMinutes: 20,
+    },
+  ],
+};
+assert.equal(isDefaultWorkoutQualification(legacyRecommendedQualification), true);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", distanceKm: 2 },
+    legacyRecommendedQualification,
+  ),
+  true,
+  "persisted duration-only Recommended rules must inherit the improved OR defaults",
+);
+const jsonbShapedLegacyRecommendedQualification = {
+  rules: [
+    {
+      minimumDurationMinutes: 20,
+      thresholdMode: "all",
+      activity: "other",
+    },
+    {
+      thresholdMode: "all",
+      activity: "strength",
+      minimumDurationMinutes: 30,
+    },
+    {
+      minimumDurationMinutes: 20,
+      activity: "running",
+      thresholdMode: "all",
+    },
+    {
+      thresholdMode: "all",
+      minimumDurationMinutes: 30,
+      activity: "walking",
+    },
+  ],
+};
+assert.equal(
+  isDefaultWorkoutQualification(jsonbShapedLegacyRecommendedQualification),
+  true,
+  "JSONB key/rule ordering must not turn the legacy Recommended preset into Custom",
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", distanceKm: 2 },
+    jsonbShapedLegacyRecommendedQualification,
+  ),
+  true,
+  "a reordered JSONB legacy preset must inherit the improved OR defaults",
+);
+const jsonbShapedCurrentRecommendedQualification = {
+  rules: [...DEFAULT_WORKOUT_QUALIFICATION.rules]
+    .reverse()
+    .map((rule) => ({
+      minimumActiveCalories: rule.minimumActiveCalories,
+      minimumDistanceKm: rule.minimumDistanceKm,
+      minimumDurationMinutes: rule.minimumDurationMinutes,
+      thresholdMode: rule.thresholdMode,
+      activity: rule.activity,
+    })),
+};
+assert.equal(
+  isDefaultWorkoutQualification(jsonbShapedCurrentRecommendedQualification),
+  true,
+  "JSONB key/rule ordering must preserve the current Recommended preset",
+);
+const customizedLegacyLookalike = {
+  rules: legacyRecommendedQualification.rules.map((rule) =>
+    rule.activity === "walking"
+      ? { ...rule, minimumDistanceKm: 2 }
+      : rule,
+  ),
+};
+assert.equal(
+  isDefaultWorkoutQualification(customizedLegacyLookalike),
+  false,
+  "a changed threshold must remain Custom even when every other legacy field matches",
+);
+assert.equal(
+  workoutQualifies(
+    { activityKey: "walking", distanceKm: 2 },
+    customizedLegacyLookalike,
+  ),
+  false,
+  "a custom all-threshold rule must not be silently upgraded to Recommended OR semantics",
 );
 assert.equal(
   workoutQualifies(
@@ -385,6 +813,11 @@ assert.match(
 assert.match(migration, /workoutCaloriesRestored: true/);
 assert.match(migration, /RETIRED_METRIC_IDS/);
 assert.match(editor, /What counts as a workout/);
+assert.match(
+  editor,
+  /Recommended uses any one: walk 30 min, 2 km, or 100 kcal; run 20 min, 3 km, or 150 kcal; strength 30 min or 120 kcal; other activity 20 min, 3 km, or 100 kcal\./,
+  "the editor must summarize every Recommended OR threshold compactly",
+);
 assert.doesNotMatch(catalog, /templateId: "gym_completed"/);
 assert.doesNotMatch(catalog, /templateId: "gym_duration"/);
 assert.doesNotMatch(onboarding.match(/gym: \[([^\]]+)\]/)?.[1] ?? "", /gym_completed|gym_duration|gym_total_volume/);

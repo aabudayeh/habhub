@@ -21,13 +21,18 @@ import {
   healthSyncMinimumIntervalMs,
   healthSyncSchedule,
 } from '@/src/health/schedule';
-import { PersistedHealthStatus } from '@/src/health/types';
+import { HealthImportRecord, PersistedHealthStatus } from '@/src/health/types';
 import { supabase } from '@/src/lib/supabase';
 import {
   APP_STORAGE_KEY,
   appAccountStorageKey,
-} from '@/src/state/AppProvider';
-import { AppState, HealthSyncSettings, SyncMode } from '@/src/types';
+} from '@/src/storage/appStateKeys';
+import {
+  getAppStateStorageItem,
+  multiSetAppStateStorage,
+} from '@/src/storage/appStateStorage';
+import { runAppStateStorageMutation } from '@/src/storage/appStateMutation';
+import { AppState, HealthDataType, HealthSyncSettings, SyncMode } from '@/src/types';
 
 const TASK_NAME = 'paceboard-health-background-sync';
 const CLOUD_SYNC_CHECKPOINT_KEY_PREFIX = 'habhub-cloud-checkpoint-v1:';
@@ -42,12 +47,142 @@ function startDate(lastSyncedAt: string | null) {
   return date;
 }
 
+function parseAppState(raw: string | null) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AppState;
+  } catch {
+    return null;
+  }
+}
+
+function applyBackgroundHealthRecords(
+  state: AppState,
+  records: HealthImportRecord[],
+  dataTypes: HealthDataType[],
+  from: Date,
+  to: Date,
+  provider: NonNullable<(typeof nativeHealthAdapter)['provider']>,
+) {
+  const sourcePreferences = mergeHealthSourcePreferences(
+    state.settings.healthSync.sourcePreferences,
+    records,
+  );
+  const entries = mapHealthRecordsToEntries(
+    records,
+    state.currentUserId,
+    healthVisibilityByMetric(state.metrics),
+    state.metrics,
+    state.settings.energyProfile,
+    sourcePreferences,
+    healthFallbackContextForRead(state.entries, state.metrics, dataTypes),
+  );
+  const stepMetricIds = dataTypes.includes('steps')
+    ? metricIdsForHealthDataTypes(['steps'], state.metrics)
+    : [];
+  const stepMetricSet = new Set(stepMetricIds);
+  const replacementThrough = aggregateRangeThroughLocalDate(to);
+  const currentLocalDate = dateKey(to);
+  const existingById = new Map(
+    state.entries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
+  );
+  const existingCurrentStepEntriesByMetric = new Map<
+    string,
+    AppState['entries']
+  >();
+  for (const entry of state.entries) {
+    if (
+      entry.userId !== state.currentUserId ||
+      entry.localDate !== currentLocalDate ||
+      !stepMetricSet.has(entry.metricId)
+    )
+      continue;
+    const dayEntries =
+      existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [];
+    dayEntries.push(entry);
+    existingCurrentStepEntriesByMetric.set(entry.metricId, dayEntries);
+  }
+  const revisionSafeEntries = entries.map((entry) =>
+    stepMetricSet.has(entry.metricId)
+      ? preserveCurrentDayStepReplacementFloor(
+          existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [],
+          preserveCurrentDayStepFloor(
+            existingById.get(`${entry.userId}:${entry.id}`),
+            entry,
+            currentLocalDate,
+          ),
+          currentLocalDate,
+        )
+      : entry,
+  );
+  const currentDayFloors =
+    stepMetricIds.length &&
+    dateKey(from) <= currentLocalDate &&
+    replacementThrough >= currentLocalDate
+      ? currentDayStepFloorsForEmptyReplacement(
+          state.entries,
+          revisionSafeEntries,
+          {
+            userId: state.currentUserId,
+            currentLocalDate,
+            stepMetricIds: stepMetricSet,
+          },
+        )
+      : [];
+  const revisionSafeEntriesWithFloors = [
+    ...revisionSafeEntries,
+    ...currentDayFloors,
+  ];
+  const replacementBase = stepMetricIds.length
+    ? {
+        ...state,
+        entries: state.entries.filter(
+          (entry) =>
+            !isDailyStepReplacementCandidate(entry, {
+              userId: state.currentUserId,
+              provider,
+              stepMetricIds: stepMetricSet,
+              fromDate: dateKey(from),
+              throughDate: replacementThrough,
+              includeFallbacks: true,
+            }),
+        ),
+      }
+    : state;
+  const nextState = applyImportedFoodFastBreaks(
+    {
+      ...replacementBase,
+      settings:
+        sourcePreferences === state.settings.healthSync.sourcePreferences
+          ? state.settings
+          : {
+              ...state.settings,
+              healthSync: {
+                ...state.settings.healthSync,
+                sourcePreferences,
+              },
+            },
+      entries: mergeHealthEntries(
+        replacementBase,
+        revisionSafeEntriesWithFloors,
+        provider,
+        metricIdsForHealthDataTypes(dataTypes, state.metrics),
+        dateKey(from),
+      ),
+      lastSavedAt: new Date().toISOString(),
+    },
+    revisionSafeEntriesWithFloors,
+  );
+  return { entries, nextState, revisionSafeEntriesWithFloors };
+}
+
 TaskManager.defineTask(TASK_NAME, async () => {
   let previousStatus: PersistedHealthStatus = { lastSyncedAt: null };
   let statusUserId = "unknown";
   try {
-    const stateJson = await AsyncStorage.getItem(APP_STORAGE_KEY);
-    if (!stateJson || !nativeHealthAdapter.provider) return BackgroundTask.BackgroundTaskResult.Success;
+    const provider = nativeHealthAdapter.provider;
+    const stateJson = await getAppStateStorageItem(APP_STORAGE_KEY);
+    if (!stateJson || !provider) return BackgroundTask.BackgroundTaskResult.Success;
     const state = JSON.parse(stateJson) as AppState;
     statusUserId = state.currentUserId;
     const statusJson = await AsyncStorage.getItem(
@@ -87,128 +222,75 @@ TaskManager.defineTask(TASK_NAME, async () => {
       liveStepSources: state.settings.healthSync.liveStepSources,
       liveStepCombination: state.settings.healthSync.liveStepCombination,
     });
-    const sourcePreferences = mergeHealthSourcePreferences(
-      state.settings.healthSync.sourcePreferences,
-      records,
-    );
-    const entries = mapHealthRecordsToEntries(
-      records,
-      state.currentUserId,
-      healthVisibilityByMetric(state.metrics),
-      state.metrics,
-      state.settings.energyProfile,
-      sourcePreferences,
-      healthFallbackContextForRead(state.entries, state.metrics, dataTypes),
-    );
-    const stepMetricIds = dataTypes.includes('steps')
-      ? metricIdsForHealthDataTypes(['steps'], state.metrics)
-      : [];
-    const stepMetricSet = new Set(stepMetricIds);
-    const replacementThrough = aggregateRangeThroughLocalDate(to);
-    const currentLocalDate = dateKey(to);
-    const existingById = new Map(
-      state.entries.map((entry) => [`${entry.userId}:${entry.id}`, entry]),
-    );
-    const existingCurrentStepEntriesByMetric = new Map<
-      string,
-      AppState['entries']
-    >();
-    for (const entry of state.entries) {
+    // Health Connect may take seconds while another headless notification task
+    // or the foreground provider commits state. Re-read and transform the
+    // newest account snapshot inside the shared write gate; network publishing
+    // remains below and never holds this local durability lock.
+    const applied = await runAppStateStorageMutation(async () => {
+      const accountKey = appAccountStorageKey(state.currentUserId);
+      const legacySnapshot = await getAppStateStorageItem(APP_STORAGE_KEY);
+      const activeState = parseAppState(legacySnapshot);
+      // The native read above can outlive a foreground account switch. Never
+      // restore the original owner from an absent, malformed, or foreign
+      // global active-account pointer.
+      if (activeState?.currentUserId !== state.currentUserId) return null;
+      const latest = activeState;
+      const latestSchedule = healthSyncSchedule(latest.settings.syncMode);
       if (
-        entry.userId !== state.currentUserId ||
-        entry.localDate !== currentLocalDate ||
-        !stepMetricSet.has(entry.metricId)
+        !latest.settings.healthSync.enabled ||
+        !latest.settings.healthSync.backgroundAccess ||
+        !latestSchedule.requestsBackground
       )
-        continue;
-      const dayEntries =
-        existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [];
-      dayEntries.push(entry);
-      existingCurrentStepEntriesByMetric.set(entry.metricId, dayEntries);
-    }
-    const revisionSafeEntries = entries.map((entry) =>
-      stepMetricSet.has(entry.metricId)
-        ? preserveCurrentDayStepReplacementFloor(
-            existingCurrentStepEntriesByMetric.get(entry.metricId) ?? [],
-            preserveCurrentDayStepFloor(
-              existingById.get(`${entry.userId}:${entry.id}`),
-              entry,
-              currentLocalDate,
-            ),
-            currentLocalDate,
-          )
-        : entry,
-    );
-    const currentDayFloors =
-      stepMetricIds.length &&
-      dateKey(from) <= currentLocalDate &&
-      replacementThrough >= currentLocalDate
-        ? currentDayStepFloorsForEmptyReplacement(
-            state.entries,
-            revisionSafeEntries,
-            {
-              userId: state.currentUserId,
-              currentLocalDate,
-              stepMetricIds: stepMetricSet,
-            },
-          )
-        : [];
-    const revisionSafeEntriesWithFloors = [
-      ...revisionSafeEntries,
-      ...currentDayFloors,
-    ];
-    const replacementBase = stepMetricIds.length
-      ? {
-          ...state,
-          entries: state.entries.filter(
-            (entry) =>
-              !isDailyStepReplacementCandidate(entry, {
-                userId: state.currentUserId,
-                provider: nativeHealthAdapter.provider,
-                stepMetricIds: stepMetricSet,
-                fromDate: dateKey(from),
-                throughDate: replacementThrough,
-                includeFallbacks: true,
-              }),
-          ),
-        }
-      : state;
-    const nextState = applyImportedFoodFastBreaks({
-      ...replacementBase,
-      settings:
-        sourcePreferences === state.settings.healthSync.sourcePreferences
-          ? state.settings
-          : {
-              ...state.settings,
-              healthSync: { ...state.settings.healthSync, sourcePreferences },
-            },
-      entries: mergeHealthEntries(replacementBase, revisionSafeEntriesWithFloors, nativeHealthAdapter.provider, metricIdsForHealthDataTypes(dataTypes, state.metrics), dateKey(from)),
-      lastSavedAt: new Date().toISOString(),
-    }, revisionSafeEntriesWithFloors);
-    const nextStatus: PersistedHealthStatus = {
-      ...status,
-      connectionEnabled: true,
-      backgroundAccess: state.settings.healthSync.backgroundAccess,
-      lastSyncedAt: new Date().toISOString(),
-      lastStepSyncedAt: dataTypes.includes('steps')
-        ? new Date().toISOString()
-        : status.lastStepSyncedAt,
-      lastReason: 'background',
-      lastImportFromDate: dateKey(from),
-      importedCount: entries.length,
-      error: null,
-    };
-    // Commit rows first and the status/checkpoint last. Foreground resume uses
-    // that checkpoint as the proof that the stored replacement window is
-    // complete, so these writes must not race each other.
-    const serializedState = JSON.stringify(nextState);
-    await AsyncStorage.multiSet([
-      [APP_STORAGE_KEY, serializedState],
-      [appAccountStorageKey(nextState.currentUserId), serializedState],
-    ]);
-    await AsyncStorage.setItem(
-      `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
-      JSON.stringify(nextStatus),
-    );
+        return null;
+      const latestEnabledTypes = new Set(
+        enabledHealthDataTypes(latest.settings.healthSync.dataTypes),
+      );
+      const currentDataTypes = dataTypes.filter((type) =>
+        latestEnabledTypes.has(type),
+      );
+      if (!currentDataTypes.length) return null;
+      const currentRecords = records.filter((record) =>
+        currentDataTypes.includes(record.type),
+      );
+      const result = applyBackgroundHealthRecords(
+        latest,
+        currentRecords,
+        currentDataTypes,
+        from,
+        to,
+        provider,
+      );
+      const syncedAt = new Date().toISOString();
+      const nextStatus: PersistedHealthStatus = {
+        ...status,
+        connectionEnabled: true,
+        backgroundAccess: result.nextState.settings.healthSync.backgroundAccess,
+        lastSyncedAt: syncedAt,
+        lastStepSyncedAt: currentDataTypes.includes('steps')
+          ? syncedAt
+          : status.lastStepSyncedAt,
+        lastReason: 'background',
+        lastImportFromDate: dateKey(from),
+        importedCount: result.entries.length,
+        error: null,
+      };
+      const serializedState = JSON.stringify(result.nextState);
+      await multiSetAppStateStorage([
+        [APP_STORAGE_KEY, serializedState],
+        [accountKey, serializedState],
+      ]);
+      // The status carries the replacement-window checkpoint used by any
+      // foreground writer queued behind this transaction. Keep it inside the
+      // same JS mutation gate so that writer can rebase instead of restoring a
+      // stale set of native rows.
+      await AsyncStorage.setItem(
+        `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
+        JSON.stringify(nextStatus),
+      );
+      return { ...result, dataTypes: currentDataTypes };
+    });
+    if (!applied) return BackgroundTask.BackgroundTaskResult.Success;
+    const { nextState, revisionSafeEntriesWithFloors } = applied;
     // Local health import is the durable source of truth. If a signed-in cloud
     // session is available, publish only the two-day compact leaderboard
     // overlap as a best-effort follow-up. Network/auth failure must never roll

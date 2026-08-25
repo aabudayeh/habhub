@@ -1069,6 +1069,10 @@ export type UserSettings = {
   activityTimerAlertMinutes?: number[];
   /** Floating timer stays hidden while timers continue running. */
   showActivityTimerOverlay?: boolean;
+  /** Compact floating timer state; timers continue and remain reachable. */
+  activityTimerOverlayMinimized?: boolean;
+  /** Add a transient Timers tab only while an activity timer exists. */
+  showActiveTimersTab?: boolean;
   /** Optional assistant entry point; cloud AI is proxied through a server function. */
   showAiAssistant?: boolean;
   onboardingComplete: boolean;

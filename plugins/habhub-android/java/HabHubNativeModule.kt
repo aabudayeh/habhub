@@ -650,6 +650,38 @@ class HabHubNativeModule(
   }
 
   @ReactMethod
+  fun peekWorkoutTimerNotificationActions(
+    ownerId: String,
+    generation: String,
+    promise: Promise,
+  ) {
+    promise.resolve(
+      HabHubWorkoutNotificationStore.peekActions(
+        reactContext,
+        ownerId,
+        generation,
+      ),
+    )
+  }
+
+  @ReactMethod
+  fun acknowledgeWorkoutTimerNotificationActions(
+    ownerId: String,
+    generation: String,
+    occurredAt: Double,
+    promise: Promise,
+  ) {
+    promise.resolve(
+      HabHubWorkoutNotificationStore.acknowledgeActionsThrough(
+        reactContext,
+        ownerId,
+        generation,
+        occurredAt.toLong(),
+      ),
+    )
+  }
+
+  @ReactMethod
   fun consumeWorkoutTimerNotificationActions(
     ownerId: String,
     generation: String,

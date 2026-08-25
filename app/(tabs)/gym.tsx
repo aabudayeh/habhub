@@ -71,10 +71,10 @@ import {
 } from "@/src/domain/performance";
 import {
   acknowledgeWorkoutActionsAfterPersistence,
-  WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
   webWorkoutActionAckRetryDelay,
 } from "@/src/domain/workoutNotifications";
 import {
+  acknowledgeNativeWorkoutTimerAction,
   acknowledgeWebWorkoutTimerActions,
   configureWorkoutTimerNotification,
   consumeWorkoutTimerActions,
@@ -90,6 +90,11 @@ import {
   WorkoutNotificationStep,
 } from "@/src/notifications/workoutTimer";
 import { useFocusedCloudSyncPause } from "@/src/cloud/useFocusedCloudSyncPause";
+import {
+  setWorkoutTimerPresence,
+  workoutDraftKey,
+} from "@/src/storage/workoutTimerPresence";
+import { readBackgroundWorkoutCompletion } from "@/src/storage/backgroundWorkoutFinish";
 import { useApp } from "@/src/state/AppProvider";
 import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext";
 import { useTutorial } from "@/src/tutorial/TutorialContext";
@@ -174,9 +179,8 @@ type StoredWorkoutDraft = {
   exercises: GymExercise[];
   timer: WorkoutTimer;
   processedWebWorkoutActionIds?: string[];
+  processedNativeWorkoutActionIds?: string[];
 };
-
-const workoutDraftKey = (userId: string) => `habhub-active-gym-workout-v2:${userId}`;
 
 function queuedWorkoutTimerActionId(action: QueuedWorkoutTimerAction) {
   return action.webActionId
@@ -479,6 +483,7 @@ function GymScreen() {
     saveGymSession,
     deleteGymSession,
     updateSettings,
+    flushLocalPersistence,
   } = useApp();
   const tutorialSandbox = useTutorialSandboxActive();
   const tutorial = useTutorial();
@@ -563,10 +568,15 @@ function GymScreen() {
   const [pendingWebTimerActionAcks, setPendingWebTimerActionAcks] = useState<
     QueuedWorkoutTimerAction[]
   >([]);
+  const [pendingNativeTimerActionAcks, setPendingNativeTimerActionAcks] =
+    useState<QueuedWorkoutTimerAction[]>([]);
   const [webTimerActionAckRetry, setWebTimerActionAckRetry] = useState(0);
+  const [nativeTimerActionAckRetry, setNativeTimerActionAckRetry] = useState(0);
   const processedNativeTimerActionIds = useRef(new Set<string>());
   const processedNativeTimerActionOrder = useRef<string[]>([]);
+  const handledBackgroundWorkoutCompletion = useRef<string | null>(null);
   const webTimerActionAckAttempt = useRef(0);
+  const nativeTimerActionAckAttempt = useRef(0);
   const workoutDraftPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const timerActionRef = useRef<
     (action: string, occurredAt?: number) => void
@@ -582,9 +592,94 @@ function GymScreen() {
   } | null>(null);
   const initializedDate = useRef<string | null>(null);
   const [workoutDraftReady, setWorkoutDraftReady] = useState(false);
+  useEffect(() => {
+    if (!workoutDraftReady) return;
+    setWorkoutTimerPresence(
+      state.currentUserId,
+      !tutorialSandbox && Boolean(workoutTimer),
+    );
+  }, [
+    state.currentUserId,
+    tutorialSandbox,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
+  useEffect(() => {
+    if (
+      Platform.OS !== "android" ||
+      tutorialSandbox ||
+      !workoutDraftReady ||
+      !workoutTimer ||
+      appActivity !== "active"
+    )
+      return;
+    let cancelled = false;
+    void readBackgroundWorkoutCompletion(state.currentUserId).then(
+      (completion) => {
+        if (
+          cancelled ||
+          !completion ||
+          completion.session.id !== sessionId
+        )
+          return;
+        const identity = `${completion.generation}:${completion.occurredAt}`;
+        if (handledBackgroundWorkoutCompletion.current === identity) return;
+        handledBackgroundWorkoutCompletion.current = identity;
+        // The headless task already wrote this session. Reapplying through the
+        // foreground reducer is idempotent and updates a still-alive provider,
+        // while clearing the stale local timer without replaying Finish twice.
+        // Flush immediately: AppProvider retires the exact recovery receipt
+        // only after both active and account snapshots contain this session.
+        saveGymSession(completion.session);
+        void flushLocalPersistence().catch(() => undefined);
+        setExercises(completion.session.exercises);
+        setDuration(
+          completion.session.durationMinutes
+            ? String(
+                Math.round(completion.session.durationMinutes * 10) / 10,
+              )
+            : "",
+        );
+        setWorkoutTimer(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    appActivity,
+    flushLocalPersistence,
+    saveGymSession,
+    sessionId,
+    state.currentUserId,
+    tutorialSandbox,
+    workoutDraftReady,
+    workoutTimer,
+  ]);
   const enqueueNativeTimerActions = useCallback(
     (actions: QueuedWorkoutTimerAction[]) => {
       if (!actions.length) return;
+      // A crash after draft persistence but before ACK leaves the exact receipt
+      // queued natively. Its durable ID proves the transition was already
+      // applied, so ACK it without replaying the workout phase a second time.
+      const alreadyProcessed = actions.filter((item) =>
+        processedNativeTimerActionIds.current.has(
+          queuedWorkoutTimerActionId(item),
+        ),
+      );
+      if (alreadyProcessed.length)
+        setPendingNativeTimerActionAcks((current) => {
+          const known = new Set(current.map(queuedWorkoutTimerActionId));
+          return [
+            ...current,
+            ...alreadyProcessed.filter((item) => {
+              const id = queuedWorkoutTimerActionId(item);
+              if (known.has(id)) return false;
+              known.add(id);
+              return true;
+            }),
+          ].slice(-30);
+        });
       setQueuedNativeTimerActions((current) => {
         const known = new Set(
           current.map(queuedWorkoutTimerActionId),
@@ -606,6 +701,18 @@ function GymScreen() {
       if (!action.webActionId) return;
       setPendingWebTimerActionAcks((current) =>
         current.some((item) => item.webActionId === action.webActionId)
+          ? current
+          : [...current, action].slice(-30),
+      );
+    },
+    [],
+  );
+  const queueNativeTimerActionAck = useCallback(
+    (action: QueuedWorkoutTimerAction) => {
+      if (action.webActionId || Platform.OS !== "android") return;
+      const id = queuedWorkoutTimerActionId(action);
+      setPendingNativeTimerActionAcks((current) =>
+        current.some((item) => queuedWorkoutTimerActionId(item) === id)
           ? current
           : [...current, action].slice(-30),
       );
@@ -1313,6 +1420,20 @@ function GymScreen() {
           processedNativeTimerActionIds.current.add(id);
           processedNativeTimerActionOrder.current.push(id);
         }
+        const processedNativeActionIds = Array.isArray(
+          draft.processedNativeWorkoutActionIds,
+        )
+          ? draft.processedNativeWorkoutActionIds
+              .filter(
+                (id): id is string =>
+                  typeof id === "string" && id.length > 0 && id.length <= 640,
+              )
+              .slice(-60)
+          : [];
+        for (const id of processedNativeActionIds) {
+          processedNativeTimerActionIds.current.add(id);
+          processedNativeTimerActionOrder.current.push(id);
+        }
         initializedDate.current = draft.localDate;
         setLocalDate(draft.localDate);
         setSessionId(draft.sessionId);
@@ -1354,6 +1475,10 @@ function GymScreen() {
           .filter((id) => id.startsWith("web:"))
           .map((id) => id.slice(4))
           .slice(-60);
+      const processedNativeWorkoutActionIds =
+        processedNativeTimerActionOrder.current
+          .filter((id) => !id.startsWith("web:"))
+          .slice(-60);
       const draft: StoredWorkoutDraft = {
         savedAt: Date.now(),
         localDate,
@@ -1370,6 +1495,7 @@ function GymScreen() {
         exercises,
         timer: workoutTimer,
         processedWebWorkoutActionIds,
+        processedNativeWorkoutActionIds,
       };
       return AsyncStorage.setItem(key, JSON.stringify(draft));
     };
@@ -1387,6 +1513,7 @@ function GymScreen() {
     intensity,
     localDate,
     pendingWebTimerActionAcks,
+    pendingNativeTimerActionAcks,
     selectedPlanId,
     sessionId,
     sessionName,
@@ -2334,6 +2461,7 @@ function GymScreen() {
             ),
       );
       queueWebTimerActionAck(next);
+      queueNativeTimerActionAck(next);
       return;
     }
 
@@ -2356,11 +2484,62 @@ function GymScreen() {
           ),
     );
     queueWebTimerActionAck(next);
+    queueNativeTimerActionAck(next);
   }, [
+    queueNativeTimerActionAck,
     queueWebTimerActionAck,
     queuedNativeTimerActions,
     workoutDraftReady,
     workoutTimer,
+  ]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== "android" ||
+      tutorialSandbox ||
+      !pendingNativeTimerActionAcks.length
+    )
+      return;
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const next = pendingNativeTimerActionAcks[0];
+    const id = queuedWorkoutTimerActionId(next);
+    const durability =
+      next.action === WORKOUT_TIMER_FINISH
+        ? flushLocalPersistence()
+        : workoutDraftPersistenceRef.current;
+    void acknowledgeWorkoutActionsAfterPersistence(durability, async () => {
+      await acknowledgeNativeWorkoutTimerAction(next);
+    })
+      .then(() => {
+        if (!active) return;
+        nativeTimerActionAckAttempt.current = 0;
+        setPendingNativeTimerActionAcks((current) =>
+          current.filter(
+            (item) => queuedWorkoutTimerActionId(item) !== id,
+          ),
+        );
+      })
+      .catch(() => {
+        if (!active) return;
+        const delay = webWorkoutActionAckRetryDelay(
+          nativeTimerActionAckAttempt.current,
+        );
+        nativeTimerActionAckAttempt.current += 1;
+        retryTimer = setTimeout(
+          () => setNativeTimerActionAckRetry((value) => value + 1),
+          delay,
+        );
+      });
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    flushLocalPersistence,
+    nativeTimerActionAckRetry,
+    pendingNativeTimerActionAcks,
+    tutorialSandbox,
   ]);
 
   useEffect(() => {
@@ -2482,17 +2661,12 @@ function GymScreen() {
       }).catch(() => undefined);
     };
     document.addEventListener("visibilitychange", syncWebWorkoutNotification);
-    const refresh = window.setInterval(
-      syncWebWorkoutNotification,
-      WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
-    );
     syncWebWorkoutNotification();
     return () => {
       document.removeEventListener(
         "visibilitychange",
         syncWebWorkoutNotification,
       );
-      window.clearInterval(refresh);
     };
   }, [
     state.currentUserId,

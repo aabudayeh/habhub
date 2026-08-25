@@ -25,7 +25,6 @@ import {
   acknowledgeWorkoutActionsAfterPersistence,
   formatWorkoutNotificationElapsed,
   WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS,
-  WEB_WORKOUT_NOTIFICATION_REFRESH_MS,
   webWorkoutActionAckRetryDelay,
   workoutNotificationElapsedSeconds,
   workoutWebNotificationBody,
@@ -215,9 +214,14 @@ assert.equal(
   "a paused web notification must not keep accruing elapsed time",
 );
 assert.equal(
-  workoutWebNotificationBody("0:07 elapsed · Finish set", 67),
+  workoutWebNotificationBody("0:07 elapsed · Finish set", 67, "paused"),
   "1:07 elapsed · Finish set",
-  "web refreshes must replace, rather than duplicate, the elapsed prefix",
+  "a paused Web notification must retain its exact frozen elapsed value",
+);
+assert.equal(
+  workoutWebNotificationBody("0:07 elapsed · Finish set", 67, "work"),
+  "Timer running · Finish set",
+  "a running Web notification must not embed a value that freezes with its hidden page",
 );
 const workoutSignatureInput = {
   ownerId: "account-a",
@@ -252,24 +256,24 @@ assert.equal(
 assert.equal(
   workoutWebNotificationSignature({
     ...workoutSignatureInput,
-    elapsedSeconds: 60,
+    phaseTimestamp: 1_000,
   }),
   workoutWebNotificationSignature({
     ...workoutSignatureInput,
-    elapsedSeconds: 60 + WEB_WORKOUT_NOTIFICATION_REFRESH_MS / 1000 - 1,
+    phaseTimestamp: 1_000,
   }),
-  "same refresh-window notification work must coalesce",
+  "the same persistent phase notification must coalesce",
 );
 assert.notEqual(
   workoutWebNotificationSignature({
     ...workoutSignatureInput,
-    elapsedSeconds: 60,
+    phaseTimestamp: 1_000,
   }),
   workoutWebNotificationSignature({
     ...workoutSignatureInput,
-    elapsedSeconds: 60 + WEB_WORKOUT_NOTIFICATION_REFRESH_MS / 1000,
+    phaseTimestamp: 2_000,
   }),
-  "the next refresh window must update the live elapsed display",
+  "a genuinely new phase origin must replace the persistent notification",
 );
 assert.equal(webWorkoutActionAckRetryDelay(0), 500);
 assert.equal(webWorkoutActionAckRetryDelay(99), WEB_WORKOUT_ACTION_ACK_RETRY_MAX_MS);
@@ -500,13 +504,27 @@ const liveTimerSource = fs.readFileSync(
   "src/notifications/liveTimer.ts",
   "utf8",
 );
+const activeTimerOverlaySource = fs.readFileSync(
+  "src/components/ActiveTimerOverlay.tsx",
+  "utf8",
+);
 const workoutTimerSource = fs.readFileSync(
   "src/notifications/workoutTimer.ts",
+  "utf8",
+);
+const backgroundWorkoutFinishSource = fs.readFileSync(
+  "src/storage/backgroundWorkoutFinish.ts",
+  "utf8",
+);
+const appProviderSource = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
+const healthBackgroundSource = fs.readFileSync(
+  "src/health/background.native.ts",
   "utf8",
 );
 const layoutSource = fs.readFileSync("app/_layout.tsx", "utf8");
 const authSource = fs.readFileSync("src/auth/AuthProvider.tsx", "utf8");
 const settingsSource = fs.readFileSync("app/notifications.tsx", "utf8");
+const metricEditorSource = fs.readFileSync("app/metric-editor.tsx", "utf8");
 const seedSource = fs.readFileSync("src/data/seed.ts", "utf8");
 const appConfigSource = fs.readFileSync("app.json", "utf8");
 const androidPluginSource = fs.readFileSync(
@@ -618,6 +636,52 @@ assert.match(
 );
 assert.match(liveTimerSource, /clearLiveActivityTimerNotifications/);
 assert.match(source, /clearLiveActivityTimerNotifications\(\)/);
+assert.match(
+  liveTimerSource,
+  /window\.Notification\.permission === "granted"[\s\S]{0,140}webActivityTimerDocumentHidden\(\)/,
+  "Web activity timers must use an already-granted permission only while the PWA is hidden",
+);
+assert.match(
+  liveTimerSource,
+  /registration\.showNotification\(timer\.title, options\)/,
+  "hidden Web activity timers must be presented through the persistent service worker",
+);
+assert.match(liveTimerSource, /icon: "\/pwa-icon-192\.png"/);
+assert.match(
+  liveTimerSource,
+  /badge: "\/habhub-notification-badge-96\.png"/,
+);
+assert.match(liveTimerSource, /requireInteraction: true/);
+assert.match(
+  liveTimerSource,
+  /route: timer\.route,[\s\S]{0,100}activityTimer: true/,
+  "an activity-timer notification body tap must retain its timer route",
+);
+assert.match(
+  activeTimerOverlaySource,
+  /document\.addEventListener\("visibilitychange", reconcileVisibility\)/,
+  "the PWA timer overlay must reconcile notifications at the browser visibility boundary",
+);
+assert.match(
+  activeTimerOverlaySource,
+  /window\.addEventListener\("pagehide", presentHiddenTimerNotifications\)/,
+  "pagehide must force the hidden notification branch even before WebKit updates visibilityState",
+);
+assert.match(
+  activeTimerOverlaySource,
+  /window\.addEventListener\("pageshow", dismissVisibleTimerNotifications\)/,
+  "pageshow must force cleanup of the persistent hidden-page timer notification",
+);
+assert.doesNotMatch(
+  activeTimerOverlaySource,
+  /window\.addEventListener\("page(?:hide|show)", reconcileVisibility\)/,
+  "page lifecycle events must not depend on a potentially stale document.visibilityState",
+);
+assert.match(
+  activeTimerOverlaySource,
+  /resumeLiveActivityTimerNotifications\(ownerId\)/,
+  "the Web timer queue must resume only for the active owner",
+);
 assert.match(workoutTimerSource, /\+\+workoutNotificationRevision/);
 assert.match(workoutTimerSource, /clearWorkoutTimerNotificationFlow/);
 assert.match(workoutTimerSource, /createManagedLocalNotificationGate/);
@@ -633,7 +697,7 @@ assert.match(workoutTimerSource, /renotify: shouldAlert && replacesLiveNotificat
 assert.match(workoutTimerSource, /webWorkoutNotificationAlertSignature/);
 assert.match(workoutTimerSource, /route: "\/gym"/);
 assert.match(workoutTimerSource, /maxActions/);
-assert.match(workoutTimerSource, /timestamp: phaseOrigin/);
+assert.match(workoutTimerSource, /timestamp: phaseTimestamp/);
 assert.match(workoutTimerSource, /action: WORKOUT_TIMER_NEXT/);
 assert.match(
   workoutTimerSource,
@@ -687,8 +751,157 @@ assert.doesNotMatch(
   /identifier: WORKOUT_TIMER_PAUSE[\s\S]{0,140}opensAppToForeground: true/,
   "native Pause/resume must stay a background action",
 );
+const nativeHeadlessActionBranch = workoutTimerSource.slice(
+  workoutTimerSource.indexOf("if (nativeWorkoutActionsEnabled()) {"),
+  workoutTimerSource.indexOf(
+    "const ownerId = workoutNotificationOwnerId",
+    workoutTimerSource.indexOf("if (nativeWorkoutActionsEnabled()) {"),
+  ),
+);
+assert.match(
+  nativeHeadlessActionBranch,
+  /action === WORKOUT_TIMER_FINISH \|\|[\s\S]{0,80}action === WORKOUT_TIMER_NEXT[\s\S]{0,100}persistNativeFinishAction\(nested\)/,
+  "explicit Finish and a potentially relabeled terminal Next must inspect the durable receipt queue",
+);
+assert.doesNotMatch(
+  nativeHeadlessActionBranch,
+  /action === WORKOUT_TIMER_PAUSE[\s\S]{0,100}persistNativeFinishAction/,
+  "the proven native Pause path must remain unchanged",
+);
+assert.match(
+  workoutTimerSource,
+  /const finish = actions\.find\([\s\S]{0,120}WORKOUT_TIMER_FINISH[\s\S]{0,80}if \(!finish\) return false/,
+  "an ordinary Next must stop after a read-only peek when Kotlin did not normalize it to Finish",
+);
+assert.match(
+  workoutTimerSource,
+  /peekWorkoutTimerNotificationActions[\s\S]{0,1600}persistBackgroundWorkoutFinish[\s\S]{0,500}acknowledgeWorkoutTimerNotificationActions/,
+  "Finish must ACK its native receipt only after the durable background save",
+);
+const foregroundNativeDrain = workoutTimerSource.slice(
+  workoutTimerSource.indexOf("export async function consumeWorkoutTimerActions"),
+  workoutTimerSource.indexOf("export async function dismissWorkoutTimerNotification"),
+);
+assert.match(
+  foregroundNativeDrain,
+  /peekNativeActions[\s\S]{0,450}WORKOUT_TIMER_FINISH[\s\S]{0,500}persistBackgroundWorkoutFinish/,
+  "foreground native replay must peek and durably persist Finish before ACK",
+);
+assert.doesNotMatch(
+  foregroundNativeDrain,
+  /consumeWorkoutTimerNotificationActions/,
+  "foreground native replay must never destructively drain receipts before persistence",
+);
+assert.match(
+  backgroundWorkoutFinishSource,
+  /setItem\([\s\S]{0,180}backgroundWorkoutCompletionKey[\s\S]{0,500}multiSetAppStateStorage[\s\S]{0,300}removeItem\(workoutDraftKey/,
+  "the recovery receipt must precede snapshot writes and draft removal",
+);
+assert.match(backgroundWorkoutFinishSource, /appAccountStorageKey\(ownerId\)/);
+assert.match(
+  backgroundWorkoutFinishSource,
+  /sameFinish[\s\S]{0,1800}reconcileBackgroundWorkoutCompletion[\s\S]{0,700}multiSetAppStateStorage/,
+  "a retry after receipt-first interruption must still repair both snapshots before ACK",
+);
+assert.match(
+  backgroundWorkoutFinishSource,
+  /removeBackgroundWorkoutCompletionExactUnlocked[\s\S]{0,300}sameFinish[\s\S]{0,180}removeItem/,
+  "receipt retirement must compare owner, generation, and Finish timestamp",
+);
+const workoutOwnerFenceIndex = backgroundWorkoutFinishSource.indexOf(
+  "if (activeState?.currentUserId !== ownerId) return null;",
+);
+const workoutReceiptWriteIndex = backgroundWorkoutFinishSource.indexOf(
+  "await AsyncStorage.setItem(",
+);
+assert.ok(
+  workoutOwnerFenceIndex >= 0 &&
+    workoutOwnerFenceIndex < workoutReceiptWriteIndex,
+  "background workout Finish must abort on an active-owner mismatch before writing its receipt or snapshots",
+);
+assert.match(
+  appProviderSource,
+  /readBackgroundWorkoutCompletion\(currentUserId\)[\s\S]{0,1300}reconcileBackgroundWorkoutCompletion/,
+  "a still-alive provider must merge a headless Finish receipt on resume",
+);
+const foregroundPersistence = appProviderSource.slice(
+  appProviderSource.indexOf("export function persistAppStateNow"),
+  appProviderSource.indexOf("function mergeBackgroundHealthRows"),
+);
+assert.match(
+  foregroundPersistence,
+  /runAppStateStorageMutation\(async[\s\S]{0,700}getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,1800}mergeBackgroundHealthRows[\s\S]{0,1300}JSON\.stringify[\s\S]{0,400}multiSetAppStateStorage/,
+  "foreground snapshots must re-read and rebase background state before serializing inside the mutation gate",
+);
+assert.match(
+  foregroundPersistence,
+  /multiSetAppStateStorage[\s\S]{0,400}return persistedState/,
+  "foreground persistence must return the exact rebased state written to both snapshots",
+);
+assert.match(
+  appProviderSource,
+  /const persisted = await persistAppStateNow\(latest\)[\s\S]{0,700}persistenceStateRef\.current = persisted[\s\S]{0,500}retireBackgroundWorkoutCompletionIfResolved/,
+  "memory must adopt the exact rebased snapshot before its workout receipt retires",
+);
+assert.match(
+  backgroundWorkoutFinishSource,
+  /retireBackgroundWorkoutCompletionIfResolved[\s\S]{0,900}getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,300}appAccountStorageKey\(ownerId\)[\s\S]{0,900}removeBackgroundWorkoutCompletionExactUnlocked/,
+  "receipt retirement must verify both active and account recovery snapshots",
+);
+const healthNativeReadIndex = healthBackgroundSource.indexOf(
+  "await nativeHealthAdapter.read",
+);
+const healthStateGateIndex = healthBackgroundSource.indexOf(
+  "await runAppStateStorageMutation",
+);
+const healthCloudPublishIndex = healthBackgroundSource.indexOf(
+  "await pushCloudRecentActivity",
+);
+assert.ok(
+  healthNativeReadIndex >= 0 &&
+    healthNativeReadIndex < healthStateGateIndex &&
+    healthStateGateIndex < healthCloudPublishIndex,
+  "Health Connect reads and cloud publishing must stay outside the shared local snapshot write gate",
+);
+assert.match(
+  healthBackgroundSource,
+  /runAppStateStorageMutation[\s\S]{0,900}getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,1800}applyBackgroundHealthRecords[\s\S]{0,1600}multiSetAppStateStorage/,
+  "background health must rebase its records onto the newest account snapshot inside the same gate as workout Finish",
+);
+const healthMutationGate = healthBackgroundSource.slice(
+  healthBackgroundSource.indexOf("await runAppStateStorageMutation"),
+  healthBackgroundSource.indexOf("if (!applied)"),
+);
+assert.match(
+  healthMutationGate,
+  /multiSetAppStateStorage[\s\S]{0,700}HEALTH_STATUS_STORAGE_KEY/,
+  "background health state and its replacement checkpoint must complete in the same local mutation gate",
+);
+assert.match(
+  healthBackgroundSource,
+  /getAppStateStorageItem\(APP_STORAGE_KEY\)[\s\S]{0,500}activeState\?\.currentUserId !== state\.currentUserId[\s\S]{0,500}healthSyncSchedule\(latest\.settings\.syncMode\)[\s\S]{0,500}!latestSchedule\.requestsBackground/,
+  "background health must abort after an account switch and re-check the latest background-sync schedule before writing",
+);
+assert.doesNotMatch(
+  healthBackgroundSource,
+  /AsyncStorage\.multiSet\(\[/,
+  "background health must not bypass serialized app-state persistence",
+);
+assert.match(
+  gymSource,
+  /readBackgroundWorkoutCompletion\(state\.currentUserId\)[\s\S]{0,1800}setWorkoutTimer\(null\)/,
+  "the Workout tab must clear its stale in-memory timer after a headless Finish",
+);
 assert.match(gymSource, /document\.visibilityState === "visible"/);
-assert.match(gymSource, /WEB_WORKOUT_NOTIFICATION_REFRESH_MS/);
+const webWorkoutLifecycle = gymSource.slice(
+  gymSource.indexOf('if (Platform.OS !== "web" || tutorialSandbox) return;'),
+  gymSource.indexOf("workoutTimer?.exerciseId", gymSource.indexOf('if (Platform.OS !== "web" || tutorialSandbox) return;')),
+);
+assert.doesNotMatch(
+  webWorkoutLifecycle,
+  /setInterval/,
+  "the Web workout notification must not depend on a hidden-page interval",
+);
 assert.match(gymSource, /state\.settings\.notifications\.pushEnabled/);
 assert.match(gymSource, /useLocalSearchParams/);
 assert.match(gymSource, /handledWebTimerAction/);
@@ -1019,6 +1232,17 @@ assert.doesNotMatch(
 );
 assert.match(gymSource, /queuedWorkoutTimerActionId[\s\S]{0,120}webActionId/);
 assert.match(gymSource, /processedWebWorkoutActionIds/);
+assert.match(gymSource, /processedNativeWorkoutActionIds/);
+assert.match(
+  gymSource,
+  /pendingNativeTimerActionAcks[\s\S]{0,1800}workoutDraftPersistenceRef\.current[\s\S]{0,500}acknowledgeNativeWorkoutTimerAction/,
+  "ordinary native receipts must ACK only after their processed draft is durable",
+);
+assert.match(
+  gymSource,
+  /next\.action === WORKOUT_TIMER_FINISH[\s\S]{0,120}flushLocalPersistence/,
+  "foreground Finish must flush its saved session before the exact native ACK",
+);
 assert.match(
   gymSource,
   /acknowledgeWorkoutActionsAfterPersistence\(\s*workoutDraftPersistenceRef\.current[\s\S]{0,300}acknowledgeWebWorkoutTimerActions/,
@@ -1047,7 +1271,7 @@ assert.match(workoutTimerSource, /badge: "\/habhub-notification-badge-96\.png"/)
 assert.match(webPushSource, /badge: "\/habhub-notification-badge-96\.png"/);
 assert.match(
   workoutTimerSource,
-  /consumeWorkoutTimerActions\(ownerId: string\)[\s\S]{0,1800}item\.ownerId === ownerId && item\.generation === generation/,
+  /consumeWorkoutTimerActions\(ownerId: string\)[\s\S]{0,4200}item\.ownerId === ownerId && item\.generation === generation/,
   "workout action consumption must be gated and filtered to the active account generation",
 );
 assert.match(androidNotificationServiceSource, /DISABLED_KEY/);
@@ -1088,6 +1312,23 @@ assert.match(
   /fun consumeActions\([\s\S]{0,350}ACTIVE_OWNER_KEY[\s\S]{0,200}GENERATION_KEY[\s\S]{0,600}item\.optString\("ownerId"\) == ownerId[\s\S]{0,120}item\.optString\("generation"\) == generation/,
   "native queued actions must remain private to their owner and generation",
 );
+assert.match(
+  androidNotificationServiceSource,
+  /fun peekActions\([\s\S]{0,350}ACTIVE_OWNER_KEY[\s\S]{0,200}GENERATION_KEY/,
+  "headless Finish may inspect only its active account generation",
+);
+assert.match(
+  androidNotificationServiceSource,
+  /fun acknowledgeActionsThrough\([\s\S]{0,900}occurredAt[\s\S]{0,250}putString\(ACTIONS_KEY, remaining\.toString\(\)\)/,
+  "native receipts must remain queued until an explicit through-timestamp ACK",
+);
+assert.match(
+  androidNotificationServiceSource,
+  /NEXT_ACTION ->[\s\S]{0,700}flow\.index < flow\.steps\.lastIndex[\s\S]{0,300}flow\.finished = true[\s\S]{0,300}queuedAction = FINISH_ACTION/,
+  "a relabeled final Next PendingIntent must be persisted as a Finish receipt",
+);
+assert.match(androidNativeSource, /peekWorkoutTimerNotificationActions/);
+assert.match(androidNativeSource, /acknowledgeWorkoutTimerNotificationActions/);
 assert.match(
   androidNotificationServiceSource,
   /fun clear\([\s\S]{0,450}putBoolean\(DISABLED_KEY, true\)[\s\S]{0,250}remove\(ACTIONS_KEY\)[\s\S]{0,80}commit\(\)/,
@@ -1141,6 +1382,21 @@ assert.match(androidNativeSource, /ACTION_REQUEST_SCHEDULE_EXACT_ALARM/);
 assert.match(settingsSource, /notificationSetupComplete/);
 assert.match(settingsSource, /displayedPushEnabled/);
 assert.match(seedSource, /notifications:\s*\{\s*pushEnabled: false/);
+assert.match(
+  metricEditorSource,
+  /tracker\?\.reminders\?\.some\(\(item\) => item\.enabled\)/,
+  "the tracker editor must preserve enabled canonical multi-reminders",
+);
+assert.match(
+  metricEditorSource,
+  /onChange=\{\(value\) => \{\s*setReminderEnabled\(true\);\s*setReminderTimes/,
+  "choosing a reminder time must also enable reminder delivery",
+);
+assert.match(
+  metricEditorSource,
+  /onPress=\{\(\) => \{\s*setReminderEnabled\(true\);\s*setReminderTimes\(\(current\) => \[\.\.\.current, "19:00"\]\)/,
+  "adding a reminder time must not silently leave reminders disabled",
+);
 assert.match(source, /cancelAllManagedLocalNotifications/);
 assert.match(source, /scheduleImmediateManagedLocalNotification/);
 assert.match(

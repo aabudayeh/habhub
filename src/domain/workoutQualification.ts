@@ -18,8 +18,7 @@ const STRENGTH_KEYS = new Set([
   "weight_machine",
 ]);
 
-/** Sensible defaults prevent a very short walk from completing Workout. */
-export const DEFAULT_WORKOUT_QUALIFICATION: WorkoutQualification = {
+const LEGACY_DEFAULT_WORKOUT_QUALIFICATION: WorkoutQualification = {
   rules: [
     {
       activity: "walking",
@@ -44,9 +43,94 @@ export const DEFAULT_WORKOUT_QUALIFICATION: WorkoutQualification = {
   ],
 };
 
+/**
+ * Recommended defaults accept any one meaningful signal that a real session
+ * occurred. This keeps short incidental movement out without penalizing
+ * providers that report only duration, distance, or active calories.
+ */
+export const DEFAULT_WORKOUT_QUALIFICATION: WorkoutQualification = {
+  rules: [
+    {
+      activity: "walking",
+      thresholdMode: "any",
+      minimumDurationMinutes: 30,
+      minimumDistanceKm: 2,
+      minimumActiveCalories: 100,
+    },
+    {
+      activity: "running",
+      thresholdMode: "any",
+      minimumDurationMinutes: 20,
+      minimumDistanceKm: 3,
+      minimumActiveCalories: 150,
+    },
+    {
+      activity: "strength",
+      thresholdMode: "any",
+      minimumDurationMinutes: 30,
+      minimumActiveCalories: 120,
+    },
+    {
+      activity: "other",
+      thresholdMode: "any",
+      minimumDurationMinutes: 20,
+      minimumDistanceKm: 3,
+      minimumActiveCalories: 100,
+    },
+  ],
+};
+
 export const ANY_RECORDED_WORKOUT_QUALIFICATION: WorkoutQualification = {
   rules: [{ activity: "any", thresholdMode: "any" }],
 };
+
+const QUALIFICATION_RULE_FIELDS = [
+  "activity",
+  "thresholdMode",
+  "minimumDurationMinutes",
+  "minimumDistanceKm",
+  "minimumActiveCalories",
+] as const;
+
+/**
+ * PostgreSQL jsonb does not preserve object-key order, and callers may also
+ * reorder independent activity rules. Compare the preset's actual semantics
+ * while rejecting duplicate activities, unknown fields, and every changed
+ * threshold so genuinely custom qualifications remain custom.
+ */
+function matchesWorkoutQualificationPreset(
+  value: WorkoutQualification | undefined,
+  preset: WorkoutQualification,
+) {
+  if (!value || !Array.isArray(value.rules)) return false;
+  if (
+    Object.keys(value).some((key) => key !== "rules") ||
+    value.rules.length !== preset.rules.length
+  )
+    return false;
+
+  const rulesByActivity = new Map(
+    value.rules.map((rule) => [rule.activity, rule] as const),
+  );
+  if (rulesByActivity.size !== value.rules.length) return false;
+
+  return preset.rules.every((expected) => {
+    const candidate = rulesByActivity.get(expected.activity);
+    if (!candidate) return false;
+    if (
+      Object.keys(candidate).some(
+        (key) =>
+          !QUALIFICATION_RULE_FIELDS.includes(
+            key as (typeof QUALIFICATION_RULE_FIELDS)[number],
+          ),
+      )
+    )
+      return false;
+    return QUALIFICATION_RULE_FIELDS.every(
+      (field) => candidate[field] === expected[field],
+    );
+  });
+}
 
 export type WorkoutQualificationSample = {
   activityKey?: string;
@@ -80,9 +164,19 @@ export function workoutQualifies(
   sample: WorkoutQualificationSample,
   qualification: WorkoutQualification | undefined = DEFAULT_WORKOUT_QUALIFICATION,
 ) {
-  const rules = qualification?.rules?.length
-    ? qualification.rules
-    : DEFAULT_WORKOUT_QUALIFICATION.rules;
+  const configured = qualification?.rules?.length
+    ? qualification
+    : DEFAULT_WORKOUT_QUALIFICATION;
+  // Existing trackers persisted the former duration-only recommended value.
+  // Treat that exact preset as Recommended so they receive the improved
+  // provider-tolerant defaults; every genuinely custom rule stays untouched.
+  const rules =
+    matchesWorkoutQualificationPreset(
+      configured,
+      LEGACY_DEFAULT_WORKOUT_QUALIFICATION,
+    )
+      ? DEFAULT_WORKOUT_QUALIFICATION.rules
+      : configured.rules;
   const family =
     sample.activity && sample.activity !== "any"
       ? sample.activity
@@ -117,7 +211,11 @@ export function isDefaultWorkoutQualification(
 ) {
   return (
     !value ||
-    JSON.stringify(value) === JSON.stringify(DEFAULT_WORKOUT_QUALIFICATION)
+    matchesWorkoutQualificationPreset(value, DEFAULT_WORKOUT_QUALIFICATION) ||
+    matchesWorkoutQualificationPreset(
+      value,
+      LEGACY_DEFAULT_WORKOUT_QUALIFICATION,
+    )
   );
 }
 

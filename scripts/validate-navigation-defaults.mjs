@@ -8,6 +8,10 @@ import {
   navigationDefaultsForVersion,
   normalizeTabOrder,
 } from "../src/domain/navigation.ts";
+import {
+  storedWorkoutDraftHasActiveTimer,
+  WORKOUT_DRAFT_MAX_AGE_MS,
+} from "../src/domain/workoutTimerPresence.ts";
 
 assert.deepEqual(DEFAULT_TAB_ORDER, [
   "index",
@@ -91,6 +95,18 @@ const onboarding = fs.readFileSync("app/onboarding.tsx", "utf8");
 const seed = fs.readFileSync("src/data/seed.ts", "utf8");
 const provider = fs.readFileSync("src/state/AppProvider.tsx", "utf8");
 const cloudProvider = fs.readFileSync("src/cloud/CloudSyncProvider.tsx", "utf8");
+const timerPage = fs.readFileSync("app/timer.tsx", "utf8");
+const timersTab = fs.readFileSync("app/(tabs)/timers.tsx", "utf8");
+const rootLayout = fs.readFileSync("app/_layout.tsx", "utf8");
+const timerOverlay = fs.readFileSync(
+  "src/components/ActiveTimerOverlay.tsx",
+  "utf8",
+);
+const gym = fs.readFileSync("app/(tabs)/gym.tsx", "utf8");
+const workoutTimerPresence = fs.readFileSync(
+  "src/storage/workoutTimerPresence.ts",
+  "utf8",
+);
 
 assert.match(tabs, /const showStatus = state\.settings\.showStatus !== false/);
 assert.match(tabs, /normalizeTabOrder\(state\.settings\.tabOrder\)/);
@@ -109,6 +125,80 @@ assert.match(seed, /showStatus: true/);
 assert.match(provider, /const restoredState: AppState = \{[\s\S]{0,100}version: 27/);
 assert.doesNotMatch(cloudProvider, /version: 24/);
 
+const now = Date.UTC(2026, 7, 25, 12);
+const activeWorkoutDraft = JSON.stringify({
+  savedAt: now - 1_000,
+  timer: { mode: "work", startedAt: now - 5_000 },
+  exercises: [],
+});
+assert.equal(storedWorkoutDraftHasActiveTimer(activeWorkoutDraft, now), true);
+assert.equal(
+  storedWorkoutDraftHasActiveTimer(
+    JSON.stringify({
+      savedAt: now - WORKOUT_DRAFT_MAX_AGE_MS - 1,
+      timer: { mode: "work" },
+      exercises: [],
+    }),
+    now,
+  ),
+  false,
+  "an abandoned workout draft must not leave a permanent navigation dot",
+);
+assert.equal(storedWorkoutDraftHasActiveTimer("not-json", now), false);
+assert.equal(
+  storedWorkoutDraftHasActiveTimer(
+    JSON.stringify({ savedAt: now, timer: null, exercises: [] }),
+    now,
+  ),
+  false,
+);
+
+assert.match(
+  tabs,
+  /state\.settings\.showActiveTimersTab === true && hasActiveActivityTimer/,
+  "the optional Timers tab must exist only while an activity timer is active",
+);
+assert.match(tabs, /next\.indexOf\("gym"\)[\s\S]{0,120}next\.splice/);
+assert.match(tabs, /route\.name === "gym" && hasActiveWorkoutTimer/);
+assert.match(tabs, /route\.name === "timers" && hasActiveActivityTimer/);
+assert.match(tabs, /<Tabs\.Screen name="timers" options=\{tabOptions\.timers\}/);
+assert.match(timersTab, /export \{ default \} from "\.\.\/timer"/);
+assert.match(
+  display.slice(display.indexOf('title="Advanced"')),
+  /title="Show active Timers tab"/,
+  "the off-by-default Timers-tab control belongs in Display > Advanced",
+);
+assert.match(seed, /showActiveTimersTab: false/);
+assert.match(seed, /showActivityTimerOverlay: true/);
+assert.match(seed, /activityTimerOverlayMinimized: false/);
+assert.match(
+  timerPage,
+  /setActivityTimer\([\s\S]{0,220}showActivityTimerOverlay: true,[\s\S]{0,80}activityTimerOverlayMinimized: false/,
+  "a newly started activity timer must restore its full floating overlay",
+);
+assert.match(timerOverlay, /const MINIMIZED_SIZE = 42/);
+assert.match(
+  timerOverlay,
+  /updateSettings\(\{ activityTimerOverlayMinimized: true \}\)/,
+);
+assert.match(timerOverlay, /style=\{styles\.minimizedButton\}/);
+assert.doesNotMatch(
+  timerOverlay,
+  /updateSettings\(\{ showActivityTimerOverlay: false \}\)/,
+  "the floating overlay control must minimize instead of stopping or hiding",
+);
+assert.match(
+  rootLayout,
+  /rootSegment === "\(tabs\)" && tabSegment === "timers"/,
+);
+assert.match(gym, /setWorkoutTimerPresence\([\s\S]{0,100}Boolean\(workoutTimer\)/);
+assert.match(workoutTimerPresence, /hydrateWorkoutTimerPresence/);
+assert.match(
+  workoutTimerPresence,
+  /revision === presenceRevision/,
+  "a stale disk read must not overwrite live Workout timer presence",
+);
+
 console.log(
-  "Status-first-pair, Chat-right-edge, visibility, onboarding, and v27 privacy-capability defaults validated.",
+  "Navigation defaults, transient timer tab, draggable activity overlay, and workout timer badge validated.",
 );

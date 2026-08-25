@@ -86,6 +86,9 @@ import { randomMessage } from "@/src/domain/social";
 import { defaultReminderTimes } from "@/src/domain/reminders";
 import { workoutQualifies } from "@/src/domain/workoutQualification";
 import {
+  reconcileBackgroundWorkoutCompletion,
+} from "@/src/domain/backgroundWorkoutFinish";
+import {
   descendantTodoIds,
   normalizeTodoItems,
   todoLabels,
@@ -120,6 +123,16 @@ import {
   setAppStateStorageItemStrict,
 } from "@/src/storage/appStateStorage";
 import {
+  APP_STORAGE_KEY,
+  appAccountStorageKey,
+  isAppAccountStorageKey,
+} from "@/src/storage/appStateKeys";
+import { runAppStateStorageMutation } from "@/src/storage/appStateMutation";
+import {
+  readBackgroundWorkoutCompletion,
+  retireBackgroundWorkoutCompletionIfResolved,
+} from "@/src/storage/backgroundWorkoutFinish";
+import {
   deleteGoogleHealthStepCheckpoint,
   readGoogleHealthStepCheckpoint,
   writeGoogleHealthStepCheckpoint,
@@ -148,8 +161,7 @@ import {
   Visibility,
 } from "@/src/types";
 
-export const APP_STORAGE_KEY = "paceboard-state-v1";
-const APP_ACCOUNT_STORAGE_KEY_PREFIX = "habhub-account-state-v1:";
+export { APP_STORAGE_KEY, appAccountStorageKey } from "@/src/storage/appStateKeys";
 const GOOGLE_HEALTH_CACHE_SCRUB_KEY = "habhub-google-health-cache-scrub-v3";
 const LOCAL_PERSIST_IDLE_MAX_WAIT_MS = 4_000;
 
@@ -166,10 +178,6 @@ type LogMetricRequest = {
   deviceOwnedMetric: "steps";
 };
 
-export function appAccountStorageKey(accountId: string) {
-  return `${APP_ACCOUNT_STORAGE_KEY_PREFIX}${accountId}`;
-}
-
 export async function readPersistedAccountState(accountId: string) {
   const storageKey = appAccountStorageKey(accountId);
   const saved = await getAppStateStorageItem(storageKey);
@@ -184,10 +192,14 @@ export async function readPersistedAccountState(accountId: string) {
   const sanitized = stateWithoutGoogleHealthLocalData(parsed);
   if (sanitized !== parsed)
     await setAppStateStorageItem(storageKey, JSON.stringify(sanitized));
-  const checkpoint = await readGoogleHealthStepCheckpoint(accountId).catch(
-    () => undefined,
-  );
-  return mergeGoogleHealthStepCheckpoint(sanitized, checkpoint);
+  const [checkpoint, workoutCompletion] = await Promise.all([
+    readGoogleHealthStepCheckpoint(accountId).catch(() => undefined),
+    readBackgroundWorkoutCompletion(accountId).catch(() => null),
+  ]);
+  const withWorkout = workoutCompletion
+    ? reconcileBackgroundWorkoutCompletion(sanitized, workoutCompletion).state
+    : sanitized;
+  return mergeGoogleHealthStepCheckpoint(withWorkout, checkpoint);
 }
 
 /** Remove plaintext Google Health rows left by a pre-privacy pilot build. */
@@ -198,7 +210,7 @@ async function scrubLegacyGoogleHealthAppSnapshots(
     return;
   const allKeys = await getAllAppStateStorageKeys();
   const keys = allKeys.filter(
-    (key) => key === APP_STORAGE_KEY || key.startsWith(APP_ACCOUNT_STORAGE_KEY_PREFIX),
+    (key) => key === APP_STORAGE_KEY || isAppAccountStorageKey(key),
   );
   const derivedCacheKeys = allKeys.filter(
     (key) =>
@@ -271,18 +283,86 @@ function stateForLocalPersistence(state: AppState): AppState {
 }
 
 export function persistAppStateNow(state: AppState) {
-  const serialized = JSON.stringify({
-    ...stateForLocalPersistence(state),
-    lastSavedAt: new Date().toISOString(),
-  });
   // The legacy key remains the pointer used by the native background task.
   // The account-scoped copy is the recovery boundary that prevents signing
   // into another account (or a transient empty cloud read) from overwriting a
   // user's tracker/page/goal preferences with a clean starter shell.
-  return multiSetAppStateStorage([
-    [APP_STORAGE_KEY, serialized],
-    [appAccountStorageKey(state.currentUserId), serialized],
-  ]);
+  return runAppStateStorageMutation(async () => {
+    // Project and serialize only after acquiring the shared gate. A background
+    // task may have committed Health Connect rows or a workout while this
+    // foreground write was queued; blindly writing the earlier in-memory
+    // snapshot here would erase that newer transaction.
+    let rebased = state;
+    const [storedRaw, healthStatusRaw, workoutCompletion] = await Promise.all([
+      getAppStateStorageItem(APP_STORAGE_KEY).catch(() => null),
+      AsyncStorage.getItem(
+        `${HEALTH_STATUS_STORAGE_KEY}:${state.currentUserId}`,
+      ).catch(() => null),
+      readBackgroundWorkoutCompletion(state.currentUserId).catch(() => null),
+    ]);
+    let stored: AppState | null = null;
+    if (storedRaw) {
+      try {
+        stored = JSON.parse(storedRaw) as AppState;
+      } catch {
+        stored = null;
+      }
+    }
+    const savedAtMs = (value: AppState | null) => {
+      const parsed = value?.lastSavedAt ? Date.parse(value.lastSavedAt) : Number.NaN;
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    if (stored?.currentUserId === state.currentUserId) {
+      const storedIsNewer = savedAtMs(stored) > savedAtMs(rebased);
+      let importFromDate: string | undefined;
+      if (healthStatusRaw) {
+        try {
+          const healthStatus = JSON.parse(
+            healthStatusRaw,
+          ) as PersistedHealthStatus;
+          if (
+            healthStatus.lastReason === "background" &&
+            !healthStatus.error
+          )
+            importFromDate = storedIsNewer
+              ? healthStatus.lastImportFromDate
+              : undefined;
+        } catch {
+          importFromDate = undefined;
+        }
+      }
+      rebased = mergeBackgroundHealthRows(rebased, stored, importFromDate);
+      const storedSourcePreferences = storedIsNewer
+        ? stored.settings?.healthSync?.sourcePreferences
+        : undefined;
+      if (storedSourcePreferences)
+        rebased = {
+          ...rebased,
+          settings: {
+            ...rebased.settings,
+            healthSync: {
+              ...rebased.settings.healthSync,
+              sourcePreferences: storedSourcePreferences,
+            },
+          },
+        };
+    }
+    if (workoutCompletion)
+      rebased = reconcileBackgroundWorkoutCompletion(
+        rebased,
+        workoutCompletion,
+      ).state;
+    const persistedState = {
+      ...rebased,
+      lastSavedAt: new Date().toISOString(),
+    };
+    const serialized = JSON.stringify(stateForLocalPersistence(persistedState));
+    await multiSetAppStateStorage([
+      [APP_STORAGE_KEY, serialized],
+      [appAccountStorageKey(state.currentUserId), serialized],
+    ]);
+    return persistedState;
+  });
 }
 
 /**
@@ -3353,8 +3433,21 @@ export function AppProvider({
       while (persistenceDirtyRef.current) {
         const revision = persistenceRevisionRef.current;
         const latest = persistenceStateRef.current;
-        await persistAppStateNow(latest);
+        const persisted = await persistAppStateNow(latest);
         if (revision === persistenceRevisionRef.current) {
+          const adoptedBackgroundMutation =
+            persisted.entries !== latest.entries ||
+            persisted.gymSessions !== latest.gymSessions ||
+            persisted.settings !== latest.settings;
+          if (adoptedBackgroundMutation) {
+            persistenceStateRef.current = persisted;
+            persistenceObservedStateRef.current = persisted;
+            dispatch({ type: "replaceLocal", state: persisted });
+            setLocalMutationRevision((value) => value + 1);
+          }
+          await retireBackgroundWorkoutCompletionIfResolved(
+            persisted.currentUserId,
+          ).catch(() => false);
           persistenceDirtyRef.current = false;
           continue;
         }
@@ -3446,12 +3539,28 @@ export function AppProvider({
         if (cancelled) return;
         if (saved) {
           const parsed = JSON.parse(saved) as AppState;
-          const restored = stateWithoutGoogleHealthLocalData(parsed);
+          const sanitized = stateWithoutGoogleHealthLocalData(parsed);
+          const workoutCompletion = await readBackgroundWorkoutCompletion(
+            sanitized.currentUserId,
+          ).catch(() => null);
+          const restored = workoutCompletion
+            ? reconcileBackgroundWorkoutCompletion(
+                sanitized,
+                workoutCompletion,
+              ).state
+            : sanitized;
           // The active account is fail-closed on its direct hydration path.
           // A legacy pilot row is removed before rendering even though the
           // broader dormant-account sweep now waits for an interaction-safe
           // maintenance turn.
-          if (restored !== parsed) {
+          if (workoutCompletion) {
+            // This writes both recovery boundaries and retires only the exact
+            // receipt after that durable pair succeeds.
+            await persistAppStateNow(restored);
+            await retireBackgroundWorkoutCompletionIfResolved(
+              restored.currentUserId,
+            );
+          } else if (restored !== parsed) {
             await setAppStateStorageItem(
               APP_STORAGE_KEY,
               JSON.stringify(restored),
@@ -3988,14 +4097,16 @@ export function AppProvider({
         void (async () => {
           await persistenceWriteRef.current?.catch(() => undefined);
           const currentUserId = persistenceStateRef.current.currentUserId;
-          const [saved, savedHealthStatus] = await Promise.all([
+          const [saved, savedHealthStatus, workoutCompletion] = await Promise.all([
             getAppStateStorageItem(APP_STORAGE_KEY).catch(() => null),
             AsyncStorage.getItem(
               `${HEALTH_STATUS_STORAGE_KEY}:${currentUserId}`,
             ).catch(() => null),
+            readBackgroundWorkoutCompletion(currentUserId).catch(() => null),
           ]);
-          if (saved) {
-            try {
+          try {
+            let merged = persistenceStateRef.current;
+            if (saved) {
               let importFromDate: string | undefined;
               if (savedHealthStatus) {
                 const healthStatus = JSON.parse(
@@ -4007,26 +4118,38 @@ export function AppProvider({
                 )
                   importFromDate = healthStatus.lastImportFromDate;
               }
-              const merged = mergeBackgroundHealthRows(
-                persistenceStateRef.current,
+              merged = mergeBackgroundHealthRows(
+                merged,
                 JSON.parse(saved) as AppState,
                 importFromDate,
               );
-              if (merged !== persistenceStateRef.current) {
-                const committed = {
-                  ...merged,
-                  lastSavedAt: new Date().toISOString(),
-                };
-                persistenceStateRef.current = committed;
-                persistenceObservedStateRef.current = committed;
-                persistenceDirtyRef.current = true;
-                persistenceRevisionRef.current += 1;
-                dispatch({ type: "replaceLocal", state: committed });
-                setLocalMutationRevision((revision) => revision + 1);
-              }
-            } catch {
-              // Keep the last valid in-memory snapshot if storage was interrupted.
             }
+            if (workoutCompletion)
+              merged = reconcileBackgroundWorkoutCompletion(
+                merged,
+                workoutCompletion,
+              ).state;
+            if (merged !== persistenceStateRef.current) {
+              const committed = {
+                ...merged,
+                lastSavedAt: new Date().toISOString(),
+              };
+              persistenceStateRef.current = committed;
+              persistenceObservedStateRef.current = committed;
+              persistenceDirtyRef.current = true;
+              persistenceRevisionRef.current += 1;
+              dispatch({ type: "replaceLocal", state: committed });
+              setLocalMutationRevision((revision) => revision + 1);
+            }
+            if (workoutCompletion)
+              await persistAppStateNow(persistenceStateRef.current).then(
+                () =>
+                  retireBackgroundWorkoutCompletionIfResolved(
+                    persistenceStateRef.current.currentUserId,
+                  ),
+              );
+          } catch {
+            // Keep the last valid in-memory snapshot if storage was interrupted.
           }
           if (!persistenceDirtyRef.current) return;
           // Let navigation paint and resume-time subscriptions settle first.

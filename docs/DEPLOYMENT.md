@@ -111,12 +111,18 @@ pnpm.cmd dlx supabase@latest secrets set WEB_PUSH_VAPID_SUBJECT=mailto:notificat
 Use this rollout order so the native Expo path never depends on an incomplete
 browser rollout:
 
-1. Apply `202608200001_web_push_subscriptions.sql`.
+1. Apply migrations through
+   `202608230002_web_personal_notification_worker_reliability.sql`, including
+   the Web Push subscription and durable personal-reminder queue migrations.
 2. Set and verify all three VAPID Edge secrets.
 3. Deploy `send-push`.
-4. Export and deploy the HTTPS web app with the matching public key.
-5. From the installed PWA, enable notifications with the in-app switch and
-   verify a chat/group event while the PWA is closed.
+4. Deploy `web-personal-notifications` with `--no-verify-jwt`; its invocation
+   is authenticated by the private Vault-backed cron path rather than a user
+   access token.
+5. Export and deploy the HTTPS web app with the matching public key.
+6. From the installed PWA, enable notifications with the in-app switch and
+   verify both a chat/group event and a tracker or to-do reminder while the PWA
+   is closed.
 
 Do not rotate the VAPID pair casually: existing browser subscriptions are bound
 to its public key. The client can replace a subscription after a deliberate
@@ -124,9 +130,11 @@ rotation, but every browser must reopen once to register the replacement.
 
 On iPhone and iPad, add HabHub to the Home Screen and open that installed app
 before enabling notifications. Web Push currently carries server-owned chat,
-group, leaderboard, membership, and challenge events. Native timed tracker and
-to-do reminders remain device-scheduled; equivalent closed-browser reminder
-delivery would require a separate server-side scheduler.
+group, leaderboard, membership, and challenge events. Timed tracker and to-do
+reminders remain device-scheduled on native builds and are mirrored into a
+private, durable server schedule for closed-browser PWA delivery. The
+`web-personal-notifications-every-minute` cron job and Edge Function must both
+remain healthy for that PWA path.
 
 ## 6. Build and deploy
 

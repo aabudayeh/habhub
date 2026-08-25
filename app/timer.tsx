@@ -162,6 +162,10 @@ export default function ActivityTimerPage() {
       ...nextTimer,
       ...notifications,
     });
+    updateSettings({
+      showActivityTimerOverlay: true,
+      activityTimerOverlayMinimized: false,
+    });
     if (tutorialSandbox)
       tutorial.reportEvent({
         actionId: "tutorial.timer.start",
@@ -302,6 +306,7 @@ export default function ActivityTimerPage() {
                 updateSettings({
                   showActivityTimerOverlay:
                     state.settings.showActivityTimerOverlay === false,
+                  activityTimerOverlayMinimized: false,
                 })
               }
             />

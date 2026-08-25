@@ -9,6 +9,7 @@ import {
   resolveScreenBottomPadding,
   resolveTabBarBottomInset,
 } from "../src/domain/webSafeArea.ts";
+import { resolveWebSoftwareKeyboardVisibility } from "../src/domain/webKeyboard.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = (relativePath) =>
@@ -35,6 +36,9 @@ const extensionPopupScript = source("browser-extension/popup.js");
 const extensionManifest = source("browser-extension/manifest.json");
 const extensionReadme = source("browser-extension/README.md");
 const extensionRoute = source("app/extension.tsx");
+const keyboardVisibility = source(
+  "src/components/useSoftwareKeyboardVisibility.ts",
+);
 
 assert.match(guards, /export function useWebBackNavigationGuard/);
 assert.match(guards, /export function useWebBackDismiss/);
@@ -94,6 +98,62 @@ assert.equal(
     maxTouchPoints: 5,
   }),
   true,
+);
+assert.equal(
+  resolveWebSoftwareKeyboardVisibility({
+    activeEditor: true,
+    baselineHeight: 844,
+    currentHeight: 480,
+    documentVisible: true,
+    editorInteractionActive: true,
+    requireFreshEditorInteraction: true,
+  }),
+  true,
+  "an actively focused iOS editor with an obstructed viewport hides navigation",
+);
+assert.equal(
+  resolveWebSoftwareKeyboardVisibility({
+    activeEditor: true,
+    baselineHeight: 844,
+    currentHeight: 480,
+    documentVisible: true,
+    editorInteractionActive: false,
+    requireFreshEditorInteraction: true,
+  }),
+  false,
+  "a restored iOS PWA's stale focused input must fail visible",
+);
+assert.equal(
+  resolveWebSoftwareKeyboardVisibility({
+    activeEditor: true,
+    baselineHeight: 844,
+    currentHeight: 480,
+    documentVisible: false,
+    editorInteractionActive: true,
+    requireFreshEditorInteraction: true,
+  }),
+  false,
+  "a backgrounded Web app must never keep navigation hidden",
+);
+assert.equal(
+  resolveWebSoftwareKeyboardVisibility({
+    activeEditor: true,
+    baselineHeight: 844,
+    currentHeight: 480,
+    documentVisible: true,
+    editorInteractionActive: false,
+    requireFreshEditorInteraction: false,
+  }),
+  true,
+  "non-iOS Web keyboard behavior remains independent from the iOS lifecycle gate",
+);
+assert.match(keyboardVisibility, /isIosWebDevice\(/);
+assert.match(keyboardVisibility, /window\.addEventListener\("pagehide"/);
+assert.match(keyboardVisibility, /window\.addEventListener\("pageshow"/);
+assert.match(keyboardVisibility, /document\.addEventListener\("visibilitychange"/);
+assert.match(
+  keyboardVisibility,
+  /document\.addEventListener\("pointerdown", handleEditorPointerDown, true\)/,
 );
 assert.equal(
   (fastingClock.match(/onPanResponderRelease: finishDrag/g) ?? []).length,
@@ -222,7 +282,11 @@ assert.doesNotMatch(
   "focus zoom must be prevented by input sizing without disabling accessible page zoom",
 );
 assert.match(html, /@supports \(height: 100dvh\)/);
-assert.match(html, /@media all and \(display-mode: standalone\)[\s\S]{0,160}height: 100vh;/);
+assert.doesNotMatch(
+  html,
+  /@media all and \(display-mode: standalone\)[\s\S]{0,160}height: 100vh;/,
+  "standalone iOS must not size its app shell with a legacy viewport that can place navigation below the visible screen",
+);
 assert.doesNotMatch(
   html,
   /body \{[\s\S]{0,120}position: fixed;/,

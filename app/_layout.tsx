@@ -159,6 +159,7 @@ function RootNavigator() {
   const { state, hydrated, updateSettings } = useApp();
   const segments = useSegments();
   const rootSegment = String(segments[0] ?? "");
+  const tabSegment = String(segments[1] ?? "");
   const landingApplied = useRef(false);
   const onboardingAccountId =
     auth.user?.id ?? (!auth.configured ? `demo:${state.currentUserId}` : null);
@@ -1229,7 +1230,11 @@ function RootNavigator() {
               <AiAssistantButton />
             ) : null}
             <ActiveTimerOverlay
-              hidden={rootSegment === "timer" || rootSegment === "extension"}
+              hidden={
+                rootSegment === "timer" ||
+                rootSegment === "extension" ||
+                (rootSegment === "(tabs)" && tabSegment === "timers")
+              }
             />
             <InAppChatBanner />
             {tutorialActive ? null : <GroupTodoReminderReconciler />}

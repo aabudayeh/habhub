@@ -6,6 +6,7 @@ import {
   completionIndicatorFillMode,
   completionIndicatorOption,
 } from "@/src/domain/completionIndicators";
+import { stateWithoutGoogleHealthLocalData } from "@/src/domain/googleHealthLocalPrivacy";
 import { leaderboardRows } from "@/src/domain/leaderboard";
 import { memberDisplayName } from "@/src/domain/members";
 import { statusRangeRollup } from "@/src/domain/status";
@@ -46,6 +47,73 @@ export type WidgetAvatarVisual = {
   avatarStyle: StatusAvatarStyle;
   heightScale: number;
 };
+
+function dailyStatusKey(
+  status: AppState["dailyMetricStatuses"][number],
+) {
+  return [
+    status.groupId,
+    status.userId,
+    status.metricId,
+    status.localDate,
+  ].join("\u0000");
+}
+
+/**
+ * Keeps the launcher's state free of this device's Google Health cache while
+ * restoring only explicit, server-projected values that the signed-in viewer
+ * is already authorized to see in the in-app leaderboard.
+ *
+ * Web-only members commonly publish compact Google Health totals without a
+ * raw entry. The generic plaintext-cache scrub correctly removes those rows,
+ * but a leaderboard widget may safely render the peer's explicit group/status
+ * projection. Raw Google entries and the current user's Google rows are never
+ * restored here.
+ */
+export function privacySafeLeaderboardWidgetState(
+  state: AppState,
+  localDate: string,
+  requestedMetricIds: readonly string[],
+): AppState {
+  const cacheSafeState = stateWithoutGoogleHealthLocalData(state);
+  if (cacheSafeState.dailyMetricStatuses === state.dailyMetricStatuses)
+    return cacheSafeState;
+
+  const memberIds = new Set(state.group.members.map((member) => member.id));
+  const metricIds = new Set(requestedMetricIds);
+  const retainedKeys = new Set(
+    cacheSafeState.dailyMetricStatuses.map(dailyStatusKey),
+  );
+  const authorizedPeerProjections = state.dailyMetricStatuses.filter(
+    (status) => {
+      if (retainedKeys.has(dailyStatusKey(status))) return false;
+      if (
+        status.groupId !== state.group.id ||
+        status.userId === state.currentUserId ||
+        !memberIds.has(status.userId) ||
+        status.localDate !== localDate ||
+        !metricIds.has(status.metricId) ||
+        status.hasData === false
+      )
+        return false;
+      if (status.visibility === "status") return true;
+      return (
+        status.visibility === "group" &&
+        status.privacyProjectionVersion === 2 &&
+        typeof status.exactValue === "number" &&
+        Number.isFinite(status.exactValue)
+      );
+    },
+  );
+  if (!authorizedPeerProjections.length) return cacheSafeState;
+  return {
+    ...cacheSafeState,
+    dailyMetricStatuses: [
+      ...cacheSafeState.dailyMetricStatuses,
+      ...authorizedPeerProjections,
+    ],
+  };
+}
 
 function metricDeepLink(metricId: string, localDate: string) {
   return `paceboard://metric-detail?metric=${encodeURIComponent(metricId)}&date=${localDate}&period=today`;

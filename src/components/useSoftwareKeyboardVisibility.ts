@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Dimensions, Keyboard, Platform } from "react-native";
 
+import { resolveWebSoftwareKeyboardVisibility } from "@/src/domain/webKeyboard";
+import { isIosWebDevice } from "@/src/domain/webSafeArea";
+
 const MIN_KEYBOARD_HEIGHT = 96;
 const ANDROID_RESTORE_DELTA = 80;
 
@@ -52,7 +55,19 @@ export function useSoftwareKeyboardVisibility() {
       if (typeof window === "undefined" || typeof document === "undefined")
         return;
 
+      const browserNavigator = navigator as Navigator & {
+        standalone?: boolean;
+      };
+      const iosWebDevice = isIosWebDevice({
+        userAgent: browserNavigator.userAgent,
+        platform: browserNavigator.platform,
+        maxTouchPoints: browserNavigator.maxTouchPoints,
+      });
       let baselineHeight = webViewportHeight();
+      // iOS can restore a suspended standalone app with its former text input
+      // still focused even though the software keyboard is gone. Re-arm only
+      // after a real editor focus/touch in the visible page.
+      let editorInteractionActive = !iosWebDevice;
       let frame: number | null = null;
       const timers = new Set<ReturnType<typeof setTimeout>>();
 
@@ -60,7 +75,17 @@ export function useSoftwareKeyboardVisibility() {
         frame = null;
         const height = webViewportHeight();
         const editing = isTextEditor(document.activeElement);
-        if (!editing) {
+        const documentVisible = document.visibilityState !== "hidden";
+        const nextVisible = resolveWebSoftwareKeyboardVisibility({
+          activeEditor: editing,
+          baselineHeight,
+          currentHeight: height,
+          documentVisible,
+          editorInteractionActive,
+          requireFreshEditorInteraction: iosWebDevice,
+          minimumKeyboardHeight: MIN_KEYBOARD_HEIGHT,
+        });
+        if (!editing || !documentVisible) {
           // An unfocused viewport is the new unobstructed baseline. Using the
           // historical maximum misclassified a smaller desktop window or a
           // portrait-to-landscape rotation as a software keyboard forever.
@@ -70,12 +95,7 @@ export function useSoftwareKeyboardVisibility() {
           setVisible(false);
           return;
         }
-
-        const threshold = Math.max(
-          MIN_KEYBOARD_HEIGHT,
-          Math.round(baselineHeight * 0.14),
-        );
-        setVisible(baselineHeight - height >= threshold);
+        setVisible(nextVisible);
       };
       const schedule = (delay = 0) => {
         if (delay) {
@@ -89,7 +109,12 @@ export function useSoftwareKeyboardVisibility() {
         if (frame !== null) cancelAnimationFrame(frame);
         frame = requestAnimationFrame(evaluate);
       };
-      const handleFocus = () => {
+      const armEditorInteraction = (target: EventTarget | null) => {
+        if (!isTextEditor(target instanceof Element ? target : null)) return;
+        editorInteractionActive = true;
+      };
+      const handleFocus = (event: FocusEvent) => {
+        armEditorInteraction(event.target);
         // Capture the unobstructed height before the browser finishes opening
         // its keyboard, then sample both early and after its animation settles.
         baselineHeight = Math.max(baselineHeight, webViewportHeight());
@@ -97,14 +122,45 @@ export function useSoftwareKeyboardVisibility() {
         schedule(120);
         schedule(360);
       };
-      const handleBlur = () => schedule(60);
+      const handleEditorPointerDown = (event: PointerEvent) => {
+        armEditorInteraction(event.target);
+        schedule();
+        schedule(120);
+      };
+      const handleBlur = () => {
+        if (iosWebDevice) editorInteractionActive = false;
+        schedule(60);
+      };
+      const resetIosLifecycleKeyboard = () => {
+        if (!iosWebDevice) return;
+        editorInteractionActive = false;
+        baselineHeight = webViewportHeight();
+        setVisible(false);
+      };
+      const handleVisibilityChange = () => {
+        if (!iosWebDevice) return;
+        resetIosLifecycleKeyboard();
+        if (document.visibilityState !== "hidden") {
+          schedule(120);
+          schedule(360);
+        }
+      };
+      const handlePageShow = () => {
+        resetIosLifecycleKeyboard();
+        schedule(120);
+        schedule(360);
+      };
 
       const viewport = window.visualViewport;
       viewport?.addEventListener("resize", evaluate);
       viewport?.addEventListener("scroll", evaluate);
       window.addEventListener("resize", evaluate);
+      window.addEventListener("pagehide", resetIosLifecycleKeyboard);
+      window.addEventListener("pageshow", handlePageShow);
+      document.addEventListener("visibilitychange", handleVisibilityChange);
       document.addEventListener("focusin", handleFocus);
       document.addEventListener("focusout", handleBlur);
+      document.addEventListener("pointerdown", handleEditorPointerDown, true);
 
       return () => {
         if (frame !== null) cancelAnimationFrame(frame);
@@ -112,8 +168,12 @@ export function useSoftwareKeyboardVisibility() {
         viewport?.removeEventListener("resize", evaluate);
         viewport?.removeEventListener("scroll", evaluate);
         window.removeEventListener("resize", evaluate);
+        window.removeEventListener("pagehide", resetIosLifecycleKeyboard);
+        window.removeEventListener("pageshow", handlePageShow);
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
         document.removeEventListener("focusin", handleFocus);
         document.removeEventListener("focusout", handleBlur);
+        document.removeEventListener("pointerdown", handleEditorPointerDown, true);
       };
     }
 

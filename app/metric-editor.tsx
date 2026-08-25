@@ -721,7 +721,9 @@ export default function TrackerEditor() {
     tracker?.goalSchedule?.daysOfWeek ?? [1, 3, 5],
   );
   const [reminderEnabled, setReminderEnabled] = useState(
-    tracker?.reminder?.enabled ?? false,
+    tracker?.reminders?.some((item) => item.enabled) ??
+      tracker?.reminder?.enabled ??
+      false,
   );
   const [reminderTimes, setReminderTimes] = useState<string[]>(
     tracker?.reminders?.map((item) => item.time) ??
@@ -1026,6 +1028,11 @@ export default function TrackerEditor() {
     setActiveFrom(dateKey());
     setTrackGoal(false);
     setGoalCalendarOpen(false);
+    setReminderEnabled(
+      preset.reminders?.some((item) => item.enabled) ??
+        preset.reminder?.enabled ??
+        false,
+    );
     setReminderTimes(
       preset.reminders?.map((item) => item.time) ??
         defaultReminderTimes({ id: preset.templateId, category: preset.category }),
@@ -2283,7 +2290,7 @@ export default function TrackerEditor() {
                   onPress={() => setWorkoutQualificationMode("custom")}
                 />
               </View>
-              <Text style={[styles.help, { color: colors.muted }]}>Recommended: 30-minute walk, 20-minute run, 30-minute strength session, or 20 minutes of another workout.</Text>
+              <Text style={[styles.help, { color: colors.muted }]}>Recommended uses any one: walk 30 min, 2 km, or 100 kcal; run 20 min, 3 km, or 150 kcal; strength 30 min or 120 kcal; other activity 20 min, 3 km, or 100 kcal.</Text>
               {workoutQualificationMode === "custom" ? (
                 <View style={styles.workoutRuleList}>
                   {workoutRules.map((rule, index) => (
@@ -3522,13 +3529,14 @@ export default function TrackerEditor() {
                             label={`Time ${index + 1}`}
                             value={time}
                             wheelPicker
-                            onChange={(value) =>
+                            onChange={(value) => {
+                              setReminderEnabled(true);
                               setReminderTimes((current) =>
                                 current.map((item, itemIndex) =>
                                   itemIndex === index ? value : item,
                                 ),
-                              )
-                            }
+                              );
+                            }}
                           />
                         </View>
                         {reminderTimes.length > 1 ? (
@@ -3560,13 +3568,14 @@ export default function TrackerEditor() {
                       {timerEnabled ? (
                         <>
                           <Pressable
-                            onPress={() =>
+                            onPress={() => {
+                              setReminderEnabled(true);
                               setReminderDurations((current) => {
                                 const next = [...current];
                                 next[index] = next[index] ? undefined : 60;
                                 return next;
-                              })
-                            }
+                              });
+                            }}
                             style={[styles.reminderFrequency, { borderColor: colors.border }]}
                           >
                             <Ionicons name="timer-outline" size={14} color={accent} />
@@ -3622,19 +3631,21 @@ export default function TrackerEditor() {
                         <ReminderScheduleEditor
                           schedule={reminderSchedules[index]}
                           anchorDate={activeFrom}
-                          onChange={(schedule) =>
+                          onChange={(schedule) => {
+                            setReminderEnabled(true);
                             setReminderSchedules((current) => {
                               const next = [...current];
                               next[index] = schedule;
                               return next;
-                            })
-                          }
+                            });
+                          }}
                         />
                       ) : null}
                       </View>
                     ))}
                     <Pressable
                       onPress={() => {
+                        setReminderEnabled(true);
                         setReminderTimes((current) => [...current, "19:00"]);
                         setReminderSchedules((current) => [
                           ...current,

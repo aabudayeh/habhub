@@ -10,6 +10,8 @@ import {
   workoutWebNotificationSignature,
 } from "@/src/domain/workoutNotifications";
 import { enhanceAndroidTimerNotification } from "@/src/notifications/liveTimer";
+import { persistBackgroundWorkoutFinish } from "@/src/storage/backgroundWorkoutFinish";
+import type { NativeWorkoutActionReceipt } from "@/src/domain/backgroundWorkoutFinish";
 
 export const WORKOUT_TIMER_CATEGORY = "metricrally-workout-timer";
 const WORKOUT_TIMER_LAST_CATEGORY = "metricrally-workout-timer-last";
@@ -81,6 +83,15 @@ type AndroidWorkoutNotificationBridge = {
     ownerId: string,
     generation: string,
   ) => Promise<string>;
+  peekWorkoutTimerNotificationActions?: (
+    ownerId: string,
+    generation: string,
+  ) => Promise<string>;
+  acknowledgeWorkoutTimerNotificationActions?: (
+    ownerId: string,
+    generation: string,
+    occurredAt: number,
+  ) => Promise<boolean>;
   clearWorkoutTimerNotificationFlow?: () => Promise<boolean>;
 };
 
@@ -601,13 +612,23 @@ async function presentWebWorkoutNotification({
     phaseStartedAt: phaseStartedAt ?? Date.now(),
     phaseElapsedSeconds,
   });
-  const notificationBody = workoutWebNotificationBody(body, elapsedSeconds);
+  const phaseOrigin = Math.max(
+    0,
+    (phaseStartedAt ?? Date.now()) - Math.max(0, phaseElapsedSeconds) * 1000,
+  );
+  const phaseTimestamp =
+    phase === "paused" ? (phaseStartedAt ?? Date.now()) : phaseOrigin;
+  const notificationBody = workoutWebNotificationBody(
+    body,
+    elapsedSeconds,
+    phase,
+  );
   const signature = workoutWebNotificationSignature({
     ownerId,
     title,
     body: notificationBody,
     phase,
-    elapsedSeconds,
+    phaseTimestamp,
   });
   if (
     webWorkoutNotificationOwnerId === ownerId &&
@@ -637,10 +658,6 @@ async function presentWebWorkoutNotification({
     return;
   const phaseLabel =
     phase === "paused" ? "PAUSED" : phase === "work" ? "WORK" : "REST";
-  const phaseOrigin = Math.max(
-    0,
-    (phaseStartedAt ?? Date.now()) - Math.max(0, phaseElapsedSeconds) * 1000,
-  );
   const maxActions = Math.max(
     0,
     Number(
@@ -670,8 +687,9 @@ async function presentWebWorkoutNotification({
           },
         ]
       : [];
-  // `timestamp` is part of the Notifications API standard and lets a browser
-  // keep showing the phase origin even after it throttles the hidden page.
+  // `timestamp` is the standards-based durable clock input. Browsers may
+  // render it as a relative age or a clock time after suspending the page;
+  // unlike body reposts it does not depend on a hidden JavaScript interval.
   // React Native's bundled DOM declaration currently omits that member.
   const options: NotificationOptions & {
     timestamp: number;
@@ -682,12 +700,12 @@ async function presentWebWorkoutNotification({
     icon: "/pwa-icon-192.png",
     badge: "/habhub-notification-badge-96.png",
     tag: WORKOUT_TIMER_NOTIFICATION,
-    timestamp: phaseOrigin,
+    timestamp: phaseTimestamp,
     actions,
     requireInteraction: true,
     // Alert once when the timer first appears and on a real phase transition.
-    // Ten-second elapsed-time replacements keep the same alert signature and
-    // stay silent, avoiding a sound/vibration loop.
+    // State replacements keep the same alert signature and stay silent,
+    // avoiding a sound/vibration loop.
     silent: !shouldAlert,
     renotify: shouldAlert && replacesLiveNotification,
     data: {
@@ -704,29 +722,138 @@ async function presentWebWorkoutNotification({
     webWorkoutNotificationAlertSignature = alertSignature;
 }
 
-async function consumeNativeActions(ownerId: string, generation: string) {
+async function peekNativeActions(
+  ownerId: string,
+  generation: string,
+): Promise<NativeWorkoutActionReceipt[]> {
   if (!nativeWorkoutActionsEnabled()) return [];
   const stored = await androidWorkoutBridge()
-    ?.consumeWorkoutTimerNotificationActions?.(ownerId, generation)
+    ?.peekWorkoutTimerNotificationActions?.(ownerId, generation)
     .catch(() => "[]");
   try {
     const parsed = stored ? (JSON.parse(stored) as unknown) : [];
     return Array.isArray(parsed)
       ? parsed.filter(
-          (item): item is QueuedWorkoutTimerAction =>
+          (item): item is NativeWorkoutActionReceipt =>
             Boolean(item) &&
             typeof item === "object" &&
-            typeof (item as QueuedWorkoutTimerAction).occurredAt === "number" &&
-            (item as QueuedWorkoutTimerAction).ownerId === ownerId &&
-            (item as QueuedWorkoutTimerAction).generation === generation &&
+            typeof (item as NativeWorkoutActionReceipt).occurredAt === "number" &&
+            (item as NativeWorkoutActionReceipt).ownerId === ownerId &&
+            (item as NativeWorkoutActionReceipt).generation === generation &&
             [WORKOUT_TIMER_NEXT, WORKOUT_TIMER_PAUSE, WORKOUT_TIMER_FINISH].includes(
-              (item as QueuedWorkoutTimerAction).action,
+              (item as NativeWorkoutActionReceipt).action,
             ),
         )
       : [];
   } catch {
     return [];
   }
+}
+
+export async function acknowledgeNativeWorkoutTimerAction(
+  action: Pick<
+    QueuedWorkoutTimerAction,
+    "ownerId" | "generation" | "occurredAt"
+  >,
+) {
+  if (!nativeWorkoutActionsEnabled())
+    throw new Error("Native workout actions are unavailable.");
+  const acknowledged =
+    (await androidWorkoutBridge()
+      ?.acknowledgeWorkoutTimerNotificationActions?.(
+        action.ownerId,
+        action.generation,
+        action.occurredAt,
+      )) ?? false;
+  if (!acknowledged)
+    throw new Error("The native workout receipt was not acknowledged.");
+  return true;
+}
+
+function parseNativeActionReceipts(
+  stored: string | undefined,
+  ownerId: string,
+  generation: string,
+) {
+  try {
+    const parsed = stored ? (JSON.parse(stored) as unknown) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is NativeWorkoutActionReceipt =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            typeof (item as NativeWorkoutActionReceipt).occurredAt ===
+              "number" &&
+            (item as NativeWorkoutActionReceipt).ownerId === ownerId &&
+            (item as NativeWorkoutActionReceipt).generation === generation &&
+            [
+              WORKOUT_TIMER_NEXT,
+              WORKOUT_TIMER_PAUSE,
+              WORKOUT_TIMER_FINISH,
+            ].includes((item as NativeWorkoutActionReceipt).action),
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function nativeFinishActionContext(payload: Record<string, unknown>) {
+  const notification =
+    payload.notification && typeof payload.notification === "object"
+      ? (payload.notification as Record<string, unknown>)
+      : undefined;
+  const request =
+    notification?.request && typeof notification.request === "object"
+      ? (notification.request as Record<string, unknown>)
+      : undefined;
+  const content =
+    request?.content && typeof request.content === "object"
+      ? (request.content as Record<string, unknown>)
+      : undefined;
+  const contentData =
+    content?.data && typeof content.data === "object"
+      ? (content.data as Record<string, unknown>)
+      : undefined;
+  const ownerId = contentData?.workoutOwnerId;
+  const generation = contentData?.workoutGeneration;
+  return typeof ownerId === "string" && typeof generation === "string"
+    ? { ownerId, generation }
+    : null;
+}
+
+async function persistNativeFinishAction(payload: Record<string, unknown>) {
+  const context = nativeFinishActionContext(payload);
+  if (!context) return false;
+  const stored = await androidWorkoutBridge()
+    ?.peekWorkoutTimerNotificationActions?.(
+      context.ownerId,
+      context.generation,
+    )
+    .catch(() => "[]");
+  const actions = parseNativeActionReceipts(
+    stored,
+    context.ownerId,
+    context.generation,
+  );
+  const finish = actions.find(
+    (item) => item.action === WORKOUT_TIMER_FINISH,
+  );
+  if (!finish) return false;
+  const completion = await persistBackgroundWorkoutFinish({
+    ownerId: context.ownerId,
+    generation: context.generation,
+    actions,
+  });
+  if (!completion) return false;
+  const acknowledged = await androidWorkoutBridge()
+    ?.acknowledgeWorkoutTimerNotificationActions?.(
+      context.ownerId,
+      context.generation,
+      finish.occurredAt,
+    )
+    .catch(() => false);
+  return acknowledged === true;
 }
 
 async function readFlow() {
@@ -922,7 +1049,18 @@ if (
     // The custom Android receiver already committed, rendered, and queued
     // this action synchronously. Running the delayed TaskManager copy as well
     // would advance a second time and briefly restore an older phase.
-    if (nativeWorkoutActionsEnabled()) return;
+    if (nativeWorkoutActionsEnabled()) {
+      // Pause and ordinary Next retain the proven synchronous native-only
+      // path. A relabeled terminal Next is normalized to Finish by Kotlin, so
+      // this read-only peek also catches that OEM/Expo PendingIntent shape.
+      // Native receipts are ACKed only after the durable write succeeds.
+      if (
+        action === WORKOUT_TIMER_FINISH ||
+        action === WORKOUT_TIMER_NEXT
+      )
+        await persistNativeFinishAction(nested);
+      return;
+    }
     const ownerId = workoutNotificationOwnerId;
     if (!ownerId) return;
     const revision = workoutNotificationRevision;
@@ -1098,7 +1236,41 @@ export async function consumeWorkoutTimerActions(ownerId: string) {
       workoutNotificationGeneration !== generation
     )
       return [];
-    const nativeActions = await consumeNativeActions(ownerId, generation);
+    // Native receipts remain in SharedPreferences until their corresponding
+    // draft/session mutation is durable. This foreground peek deliberately
+    // mirrors the headless Finish path instead of destructively consuming the
+    // queue before React has persisted its transition.
+    const nativeActions = await peekNativeActions(ownerId, generation);
+    let nativeActionsForReact = nativeActions;
+    const nativeFinish = nativeActions.find(
+      (item) => item.action === WORKOUT_TIMER_FINISH,
+    );
+    if (nativeFinish) {
+      const completion = await persistBackgroundWorkoutFinish({
+        ownerId,
+        generation,
+        actions: nativeActions,
+      });
+      if (completion) {
+        const acknowledged = await acknowledgeNativeWorkoutTimerAction(
+          nativeFinish,
+        )
+          .then(() => true)
+          .catch(() => false);
+        if (acknowledged) {
+          const finishIndex = nativeActions.indexOf(nativeFinish);
+          nativeActionsForReact = nativeActions.slice(finishIndex + 1);
+        } else {
+          // The session is durable, but the native queue still owns replay.
+          // Returning these transitions would apply them a second time in Gym.
+          nativeActionsForReact = [];
+        }
+      } else {
+        // No durable Finish means no transition through Finish may escape the
+        // native queue into React. A future exact retry retains ownership.
+        nativeActionsForReact = [];
+      }
+    }
     const stored = await AsyncStorage.getItem(WORKOUT_TIMER_ACTIONS_KEY);
     let storedActions: QueuedWorkoutTimerAction[] = [];
     try {
@@ -1149,7 +1321,7 @@ export async function consumeWorkoutTimerActions(ownerId: string) {
       workoutNotificationGeneration !== generation
     )
       return [];
-    return nativeActions.length ? nativeActions : matchingStored;
+    return nativeActions.length ? nativeActionsForReact : matchingStored;
   });
   return consumed ?? [];
 }

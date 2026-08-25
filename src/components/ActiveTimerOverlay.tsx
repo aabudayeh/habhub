@@ -1,10 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   AppState as NativeAppState,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   useWindowDimensions,
@@ -20,8 +27,10 @@ import {
   formatActivityTimer,
 } from "@/src/domain/activityTimer";
 import {
+  clearLiveActivityTimerNotifications,
   dismissLiveActivityTimerNotifications,
   LiveActivityTimerNotification,
+  resumeLiveActivityTimerNotifications,
   syncLiveActivityTimerNotifications,
 } from "@/src/notifications/liveTimer";
 import { useApp } from "@/src/state/AppProvider";
@@ -30,6 +39,7 @@ import { useAppColors, useGroupAccent } from "@/src/theme";
 
 const OVERLAY_WIDTH = 178;
 const OVERLAY_HEIGHT = 46;
+const MINIMIZED_SIZE = 42;
 
 export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   const { state, updateSettings } = useApp();
@@ -48,6 +58,9 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     timers.find((item) => item.id === state.activeTimer?.id) ?? timers[0];
   const colors = useAppColors();
   const accent = useGroupAccent();
+  const minimized = state.settings.activityTimerOverlayMinimized === true;
+  const overlayWidth = minimized ? MINIMIZED_SIZE : OVERLAY_WIDTH;
+  const overlayHeight = minimized ? MINIMIZED_SIZE : OVERLAY_HEIGHT;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [now, setNow] = useState(Date.now());
@@ -99,22 +112,27 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
   );
   const notificationDescriptorsRef = useRef(notificationDescriptors);
   notificationDescriptorsRef.current = notificationDescriptors;
-  const clamp = (x: number, y: number) => ({
-    x: Math.max(8, Math.min(width - OVERLAY_WIDTH - 8, x)),
-    y: Math.max(
-      insets.top + 6,
-      Math.min(height - OVERLAY_HEIGHT - insets.bottom - 76, y),
-    ),
-  });
+  const clamp = useCallback(
+    (x: number, y: number) => ({
+      x: Math.max(8, Math.min(width - overlayWidth - 8, x)),
+      y: Math.max(
+        insets.top + 6,
+        Math.min(height - overlayHeight - insets.bottom - 76, y),
+      ),
+    }),
+    [height, insets.bottom, insets.top, overlayHeight, overlayWidth, width],
+  );
   useEffect(() => {
-    if (!timer || hidden) return;
+    // The compact bubble has no changing elapsed label, so avoid waking the
+    // whole overlay twice per second while it is minimized.
+    if (!timer || hidden || minimized) return;
     const interval = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(interval);
-  }, [hidden, timer]);
+  }, [hidden, minimized, timer]);
   useEffect(() => {
     if (!timer || initialized.current) return;
     initialized.current = true;
-    const initial = clamp(width - OVERLAY_WIDTH - 12, insets.top + 52);
+    const initial = clamp(width - overlayWidth - 12, insets.top + 52);
     positionRef.current = initial;
     position.setValue(initial);
     // Position is intentionally initialized only when a timer first appears.
@@ -124,6 +142,7 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     if (!timer) initialized.current = false;
   }, [timer]);
   useEffect(() => {
+    if (Platform.OS === "web") return;
     if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active")
       void dismissLiveActivityTimerNotifications(state.currentUserId);
@@ -144,6 +163,7 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     return () => subscription.remove();
   }, [state.currentUserId, tutorialSandbox]);
   useEffect(() => {
+    if (Platform.OS === "web") return;
     if (tutorialSandbox) return;
     if (NativeAppState.currentState === "active") return;
     void syncLiveActivityTimerNotifications(
@@ -152,13 +172,73 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
     );
   }, [notificationDescriptors, state.currentUserId, tutorialSandbox]);
   useEffect(() => {
+    if (Platform.OS !== "web") return;
+    if (
+      tutorialSandbox ||
+      state.settings.notifications.pushEnabled === false
+    ) {
+      void clearLiveActivityTimerNotifications();
+      return;
+    }
+    const ownerId = state.currentUserId;
+    resumeLiveActivityTimerNotifications(ownerId);
+    const presentHiddenTimerNotifications = () => {
+      void syncLiveActivityTimerNotifications(
+        notificationDescriptorsRef.current,
+        ownerId,
+      );
+    };
+    const dismissVisibleTimerNotifications = () => {
+      void dismissLiveActivityTimerNotifications(ownerId);
+    };
+    const reconcileVisibility = () => {
+      if (document.visibilityState === "visible")
+        dismissVisibleTimerNotifications();
+      else presentHiddenTimerNotifications();
+    };
+    reconcileVisibility();
+    document.addEventListener("visibilitychange", reconcileVisibility);
+    // WebKit can dispatch pagehide before visibilityState becomes hidden and
+    // then suspend the page before a later visibilitychange handler finishes.
+    // Treat the lifecycle events as authoritative so minimizing an installed
+    // iOS app cannot accidentally run the visible-page dismissal branch.
+    window.addEventListener("pagehide", presentHiddenTimerNotifications);
+    window.addEventListener("pageshow", dismissVisibleTimerNotifications);
+    return () => {
+      document.removeEventListener("visibilitychange", reconcileVisibility);
+      window.removeEventListener("pagehide", presentHiddenTimerNotifications);
+      window.removeEventListener("pageshow", dismissVisibleTimerNotifications);
+    };
+  }, [
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
+    tutorialSandbox,
+  ]);
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      tutorialSandbox ||
+      state.settings.notifications.pushEnabled === false ||
+      document.visibilityState === "visible"
+    )
+      return;
+    void syncLiveActivityTimerNotifications(
+      notificationDescriptors,
+      state.currentUserId,
+    );
+  }, [
+    notificationDescriptors,
+    state.currentUserId,
+    state.settings.notifications.pushEnabled,
+    tutorialSandbox,
+  ]);
+  useEffect(() => {
     if (!initialized.current) return;
     const next = clamp(positionRef.current.x, positionRef.current.y);
     positionRef.current = next;
     position.setValue(next);
     // Re-clamp only when the usable screen bounds change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, insets.bottom, insets.top, width]);
+  }, [clamp, height, insets.bottom, insets.top, minimized, position, width]);
   const responder = useMemo(
     () =>
       PanResponder.create({
@@ -191,9 +271,7 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
           position.setValue(positionRef.current);
         },
       }),
-    // Bounds are deliberately refreshed when the screen changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [height, insets.bottom, insets.top, position, width],
+    [clamp, position],
   );
   if (
     !timer ||
@@ -212,68 +290,103 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
           styles.position,
           position.getLayout(),
           {
+            width: overlayWidth,
+            height: overlayHeight,
             backgroundColor: colors.card,
             borderColor: timer.status === "paused" ? "#D24B4B" : accent,
           },
         ]}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t(`Open ${metricName} timer`)}
-          onPress={() =>
-            router.navigate({ pathname: "/timer", params: { timer: timer.id } } as never)
-          }
-          style={styles.pill}
-        >
-          <View
-            style={[
-              styles.icon,
-              {
-                backgroundColor:
-                  timer.status === "paused"
-                    ? "#D24B4B20"
-                    : `${accent}20`,
-              },
-            ]}
+        {minimized ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t(`Expand ${metricName} timer`)}
+            onPress={() =>
+              updateSettings({ activityTimerOverlayMinimized: false })
+            }
+            style={styles.minimizedButton}
           >
             <Ionicons
               name={timer.status === "paused" ? "pause" : "timer-outline"}
-              size={16}
+              size={21}
               color={timer.status === "paused" ? "#D24B4B" : accent}
             />
-          </View>
-          <View style={styles.copy}>
-            <Text
-              translate={false}
-              numberOfLines={1}
-              style={[styles.name, { color: colors.muted }]}
-            >
-              {metricName}
-            </Text>
-            <Text style={[styles.time, { color: colors.ink }]}>
-              {formatActivityTimer(seconds)}
-            </Text>
-          </View>
-          {timers.length > 1 ? (
-            <View style={[styles.count, { backgroundColor: colors.primarySoft }]}>
-              <Text translate={false} style={[styles.countText, { color: accent }]}>
-                +{timers.length - 1}
-              </Text>
-            </View>
-          ) : null}
+            <View
+              style={[
+                styles.minimizedDot,
+                {
+                  backgroundColor:
+                    timer.status === "paused" ? "#D24B4B" : accent,
+                  borderColor: colors.card,
+                },
+              ]}
+            />
+          </Pressable>
+        ) : (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t("Hide floating timer")}
-            hitSlop={8}
-            onPress={(event) => {
-              event.stopPropagation();
-              updateSettings({ showActivityTimerOverlay: false });
-            }}
-            style={styles.close}
+            accessibilityLabel={t(`Open ${metricName} timer`)}
+            onPress={() =>
+              router.navigate({
+                pathname: "/timer",
+                params: { timer: timer.id },
+              } as never)
+            }
+            style={styles.pill}
           >
-            <Ionicons name="close" size={14} color={colors.faint} />
+            <View
+              style={[
+                styles.icon,
+                {
+                  backgroundColor:
+                    timer.status === "paused" ? "#D24B4B20" : `${accent}20`,
+                },
+              ]}
+            >
+              <Ionicons
+                name={timer.status === "paused" ? "pause" : "timer-outline"}
+                size={16}
+                color={timer.status === "paused" ? "#D24B4B" : accent}
+              />
+            </View>
+            <View style={styles.copy}>
+              <Text
+                translate={false}
+                numberOfLines={1}
+                style={[styles.name, { color: colors.muted }]}
+              >
+                {metricName}
+              </Text>
+              <Text style={[styles.time, { color: colors.ink }]}>
+                {formatActivityTimer(seconds)}
+              </Text>
+            </View>
+            {timers.length > 1 ? (
+              <View
+                style={[styles.count, { backgroundColor: colors.primarySoft }]}
+              >
+                <Text
+                  translate={false}
+                  style={[styles.countText, { color: accent }]}
+                >
+                  +{timers.length - 1}
+                </Text>
+              </View>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("Minimize floating timer")}
+              hitSlop={8}
+              onPress={(event) => {
+                event.stopPropagation();
+                updateSettings({ activityTimerOverlayMinimized: true });
+              }}
+              style={styles.minimize}
+            >
+              <Ionicons name="remove" size={16} color={colors.faint} />
+            </Pressable>
           </Pressable>
-        </Pressable>
+        )}
       </Animated.View>
     </View>
   );
@@ -282,8 +395,6 @@ export function ActiveTimerOverlay({ hidden = false }: { hidden?: boolean }) {
 const styles = StyleSheet.create({
   position: {
     position: "absolute",
-    width: OVERLAY_WIDTH,
-    height: OVERLAY_HEIGHT,
     borderWidth: 1,
     borderRadius: 15,
     shadowColor: "#000000",
@@ -318,5 +429,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   countText: { fontSize: 8, fontWeight: "900" },
-  close: { width: 20, height: 28, alignItems: "center", justifyContent: "center" },
+  minimize: {
+    width: 20,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  minimizedButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  minimizedDot: {
+    position: "absolute",
+    right: 6,
+    top: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
+  },
 });

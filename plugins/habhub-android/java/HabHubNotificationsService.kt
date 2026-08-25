@@ -251,6 +251,66 @@ internal object HabHubWorkoutNotificationStore {
   }
 
   @Synchronized
+  fun peekActions(
+    context: Context,
+    ownerId: String,
+    generation: String,
+  ): String {
+    val prefs = preferences(context)
+    if (
+      prefs.getBoolean(DISABLED_KEY, true) ||
+      prefs.getString(ACTIVE_OWNER_KEY, null) != ownerId ||
+      prefs.getString(GENERATION_KEY, null) != generation
+    ) return "[]"
+    val stored = runCatching {
+      JSONArray(prefs.getString(ACTIONS_KEY, null) ?: "[]")
+    }.getOrElse { JSONArray() }
+    val actions = JSONArray()
+    for (index in 0 until stored.length()) {
+      val item = stored.optJSONObject(index) ?: continue
+      if (
+        item.optString("ownerId") == ownerId &&
+        item.optString("generation") == generation
+      ) actions.put(item)
+    }
+    return actions.toString()
+  }
+
+  @Synchronized
+  fun acknowledgeActionsThrough(
+    context: Context,
+    ownerId: String,
+    generation: String,
+    occurredAt: Long,
+  ): Boolean {
+    val prefs = preferences(context)
+    if (
+      prefs.getBoolean(DISABLED_KEY, true) ||
+      prefs.getString(ACTIVE_OWNER_KEY, null) != ownerId ||
+      prefs.getString(GENERATION_KEY, null) != generation
+    ) return false
+    val stored = runCatching {
+      JSONArray(prefs.getString(ACTIONS_KEY, null) ?: "[]")
+    }.getOrElse { JSONArray() }
+    val remaining = JSONArray()
+    var acknowledged = false
+    for (index in 0 until stored.length()) {
+      val item = stored.optJSONObject(index) ?: continue
+      val belongsToFlow =
+        item.optString("ownerId") == ownerId &&
+          item.optString("generation") == generation
+      if (belongsToFlow && item.optLong("occurredAt", Long.MAX_VALUE) <= occurredAt) {
+        acknowledged = true
+      } else {
+        remaining.put(item)
+      }
+    }
+    if (!acknowledged) return false
+    prefs.edit().putString(ACTIONS_KEY, remaining.toString()).commit()
+    return true
+  }
+
+  @Synchronized
   fun consumeActions(
     context: Context,
     ownerId: String,
@@ -308,6 +368,7 @@ internal object HabHubWorkoutNotificationStore {
 
     val flow = readFlow(context)
     var accepted = false
+    var queuedAction = action
     if (flow != null && !flow.finished) {
       when (action) {
         PAUSE_ACTION -> {
@@ -335,6 +396,11 @@ internal object HabHubWorkoutNotificationStore {
               flow.phaseElapsedMs = 0L
             } else {
               flow.finished = true
+              // An in-place rebuilt notification may relabel Expo's existing
+              // Next PendingIntent as Finish. Normalize that terminal tap so
+              // headless JS persists the workout instead of treating it as an
+              // ordinary progression receipt.
+              queuedAction = FINISH_ACTION
             }
           }
           accepted = true
@@ -357,7 +423,7 @@ internal object HabHubWorkoutNotificationStore {
       ACTIONS_KEY,
       appendAction(
         prefs.getString(ACTIONS_KEY, null),
-        action,
+        queuedAction,
         occurredAt,
         ownerId,
         generation,

@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { BottomTabBar } from "@react-navigation/bottom-tabs";
 import { useIsFocused } from "@react-navigation/native";
 import { Href, Tabs } from "expo-router";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useSyncExternalStore } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { Freeze } from "react-freeze";
 import { enableFreeze } from "react-native-screens";
@@ -14,6 +14,12 @@ import { LandingPage } from "@/src/types";
 import { useTranslation } from "@/src/i18n";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useSoftwareKeyboardVisibility } from "@/src/components/useSoftwareKeyboardVisibility";
+import {
+  hydrateWorkoutTimerPresence,
+  setWorkoutTimerPresence,
+  subscribeWorkoutTimerPresence,
+  workoutTimerPresenceFor,
+} from "@/src/storage/workoutTimerPresence";
 import { TutorialTarget } from "@/src/components/TutorialSpotlight";
 import {
   compactTabBarForCount,
@@ -35,7 +41,10 @@ const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
   journal: "book-outline",
   performance: "speedometer-outline",
   status: "accessibility-outline",
+  timers: "timer-outline",
 };
+
+type TabRouteName = LandingPage | "timers";
 
 // Native tabs keep their local state, but hidden heavy pages must stop React
 // work while another tab is handling touches. react-native-screens requires
@@ -90,6 +99,21 @@ export default function TabLayout() {
   const curvedWebEdgeGutter =
     Platform.OS === "web" && insets.bottom > 0 ? 10 : 0;
   const softwareKeyboardVisible = useSoftwareKeyboardVisibility();
+  const activityTimers = state.activityTimers?.length
+    ? state.activityTimers
+    : state.activeTimer
+      ? [state.activeTimer]
+      : [];
+  const hasActiveActivityTimer = activityTimers.length > 0;
+  const hasActiveWorkoutTimer = useSyncExternalStore(
+    subscribeWorkoutTimerPresence,
+    () => workoutTimerPresenceFor(state.currentUserId),
+    () => false,
+  );
+  useEffect(() => {
+    setWorkoutTimerPresence(state.currentUserId, false);
+    void hydrateWorkoutTimerPresence(state.currentUserId);
+  }, [state.currentUserId]);
   const hasUnreadChat = useMemo(() => {
     const readAt =
       state.settings.notifications.chatReadAtByConversation ?? {};
@@ -134,9 +158,21 @@ export default function TabLayout() {
   const showJournal = state.settings.showJournal !== false;
   const showPerformance = state.settings.showPerformance !== false;
   const showStatus = state.settings.showStatus !== false;
-  const tabOrder = normalizeTabOrder(state.settings.tabOrder);
+  const tabOrder = useMemo(
+    () => normalizeTabOrder(state.settings.tabOrder),
+    [state.settings.tabOrder],
+  );
+  const showTimersTab =
+    state.settings.showActiveTimersTab === true && hasActiveActivityTimer;
+  const orderedTabs = useMemo<TabRouteName[]>(() => {
+    if (!showTimersTab) return tabOrder;
+    const next: TabRouteName[] = [...tabOrder];
+    const workoutIndex = next.indexOf("gym");
+    next.splice(workoutIndex >= 0 ? workoutIndex + 1 : next.length, 0, "timers");
+    return next;
+  }, [showTimersTab, tabOrder]);
   const tabOptions: Record<
-    LandingPage,
+    TabRouteName,
     { title: string; href?: Href | null }
   > = {
     index: { title: t("Today") },
@@ -167,15 +203,18 @@ export default function TabLayout() {
       title: t("Status"),
       href: showStatus ? ("/status" as Href) : null,
     },
+    timers: {
+      title: t("Timers"),
+      href: showTimersTab ? ("/timers" as Href) : null,
+    },
   };
-  const isVisible = (name: LandingPage) => tabOptions[name].href !== null;
-  const orderedTabs = tabOrder;
+  const isVisible = (name: TabRouteName) => tabOptions[name].href !== null;
   const visibleTabCount = orderedTabs.filter(isVisible).length;
   const compactTabBar = compactTabBarForCount(visibleTabCount);
   const requestedDefault = state.settings.defaultLandingPage ?? "index";
   const defaultTab: LandingPage = isVisible(requestedDefault)
     ? requestedDefault
-    : orderedTabs.find(isVisible) ?? "index";
+    : tabOrder.find(isVisible) ?? "index";
   return (
     <Tabs
       initialRouteName={defaultTab}
@@ -195,7 +234,7 @@ export default function TabLayout() {
         headerShown: false,
         lazy: true,
         freezeOnBlur: true,
-        tabBarButton: isVisible(route.name as LandingPage)
+        tabBarButton: isVisible(route.name as TabRouteName)
           ? (props) => (
               <HapticTab {...props} tutorialId={`tab-${route.name}`} />
             )
@@ -283,6 +322,20 @@ export default function TabLayout() {
                   ]}
                 />
               ) : null}
+              {(route.name === "gym" && hasActiveWorkoutTimer) ||
+              (route.name === "timers" && hasActiveActivityTimer) ? (
+                <View
+                  accessibilityLabel={
+                    route.name === "gym"
+                      ? t("Workout timer active")
+                      : t("Activity timer active")
+                  }
+                  style={[
+                    styles.timerDot,
+                    { borderColor: colors.card },
+                  ]}
+                />
+              ) : null}
             </View>
           );
         },
@@ -291,6 +344,9 @@ export default function TabLayout() {
       {orderedTabs.map((name) => (
         <Tabs.Screen key={name} name={name} options={tabOptions[name]} />
       ))}
+      {!orderedTabs.includes("timers") ? (
+        <Tabs.Screen name="timers" options={tabOptions.timers} />
+      ) : null}
     </Tabs>
   );
 }
@@ -315,5 +371,15 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     borderWidth: 2,
     backgroundColor: "#F06A45",
+  },
+  timerDot: {
+    position: "absolute",
+    top: 0,
+    right: 1,
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
+    borderWidth: 2,
+    backgroundColor: "#A7F432",
   },
 });

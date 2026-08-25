@@ -9,6 +9,7 @@ import { todayHeroSummary } from "../src/domain/todayHero.ts";
 import {
   featuredWidgetSnapshot,
   leaderboardWidgetSnapshot,
+  privacySafeLeaderboardWidgetState,
   statusWidgetSnapshot,
 } from "../src/widgets/snapshot.ts";
 
@@ -226,6 +227,125 @@ const privateSarah = privateLeaderboard.metrics[0]?.rows.find(
 assert.equal(privateSarah?.private, true);
 assert.equal(privateSarah?.value, "Private");
 
+const webSharedStatusState = {
+  ...leaderboardState,
+  entries: leaderboardState.entries.filter(
+    (entry) =>
+      entry.metricId !== "steps" ||
+      entry.localDate !== today ||
+      ![state.currentUserId, "sarah", "daniel"].includes(entry.userId),
+  ),
+  dailyMetricStatuses: [
+    ...leaderboardState.dailyMetricStatuses.filter(
+      (status) =>
+        status.metricId !== "steps" ||
+        status.localDate !== today ||
+        ![state.currentUserId, "sarah", "daniel"].includes(status.userId),
+    ),
+    {
+      groupId: state.group.id,
+      metricId: "steps",
+      userId: "sarah",
+      localDate: today,
+      goalReached: false,
+      scoreContribution: 43.21,
+      visibility: "group",
+      exactValue: 4321,
+      privacyProjectionVersion: 2,
+      hasData: true,
+      sourceProvider: "google_health",
+    },
+    {
+      groupId: state.group.id,
+      metricId: "steps",
+      userId: "daniel",
+      localDate: today,
+      goalReached: true,
+      scoreContribution: 100,
+      visibility: "private",
+      exactValue: 999999,
+      privacyProjectionVersion: 2,
+      hasData: true,
+      sourceProvider: "google_health",
+    },
+    {
+      groupId: state.group.id,
+      metricId: "steps",
+      userId: state.currentUserId,
+      localDate: today,
+      goalReached: true,
+      scoreContribution: 100,
+      visibility: "group",
+      exactValue: 888888,
+      privacyProjectionVersion: 2,
+      hasData: true,
+      sourceProvider: "google_health",
+    },
+  ],
+};
+const genericCacheSafeState = stateWithoutGoogleHealthLocalData(
+  webSharedStatusState,
+);
+assert.equal(
+  genericCacheSafeState.dailyMetricStatuses.some(
+    (status) =>
+      status.metricId === "steps" &&
+      status.localDate === today &&
+      status.userId === "sarah",
+  ),
+  false,
+  "the generic plaintext-cache scrub intentionally removes Google-derived compact rows",
+);
+const widgetLeaderboardState = privacySafeLeaderboardWidgetState(
+  webSharedStatusState,
+  today,
+  ["steps"],
+);
+assert.equal(
+  widgetLeaderboardState.dailyMetricStatuses.some(
+    (status) =>
+      status.metricId === "steps" &&
+      status.localDate === today &&
+      status.userId === "sarah" &&
+      status.exactValue === 4321,
+  ),
+  true,
+  "an explicit v2 group projection from a web-only peer must remain visible to the widget",
+);
+assert.equal(
+  widgetLeaderboardState.dailyMetricStatuses.some(
+    (status) =>
+      status.metricId === "steps" &&
+      status.localDate === today &&
+      [state.currentUserId, "daniel"].includes(status.userId),
+  ),
+  false,
+  "private peer projections and this device owner's Google projection must stay outside the launcher state",
+);
+const webSharedLeaderboard = leaderboardWidgetSnapshot(
+  widgetLeaderboardState,
+  today,
+  state.settings.language ?? "en",
+  identity,
+  theme,
+  ["steps"],
+);
+const webSarah = webSharedLeaderboard.metrics[0]?.rows.find(
+  (row) => row.id === "sarah",
+);
+const privateDaniel = webSharedLeaderboard.metrics[0]?.rows.find(
+  (row) => row.id === "daniel",
+);
+assert.equal(webSarah?.private, false);
+assert.match(webSarah?.value ?? "", /4[.,]321 steps/);
+assert.equal(privateDaniel?.private, true);
+assert.equal(privateDaniel?.value, "Private");
+assert.doesNotMatch(
+  JSON.stringify(webSharedLeaderboard),
+  /google_health|888888|999999/,
+  "the native payload may contain only the authorized formatted peer value, never provider metadata or excluded values",
+);
+
 const activeTodoFilterState = {
   ...state,
   settings: {
@@ -310,7 +430,12 @@ const bridge = read("src/widgets/WidgetSnapshotBridge.tsx");
 assert.match(
   bridge,
   /const currentState = stateWithoutGoogleHealthLocalData\(stateRef\.current\)[\s\S]{0,900}featuredWidgetSnapshot\([\s\S]{0,300}currentState/,
-  "both durable widget snapshots must be derived only after the Google projection",
+  "Featured and Status snapshots must remain derived only after the Google cache scrub",
+);
+assert.match(
+  bridge,
+  /const leaderboardState = leaderboardConfigurations\.length[\s\S]{0,200}privacySafeLeaderboardWidgetState\([\s\S]{0,160}stateRef\.current,[\s\S]{0,100}today,[\s\S]{0,100}requestedLeaderboardMetricIds[\s\S]{0,500}leaderboardWidgetSnapshot\([\s\S]{0,100}leaderboardState/,
+  "Leaderboard snapshots must use the peer-authorized projection rather than the broader local cache projection",
 );
 
 console.log("Privacy-safe Featured, Status, and Leaderboard widget snapshots validated.");

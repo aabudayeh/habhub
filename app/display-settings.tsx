@@ -697,6 +697,15 @@ export default function DisplaySettings() {
         onPress={() => setAdvancedOpen((open) => !open)}
       >
         <Card style={styles.list}>
+          <ToggleRow
+            icon="timer-outline"
+            title="Show active Timers tab"
+            copy="Add a temporary Timers tab only while an activity timer is active"
+            enabled={state.settings.showActiveTimersTab === true}
+            onChange={(enabled) =>
+              updateSettings({ showActiveTimersTab: enabled })
+            }
+          />
           <SelectionMenu
             title="Status avatar style"
             items={[

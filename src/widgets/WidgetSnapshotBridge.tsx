@@ -20,6 +20,7 @@ import { useTutorialSandboxActive } from "@/src/tutorial/TutorialSandboxContext"
 import {
   featuredWidgetSnapshot,
   leaderboardWidgetSnapshot,
+  privacySafeLeaderboardWidgetState,
   statusWidgetSnapshot,
 } from "@/src/widgets/snapshot";
 import {
@@ -171,9 +172,10 @@ export function WidgetSnapshotBridge() {
         return;
       }
       snapshotClearedRef.current = false;
-      // Android stores widget JSON in plaintext SharedPreferences. Build only
-      // from the cache-safe projection; Google values continue to render in
-      // the open app but never influence a durable launcher snapshot.
+      // Android stores widget JSON in plaintext SharedPreferences. Featured
+      // and Status use the cache-safe projection so this device's raw Google
+      // values never persist there. Leaderboard separately restores only an
+      // authorized peer's explicit compact group/status projection.
       const currentState = stateWithoutGoogleHealthLocalData(stateRef.current);
       const currentLanguage = languageRef.current;
       const translate = translationRef.current;
@@ -224,9 +226,16 @@ export function WidgetSnapshotBridge() {
           ),
         ),
       ];
+      const leaderboardState = leaderboardConfigurations.length
+        ? privacySafeLeaderboardWidgetState(
+            stateRef.current,
+            today,
+            requestedLeaderboardMetricIds,
+          )
+        : currentState;
       const leaderboard = leaderboardConfigurations.length
         ? leaderboardWidgetSnapshot(
-            currentState,
+            leaderboardState,
             today,
             currentLanguage,
             translate,
