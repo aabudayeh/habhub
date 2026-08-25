@@ -302,6 +302,8 @@ assert.match(today, /subtaskSection/);
 assert.match(today, /useTodoSubtaskExpansion/);
 assert.match(today, /useTodoItemVisibility/);
 assert.match(today, /accessibilityLabel=\{visible \? "Hide to-do" : "Show to-do"\}/);
+assert.match(today, /accessibilityLabel=\{t\("Delete"\)\}/);
+assert.match(today, /onPress: \(\) => deleteTodo\(todo\.id\)/);
 assert.match(today, /children\.length && childrenExpanded/);
 assert.doesNotMatch(
   today,
@@ -327,6 +329,11 @@ assert.match(leaderboardTodos, /useTodoSubtaskExpansion/);
 assert.match(leaderboardTodos, /useTodoItemVisibility/);
 assert.match(leaderboardTodos, /accessibilityLabel=\{itemVisible \? "Hide group to-do" : "Show group to-do"\}/);
 assert.match(leaderboardTodos, /nested\.length && nestedExpanded/);
+assert.match(
+  leaderboardTodos,
+  /\{editing && canDelete\(todo\) \? \([\s\S]{0,500}accessibilityLabel="Delete group to-do"/,
+  "group deletion must be destructive and visible only while Leaderboard edit mode is active",
+);
 const leaderboard = read("app/(tabs)/group.tsx");
 assert.match(leaderboard, /GroupTodoLeaderboardSection/);
 assert.match(leaderboard, /groupTodosBelowTrackers/);
@@ -355,6 +362,7 @@ assert.match(groupEditor, /cleanupCreatedDraftRows/);
 assert.match(groupEditor, /canAdd/);
 assert.match(groupEditor, /addingDisabled=\{saving\}/);
 assert.match(groupEditor, /canManageItem=/);
+assert.match(groupEditor, /<Ionicons name="trash-outline"[\s\S]{0,120}Delete for group/);
 assert.match(groupEditor, /useWebBackNavigationGuard/);
 const personalEditor = read("app/todo-editor.tsx");
 assert.match(personalEditor, /<TodoSubtaskEditorSection/);

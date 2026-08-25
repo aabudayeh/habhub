@@ -52,7 +52,6 @@ import { latestMemberActivityPublishedAt } from "@/src/domain/leaderboardSync";
 import { FOOD_NUTRIENTS } from "@/src/domain/food";
 import {
   memberDisplayName,
-  memberOriginalLabel,
   memberRoleLabel,
 } from "@/src/domain/members";
 import { imageSourceUri } from "@/src/domain/media";
@@ -554,8 +553,7 @@ export default function LeaderboardDetail() {
                     </Text>
                   </Pressable>
                   <Text style={[styles.role, { color: colors.muted }]}>
-                    {memberOriginalLabel(state, row.member) ??
-                      memberRoleLabel(row.member)}
+                    {memberRoleLabel(row.member)}
                   </Text>
                   {memberSyncedAt ? (
                     <Text style={[styles.role, { color: colors.muted }]}>

@@ -53,7 +53,7 @@ data class HabHubWidgetConfiguration(
 )
 
 object HabHubWidgetStore {
-  const val LEADERBOARD_FONT_PERCENT_MIN = 90
+  const val LEADERBOARD_FONT_PERCENT_MIN = 60
   const val LEADERBOARD_FONT_PERCENT_MAX = 130
   const val LEADERBOARD_FONT_PERCENT_DEFAULT = 100
   private const val PREFS = "habhub_widgets"
@@ -339,6 +339,7 @@ object HabHubWidgetRenderer {
   private const val GOAL_LIME = "#B8E45C"
   private const val MAX_RENDER_PIXELS = 190_000f
   private const val MIN_LEADERBOARD_ROW_TEXT_SIZE = 6.2f
+  private const val MIN_SCALED_LEADERBOARD_TEXT_SIZE = 4.6f
   private val providers = arrayOf(
     HabHubSmallWidgetProvider::class.java,
     HabHubSquareWidgetProvider::class.java,
@@ -741,20 +742,29 @@ object HabHubWidgetRenderer {
       HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MIN / 100f,
       HabHubWidgetStore.LEADERBOARD_FONT_PERCENT_MAX / 100f,
     )
+    val headerTextFloor = (
+      MIN_LEADERBOARD_ROW_TEXT_SIZE * leaderboardFontScale
+    ).coerceAtLeast(MIN_SCALED_LEADERBOARD_TEXT_SIZE)
     val pad = (min(size.widthDp, size.heightDp) * 0.065f).coerceIn(4f, 12f)
     val headerSize = (
       min(size.widthDp / 14f, size.heightDp / 6.5f) * leaderboardFontScale
-    ).coerceIn(6.2f, 17f)
+    ).coerceIn(headerTextFloor, 17f)
     val headerBaseline = pad + headerSize
     val datePaint = textPaint(
-      (headerSize * 0.72f).coerceIn(5f, 10.5f),
+      (headerSize * 0.72f).coerceIn(
+        (5f * leaderboardFontScale).coerceAtLeast(4.2f),
+        10.5f,
+      ),
       Color.argb(210, 222, 230, 242),
       true,
     )
     val dateLabel = item.optString("dateLabel")
     val dateWidth = min(
       size.widthDp * 0.38f,
-      max(24f, datePaint.measureText(dateLabel) + 2f),
+      max(
+        (24f * leaderboardFontScale).coerceAtLeast(18f),
+        datePaint.measureText(dateLabel) + 2f,
+      ),
     )
     val title = item.optString("title", "Leaderboard")
     val titleWidth = max(12f, size.widthDp - pad * 2f - dateWidth - 4f)
@@ -768,7 +778,9 @@ object HabHubWidgetRenderer {
         title,
         titleWidth,
         headerSize,
-        (headerSize * 0.74f).coerceAtLeast(5.2f),
+        (headerSize * 0.74f).coerceAtLeast(
+          (5.2f * leaderboardFontScale).coerceAtLeast(4.2f),
+        ),
         Color.WHITE,
         true,
       ),
@@ -788,7 +800,14 @@ object HabHubWidgetRenderer {
         context.getString(R.string.habhub_widget_open_to_update),
         size.widthDp / 2f,
         size.heightDp / 2f + 4f,
-        textPaint((headerSize * 0.82f).coerceIn(5.2f, 11f), Color.argb(210, 222, 230, 242), true),
+        textPaint(
+          (headerSize * 0.82f).coerceIn(
+            (5.2f * leaderboardFontScale).coerceAtLeast(4.2f),
+            11f,
+          ),
+          Color.argb(210, 222, 230, 242),
+          true,
+        ),
       )
       return
     }
@@ -810,7 +829,8 @@ object HabHubWidgetRenderer {
         size.widthDp / size.heightDp <= 3f
     val rowTextFloor = (
       MIN_LEADERBOARD_ROW_TEXT_SIZE * leaderboardFontScale
-    ).coerceAtLeast(MIN_LEADERBOARD_ROW_TEXT_SIZE)
+    ).coerceAtLeast(MIN_SCALED_LEADERBOARD_TEXT_SIZE)
+    val rowSpacingScale = leaderboardFontScale.coerceIn(0.72f, 1.3f)
     metrics.forEachIndexed { index, metric ->
       val column = index % grid.columns
       val row = index / grid.columns
@@ -824,21 +844,37 @@ object HabHubWidgetRenderer {
         .coerceIn(0.62f, maximumCellScale)
       val denseMemberHeader = desiredRows >= 3 && grid.cellHeight < 32f + desiredRows * 14f
       val headerScale = if (denseMemberHeader) 0.78f else 1f
-      val innerPad = (4.5f * cellScale * headerScale).coerceIn(2.4f, 10f)
+      val innerPad = (
+        4.5f * cellScale * headerScale * leaderboardFontScale
+      ).coerceIn(
+        (2.4f * leaderboardFontScale).coerceAtLeast(1.8f),
+        10f,
+      )
       val metricTitleSize = (
         8.2f * cellScale * headerScale * leaderboardFontScale
-      ).coerceIn(5.4f, 18f)
+      ).coerceIn(
+        (5.4f * leaderboardFontScale).coerceAtLeast(4.4f),
+        18f,
+      )
       val baseRowTextSize = (
         6.6f * cellScale * headerScale * leaderboardFontScale
       ).coerceIn(4.5f, 14.5f)
-      val iconRadius = (4.8f * cellScale * headerScale).coerceIn(3f, 12f)
+      val iconRadius = (
+        4.8f * cellScale * headerScale * leaderboardFontScale
+      ).coerceIn(
+        (3f * leaderboardFontScale).coerceAtLeast(2.4f),
+        12f,
+      )
       val cornerRadius = (7f * cellScale).coerceIn(5f, 15f)
       canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint(Color.argb(34, 255, 255, 255)))
       canvas.drawRoundRect(rect, cornerRadius, cornerRadius, strokePaint(Color.argb(42, 214, 226, 246), max(0.65f, cellScale * 0.55f)))
       val metricColor = parseColor(metric.optString("color"), Color.rgb(184, 228, 92))
       val iconCenterX = left + innerPad + iconRadius
       val iconCenterY = top + innerPad + iconRadius
-      val iconRectRadius = iconRadius + max(1.2f, cellScale)
+      val iconRectRadius = iconRadius + max(
+        (1.2f * leaderboardFontScale).coerceAtLeast(1f),
+        cellScale * leaderboardFontScale,
+      )
       canvas.drawRoundRect(
         RectF(
           iconCenterX - iconRectRadius,
@@ -878,9 +914,14 @@ object HabHubWidgetRenderer {
       val titleBandHeight = max(iconRadius * 2f + innerPad * 1.45f, metricTitleSize * 1.65f + innerPad)
       val rowTop = top + titleBandHeight
       val availableHeight = max(0f, rect.bottom - rowTop - innerPad * 0.45f)
-      val roomyStackRows = grid.cellWidth < 76f
+      val narrowTallSingleMetricRows =
+        metrics.size == 1 &&
+          size.widthDp < 150f &&
+          size.heightDp >= 150f &&
+          grid.cellWidth <= 112f
+      val roomyStackRows = grid.cellWidth < 76f || narrowTallSingleMetricRows
       val preferredRowHeight = max(
-        if (roomyStackRows) 14f else 10f,
+        (if (roomyStackRows) 14f else 10f) * rowSpacingScale,
         baseRowTextSize * if (roomyStackRows) 3.15f else 2.15f,
       )
       // Keep the airy layout for a couple of members. If it would hide a
@@ -889,7 +930,10 @@ object HabHubWidgetRenderer {
       val compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight
       val compactRowHeight = max(
         rowTextFloor * 1.35f,
-        min(10f, max(6.4f, baseRowTextSize * 0.9f)),
+        min(
+          10f * rowSpacingScale,
+          max(6.4f * rowSpacingScale, baseRowTextSize * 0.9f),
+        ),
       )
       val visibleRows = min(
         desiredRows,
@@ -950,16 +994,27 @@ object HabHubWidgetRenderer {
           val baseline = centerY + rowTextSize * 0.34f
           drawText(canvas, rank, left + innerPad, baseline, rankWidth, rankPaint)
           val naturalValuePaint = textPaint(rowTextSize, valueColor, true)
+          val compactWidthScale = leaderboardFontScale.coerceAtMost(1f)
           val minimumNameWidth = if (wideTwoMetricLayout) {
-            min(38f, grid.cellWidth * 0.34f)
+            min(
+              38f + (1f - compactWidthScale) * 10f,
+              grid.cellWidth * (0.34f + (1f - compactWidthScale) * 0.10f),
+            )
           } else {
-            min(32f, grid.cellWidth * 0.30f)
+            min(
+              32f + (1f - compactWidthScale) * 20f,
+              grid.cellWidth * (0.30f + (1f - compactWidthScale) * 0.16f),
+            )
           }
           val maximumValueWidth = max(10f, right - labelLeft - minimumNameWidth - innerPad * 0.55f)
           val valueWidth = min(
             maximumValueWidth,
             max(
-              grid.cellWidth * if (wideTwoMetricLayout) 0.24f else 0.34f,
+              grid.cellWidth * if (wideTwoMetricLayout) {
+                0.18f + compactWidthScale * 0.06f
+              } else {
+                0.20f + compactWidthScale * 0.14f
+              },
               naturalValuePaint.measureText(value) + 1f,
             ),
           )

@@ -79,7 +79,7 @@ import {
   shiftedPeriodAnchor,
 } from "@/src/domain/leaderboard";
 import { leaderboardSyncTimestamp } from "@/src/domain/leaderboardSync";
-import { memberDisplayName, memberOriginalLabel } from "@/src/domain/members";
+import { memberDisplayName } from "@/src/domain/members";
 import {
   useCloudSyncActions,
   useCloudSyncStatus,
@@ -722,11 +722,12 @@ function LeaderboardScreen() {
       1,
       4,
     );
-    // Web pages can use the surrounding vertical scroll when a chosen card
-    // count is taller than the visual viewport. Honouring the saved count here
-    // also prevents the history/date disclosure from rechunking and remounting
-    // every leaderboard card.
-    if (Platform.OS === "web") return preferredCapacity;
+    // Web pages and an explicitly expanded native page can use the surrounding
+    // vertical Screen scroll when their chosen card count is taller than the
+    // visual viewport. Keep the adaptive fitting behavior for the established
+    // one/two-card default, but never silently reduce a user's 3/4 selection.
+    if (Platform.OS === "web" || preferredCapacity > 2)
+      return preferredCapacity;
     return Math.min(fittingCapacity, preferredCapacity);
   }, [
     state.group.members.length,
@@ -1495,11 +1496,6 @@ function LeaderboardScreen() {
                         onPress={openLeaderboardDetail}
                         style={styles.memberDetailLink}
                       >
-                        {memberOriginalLabel(state, row.member) ? (
-                          <Text style={[styles.original, { color: colors.faint }]}>
-                            {memberOriginalLabel(state, row.member)}
-                          </Text>
-                        ) : null}
                         {loadingSavedResult ? (
                           <Text style={[styles.detail, { color: colors.muted }]}>
                             Loading saved data…
@@ -1633,6 +1629,7 @@ function LeaderboardScreen() {
             testID="leaderboard-card-pages"
             pages={rankingPages}
             scrollEnabled={!draggingCardId}
+            webNaturalHeight
             requestedPage={requestedLeaderboardPage}
             onPageChange={(page) => {
               if (page === requestedLeaderboardPage)
@@ -2408,7 +2405,6 @@ const styles = StyleSheet.create({
   memberDetailLink: { minHeight: 18, justifyContent: "center" },
   metricLink: { flexDirection: "row", alignItems: "center", gap: 5, paddingVertical: 4 },
   name: { fontSize: 12, fontWeight: "900" },
-  original: { fontSize: 8, marginTop: 1 },
   detail: { fontSize: 8, lineHeight: 12, marginTop: 2 },
   detailLine: {
     flexDirection: "row",

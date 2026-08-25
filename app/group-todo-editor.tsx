@@ -901,6 +901,7 @@ export default function GroupTodoEditor() {
           }
           style={styles.delete}
         >
+          <Ionicons name="trash-outline" size={15} color="#C44949" />
           <Text style={styles.deleteText}>Delete for group</Text>
         </Pressable>
       ) : null}
@@ -923,7 +924,7 @@ const styles = StyleSheet.create({
   dateText: { flex: 1, fontSize: 10, fontWeight: "800" },
   save: { minHeight: 46, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   saveText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
-  delete: { minHeight: 42, alignItems: "center", justifyContent: "center" },
+  delete: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   deleteText: { color: "#C44949", fontSize: 9, fontWeight: "900" },
   error: { fontSize: 9, lineHeight: 13, marginBottom: 8 },
   message: { padding: 18, fontSize: 10 },

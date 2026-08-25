@@ -8,6 +8,7 @@ export type WebDisplayEnvironment = {
 
 export const STANDALONE_IOS_TAB_BOTTOM_INSET = 10;
 export const WEB_TAB_CONTENT_BOTTOM_PADDING = 16;
+export const IOS_WEB_MIN_EDITOR_FONT_SIZE = 16;
 
 export function isIosWebDevice(
   environment: WebDisplayEnvironment,
@@ -31,6 +32,29 @@ export function isStandaloneIosWebApp(
     environment.navigatorStandalone === true;
 
   return isIosWebDevice(environment) && standalone;
+}
+
+/**
+ * Mobile Safari zooms the complete page when a focused editor renders below
+ * 16 CSS pixels. Protect every iOS Web editor by default, while preserving the
+ * existing explicit opt-in used by compact cross-platform editors (Chat) and
+ * allowing a deliberate opt-out when a future control truly needs one.
+ */
+export function resolveWebEditorFontSize(
+  fontSize: number,
+  environment?: WebDisplayEnvironment,
+  preventWebFocusZoom?: boolean,
+): number {
+  const normalizedFontSize = Number.isFinite(fontSize)
+    ? Math.max(0, fontSize)
+    : IOS_WEB_MIN_EDITOR_FONT_SIZE;
+  const protectFocus =
+    preventWebFocusZoom === true ||
+    (preventWebFocusZoom !== false &&
+      Boolean(environment && isIosWebDevice(environment)));
+  return protectFocus
+    ? Math.max(IOS_WEB_MIN_EDITOR_FONT_SIZE, normalizedFontSize)
+    : normalizedFontSize;
 }
 
 /**

@@ -46,11 +46,13 @@ type PushTicket = {
 };
 type ExpoPushTarget = {
   kind: "expo";
+  userId: string;
   token: string;
   preferences: Record<string, unknown>;
 };
 type WebPushTarget = {
   kind: "web";
+  userId: string;
   token: string;
   endpoint: string;
   p256dh: string;
@@ -59,6 +61,19 @@ type WebPushTarget = {
   preferences: Record<string, unknown>;
 };
 type PushTarget = ExpoPushTarget | WebPushTarget;
+type DevicePushTokenRow = {
+  user_id: string;
+  token: string;
+  preferences: unknown;
+};
+type WebPushSubscriptionRow = {
+  user_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  expiration_time: number | string | null;
+  preferences: unknown;
+};
 type StoredPushEvent = {
   id: string;
   event_key: string;
@@ -419,15 +434,20 @@ Deno.serve(async (request) => {
       await markCanonicalEventAccepted(admin, canonical, "no_recipients");
       return json({ sent: 0, accepted: true });
     }
+    const chatNicknames = await recipientChatNicknames(
+      admin,
+      canonical,
+      recipientIds,
+    );
 
     const { data: tokens, error: tokenError } = await admin
       .from("device_push_tokens")
-      .select("token, preferences, platform")
+      .select("user_id, token, preferences, platform")
       .in("user_id", recipientIds);
     if (tokenError) throw tokenError;
     const webSubscriptionResult = await admin
       .from("web_push_subscriptions")
-      .select("endpoint, p256dh, auth, expiration_time, preferences")
+      .select("user_id, endpoint, p256dh, auth, expiration_time, preferences")
       .in("user_id", recipientIds);
     if (
       webSubscriptionResult.error &&
@@ -435,17 +455,21 @@ Deno.serve(async (request) => {
     )
       throw webSubscriptionResult.error;
     const targets: PushTarget[] = [
-      ...(tokens ?? []).map((item) => ({
+      ...((tokens ?? []) as DevicePushTokenRow[]).map((item) => ({
         kind: "expo" as const,
+        userId: item.user_id as string,
         token: item.token as string,
         preferences: objectRecord(item.preferences),
       })),
       ...(webSubscriptionResult.error
         ? []
-        : (webSubscriptionResult.data ?? []).map((item) => {
+        : (
+            (webSubscriptionResult.data ?? []) as WebPushSubscriptionRow[]
+          ).map((item) => {
             const expirationTime = Number(item.expiration_time);
             return {
               kind: "web" as const,
+              userId: item.user_id as string,
               token: item.endpoint as string,
               endpoint: item.endpoint as string,
               p256dh: item.p256dh as string,
@@ -495,6 +519,11 @@ Deno.serve(async (request) => {
       (item): item is WebPushTarget => item.kind === "web",
     );
     const messages = expoEligible.map((item) => {
+      const recipientEvent = eventForPushRecipient(
+        canonical!,
+        item.userId,
+        chatNicknames,
+      );
       const language = pushLanguage(item.preferences ?? {});
       return {
         to: item.token,
@@ -502,18 +531,18 @@ Deno.serve(async (request) => {
         channelId: "paceboard",
         priority: "high",
         title: pushPreview(
-          canonical!.titles?.[language] ??
-          canonical!.titles?.en ??
-          canonical!.title,
+          recipientEvent.titles?.[language] ??
+          recipientEvent.titles?.en ??
+          recipientEvent.title,
           120,
         ),
         body: pushPreview(
-          canonical!.bodies?.[language] ??
-          canonical!.bodies?.en ??
-          canonical!.body,
+          recipientEvent.bodies?.[language] ??
+          recipientEvent.bodies?.en ??
+          recipientEvent.body,
           220,
         ),
-        data: canonical!.data,
+        data: recipientEvent.data,
       };
     });
 
@@ -584,7 +613,16 @@ Deno.serve(async (request) => {
         const batch = webEligible.slice(offset, offset + 20);
         const outcomes = await Promise.allSettled(
           batch.map((target) =>
-            sendWebPushTarget(target, canonical!, topic, vapidDetails),
+            sendWebPushTarget(
+              target,
+              eventForPushRecipient(
+                canonical!,
+                target.userId,
+                chatNicknames,
+              ),
+              topic,
+              vapidDetails,
+            ),
           ),
         );
         const acceptedTokens = outcomes.flatMap((outcome, index) =>
@@ -1545,6 +1583,63 @@ async function canDispatchStoredEvent(
     .maybeSingle();
   if (error) throw error;
   return membership?.status === "active";
+}
+
+async function recipientChatNicknames(
+  admin: ReturnType<typeof createClient>,
+  event: CanonicalEvent,
+  recipientIds: string[],
+) {
+  const senderId = normalizedUuid(event.data.senderId);
+  if (event.category !== "chat" || !senderId || !recipientIds.length)
+    return new Map<string, string>();
+  // Nicknames are private aliases owned by the notification recipient. Resolve
+  // them after the authorized audience is known so one member's alias is never
+  // reused for another member's notification.
+  const { data, error } = await admin
+    .from("group_member_aliases")
+    .select("owner_user_id, nickname")
+    .eq("group_id", event.groupId)
+    .eq("subject_user_id", senderId)
+    .in("owner_user_id", recipientIds);
+  if (error) throw error;
+  return new Map(
+    (
+      (data ?? []) as { owner_user_id: unknown; nickname: unknown }[]
+    ).flatMap((row) => {
+        const ownerId = normalizedUuid(row.owner_user_id);
+        const nickname = normalizedString(row.nickname, 80);
+        return ownerId && nickname ? [[ownerId, nickname] as const] : [];
+      }),
+  );
+}
+
+function eventForPushRecipient(
+  event: CanonicalEvent,
+  recipientId: string,
+  chatNicknames: ReadonlyMap<string, string>,
+): CanonicalEvent {
+  if (event.category !== "chat") return event;
+  const nickname = chatNicknames.get(recipientId);
+  if (!nickname) return event;
+  const profileName = event.data.senderName;
+  const direct = event.eventType === "direct_message";
+  const profilePrefix = profileName ? `${profileName}:` : "";
+  const body =
+    !direct && profilePrefix && event.body.startsWith(profilePrefix)
+      ? `${nickname}:${event.body.slice(profilePrefix.length)}`
+      : event.body;
+  return {
+    ...event,
+    title: direct ? `Direct message from ${nickname}` : event.title,
+    body,
+    // Canonical chat copy is English user-authored content rather than an app
+    // phrase catalogue. Clearing optional localized fallbacks ensures the
+    // recipient-specific alias remains the final visible sender identity.
+    titles: undefined,
+    bodies: undefined,
+    data: { ...event.data, senderName: nickname },
+  };
 }
 
 async function canonicalRecipients(

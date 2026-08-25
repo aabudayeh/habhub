@@ -451,7 +451,8 @@ export type DailyMetricStatus = {
   hasData?: boolean;
   /**
    * Sensitive-source provenance for compact projections. Google-derived
-   * statuses remain cloud/in-memory only and are excluded from device caches.
+   * statuses are excluded from plaintext caches; only already-authorized
+   * compact projections may use the account-scoped encrypted checkpoint.
    */
   sourceProvider?: HealthProvider;
   /** Last cloud update for this member's daily group snapshot. */

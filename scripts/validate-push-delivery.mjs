@@ -227,6 +227,54 @@ assert.match(edge, /const expectedEventKey = `message:\$\{groupId\}:\$\{clientMe
 assert.match(edge, /pushPreview\(direct \? text :/);
 assert.match(edge, /`Group message in \$\{groupName\}`/);
 assert.match(edge, /`\$\{senderName\}: \$\{text\}`/);
+assert.match(
+  chatScreen,
+  /`Message \$\{memberDisplayName\(state, recipient\)\}…`/,
+  "the direct-message composer must use the viewer's group nickname",
+);
+assert.ok(
+  (chatScreen.match(/memberDisplayName\(state, sender\)/g) ?? []).length >= 1,
+  "message sender labels must use the shared group nickname resolver",
+);
+assert.equal(
+  (edge.match(/\.from\("group_member_aliases"\)/g) ?? []).length,
+  1,
+  "recipient nicknames must be loaded in one bounded query rather than once per push target",
+);
+const recipientAliasResolver = edge.slice(
+  edge.indexOf("async function recipientChatNicknames"),
+  edge.indexOf("function eventForPushRecipient"),
+);
+assert.match(
+  recipientAliasResolver,
+  /\.eq\("group_id", event\.groupId\)[\s\S]{0,180}\.eq\("subject_user_id", senderId\)[\s\S]{0,180}\.in\("owner_user_id", recipientIds\)/,
+  "chat pushes must resolve each recipient's private group-scoped alias",
+);
+assert.match(edge, /\.select\("user_id, token, preferences, platform"\)/);
+assert.match(
+  edge,
+  /\.select\("user_id, endpoint, p256dh, auth, expiration_time, preferences"\)/,
+);
+const expoChatPersonalization = edge.slice(
+  edge.indexOf("const messages = expoEligible.map"),
+  edge.indexOf("let acceptedTicketCount"),
+);
+assert.match(
+  expoChatPersonalization,
+  /eventForPushRecipient\([\s\S]{0,100}item\.userId/,
+  "Expo pushes must personalize sender identity for their recipient",
+);
+assert.match(expoChatPersonalization, /data: recipientEvent\.data/);
+const webChatPersonalization = edge.slice(
+  edge.indexOf("if (webEligible.length)"),
+  edge.indexOf("// `sent` is retained for old clients"),
+);
+assert.match(
+  webChatPersonalization,
+  /sendWebPushTarget\([\s\S]{0,120}eventForPushRecipient\([\s\S]{0,100}target\.userId/,
+  "Web pushes must personalize sender identity for their recipient",
+);
+assert.match(edge, /data: \{ \.\.\.event\.data, senderName: nickname \}/);
 assert.match(cloud, /`Group message in \$\{state\.group\.name\}`/);
 assert.match(cloud, /`\$\{sender\.name\}: \$\{message\.text \|\| fallback\}`/);
 assert.match(alertDomain, /`Group message in \$\{state\.group\.name\}`/);

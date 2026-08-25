@@ -181,8 +181,8 @@ assert.match(pluginSource, /LEADERBOARD_METRICS_PREFIX/);
 assert.match(pluginSource, /LEADERBOARD_FONT_PERCENT_PREFIX/);
 assert.match(
   pluginSource,
-  /LEADERBOARD_FONT_PERCENT_MIN = 90[\s\S]*LEADERBOARD_FONT_PERCENT_MAX = 130[\s\S]*LEADERBOARD_FONT_PERCENT_DEFAULT = 100/,
-  "Leaderboard text customization must have bounded, readable defaults",
+  /LEADERBOARD_FONT_PERCENT_MIN = 60[\s\S]*LEADERBOARD_FONT_PERCENT_MAX = 130[\s\S]*LEADERBOARD_FONT_PERCENT_DEFAULT = 100/,
+  "Leaderboard text customization must allow a compact 60% setting while preserving the default",
 );
 assert.doesNotMatch(pluginSource, /LEADERBOARD_COUNT_PREFIX|val leaderboardCount:/);
 assert.match(pluginSource, /setOf\("theme", "transparent", "custom"\)/);
@@ -254,39 +254,57 @@ assert.match(
 );
 assert.match(
   pluginSource,
-  /MIN_LEADERBOARD_ROW_TEXT_SIZE = 6\.2f[\s\S]*rowTextFloor = \([\s\S]*MIN_LEADERBOARD_ROW_TEXT_SIZE \* leaderboardFontScale[\s\S]*denseMemberHeader = desiredRows >= 3[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*rowTextFloor \* 1\.35f[\s\S]*rowHeight \* 0\.66f[\s\S]*coerceAtLeast\(rowTextFloor\)[\s\S]*baseRowTextSize \* 1\.28f/,
-  "Leaderboard rows must keep a legible floor while compacting larger groups and scaling into spare height",
+  /MIN_LEADERBOARD_ROW_TEXT_SIZE = 6\.2f[\s\S]*MIN_SCALED_LEADERBOARD_TEXT_SIZE = 4\.6f[\s\S]*rowTextFloor = \([\s\S]*MIN_LEADERBOARD_ROW_TEXT_SIZE \* leaderboardFontScale[\s\S]*coerceAtLeast\(MIN_SCALED_LEADERBOARD_TEXT_SIZE\)[\s\S]*denseMemberHeader = desiredRows >= 3[\s\S]*desiredRows \* preferredRowHeight > availableHeight[\s\S]*rowTextFloor \* 1\.35f[\s\S]*rowHeight \* 0\.66f[\s\S]*coerceAtLeast\(rowTextFloor\)[\s\S]*baseRowTextSize \* 1\.28f/,
+  "Leaderboard rows must scale below the default floor while retaining a legible absolute minimum",
 );
 assert.match(
   pluginSource,
-  /wideTwoMetricLayout =[\s\S]*metrics\.size == 2[\s\S]*grid\.columns == 2[\s\S]*size\.widthDp >= 220f[\s\S]*size\.widthDp \/ size\.heightDp <= 3f[\s\S]*maximumCellScale = if \(wideTwoMetricLayout\) 1\.45f[\s\S]*grid\.cellWidth \* if \(wideTwoMetricLayout\) 0\.24f else 0\.34f/,
+  /rowSpacingScale[\s\S]*innerPad = \([\s\S]*leaderboardFontScale[\s\S]*iconRadius = \([\s\S]*leaderboardFontScale[\s\S]*compactWidthScale[\s\S]*0\.30f \+ \(1f - compactWidthScale\) \* 0\.16f/,
+  "Compact widget typography must also reclaim icon, padding, row-spacing, and name-column space",
+);
+assert.match(
+  pluginSource,
+  /narrowTallSingleMetricRows =[\s\S]*metrics\.size == 1[\s\S]*size\.widthDp < 150f[\s\S]*size\.heightDp >= 150f[\s\S]*grid\.cellWidth <= 112f[\s\S]*roomyStackRows = grid\.cellWidth < 76f \|\| narrowTallSingleMetricRows[\s\S]*stackRows = roomyStackRows && !compactRows/,
+  "A narrow/tall single-metric widget must stack name and value only when every requested row fits",
+);
+assert.match(
+  pluginSource,
+  /wideTwoMetricLayout =[\s\S]*metrics\.size == 2[\s\S]*grid\.columns == 2[\s\S]*size\.widthDp >= 220f[\s\S]*size\.widthDp \/ size\.heightDp <= 3f[\s\S]*maximumCellScale = if \(wideTwoMetricLayout\) 1\.45f[\s\S]*compactWidthScale[\s\S]*0\.34f \+ \(1f - compactWidthScale\) \* 0\.10f[\s\S]*0\.18f \+ compactWidthScale \* 0\.06f/,
   "A 4 x 2 two-tracker widget must cap oversized typography and return spare width to member names",
 );
 const MIN_LEADERBOARD_ROW_TEXT_SIZE = 6.2;
+const MIN_SCALED_LEADERBOARD_TEXT_SIZE = 4.6;
 function singleMetricLeaderboardDensity(widthDp, heightDp, members, fontScale = 1) {
   const pad = Math.min(12, Math.max(4, Math.min(widthDp, heightDp) * 0.065));
-  const headerSize = Math.min(17, Math.max(6.2, Math.min(widthDp / 14, heightDp / 6.5) * fontScale));
+  const headerTextFloor = Math.max(MIN_SCALED_LEADERBOARD_TEXT_SIZE, MIN_LEADERBOARD_ROW_TEXT_SIZE * fontScale);
+  const headerSize = Math.min(17, Math.max(headerTextFloor, Math.min(widthDp / 14, heightDp / 6.5) * fontScale));
   const cellWidth = widthDp - pad * 2;
   const cellHeight = heightDp - (pad + headerSize + Math.max(3, headerSize * 0.45)) - pad;
   const desiredRows = Math.min(members, 5);
   const cellScale = Math.min(2.6, Math.max(0.62, Math.min(cellWidth / 68, cellHeight / 39)));
   const denseMemberHeader = desiredRows >= 3 && cellHeight < 32 + desiredRows * 14;
   const headerScale = denseMemberHeader ? 0.78 : 1;
-  const innerPad = Math.min(10, Math.max(2.4, 4.5 * cellScale * headerScale));
-  const metricTitleSize = Math.min(18, Math.max(5.4, 8.2 * cellScale * headerScale * fontScale));
+  const innerPad = Math.min(10, Math.max(Math.max(1.8, 2.4 * fontScale), 4.5 * cellScale * headerScale * fontScale));
+  const metricTitleSize = Math.min(18, Math.max(Math.max(4.4, 5.4 * fontScale), 8.2 * cellScale * headerScale * fontScale));
   const baseRowTextSize = Math.min(14.5, Math.max(4.5, 6.6 * cellScale * headerScale * fontScale));
-  const iconRadius = Math.min(12, Math.max(3, 4.8 * cellScale * headerScale));
+  const iconRadius = Math.min(12, Math.max(Math.max(2.4, 3 * fontScale), 4.8 * cellScale * headerScale * fontScale));
   const titleBandHeight = Math.max(
     iconRadius * 2 + innerPad * 1.45,
     metricTitleSize * 1.65 + innerPad,
   );
   const availableHeight = Math.max(0, cellHeight - titleBandHeight - innerPad * 0.45);
-  const preferredRowHeight = Math.max(10, baseRowTextSize * 2.15);
+  const rowSpacingScale = Math.min(1.3, Math.max(0.72, fontScale));
+  const roomyStackRows =
+    cellWidth < 76 || (widthDp < 150 && heightDp >= 150 && cellWidth <= 112);
+  const preferredRowHeight = Math.max(
+    (roomyStackRows ? 14 : 10) * rowSpacingScale,
+    baseRowTextSize * (roomyStackRows ? 3.15 : 2.15),
+  );
   const compactRows = desiredRows > 0 && desiredRows * preferredRowHeight > availableHeight;
-  const rowTextFloor = Math.max(MIN_LEADERBOARD_ROW_TEXT_SIZE, MIN_LEADERBOARD_ROW_TEXT_SIZE * fontScale);
+  const rowTextFloor = Math.max(MIN_SCALED_LEADERBOARD_TEXT_SIZE, MIN_LEADERBOARD_ROW_TEXT_SIZE * fontScale);
   const compactRowHeight = Math.max(
     rowTextFloor * 1.35,
-    Math.min(10, Math.max(6.4, baseRowTextSize * 0.9)),
+    Math.min(10 * rowSpacingScale, Math.max(6.4 * rowSpacingScale, baseRowTextSize * 0.9)),
   );
   const visibleRows = Math.min(
     desiredRows,
@@ -301,8 +319,11 @@ function singleMetricLeaderboardDensity(widthDp, heightDp, members, fontScale = 
           rowHeight * 0.66,
         ),
       )
-    : Math.max(baseRowTextSize, Math.min(baseRowTextSize * 1.28, rowHeight * 0.58));
-  return { rowHeight, rowTextSize, visibleRows };
+    : Math.max(
+        baseRowTextSize,
+        Math.min(baseRowTextSize * 1.28, rowHeight * (roomyStackRows ? 0.4 : 0.58)),
+      );
+  return { cellWidth, compactRows, rowHeight, rowTextSize, visibleRows };
 }
 const sparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1);
 const crowdedLeaderboard = singleMetricLeaderboardDensity(203, 105, 5);
@@ -322,11 +343,70 @@ assert.ok(
   compactLeaderboard.rowTextSize >= MIN_LEADERBOARD_ROW_TEXT_SIZE,
   "A crowded 2 x 1 leaderboard must never shrink member text below the legible floor",
 );
-const smallerSparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1, 0.9);
+const smallerSparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1, 0.6);
 const largerSparseLeaderboard = singleMetricLeaderboardDensity(203, 105, 1, 1.3);
 assert.ok(
   largerSparseLeaderboard.rowTextSize > smallerSparseLeaderboard.rowTextSize,
   "The per-widget text scale must materially change roomy Leaderboard rows",
+);
+const defaultTwoByThreeLeaderboard = singleMetricLeaderboardDensity(109, 180, 5, 1);
+const compactTwoByThreeLeaderboard = singleMetricLeaderboardDensity(109, 180, 5, 0.6);
+const compactTwoByOneLeaderboard = singleMetricLeaderboardDensity(109, 50, 2, 0.6);
+assert.equal(compactTwoByThreeLeaderboard.visibleRows, 5);
+assert.ok(
+  compactTwoByThreeLeaderboard.rowTextSize < defaultTwoByThreeLeaderboard.rowTextSize * 0.8,
+  "The 60% setting must materially compact a crowded 2 x 3 Leaderboard widget",
+);
+assert.ok(compactTwoByThreeLeaderboard.rowTextSize >= MIN_SCALED_LEADERBOARD_TEXT_SIZE);
+function shouldStackLeaderboardRows({ metricCount, widthDp, heightDp, cellWidth, compactRows }) {
+  const narrowTallSingleMetricRows =
+    metricCount === 1 && widthDp < 150 && heightDp >= 150 && cellWidth <= 112;
+  const roomyStackRows = cellWidth < 76 || narrowTallSingleMetricRows;
+  return roomyStackRows && !compactRows;
+}
+assert.equal(
+  shouldStackLeaderboardRows({
+    metricCount: 1,
+    widthDp: 109,
+    heightDp: 180,
+    cellWidth: compactTwoByThreeLeaderboard.cellWidth,
+    compactRows: compactTwoByThreeLeaderboard.compactRows,
+  }),
+  true,
+  "A 2 x 3 single-metric widget must give the full row width to long names",
+);
+assert.equal(
+  shouldStackLeaderboardRows({
+    metricCount: 1,
+    widthDp: 109,
+    heightDp: 50,
+    cellWidth: compactTwoByOneLeaderboard.cellWidth,
+    compactRows: compactTwoByOneLeaderboard.compactRows,
+  }),
+  false,
+  "A 2 x 1 widget must preserve its compact single-line rows",
+);
+assert.equal(
+  shouldStackLeaderboardRows({
+    metricCount: 2,
+    widthDp: 109,
+    heightDp: 180,
+    cellWidth: compactTwoByThreeLeaderboard.cellWidth,
+    compactRows: compactTwoByThreeLeaderboard.compactRows,
+  }),
+  false,
+  "Selecting multiple metrics must preserve the existing grid row layout",
+);
+assert.equal(
+  shouldStackLeaderboardRows({
+    metricCount: 1,
+    widthDp: 109,
+    heightDp: 180,
+    cellWidth: defaultTwoByThreeLeaderboard.cellWidth,
+    compactRows: defaultTwoByThreeLeaderboard.compactRows,
+  }),
+  false,
+  "Narrow/tall rows must fall back to the compact single-line layout when stacking would hide members",
 );
 function bestLeaderboardGrid(count, width, height, gap) {
   let best = { columns: 1, rows: count, cellWidth: width, cellHeight: height / Math.max(1, count), readability: 0 };

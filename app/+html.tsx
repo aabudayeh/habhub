@@ -70,7 +70,13 @@ export default function RootHtml({ children }: PropsWithChildren) {
         <meta name="theme-color" content="#F4F7FB" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="HabHub" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        {/*
+         * WebKit offsets bottom-positioned content in installed apps when
+         * black-translucent is combined with viewport-fit=cover. An opaque
+         * dark status bar preserves the intended appearance without moving
+         * the bottom navigator or adding a canvas-coloured strip above it.
+         */}
+        <meta name="apple-mobile-web-app-status-bar-style" content="black" />
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="apple-touch-icon" href="/habhub-icon.png" />
         <meta

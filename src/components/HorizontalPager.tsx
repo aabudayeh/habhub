@@ -33,6 +33,7 @@ export function HorizontalPager({
   requestedPage,
   onPageChange,
   showPageDots = true,
+  webNaturalHeight = false,
 }: {
   pages: ReactNode[];
   accessibilityLabel: string;
@@ -45,6 +46,13 @@ export function HorizontalPager({
   onPageChange?: (page: number) => void;
   /** Hide built-in dots when the surrounding screen already renders them. */
   showPageDots?: boolean;
+  /**
+   * Let a tall Web page contribute its full height to a surrounding vertical
+   * ScrollView. React Native Web gives horizontal ScrollViews `flexShrink: 1`
+   * by default, which can otherwise clamp a multi-card page to the viewport
+   * and leave the clipped rows unreachable. Native keeps its existing sizing.
+   */
+  webNaturalHeight?: boolean;
 }) {
   const colors = useAppColors();
   const { t } = useLocalization();
@@ -184,6 +192,24 @@ export function HorizontalPager({
   );
 
   if (!pages.length) return null;
+  if (Platform.OS === "web" && pages.length === 1) {
+    // RN Web adds `touch-action: none` to a disabled ScrollView. Bypass the
+    // horizontal viewport when there is nothing to page so a tall page never
+    // swallows the surrounding Screen's vertical touch gesture. The effects
+    // above still clamp requested pages and report page zero to consumers.
+    return (
+      <View
+        accessibilityLabel={t(accessibilityLabel)}
+        onLayout={measure}
+        style={styles.root}
+        testID={testID}
+      >
+        <View style={[styles.page, styles.singleWebPage, pageStyle]}>
+          {pages[0]}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View
@@ -217,7 +243,12 @@ export function HorizontalPager({
         onScroll={Platform.OS === "web" ? updateActivePage : undefined}
         onMomentumScrollEnd={updateActivePage}
         onScrollEndDrag={updateActivePage}
-        style={styles.viewport}
+        style={[
+          styles.viewport,
+          Platform.OS === "web" && webNaturalHeight
+            ? styles.webNaturalHeightViewport
+            : undefined,
+        ]}
       >
         {pages.map((page, index) => (
           <View
@@ -275,7 +306,9 @@ export function HorizontalPager({
 const styles = StyleSheet.create({
   root: { width: "100%" },
   viewport: { width: "100%" },
+  webNaturalHeightViewport: { flexGrow: 0, flexShrink: 0 },
   page: { alignSelf: "flex-start" },
+  singleWebPage: { width: "100%" },
   unmeasuredPage: { width: "100%" },
   dots: {
     minHeight: 26,

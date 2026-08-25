@@ -100,12 +100,17 @@ assert.match(leaderboard, /if \(!leaderboardUsesPages\) return rankingCards/);
 assert.match(leaderboard, /scrollEnabled=\{!draggingCardId\}/);
 assert.match(settings, /\[1, 2, 3, 4\]\.map/);
 assert.match(leaderboard, /testID="leaderboard-card-pages"/);
+assert.match(
+  leaderboard,
+  /testID="leaderboard-card-pages"[\s\S]{0,220}webNaturalHeight/,
+  "Web Leaderboard pages with three or four cards must expose their full height to the surrounding vertical scroll",
+);
 assert.match(leaderboard, /chunkIntoPages\(\s*rankingCards/);
 assert.match(leaderboard, /return Math\.min\(fittingCapacity, preferredCapacity\)/);
 assert.match(
   leaderboard,
-  /if \(Platform\.OS === "web"\) return preferredCapacity/,
-  "Web must preserve the user's saved card count and let the surrounding screen scroll",
+  /if \(Platform\.OS === "web" \|\| preferredCapacity > 2\)\s*return preferredCapacity/,
+  "Web and explicit 3/4-card native pages must preserve the saved chunk size and let the surrounding screen scroll",
 );
 const leaderboardPageSize = leaderboard.slice(
   leaderboard.indexOf("const leaderboardPageSize = useMemo"),
@@ -139,6 +144,23 @@ assert.match(pager, /const activePageRef = useRef\(0\)/);
 assert.match(pager, /onPress=\{\(\) => moveToPage\(index\)\}/);
 assert.doesNotMatch(pager, /disabled=\{Platform\.OS !== "web"\}/);
 assert.match(pager, /navigator\.maxTouchPoints \?\? 0/);
+assert.match(pager, /webNaturalHeight\?: boolean/);
+assert.match(
+  pager,
+  /if \(Platform\.OS === "web" && pages\.length === 1\)[\s\S]{0,700}styles\.singleWebPage[\s\S]{0,100}\{pages\[0\]\}/,
+  "a single tall Web page must bypass RN Web's disabled horizontal ScrollView so touch-action none cannot block its parent vertical scroll",
+);
+assert.match(pager, /scrollEnabled=\{scrollEnabled && pages\.length > 1\}/);
+assert.match(
+  pager,
+  /Platform\.OS === "web" && webNaturalHeight[\s\S]{0,120}styles\.webNaturalHeightViewport/,
+  "natural-height pager sizing must remain Web-only so native paging behavior is unchanged",
+);
+assert.match(
+  pager,
+  /webNaturalHeightViewport:\s*\{\s*flexGrow: 0, flexShrink: 0\s*\}/,
+  "the nested horizontal Web ScrollView must not shrink and clip tall pages",
+);
 assert.match(
   pager,
   /Platform\.OS === "web" \|\| Math\.abs\(index - activePage\) <= 1/,

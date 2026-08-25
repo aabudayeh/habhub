@@ -320,7 +320,7 @@ export function GroupTodoLeaderboardSection({
             >
               <Ionicons name="return-down-forward-outline" size={13} color={colors.faint} />
             </Pressable>
-            {canDelete(todo) ? (
+            {editing && canDelete(todo) ? (
               <Pressable
                 accessibilityLabel="Delete group to-do"
                 hitSlop={7}
@@ -330,7 +330,7 @@ export function GroupTodoLeaderboardSection({
                 }}
                 style={styles.smallAction}
               >
-                <Ionicons name="trash-outline" size={13} color={colors.faint} />
+                <Ionicons name="trash-outline" size={13} color="#C44949" />
               </Pressable>
             ) : null}
             <Ionicons name="chevron-forward" size={13} color={colors.faint} />

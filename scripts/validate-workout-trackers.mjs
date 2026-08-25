@@ -758,6 +758,96 @@ assert.equal(
   1,
   "the retirement migration must remain idempotent",
 );
+const lateLegacyWalkingEntry = {
+  id: "entry-old-walking-calories",
+  metricId: "workout_calories",
+  userId: "owner",
+  value: 126,
+  localDate: "2026-08-24",
+  recordedAt: "2026-08-24T17:30:00.000Z",
+  visibility: "group",
+  source: "manual",
+  label: "Walking",
+};
+const migratedLateWalking = migrateRetiredWorkoutCaloriesEntries(
+  [lateLegacyWalkingEntry],
+  "owner",
+);
+const migratedLateWalkingEntry = migratedLateWalking.entries.find(
+  (entry) => entry.metricId === "exercise",
+);
+assert.ok(migratedLateWalkingEntry);
+const repairedSamsungWalkingEntry = {
+  id: "health:health_connect:total_energy:samsung-walk:exercise",
+  metricId: "exercise",
+  userId: "owner",
+  value: 126,
+  localDate: "2026-08-24",
+  recordedAt: "2026-08-24T17:32:00.000Z",
+  visibility: "group",
+  source: "imported",
+  sourceProvider: "health_connect",
+  sourceRecordId: "samsung-walk",
+  sourceOrigin: "com.sec.android.app.shealth",
+  label: "Walking",
+};
+const repairedLateWalking = migrateRetiredWorkoutCaloriesEntries(
+  [...migratedLateWalking.entries, repairedSamsungWalkingEntry],
+  "owner",
+);
+assert.equal(
+  repairedLateWalking.entries.some(
+    (entry) => entry.id === migratedLateWalkingEntry.id,
+  ),
+  false,
+  "a later Samsung repair must replace the strongly matching legacy manual Walking projection",
+);
+assert.ok(
+  repairedLateWalking.entries.some(
+    (entry) => entry.id === repairedSamsungWalkingEntry.id,
+  ),
+  "late repair reconciliation must retain the canonical Samsung workout row",
+);
+assert.ok(
+  repairedLateWalking.removedOwnEntryIds.includes(
+    migratedLateWalkingEntry.id,
+  ),
+  "the replaced legacy projection must receive a durable owner tombstone",
+);
+const ordinaryManualWalkingEntry = {
+  ...lateLegacyWalkingEntry,
+  id: "entry-current-manual-walking-calories",
+  metricId: "exercise",
+};
+const ordinaryManualWalking = migrateRetiredWorkoutCaloriesEntries(
+  [ordinaryManualWalkingEntry, repairedSamsungWalkingEntry],
+  "owner",
+);
+assert.ok(
+  ordinaryManualWalking.entries.some(
+    (entry) => entry.id === ordinaryManualWalkingEntry.id,
+  ),
+  "an ordinary manual Active-energy entry must never be deleted by legacy cleanup",
+);
+const unrelatedManualWalking = migrateRetiredWorkoutCaloriesEntries(
+  [
+    ...migratedLateWalking.entries,
+    {
+      ...repairedSamsungWalkingEntry,
+      id: `${repairedSamsungWalkingEntry.id}:different-session`,
+      sourceRecordId: "samsung-different-walk",
+      value: 220,
+      recordedAt: "2026-08-24T21:00:00.000Z",
+    },
+  ],
+  "owner",
+);
+assert.ok(
+  unrelatedManualWalking.entries.some(
+    (entry) => entry.id === migratedLateWalkingEntry.id,
+  ),
+  "a different synced walk must not delete an unrelated legacy manual entry",
+);
 const deletionWinsEntries = migrateRetiredWorkoutCaloriesEntries(
   legacyCaloriesState.entries,
   legacyCaloriesState.currentUserId,

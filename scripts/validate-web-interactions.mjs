@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   isIosWebDevice,
   isStandaloneIosWebApp,
+  resolveWebEditorFontSize,
   resolveScreenBottomPadding,
   resolveTabBarBottomInset,
 } from "../src/domain/webSafeArea.ts";
@@ -174,6 +175,50 @@ assert.equal(
   true,
 );
 assert.equal(
+  resolveWebEditorFontSize(10, {
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+    platform: "iPhone",
+    maxTouchPoints: 5,
+  }),
+  16,
+  "every iPhone Web editor must prevent Safari's focus zoom by default",
+);
+assert.equal(
+  resolveWebEditorFontSize(10, {
+    userAgent: "Mozilla/5.0 (Linux; Android 15)",
+    platform: "Linux armv8l",
+    maxTouchPoints: 5,
+  }),
+  10,
+  "default focus protection must not resize Android Web editors",
+);
+assert.equal(
+  resolveWebEditorFontSize(
+    10,
+    {
+      userAgent: "Mozilla/5.0 (Linux; Android 15)",
+      platform: "Linux armv8l",
+      maxTouchPoints: 5,
+    },
+    true,
+  ),
+  16,
+  "the existing explicit Web focus protection remains cross-platform",
+);
+assert.equal(
+  resolveWebEditorFontSize(
+    10,
+    {
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+      platform: "iPhone",
+      maxTouchPoints: 5,
+    },
+    false,
+  ),
+  10,
+  "an explicit opt-out remains available",
+);
+assert.equal(
   isStandaloneIosWebApp({
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)",
     platform: "MacIntel",
@@ -273,7 +318,7 @@ assert.doesNotMatch(today, /styles\.webTabPage|webTabPage:/);
 assert.match(today, /contentInsetAdjustmentBehavior=\{[\s\S]{0,80}Platform\.OS === "web" \? "never"/);
 assert.match(today, /todayTileMaxHeight = iosWebDevice && todayUsesPages \? 96 : 88/);
 assert.match(appText, /preventWebFocusZoom\?: boolean/);
-assert.match(appText, /Math\.max\(16, scaledFontSize\)/);
+assert.match(appText, /resolveWebEditorFontSize\(/);
 assert.match(chat, /<TextInput[\s\S]{0,180}preventWebFocusZoom/);
 assert.match(html, /viewport-fit=cover/);
 assert.doesNotMatch(
@@ -284,8 +329,17 @@ assert.doesNotMatch(
 assert.match(html, /@supports \(height: 100dvh\)/);
 assert.doesNotMatch(
   html,
-  /@media all and \(display-mode: standalone\)[\s\S]{0,160}height: 100vh;/,
-  "standalone iOS must not size its app shell with a legacy viewport that can place navigation below the visible screen",
+  /@media all and \(display-mode: standalone\)[\s\S]{0,240}height: 100vh;/,
+  "standalone iOS must not repeat the shell height that moved navigation below the visible viewport",
+);
+assert.match(
+  html,
+  /apple-mobile-web-app-status-bar-style" content="black"/,
+  "installed iOS Web apps must avoid WebKit's black-translucent bottom-positioning bug",
+);
+assert.doesNotMatch(
+  html,
+  /apple-mobile-web-app-status-bar-style" content="black-translucent"/,
 );
 assert.doesNotMatch(
   html,

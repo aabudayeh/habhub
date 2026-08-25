@@ -15,6 +15,7 @@ import {
 } from "../src/domain/sharedLeaderboardLogs.ts";
 import { accountOwnedCollections } from "../src/domain/accountCollections.ts";
 import { scopeCachedGroupActivity } from "../src/domain/groupActivityCacheScope.ts";
+import { memberDisplayName } from "../src/domain/members.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (file) => readFileSync(path.join(root, file), "utf8");
@@ -106,6 +107,39 @@ assert.match(
 assert.match(
   group,
   /onPress=\{openMemberComparison\}[\s\S]{0,180}style=\{styles\.memberNameLink\}/,
+);
+assert.doesNotMatch(
+  group,
+  /memberOriginalLabel/,
+  "Leaderboard cards should show the chosen nickname without repeating the profile name below it",
+);
+assert.doesNotMatch(
+  leaderboardDetail,
+  /memberOriginalLabel/,
+  "Leaderboard details should preserve useful role and sync metadata without repeating the profile name",
+);
+const nicknameFixture = {
+  group: { id: "group-a" },
+  settings: {
+    memberNicknamesByGroup: {
+      "group-a": { friend: "Walking buddy" },
+      "group-b": { friend: "Other group alias" },
+    },
+    memberNicknames: { friend: "Legacy alias" },
+  },
+};
+assert.equal(
+  memberDisplayName(nicknameFixture, { id: "friend", name: "Profile Name" }),
+  "Walking buddy",
+  "member names must use the viewer's nickname for the active group",
+);
+assert.equal(
+  memberDisplayName(
+    { ...nicknameFixture, group: { id: "group-c" } },
+    { id: "friend", name: "Profile Name" },
+  ),
+  "Legacy alias",
+  "legacy aliases remain a migration fallback when no group alias exists",
 );
 assert.doesNotMatch(
   group,

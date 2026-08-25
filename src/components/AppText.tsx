@@ -11,6 +11,10 @@ import {
 
 import { palette, useAppColors, useFontScale } from "@/src/theme";
 import { useLocalization } from "@/src/i18n";
+import {
+  resolveWebEditorFontSize,
+  type WebDisplayEnvironment,
+} from "@/src/domain/webSafeArea";
 
 type AppTextProps = TextProps & {
   preserveColor?: boolean;
@@ -24,8 +28,8 @@ type AppTextInputProps = TextInputProps & {
   /**
    * Keep the rendered Web font at 16 CSS pixels or larger. Mobile Safari
    * otherwise zooms the whole viewport when this input receives focus.
-   * This is opt-in so compact native controls and unrelated Web forms keep
-   * their established visual density.
+   * iOS Web enables this by default. Explicit `true` retains the existing
+   * cross-platform Web behavior; explicit `false` opts a field out.
    */
   preventWebFocusZoom?: boolean;
 };
@@ -143,7 +147,7 @@ function AppTextInput(
     accessibilityLabel,
     accessibilityHint,
     translate = true,
-    preventWebFocusZoom = false,
+    preventWebFocusZoom,
     ...props
   },
   ref,
@@ -154,9 +158,21 @@ function AppTextInput(
   const flattened = StyleSheet.flatten(style) as TextStyle | undefined;
   const fontSize = flattened?.fontSize ?? 14;
   const scaledFontSize = fontSize * scale;
+  const webDisplayEnvironment: WebDisplayEnvironment | undefined =
+    Platform.OS === "web" && typeof navigator !== "undefined"
+      ? {
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          maxTouchPoints: navigator.maxTouchPoints,
+        }
+      : undefined;
   const focusSafeWebFontSize =
-    Platform.OS === "web" && preventWebFocusZoom
-      ? Math.max(16, scaledFontSize)
+    Platform.OS === "web"
+      ? resolveWebEditorFontSize(
+          scaledFontSize,
+          webDisplayEnvironment,
+          preventWebFocusZoom,
+        )
       : undefined;
   return (
     <NativeTextInput
@@ -183,7 +199,8 @@ function AppTextInput(
           borderColor: remapColor(flattened?.borderColor, colors),
         },
         scale === 1 ? undefined : { fontSize: scaledFontSize },
-        focusSafeWebFontSize === undefined
+        focusSafeWebFontSize === undefined ||
+        focusSafeWebFontSize === scaledFontSize
           ? undefined
           : { fontSize: focusSafeWebFontSize },
         locale.isRtl

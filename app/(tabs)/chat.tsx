@@ -1095,7 +1095,7 @@ function ChatScreen() {
                 onSubmitEditing={submit}
                 placeholder={
                   recipient
-                    ? `Message ${recipient.name}…`
+                    ? `Message ${memberDisplayName(state, recipient)}…`
                     : "Message the group…"
                 }
                 placeholderTextColor={palette.faint}

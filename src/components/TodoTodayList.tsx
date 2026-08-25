@@ -15,6 +15,7 @@ import {
   todoSkippedOnDate,
 } from "@/src/domain/schedule";
 import { flattenTodoHierarchy, todoLabels } from "@/src/domain/todos";
+import { LocalizedAlert as Alert, useTranslation } from "@/src/i18n";
 import { useApp } from "@/src/state/AppProvider";
 import { useAppColors, useGroupAccent } from "@/src/theme";
 import { TodoItem } from "@/src/types";
@@ -45,6 +46,7 @@ export function TodoTodayList({
   const {
     state,
     toggleTodo,
+    deleteTodo,
     reorderTodo,
     saveTodo,
     updateSettings,
@@ -154,6 +156,22 @@ export function TodoTodayList({
               ...todo,
               pinnedAt: todo.pinnedAt ? undefined : new Date().toISOString(),
             })
+          }
+          onDelete={() =>
+            Alert.alert(
+              "Delete to-do?",
+              children.length
+                ? "Its nested sub-to-dos will also be deleted."
+                : "This cannot be undone.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete",
+                  style: "destructive",
+                  onPress: () => deleteTodo(todo.id),
+                },
+              ],
+            )
           }
           onMove={(targetIndex) => {
             moveTodoBeside(todo, shownItems[targetIndex]?.item);
@@ -278,6 +296,7 @@ function TodoRow({
   index,
   count,
   onPin,
+  onDelete,
   onMove,
   onToggle,
   onLongPress,
@@ -295,6 +314,7 @@ function TodoRow({
   index: number;
   count: number;
   onPin: () => void;
+  onDelete: () => void;
   onMove: (targetIndex: number) => void;
   onToggle: () => void;
   onLongPress: () => void;
@@ -307,6 +327,7 @@ function TodoRow({
   depth: number;
 }) {
   const colors = useAppColors();
+  const t = useTranslation();
   const smoothDrag = useSmoothReorderGesture({
     enabled: editing,
     index,
@@ -493,6 +514,19 @@ function TodoRow({
           </Pressable>
         ) : todo.pinnedAt ? (
           <Ionicons name="pin" size={12} color="#E9A23B" />
+        ) : null}
+        {editing ? (
+          <Pressable
+            accessibilityLabel={t("Delete")}
+            hitSlop={7}
+            onPress={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            style={styles.smallAction}
+          >
+            <Ionicons name="trash-outline" size={14} color="#C44949" />
+          </Pressable>
         ) : null}
         {editing ? (
           <GestureDetector gesture={smoothDrag.gesture}>
